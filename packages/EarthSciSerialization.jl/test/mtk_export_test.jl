@@ -348,10 +348,14 @@ end
     @test rhs["args"][2]["op"] == "min"
     @test rhs["args"][2]["args"][1]["op"] == "max"
 
-    # Round-trip through JSON and verify
+    # Round-trip through JSON and verify the min/max structure survives.
+    # rhs is `-k * min(max(u, 0.0), 1.0)`, so the outer op is `*`; the
+    # min sits at args[2].
     s = JSON3.write(out)
     parsed = JSON3.read(s)
-    @test parsed["models"]["MinMaxClamp"]["equations"][1]["rhs"]["op"] == "min"
+    @test parsed["models"]["MinMaxClamp"]["equations"][1]["rhs"]["op"] == "*"
+    @test parsed["models"]["MinMaxClamp"]["equations"][1]["rhs"]["args"][2]["op"] == "min"
+    @test parsed["models"]["MinMaxClamp"]["equations"][1]["rhs"]["args"][2]["args"][1]["op"] == "max"
 
     # Load back and verify we can reconstruct the MTK system
     tmpfile = tempname() * ".esm"
@@ -394,7 +398,10 @@ end
 
     model_dict = out["models"]["NaryMinMax"]
     eq = model_dict["equations"][1]
-    inner_min = eq["rhs"]["args"][1]
+    # MTK rewrites unary negation `-min(...)` as `-1 * min(...)`, so the
+    # rhs op is `*` and the min node sits at args[2], not args[1].
+    @test eq["rhs"]["op"] == "*"
+    inner_min = eq["rhs"]["args"][2]
     @test inner_min["op"] == "min"
     @test length(inner_min["args"]) == 2
 end

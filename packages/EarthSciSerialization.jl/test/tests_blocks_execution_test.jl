@@ -13,6 +13,10 @@ using Test
 using EarthSciSerialization
 import ModelingToolkit
 import OrdinaryDiffEqTsit5
+# Required by MTK's DAE initialization path for fixtures with algebraic
+# equations (e.g. algebraic_diameter_growth.esm). Without this load,
+# `ODEProblem(simp, ...)` errors with "no nonlinear solve has been loaded".
+import OrdinaryDiffEqNonlinearSolve
 
 const _ESM_TB = EarthSciSerialization
 const _MTK_TB = ModelingToolkit

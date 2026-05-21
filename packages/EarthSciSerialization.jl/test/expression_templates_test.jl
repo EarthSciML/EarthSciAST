@@ -6,7 +6,7 @@ using JSON3
 using EarthSciSerialization
 using EarthSciSerialization: lower_expression_templates,
     reject_expression_templates_pre_v04, ExpressionTemplateError, OpExpr,
-    NumExpr, IntExpr, VarExpr
+    NumExpr, IntExpr, VarExpr, JSONLikeDict
 
 const ARRHENIUS_FIXTURE_JSON = """
 {
@@ -201,8 +201,14 @@ const ARRHENIUS_FIXTURE_JSON = """
         expanded_via_pass = lower_expression_templates(raw)
         expanded_dict = JSON3.read(read(expanded_path, String))
         # Compare reactions arrays as JSON-normalised strings.
+        # `lower_expression_templates` returns JSONLikeDict-wrapped values for
+        # the post-expansion view; unwrap them before the recursive Dict
+        # rebuild so they round-trip to a plain `Dict{String,Any}` matching
+        # the reference parsed straight from `expanded.esm`.
         function _norm(x)
-            if x isa AbstractDict || x isa JSON3.Object
+            if x isa JSONLikeDict
+                return _norm(getfield(x, :data))
+            elseif x isa AbstractDict || x isa JSON3.Object
                 return Dict{String,Any}(string(k) => _norm(v) for (k, v) in pairs(x))
             elseif x isa AbstractVector || x isa JSON3.Array
                 return Any[_norm(v) for v in x]
