@@ -432,14 +432,27 @@ def _parse_plot_series(data: Dict[str, Any]) -> PlotSeries:
 
 
 def _parse_plot(data: Dict[str, Any]) -> Plot:
+    raw_y = data["y"]
+    explicit_series = [_parse_plot_series(s) for s in data.get("series", [])]
+    if isinstance(raw_y, list):
+        axes = [_parse_plot_axis(item) for item in raw_y]
+        y_axis = axes[0]
+        inline_series = [
+            PlotSeries(name=axis.label or axis.variable, variable=axis.variable)
+            for axis in axes
+        ]
+        series = explicit_series or inline_series
+    else:
+        y_axis = _parse_plot_axis(raw_y)
+        series = explicit_series
     return Plot(
         id=data["id"],
         type=data["type"],
         x=_parse_plot_axis(data["x"]),
-        y=_parse_plot_axis(data["y"]),
+        y=y_axis,
         description=data.get("description"),
         value=_parse_plot_value(data["value"]) if "value" in data else None,
-        series=[_parse_plot_series(s) for s in data.get("series", [])],
+        series=series,
     )
 
 
