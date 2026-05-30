@@ -1,0 +1,121 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "arrayop_17_discretized_latlon_heat",
+    "description": "Discretized heat equation on a lat-lon grid: Nlon=4 (periodic), Nlat=2 (non-periodic). dlon=pi/2, coefficient=1/dlon^2=4/pi^2~=0.4052847345693511. IC: u[i,j,0]=sin(2*lon_i) giving [1,-1,1,-1] for each lat row. Eigenvalue lambda=-2*coeff*2=-16/pi^2~=-1.6211389382774044. At T=0.25: decay=exp(lambda*0.25)~=0.6667869265380654. The lon (i) dimension is periodic: neighbor indices wrap via ifelse. The lat (j) dimension is non-periodic with out-of-bounds returning 0 (ghost cells). Tests the periodic-wrapping indexed-state path (ess-m1e, lat_lon family).",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.furiosa"
+    ],
+    "tags": [
+      "arrayop",
+      "conformance",
+      "stencil",
+      "periodic",
+      "lat_lon",
+      "pde",
+      "neighbor_coupling"
+    ]
+  },
+  "models": {
+    "HeatLatLon": {
+      "tolerance": {
+        "rel": 1e-3,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "shape": ["i", "j"]
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Lon-periodic heat equation. i=lon index (1..4, periodic wrap), j=lat index (1..2, Dirichlet ghost cells). RHS = coeff*(u[wrap(i-1),j] + (-2)*u[i,j] + u[wrap(i+1),j]).",
+          "lhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": ["i", "j"],
+            "expr": {
+              "op": "D",
+              "args": [{"op": "index", "args": ["u", "i", "j"]}],
+              "wrt": "t"
+            },
+            "ranges": {"i": [1, 4], "j": [1, 2]}
+          },
+          "rhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": ["i", "j"],
+            "expr": {
+              "op": "*",
+              "args": [
+                0.4052847345693511,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {"op": "ifelse", "args": [
+                          {"op": "<", "args": [{"op": "-", "args": ["i", 1]}, 1]},
+                          {"op": "+", "args": [{"op": "-", "args": ["i", 1]}, 4]},
+                          {"op": "ifelse", "args": [
+                            {"op": ">", "args": [{"op": "-", "args": ["i", 1]}, 4]},
+                            {"op": "-", "args": [{"op": "-", "args": ["i", 1]}, 4]},
+                            {"op": "-", "args": ["i", 1]}
+                          ]}
+                        ]},
+                        "j"
+                      ]
+                    },
+                    {"op": "*", "args": [-2, {"op": "index", "args": ["u", "i", "j"]}]},
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {"op": "ifelse", "args": [
+                          {"op": "<", "args": [{"op": "+", "args": ["i", 1]}, 1]},
+                          {"op": "+", "args": [{"op": "+", "args": ["i", 1]}, 4]},
+                          {"op": "ifelse", "args": [
+                            {"op": ">", "args": [{"op": "+", "args": ["i", 1]}, 4]},
+                            {"op": "-", "args": [{"op": "+", "args": ["i", 1]}, 4]},
+                            {"op": "+", "args": ["i", 1]}
+                          ]}
+                        ]},
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "ranges": {"i": [1, 4], "j": [1, 2]}
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "lon_decay_T0.25",
+          "description": "Sinusoidal IC u[i,j,0]=sin(2*lon_i) decays under periodic lon diffusion. lambda=-16/pi^2~=-1.6211389382774044, decay at T=0.25: exp(lambda*0.25)~=0.6667869265380654. IC values: [1,-1,1,-1] for each lat row. Tolerance 1e-3.",
+          "initial_conditions": {
+            "u[1,1]": 1.0,
+            "u[2,1]": -1.0,
+            "u[3,1]": 1.0,
+            "u[4,1]": -1.0,
+            "u[1,2]": 1.0,
+            "u[2,2]": -1.0,
+            "u[3,2]": 1.0,
+            "u[4,2]": -1.0
+          },
+          "time_span": {"start": 0.0, "end": 0.25},
+          "assertions": [
+            {"variable": "u[1,1]", "time": 0.25, "expected": 0.6668},
+            {"variable": "u[2,1]", "time": 0.25, "expected": -0.6668},
+            {"variable": "u[1,2]", "time": 0.25, "expected": 0.6668}
+          ]
+        }
+      ]
+    }
+  }
+}
