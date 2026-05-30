@@ -788,9 +788,29 @@ function coerce_model(data::Any)::Model
         EarthSciSerialization.Test[coerce_test(t) for t in data.tests] :
         EarthSciSerialization.Test[]
 
+    # Inline subsystems (schema §4.7): child Model objects keyed by name.
+    # Each value is either an inline Model dict (fully specified) or a
+    # SubsystemRef `{"ref": "..."}` dict (resolved later by
+    # resolve_subsystem_refs!). Inline entries are coerced recursively here;
+    # ref entries are stored as empty placeholder Models and filled in by the
+    # ref-resolution pass (esm-ol5qa).
+    subsystems = Dict{String,Model}()
+    if haskey(data, :subsystems) && data.subsystems !== nothing
+        for (k, v) in pairs(data.subsystems)
+            subsystems[string(k)] = if haskey(v, :ref) && v.ref !== nothing
+                # Placeholder — resolve_subsystem_refs! will replace this with
+                # the loaded external model. Store empty so the key exists.
+                Model(Dict{String,ModelVariable}(), Equation[])
+            else
+                coerce_model(v)
+            end
+        end
+    end
+
     return Model(variables, equations;
                  discrete_events=discrete_events,
                  continuous_events=continuous_events,
+                 subsystems=subsystems,
                  domain=domain,
                  tolerance=tolerance,
                  tests=tests,
