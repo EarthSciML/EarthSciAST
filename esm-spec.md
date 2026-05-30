@@ -499,15 +499,58 @@ In the example above, `Atmosphere` and `Ocean` are included by reference while `
 | Absolute path | `"/models/atmosphere.esm"` | Used as-is |
 | HTTP/HTTPS URL | `"https://example.com/models/atmosphere.esm"` | Fetched from the network |
 
-**Referenced file requirements:**
+**Referenced file requirements (model/reaction-system subsystems):**
 
 - The referenced file must be a valid ESM file (with `esm` version and `metadata` fields).
-- It must contain exactly one top-level model or reaction system. The single model or reaction system defined in the file is used as the subsystem definition.
+- It must contain exactly one top-level model or reaction system and must NOT carry a `"kind"` field (absence of `"kind"` identifies a subsystem file). The single model or reaction system defined in the file is used as the subsystem definition.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
 **Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.
+
+#### 4.7.1 GridDiscretization Descriptors
+
+A **GridDiscretization Descriptor** (GDD) is a second referenceable file type distinct from model/reaction-system subsystems. A GDD carries grid geometry and discretization rules together in a single document, enabling test and example blocks to specify exactly how a PDE component is discretized without embedding that information in the component definition itself.
+
+GDD files are published by the EarthSciDiscretizations (ESD) project at stable URLs. Authors may also supply local paths or any HTTPS URL.
+
+**GDD file format:**
+
+```json
+{
+  "esm": "0.5.0",
+  "kind": "grid_discretization_descriptor",
+  "metadata": {
+    "title": "Cartesian 1-D N=32 with centered-2nd FD",
+    "description": "Uniform 1-D domain [0,1], 32 cells, second-order centered finite differences"
+  },
+  "grids": {
+    "domain": {
+      "spatial": {
+        "x": { "min": 0.0, "max": 1.0, "units": "m", "cells": 32 }
+      }
+    }
+  },
+  "discretizations": {
+    "grad": { "ref": "https://esd.earthsciml.org/rules/centered_2nd_uniform.json" }
+  }
+}
+```
+
+A GDD file is identified by `"kind": "grid_discretization_descriptor"`. It MUST NOT be placed in the `subsystems` map — it is not a model or reaction system. GDD files are referenced exclusively from test and example `grid_refs` fields (§6.6.2 and §6.7.2).
+
+**GDD file fields:**
+
+| Field | Required | Description |
+|---|---|---|
+| `esm` | ✓ | ESM format version string. |
+| `kind` | ✓ | Must be `"grid_discretization_descriptor"`. |
+| `metadata` | | Optional title and description. |
+| `grids` | ✓ | Dictionary mapping domain names to spatial grid specs. Domain names must match the `domain` field of the referencing component. Each entry overrides the component's declared `spatial` block for that domain when the test or example runs; `temporal`, `boundary_conditions`, and other domain fields are inherited from the component unchanged. |
+| `discretizations` | | Dictionary mapping operator names (e.g., `"grad"`, `"div"`) to discretization rules. Each value may be an inline rule object or a `{ref: URL-or-path}` pointing to an ESD rule file. Overrides the component's declared discretizations for this run. |
+
+**Dependency note:** For `grid_refs` to work in production, ESD must publish GDD files at stable, resolvable URLs or paths. Authors referencing ESD-published GDDs should pin a versioned URL to guard against upstream changes.
 
 ---
 
@@ -1079,6 +1122,7 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 | `time_span` | ✓ | `{start, end}` — simulation time interval in the component's time units. |
 | `tolerance` | | Test-level default tolerance; see Section 6.6.4. |
 | `assertions` | ✓ | Array of scalar checks; must contain at least one. |
+| `grid_refs` | | PDE only. Array of `{"ref": URL-or-path}` objects pointing to GridDiscretization Descriptor files (§4.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the test on exactly that grid configuration. A list of two or more entries enables a resolution sweep — the test is executed once per entry and the results are available to `convergence_order` assertions (§6.6.5). Validators MUST reject `convergence_order` assertions in tests with fewer than two `grid_refs` entries. |
 
 #### 6.6.3 Assertion Semantics
 
@@ -1088,11 +1132,12 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 |---|---|---|
 | `variable` | ✓ | Variable or species name. Local names (e.g., `"O3"`) or scoped references into subsystems (e.g., `"inner.X"`) are both allowed. |
 | `time` | ✓ | Simulation time at which to evaluate the assertion; must lie in `[time_span.start, time_span.end]`. |
-| `expected` | ✓ | Expected scalar value. |
+| `expected` | ✓ (except `convergence_order`) | Expected scalar value. Not used for `convergence_order` assertions — use `expected_order` instead. |
 | `tolerance` | | Per-assertion tolerance override. |
 | `coords` | | PDE only: spatial-point sample. Map from domain dimension name to the numeric coordinate at which to evaluate the field. Mutually exclusive with `reduce`. |
-| `reduce` | | PDE only: collapse the spatial field to a scalar before comparison. One of `integral`, `mean`, `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`. |
-| `reference` | error-norms only | Required when `reduce` is `L2_error` or `Linf_error`: an inline `Expression` (evaluated over the component's domain coordinates) or `{type: "from_file", path, format?}`. |
+| `reduce` | | PDE only: collapse the spatial field to a scalar before comparison. One of `integral`, `mean`, `max`, `min`, `L2_error`, `Linf_error`, `convergence_order`. Mutually exclusive with `coords`. |
+| `reference` | error-norms and convergence | Required when `reduce` is `L2_error`, `Linf_error`, or `convergence_order`: an inline `Expression` (evaluated over the component's domain coordinates) or `{type: "from_file", path, format?}`. |
+| `expected_order` | `convergence_order` only | Required when `reduce` is `convergence_order`. The expected numerical convergence rate (e.g., `2.0` for second-order methods). |
 
 Assertions are stored **inline** only — there is no file-reference option. Tests should be small (a handful of assertion points), not full reference trajectories.
 
@@ -1153,6 +1198,63 @@ Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x
 }
 ```
 
+#### 6.6.6 Convergence-Order Assertions
+
+The `reduce: "convergence_order"` assertion is the **gold-standard PDE validation** for discretization accuracy. It runs the enclosing test at each resolution listed in `grid_refs` (§6.6.2), computes the relative L2 error against `reference` at each resolution, and asserts that the measured rate matches `expected_order`.
+
+**Mechanics:**
+
+1. The test is executed once per entry in `grid_refs`, substituting the GDD's grid and discretizations into the component's declared domain.
+2. At each run, the relative L2 error is computed: `e_k = ||u_k − u_ref||_2 / ||u_ref||_2`.
+3. The representative grid spacing `h_k` for each run is taken as the geometric mean of the per-dimension `grid_spacing` values declared in the GDD's `grids` block. For runs with the same topology but different `cells` counts, `h` scales as `1 / cells`.
+4. The observed convergence order is estimated by linear regression of `log(e_k)` on `log(h_k)`: `p_obs = Δ log(e) / Δ log(h)`.
+5. The assertion passes when `p_obs ≥ expected_order × (1 − rel)` where `rel` is resolved from the assertion's `tolerance.rel` (default: `0.1` — allowing 10% under the nominal order).
+
+**Validator requirements:**
+
+- Validators MUST reject a `convergence_order` assertion in a test with fewer than two `grid_refs` entries.
+- Validators MUST reject a `convergence_order` assertion that omits `reference` or `expected_order`.
+- Validators MUST reject a `convergence_order` assertion that includes `expected` (the scalar-comparison field is inapplicable).
+
+**Worked example — 1-D heat equation MMS convergence test** at three grid refinement levels (N = 16, 32, 64), expecting second-order convergence:
+
+```json
+{
+  "id": "mms_order2",
+  "description": "MMS convergence test: 1-D heat equation u_t = 0.01 u_xx, expect O(dx^2)",
+  "initial_conditions": {
+    "type": "expression",
+    "values": {
+      "u": { "op": "sin", "args": [{ "op": "*", "args": [3.14159265, "x"] }] }
+    }
+  },
+  "time_span": { "start": 0.0, "end": 0.1 },
+  "grid_refs": [
+    { "ref": "https://esd.earthsciml.org/grids/cartesian_1d_n16_fd2.gdd.json" },
+    { "ref": "https://esd.earthsciml.org/grids/cartesian_1d_n32_fd2.gdd.json" },
+    { "ref": "https://esd.earthsciml.org/grids/cartesian_1d_n64_fd2.gdd.json" }
+  ],
+  "assertions": [
+    {
+      "variable": "u",
+      "time": 0.1,
+      "reduce": "convergence_order",
+      "reference": {
+        "op": "*",
+        "args": [
+          { "op": "exp", "args": [{ "op": "*", "args": [-0.01, 9.8696, 0.1] }] },
+          { "op": "sin", "args": [{ "op": "*", "args": [3.14159265, "x"] }] }
+        ]
+      },
+      "expected_order": 2.0,
+      "tolerance": { "rel": 0.1 }
+    }
+  ]
+}
+```
+
+The three GDD files encode grids at N = 16, 32, 64 cells. Assuming second-order centered FD, the runtime should observe `p_obs ≈ 2.0`. With `tolerance.rel = 0.1`, the test passes when `p_obs ≥ 1.8`.
+
 ### 6.7 Examples
 
 A model may also carry an array of **inline examples**. An example is an illustrative run (or family of runs) showing how the component is intended to be used. Examples do not produce pass/fail outcomes — they produce trajectories and plots.
@@ -1209,6 +1311,7 @@ Like tests, examples are per-component and travel with the model in the `.esm` d
 | `parameters` | | Parameter overrides, keyed by local parameter name. |
 | `time_span` | ✓ | `{start, end}` in the component's time units. |
 | `parameter_sweep` | | Optional parameter sweep; see Section 6.7.3. When present, the example represents a family of runs rather than a single trajectory. |
+| `grid_refs` | | PDE only. Array of `{"ref": URL-or-path}` objects pointing to GridDiscretization Descriptor files (§4.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the example on exactly that grid configuration. When multiple entries are provided, the example represents a family of runs at different grid configurations — analogous to `parameter_sweep` but varying the grid rather than parameters. `grid_refs` and `parameter_sweep` may be combined; the total run count is their Cartesian product. |
 | `plots` | | Plot specifications derived from the run(s); see Section 6.7.4. |
 
 #### 6.7.3 Parameter Sweeps
