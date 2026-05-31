@@ -239,7 +239,9 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
         r = ranges[name]
         idx_sym[name] = pool[k]
         offset = first(r) - 1
-        idx_body[name] = offset == 0 ? pool[k] : Symbolics.wrap(pool[k]) + offset
+        # Use pool[k] directly (BasicSymbolic{SymReal}), not Symbolics.wrap(pool[k])
+        # (Num), so that u[idx_body[i], idx_body[j]] dispatches correctly.
+        idx_body[name] = offset == 0 ? pool[k] : pool[k] + offset
     end
     singleton_vars = [pool[n_named + s] for s in 1:n_singletons]
 
