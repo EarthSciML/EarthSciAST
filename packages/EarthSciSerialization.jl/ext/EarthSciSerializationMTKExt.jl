@@ -234,26 +234,16 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     singleton_vars = [pool[n_named + s] for s in 1:n_singletons]
 
     # Inject index vars into var_dict and evaluate the body symbolically.
-    # Also inject a pool-var → range mapping so _build_index can identify
-    # ghost-cell stencil accesses (indices that go outside the array bounds).
     saved = Dict{String,Any}()
     for (k, v) in idx_sym
         if haskey(var_dict, k); saved[k] = var_dict[k]; end
         var_dict[k] = v
     end
-    gc_ranges = Dict{Any, UnitRange{Int}}(idx_sym[name] => ranges[name] for name in all_named)
-    saved_gcr = get(var_dict, "__gc_sym_ranges__", nothing)
-    var_dict["__gc_sym_ranges__"] = gc_ranges
     body_sym = try
         _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
     finally
         for k in keys(idx_sym)
             if haskey(saved, k); var_dict[k] = saved[k]; else; delete!(var_dict, k); end
-        end
-        if saved_gcr === nothing
-            delete!(var_dict, "__gc_sym_ranges__")
-        else
-            var_dict["__gc_sym_ranges__"] = saved_gcr
         end
     end
 
@@ -485,22 +475,12 @@ end
 # Build an `index` node: `args[1]` is the array-shaped operand, `args[2:]`
 # are the index expressions.
 #
-# Ghost-cell / Dirichlet-BC semantics: indices outside declared array bounds
-# map to ghost cells whose value is fixed at zero.
-#
-# Two guards:
-# 1. All-integer indices: return Num(0) immediately for any out-of-bounds dim.
-# 2. Symbolic stencil offsets inside an arrayop body: when the caller
-#    (_build_arrayop_sym) injects "__gc_sym_ranges__" into var_dict, use those
-#    ranges to detect accesses that go out of bounds (e.g. u[i-1,j] for
-#    i∈[1,3] with shape [1:3] — effective range 0:2 violates lower bound).
-#    For each such dimension, clamp the index to [1, sz[d]] and wrap with
-#    nested ifelse so ghost cells evaluate to 0. Clamping changes the index
-#    from an affine form (pad=-1) that the ArrayOp bounds-checker rejects to
-#    a complex expression (pad=nothing) that bypasses the check.
-#    In-bounds arithmetic offsets (e.g. u[i+1] for i∈[1,8] with shape [1:10])
-#    pass through unchanged.
-#
+# Ghost-cell / Dirichlet-BC semantics: when all indices are concrete integers
+# and any falls outside the declared array bounds (< 1 or > size(arr, d)),
+# the stencil access is on a ghost cell whose value is fixed at zero. This
+# handles boundary cells in arrayops like the 2D heat stencil where `u[0,j]`
+# or `u[N+1,j]` reference cells outside the interior domain. The underlying
+# Symbolics.Arr is 1-based and would raise BoundsError without this guard.
 # Periodic BCs fold indices into range before reaching here via
 # _apply_periodic_folding! in discretize.jl.
 function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
@@ -516,76 +496,17 @@ function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
             push!(idxs, _esm_to_symbolic(a, var_dict, t_sym, dim_dict))
         end
     end
-
-    if arr isa AbstractArray && !isempty(idxs)
+    # Ghost-cell guard: concrete integer indices outside the declared array
+    # bounds map to Dirichlet ghost cells (value = 0).
+    if arr isa AbstractArray && !isempty(idxs) && all(idx isa Integer for idx in idxs)
         sz = size(arr)
         if length(sz) == length(idxs)
-            if all(idx isa Integer for idx in idxs)
-                # Guard 1: concrete ghost-cell — return 0 for out-of-bounds.
-                for (d, idx) in enumerate(idxs)
-                    (idx < 1 || idx > sz[d]) && return Symbolics.Num(0)
-                end
-            elseif arr isa Symbolics.Arr
-                # Guard 2: symbolic stencil offsets — use injected range context
-                # to detect accesses that actually go out of bounds.
-                gc_ranges = get(var_dict, "__gc_sym_ranges__", nothing)
-                if gc_ranges !== nothing
-                    clamped = collect(Any, idxs)
-                    ghost_dims = Int[]
-                    for (d, idx) in enumerate(idxs)
-                        idx isa Integer && continue
-                        # Try to find: idx = pool_var + C for some pool var with range
-                        _is_ghost = false
-                        for (pool_var, var_range) in gc_ranges
-                            C = _try_constant_offset(idx, pool_var)
-                            C === nothing && continue
-                            lo_eff = first(var_range) + C
-                            hi_eff = last(var_range) + C
-                            if lo_eff < 1 || hi_eff > sz[d]
-                                _is_ghost = true
-                                break
-                            end
-                        end
-                        if _is_ghost
-                            push!(ghost_dims, d)
-                            clamped[d] = max(1, min(sz[d], idx))
-                        end
-                    end
-                    if !isempty(ghost_dims)
-                        elem = getindex(arr, clamped...)
-                        # Unwrap Num → BasicSymbolic so SymbolicUtils ifelse stores
-                        # args in ArgsT{SymReal}; 0::Int converts to Const{SymReal}(0).
-                        body = isa(elem, Symbolics.Num) ? Symbolics.unwrap(elem) : elem
-                        for d in ghost_dims
-                            idx = idxs[d]
-                            body = ifelse(idx >= 1, ifelse(idx <= sz[d], body, 0), 0)
-                        end
-                        return Symbolics.wrap(body)
-                    end
-                end
+            for (d, idx) in enumerate(idxs)
+                (idx < 1 || idx > sz[d]) && return Symbolics.Num(0)
             end
         end
     end
     return getindex(arr, idxs...)
-end
-
-# Returns integer offset C if idx == pool_var + C (a linear affine shift
-# with integer constant), otherwise returns nothing.
-# Used by _build_index to determine if a stencil access is a ghost cell.
-function _try_constant_offset(idx, pool_var)
-    diff = idx - pool_var
-    diff_raw = isa(diff, Symbolics.Num) ? Symbolics.unwrap(diff) : diff
-    # Try to extract concrete value: unwrap_const returns the value for a
-    # Const node, or the expression itself if still symbolic.
-    const_val = if diff_raw isa SymUtils.BasicSymbolic
-        SymUtils.unwrap_const(diff_raw)
-    else
-        diff_raw  # plain Julia number (Int, Float64, etc.)
-    end
-    # If still symbolic, it's not a constant offset
-    const_val isa SymUtils.BasicSymbolic && return nothing
-    const_val isa Integer && return Int(const_val)
-    return nothing
 end
 
 function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
