@@ -69,10 +69,12 @@ using JSON3
     DISPLAY_RENDERING_ERROR = 7003
 end
 
-# Error severity levels
+# Error severity levels. The error level is named SEV_ERROR (not ERROR)
+# because the module also defines the exported AssertionStatus member ERROR
+# (src/run_tests.jl); two enums in one module cannot share a member name.
 @enum Severity begin
     CRITICAL
-    ERROR
+    SEV_ERROR
     WARNING
     INFO
     DEBUG
@@ -165,7 +167,7 @@ end
 Add an error to the collection.
 """
 function add_error!(collector::ErrorCollector, error::ESMError)
-    if error.severity in [CRITICAL, ERROR]
+    if error.severity in [CRITICAL, SEV_ERROR]
         push!(collector.errors, error)
     else
         push!(collector.warnings, error)
@@ -218,14 +220,15 @@ function format_user_friendly(error::ESMError)
     # Header with severity and code
     severity_icons = Dict(
         CRITICAL => "🚫",
-        ERROR => "❌",
+        SEV_ERROR => "❌",
         WARNING => "⚠️",
         INFO => "ℹ️",
         DEBUG => "🔍"
     )
 
     icon = get(severity_icons, error.severity, "•")
-    push!(lines, "$(icon) $(uppercase(string(error.severity))) [ESM$(Int(error.code))]")
+    severity_label = error.severity == SEV_ERROR ? "ERROR" : uppercase(string(error.severity))
+    push!(lines, "$(icon) $(severity_label) [ESM$(Int(error.code))]")
     push!(lines, "   $(error.message)")
 
     if !isempty(error.path)
@@ -352,7 +355,7 @@ module ESMErrorFactory
 
 import ..ErrorCode, ..Severity, ..ESMError, ..ErrorContext, ..FixSuggestion,
        ..JSON_PARSE_ERROR, ..EQUATION_UNKNOWN_IMBALANCE, ..UNDEFINED_REFERENCE, ..LARGE_SYSTEM_WARNING,
-       ..CRITICAL, ..ERROR, ..WARNING
+       ..CRITICAL, ..SEV_ERROR, ..WARNING
 
 """
     create_json_parse_error(message, file_path="", line_number=nothing)
@@ -382,7 +385,7 @@ function create_json_parse_error(message::String, file_path::String="", line_num
     return ESMError(
         JSON_PARSE_ERROR,
         "Failed to parse JSON: $message",
-        ERROR;
+        SEV_ERROR;
         path=file_path,
         context=context,
         fix_suggestions=suggestions
@@ -428,7 +431,7 @@ function create_equation_imbalance_error(model_name::String, num_equations::Int,
     return ESMError(
         EQUATION_UNKNOWN_IMBALANCE,
         message,
-        ERROR;
+        SEV_ERROR;
         path="/models[name='$model_name']",
         context=context,
         fix_suggestions=suggestions
@@ -485,7 +488,7 @@ function create_undefined_reference_error(reference::String, available_variables
     return ESMError(
         UNDEFINED_REFERENCE,
         "Reference '$reference' is not defined in the current scope",
-        ERROR;
+        SEV_ERROR;
         path=scope_path,
         context=context,
         fix_suggestions=suggestions,
