@@ -173,3 +173,130 @@ end
         @test du[vm["u[$i]"]] == expect(i)
     end
 end
+
+@testset "tree_walk: expression IC for 2D diffusion — u0 matches hand-built field (ess-zb1)" begin
+    # Build a 4×4 Cartesian diffusion ESM with variables shaped ["x","y"].
+    # The expression IC sin(π*(x-0.5)/2) * sin(π*(y-0.5)/2) should produce
+    # u0 that matches the hand-built field to machine precision.
+    N = 4
+    dx = 1.0
+
+    coeff_x_pos  = Dict("op" => "/", "args" => Any[1,  Dict("op" => "*", "args" => Any["dx", "dx"])])
+    coeff_x_zero = Dict("op" => "/", "args" => Any[-2, Dict("op" => "*", "args" => Any["dx", "dx"])])
+    coeff_y_pos  = Dict("op" => "/", "args" => Any[1,  Dict("op" => "*", "args" => Any["dy", "dy"])])
+    coeff_y_zero = Dict("op" => "/", "args" => Any[-2, Dict("op" => "*", "args" => Any["dy", "dy"])])
+
+    mk_idx(u, di, dj) = begin
+        xi = di == 0 ? "i" : Dict("op" => "+", "args" => Any["i", di])
+        yj = dj == 0 ? "j" : Dict("op" => "+", "args" => Any["j", dj])
+        Dict("op" => "index", "args" => Any[u, xi, yj])
+    end
+
+    pvar = "\$u"
+    stencil_terms = Any[
+        Dict("op" => "*", "args" => Any[coeff_x_pos,  mk_idx(pvar, -1,  0)]),
+        Dict("op" => "*", "args" => Any[coeff_x_zero, mk_idx(pvar,  0,  0)]),
+        Dict("op" => "*", "args" => Any[coeff_x_pos,  mk_idx(pvar,  1,  0)]),
+        Dict("op" => "*", "args" => Any[coeff_y_pos,  mk_idx(pvar,  0, -1)]),
+        Dict("op" => "*", "args" => Any[coeff_y_zero, mk_idx(pvar,  0,  0)]),
+        Dict("op" => "*", "args" => Any[coeff_y_pos,  mk_idx(pvar,  0,  1)]),
+    ]
+    laplacian_rule = Dict{String,Any}(
+        "name"    => "laplacian_2nd_cartesian",
+        "pattern" => Dict("op" => "laplacian", "args" => Any[pvar]),
+        "replacement" => Dict("op" => "+", "args" => stencil_terms),
+    )
+
+    pde_esm = Dict{String,Any}(
+        "esm"      => "0.2.0",
+        "metadata" => Dict{String,Any}("name" => "diffusion_2d_expr_ic"),
+        "grids"    => Dict{String,Any}(
+            "g" => Dict{String,Any}(
+                "family"     => "cartesian",
+                "dimensions" => Any[
+                    Dict{String,Any}("name" => "x", "size" => N, "periodic" => true, "spacing" => "uniform"),
+                    Dict{String,Any}("name" => "y", "size" => N, "periodic" => true, "spacing" => "uniform"),
+                ],
+            ),
+        ),
+        "models" => Dict{String,Any}(
+            "diffusion" => Dict{String,Any}(
+                "grid" => "g",
+                "variables" => Dict{String,Any}(
+                    "u"       => Dict{String,Any}("type" => "state", "shape" => Any["x", "y"],
+                                                   "location" => "cell_center"),
+                    "D_coeff" => Dict{String,Any}("type" => "parameter", "default" => 1.0),
+                    "dx"      => Dict{String,Any}("type" => "parameter", "default" => dx),
+                    "dy"      => Dict{String,Any}("type" => "parameter", "default" => dx),
+                ),
+                "equations" => Any[
+                    Dict{String,Any}(
+                        "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                        "rhs" => Dict("op" => "*", "args" => Any[
+                            "D_coeff",
+                            Dict("op" => "laplacian", "args" => Any["u"]),
+                        ]),
+                    ),
+                ],
+            ),
+        ),
+        "rules" => Any[laplacian_rule],
+    )
+
+    ode_esm = @test_nowarn discretize(pde_esm)
+
+    # Author the IC as ESS expression: sin(π*(x-0.5)/2) * sin(π*(y-0.5)/2)
+    # where x and y are the integer 1-based cell indices bound to shape dims.
+    # Use EarthSciSerialization.Expr to avoid conflict with Core.Expr.
+    _E = EarthSciSerialization.Expr
+    pi_val = Float64(π)
+    ic_expr = OpExpr("*", _E[
+        OpExpr("sin", _E[
+            OpExpr("*", _E[
+                NumExpr(pi_val),
+                OpExpr("/", _E[
+                    OpExpr("-", _E[VarExpr("x"), NumExpr(0.5)]),
+                    NumExpr(Float64(N) / 2),
+                ]),
+            ]),
+        ]),
+        OpExpr("sin", _E[
+            OpExpr("*", _E[
+                NumExpr(pi_val),
+                OpExpr("/", _E[
+                    OpExpr("-", _E[VarExpr("y"), NumExpr(0.5)]),
+                    NumExpr(Float64(N) / 2),
+                ]),
+            ]),
+        ]),
+    ])
+
+    f!, u0, p, _tspan, var_map = @test_nowarn build_evaluator(ode_esm;
+        expression_initial_conditions=Dict("u" => ic_expr))
+
+    @test length(u0) == N * N
+
+    # Verify u0 matches the hand-built reference field to machine precision.
+    for i in 1:N, j in 1:N
+        expected = sin(π * (i - 0.5) / 2) * sin(π * (j - 0.5) / 2)
+        @test u0[var_map["u[$i,$j]"]] ≈ expected  rtol=1e-15
+    end
+
+    # E2e: simulate and verify analytic decay. λ = -4 for this 4×4 periodic grid.
+    T = 0.1
+    prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, T), p)
+    sol  = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
+                                     reltol=1e-10, abstol=1e-12)
+    @test sol.t[end] ≈ T
+    decay_factor = exp(-4.0 * T)
+    u_final = sol.u[end]
+    max_err = 0.0
+    for i in 1:N, j in 1:N
+        u0_ij   = sin(π * (i - 0.5) / 2) * sin(π * (j - 0.5) / 2)
+        u_exact = u0_ij * decay_factor
+        u_sim   = u_final[var_map["u[$i,$j]"]]
+        max_err = max(max_err, abs(u_sim - u_exact))
+    end
+    @info "expression IC diffusion max error vs analytic" max_err decay_factor
+    @test max_err < 1e-6
+end

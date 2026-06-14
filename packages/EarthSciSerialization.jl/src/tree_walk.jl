@@ -47,6 +47,7 @@ Base.showerror(io::IO, e::TreeWalkError) =
 
 """
     build_evaluator(model::Model; initial_conditions=Dict(),
+                    expression_initial_conditions=Dict(),
                     parameter_overrides=Dict(), tspan=nothing,
                     registered_functions=Dict())
 
@@ -66,7 +67,16 @@ RHS expressions at build time.
 Keyword arguments:
 
 * `initial_conditions::Dict{String,<:Real}` — override the default
-  values in `model.variables` for specific state variables.
+  values in `model.variables` for specific state variables. Keyed by
+  variable name (scalar) or cell key such as `"u[1,2]"` (array cell).
+  Takes precedence over `expression_initial_conditions`.
+* `expression_initial_conditions::Dict{String,<:Expr}` — per-variable
+  closed-form initial fields for array state variables (ESM §11.4
+  `expression` IC type). Each value is an `Expr` AST whose free symbols
+  MUST be the variable's declared dimension names (from `shape`). The
+  expression is evaluated at each grid cell by binding the integer
+  1-based index of dimension `d` to `shape[d]`. Cell-specific entries
+  in `initial_conditions` take precedence.
 * `parameter_overrides::Dict{String,<:Real}` — override the default
   values for specific parameters.
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
@@ -77,6 +87,7 @@ Keyword arguments:
 """
 function build_evaluator(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
+                         expression_initial_conditions::AbstractDict=Dict{String,Expr}(),
                          parameter_overrides::AbstractDict=Dict{String,Float64}(),
                          tspan::Union{Nothing,Tuple{<:Real,<:Real}}=nothing,
                          registered_functions::AbstractDict=Dict{String,Function}())
@@ -169,16 +180,41 @@ function build_evaluator(model::Model;
             u0[i] = d === nothing ? 0.0 : Float64(d)
         end
     end
+    # Precompile expression ICs once per variable to avoid recompiling per cell.
+    # Maps vname → (_Node, shape::Vector{String}) where shape gives dimension names.
+    ic_expr_compiled = Dict{String,Tuple{_Node,Vector{String}}}()
+    for (vname, ic_expr) in expression_initial_conditions
+        if haskey(model.variables, vname)
+            shape = model.variables[vname].shape
+            if shape !== nothing && !isempty(shape)
+                dim_var_map = Dict{String,Int}(shape[d] => d for d in 1:length(shape))
+                node = _compile(ic_expr, dim_var_map, Set{Symbol}(), Dict{String,Any}())
+                ic_expr_compiled[vname] = (node, shape)
+            end
+        end
+    end
+
     n_scalar = length(scalar_state_names)
     for (i_rel, cname) in enumerate(array_cell_names)
         i_abs = n_scalar + i_rel
         if haskey(initial_conditions, cname)
             u0[i_abs] = Float64(initial_conditions[cname])
         else
-            # Try the parent variable's scalar default (rare fallback).
             m = match(r"^([^\[]+)\[", cname)
             vname = m === nothing ? "" : m.captures[1]
-            if haskey(model.variables, vname)
+            if haskey(ic_expr_compiled, vname)
+                # Evaluate expression at this cell's integer index coordinates.
+                node, _ = ic_expr_compiled[vname]
+                m2 = match(r"\[([^\]]+)\]$", cname)
+                if m2 !== nothing
+                    cell_idxs = parse.(Int, split(m2.captures[1], ","))
+                    u_ic = Float64[Float64(x) for x in cell_idxs]
+                    u0[i_abs] = _eval_node(node, u_ic, NamedTuple(), 0.0)
+                else
+                    u0[i_abs] = 0.0
+                end
+            elseif haskey(model.variables, vname)
+                # Fall back to the parent variable's scalar default.
                 d = model.variables[vname].default
                 u0[i_abs] = d === nothing ? 0.0 : Float64(d)
             else
