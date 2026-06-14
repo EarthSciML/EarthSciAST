@@ -46,6 +46,7 @@ include("grid_assembly.jl")
 include("ghost_cells.jl")
 include("mtk_export.jl")
 include("tree_walk.jl")
+include("gdd.jl")
 include("run_tests.jl")
 
 export
@@ -136,6 +137,8 @@ export
     materialize, expand_scheme,
     # Discretization pipeline (RFC §11, gt-gbs2)
     discretize,
+    # GDD loading and grid_refs resolution (esm-spec §4.7.1, §6.6.2, §6.7.2)
+    resolve_grid_refs,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)

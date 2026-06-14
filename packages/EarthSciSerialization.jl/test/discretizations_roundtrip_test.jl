@@ -139,3 +139,114 @@ end
     @test consumer["requires"]["q_left_edge"] == "ppm_reconstruction#q_left_edge"
     @test consumer["requires"]["q_right_edge"] == "ppm_reconstruction#q_right_edge"
 end
+
+@testset "§4.7.1 discretizations {ref} resolution" begin
+    ref_path    = joinpath(_DISC_FIXTURES_DIR, "disc_ref_resolve.esm")
+    inline_path = joinpath(_DISC_FIXTURES_DIR, "disc_ref_resolve_inline.esm")
+
+    @testset "load resolves {ref} to inline scheme" begin
+        esm = EarthSciSerialization.load(ref_path)
+        @test esm isa EsmFile
+        @test esm.discretizations !== nothing
+        @test haskey(esm.discretizations, "centered_grad")
+
+        # After resolution the entry must be a scheme dict, not a {ref} dict.
+        scheme = esm.discretizations["centered_grad"]
+        @test scheme isa Dict
+        @test !haskey(scheme, "ref")
+        @test haskey(scheme, "applies_to")
+        @test haskey(scheme, "stencil")
+        @test scheme["grid_family"] == "cartesian"
+        @test length(scheme["stencil"]) == 2
+    end
+
+    @testset "{ref} and inline produce identical scheme dicts" begin
+        ref_esm    = EarthSciSerialization.load(ref_path)
+        inline_esm = EarthSciSerialization.load(inline_path)
+        @test ref_esm.discretizations["centered_grad"] ==
+              inline_esm.discretizations["centered_grad"]
+    end
+
+    @testset "dangling {ref} raises SubsystemRefError" begin
+        mktempdir() do dir
+            bad_esm = """
+            {
+              "esm": "0.2.0",
+              "metadata": { "name": "bad_ref" },
+              "models": {
+                "E": {
+                  "variables": { "x": { "type": "state", "default": 0.0, "units": "1" } },
+                  "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 0.0 }]
+                }
+              },
+              "discretizations": { "s": { "ref": "does_not_exist.esm" } }
+            }
+            """
+            p = joinpath(dir, "bad.esm")
+            write(p, bad_esm)
+            @test_throws EarthSciSerialization.SubsystemRefError EarthSciSerialization.load(p)
+        end
+    end
+
+    @testset "URL {ref} triggers remote-load error path (mocked)" begin
+        mktempdir() do dir
+            url_esm = """
+            {
+              "esm": "0.2.0",
+              "metadata": { "name": "url_ref" },
+              "models": {
+                "E": {
+                  "variables": { "x": { "type": "state", "default": 0.0, "units": "1" } },
+                  "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 0.0 }]
+                }
+              },
+              "discretizations": {
+                "s": { "ref": "https://unreachable.invalid/rules/scheme.json" }
+              }
+            }
+            """
+            p = joinpath(dir, "url_ref.esm")
+            write(p, url_esm)
+            # URL loading fails with SubsystemRefError (wrapped download error).
+            @test_throws EarthSciSerialization.SubsystemRefError EarthSciSerialization.load(p)
+        end
+    end
+
+    @testset "empty disc ref file raises SubsystemRefError" begin
+        mktempdir() do dir
+            # Rule file with no discretizations block.
+            rule_file = """
+            {
+              "esm": "0.2.0",
+              "metadata": { "name": "empty_rule" },
+              "models": {
+                "E": {
+                  "variables": { "x": { "type": "state", "default": 0.0, "units": "1" } },
+                  "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 0.0 }]
+                }
+              }
+            }
+            """
+            rule_path = joinpath(dir, "empty_rule.esm")
+            write(rule_path, rule_file)
+
+            host_esm = """
+            {
+              "esm": "0.2.0",
+              "metadata": { "name": "host" },
+              "models": {
+                "E": {
+                  "variables": { "x": { "type": "state", "default": 0.0, "units": "1" } },
+                  "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 0.0 }]
+                }
+              },
+              "discretizations": { "s": { "ref": "empty_rule.esm" } }
+            }
+            """
+            host_path = joinpath(dir, "host.esm")
+            write(host_path, host_esm)
+            err = @test_throws EarthSciSerialization.SubsystemRefError EarthSciSerialization.load(host_path)
+            @test occursin("no discretizations", err.value.message)
+        end
+    end
+end

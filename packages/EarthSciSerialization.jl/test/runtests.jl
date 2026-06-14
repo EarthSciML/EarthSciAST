@@ -33,6 +33,8 @@ using JSON3
     include("rule_engine_test.jl")
     include("rule_engine_conformance_test.jl")
     include("scheme_expansion_test.jl")
+    include("discretization_ref_test.jl")
+    include("grid_refs_test.jl")
     include("discretize_test.jl")
     include("conformance_discretize_test.jl")
     include("dae_missing_conformance_test.jl")

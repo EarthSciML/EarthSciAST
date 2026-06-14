@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://earthsciml.org/schemas/esm/0.6.0/esm.schema.json",
   "title": "ESM Format",
-  "description": "EarthSciML Serialization Format (v0.6.0) \u2014 a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.6.0 adds the `integral` built-in AST op for spatial partial integrals in partial integro-differential equations (PIDEs): an `integral` node carries `var` (integration dimension name), `lower` (lower-bound Expression), `upper` (upper-bound Expression), and `args[0]` (integrand); the upper bound may be the spatial variable itself for cumulative/partial integrals, or a constant for whole-domain integrals. Lowers to MethodOfLines.jl `Integral(x in DomainSets.ClosedInterval(lower, upper))`. v0.5.0 widens the `plots.y` field to accept either a single PlotAxis or an array of PlotAxis objects: the array form is an inline multi-series shorthand for `line`/`scatter` plots that projects each axis entry onto the `series` list (first entry becomes the canonical y-axis; each entry's `label`, or its `variable` when `label` is absent, becomes the series name). v0.4.0 adds first-class sampled function tables: a top-level `function_tables` block carrying named axes plus per-output literal data, and a new `table_lookup` AST op that names a table, supplies a per-axis input expression map, and selects an output. Tables are syntactic sugar that bindings lower to the existing `interp.linear` / `interp.bilinear` / `index` semantics \u2014 same numerical result, with the bulk data lifted out of repeated inline `const` arrays (see docs/rfcs/sampled-tables.md). v0.4.0 also adds component-scoped in-file `expression_templates` blocks (declared inside a single model or reaction_system) plus a new `apply_expression_template` AST op that references a template by name with per-parameter bindings. Templates are pure syntactic substitution \u2014 no recursion, no template-calls-template, no metaprogramming \u2014 and are expanded at load time so downstream consumers see only normal Expression ASTs (see docs/rfcs/ast-expression-templates.md). v0.3.0 closed the function-registry extension point (see docs/rfcs/closed-function-registry.md): the top-level `operators` and `registered_functions` blocks are removed, the `call` AST op is removed, and a new top-level `enums` block plus `fn` and `enum` AST ops are added. The `fn` op invokes a spec-defined closed function (currently the `datetime.*` calendar family plus `interp.searchsorted`, `interp.linear`, and `interp.bilinear`); `enum` resolves a file-local symbol to a positive integer used by the existing `index` op. Files declaring `operators` or `registered_functions` are no longer valid under this schema and must be migrated to AST equations + closed-function calls + discretization schemes (RFC \u00a76).",
+  "description": "EarthSciML Serialization Format (v0.6.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.6.0 adds the `integral` built-in AST op for spatial partial integrals in partial integro-differential equations (PIDEs): an `integral` node carries `var` (integration dimension name), `lower` (lower-bound Expression), `upper` (upper-bound Expression), and `args[0]` (integrand); the upper bound may be the spatial variable itself for cumulative/partial integrals, or a constant for whole-domain integrals. Lowers to MethodOfLines.jl `Integral(x in DomainSets.ClosedInterval(lower, upper))`. v0.5.0 widens the `plots.y` field to accept either a single PlotAxis or an array of PlotAxis objects: the array form is an inline multi-series shorthand for `line`/`scatter` plots that projects each axis entry onto the `series` list (first entry becomes the canonical y-axis; each entry's `label`, or its `variable` when `label` is absent, becomes the series name). v0.4.0 adds first-class sampled function tables: a top-level `function_tables` block carrying named axes plus per-output literal data, and a new `table_lookup` AST op that names a table, supplies a per-axis input expression map, and selects an output. Tables are syntactic sugar that bindings lower to the existing `interp.linear` / `interp.bilinear` / `index` semantics — same numerical result, with the bulk data lifted out of repeated inline `const` arrays (see docs/rfcs/sampled-tables.md). v0.4.0 also adds component-scoped in-file `expression_templates` blocks (declared inside a single model or reaction_system) plus a new `apply_expression_template` AST op that references a template by name with per-parameter bindings. Templates are pure syntactic substitution — no recursion, no template-calls-template, no metaprogramming — and are expanded at load time so downstream consumers see only normal Expression ASTs (see docs/rfcs/ast-expression-templates.md). v0.3.0 closed the function-registry extension point (see docs/rfcs/closed-function-registry.md): the top-level `operators` and `registered_functions` blocks are removed, the `call` AST op is removed, and a new top-level `enums` block plus `fn` and `enum` AST ops are added. The `fn` op invokes a spec-defined closed function (currently the `datetime.*` calendar family plus `interp.searchsorted`, `interp.linear`, and `interp.bilinear`); `enum` resolves a file-local symbol to a positive integer used by the existing `index` op. Files declaring `operators` or `registered_functions` are no longer valid under this schema and must be migrated to AST equations + closed-function calls + discretization schemes (RFC §6).",
   "type": "object",
   "required": [
     "esm",
@@ -19,6 +19,16 @@
       "required": [
         "reaction_systems"
       ]
+    },
+    {
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "grid_discretization_descriptor"
+        }
+      }
     }
   ],
   "properties": {
@@ -26,6 +36,10 @@
       "type": "string",
       "description": "Format version string (semver).",
       "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Optional document-kind discriminator. When set to 'grid_discretization_descriptor', the document is a GridDiscretization Descriptor (GDD) file (esm-spec.md §4.7.1). GDD files carry grid geometry and discretization rules together and are referenced from test and example grid_refs fields. Absent for standard ESM component documents."
     },
     "metadata": {
       "$ref": "#/$defs/Metadata"
@@ -53,7 +67,7 @@
     },
     "enums": {
       "type": "object",
-      "description": "File-local symbol-to-positive-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to positive integers. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md \u00a79.3.",
+      "description": "File-local symbol-to-positive-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to positive integers. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.",
       "additionalProperties": {
         "$ref": "#/$defs/EnumDeclaration"
       }
@@ -81,7 +95,7 @@
     },
     "discretizations": {
       "type": "object",
-      "description": "Named stencil templates (discretization schemes) that map PDE operators to concrete AST transforms over a grid. Each entry is either a standard stencil-template Discretization (\u00a77.1) or a CrossMetricStencilRule composite (\u00a77.6) that combines per-axis stencils and metric components for covariant operators on curvilinear grids, or a MultiOutputStencilRule (\u00a77.9) that emits multiple named output fields from one stencil application.",
+      "description": "Named stencil templates (discretization schemes) that map PDE operators to concrete AST transforms over a grid. Each entry is either a standard stencil-template Discretization (§7.1) or a CrossMetricStencilRule composite (§7.6) that combines per-axis stencils and metric components for covariant operators on curvilinear grids, or a MultiOutputStencilRule (§7.9) that emits multiple named output fields from one stencil application, or a DiscretizationRef (§4.7.1) {ref} pointer to an external ESD rule file.",
       "additionalProperties": {
         "oneOf": [
           {
@@ -92,27 +106,30 @@
           },
           {
             "$ref": "#/$defs/MultiOutputStencilRule"
+          },
+          {
+            "$ref": "#/$defs/DiscretizationRef"
           }
         ]
       }
     },
     "grids": {
       "type": "object",
-      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured/cubed_sphere topology with dimensions, staggering locations, metric arrays, and (for unstructured/cubed-sphere) connectivity tables. See docs/rfcs/discretization.md \u00a76.",
+      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured/cubed_sphere topology with dimensions, staggering locations, metric arrays, and (for unstructured/cubed-sphere) connectivity tables. See docs/rfcs/discretization.md §6.",
       "additionalProperties": {
         "$ref": "#/$defs/Grid"
       }
     },
     "staggering_rules": {
       "type": "object",
-      "description": "Named staggering conventions that declare where quantities live on a grid. The unstructured_c_grid kind (RFC \u00a77.4) captures MPAS-style C-grid placement \u2014 scalars at Voronoi cell centers, normal velocities at edge midpoints, vorticity at triangle vertices \u2014 and is the prerequisite declaration for the \u00a77.3 worked-example discretizations (mpas_divergence_flux_form, mpas_gradient_edge_difference). Each entry references a grids.<g> entry by name.",
+      "description": "Named staggering conventions that declare where quantities live on a grid. The unstructured_c_grid kind (RFC §7.4) captures MPAS-style C-grid placement — scalars at Voronoi cell centers, normal velocities at edge midpoints, vorticity at triangle vertices — and is the prerequisite declaration for the §7.3 worked-example discretizations (mpas_divergence_flux_form, mpas_gradient_edge_difference). Each entry references a grids.<g> entry by name.",
       "additionalProperties": {
         "$ref": "#/$defs/StaggeringRule"
       }
     },
     "function_tables": {
       "type": "object",
-      "description": "Component-scoped sampled function tables (v0.4.0). Each entry declares ordered named axes plus a literal nested-array data block, optionally tagged with output names; the `table_lookup` AST op references a table by id, supplies a per-axis input-coordinate expression map, and selects which output to return. Tables are syntactic sugar over `interp.linear` / `interp.bilinear` / `index`: a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup. See esm-spec.md \u00a79.5 and docs/rfcs/sampled-tables.md.",
+      "description": "Component-scoped sampled function tables (v0.4.0). Each entry declares ordered named axes plus a literal nested-array data block, optionally tagged with output names; the `table_lookup` AST op references a table by id, supplies a per-axis input-coordinate expression map, and selects which output to return. Tables are syntactic sugar over `interp.linear` / `interp.bilinear` / `index`: a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup. See esm-spec.md §9.5 and docs/rfcs/sampled-tables.md.",
       "additionalProperties": {
         "$ref": "#/$defs/FunctionTable"
       }
@@ -393,14 +410,14 @@
         },
         "name": {
           "type": "string",
-          "description": "For fn: the dotted module path of a function in the closed function registry (esm-spec.md \u00a79.2). The set of valid names is fixed by the spec version; bindings MUST reject unknown names with diagnostic 'unknown_closed_function'. v0.3.0 set: datetime.year, datetime.month, datetime.day, datetime.hour, datetime.minute, datetime.second, datetime.day_of_year, datetime.julian_day, datetime.is_leap_year, interp.searchsorted, interp.linear, interp.bilinear. For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md \u00a79.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
+          "description": "For fn: the dotted module path of a function in the closed function registry (esm-spec.md §9.2). The set of valid names is fixed by the spec version; bindings MUST reject unknown names with diagnostic 'unknown_closed_function'. v0.3.0 set: datetime.year, datetime.month, datetime.day, datetime.hour, datetime.minute, datetime.second, datetime.day_of_year, datetime.julian_day, datetime.is_leap_year, interp.searchsorted, interp.linear, interp.bilinear. For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
         },
         "value": {
           "description": "For const: the inline literal value carried by this expression node. Any JSON number, integer, or nested array thereof. `args` MUST be empty for a const node."
         },
         "kind": {
           "type": "string",
-          "description": "For the 'bc' pattern-match op: the BC kind to match (one of 'constant', 'dirichlet', 'neumann', 'robin', 'zero_gradient', 'periodic', 'flux_contrib'). See RFC \u00a79.2.",
+          "description": "For the 'bc' pattern-match op: the BC kind to match (one of 'constant', 'dirichlet', 'neumann', 'robin', 'zero_gradient', 'periodic', 'flux_contrib'). See RFC §9.2.",
           "enum": [
             "constant",
             "dirichlet",
@@ -413,7 +430,7 @@
         },
         "side": {
           "type": "string",
-          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'panel_seam', 'mesh_boundary'). See RFC \u00a79.2."
+          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'panel_seam', 'mesh_boundary'). See RFC §9.2."
         },
         "table": {
           "type": "string",
@@ -421,7 +438,7 @@
         },
         "axes": {
           "type": "object",
-          "description": "For table_lookup: a map from axis name (matching one of the referenced table's `axes[].name` entries) to the scalar input expression supplying that coordinate at evaluation time. Every axis declared on the table MUST appear as a key; extra keys are rejected with 'table_lookup_axis_name_mismatch'. `args` MUST be empty for a table_lookup node \u2014 the per-axis expressions live here.",
+          "description": "For table_lookup: a map from axis name (matching one of the referenced table's `axes[].name` entries) to the scalar input expression supplying that coordinate at evaluation time. Every axis declared on the table MUST appear as a key; extra keys are rejected with 'table_lookup_axis_name_mismatch'. `args` MUST be empty for a table_lookup node — the per-axis expressions live here.",
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           }
@@ -440,7 +457,7 @@
         },
         "bindings": {
           "type": "object",
-          "description": "For apply_expression_template: a map from each parameter name declared by the referenced template to the Expression bound to that parameter. Every entry of the template's `params` MUST appear as a key; extra keys are rejected at load time with diagnostic 'apply_expression_template_bindings_mismatch'. Values may be numeric literals, variable name references (strings), or arbitrary Expression ASTs (full subtrees). `args` MUST be empty for an apply_expression_template node \u2014 the parameter values live here.",
+          "description": "For apply_expression_template: a map from each parameter name declared by the referenced template to the Expression bound to that parameter. Every entry of the template's `params` MUST appear as a key; extra keys are rejected at load time with diagnostic 'apply_expression_template_bindings_mismatch'. Values may be numeric literals, variable name references (strings), or arbitrary Expression ASTs (full subtrees). `args` MUST be empty for an apply_expression_template node — the parameter values live here.",
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           }
@@ -968,7 +985,7 @@
             "observed",
             "brownian"
           ],
-          "description": "state = time-dependent unknown; parameter = externally set constant; observed = derived quantity; brownian = stochastic noise process (Wiener) that drives an SDE \u2014 the presence of any brownian variable promotes the enclosing model from an ODE system to an SDE system."
+          "description": "state = time-dependent unknown; parameter = externally set constant; observed = derived quantity; brownian = stochastic noise process (Wiener) that drives an SDE — the presence of any brownian variable promotes the enclosing model from an ODE system to an SDE system."
         },
         "units": {
           "type": "string"
@@ -992,11 +1009,11 @@
           "items": {
             "type": "string"
           },
-          "description": "Arrayed-variable shape: ordered list of dimension names (drawn from the enclosing model's domain.spatial). Omitted or null indicates a scalar. Introduced in spec 0.2 (discretization RFC \u00a710.2)."
+          "description": "Arrayed-variable shape: ordered list of dimension names (drawn from the enclosing model's domain.spatial). Omitted or null indicates a scalar. Introduced in spec 0.2 (discretization RFC §10.2)."
         },
         "location": {
           "type": "string",
-          "description": "Staggered-grid location tag (e.g., \"cell_center\", \"edge_normal\", \"x_face\", \"vertex\"). Omitted indicates no explicit staggering; the spatialization step defaults to \"cell_center\" when the variable's model has a grid (discretization RFC \u00a710.2, \u00a711 step 2)."
+          "description": "Staggered-grid location tag (e.g., \"cell_center\", \"edge_normal\", \"x_face\", \"vertex\"). Omitted indicates no explicit staggering; the spatialization step defaults to \"cell_center\" when the variable's model has a grid (discretization RFC §10.2, §11 step 2)."
         },
         "noise_kind": {
           "type": "string",
@@ -1063,7 +1080,7 @@
     },
     "Model": {
       "type": "object",
-      "description": "An ODE system \u2014 a fully specified set of time-dependent equations.",
+      "description": "An ODE system — a fully specified set of time-dependent equations.",
       "required": [
         "variables",
         "equations"
@@ -1179,7 +1196,7 @@
         },
         "boundary_conditions": {
           "type": "object",
-          "description": "Model-level boundary conditions, keyed by user-supplied id (see docs/rfcs/discretization.md \u00a79). v0.2.0 breaking change: domains.<d>.boundary_conditions was removed in favor of this field; files from v0.1.0 carrying the old field must be migrated via spec.migrate_0_1_to_0_2 (RFC \u00a716.1).",
+          "description": "Model-level boundary conditions, keyed by user-supplied id (see docs/rfcs/discretization.md §9). v0.2.0 breaking change: domains.<d>.boundary_conditions was removed in favor of this field; files from v0.1.0 carrying the old field must be migrated via spec.migrate_0_1_to_0_2 (RFC §16.1).",
           "additionalProperties": {
             "$ref": "#/$defs/BoundaryCondition"
           }
@@ -1207,6 +1224,20 @@
         }
       }
     },
+    "DiscretizationRef": {
+      "type": "object",
+      "description": "A reference to an external ESD rule file containing a single discretization scheme definition (§4.7.1). The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file. At load time the referenced file's single scheme is spliced in place of this {ref} object.",
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Local file path or URL pointing to an ESD rule file (an ESM file whose discretizations block contains exactly one scheme definition). The scheme is loaded and used as the inline definition for this discretizations entry."
+        }
+      }
+    },
     "Species": {
       "type": "object",
       "description": "A reactive species in a reaction system.",
@@ -1228,7 +1259,7 @@
         "constant": {
           "type": "boolean",
           "default": false,
-          "description": "When true, the species participates in reactions as a reactant/product but its concentration is held fixed (no ODE integration) \u2014 a reservoir species. Maps to Catalyst's @species [isconstantspecies=true]. Absent or false means an ordinary state species with an ODE."
+          "description": "When true, the species participates in reactions as a reactant/product but its concentration is held fixed (no ODE integration) — a reservoir species. Maps to Catalyst's @species [isconstantspecies=true]. Absent or false means an ordinary state species with an ODE."
         }
       }
     },
@@ -1254,7 +1285,7 @@
     },
     "StoichiometryEntry": {
       "type": "object",
-      "description": "A species with its stoichiometric coefficient in a reaction. Coefficients MUST be positive and finite (NaN / \u00b1Infinity are rejected at parse time). Fractional values are supported to preserve fidelity with atmospheric-chemistry mechanisms whose products include non-integer yields (e.g. `0.87 CH2O`, `1.86 CH3O2`). Integer values remain valid \u2014 they are a subset of the permitted number range.",
+      "description": "A species with its stoichiometric coefficient in a reaction. Coefficients MUST be positive and finite (NaN / ±Infinity are rejected at parse time). Fractional values are supported to preserve fidelity with atmospheric-chemistry mechanisms whose products include non-integer yields (e.g. `0.87 CH2O`, `1.86 CH3O2`). Integer values remain valid — they are a subset of the permitted number range.",
       "required": [
         "species",
         "stoichiometry"
@@ -1289,7 +1320,7 @@
           "type": "string"
         },
         "substrates": {
-          "description": "Array of {species, stoichiometry} or null for source reactions (\u2205 \u2192 X).",
+          "description": "Array of {species, stoichiometry} or null for source reactions (∅ → X).",
           "oneOf": [
             {
               "type": "null"
@@ -1304,7 +1335,7 @@
           ]
         },
         "products": {
-          "description": "Array of {species, stoichiometry} or null for sink reactions (X \u2192 \u2205).",
+          "description": "Array of {species, stoichiometry} or null for sink reactions (X → ∅).",
           "oneOf": [
             {
               "type": "null"
@@ -1329,7 +1360,7 @@
     },
     "ReactionSystem": {
       "type": "object",
-      "description": "A reaction network \u2014 declarative representation of chemical or biological reactions.",
+      "description": "A reaction network — declarative representation of chemical or biological reactions.",
       "required": [
         "species",
         "parameters",
@@ -1446,7 +1477,7 @@
     },
     "ExpressionTemplate": {
       "type": "object",
-      "description": "A single in-file Expression-AST template (esm-spec \u00a79.6 / docs/rfcs/ast-expression-templates.md). The `body` is a normal Expression AST in which parameter occurrences are written as bare parameter-name strings in any position where a variable reference would appear. At load time `apply_expression_template` nodes are expanded by structural substitution: every parameter occurrence in `body` is replaced by the bound argument's AST in source order. Pure syntactic substitution \u2014 no evaluation, no metaprogramming. Bodies MUST NOT contain `apply_expression_template` nodes themselves (no template-calls-template); bindings reject this with diagnostic 'apply_expression_template_recursive_body'.",
+      "description": "A single in-file Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `body` is a normal Expression AST in which parameter occurrences are written as bare parameter-name strings in any position where a variable reference would appear. At load time `apply_expression_template` nodes are expanded by structural substitution: every parameter occurrence in `body` is replaced by the bound argument's AST in source order. Pure syntactic substitution — no evaluation, no metaprogramming. Bodies MUST NOT contain `apply_expression_template` nodes themselves (no template-calls-template); bindings reject this with diagnostic 'apply_expression_template_recursive_body'.",
       "required": [
         "params",
         "body"
@@ -1710,7 +1741,7 @@
         },
         "grid_refs": {
           "type": "array",
-          "description": "PDE only. Array of {ref} objects pointing to GridDiscretization Descriptor files (see esm-spec.md \u00a74.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the test on exactly that grid configuration. Two or more entries enable a resolution sweep for convergence_order assertions.",
+          "description": "PDE only. Array of {ref} objects pointing to GridDiscretization Descriptor files (see esm-spec.md §4.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the test on exactly that grid configuration. Two or more entries enable a resolution sweep for convergence_order assertions.",
           "items": {
             "type": "object",
             "required": [
@@ -1816,7 +1847,7 @@
     },
     "ParameterSweep": {
       "type": "object",
-      "description": "A parameter sweep specification. Currently only Cartesian product sweeps are supported \u2014 the total run count is the product of each dimension's length.",
+      "description": "A parameter sweep specification. Currently only Cartesian product sweeps are supported — the total run count is the product of each dimension's length.",
       "required": [
         "type",
         "dimensions"
@@ -1905,7 +1936,7 @@
     },
     "Plot": {
       "type": "object",
-      "description": "A plot specification associated with an example. Only structural information is recorded \u2014 axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.",
+      "description": "A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.",
       "required": [
         "id",
         "type",
@@ -1951,7 +1982,7 @@
         },
         "value": {
           "$ref": "#/$defs/PlotValue",
-          "description": "Required for heatmap; defines the color channel. Ignored for line/scatter. For field_snapshot, the variable plotted as the color channel (use `value.variable`); `at_time` and `reduce` are ignored \u2014 the field is sampled at `at_time` declared on the plot."
+          "description": "Required for heatmap; defines the color channel. Ignored for line/scatter. For field_snapshot, the variable plotted as the color channel (use `value.variable`); `at_time` and `reduce` are ignored — the field is sampled at `at_time` declared on the plot."
         },
         "series": {
           "type": "array",
@@ -2046,7 +2077,7 @@
         },
         "initial_state": {
           "$ref": "#/$defs/InitialConditions",
-          "description": "Initial conditions for state variables. Reuses the top-level InitialConditions $def (constant / per_variable / from_file / expression). For PDE components the `expression` variant carries per-variable closed-form initial fields (see esm-spec.md \u00a711.4)."
+          "description": "Initial conditions for state variables. Reuses the top-level InitialConditions $def (constant / per_variable / from_file / expression). For PDE components the `expression` variant carries per-variable closed-form initial fields (see esm-spec.md §11.4)."
         },
         "parameters": {
           "type": "object",
@@ -2071,7 +2102,7 @@
         },
         "grid_refs": {
           "type": "array",
-          "description": "PDE only. Array of {ref} objects pointing to GridDiscretization Descriptor files (see esm-spec.md \u00a74.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the example on exactly that grid configuration. When multiple entries are provided, the example represents a family of runs at different grid configurations; may be combined with parameter_sweep (total runs = Cartesian product).",
+          "description": "PDE only. Array of {ref} objects pointing to GridDiscretization Descriptor files (see esm-spec.md §4.7.1). Each entry overrides the component's declared spatial grid and discretization for one run. A single-element list runs the example on exactly that grid configuration. When multiple entries are provided, the example represents a family of runs at different grid configurations; may be combined with parameter_sweep (total runs = Cartesian product).",
           "items": {
             "type": "object",
             "required": [
@@ -2118,12 +2149,12 @@
         "start": {
           "type": "string",
           "format": "date-time",
-          "description": "ISO 8601 datetime \u2014 first timestamp available from this source."
+          "description": "ISO 8601 datetime — first timestamp available from this source."
         },
         "end": {
           "type": "string",
           "format": "date-time",
-          "description": "ISO 8601 datetime \u2014 last timestamp available from this source."
+          "description": "ISO 8601 datetime — last timestamp available from this source."
         },
         "file_period": {
           "type": "string",
@@ -2272,7 +2303,7 @@
     },
     "DataLoaderMesh": {
       "type": "object",
-      "description": "Mesh-loader descriptor (discretization RFC \u00a78.A). Declares which loader fields are integer-typed connectivity tables vs float-typed metric arrays and the topological family the loader serves. Only meaningful when the enclosing DataLoader has kind='mesh'.",
+      "description": "Mesh-loader descriptor (discretization RFC §8.A). Declares which loader fields are integer-typed connectivity tables vs float-typed metric arrays and the topological family the loader serves. Only meaningful when the enclosing DataLoader has kind='mesh'.",
       "required": [
         "topology",
         "connectivity_fields",
@@ -2287,7 +2318,7 @@
             "fesom_triangular",
             "icon_triangular"
           ],
-          "description": "Closed topology enum. 'mpas_voronoi' is the v0.2.0 MVP; 'fesom_triangular' and 'icon_triangular' are reserved. Adding a new value is a minor version bump (RFC \u00a78.A.1)."
+          "description": "Closed topology enum. 'mpas_voronoi' is the v0.2.0 MVP; 'fesom_triangular' and 'icon_triangular' are reserved. Adding a new value is a minor version bump (RFC §8.A.1)."
         },
         "connectivity_fields": {
           "type": "array",
@@ -2307,7 +2338,7 @@
         },
         "dimension_sizes": {
           "type": "object",
-          "description": "Map of dimension name \u2192 integer extent or the literal string 'from_file'. Values feed grid-level parameters marked value='from_loader' (RFC \u00a76.6).",
+          "description": "Map of dimension name → integer extent or the literal string 'from_file'. Values feed grid-level parameters marked value='from_loader' (RFC §6.6).",
           "additionalProperties": {
             "oneOf": [
               {
@@ -2327,7 +2358,7 @@
     },
     "DataLoaderDeterminism": {
       "type": "object",
-      "description": "Reproducibility contract a mesh (or grid) loader advertises to bindings (discretization RFC \u00a78.A and \u00a714 item 4). A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.",
+      "description": "Reproducibility contract a mesh (or grid) loader advertises to bindings (discretization RFC §8.A and §14 item 4). A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.",
       "additionalProperties": false,
       "properties": {
         "endian": {
@@ -2358,7 +2389,7 @@
     },
     "DataLoader": {
       "type": "object",
-      "description": "A generic, runtime-agnostic description of an external data source. Carries enough structural information to locate files, map timestamps to files, describe spatial/variable semantics, and regrid \u2014 rather than pointing at a runtime handler. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.",
+      "description": "A generic, runtime-agnostic description of an external data source. Carries enough structural information to locate files, map timestamps to files, describe spatial/variable semantics, and regrid — rather than pointing at a runtime handler. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.",
       "required": [
         "kind",
         "source",
@@ -2374,7 +2405,7 @@
             "static",
             "mesh"
           ],
-          "description": "Structural kind of the dataset. 'grid' / 'points' / 'static' are the classical kinds; 'mesh' (discretization RFC \u00a78.A) declares a mesh loader that publishes integer connectivity tables and float metric arrays under mesh.connectivity_fields / mesh.metric_fields. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags."
+          "description": "Structural kind of the dataset. 'grid' / 'points' / 'static' are the classical kinds; 'mesh' (discretization RFC §8.A) declares a mesh loader that publishes integer connectivity tables and float metric arrays under mesh.connectivity_fields / mesh.metric_fields. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags."
         },
         "source": {
           "$ref": "#/$defs/DataLoaderSource"
@@ -2441,7 +2472,7 @@
     },
     "EnumDeclaration": {
       "type": "object",
-      "description": "A file-local enum mapping symbolic names to positive integers (esm-spec.md \u00a79.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.",
+      "description": "A file-local enum mapping symbolic names to positive integers (esm-spec.md §9.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.",
       "minProperties": 1,
       "additionalProperties": {
         "type": "integer",
@@ -2874,7 +2905,7 @@
       }
     },
     "InitialConditions": {
-      "description": "Initial conditions for state variables. Four shapes: `constant` (uniform scalar), `per_variable` (uniform per variable), `from_file` (load a precomputed field), and `expression` (per-variable Expressions over the component's domain coordinates \u2014 a serializable closed-form initial field for PDE components).",
+      "description": "Initial conditions for state variables. Four shapes: `constant` (uniform scalar), `per_variable` (uniform per variable), `from_file` (load a precomputed field), and `expression` (per-variable Expressions over the component's domain coordinates — a serializable closed-form initial field for PDE components).",
       "oneOf": [
         {
           "type": "object",
@@ -2943,7 +2974,7 @@
             },
             "values": {
               "type": "object",
-              "description": "Map from variable name to an Expression that yields the variable's initial field. Free symbols in the Expression MUST be names of the component domain's spatial dimensions (e.g., \"x\", \"y\"). The runtime evaluates the Expression at every grid point to produce u(x, 0). Only meaningful on PDE (\u22651-D spatial) components.",
+              "description": "Map from variable name to an Expression that yields the variable's initial field. Free symbols in the Expression MUST be names of the component domain's spatial dimensions (e.g., \"x\", \"y\"). The runtime evaluates the Expression at every grid point to produce u(x, 0). Only meaningful on PDE (≥1-D spatial) components.",
               "additionalProperties": {
                 "$ref": "#/$defs/Expression"
               },
@@ -2955,7 +2986,7 @@
     },
     "DeprecatedDomainBoundaryCondition": {
       "type": "object",
-      "description": "DEPRECATED v0.1.0 domain-level boundary condition entry. Retained for the v0.2.0 transitional window only (RFC \u00a710.1). Loaders emit E_DEPRECATED_DOMAIN_BC when encountering it; use Model.boundary_conditions (keyed map of BoundaryCondition entries) instead.",
+      "description": "DEPRECATED v0.1.0 domain-level boundary condition entry. Retained for the v0.2.0 transitional window only (RFC §10.1). Loaders emit E_DEPRECATED_DOMAIN_BC when encountering it; use Model.boundary_conditions (keyed map of BoundaryCondition entries) instead.",
       "deprecated": true,
       "required": [
         "type",
@@ -3000,7 +3031,7 @@
     },
     "BoundaryCondition": {
       "type": "object",
-      "description": "Model-level boundary condition entry (v0.2.0). Constrains one model variable on one boundary side. See docs/rfcs/discretization.md \u00a79.2 for full semantics. This object lives under models.<M>.boundary_conditions keyed by user-supplied id; it replaces the v0.1.0 domains.<d>.boundary_conditions list.",
+      "description": "Model-level boundary condition entry (v0.2.0). Constrains one model variable on one boundary side. See docs/rfcs/discretization.md §9.2 for full semantics. This object lives under models.<M>.boundary_conditions keyed by user-supplied id; it replaces the v0.1.0 domains.<d>.boundary_conditions list.",
       "required": [
         "variable",
         "side",
@@ -3027,10 +3058,10 @@
             "periodic",
             "flux_contrib"
           ],
-          "description": "BC kind. constant/dirichlet = fixed value; zero_gradient/neumann = \u2202u/\u2202n-based; robin = \u03b1u + \u03b2\u2202u/\u2202n = \u03b3; periodic = pair-side wraparound (declare once per periodic pair on either min or max side); flux_contrib = a component-contributed flux summand that the rewrite engine aggregates with other flux_contrib entries for the same (variable, side) pair before applying the enclosing neumann/robin template."
+          "description": "BC kind. constant/dirichlet = fixed value; zero_gradient/neumann = ∂u/∂n-based; robin = αu + β∂u/∂n = γ; periodic = pair-side wraparound (declare once per periodic pair on either min or max side); flux_contrib = a component-contributed flux summand that the rewrite engine aggregates with other flux_contrib entries for the same (variable, side) pair before applying the enclosing neumann/robin template."
         },
         "value": {
-          "description": "BC value: numeric literal, variable/parameter reference string, or expression AST. Required for kind='constant' and kind='dirichlet'; semantics for other kinds per RFC \u00a79.2.",
+          "description": "BC value: numeric literal, variable/parameter reference string, or expression AST. Required for kind='constant' and kind='dirichlet'; semantics for other kinds per RFC §9.2.",
           "oneOf": [
             {
               "type": "number"
@@ -3044,7 +3075,7 @@
           ]
         },
         "robin_alpha": {
-          "description": "Robin BC coefficient \u03b1 for the u term in \u03b1u + \u03b2\u2202u/\u2202n = \u03b3.",
+          "description": "Robin BC coefficient α for the u term in αu + β∂u/∂n = γ.",
           "oneOf": [
             {
               "type": "number"
@@ -3058,7 +3089,7 @@
           ]
         },
         "robin_beta": {
-          "description": "Robin BC coefficient \u03b2 for the \u2202u/\u2202n term in \u03b1u + \u03b2\u2202u/\u2202n = \u03b3.",
+          "description": "Robin BC coefficient β for the ∂u/∂n term in αu + β∂u/∂n = γ.",
           "oneOf": [
             {
               "type": "number"
@@ -3072,7 +3103,7 @@
           ]
         },
         "robin_gamma": {
-          "description": "Robin BC RHS value \u03b3 in \u03b1u + \u03b2\u2202u/\u2202n = \u03b3.",
+          "description": "Robin BC RHS value γ in αu + β∂u/∂n = γ.",
           "oneOf": [
             {
               "type": "number"
@@ -3087,14 +3118,14 @@
         },
         "face_coords": {
           "type": "array",
-          "description": "Reduced face-coordinate index names used when `value` contains an `index` op into a loader-provided time-varying field (\u00a79.2 / \u00a78.A.3). E.g., for side='zmin' on a 3D grid, face_coords: ['i', 'j']. Omit when `value` does not index into a time-varying loader field.",
+          "description": "Reduced face-coordinate index names used when `value` contains an `index` op into a loader-provided time-varying field (§9.2 / §8.A.3). E.g., for side='zmin' on a 3D grid, face_coords: ['i', 'j']. Omit when `value` does not index into a time-varying loader field.",
           "items": {
             "type": "string"
           }
         },
         "contributed_by": {
           "type": "object",
-          "description": "Optional component-contribution marker identifying the model component (deposition, emissions, surface-flux scheme) providing this flux. The rewrite engine sums all flux_contrib entries for the same (variable, side) pair into a single aggregated flux, then applies the enclosing kind's BC template. See RFC \u00a79.3.",
+          "description": "Optional component-contribution marker identifying the model component (deposition, emissions, surface-flux scheme) providing this flux. The rewrite engine sums all flux_contrib entries for the same (variable, side) pair into a single aggregated flux, then applies the enclosing kind's BC template. See RFC §9.3.",
           "additionalProperties": false,
           "required": [
             "component"
@@ -3171,7 +3202,7 @@
         },
         "boundary_conditions": {
           "type": "array",
-          "description": "DEPRECATED (v0.2.0, RFC \u00a710.1): domain-level boundary_conditions is superseded by model-level boundary_conditions (models.<M>.boundary_conditions). Retained in the schema only as a transitional compatibility shim; loaders MUST emit E_DEPRECATED_DOMAIN_BC when this field is present. A follow-up release will remove this field entirely.",
+          "description": "DEPRECATED (v0.2.0, RFC §10.1): domain-level boundary_conditions is superseded by model-level boundary_conditions (models.<M>.boundary_conditions). Retained in the schema only as a transitional compatibility shim; loaders MUST emit E_DEPRECATED_DOMAIN_BC when this field is present. A follow-up release will remove this field entirely.",
           "deprecated": true,
           "items": {
             "$ref": "#/$defs/DeprecatedDomainBoundaryCondition"
@@ -3224,7 +3255,7 @@
     },
     "GridMetricGenerator": {
       "type": "object",
-      "description": "Generator for a grid metric array. Exactly one kind per \u00a76.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables \u2014 currently 'gnomonic_c6_neighbors' and 'gnomonic_c6_d4_action'; adding a new builtin is a minor version bump per \u00a76.4.1).",
+      "description": "Generator for a grid metric array. Exactly one kind per §6.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables — currently 'gnomonic_c6_neighbors' and 'gnomonic_c6_d4_action'; adding a new builtin is a minor version bump per §6.4.1).",
       "required": [
         "kind"
       ],
@@ -3262,7 +3293,7 @@
         },
         "name": {
           "type": "string",
-          "description": "For kind='builtin': canonical name from the closed set defined in \u00a76.4 (currently 'gnomonic_c6_neighbors', 'gnomonic_c6_d4_action'). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
+          "description": "For kind='builtin': canonical name from the closed set defined in §6.4 (currently 'gnomonic_c6_neighbors', 'gnomonic_c6_d4_action'). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
         }
       },
       "allOf": [
@@ -3322,7 +3353,7 @@
     },
     "GridMetricArray": {
       "type": "object",
-      "description": "A named metric array declared on a grid (e.g., dx, dcEdge, areaCell). See \u00a76.5.",
+      "description": "A named metric array declared on a grid (e.g., dx, dcEdge, areaCell). See §6.5.",
       "required": [
         "rank",
         "generator"
@@ -3343,7 +3374,7 @@
           "items": {
             "type": "string"
           },
-          "description": "For rank\u22652: ordered list of dimensions the array is indexed by."
+          "description": "For rank≥2: ordered list of dimensions the array is indexed by."
         },
         "shape": {
           "type": "array",
@@ -3356,7 +3387,7 @@
     },
     "GridConnectivity": {
       "type": "object",
-      "description": "Unstructured-grid connectivity table (e.g., cellsOnEdge, edgesOnCell). Integer-indexed lookup produced by a mesh loader. See \u00a76.3.",
+      "description": "Unstructured-grid connectivity table (e.g., cellsOnEdge, edgesOnCell). Integer-indexed lookup produced by a mesh loader. See §6.3.",
       "required": [
         "shape",
         "rank"
@@ -3415,7 +3446,7 @@
     },
     "Grid": {
       "type": "object",
-      "description": "A named discretization grid. The `family` selects one of three topologies (cartesian / unstructured / cubed_sphere) per docs/rfcs/discretization.md \u00a76.1-\u00a76.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
+      "description": "A named discretization grid. The `family` selects one of three topologies (cartesian / unstructured / cubed_sphere) per docs/rfcs/discretization.md §6.1-§6.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
       "required": [
         "family",
         "dimensions"
@@ -3446,7 +3477,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Declared stagger locations used by variables on this grid (see \u00a711)."
+          "description": "Declared stagger locations used by variables on this grid (see §11)."
         },
         "metric_arrays": {
           "type": "object",
@@ -3456,14 +3487,14 @@
         },
         "parameters": {
           "type": "object",
-          "description": "Grid-level parameters. Reuses the ordinary ESM Parameter schema. Parameters with value='from_loader' are resolved at load time from a referenced data_loaders entry (\u00a76.6).",
+          "description": "Grid-level parameters. Reuses the ordinary ESM Parameter schema. Parameters with value='from_loader' are resolved at load time from a referenced data_loaders entry (§6.6).",
           "additionalProperties": {
             "$ref": "#/$defs/Parameter"
           }
         },
         "domain": {
           "type": "string",
-          "description": "Optional name of the domains entry this grid refines. If a domain declares grid_spacing for the same dimension, the grid's extents.<dim>.spacing wins (\u00a76.1)."
+          "description": "Optional name of the domains entry this grid refines. If a domain declares grid_spacing for the same dimension, the grid's extents.<dim>.spacing wins (§6.1)."
         },
         "extents": {
           "type": "object",
@@ -3607,7 +3638,7 @@
       }
     },
     "PatternNode": {
-      "description": "A shallow AST pattern (discretization RFC \u00a75.2, \u00a77.1). Values may be number literals, pattern variables ($name) or concrete strings, or object-form expression patterns. depth-1 constraint is not enforced by the schema \u2014 it is checked by the rule engine per \u00a77.2.1.",
+      "description": "A shallow AST pattern (discretization RFC §5.2, §7.1). Values may be number literals, pattern variables ($name) or concrete strings, or object-form expression patterns. depth-1 constraint is not enforced by the schema — it is checked by the rule engine per §7.2.1.",
       "oneOf": [
         {
           "type": "number"
@@ -3635,7 +3666,7 @@
     },
     "RuleGuard": {
       "type": "object",
-      "description": "A rule-selection-time guard constraining a pattern-variable binding. Drawn from the \u00a75.2.4 closed vocabulary; unknown guard names MUST be rejected at parse time.",
+      "description": "A rule-selection-time guard constraining a pattern-variable binding. Drawn from the §5.2.4 closed vocabulary; unknown guard names MUST be rejected at parse time.",
       "required": [
         "guard"
       ],
@@ -3643,7 +3674,7 @@
       "properties": {
         "guard": {
           "type": "string",
-          "description": "Guard name (one of the \u00a75.2.4 closed set: 'dim_is_spatial_dim_of', 'var_location_is', 'var_has_grid', 'dim_is_periodic', 'dim_is_nonuniform', 'var_shape_rank', 'var_is_spatial_dim_of' legacy alias).",
+          "description": "Guard name (one of the §5.2.4 closed set: 'dim_is_spatial_dim_of', 'var_location_is', 'var_has_grid', 'dim_is_periodic', 'dim_is_nonuniform', 'var_shape_rank', 'var_is_spatial_dim_of' legacy alias).",
           "enum": [
             "dim_is_spatial_dim_of",
             "var_is_spatial_dim_of",
@@ -3661,11 +3692,11 @@
       }
     },
     "RuleRegion": {
-      "description": "Spatial scope of a rule (discretization RFC \u00a77.2). When absent the rule applies everywhere the pattern matches. When a string, it is an informational/advisory tag with no runtime effect (legacy form from v0.2 \u00a75.2). When an object, it is a normative scoping predicate evaluated per query point; the rule applies ONLY at points satisfying the predicate, and falls through to the next matching rule otherwise.",
+      "description": "Spatial scope of a rule (discretization RFC §7.2). When absent the rule applies everywhere the pattern matches. When a string, it is an informational/advisory tag with no runtime effect (legacy form from v0.2 §5.2). When an object, it is a normative scoping predicate evaluated per query point; the rule applies ONLY at points satisfying the predicate, and falls through to the next matching rule otherwise.",
       "oneOf": [
         {
           "type": "string",
-          "description": "Legacy advisory tag. No runtime effect \u2014 authors may group rules by region in editors but the rule engine does not consult it."
+          "description": "Legacy advisory tag. No runtime effect — authors may group rules by region in editors but the rule engine does not consult it."
         },
         {
           "type": "object",
@@ -3713,7 +3744,7 @@
             },
             "field": {
               "type": "string",
-              "description": "For kind='mask_field': name of a data_loaders entry OR a boolean-typed model variable whose per-point value gates rule application (truthy \u21d2 rule applies)."
+              "description": "For kind='mask_field': name of a data_loaders entry OR a boolean-typed model variable whose per-point value gates rule application (truthy ⇒ rule applies)."
             },
             "axis": {
               "type": "string",
@@ -3806,7 +3837,7 @@
     },
     "Rule": {
       "type": "object",
-      "description": "A single rewrite rule (discretization RFC \u00a75.2). Matches an AST pattern with pattern variables, optionally guarded, and replaces the match with an inline AST ('replacement') or a named scheme ('use'). Region-of-applicability and per-point predicates are optional.",
+      "description": "A single rewrite rule (discretization RFC §5.2). Matches an AST pattern with pattern variables, optionally guarded, and replaces the match with an inline AST ('replacement') or a named scheme ('use'). Region-of-applicability and per-point predicates are optional.",
       "required": [
         "pattern"
       ],
@@ -3818,10 +3849,10 @@
         },
         "pattern": {
           "$ref": "#/$defs/PatternNode",
-          "description": "Match pattern \u2014 an AST with '$'-prefixed pattern variables (\u00a75.2). Depth and shape are enforced by the rule engine, not the schema."
+          "description": "Match pattern — an AST with '$'-prefixed pattern variables (§5.2). Depth and shape are enforced by the rule engine, not the schema."
         },
         "where": {
-          "description": "Rule-selection-time predicate. Accepts either (a) an ARRAY of \u00a75.2.4 guard objects constraining pattern-variable bindings before the rule fires, or (b) an OBJECT expression-AST predicate evaluated per query point (\u00a77.2; reuses \u00a74 expression ops \u2014 e.g. {\"op\":\"==\",\"args\":[\"i\",0]}) whose value is coerced to bool. When an expression predicate is supplied, the rule applies ONLY at points where it evaluates true; the engine falls through to the next matching rule otherwise. Bindings that do not implement the per-point evaluator treat an object 'where' as a load-time parse success plus a runtime no-op that disables the rule (conservative fall-through).",
+          "description": "Rule-selection-time predicate. Accepts either (a) an ARRAY of §5.2.4 guard objects constraining pattern-variable bindings before the rule fires, or (b) an OBJECT expression-AST predicate evaluated per query point (§7.2; reuses §4 expression ops — e.g. {\"op\":\"==\",\"args\":[\"i\",0]}) whose value is coerced to bool. When an expression predicate is supplied, the rule applies ONLY at points where it evaluates true; the engine falls through to the next matching rule otherwise. Bindings that do not implement the per-point evaluator treat an object 'where' as a load-time parse success plus a runtime no-op that disables the rule (conservative fall-through).",
           "oneOf": [
             {
               "type": "array",
@@ -3843,11 +3874,11 @@
         },
         "use": {
           "type": "string",
-          "description": "Name of a scheme from 'discretizations.<name>' to invoke for expansion (\u00a77.2.1). Mutually exclusive with 'replacement'."
+          "description": "Name of a scheme from 'discretizations.<name>' to invoke for expansion (§7.2.1). Mutually exclusive with 'replacement'."
         },
         "produces": {
           "type": "array",
-          "description": "Optional side-equation emission entries (\u00a79.4). A rule with 'produces' alone (no 'replacement'/'use') is legal.",
+          "description": "Optional side-equation emission entries (§9.4). A rule with 'produces' alone (no 'replacement'/'use') is legal.",
           "items": {
             "type": "object",
             "additionalProperties": true
@@ -3861,7 +3892,7 @@
         },
         "bindings": {
           "type": "object",
-          "description": "Declares the symbolic identifiers (other than pattern variables and canonical grid indices i/j/k/...) that the rule's replacement AST may reference, together with the rate at which each binding's value changes at runtime (RFC \u00a75.2.8). This is metadata: loaders preserve it across roundtrips but the rule engine does not consult it during pattern matching or expansion. Time-varying bindings (per_step, per_cell) document a contract between the rule author and the host runtime that supplies values during simulation. Static bindings are equivalent to model parameters and may be evaluated at load time. Keys are bare identifier names (e.g. 'dt', 'dx', 'velocity', 'cos_lat'); '$'-prefixed pattern-variable names are NOT permitted here (declare those via the pattern itself).",
+          "description": "Declares the symbolic identifiers (other than pattern variables and canonical grid indices i/j/k/...) that the rule's replacement AST may reference, together with the rate at which each binding's value changes at runtime (RFC §5.2.8). This is metadata: loaders preserve it across roundtrips but the rule engine does not consult it during pattern matching or expansion. Time-varying bindings (per_step, per_cell) document a contract between the rule author and the host runtime that supplies values during simulation. Static bindings are equivalent to model parameters and may be evaluated at load time. Keys are bare identifier names (e.g. 'dt', 'dx', 'velocity', 'cos_lat'); '$'-prefixed pattern-variable names are NOT permitted here (declare those via the pattern itself).",
           "additionalProperties": {
             "$ref": "#/$defs/RuleBinding"
           }
@@ -3889,7 +3920,7 @@
       ]
     },
     "BoundaryPolicy": {
-      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC \u00a75.2.8 / \u00a77). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] \u2014 a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec \u2014 a {kind, ...} object). The per-axis form is required for cubed-sphere 'panel_dispatch' and for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, panel metric selection, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
+      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC §5.2.8 / §7). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] — a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec — a {kind, ...} object). The per-axis form is required for cubed-sphere 'panel_dispatch' and for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, panel metric selection, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
       "oneOf": [
         {
           "type": "string",
@@ -3926,7 +3957,7 @@
     },
     "BoundaryPolicySpec": {
       "type": "object",
-      "description": "A single per-axis boundary policy (RFC \u00a75.2.8 / \u00a77). The 'kind' tag selects from the closed set described in BoundaryPolicy; per-kind sibling fields carry the policy's parameters.",
+      "description": "A single per-axis boundary policy (RFC §5.2.8 / §7). The 'kind' tag selects from the closed set described in BoundaryPolicy; per-kind sibling fields carry the policy's parameters.",
       "required": [
         "kind"
       ],
@@ -3984,7 +4015,7 @@
       ]
     },
     "GhostWidth": {
-      "description": "Required ghost-cell padding per axis for a rule (RFC \u00a75.2.8 / \u00a77). The runtime preparing inputs to a rule SHALL extend each axis's input array by at least 'ghost_width[axis]' cells on each side, using the rule's declared 'boundary_policy' for that axis to fill the extension. Two authorial forms are accepted: (1) a non-negative INTEGER \u2014 uniform width applied to every axis the rule's stencil reaches; (2) an OBJECT with 'by_axis' giving per-axis non-negative integers. Omission is equivalent to 0 (rule reads only in-bounds indices). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
+      "description": "Required ghost-cell padding per axis for a rule (RFC §5.2.8 / §7). The runtime preparing inputs to a rule SHALL extend each axis's input array by at least 'ghost_width[axis]' cells on each side, using the rule's declared 'boundary_policy' for that axis to fill the extension. Two authorial forms are accepted: (1) a non-negative INTEGER — uniform width applied to every axis the rule's stencil reaches; (2) an OBJECT with 'by_axis' giving per-axis non-negative integers. Omission is equivalent to 0 (rule reads only in-bounds indices). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
       "oneOf": [
         {
           "type": "integer",
@@ -4014,7 +4045,7 @@
     },
     "RuleBinding": {
       "type": "object",
-      "description": "A single binding declaration for a rule (RFC \u00a75.2.8). Carries the binding's update cadence ('static', 'per_step', 'per_cell') and an optional default-value expression. The schema does not require 'default' \u2014 a binding with no default declares a runtime-supplied value with no compile-time fallback.",
+      "description": "A single binding declaration for a rule (RFC §5.2.8). Carries the binding's update cadence ('static', 'per_step', 'per_cell') and an optional default-value expression. The schema does not require 'default' — a binding with no default declares a runtime-supplied value with no compile-time fallback.",
       "required": [
         "kind"
       ],
@@ -4031,17 +4062,17 @@
         },
         "default": {
           "$ref": "#/$defs/ExpressionNode",
-          "description": "Optional default value as an \u00a74 expression. For 'static' bindings this is the value used when the runtime supplies no override. For 'per_step' and 'per_cell' bindings it is an authorial fallback \u2014 bindings MAY ignore it if the runtime always supplies a live value."
+          "description": "Optional default value as an §4 expression. For 'static' bindings this is the value used when the runtime supplies no override. For 'per_step' and 'per_cell' bindings it is an authorial fallback — bindings MAY ignore it if the runtime always supplies a live value."
         },
         "description": {
           "type": "string",
-          "description": "Free-form authorial note about what this binding represents (e.g. 'Courant number, set per-step from max|u|\u00b7dt/dx')."
+          "description": "Free-form authorial note about what this binding represents (e.g. 'Courant number, set per-step from max|u|·dt/dx')."
         }
       }
     },
     "NeighborSelector": {
       "type": "object",
-      "description": "Discretization stencil neighbor selector (RFC \u00a74, \u00a77.2). The selector.kind tag discriminates between cartesian, panel, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
+      "description": "Discretization stencil neighbor selector (RFC §4, §7.2). The selector.kind tag discriminates between cartesian, panel, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
       "required": [
         "kind"
       ],
@@ -4054,7 +4085,7 @@
             "indirect",
             "reduction"
           ],
-          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian\u2194cartesian, cubed_sphere\u2194panel, unstructured\u2194indirect|reduction)."
+          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian↔cartesian, cubed_sphere↔panel, unstructured↔indirect|reduction)."
         },
         "axis": {
           "description": "cartesian: axis name (string or pattern variable e.g. \"$x\"). Ignored for other kinds."
@@ -4180,7 +4211,7 @@
     },
     "GhostVarDecl": {
       "type": "object",
-      "description": "Optional ghost-cell variable declaration used by a discretization scheme (e.g. a periodic-BC halo). See RFC \u00a79 for boundary-condition interaction.",
+      "description": "Optional ghost-cell variable declaration used by a discretization scheme (e.g. a periodic-BC halo). See RFC §9 for boundary-condition interaction.",
       "required": [
         "name"
       ],
@@ -4201,7 +4232,7 @@
     },
     "Discretization": {
       "type": "object",
-      "description": "A named discretization scheme. Three kinds are supported: (a) \"stencil\" (default) \u2014 a template mapping a PDE operator class (via applies_to) to a combination (combine) over neighbors with symbolic coefficients (RFC \u00a77.1); (b) \"dimensional_split\" \u2014 a composite scheme that applies a 1D inner scheme along each of several orthogonal axes via Strang/Lie operator splitting (RFC \u00a77.5); (c) \"flux_form_semi_lagrangian\" \u2014 a flux-form semi-Lagrangian (FFSL) advection scheme (Lin & Rood 1996 MWR) that combines a piecewise reconstruction with flux-form remapping over declared advection axes, described in RFC \u00a77.7. A scheme may additionally carry a `grid_dispatch` block (RFC \u00a77.8) instead of an inline body \u2014 a list of {grid_family, body} variants whose body fields (stencil / inner_rule / etc.) replace the inline ones at load time, picked by the active grid's family.",
+      "description": "A named discretization scheme. Three kinds are supported: (a) \"stencil\" (default) — a template mapping a PDE operator class (via applies_to) to a combination (combine) over neighbors with symbolic coefficients (RFC §7.1); (b) \"dimensional_split\" — a composite scheme that applies a 1D inner scheme along each of several orthogonal axes via Strang/Lie operator splitting (RFC §7.5); (c) \"flux_form_semi_lagrangian\" — a flux-form semi-Lagrangian (FFSL) advection scheme (Lin & Rood 1996 MWR) that combines a piecewise reconstruction with flux-form remapping over declared advection axes, described in RFC §7.7. A scheme may additionally carry a `grid_dispatch` block (RFC §7.8) instead of an inline body — a list of {grid_family, body} variants whose body fields (stencil / inner_rule / etc.) replace the inline ones at load time, picked by the active grid's family.",
       "required": [
         "applies_to"
       ],
@@ -4215,10 +4246,10 @@
             "flux_form_semi_lagrangian"
           ],
           "default": "stencil",
-          "description": "Scheme kind discriminator. \"stencil\" (default when omitted) selects the neighbor-combination template described in RFC \u00a77.1; \"dimensional_split\" selects the axis-sweep composite described in RFC \u00a77.5, which requires axes / inner_rule / splitting; \"flux_form_semi_lagrangian\" selects the FFSL advection family described in RFC \u00a77.7, which requires reconstruction / remap / cfl_policy / dimensions (and forbids stencil / axes / inner_rule)."
+          "description": "Scheme kind discriminator. \"stencil\" (default when omitted) selects the neighbor-combination template described in RFC §7.1; \"dimensional_split\" selects the axis-sweep composite described in RFC §7.5, which requires axes / inner_rule / splitting; \"flux_form_semi_lagrangian\" selects the FFSL advection family described in RFC §7.7, which requires reconstruction / remap / cfl_policy / dimensions (and forbids stencil / axes / inner_rule)."
         },
         "applies_to": {
-          "description": "Shallow (depth-1) AST pattern identifying the operator this scheme discretizes. Guard only \u2014 bindings flow from the triggering rule by name (RFC \u00a77.2.1). For dimensional_split schemes this names the N-D operator that the sweep composite stands in for (e.g. a 2D advection op whose inner_rule is a 1D PPM flux divergence).",
+          "description": "Shallow (depth-1) AST pattern identifying the operator this scheme discretizes. Guard only — bindings flow from the triggering rule by name (RFC §7.2.1). For dimensional_split schemes this names the N-D operator that the sweep composite stands in for (e.g. a 2D advection op whose inner_rule is a 1D PPM flux divergence).",
           "$ref": "#/$defs/PatternNode"
         },
         "grid_family": {
@@ -4247,7 +4278,7 @@
           "items": {
             "$ref": "#/$defs/StencilEntry"
           },
-          "description": "stencil: array of {selector, coeff} entries. Exactly one entry for a reduction selector; one-or-more for the others (RFC \u00a77.1). Required when kind is \"stencil\" or omitted; must be absent when kind is \"dimensional_split\"."
+          "description": "stencil: array of {selector, coeff} entries. Exactly one entry for a reduction selector; one-or-more for the others (RFC §7.1). Required when kind is \"stencil\" or omitted; must be absent when kind is \"dimensional_split\"."
         },
         "axes": {
           "type": "array",
@@ -4255,7 +4286,7 @@
           "items": {
             "type": "string"
           },
-          "description": "dimensional_split: ordered list of spatial axes (names from the target grid's dimensions) along which the inner scheme is swept. Each axis is visited once per Lie step and twice (symmetrically) per Strang step. See RFC \u00a77.5."
+          "description": "dimensional_split: ordered list of spatial axes (names from the target grid's dimensions) along which the inner scheme is swept. Each axis is visited once per Lie step and twice (symmetrically) per Strang step. See RFC §7.5."
         },
         "inner_rule": {
           "type": "string",
@@ -4268,7 +4299,7 @@
             "lie",
             "none"
           ],
-          "description": "dimensional_split: operator-splitting convention. \"lie\" applies each axis once in sequence (first-order in time). \"strang\" uses a symmetric half-step pattern with axes swept forward at \u0394t/2, the last axis applied at \u0394t, then the remaining axes swept in reverse at \u0394t/2 (second-order in time). \"none\" declares the composite structurally without prescribing a splitting order (e.g. for static metadata or parallel-split runtimes that choose their own order)."
+          "description": "dimensional_split: operator-splitting convention. \"lie\" applies each axis once in sequence (first-order in time). \"strang\" uses a symmetric half-step pattern with axes swept forward at Δt/2, the last axis applied at Δt, then the remaining axes swept in reverse at Δt/2 (second-order in time). \"none\" declares the composite structurally without prescribing a splitting order (e.g. for static metadata or parallel-split runtimes that choose their own order)."
         },
         "order_of_sweeps": {
           "type": "string",
@@ -4281,7 +4312,7 @@
           "description": "dimensional_split: optional direction pattern governing the per-timestep axis traversal. \"forward\" walks axes in listed order each step; \"reverse\" walks them in reverse; \"alternating\" flips direction on successive timesteps to reduce splitting bias (Strang-typical). Ignored when splitting is \"strang\" (which defines its own symmetric order) or \"none\"."
         },
         "reconstruction": {
-          "description": "flux_form_semi_lagrangian (RFC \u00a77.7): the sub-cell reconstruction used to build cell-edge fluxes. Either a string naming a sibling discretizations entry (rule ref), or an inline object declaring a reconstruction scheme \u2014 `order` (e.g. \"PPM\", \"PLM\", \"centered\") plus optional free-form `parameters`. Composes with `limiter` when one is declared.",
+          "description": "flux_form_semi_lagrangian (RFC §7.7): the sub-cell reconstruction used to build cell-edge fluxes. Either a string naming a sibling discretizations entry (rule ref), or an inline object declaring a reconstruction scheme — `order` (e.g. \"PPM\", \"PLM\", \"centered\") plus optional free-form `parameters`. Composes with `limiter` when one is declared.",
           "oneOf": [
             {
               "type": "string",
@@ -4296,7 +4327,7 @@
               "properties": {
                 "order": {
                   "type": "string",
-                  "description": "Reconstruction order / family name (e.g. \"PPM\", \"PLM\", \"centered\", \"WENO5\"). Not an enum \u2014 runtimes may add families; unknown values are the rule engine's responsibility to reject."
+                  "description": "Reconstruction order / family name (e.g. \"PPM\", \"PLM\", \"centered\", \"WENO5\"). Not an enum — runtimes may add families; unknown values are the rule engine's responsibility to reject."
                 },
                 "parameters": {
                   "type": "object",
@@ -4309,7 +4340,7 @@
         },
         "remap": {
           "type": "object",
-          "description": "flux_form_semi_lagrangian (RFC \u00a77.7): flux-form remap semantics \u2014 how reconstructed sub-cell profiles are integrated across cell faces and used to update cell averages.",
+          "description": "flux_form_semi_lagrangian (RFC §7.7): flux-form remap semantics — how reconstructed sub-cell profiles are integrated across cell faces and used to update cell averages.",
           "required": [
             "semantics"
           ],
@@ -4321,7 +4352,7 @@
                 "conservative",
                 "non_conservative"
               ],
-              "description": "Remap family. `conservative` preserves the volume-integrated tracer mass per Lin & Rood (1996) \u00a72. `non_conservative` uses pointwise trajectory remap (Staniforth & C\u00f4t\u00e9 1991)."
+              "description": "Remap family. `conservative` preserves the volume-integrated tracer mass per Lin & Rood (1996) §2. `non_conservative` uses pointwise trajectory remap (Staniforth & Côté 1991)."
             },
             "flux_form": {
               "type": "string",
@@ -4335,7 +4366,7 @@
           }
         },
         "limiter": {
-          "description": "flux_form_semi_lagrangian (RFC \u00a77.7): optional slope/flux limiter applied during reconstruction to preserve monotonicity. Either a string naming a sibling discretizations entry (rule ref \u2014 e.g. a named monotonic limiter scheme), or an inline object declaring a limiter family.",
+          "description": "flux_form_semi_lagrangian (RFC §7.7): optional slope/flux limiter applied during reconstruction to preserve monotonicity. Either a string naming a sibling discretizations entry (rule ref — e.g. a named monotonic limiter scheme), or an inline object declaring a limiter family.",
           "oneOf": [
             {
               "type": "string",
@@ -4366,7 +4397,7 @@
             "conservative",
             "non_conservative"
           ],
-          "description": "flux_form_semi_lagrangian (RFC \u00a77.7): CFL policy governing the reconstruction/remap pairing. `conservative`: mass-conserving flux-form (Lin & Rood 1996); `non_conservative`: pointwise SL trajectory without flux conservation."
+          "description": "flux_form_semi_lagrangian (RFC §7.7): CFL policy governing the reconstruction/remap pairing. `conservative`: mass-conserving flux-form (Lin & Rood 1996); `non_conservative`: pointwise SL trajectory without flux conservation."
         },
         "dimensions": {
           "type": "array",
@@ -4374,7 +4405,7 @@
           "items": {
             "type": "string"
           },
-          "description": "flux_form_semi_lagrangian (RFC \u00a77.7): axis names along which the rule advects, in application order. The named axes must appear in the enclosing grid's `dimensions`; each axis is swept once per step. Composes with dimensional_split (a dimensional_split scheme's `inner_rule` may reference an FFSL scheme whose `dimensions` is a single axis)."
+          "description": "flux_form_semi_lagrangian (RFC §7.7): axis names along which the rule advects, in application order. The named axes must appear in the enclosing grid's `dimensions`; each axis is swept once per step. Composes with dimensional_split (a dimensional_split scheme's `inner_rule` may reference an FFSL scheme whose `dimensions` is a single axis)."
         },
         "accuracy": {
           "type": "string",
@@ -4383,7 +4414,7 @@
         "order": {
           "type": "integer",
           "minimum": 1,
-          "description": "Optional scalar selector for stencil width / truncation order. Positive integer. For families that admit a parameterized order (e.g. arbitrary-order centered uniform finite differences via Fornberg-recursion weights), this field picks the concrete scheme: centered uniform FD uses positive even integers (2, 4, 6, 8, \u2026); one-sided or upwind schemes use any positive integer. Absence means the rule's default applies (e.g. the hard-coded order=2 of centered_2nd_uniform). The field is consumed by the rule engine / scheme authoring layer \u2014 schema accepts any positive integer; family-specific parity constraints (even for centered) are enforced by the rule implementation, not the schema. See discretization RFC \u00a77.1."
+          "description": "Optional scalar selector for stencil width / truncation order. Positive integer. For families that admit a parameterized order (e.g. arbitrary-order centered uniform finite differences via Fornberg-recursion weights), this field picks the concrete scheme: centered uniform FD uses positive even integers (2, 4, 6, 8, …); one-sided or upwind schemes use any positive integer. Absence means the rule's default applies (e.g. the hard-coded order=2 of centered_2nd_uniform). The field is consumed by the rule engine / scheme authoring layer — schema accepts any positive integer; family-specific parity constraints (even for centered) are enforced by the rule implementation, not the schema. See discretization RFC §7.1."
         },
         "requires_locations": {
           "type": "array",
@@ -4394,7 +4425,7 @@
         },
         "emits_location": {
           "type": "string",
-          "description": "Staggered-grid location the scheme emits (e.g. \"cell_center\", \"edge_normal\"). Used to pin $target on unstructured grids (RFC \u00a77.1.1)."
+          "description": "Staggered-grid location the scheme emits (e.g. \"cell_center\", \"edge_normal\"). Used to pin $target on unstructured grids (RFC §7.1.1)."
         },
         "target_binding": {
           "type": "string",
@@ -4426,9 +4457,9 @@
           "additionalProperties": {
             "type": "string",
             "pattern": "^[^#]+#[^#]+$",
-            "description": "Provider reference in the form '<sibling-scheme>#<output-name>'. The sibling scheme must be a MultiOutputStencilRule (RFC \u00a77.9) declared in the same discretizations block, and the output name must appear in that scheme's declared outputs array. Both constraints are enforced by the loader at parse time (static resolvability); binding compatibility is a runtime check."
+            "description": "Provider reference in the form '<sibling-scheme>#<output-name>'. The sibling scheme must be a MultiOutputStencilRule (RFC §7.9) declared in the same discretizations block, and the output name must appear in that scheme's declared outputs array. Both constraints are enforced by the loader at parse time (static resolvability); binding compatibility is a runtime check."
           },
-          "description": "RFC \u00a77.9 consumer demand map. Maps local names used inside this scheme's stencil/coeff expressions to outputs from sibling MultiOutputStencilRule providers. Each value MUST have the form '<sibling-scheme>#<declared-output>'. The loader resolves all references statically at load time (E_PROVIDER_NOT_FOUND if the sibling is absent or is not a multi_output_stencil; E_OUTPUT_NOT_FOUND if the named output is not in the sibling's outputs array). Absent means this scheme has no provider dependencies."
+          "description": "RFC §7.9 consumer demand map. Maps local names used inside this scheme's stencil/coeff expressions to outputs from sibling MultiOutputStencilRule providers. Each value MUST have the form '<sibling-scheme>#<declared-output>'. The loader resolves all references statically at load time (E_PROVIDER_NOT_FOUND if the sibling is absent or is not a multi_output_stencil; E_OUTPUT_NOT_FOUND if the named output is not in the sibling's outputs array). Absent means this scheme has no provider dependencies."
         },
         "grid_dispatch": {
           "type": "array",
@@ -4436,7 +4467,7 @@
           "items": {
             "$ref": "#/$defs/DiscretizationVariant"
           },
-          "description": "RFC \u00a77.8: family-keyed variant table. When present, the scheme declares two or more grid-family-specific bodies in place of an inline one \u2014 each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies \u2014 e.g. PPM on cartesian interiors vs. cubed-sphere panels \u2014 without forking the scheme name."
+          "description": "RFC §7.8: family-keyed variant table. When present, the scheme declares two or more grid-family-specific bodies in place of an inline one — each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies — e.g. PPM on cartesian interiors vs. cubed-sphere panels — without forking the scheme name."
         }
       },
       "allOf": [
@@ -4707,7 +4738,7 @@
     },
     "DiscretizationVariant": {
       "type": "object",
-      "description": "RFC \u00a77.8: one entry of a Discretization's `grid_dispatch` block. Declares a per-grid-family body that replaces the parent's inline body when the active grid's family matches `grid_family`. The body fields (`kind`, `combine`, `stencil`, `axes`, `inner_rule`, `splitting`, `order_of_sweeps`, `reconstruction`, `remap`, `limiter`, `cfl_policy`, `dimensions`) follow the same kind-discriminated semantics and mutual-exclusion rules as the parent Discretization. Shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) live on the parent and are not duplicated here. A variant whose `grid_family` matches no active grid is inert. CrossMetricStencilRule entries (RFC \u00a77.6) are a sibling top-level shape and not eligible for `grid_dispatch`; author per-family CrossMetric rules as separate `discretizations` entries instead.",
+      "description": "RFC §7.8: one entry of a Discretization's `grid_dispatch` block. Declares a per-grid-family body that replaces the parent's inline body when the active grid's family matches `grid_family`. The body fields (`kind`, `combine`, `stencil`, `axes`, `inner_rule`, `splitting`, `order_of_sweeps`, `reconstruction`, `remap`, `limiter`, `cfl_policy`, `dimensions`) follow the same kind-discriminated semantics and mutual-exclusion rules as the parent Discretization. Shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) live on the parent and are not duplicated here. A variant whose `grid_family` matches no active grid is inert. CrossMetricStencilRule entries (RFC §7.6) are a sibling top-level shape and not eligible for `grid_dispatch`; author per-family CrossMetric rules as separate `discretizations` entries instead.",
       "required": [
         "grid_family"
       ],
@@ -5045,7 +5076,7 @@
     },
     "StaggeringRule": {
       "type": "object",
-      "description": "A named staggering convention declaring where quantities live on a grid. The `kind` discriminant selects the staggering family. For MPAS Voronoi meshes (kind='unstructured_c_grid'), scalars live at Voronoi cell centers, normal velocities at edge midpoints, and vorticity at triangle vertices \u2014 a topology fundamentally unstructured. The referenced `grid` must be a grids.<g> entry of family 'unstructured'. See discretization RFC \u00a77.4.",
+      "description": "A named staggering convention declaring where quantities live on a grid. The `kind` discriminant selects the staggering family. For MPAS Voronoi meshes (kind='unstructured_c_grid'), scalars live at Voronoi cell centers, normal velocities at edge midpoints, and vorticity at triangle vertices — a topology fundamentally unstructured. The referenced `grid` must be a grids.<g> entry of family 'unstructured'. See discretization RFC §7.4.",
       "required": [
         "kind",
         "grid"
@@ -5118,7 +5149,7 @@
     },
     "CrossMetricTerm": {
       "type": "object",
-      "description": "One term of a CrossMetricStencilRule composite expansion (RFC \u00a77.4). Semantically, the term contributes `sign * metric_component(target) * axis_stencil(field, axis)` to the composite, where `axis_stencil` names another Discretization whose expansion is substituted point-wise and `metric_component` names a metric array from the grid's metric_arrays block. Terms with identical `axis_stencil` but distinct `metric_component` are how cross-derivative composites (e.g. g_xieta \u00b7 \u2202\u00b2/\u2202\u03be\u2202\u03b7) are assembled.",
+      "description": "One term of a CrossMetricStencilRule composite expansion (RFC §7.4). Semantically, the term contributes `sign * metric_component(target) * axis_stencil(field, axis)` to the composite, where `axis_stencil` names another Discretization whose expansion is substituted point-wise and `metric_component` names a metric array from the grid's metric_arrays block. Terms with identical `axis_stencil` but distinct `metric_component` are how cross-derivative composites (e.g. g_xieta · ∂²/∂ξ∂η) are assembled.",
       "required": [
         "axis_stencil",
         "metric_component"
@@ -5149,7 +5180,7 @@
     },
     "CrossMetricStencilRule": {
       "type": "object",
-      "description": "Cross-metric composite stencil rule (RFC \u00a77.4). Expresses operators whose discretization does not fit the single-axis stencil shape \u2014 specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a cubed-sphere panel, which combines \u2202/\u2202\u03be and \u2202/\u2202\u03b7 stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `\u03a3_terms[ sign_t \u00b7 metric_component_t($target) \u00b7 axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
+      "description": "Cross-metric composite stencil rule (RFC §7.4). Expresses operators whose discretization does not fit the single-axis stencil shape — specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a cubed-sphere panel, which combines ∂/∂ξ and ∂/∂η stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `Σ_terms[ sign_t · metric_component_t($target) · axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
       "required": [
         "applies_to",
         "grid_family",
@@ -5164,7 +5195,7 @@
           "description": "Discriminator for bindings that need to distinguish this rule type from a standard Discretization. Optional (presence of `terms` is sufficient), but recommended for statically-typed bindings."
         },
         "applies_to": {
-          "description": "Shallow (depth-1) AST pattern identifying the operator this composite discretizes (e.g. a 2D Laplacian). Guard only \u2014 bindings flow from the triggering rule by name (RFC \u00a77.2.1). Same shape as Discretization.applies_to.",
+          "description": "Shallow (depth-1) AST pattern identifying the operator this composite discretizes (e.g. a 2D Laplacian). Guard only — bindings flow from the triggering rule by name (RFC §7.2.1). Same shape as Discretization.applies_to.",
           "$ref": "#/$defs/PatternNode"
         },
         "grid_family": {
@@ -5205,7 +5236,7 @@
         },
         "boundary_fallback": {
           "type": "string",
-          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges, corners, or cross-panel boundaries where the composite's full stencil cannot be evaluated (e.g. cubed-sphere corner halos with incomplete metric support). Optional \u2014 when omitted, boundary handling falls through to the model's boundary_conditions."
+          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges, corners, or cross-panel boundaries where the composite's full stencil cannot be evaluated (e.g. cubed-sphere corner halos with incomplete metric support). Optional — when omitted, boundary handling falls through to the model's boundary_conditions."
         },
         "accuracy": {
           "type": "string",
@@ -5244,7 +5275,7 @@
     },
     "FunctionTable": {
       "type": "object",
-      "description": "A sampled function table (esm-spec.md \u00a79.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / `index` (nearest); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.",
+      "description": "A sampled function table (esm-spec.md §9.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / `index` (nearest); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.",
       "required": [
         "axes",
         "data"
@@ -5275,7 +5306,7 @@
         },
         "out_of_bounds": {
           "type": "string",
-          "description": "Out-of-bounds policy applied to query coordinates that fall outside an axis range. 'clamp' pins to the nearest edge \u2014 this matches the semantics of `interp.linear` and `interp.bilinear` (extrapolate-flat). 'error' MUST raise at evaluation time; bindings emit diagnostic 'table_lookup_out_of_bounds' on first violation. v0.4.0: 'clamp' is the only policy required of all five bindings; 'error' is conformant when the binding implements it.",
+          "description": "Out-of-bounds policy applied to query coordinates that fall outside an axis range. 'clamp' pins to the nearest edge — this matches the semantics of `interp.linear` and `interp.bilinear` (extrapolate-flat). 'error' MUST raise at evaluation time; bindings emit diagnostic 'table_lookup_out_of_bounds' on first violation. v0.4.0: 'clamp' is the only policy required of all five bindings; 'error' is conformant when the binding implements it.",
           "enum": [
             "clamp",
             "error"
@@ -5311,7 +5342,7 @@
     },
     "FunctionTableAxis": {
       "type": "object",
-      "description": "A single named axis inside a FunctionTable. The `values` array supplies the sample coordinates along this axis; it MUST be strictly increasing finite floats with at least 2 entries (mirrors the `interp.linear` / `interp.bilinear` axis contract in \u00a79.2).",
+      "description": "A single named axis inside a FunctionTable. The `values` array supplies the sample coordinates along this axis; it MUST be strictly increasing finite floats with at least 2 entries (mirrors the `interp.linear` / `interp.bilinear` axis contract in §9.2).",
       "required": [
         "name",
         "values"
@@ -5324,7 +5355,7 @@
         },
         "units": {
           "type": "string",
-          "description": "Optional advisory units string (e.g. 'Pa', 'K'). v0.4.0 records this for documentation only \u2014 no load-time unit checking is performed against the supplied input expression. Promotion to enforcement is deferred to a future units RFC."
+          "description": "Optional advisory units string (e.g. 'Pa', 'K'). v0.4.0 records this for documentation only — no load-time unit checking is performed against the supplied input expression. Promotion to enforcement is deferred to a future units RFC."
         },
         "values": {
           "type": "array",
@@ -5435,6 +5466,66 @@
         },
         "reference": {
           "$ref": "#/$defs/Reference"
+        }
+      }
+    },
+    "GridDiscretizationDescriptor": {
+      "type": "object",
+      "description": "A GridDiscretization Descriptor (GDD) document (esm-spec.md §4.7.1). GDD files are identified by kind='grid_discretization_descriptor' and carry a grids block (spatial grid geometry per domain) plus an optional discretizations block (operator rules). They are referenced exclusively from test and example grid_refs fields to run a PDE component on a specific grid configuration.",
+      "required": [
+        "esm",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "esm": {
+          "type": "string",
+          "description": "Format version string (semver).",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "grid_discretization_descriptor",
+          "description": "Document-kind discriminator. Must be 'grid_discretization_descriptor'."
+        },
+        "metadata": {
+          "$ref": "#/$defs/Metadata"
+        },
+        "grids": {
+          "type": "object",
+          "description": "Dictionary mapping grid/domain names to grid specifications. Keys must match the grid or domain name used by the referencing component. Each value overrides the component's declared grid for that name when the test or example runs.",
+          "additionalProperties": true
+        },
+        "discretizations": {
+          "type": "object",
+          "description": "Dictionary mapping operator names to discretization rules or {ref} pointers to ESD rule files (§4.7.1). Overrides the component's declared discretizations for this run.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Discretization"
+              },
+              {
+                "$ref": "#/$defs/DiscretizationVariant"
+              },
+              {
+                "$ref": "#/$defs/CrossMetricStencilRule"
+              },
+              {
+                "type": "object",
+                "description": "Reference to an external ESD rule file.",
+                "required": [
+                  "ref"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "description": "URL or path to an ESD rule file whose discretizations block is merged into the component's discretizations."
+                  }
+                }
+              }
+            ]
+          }
         }
       }
     }

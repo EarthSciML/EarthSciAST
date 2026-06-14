@@ -1,0 +1,33 @@
+{
+  "esm": "0.5.0",
+  "kind": "grid_discretization_descriptor",
+  "metadata": {
+    "name": "cartesian_1d_n8_periodic",
+    "description": "Uniform 1-D domain, N=8 cells, periodic BCs. Provides a centered-difference grad scheme for use in grid_refs resolution tests."
+  },
+  "grids": {
+    "gx": {
+      "family": "cartesian",
+      "dimensions": [
+        {"name": "i", "size": 8, "periodic": true, "spacing": "uniform"}
+      ]
+    }
+  },
+  "discretizations": {
+    "centered_grad": {
+      "applies_to": {"op": "grad", "args": ["$u"], "dim": "$x"},
+      "grid_family": "cartesian",
+      "combine": "+",
+      "stencil": [
+        {
+          "selector": {"kind": "cartesian", "axis": "$x", "offset": -1},
+          "coeff": {"op": "/", "args": [-1, {"op": "*", "args": [2, "dx"]}]}
+        },
+        {
+          "selector": {"kind": "cartesian", "axis": "$x", "offset": 1},
+          "coeff": {"op": "/", "args": [1, {"op": "*", "args": [2, "dx"]}]}
+        }
+      ]
+    }
+  }
+}

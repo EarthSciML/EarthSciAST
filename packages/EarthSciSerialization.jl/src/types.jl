@@ -420,11 +420,17 @@ struct Assertion
 end
 
 """
-    Test(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance)
+    Test(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance, grid_refs)
 
 Inline validation test for a Model (schema gt-cc1). Defines the run
 configuration — initial conditions, parameter overrides, simulation time
 span — and a list of scalar assertions that must hold.
+
+`grid_refs` carries the resolved `ref` strings from the test's `grid_refs`
+array (esm-spec.md §6.6.2). Each string is a URL or path to a
+GridDiscretization Descriptor file (§4.7.1). When non-empty, the test should
+be run once per entry with the GDD's grid and discretizations applied; use
+`resolve_grid_refs` to produce the corresponding discretized ESM dicts.
 """
 struct Test
     id::String
@@ -434,16 +440,18 @@ struct Test
     time_span::TimeSpan
     tolerance::Union{Tolerance,Nothing}
     assertions::Vector{Assertion}
+    grid_refs::Vector{String}
 
     function Test(id::AbstractString, time_span::TimeSpan, assertions::Vector{Assertion};
                   description=nothing,
                   initial_conditions=Dict{String,Float64}(),
                   parameter_overrides=Dict{String,Float64}(),
-                  tolerance=nothing)
+                  tolerance=nothing,
+                  grid_refs=String[])
         return new(String(id), description,
                    Dict{String,Float64}(string(k) => Float64(v) for (k, v) in initial_conditions),
                    Dict{String,Float64}(string(k) => Float64(v) for (k, v) in parameter_overrides),
-                   time_span, tolerance, assertions)
+                   time_span, tolerance, assertions, Vector{String}(grid_refs))
     end
 end
 

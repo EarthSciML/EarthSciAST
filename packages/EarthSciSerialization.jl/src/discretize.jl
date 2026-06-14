@@ -82,15 +82,18 @@ function discretize(esm::AbstractDict;
                     max_passes::Int = 32,
                     strict_unrewritten::Bool = true,
                     dae_support::Bool = _default_dae_support(),
-                    lift_1d_arrayop::Bool = false)::Dict{String,Any}
+                    lift_1d_arrayop::Bool = false,
+                    source_path::Union{String,Nothing} = nothing)::Dict{String,Any}
     out = _deep_native(esm)
     out isa Dict{String,Any} || throw(ArgumentError(
         "discretize: input must be a JSON object / Dict; got $(typeof(esm))"))
 
+    base_path = source_path !== nothing ? dirname(abspath(source_path)) : ""
+
     # Parse rules declared at the top level.
     top_rules = _load_rules(get(out, "rules", nothing))
 
-    ctx = _build_rule_context(out)
+    ctx = _build_rule_context(out, base_path)
 
     models = get(out, "models", nothing)
     if models isa AbstractDict
@@ -123,7 +126,7 @@ end
 # Rule-context assembly (grids + variables)
 # ============================================================================
 
-function _build_rule_context(esm::Dict{String,Any})::RuleContext
+function _build_rule_context(esm::Dict{String,Any}, base_path::String = "")::RuleContext
     grids = Dict{String,Dict{String,Any}}()
     grids_raw = get(esm, "grids", nothing)
     if grids_raw isa AbstractDict
@@ -156,7 +159,7 @@ function _build_rule_context(esm::Dict{String,Any})::RuleContext
             end
         end
     end
-    schemes = parse_schemes(get(esm, "discretizations", nothing))
+    schemes = parse_schemes(get(esm, "discretizations", nothing), base_path)
     return RuleContext(grids, variables, Dict{String,Int}(), nothing,
                        Dict{String,Vector{Dict{String,Int}}}(), schemes)
 end

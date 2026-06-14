@@ -258,7 +258,7 @@ function parse_multi_output_stencil_scheme(name::AbstractString, raw)::MultiOutp
 end
 
 """
-    parse_schemes(raw) -> Dict{String,AbstractScheme}
+    parse_schemes(raw, base_path="", visited=nothing) -> Dict{String,AbstractScheme}
 
 Parse the top-level `discretizations` block into a name-keyed registry of
 [`AbstractScheme`](@ref) entries. Handles both §7.1 flat stencil schemes
@@ -266,17 +266,39 @@ Parse the top-level `discretizations` block into a name-keyed registry of
 ([`MultiOutputStencilScheme`](@ref)). Accepts the JSON-object-keyed-by-name
 form. Returns an empty dict for `nothing` / empty / missing input.
 
+When `base_path` is provided, entries of the form `{ref: "<path-or-URL>"}`
+are resolved by loading the external ESD rule file and splicing its
+`discretizations` block in place of the ref. `visited` is a cycle-detection
+guard (a `Set{String}` of canonical references already on the call stack).
+
 After parsing all entries, validates consumer `requires` references:
 each value must resolve to a `<sibling-scheme>#<output>` where the sibling
 is a `MultiOutputStencilScheme` and the output is in its `outputs` array
 (E_PROVIDER_NOT_FOUND, E_OUTPUT_NOT_FOUND per RFC §7.9).
 """
-function parse_schemes(raw)::Dict{String,AbstractScheme}
+function parse_schemes(raw, base_path::String = "",
+                       visited::Union{Nothing,Set{String}} = nothing)::Dict{String,AbstractScheme}
     out = Dict{String,AbstractScheme}()
     raw === nothing && return out
     _is_dict_like(raw) || return out
     for (k, v) in _iterate_dict(raw)
         sk = String(k)
+        # Resolve {ref} entries: load the target file, extract its single scheme
+        # definition, and parse it under the parent key (§4.7.1 "spliced in place").
+        if _is_dict_like(v) && _getkey(v, "ref"; default=nothing) !== nothing
+            ref_val = String(_getkey(v, "ref"))
+            if isempty(base_path)
+                throw(RuleEngineError("E_SCHEME_REF",
+                    "discretizations entry '$sk': {ref} resolution requires a " *
+                    "base path — pass `source_path` to discretize()"))
+            end
+            if visited === nothing
+                visited = Set{String}()
+            end
+            scheme_def = _resolve_discretization_ref(sk, ref_val, base_path, visited)
+            out[sk] = parse_scheme(sk, scheme_def)
+            continue
+        end
         kind_raw = _is_dict_like(v) ? _getkey(v, "kind"; default=nothing) : nothing
         kind = kind_raw === nothing ? "stencil" : String(kind_raw)
         if kind == "multi_output_stencil"
@@ -312,6 +334,43 @@ function parse_schemes(raw)::Dict{String,AbstractScheme}
     end
 
     return out
+end
+
+"""
+    _resolve_discretization_ref(scheme_name, ref, base_path, visited) -> raw scheme dict
+
+Load the ESM file at `ref` (local path or URL) via the subsystem `_load_ref`
+machinery, extract its `discretizations` block, and return the single raw scheme
+definition dict. The returned dict is parsed by the caller under `scheme_name`.
+
+Raises `RuleEngineError` if the file has no `discretizations` block or if it
+does not contain exactly one scheme (§4.7.1 requires a single scheme per file).
+"""
+function _resolve_discretization_ref(scheme_name::String, ref::String,
+                                      base_path::String, visited::Set{String})
+    local loaded::EsmFile
+    try
+        loaded = _load_ref(ref, base_path, visited)
+    catch e
+        if e isa SubsystemRefError
+            throw(RuleEngineError("E_SCHEME_REF",
+                "discretization ref '$ref': $(e.message)"))
+        end
+        rethrow(e)
+    end
+    disc_raw = loaded.discretizations
+    if disc_raw === nothing || isempty(disc_raw)
+        throw(RuleEngineError("E_SCHEME_REF",
+            "discretization ref '$ref' (for scheme '$scheme_name') resolved to a " *
+            "file with no `discretizations` block"))
+    end
+    if length(disc_raw) != 1
+        throw(RuleEngineError("E_SCHEME_REF",
+            "discretization ref '$ref' (for scheme '$scheme_name') must contain " *
+            "exactly one scheme definition, found $(length(disc_raw))"))
+    end
+    _, scheme_def = first(disc_raw)
+    return scheme_def
 end
 
 # ============================================================================

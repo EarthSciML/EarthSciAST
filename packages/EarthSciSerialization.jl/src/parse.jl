@@ -931,11 +931,17 @@ function coerce_test(data::Any)::EarthSciSerialization.Test
     end
     tolerance = haskey(data, :tolerance) && data.tolerance !== nothing ?
         coerce_tolerance(data.tolerance) : nothing
+    grid_refs = if haskey(data, :grid_refs) && data.grid_refs !== nothing
+        String[string(entry.ref) for entry in data.grid_refs]
+    else
+        String[]
+    end
     return EarthSciSerialization.Test(id, time_span, assertions;
         description=description,
         initial_conditions=ic,
         parameter_overrides=po,
-        tolerance=tolerance)
+        tolerance=tolerance,
+        grid_refs=grid_refs)
 end
 
 """
@@ -1801,6 +1807,12 @@ function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{S
             _resolve_reaction_system_refs!(file.reaction_systems, name, rsys, base_path, visited)
         end
     end
+
+    # Resolve {ref} entries in discretizations (§4.7.1). Share the visited set
+    # so cycles through loaded rule files are detected.
+    if file.discretizations !== nothing
+        _resolve_discretization_refs!(file.discretizations, base_path, visited)
+    end
 end
 
 """
@@ -1827,6 +1839,42 @@ function _resolve_reaction_system_refs!(rsys_dict::Dict{String,ReactionSystem}, 
         # Recursively resolve nested subsystem refs
         _resolve_reaction_system_refs!(rsys.subsystems, sub_name, sub_rsys, base_path, visited)
     end
+end
+
+"""
+    _resolve_discretization_refs!(disc, base_path, visited)
+
+For every `{"ref": "..."}` entry in the raw `discretizations` dict, load the
+referenced ESD rule file and merge ALL of its scheme entries into `disc`
+(using the file's own scheme names).  The `{"ref": "..."}` placeholder entry
+is deleted.  Cycles are detected via the shared `visited` set that is also
+used by the subsystem-ref resolver.
+"""
+function _resolve_discretization_refs!(disc::Dict{String,Any}, base_path::String,
+                                       visited::Set{String})
+    placeholder_keys = String[]
+    to_merge = Dict{String,Any}()
+
+    for k in collect(keys(disc))
+        v = disc[k]
+        if v isa AbstractDict && haskey(v, "ref") && length(v) == 1
+            ref_str = String(v["ref"])
+            ref_file = _load_ref(ref_str, base_path, visited)
+            loaded = ref_file.discretizations
+            if loaded === nothing || isempty(loaded)
+                throw(SubsystemRefError(
+                    "ESD rule file '$(ref_str)' has no discretizations block; " *
+                    "expected at least one scheme definition"))
+            end
+            push!(placeholder_keys, k)
+            merge!(to_merge, loaded)
+        end
+    end
+
+    for k in placeholder_keys
+        delete!(disc, k)
+    end
+    merge!(disc, to_merge)
 end
 
 """
