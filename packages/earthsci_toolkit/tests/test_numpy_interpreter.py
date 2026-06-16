@@ -210,3 +210,95 @@ def test_expr_contains_array_op_recursion() -> None:
     outer = ExprNode(op="+", args=[inner, 2.0])
     assert expr_contains_array_op(outer)
     assert not expr_contains_array_op(ExprNode(op="+", args=[1.0, 2.0]))
+
+
+def test_arrayop_contraction_plus_matvec() -> None:
+    """out[i] = Σ_j A[i,j] * x[j]  (matrix–vector product via fast einsum path)."""
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])   # 2×3
+    x = np.array([10.0, 1.0, 0.1])                       # shape (3,)
+    ctx = _ctx({"A": A, "x": x})
+    expr = ExprNode(
+        op="arrayop",
+        args=[],
+        output_idx=["i"],
+        expr=ExprNode(op="*", args=[
+            ExprNode(op="index", args=["A", "i", "j"]),
+            ExprNode(op="index", args=["x", "j"]),
+        ]),
+        reduce="+",
+        ranges={"i": [1, 2], "j": [1, 3]},
+    )
+    out = eval_expr(expr, ctx)
+    expected = A @ x  # [12.3, 40.6]
+    np.testing.assert_allclose(out, expected)
+
+
+def test_arrayop_contraction_max_row() -> None:
+    """out[i] = max_j A[i,j]  (row-wise max via fast outer-reduce path)."""
+    A = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])   # 2×3
+    ctx = _ctx({"A": A})
+    expr = ExprNode(
+        op="arrayop",
+        args=[],
+        output_idx=["i"],
+        expr=ExprNode(op="index", args=["A", "i", "j"]),
+        reduce="max",
+        ranges={"i": [1, 2], "j": [1, 3]},
+    )
+    out = eval_expr(expr, ctx)
+    np.testing.assert_allclose(out, [4.0, 9.0])
+
+
+def test_arrayop_contraction_min_row() -> None:
+    """out[i] = min_j A[i,j]  (row-wise min via fast outer-reduce path)."""
+    A = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])   # 2×3
+    ctx = _ctx({"A": A})
+    expr = ExprNode(
+        op="arrayop",
+        args=[],
+        output_idx=["i"],
+        expr=ExprNode(op="index", args=["A", "i", "j"]),
+        reduce="min",
+        ranges={"i": [1, 2], "j": [1, 3]},
+    )
+    out = eval_expr(expr, ctx)
+    np.testing.assert_allclose(out, [1.0, 1.0])
+
+
+def test_arrayop_contraction_plus_scalar_coeff() -> None:
+    """out[i] = Σ_j 2 * A[i,j] * x[j]  (scalar coefficient in fast path)."""
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])   # 2×2
+    x = np.array([5.0, 6.0])
+    ctx = _ctx({"A": A, "x": x})
+    expr = ExprNode(
+        op="arrayop",
+        args=[],
+        output_idx=["i"],
+        expr=ExprNode(op="*", args=[
+            2.0,
+            ExprNode(op="index", args=["A", "i", "j"]),
+            ExprNode(op="index", args=["x", "j"]),
+        ]),
+        reduce="+",
+        ranges={"i": [1, 2], "j": [1, 2]},
+    )
+    out = eval_expr(expr, ctx)
+    expected = 2.0 * (A @ x)  # [2*(1*5+2*6), 2*(3*5+4*6)] = [34, 78]
+    np.testing.assert_allclose(out, expected)
+
+
+def test_arrayop_stencil_fallback_unchanged() -> None:
+    """Stencil with offset subscripts still works via scalar fallback."""
+    ctx = _ctx({"u": np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])})
+    expr = ExprNode(
+        op="arrayop",
+        args=[],
+        output_idx=["i"],
+        expr=ExprNode(op="+", args=[
+            ExprNode(op="index", args=["u", ExprNode(op="-", args=["i", 1])]),
+            ExprNode(op="index", args=["u", ExprNode(op="+", args=["i", 1])]),
+        ]),
+        ranges={"i": [2, 4]},
+    )
+    out = eval_expr(expr, ctx)
+    np.testing.assert_allclose(out, [1.0 + 100.0, 10.0 + 1000.0, 100.0 + 10000.0])

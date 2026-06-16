@@ -343,14 +343,177 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
     return float(arr_val[zero_idx])
 
 
+def _decompose_body_as_scaled_product(
+    body: Expr, all_syms: frozenset,
+) -> Optional[Tuple[float, List[Tuple[str, List[str]]]]]:
+    """Try to decompose body as (scalar_coeff, [(var, [sym, ...]), ...]).
+
+    Only handles bodies that are numeric literals or products of ``index(var,
+    sym, ...)`` nodes where every subscript is a bare index symbol present in
+    ``all_syms``. Returns ``None`` for affine subscripts, unary ops, sums, or
+    any other structure that requires the scalar fallback.
+    """
+    if isinstance(body, bool):
+        return None
+    if isinstance(body, (int, float)):
+        return float(body), []
+    if isinstance(body, str):
+        return None
+    if not isinstance(body, ExprNode):
+        return None
+    if body.op == "index":
+        if not body.args:
+            return None
+        var = body.args[0]
+        if not isinstance(var, str):
+            return None
+        subscripts: List[str] = []
+        for s in body.args[1:]:
+            if isinstance(s, str) and s in all_syms:
+                subscripts.append(s)
+            else:
+                return None
+        return 1.0, [(var, subscripts)]
+    if body.op == "*":
+        coeff = 1.0
+        terms: List[Tuple[str, List[str]]] = []
+        for arg in body.args:
+            r = _decompose_body_as_scaled_product(arg, all_syms)
+            if r is None:
+                return None
+            c, t = r
+            coeff *= c
+            terms.extend(t)
+        return coeff, terms
+    return None
+
+
+def _eval_arrayop_vectorized(
+    body: Expr,
+    ctx: EvalContext,
+    out_syms: List[str],
+    reduce_syms: List[str],
+    sym_0based: Dict[str, List[int]],
+    out_shape: Tuple[int, ...],
+    reducer: str,
+) -> Optional[np.ndarray]:
+    """Vectorized fast path for arrayop evaluation.
+
+    Handles bodies that are scalar multiples of products of ``index(var,
+    sym, ...)`` with pure symbol subscripts.  For ``+`` reduction uses
+    ``np.einsum``; for ``max``/``min``/``*`` builds a combined outer-product
+    array and reduces along the contraction axes.  Returns ``None`` when the
+    body does not match the supported pattern (falls back to scalar loop).
+    """
+    all_syms: frozenset = frozenset(out_syms) | frozenset(reduce_syms)
+    decomp = _decompose_body_as_scaled_product(body, all_syms)
+    if decomp is None:
+        return None
+    coeff, index_terms = decomp
+
+    if not index_terms:
+        # Pure scalar body — tile over output shape, fold reducer.
+        n_red = 1
+        for s in reduce_syms:
+            n_red *= len(sym_0based[s])
+        if reducer == "+":
+            val = coeff * n_red
+        elif reducer == "*":
+            val = coeff ** n_red
+        else:
+            val = coeff
+        return np.full(out_shape, val, dtype=float) if out_shape else np.float64(val)
+
+    # Assign einsum letter labels (output symbols first, then reduction).
+    sym_order: List[str] = list(out_syms) + [s for s in reduce_syms if s not in out_syms]
+    if len(sym_order) > 26:
+        return None
+    sym_letter: Dict[str, str] = {s: chr(ord("a") + i) for i, s in enumerate(sym_order)}
+
+    # Build 0-based-sliced arrays for each index term.
+    sliced: List[np.ndarray] = []
+    term_specs: List[str] = []
+    effective_coeff = coeff
+
+    for var_name, var_syms in index_terms:
+        if len(set(var_syms)) != len(var_syms):
+            return None  # Diagonal access — fall back
+        if var_name in ctx.state_layout:
+            arr = _view_state_array(var_name, ctx)
+        elif var_name in ctx.param_values:
+            if var_syms:
+                return None
+            effective_coeff *= ctx.param_values[var_name]
+            continue
+        elif var_name in ctx.observed_values:
+            if var_syms:
+                return None
+            effective_coeff *= ctx.observed_values[var_name]
+            continue
+        else:
+            return None
+        if arr.ndim == 0 and not var_syms:
+            effective_coeff *= float(arr)
+            continue
+        if arr.ndim != len(var_syms):
+            return None
+        idx_cols = [np.asarray(sym_0based[s], dtype=int) for s in var_syms]
+        arr_slice = (arr[idx_cols[0]] if len(idx_cols) == 1
+                     else arr[np.ix_(*idx_cols)])
+        sliced.append(np.asarray(arr_slice, dtype=float))
+        term_specs.append("".join(sym_letter[s] for s in var_syms))
+
+    if not sliced:
+        n_red = 1
+        for s in reduce_syms:
+            n_red *= len(sym_0based[s])
+        if reducer == "+":
+            return np.full(out_shape, effective_coeff * n_red, dtype=float)
+        return None
+
+    out_spec = "".join(sym_letter[s] for s in out_syms)
+
+    try:
+        if reducer == "+":
+            einsum_str = ",".join(term_specs) + "->" + out_spec
+            result = np.asarray(effective_coeff * np.einsum(einsum_str, *sliced), dtype=float)
+            return result.reshape(out_shape) if out_shape else result
+
+        # For */max/min: build outer product over all symbols in terms, then reduce.
+        # Scalar coefficient must be 1 for non-additive reducers to distribute correctly.
+        if effective_coeff != 1.0:
+            return None
+        all_syms_in_terms: List[str] = []
+        for spec in term_specs:
+            for c in spec:
+                if c not in all_syms_in_terms:
+                    all_syms_in_terms.append(c)
+        combined_spec = "".join(all_syms_in_terms)
+        outer_str = ",".join(term_specs) + "->" + combined_spec
+        combined = np.einsum(outer_str, *sliced)
+        red_axes = tuple(i for i, c in enumerate(combined_spec) if c not in out_spec)
+        if not red_axes:
+            return np.asarray(combined, dtype=float).reshape(out_shape)
+        if reducer == "*":
+            return np.asarray(np.prod(combined, axis=red_axes), dtype=float)
+        if reducer == "max":
+            return np.asarray(np.max(combined, axis=red_axes), dtype=float)
+        if reducer == "min":
+            return np.asarray(np.min(combined, axis=red_axes), dtype=float)
+    except Exception:
+        return None
+
+    return None
+
+
 def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """Evaluate an arrayop body over its output index box.
 
     Returns an ndarray whose shape is the cartesian product of the ranges for
-    each symbolic index in ``output_idx``. Reduction (``reduce``) over index
-    symbols that appear in the body but not in ``output_idx`` is supported
-    for the default sum reducer; a future fast path can lift common uniform
-    contractions to ``np.einsum``.
+    each symbolic index in ``output_idx``.  Tries a vectorized numpy fast path
+    first (einsum for ``+`` reduction, combined outer-reduce for ``*/max/min``);
+    falls back to a scalar loop for bodies with affine subscripts, bare variable
+    names, or other unsupported structure.
     """
     if expr.expr is None:
         raise NumpyInterpreterError("arrayop requires an 'expr' body")
@@ -365,34 +528,47 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             )
 
     from .flatten import _expand_range  # local import to avoid cycle
-    out_ranges = [_expand_range(ranges[s]) for s in out_syms]
-    out_shape = tuple(len(r) for r in out_ranges)
+    out_ranges_exp = [_expand_range(ranges[s]) for s in out_syms]
+    out_shape = tuple(len(r) for r in out_ranges_exp)
 
-    # Collect reduction indices (appear in ranges but not in output_idx).
-    reduce_syms: List[str] = [s for s in ranges.keys() if s not in out_syms]
-    red_ranges = [_expand_range(ranges[s]) for s in reduce_syms]
+    reduce_syms: List[str] = [s for s in ranges if s not in out_syms]
+    red_ranges_exp = [_expand_range(ranges[s]) for s in reduce_syms]
     reducer = expr.reduce or "+"
 
+    # Pre-compute 0-based index lists for the fast path.
+    sym_0based: Dict[str, List[int]] = {}
+    for s, r in zip(out_syms, out_ranges_exp):
+        sym_0based[s] = [x - 1 for x in r]
+    for s, r in zip(reduce_syms, red_ranges_exp):
+        sym_0based[s] = [x - 1 for x in r]
+
+    fast = _eval_arrayop_vectorized(
+        expr.expr, ctx, out_syms, reduce_syms, sym_0based, out_shape, reducer
+    )
+    if fast is not None:
+        return fast
+
+    # Scalar fallback: hoist the cartesian reduction product outside the output loop.
     out = np.zeros(out_shape, dtype=float)
+    cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else []
     it = np.ndindex(*out_shape) if out_shape else [()]
     for multi_idx in it:
         local_binding: Dict[str, int] = {}
-        for s, pos in zip(out_syms, multi_idx):
-            local_binding[s] = out_ranges[out_syms.index(s)][pos]
+        for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
+            local_binding[s] = r[pos]
         if not reduce_syms:
             prev = dict(ctx.locals)
             ctx.locals.update(local_binding)
             try:
-                v = eval_expr(expr.expr, ctx)
+                out[multi_idx] = float(eval_expr(expr.expr, ctx))
             finally:
                 ctx.locals = prev
-            out[multi_idx] = float(v)
         else:
             acc: Optional[float] = None
             prev = dict(ctx.locals)
             try:
                 ctx.locals.update(local_binding)
-                for red_point in _cartesian(red_ranges):
+                for red_point in cartesian_red:
                     for s, v in zip(reduce_syms, red_point):
                         ctx.locals[s] = v
                     val = float(eval_expr(expr.expr, ctx))
