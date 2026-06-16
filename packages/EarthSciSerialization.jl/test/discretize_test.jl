@@ -203,7 +203,7 @@ using JSON3
         @test unfolded == String[]
     end
 
-    @testset "non-periodic BCs: interior shrink + boundary-cell emission (ess-gp3)" begin
+    @testset "non-periodic BCs: makearray lowering (ess-j8t)" begin
         # 1D bounded heat-like model: D(u) = grad(u) rewritten to a centered
         # stencil; dirichlet at xmin (value 3), zero-flux neumann at xmax.
         function _bounded_1d_esm(; bcs=true)
@@ -226,38 +226,47 @@ using JSON3
 
         out = discretize(_bounded_1d_esm(); lift_1d_arrayop=true)
         eqs = out["models"]["M"]["equations"]
-        # 1 interior arrayop + 2 boundary cells (reach 1, both sides bounded).
-        @test length(eqs) == 3
-        interior = eqs[1]
-        @test interior["lhs"]["op"] == "arrayop"
-        @test interior["lhs"]["ranges"] == Dict{String,Any}("i" => Any[2, 7])
-        @test interior["rhs"]["ranges"] == Dict{String,Any}("i" => Any[2, 7])
+        # Single arrayop over full grid with makearray RHS (ess-j8t).
+        @test length(eqs) == 1
+        eq = eqs[1]
+        @test eq["lhs"]["op"] == "arrayop"
+        # Full grid ranges (not shrunk).
+        @test eq["lhs"]["ranges"] == Dict{String,Any}("i" => Any[1, 8])
+        @test eq["rhs"]["ranges"] == Dict{String,Any}("i" => Any[1, 8])
+        # RHS expr is index(makearray(...), i).
+        rhs_expr = eq["rhs"]["expr"]
+        @test rhs_expr["op"] == "index"
+        ma = rhs_expr["args"][1]
+        @test ma["op"] == "makearray"
         # No periodic folding on a bounded dim.
-        @test !occursin("ifelse", JSON3.write(interior["rhs"]))
-
-        # Left boundary cell: ghost u[0] replaced by the dirichlet value 3.
-        # Rule rhs is -u[i-1] + u[i+1], so at i=1: -(3) + u[2].
-        left = eqs[2]
-        @test left["lhs"]["args"][1] == Dict{String,Any}("op" => "index", "args" => Any["u", 1])
-        s_left = JSON3.write(left["rhs"])
-        @test !occursin("\"index\",\"args\":[\"u\",0]", replace(s_left, " " => ""))
-        @test occursin("3", s_left)
-        @test occursin("[\"u\",2]", replace(s_left, " " => ""))
-
-        # Right boundary cell: ghost u[9] mirrors to u[8] (zero-flux).
-        right = eqs[3]
-        @test right["lhs"]["args"][1] == Dict{String,Any}("op" => "index", "args" => Any["u", 8])
-        s_right = replace(JSON3.write(right["rhs"]), " " => "")
-        @test occursin("[\"u\",8]", s_right)   # mirrored ghost
-        @test occursin("[\"u\",7]", s_right)   # interior neighbor
-        @test !occursin("[\"u\",9]", s_right)  # no out-of-range read survives
+        @test !occursin("ifelse", JSON3.write(eq["rhs"]))
+        # regions: interior [1,8], xmin ghost [1,1], xmax ghost [8,8].
+        @test length(ma["regions"]) == 3
+        @test ma["regions"][1] == Any[Any[1, 8]]
+        @test ma["regions"][2] == Any[Any[1, 1]]
+        @test ma["regions"][3] == Any[Any[8, 8]]
+        # xmin value: ghost u[i-1]→3 (dirichlet). Rule rhs is -u[i-1]+u[i+1], so
+        # left ghost value serializes with "3" and u[i+1] but no u[i-1].
+        # After canonicalize, u[i+1] is {op:"+",args:[1,"i"]} (constant first);
+        # JSON3 serializes alphabetically: "args":[1,"i"],"op":"+".
+        s_xmin = replace(JSON3.write(ma["values"][2]), " " => "")
+        @test occursin("3", s_xmin)
+        @test !occursin("\"args\":[\"i\",1]", s_xmin)   # u[i-1] gone (args form of i-1)
+        @test occursin("\"args\":[1,\"i\"]", s_xmin)    # u[i+1] present (canonical: 1+i)
+        # xmax value: ghost u[i+1] mirrored to u[16-i] (2*8+1-1=16). Rule rhs
+        # is -u[i-1]+u[i+1], so right ghost value has u[i-1] and u[16-i].
+        s_xmax = replace(JSON3.write(ma["values"][3]), " " => "")
+        @test occursin("\"args\":[\"i\",1]", s_xmax)    # u[i-1] present (args form)
+        @test !occursin("\"args\":[1,\"i\"]", s_xmax)   # u[i+1] gone (replaced by mirror)
+        @test occursin("16", s_xmax)                     # mirror const 2*8+1-1=16
 
         # Backward compat: bounded dim WITHOUT declared BCs is unchanged
-        # (full range, no extra equations, zero-ghost convention).
+        # (full range, no makearray, zero-ghost convention).
         out0 = discretize(_bounded_1d_esm(bcs=false); lift_1d_arrayop=true)
         eqs0 = out0["models"]["M"]["equations"]
         @test length(eqs0) == 1
         @test eqs0[1]["lhs"]["ranges"] == Dict{String,Any}("i" => Any[1, 8])
+        @test !occursin("makearray", JSON3.write(eqs0[1]["rhs"]))
 
         # Unsupported kinds on a lifted bounded dim are loud, not silent.
         bad = _bounded_1d_esm()

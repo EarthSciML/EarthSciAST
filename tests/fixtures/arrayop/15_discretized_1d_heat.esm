@@ -2,7 +2,7 @@
   "esm": "0.1.0",
   "metadata": {
     "name": "arrayop_15_discretized_1d_heat",
-    "description": "Discretized 1D heat equation on 4 interior cells with Dirichlet BCs (ghost cells u[0]=u[5]=0). dx=0.2, stencil coefficient 1/dx^2=25. Interior stencil: D(u[i+1]) = 25*(u[i] - 2u[i+1] + u[i+2]) for 1-based i in 1..2. The first-mode sinusoidal IC u[i]=sin(pi*i/5) decays with the exact discrete eigenvalue lambda_1 = 25*(2*cos(pi/5)-2) = -9.5492, so u[i,t] = exp(lambda_1*t)*sin(pi*i/5). This fixture tests the spatial-PDE dispatch path: simulate() must route models with shape-d state variables to the ArrayOp runtime.",
+    "description": "Discretized 1D heat equation on 4 cells with Dirichlet BCs (ghost cells u[0]=u[5]=0). dx=0.2, stencil coefficient 1/dx^2=25. Full-grid arrayop with makearray ghost lowering (ess-j8t): region 0=[1,4] interior, region 1=[1,1] xmin ghost (u[i-1]→0), region 2=[4,4] xmax ghost (u[i+1]→0). The first-mode sinusoidal IC u[i]=sin(pi*i/5) decays with the exact discrete eigenvalue lambda_1=25*(2*cos(pi/5)-2)=-9.5492, so u[i,t]=exp(lambda_1*t)*sin(pi*i/5). This fixture tests the spatial-PDE dispatch path: simulate() must route models with shape-d state variables to the ArrayOp runtime.",
     "authors": [
       "EarthSciSerialization/polecats/gastown.furiosa"
     ],
@@ -11,7 +11,9 @@
       "conformance",
       "stencil",
       "spatial_dispatch",
-      "pde"
+      "pde",
+      "makearray",
+      "boundary_conditions"
     ]
   },
   "models": {
@@ -28,95 +30,77 @@
       },
       "equations": [
         {
-          "_comment": "Left boundary cell: D(u[1]) = 25*(-2*u[1] + u[2]), ghost u[0]=0",
-          "lhs": {
-            "op": "D",
-            "args": [
-              {
-                "op": "index",
-                "args": ["u", 1]
-              }
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              25,
-              {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [-2, {"op": "index", "args": ["u", 1]}]
-                  },
-                  {"op": "index", "args": ["u", 2]}
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "_comment": "Interior cells via arrayop, 1-based i in 1..2, offsets baked into body",
           "lhs": {
             "op": "arrayop",
             "args": [],
             "output_idx": ["i"],
             "expr": {
               "op": "D",
-              "args": [{"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}],
+              "args": [{"op": "index", "args": ["u", "i"]}],
               "wrt": "t"
             },
-            "ranges": {"i": [1, 2]}
+            "ranges": {"i": [1, 4]}
           },
           "rhs": {
             "op": "arrayop",
             "args": [],
             "output_idx": ["i"],
             "expr": {
-              "op": "*",
+              "op": "index",
               "args": [
-                25,
                 {
-                  "op": "+",
-                  "args": [
-                    {"op": "index", "args": ["u", "i"]},
-                    {"op": "*", "args": [-2, {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}]},
-                    {"op": "index", "args": ["u", {"op": "+", "args": ["i", 2]}]}
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [[[1, 4]], [[1, 1]], [[4, 4]]],
+                  "values": [
+                    {
+                      "op": "*",
+                      "args": [
+                        25,
+                        {
+                          "op": "+",
+                          "args": [
+                            {"op": "index", "args": ["u", {"op": "-", "args": ["i", 1]}]},
+                            {"op": "*", "args": [-2, {"op": "index", "args": ["u", "i"]}]},
+                            {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        25,
+                        {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {"op": "*", "args": [-2, {"op": "index", "args": ["u", "i"]}]},
+                            {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]}
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        25,
+                        {
+                          "op": "+",
+                          "args": [
+                            {"op": "index", "args": ["u", {"op": "-", "args": ["i", 1]}]},
+                            {"op": "*", "args": [-2, {"op": "index", "args": ["u", "i"]}]},
+                            0
+                          ]
+                        }
+                      ]
+                    }
                   ]
-                }
+                },
+                "i"
               ]
             },
-            "ranges": {"i": [1, 2]}
-          }
-        },
-        {
-          "_comment": "Right boundary cell: D(u[4]) = 25*(u[3] - 2*u[4]), ghost u[5]=0",
-          "lhs": {
-            "op": "D",
-            "args": [
-              {
-                "op": "index",
-                "args": ["u", 4]
-              }
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              25,
-              {
-                "op": "+",
-                "args": [
-                  {"op": "index", "args": ["u", 3]},
-                  {
-                    "op": "*",
-                    "args": [-2, {"op": "index", "args": ["u", 4]}]
-                  }
-                ]
-              }
-            ]
+            "ranges": {"i": [1, 4]}
           }
         }
       ],

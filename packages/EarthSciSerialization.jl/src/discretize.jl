@@ -583,30 +583,120 @@ function _try_arrayop_lift_equation!(eqn::Dict{String,Any},
 end
 
 # ============================================================================
-# Non-periodic boundary conditions on lifted arrayop equations (ess-gp3)
+# Non-periodic boundary conditions on lifted arrayop equations (ess-j8t)
 # ============================================================================
 #
-# For a lifted equation whose variable has declared dirichlet/neumann/interface
-# BCs on a non-periodic dimension, shrink the interior arrayop range on that
-# side by the stencil reach and emit one scalar equation per excluded boundary
-# cell (the tests/fixtures/arrayop/15_discretized_1d_heat.esm pattern): the
-# stencil is instantiated at the literal cell indices, with out-of-range
-# (ghost) reads resolved per the read variable's BC —
+# Ghost reads for boundary cells are handled by wrapping the arrayop RHS as
+# index(makearray(regions,values),i,j,...):
+#   region 0 = full grid with the interior stencil body
+#   per-side regions = stencil bodies with ghost reads substituted per BC kind
+#   corner regions (≥2 bounded axes) listed LAST so last-region-wins applies
 #
-#   dirichlet  → the ghost read is replaced by the BC `value` expression
-#   neumann 0  → the ghost read mirrors back in range (zero-flux:
-#                u[1-k] := u[k], u[2N+1-e] := u[e])
-#   interface  → the ghost read is replaced by an index into the coupled
-#                variable: u[N+k] → coupled[k]; u[1-k] → coupled[N+1-k]
-#                (value continuity at the shared boundary point). Both
-#                variables must occupy the same grid dimension with the same
-#                size N. Declared via `coupled_variable` field on the BC.
+# Ghost substitution per BC kind:
+#   dirichlet  → out-of-range read replaced by _deep_native(bc["value"])
+#   neumann 0  → out-of-range read index(u, i+k) replaced by
+#                index(u, c - dim_idx) where c = (1-k) for :min, (2N+1-k) for :max
+#   interface  → not yet handled in makearray path; skipped (zero-ghost fallback)
 #
-# Reads of periodic dimensions wrap numerically. Ghost reads with no
-# declared BC keep the zero-ghost convention (current behavior), so models
-# without BC declarations are byte-identical to before. Nonzero-Neumann and
-# other BC kinds on a lifted bounded dimension raise E_BC_UNSUPPORTED rather
-# than being silently ignored.
+# Models without BC declarations are byte-identical to before (bc_map empty →
+# early return). Nonzero-Neumann and other unsupported BC kinds raise
+# E_BC_UNSUPPORTED via _check_bc_supported.
+
+# Extract integer offset k from expressions of the form:
+#   dim_idx           → k = 0
+#   dim_idx + k       → k  (variable first, as in raw rule output)
+#   k + dim_idx       → k  (constant first, as in canonicalized output)
+#   dim_idx - k       → -k (subtraction is not commutative; variable must be first)
+# Returns nothing for all other forms.
+function _extract_canonical_offset(arg, dim_idx::String)::Union{Int,Nothing}
+    arg isa AbstractString && return String(arg) == dim_idx ? 0 : nothing
+    arg isa AbstractDict || return nothing
+    op = get(arg, "op", "")
+    args = get(arg, "args", Any[])
+    length(args) == 2 || return nothing
+    aa1, aa2 = args[1], args[2]
+    if op == "+"
+        if aa1 isa AbstractString && String(aa1) == dim_idx && aa2 isa Number
+            return Int(aa2)
+        elseif aa1 isa Number && aa2 isa AbstractString && String(aa2) == dim_idx
+            return Int(aa1)   # commutative: k+i = i+k
+        end
+    elseif op == "-"
+        if aa1 isa AbstractString && String(aa1) == dim_idx && aa2 isa Number
+            return -Int(aa2)
+        end
+    end
+    return nothing
+end
+
+# Substitute ghost reads in a stencil body for one (dim, side, reach) pair.
+# ghost_spec maps variable_name to one of:
+#   (:dirichlet, value)             — replace ghost read with the BC value
+#   (:neumann_zero, N)              — replace with mirror: c - dim_idx
+#   (:interface, (coupled, N))      — replace with index into coupled variable
+# Reads outside the ghost threshold are replaced; all other nodes are recursed
+# into but otherwise unchanged.
+function _substitute_ghost(node, dim_idx::String, side::Symbol, reach::Int,
+                            ghost_spec::Dict{String,Tuple{Symbol,Any}})
+    node isa AbstractDict || return node
+    if get(node, "op", nothing) == "index"
+        args = get(node, "args", Any[])
+        if !isempty(args) && args[1] isa AbstractString
+            vname = String(args[1])
+            spec = get(ghost_spec, vname, nothing)
+            if spec !== nothing
+                kind, payload = spec
+                for a in args[2:end]
+                    offset = _extract_canonical_offset(a, dim_idx)
+                    offset === nothing && continue
+                    if (side == :min && offset <= -reach) || (side == :max && offset >= reach)
+                        if kind == :dirichlet
+                            return _deep_native(payload)
+                        elseif kind == :neumann_zero
+                            N = Int(payload)
+                            c = side == :min ? (1 - offset) : (2 * N + 1 - offset)
+                            return Dict{String,Any}(
+                                "op"   => "index",
+                                "args" => Any[vname, Dict{String,Any}(
+                                    "op"   => "-",
+                                    "args" => Any[c, dim_idx],
+                                )],
+                            )
+                        else  # :interface
+                            coupled, N = payload
+                            c = side == :min ? (N + offset) : (offset - N)
+                            new_idx = c == 0 ? String(dim_idx) :
+                                      c > 0 ? Dict{String,Any}("op" => "+",
+                                                  "args" => Any[dim_idx, c]) :
+                                              Dict{String,Any}("op" => "-",
+                                                  "args" => Any[dim_idx, -c])
+                            return Dict{String,Any}(
+                                "op"   => "index",
+                                "args" => Any[String(coupled), new_idx],
+                            )
+                        end
+                    end
+                end
+            end
+        end
+    end
+    out = Dict{String,Any}()
+    for (k, v) in node
+        key = String(k)
+        if key == "args" && v isa AbstractVector
+            out[key] = Any[_substitute_ghost(a, dim_idx, side, reach, ghost_spec) for a in v]
+        elseif v isa AbstractDict
+            out[key] = _substitute_ghost(v, dim_idx, side, reach, ghost_spec)
+        elseif v isa AbstractVector
+            out[key] = Any[a isa AbstractDict ?
+                _substitute_ghost(a, dim_idx, side, reach, ghost_spec) : a for a in v]
+        else
+            out[key] = v
+        end
+    end
+    return out
+end
+
 function _apply_nonperiodic_bcs!(eqn::Dict{String,Any}, info::NamedTuple,
                                   bcs::AbstractDict,
                                   grids::Dict{String,Dict{String,Any}},
@@ -617,11 +707,7 @@ function _apply_nonperiodic_bcs!(eqn::Dict{String,Any}, info::NamedTuple,
     dim_sizes isa AbstractDict || return Any[]
     periodic = Set{String}(String.(get(gmeta, "periodic_dims", Any[])))
 
-    # BC map: (variable, dim_name, :min|:max) → (kind, payload). Side names
-    # follow the "<dim>min"/"<dim>max" convention. Payload is:
-    #   dirichlet/constant: the BC `value` expression
-    #   neumann (zero-flux): 0 (the value field, checked by _check_bc_supported)
-    #   interface: the coupled_variable name String
+    # BC map: (variable, dim_name, :min|:max) → (kind, payload).
     bc_map = Dict{Tuple{String,String,Symbol},Tuple{String,Any}}()
     for bcname in sort!(collect(String.(keys(bcs))))
         bc = bcs[bcname]
@@ -653,67 +739,117 @@ function _apply_nonperiodic_bcs!(eqn::Dict{String,Any}, info::NamedTuple,
     nd     = length(shape)
     sizes  = Int[Int(dim_sizes[shape[d]]) for d in 1:nd]
 
-    # Stencil reach per canonical index variable (max |offset| across every
-    # index read in the pre-fold RHS).
     reach = Dict{String,Int}(ix => 0 for ix in idxs)
     _scan_stencil_reach!(reach, info.rhs_prefold)
 
-    lo = ones(Int, nd)
-    hi = copy(sizes)
-    bounded = falses(nd)
+    bounded_min = falses(nd)
+    bounded_max = falses(nd)
     for d in 1:nd
         dn = shape[d]
         dn in periodic && continue
         r = get(reach, idxs[d], 0)
-        for (sym, isback) in ((:min, false), (:max, true))
+        for (sym, flag_vec) in ((:min, bounded_min), (:max, bounded_max))
             entry = get(bc_map, (var, dn, sym), nothing)
             entry === nothing && continue
             kind, value = entry
             _check_bc_supported(kind, value, var, dn)
-            r == 0 && continue   # no ghost reads on this dim; nothing to emit
-            if isback
-                hi[d] = sizes[d] - r
-            else
-                lo[d] = 1 + r
-            end
-            bounded[d] = true
+            r == 0 && continue
+            flag_vec[d] = true
         end
     end
-    any(bounded) || return Any[]
+    any(bounded_min) || any(bounded_max) || return Any[]
+
     for d in 1:nd
-        lo[d] <= hi[d] || throw(RuleEngineError("E_BC_GRID_TOO_SMALL",
+        bounded_min[d] && bounded_max[d] || continue
+        r = get(reach, idxs[d], 0)
+        1 + r <= sizes[d] - r || throw(RuleEngineError("E_BC_GRID_TOO_SMALL",
             "dimension '$(shape[d])' (size $(sizes[d])) is too small for the " *
-            "stencil reach $(get(reach, idxs[d], 0)) with boundary conditions " *
-            "on both sides"))
+            "stencil reach $r with boundary conditions on both sides"))
     end
 
-    # Shrink the interior arrayop on the bounded dims (lhs + rhs wrappers).
+    # Collect (dim_index, :min|:max) pairs that have ghost-substitutable BCs.
+    ghost_sides = Tuple{Int,Symbol}[]
     for d in 1:nd
-        bounded[d] || continue
-        eqn["lhs"]["ranges"][idxs[d]] = Any[lo[d], hi[d]]
-        eqn["rhs"]["ranges"][idxs[d]] = Any[lo[d], hi[d]]
+        bounded_min[d] && push!(ghost_sides, (d, :min))
+        bounded_max[d] && push!(ghost_sides, (d, :max))
     end
 
-    # Emit one scalar equation per excluded boundary cell.
-    extra = Any[]
-    for cell in Iterators.product((1:sizes[d] for d in 1:nd)...)
-        all(d -> lo[d] <= cell[d] <= hi[d], 1:nd) && continue
-        fixed = Dict{String,Int}(idxs[d] => cell[d] for d in 1:nd)
-        rhs_cell = _instantiate_bc_cell(info.rhs_prefold, fixed, variables,
-                                        dim_sizes, periodic, bc_map)
-        lhs_cell = Dict{String,Any}(
-            "op"   => "D",
-            "args" => Any[Dict{String,Any}(
-                "op" => "index", "args" => Any[var, cell...])],
-            "wrt"  => info.wrt,
-        )
-        push!(extra, Dict{String,Any}(
-            "_comment" => "boundary cell $(var)[$(join(cell, ','))] emitted from boundary_conditions (ess-gp3)",
-            "lhs" => lhs_cell,
-            "rhs" => rhs_cell,
-        ))
+    # Build ghost_spec for one (dim d, side) from bc_map.
+    function _ghost_spec_for(d::Int, side::Symbol)
+        dn = shape[d]
+        spec = Dict{String,Tuple{Symbol,Any}}()
+        for ((vn, dname, s), (kind, payload)) in bc_map
+            dname == dn && s == side || continue
+            if kind == "dirichlet"
+                spec[vn] = (:dirichlet, payload)
+            elseif kind == "neumann"
+                spec[vn] = (:neumann_zero, sizes[d])
+            elseif kind == "interface"
+                payload isa AbstractString && !isempty(String(payload)) || continue
+                spec[vn] = (:interface, (String(payload), sizes[d]))
+            end
+        end
+        return spec
     end
-    return extra
+
+    # makearray regions and values:
+    #   region 0 = full grid (interior, no ghost sub)
+    #   per-side regions (single-axis ghost)
+    #   corner regions (multi-axis ghost, listed LAST for last-region-wins)
+    regions = Vector{Vector{Vector{Int}}}()
+    values  = Vector{Any}()
+
+    push!(regions, [[1, sizes[d]] for d in 1:nd])
+    push!(values,  _deep_native(info.rhs_prefold))
+
+    for (d, side) in ghost_sides
+        r = get(reach, idxs[d], 0)
+        region = [[1, sizes[dd]] for dd in 1:nd]
+        region[d] = side == :min ? [1, r] : [sizes[d] - r + 1, sizes[d]]
+        spec = _ghost_spec_for(d, side)
+        body = _substitute_ghost(_deep_native(info.rhs_prefold), idxs[d], side, r, spec)
+        push!(regions, region)
+        push!(values,  body)
+    end
+
+    # Corner regions: subsets of ghost_sides of size ≥ 2 with distinct dims.
+    n = length(ghost_sides)
+    if n >= 2
+        for bits in 1:(1 << n - 1)
+            combo = [ghost_sides[i] for i in 1:n if (bits >> (i - 1)) & 1 != 0]
+            length(combo) < 2 && continue
+            dims_seen = Set{Int}(d for (d, _) in combo)
+            length(dims_seen) == length(combo) || continue
+            region = [[1, sizes[dd]] for dd in 1:nd]
+            body   = _deep_native(info.rhs_prefold)
+            for (d, side) in combo
+                r = get(reach, idxs[d], 0)
+                region[d] = side == :min ? [1, r] : [sizes[d] - r + 1, sizes[d]]
+                spec = _ghost_spec_for(d, side)
+                body = _substitute_ghost(body, idxs[d], side, r, spec)
+            end
+            push!(regions, region)
+            push!(values,  body)
+        end
+    end
+
+    makearray = Dict{String,Any}(
+        "op"      => "makearray",
+        "args"    => Any[],
+        "regions" => regions,
+        "values"  => values,
+    )
+    index_expr = Dict{String,Any}(
+        "op"   => "index",
+        "args" => Any[makearray, (String(ix) for ix in idxs)...],
+    )
+
+    full_ranges = Dict{String,Any}(String(idxs[d]) => Any[1, sizes[d]] for d in 1:nd)
+    eqn["lhs"]["ranges"] = full_ranges
+    eqn["rhs"]["ranges"] = full_ranges
+    eqn["rhs"]["expr"]   = index_expr
+
+    return Any[]
 end
 
 function _check_bc_supported(kind::String, value, var::String, dim::String)
