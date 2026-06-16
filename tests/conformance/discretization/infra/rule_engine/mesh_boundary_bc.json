@@ -1,0 +1,27 @@
+{
+  "id": "mesh_boundary_bc",
+  "description": "RegionMaskField BC for unstructured mesh (RFC §5.2.7). On MPAS/DUO meshes, 'is_boundary' marks cells at the domain boundary. When the query_point matches a cell in the is_boundary mask, divergence expressions are zeroed — the canonical BC application pattern for unstructured grids.",
+  "context": {
+    "query_point": {"cell": 3},
+    "mask_fields": {
+      "is_boundary": [
+        {"cell": 3}
+      ]
+    }
+  },
+  "rules": [
+    {
+      "name": "zero_div_at_boundary",
+      "pattern":     {"op": "div", "args": ["$u"]},
+      "region":      {"kind": "mask_field", "field": "is_boundary"},
+      "replacement": 0
+    }
+  ],
+  "input": {"op": "div", "args": ["q"]},
+  "expect": {
+    "kind": "output",
+    "canonical_json": "0"
+  },
+  "requires_per_point_scope": true,
+  "tags": ["region", "mask_field", "unstructured", "mpas", "bc"]
+}

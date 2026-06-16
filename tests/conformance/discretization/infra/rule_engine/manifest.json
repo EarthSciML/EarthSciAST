@@ -22,7 +22,9 @@
     {"id": "ghost_width_uniform", "path": "ghost_width_uniform.json", "tags": ["boundary_policy", "ghost_width", "reflecting", "uniform"]},
     {"id": "guard_bind_side_axis", "path": "guard_bind_side_axis.json", "tags": ["guard", "bind_side_axis"]},
     {"id": "guard_bind_side_spacing", "path": "guard_bind_side_spacing.json", "tags": ["guard", "bind_side_spacing"]},
-    {"id": "guard_bind_side_dim_size", "path": "guard_bind_side_dim_size.json", "tags": ["guard", "bind_side_dim_size"]}
+    {"id": "guard_bind_side_dim_size", "path": "guard_bind_side_dim_size.json", "tags": ["guard", "bind_side_dim_size"]},
+    {"id": "mesh_boundary_bc", "path": "mesh_boundary_bc.json", "tags": ["region", "mask_field", "unstructured", "mpas", "bc"]},
+    {"id": "panel_boundary_index_replacement", "path": "panel_boundary_index_replacement.json", "tags": ["region", "panel_boundary", "cubed_sphere", "index_replacement"]}
   ],
   "bindings_required": ["julia", "rust"],
   "bindings_optional": ["python", "go", "typescript"],

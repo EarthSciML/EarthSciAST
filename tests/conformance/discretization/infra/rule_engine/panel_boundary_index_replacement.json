@@ -1,0 +1,33 @@
+{
+  "id": "panel_boundary_index_replacement",
+  "description": "RegionPanelBoundary with nested-index replacement for cubed-sphere seam treatment (RFC §5.2.7, §6.4). At the east edge of panel 2 (i=3 on a C4 grid), the seam rule replaces grad(u, dim:i) with an index lookup into u via the seam neighbor table 'nb_east_p2'. Tests that wildcard bindings ($u) are correctly substituted into nested index expressions inside the replacement.",
+  "context": {
+    "grid_name": "cubed_c4",
+    "grids": {
+      "cubed_c4": {
+        "spatial_dims": ["panel", "i", "j"],
+        "dim_bounds": {"i": [0, 3], "j": [0, 3]},
+        "panel_connectivity": {
+          "neighbors": [[1,3,4,5],[2,0,4,5],[3,1,4,5],[0,2,4,5],[3,1,2,0],[1,3,2,0]],
+          "axis_flip":  [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]
+        }
+      }
+    },
+    "query_point": {"p": 2, "i": 3, "j": 1}
+  },
+  "rules": [
+    {
+      "name": "seam_grad_to_index_p2_east",
+      "pattern":     {"op": "grad", "args": ["$u"], "dim": "i"},
+      "region":      {"kind": "panel_boundary", "panel": 2, "side": "east"},
+      "replacement": {"op": "index", "args": ["$u", {"op": "index", "args": ["nb_east_p2", 0]}]}
+    }
+  ],
+  "input": {"op": "grad", "args": ["q"], "dim": "i"},
+  "expect": {
+    "kind": "output",
+    "canonical_json": "{\"args\":[\"q\",{\"args\":[\"nb_east_p2\",0],\"op\":\"index\"}],\"op\":\"index\"}"
+  },
+  "requires_per_point_scope": true,
+  "tags": ["region", "panel_boundary", "cubed_sphere", "index_replacement"]
+}
