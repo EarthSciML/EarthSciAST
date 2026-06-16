@@ -54,9 +54,11 @@ Build a tree-walk ODE RHS evaluator for `model`.
 
 All state variables must be scalar (shape === nothing) — the walker
 assumes equations have already been scalarized by the discretize
-pipeline. Array-typed ops (`arrayop`, `makearray`, `broadcast`,
-`reshape`, `transpose`, `concat`) therefore raise
-`E_TREEWALK_UNSUPPORTED_OP` if they appear in an RHS.
+pipeline. `arrayop` and `makearray` are supported in expression
+position: scalar `arrayop` (empty `output_idx`) is expanded inline;
+`index(arrayop(...), k...)` and `index(makearray(...), k...)` are
+resolved at build time. Other array-typed ops (`broadcast`, `reshape`,
+`transpose`, `concat`) raise `E_TREEWALK_UNSUPPORTED_OP`.
 
 The returned `f!` closure reads `u`, the captured parameter vector
 `p` (a NamedTuple keyed by parameter name), and `t`, and writes
@@ -629,14 +631,19 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
             "by ESD discretization rules before reaching the simulator. " *
             "Pipeline contract violated."))
     elseif op_sym === :arrayop
-        # arrayop is valid as a top-level equation LHS/RHS pair but must
-        # never appear as a sub-expression inside a compiled body. If we
-        # reach here the caller likely passed an arrayop in a non-equation
-        # context (e.g. bare RHS on a scalar equation) — that is an error.
+        # If _resolve_indices ran, scalar arrayop (empty output_idx) was
+        # already expanded to a plain arithmetic tree and never reaches here.
+        # Reaching this branch means an array-producing arrayop (non-empty
+        # output_idx) appeared without being wrapped in an index() call.
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-                            "arrayop node in expression position — " *
-                            "only valid as an equation-level LHS/RHS pair"))
-    elseif op_sym === :makearray || op_sym === :broadcast || op_sym === :reshape ||
+                            "arrayop with non-empty output_idx in expression position " *
+                            "requires wrapping in index(arrayop(...), k1, k2, ...)"))
+    elseif op_sym === :makearray
+        # makearray in expression position must be wrapped in index().
+        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
+                            "makearray in expression position requires wrapping " *
+                            "in index(makearray(...), k1, k2, ...)"))
+    elseif op_sym === :broadcast || op_sym === :reshape ||
            op_sym === :transpose || op_sym === :concat
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
                             "$(expr.op) (not yet supported in tree-walk path)"))
@@ -1024,6 +1031,135 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int})
           "cannot evaluate '$(op)' as a constant integer index"))
 end
 
+# Combine a vector of expressions with a reduce operator.
+# Build-time helper for expression-position arrayop expansion.
+# For "+" and "*" we emit an n-ary OpExpr (matching _eval_node_op hot paths).
+# For "max"/"min" we emit left-folded binary OpExprs to avoid adding n-ary
+# variants to _eval_node_op (which already handles them as ≥2-arg ops, but
+# the build-time fold keeps runtime dispatch uniform).
+function _combine_with_reducer(reduce_op::String, terms::Vector{Expr})
+    isempty(terms) && return NumExpr(reduce_op == "*" ? 1.0 : 0.0)
+    length(terms) == 1 && return terms[1]
+    if reduce_op == "+"
+        return OpExpr("+", terms)
+    elseif reduce_op == "*"
+        return OpExpr("*", terms)
+    elseif reduce_op == "max"
+        result = terms[1]
+        for i in 2:length(terms)
+            result = OpExpr("max", Expr[result, terms[i]])
+        end
+        return result
+    elseif reduce_op == "min"
+        result = terms[1]
+        for i in 2:length(terms)
+            result = OpExpr("min", Expr[result, terms[i]])
+        end
+        return result
+    else
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+                            "unsupported reduce='$reduce_op'; expected +, *, max, or min"))
+    end
+end
+
+# Resolve index(arrayop(...), k1, k2, ...) in expression position by
+# substituting the output_idx values and unrolling contracted indices at
+# build time. Mirrors the LHS-arrayop expansion in build_evaluator (lines
+# ~280-370) but produces a scalar Expr instead of writing to rhs_list.
+function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
+                                    array_var_info, var_map, const_arrays)
+    output_idx_raw = arrayop_expr.output_idx === nothing ? Any[] : arrayop_expr.output_idx
+    output_idx_strs = [String(s) for s in output_idx_raw if s isa AbstractString]
+    length(output_idx_strs) == length(idx_args) ||
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
+              "arrayop output_idx has $(length(output_idx_strs)) dims " *
+              "but $(length(idx_args)) index args"))
+    body = arrayop_expr.expr_body
+    body === nothing &&
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
+                            "arrayop requires an expr body"))
+    ranges_dict = arrayop_expr.ranges === nothing ? Dict{String,Any}() : arrayop_expr.ranges
+    reduce_op = arrayop_expr.reduce === nothing ? "+" : String(arrayop_expr.reduce)
+
+    # Substitute concrete output-index values into body.
+    k_vals = [_eval_const_int(a, Dict{String,Int}()) for a in idx_args]
+    idx_exprs = Dict{String,Expr}(
+        output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
+        for d in 1:length(output_idx_strs))
+    sub_body = _sub_preserving(body, idx_exprs)
+
+    # Contracted indices: all range keys NOT appearing in output_idx.
+    output_idx_set = Set(output_idx_strs)
+    contract_names = sort!(String[n for n in keys(ranges_dict) if !(n in output_idx_set)])
+    contract_iters = [collect(_expand_int_range(ranges_dict[n])) for n in contract_names]
+
+    isempty(contract_names) &&
+        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays)
+
+    terms = Expr[]
+    for k_tuple in Iterators.product(contract_iters...)
+        k_exprs = Dict{String,Expr}(
+            contract_names[d] => IntExpr(Int64(k_tuple[d]))
+            for d in 1:length(contract_names))
+        term = _sub_preserving(sub_body, k_exprs)
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays))
+    end
+    return _combine_with_reducer(reduce_op, terms)
+end
+
+# Resolve index(makearray(regions=[...], values=[...]), k1, k2, ...) by
+# selecting the value expression whose region covers (k1, k2, ...).
+# Later regions overwrite earlier ones, matching the Python reference
+# semantics (_eval_makearray in numpy_interpreter.py:429-457).
+function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Expr},
+                                      array_var_info, var_map, const_arrays)
+    regions = makearray_expr.regions === nothing ?
+              Vector{Vector{Vector{Int}}}() : makearray_expr.regions
+    values  = makearray_expr.values  === nothing ? Expr[] : makearray_expr.values
+    length(regions) == length(values) ||
+        throw(TreeWalkError("E_TREEWALK_MAKEARRAY_MISMATCH",
+              "makearray regions/values length mismatch " *
+              "($(length(regions)) vs $(length(values)))"))
+    k_vals = [_eval_const_int(a, Dict{String,Int}()) for a in idx_args]
+    ndim   = length(k_vals)
+    result_expr::Expr = NumExpr(0.0)  # default: 0 if no region covers the point
+    for (region, val_expr) in zip(regions, values)
+        length(region) == ndim ||
+            throw(TreeWalkError("E_TREEWALK_MAKEARRAY_NDIM",
+                  "makearray region has $(length(region)) dims but $(ndim) indices"))
+        in_region = all(k_vals[d] >= region[d][1] && k_vals[d] <= region[d][2]
+                        for d in 1:ndim)
+        in_region && (result_expr = val_expr)  # overwrite; last match wins
+    end
+    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays)
+end
+
+# Expand a scalar arrayop (empty output_idx) to a plain scalar Expr by
+# unrolling all contracted indices at build time and combining them with the
+# declared reducer. This is the build-time equivalent of an einsum over a
+# general expression body — compile once, evaluate cheaply at every RHS call.
+function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, const_arrays)
+    body = arrayop_expr.expr_body
+    body === nothing &&
+        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
+                            "arrayop requires an expr body"))
+    ranges_dict  = arrayop_expr.ranges === nothing ? Dict{String,Any}() : arrayop_expr.ranges
+    reduce_op    = arrayop_expr.reduce === nothing ? "+" : String(arrayop_expr.reduce)
+    contract_names = sort!(String[n for n in keys(ranges_dict)])
+    contract_iters = [collect(_expand_int_range(ranges_dict[n])) for n in contract_names]
+    isempty(contract_names) &&
+        return _resolve_indices(body, array_var_info, var_map, const_arrays)
+    terms = Expr[]
+    for k_tuple in Iterators.product(contract_iters...)
+        k_exprs = Dict{String,Expr}(
+            contract_names[d] => IntExpr(Int64(k_tuple[d]))
+            for d in 1:length(contract_names))
+        term = _sub_preserving(body, k_exprs)
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays))
+    end
+    return _combine_with_reducer(reduce_op, terms)
+end
+
 # Replace index(var, k1, k2, ...) nodes:
 #   - In-bounds state/array var → VarExpr(cell_key) referencing the flat state slot.
 #   - In-bounds const_array entry → NumExpr(literal) inlining the pre-computed value.
@@ -1057,6 +1193,20 @@ function _resolve_indices(expr::OpExpr,
         isempty(expr.args) &&
             throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
         first_arg = expr.args[1]
+        # Expression-position arrayop: index(arrayop(...), k1, k2, ...)
+        # Expand the arrayop at build time by substituting output_idx and
+        # unrolling contracted indices (same strategy as the LHS-arrayop
+        # equation path in build_evaluator, ~lines 280-370).
+        if first_arg isa OpExpr && first_arg.op == "arrayop"
+            return _resolve_index_of_arrayop(first_arg::OpExpr, expr.args[2:end],
+                                             array_var_info, var_map, const_arrays)
+        end
+        # Expression-position makearray: index(makearray(...), k1, k2, ...)
+        # Select the value whose region covers (k1,...); later regions win.
+        if first_arg isa OpExpr && first_arg.op == "makearray"
+            return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
+                                               array_var_info, var_map, const_arrays)
+        end
         if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
             vname = first_arg.name
             lo, hi = array_var_info[vname]
@@ -1130,6 +1280,18 @@ function _resolve_indices(expr::OpExpr,
             end
             return OpExpr("*", Expr[VarExpr("d$(iv)"), OpExpr("+", cells)])
         end
+    end
+    # Scalar arrayop (empty output_idx) in expression position: expand inline.
+    # Non-scalar arrayop (non-empty output_idx) must be wrapped in index() —
+    # handled by the _resolve_indices index-of-arrayop branch above.
+    if expr.op == "arrayop"
+        output_idx_raw = expr.output_idx === nothing ? Any[] : expr.output_idx
+        output_idx_strs = [s for s in output_idx_raw if s isa AbstractString]
+        if isempty(output_idx_strs)
+            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays)
+        end
+        # Non-scalar arrayop without index() — pass through (will become a
+        # compile-time error in _compile with a helpful message).
     end
     new_args = Expr[_resolve_indices(a, array_var_info, var_map, const_arrays) for a in expr.args]
     new_body = expr.expr_body === nothing ? nothing :
