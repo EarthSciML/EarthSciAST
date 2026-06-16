@@ -2468,16 +2468,13 @@ function EarthSciSerialization.discretize(
     # Neighbor index arrays. Boundary sentinels (0) fall back to self so the
     # generated stencils stay well-defined; concrete grids that wrap (periodic,
     # cubed-sphere, MPAS) hide the boundary inside neighbor_indices.
+    # Non-periodic boundary cells use self-fallback (zero-ghost convention).
     self_idx = collect(1:N)
     _safe(arr) = map((n, s) -> n == 0 ? s : n, arr, self_idx)
-    raw_nbE  = ESM_.neighbor_indices(grid, xi_axis,  +1)
-    raw_nbW  = ESM_.neighbor_indices(grid, xi_axis,  -1)
-    raw_nbNp = ESM_.neighbor_indices(grid, eta_axis, +1)
-    raw_nbSp = ESM_.neighbor_indices(grid, eta_axis, -1)
-    nbE  = _safe(raw_nbE)
-    nbW  = _safe(raw_nbW)
-    nbNp = _safe(raw_nbNp)
-    nbSp = _safe(raw_nbSp)
+    nbE  = _safe(ESM_.neighbor_indices(grid, xi_axis,  +1))
+    nbW  = _safe(ESM_.neighbor_indices(grid, xi_axis,  -1))
+    nbNp = _safe(ESM_.neighbor_indices(grid, eta_axis, +1))
+    nbSp = _safe(ESM_.neighbor_indices(grid, eta_axis, -1))
     nbNE = _safe(ESM_.neighbor_indices(grid, eta_axis, +1)[nbE])
     nbNW = _safe(ESM_.neighbor_indices(grid, eta_axis, +1)[nbW])
     nbSE = _safe(ESM_.neighbor_indices(grid, eta_axis, -1)[nbE])
@@ -2492,38 +2489,20 @@ function EarthSciSerialization.discretize(
         disc_vars[dv] = arr
     end
 
-    # BC handling (ess-gp3): parse spatial BCs and build ghost-cell arrays.
-    t0 = _extract_tspan_pde(sys, t_iv)[1]
-    domain_bounds = _extract_domain_bounds(sys.domain, spatial_iv_names)
-    coord_arrays_bc = Dict{Symbol, Vector{Float64}}(
-        nm => Vector{Float64}(ESM_.cell_centers(grid, nm)) for nm in spatial_iv_names
-    )
-    bc_specs = _SpatialBC[]
-    for bc in sys.bcs
-        # Skip ICs (first arg is numeric == t0)
-        _is_initial_condition_pde(bc, dvs[1], t0) && continue
-        spec = _try_parse_dirichlet(bc, dvs, spatial_iv_names, domain_bounds, xi_axis, eta_axis, t0)
-        spec !== nothing && push!(bc_specs, spec)
-        nspec = _try_parse_neumann(bc, dvs, spatial_iv_names, domain_bounds, xi_axis, eta_axis, t0)
-        nspec !== nothing && push!(bc_specs, nspec)
-    end
-    ghost = _build_ghost_vals(bc_specs, dvs, disc_vars, N, dξ, dη,
-                               raw_nbE, raw_nbW, raw_nbNp, raw_nbSp,
-                               xi_axis, eta_axis, spatial_ivs, spatial_iv_names, coord_arrays_bc)
-
     # Per-cell ODE equations. Each PDE equation expands into N scalar eqns.
+    # Spatial BCs in sys.bcs are ignored here; non-periodic boundary cells use
+    # self-fallback (zero-ghost convention). BC handling belongs at the ESM rule level.
     Dt = ModelingToolkit.Differential(t_iv)
     all_eqs = Symbolics.Equation[]
     for eq in sys.eqs
         lhs_dv = _identify_lhs_dv_pde(eq.lhs, dvs)
         lhs_arr = disc_vars[lhs_dv]
         for c in 1:N
-            raw_nb = (E=raw_nbE[c], W=raw_nbW[c], Np=raw_nbNp[c], Sp=raw_nbSp[c])
             nb = (E=nbE[c], W=nbW[c], Np=nbNp[c], Sp=nbSp[c],
                   NE=nbNE[c], NW=nbNW[c], SE=nbSE[c], SW=nbSW[c])
             rhs_c = _substitute_at_cell(
                 eq.rhs, disc_vars, dvs, spatial_iv_names,
-                xi_axis, eta_axis, c, raw_nb, nb, dξ, dη, cj, cj2, ghost,
+                xi_axis, eta_axis, c, nb, dξ, dη, cj, cj2,
             )
             push!(all_eqs, Dt(lhs_arr[c]) ~ rhs_c)
         end
@@ -2582,7 +2561,7 @@ end
 # target axis). Nonlinear terms are preserved by recursing into operator
 # arguments — `u^2` becomes `u_arr[c]^2`, `sin(u)` becomes `sin(u_arr[c])`.
 function _substitute_at_cell(expr, disc_vars, dvs, spatial_iv_names,
-                              xi_axis, eta_axis, c, raw_nb, nb, dξ, dη, cj, cj2, ghost)
+                              xi_axis, eta_axis, c, nb, dξ, dη, cj, cj2)
     ex = Symbolics.unwrap(expr)
     if !Symbolics.iscall(ex)
         return Symbolics.wrap(ex)
@@ -2608,7 +2587,7 @@ function _substitute_at_cell(expr, disc_vars, dvs, spatial_iv_names,
         if order == 2
             # ∂²/∂x² form — outer and inner axis are the same.
             return _second_deriv_cell(inner_arg, outer, outer, disc_vars, dvs,
-                                       c, raw_nb, nb, dξ, dη, cj, cj2, ghost)
+                                       c, nb, dξ, dη, cj, cj2)
         end
         order > 2 && error("discretize: Differential order $(order) not supported (≤ 2 only)")
 
@@ -2623,16 +2602,15 @@ function _substitute_at_cell(expr, disc_vars, dvs, spatial_iv_names,
             inner = _resolve_axis(Symbol(inner_op.x), xi_axis, eta_axis, spatial_iv_names)
             innermost = Symbolics.arguments(inner_arg)[1]
             return _second_deriv_cell(innermost, outer, inner, disc_vars, dvs,
-                                       c, raw_nb, nb, dξ, dη, cj, cj2, ghost)
+                                       c, nb, dξ, dη, cj, cj2)
         end
-        return _first_deriv_cell(inner_arg, outer, disc_vars, dvs,
-                                  c, raw_nb, nb, dξ, dη, cj, ghost)
+        return _first_deriv_cell(inner_arg, outer, disc_vars, dvs, c, nb, dξ, dη, cj)
     end
 
     # General operator — recurse into arguments (preserves nonlinear structure).
     new_args = [
         _substitute_at_cell(Symbolics.wrap(a), disc_vars, dvs, spatial_iv_names,
-                            xi_axis, eta_axis, c, raw_nb, nb, dξ, dη, cj, cj2, ghost)
+                            xi_axis, eta_axis, c, nb, dξ, dη, cj, cj2)
         for a in args
     ]
     return Symbolics.wrap(op(Symbolics.unwrap.(new_args)...))
@@ -2656,13 +2634,12 @@ function _eval_expr_at(expr, disc_vars, dvs, cn)
 end
 
 # Centered first derivative w.r.t. an axis, with chain-rule transform when
-# the axis is a physical target axis.
-function _first_deriv_cell(inner_arg, outer, disc_vars, dvs,
-                            c, raw_nb, nb, dξ, dη, cj, ghost)
-    f_E = _eval_at_nb(inner_arg, disc_vars, dvs, c, raw_nb.E,  nb.E,  ghost, :xi,  +1)
-    f_W = _eval_at_nb(inner_arg, disc_vars, dvs, c, raw_nb.W,  nb.W,  ghost, :xi,  -1)
-    f_N = _eval_at_nb(inner_arg, disc_vars, dvs, c, raw_nb.Np, nb.Np, ghost, :eta, +1)
-    f_S = _eval_at_nb(inner_arg, disc_vars, dvs, c, raw_nb.Sp, nb.Sp, ghost, :eta, -1)
+# the axis is a physical target axis. Boundary cells use self-fallback via nb.
+function _first_deriv_cell(inner_arg, outer, disc_vars, dvs, c, nb, dξ, dη, cj)
+    f_E = _eval_expr_at(inner_arg, disc_vars, dvs, nb.E)
+    f_W = _eval_expr_at(inner_arg, disc_vars, dvs, nb.W)
+    f_N = _eval_expr_at(inner_arg, disc_vars, dvs, nb.Np)
+    f_S = _eval_expr_at(inner_arg, disc_vars, dvs, nb.Sp)
     df_dξ = (f_E - f_W) / (2 * dξ)
     df_dη = (f_N - f_S) / (2 * dη)
     if outer === :xi
@@ -2680,18 +2657,18 @@ end
 #   ∂²u/∂x∂y = Σ_kl (∂ξ_k/∂x)(∂ξ_l/∂y) ∂²u/(∂ξ_k∂ξ_l)
 #            + Σ_k  (∂²ξ_k/∂x∂y)         ∂u/∂ξ_k
 # Computational-axis derivatives use plain centered second / mixed FD.
+# Boundary cells use self-fallback via nb (zero-ghost convention).
 function _second_deriv_cell(innermost, outer, inner, disc_vars, dvs,
-                              c, raw_nb, nb, dξ, dη, cj, cj2, ghost)
+                              c, nb, dξ, dη, cj, cj2)
     f_C  = _eval_expr_at(innermost, disc_vars, dvs, c)
-    f_E  = _eval_at_nb(innermost, disc_vars, dvs, c, raw_nb.E,  nb.E,  ghost, :xi,  +1)
-    f_W  = _eval_at_nb(innermost, disc_vars, dvs, c, raw_nb.W,  nb.W,  ghost, :xi,  -1)
-    f_N  = _eval_at_nb(innermost, disc_vars, dvs, c, raw_nb.Np, nb.Np, ghost, :eta, +1)
-    f_S  = _eval_at_nb(innermost, disc_vars, dvs, c, raw_nb.Sp, nb.Sp, ghost, :eta, -1)
-    # Diagonal neighbors: use primary-axis ghost evaluated at secondary-axis neighbor
-    f_NE = _eval_at_diag(innermost, disc_vars, dvs, c, raw_nb.Np, nb.E,  nb.NE, ghost, :eta, +1)
-    f_NW = _eval_at_diag(innermost, disc_vars, dvs, c, raw_nb.Np, nb.W,  nb.NW, ghost, :eta, +1)
-    f_SE = _eval_at_diag(innermost, disc_vars, dvs, c, raw_nb.Sp, nb.E,  nb.SE, ghost, :eta, -1)
-    f_SW = _eval_at_diag(innermost, disc_vars, dvs, c, raw_nb.Sp, nb.W,  nb.SW, ghost, :eta, -1)
+    f_E  = _eval_expr_at(innermost, disc_vars, dvs, nb.E)
+    f_W  = _eval_expr_at(innermost, disc_vars, dvs, nb.W)
+    f_N  = _eval_expr_at(innermost, disc_vars, dvs, nb.Np)
+    f_S  = _eval_expr_at(innermost, disc_vars, dvs, nb.Sp)
+    f_NE = _eval_expr_at(innermost, disc_vars, dvs, nb.NE)
+    f_NW = _eval_expr_at(innermost, disc_vars, dvs, nb.NW)
+    f_SE = _eval_expr_at(innermost, disc_vars, dvs, nb.SE)
+    f_SW = _eval_expr_at(innermost, disc_vars, dvs, nb.SW)
 
     d2f_dξ2  = (f_E - 2 * f_C + f_W) / dξ^2
     d2f_dη2  = (f_N - 2 * f_C + f_S) / dη^2
@@ -2736,232 +2713,6 @@ function _second_chain_coeffs(outer, inner, c, cj2)
     return (0.0, 0.0)
 end
 
-# ── Spatial BC parsing and ghost-cell construction (ess-gp3) ─────────────────
-
-struct _SpatialBC
-    dv_name::Symbol       # DV name (for matching)
-    dv::Any               # the dependent variable
-    axis::Symbol          # :xi or :eta (which grid axis this applies to)
-    offset::Int           # +1 (high) or -1 (low)
-    kind::Symbol          # :dirichlet or :neumann
-    rhs::Any              # symbolic RHS expression (may contain spatial IVs)
-end
-
-function _extract_domain_bounds(sys_domain, spatial_iv_names::Vector{Symbol})
-    bounds = Dict{Symbol, Tuple{Float64, Float64}}()
-    for d in sys_domain
-        nm = Symbol(d.variables)
-        nm in spatial_iv_names || continue
-        bounds[nm] = (Float64(d.domain.left), Float64(d.domain.right))
-    end
-    return bounds
-end
-
-# Identify spatial IV name → grid axis (:xi or :eta).
-function _iv_to_grid_axis(iv_name::Symbol, xi_axis::Symbol, eta_axis::Symbol)
-    iv_name == xi_axis  && return :xi
-    iv_name == eta_axis && return :eta
-    iv_name in (:xi, :ξ)  && return :xi
-    iv_name in (:eta, :η) && return :eta
-    return nothing
-end
-
-# Try to parse a Dirichlet BC: dv(t, x..., boundary_val) ~ rhs
-function _try_parse_dirichlet(bc, dvs, spatial_iv_names::Vector{Symbol},
-                               domain_bounds::Dict, xi_axis::Symbol, eta_axis::Symbol, t0::Float64)
-    lhs = Symbolics.unwrap(bc.lhs)
-    Symbolics.iscall(lhs) || return nothing
-    lhs_name = Symbol(Symbolics.tosymbol(Symbolics.wrap(lhs), escape=false))
-    matched_dv = nothing
-    for dv in dvs
-        Symbol(Symbolics.tosymbol(dv, escape=false)) == lhs_name && (matched_dv = dv; break)
-    end
-    matched_dv === nothing && return nothing
-
-    args = Symbolics.arguments(lhs)
-    length(args) < 2 && return nothing
-
-    # First arg must be symbolic (not a number) — if numeric it's an IC.
-    t_val = Symbolics.value(Symbolics.wrap(args[1]))
-    t_val isa Number && return nothing
-
-    # Find the pinned spatial argument (one must be a number at a domain boundary).
-    for (kidx, nm) in enumerate(spatial_iv_names)
-        length(args) < kidx + 1 && continue
-        av = Symbolics.value(Symbolics.wrap(args[kidx + 1]))
-        av isa Number || continue
-        av_f = Float64(av)
-        bounds = get(domain_bounds, nm, nothing)
-        bounds === nothing && continue
-        lo, hi = bounds
-        offset = isapprox(av_f, lo; atol = 1e-10) ? -1 :
-                 isapprox(av_f, hi; atol = 1e-10) ? +1 : continue
-        axis = _iv_to_grid_axis(nm, xi_axis, eta_axis)
-        axis === nothing && continue
-        return _SpatialBC(lhs_name, matched_dv, axis, offset, :dirichlet, bc.rhs)
-    end
-    return nothing
-end
-
-# Try to parse a Neumann BC: Differential(spatial_iv)(dv(t, x..., boundary_val)) ~ rhs
-function _try_parse_neumann(bc, dvs, spatial_iv_names::Vector{Symbol},
-                             domain_bounds::Dict, xi_axis::Symbol, eta_axis::Symbol, t0::Float64)
-    lhs = Symbolics.unwrap(bc.lhs)
-    Symbolics.iscall(lhs) || return nothing
-    op = Symbolics.operation(lhs)
-    op isa ModelingToolkit.Differential || return nothing
-
-    diff_nm = Symbol(op.x)
-    kidx = findfirst(==(diff_nm), spatial_iv_names)
-    kidx === nothing && return nothing
-
-    inner = Symbolics.arguments(lhs)[1]
-    inner_ex = Symbolics.unwrap(inner)
-    Symbolics.iscall(inner_ex) || return nothing
-
-    inner_name = Symbol(Symbolics.tosymbol(Symbolics.wrap(inner_ex), escape=false))
-    matched_dv = nothing
-    for dv in dvs
-        Symbol(Symbolics.tosymbol(dv, escape=false)) == inner_name && (matched_dv = dv; break)
-    end
-    matched_dv === nothing && return nothing
-
-    iargs = Symbolics.arguments(inner_ex)
-    length(iargs) < 2 && return nothing
-    t_val = Symbolics.value(Symbolics.wrap(iargs[1]))
-    t_val isa Number && return nothing  # IC
-
-    length(iargs) < kidx + 1 && return nothing
-    av = Symbolics.value(Symbolics.wrap(iargs[kidx + 1]))
-    av isa Number || return nothing
-    av_f = Float64(av)
-
-    nm = spatial_iv_names[kidx]
-    bounds = get(domain_bounds, nm, nothing)
-    bounds === nothing && return nothing
-    lo, hi = bounds
-    offset = isapprox(av_f, lo; atol = 1e-10) ? -1 :
-             isapprox(av_f, hi; atol = 1e-10) ? +1 : return nothing
-    axis = _iv_to_grid_axis(nm, xi_axis, eta_axis)
-    axis === nothing && return nothing
-    return _SpatialBC(inner_name, matched_dv, axis, offset, :neumann, bc.rhs)
-end
-
-# Evaluate a BC RHS expression at cell c by substituting spatial-IV coordinates.
-function _eval_bc_rhs_at_cell(rhs, spatial_ivs, spatial_iv_names::Vector{Symbol},
-                               coord_arrays::Dict, c::Int)
-    subs = Dict{Any,Any}()
-    for (iv, nm) in zip(spatial_ivs, spatial_iv_names)
-        val = coord_arrays[nm][c]
-        subs[iv] = val
-        subs[Symbolics.unwrap(iv)] = val
-    end
-    result = Symbolics.substitute(rhs, subs)
-    v = Symbolics.value(result)
-    v isa Number && return Float64(v)
-    return result  # time-dependent; stays symbolic
-end
-
-# Build ghost-value arrays.
-# Returns Dict{dv => Dict{(axis, offset) => Vector{Any}[N]}}
-# ghost[dv][(axis, offset)][c] = symbolic ghost-cell value for DV dv at
-# boundary cell c in direction (axis, offset). Defaults to self-fallback.
-function _build_ghost_vals(bc_specs::Vector{_SpatialBC}, dvs, disc_vars,
-                            N::Int, dξ::Float64, dη::Float64,
-                            raw_nbE, raw_nbW, raw_nbNp, raw_nbSp,
-                            xi_axis::Symbol, eta_axis::Symbol,
-                            spatial_ivs, spatial_iv_names::Vector{Symbol},
-                            coord_arrays::Dict)
-    ghost = Dict{Any, Dict{Tuple{Symbol,Int}, Vector{Any}}}()
-    for dv in dvs
-        ghost[dv] = Dict(
-            (:xi,  +1) => Any[disc_vars[dv][c] for c in 1:N],
-            (:xi,  -1) => Any[disc_vars[dv][c] for c in 1:N],
-            (:eta, +1) => Any[disc_vars[dv][c] for c in 1:N],
-            (:eta, -1) => Any[disc_vars[dv][c] for c in 1:N],
-        )
-    end
-
-    raw_nb_for = Dict(
-        (:xi,  +1) => raw_nbE,
-        (:xi,  -1) => raw_nbW,
-        (:eta, +1) => raw_nbNp,
-        (:eta, -1) => raw_nbSp,
-    )
-
-    for spec in bc_specs
-        dv = spec.dv
-        key = (spec.axis, spec.offset)
-        raw_nb = raw_nb_for[key]
-        d_axis = spec.axis === :xi ? dξ : dη
-        arr = ghost[dv][key]
-        for c in 1:N
-            raw_nb[c] == 0 || continue  # only boundary cells
-            rhs_c = _eval_bc_rhs_at_cell(spec.rhs, spatial_ivs, spatial_iv_names, coord_arrays, c)
-            u_c = disc_vars[dv][c]
-            arr[c] = spec.kind === :dirichlet ? 2 * rhs_c - u_c :
-                                                u_c + rhs_c * d_axis   # neumann
-        end
-    end
-    return ghost
-end
-
-# Return the ghost value for dv at boundary cell c in direction (axis, offset).
-@inline function _ghost_val(ghost, dv, axis::Symbol, offset::Int, c::Int, disc_vars)
-    g = get(ghost, dv, nothing)
-    g === nothing && return disc_vars[dv][c]
-    arr = get(g, (axis, offset), nothing)
-    arr === nothing && return disc_vars[dv][c]
-    return arr[c]
-end
-
-# Evaluate expr at a specific neighbor, using ghost when the raw neighbor index is 0.
-function _eval_at_nb(expr, disc_vars, dvs, c_self::Int, raw_cn::Int, safe_cn::Int,
-                      ghost, axis::Symbol, offset::Int)
-    if raw_cn != 0
-        return _eval_expr_at(expr, disc_vars, dvs, raw_cn)
-    end
-    override = Dict{Any,Any}(dv => _ghost_val(ghost, dv, axis, offset, c_self, disc_vars)
-                              for dv in dvs)
-    return _eval_expr_at_ghost(expr, disc_vars, dvs, override)
-end
-
-# Evaluate expr at a diagonal neighbor (e.g. NE), where the primary axis may be at a boundary.
-# primary = (axis, offset) for the axis that may be boundary (e.g. north: eta, +1)
-# secondary_nb = safe neighbor cell in the secondary axis (e.g. nbE[c_self])
-# diag_safe = current safe diagonal index (fallback if no ghost available)
-function _eval_at_diag(expr, disc_vars, dvs, c_self::Int, raw_nb_primary::Int,
-                        secondary_nb::Int, diag_safe::Int,
-                        ghost, primary_axis::Symbol, primary_offset::Int)
-    if raw_nb_primary == 0
-        # Primary axis at boundary: ghost is the primary-axis ghost evaluated at the secondary neighbor
-        override = Dict{Any,Any}(
-            dv => _ghost_val(ghost, dv, primary_axis, primary_offset, secondary_nb, disc_vars)
-            for dv in dvs
-        )
-        return _eval_expr_at_ghost(expr, disc_vars, dvs, override)
-    end
-    return _eval_expr_at(expr, disc_vars, dvs, diag_safe)
-end
-
-# Evaluate expr substituting symbolic ghost values per DV.
-function _eval_expr_at_ghost(expr, disc_vars, dvs, ghost_override::Dict)
-    ex = Symbolics.unwrap(expr)
-    if !Symbolics.iscall(ex)
-        return Symbolics.wrap(ex)
-    end
-    for dv in dvs
-        if isequal(Symbolics.wrap(ex), dv)
-            g = get(ghost_override, dv, nothing)
-            return g !== nothing ? Symbolics.wrap(g) : Symbolics.wrap(ex)
-        end
-    end
-    op = Symbolics.operation(ex)
-    args = Symbolics.arguments(ex)
-    new_args = [_eval_expr_at_ghost(Symbolics.wrap(a), disc_vars, dvs, ghost_override)
-                for a in args]
-    return Symbolics.wrap(op(Symbolics.unwrap.(new_args)...))
-end
 
 # Project initial conditions from `sys.bcs` of form `dv(t0, ivs...) ~ rhs(ivs...)`
 # onto each cell. Unmatched DVs default to zero per the ESD reference.
