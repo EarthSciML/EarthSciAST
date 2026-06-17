@@ -777,9 +777,9 @@ fn check_event_discrete_parameters(obj: &serde_json::Map<String, Value>, errors:
     }
 }
 
-/// Closed set of builtin generator names recognized by §6.4. Adding a new
-/// builtin is a minor version bump.
-const GRID_BUILTIN_NAMES: &[&str] = &["gnomonic_c6_neighbors", "gnomonic_c6_d4_action"];
+/// Closed set of builtin generator names recognized by §6.4. The set is
+/// currently empty; adding a new builtin is a minor version bump.
+const GRID_BUILTIN_NAMES: &[&str] = &[];
 
 /// Validate that every grid metric/connectivity generator that references a
 /// `data_loaders` entry resolves to a known loader, and that every
@@ -813,14 +813,11 @@ fn check_grid_references(obj: &serde_json::Map<String, Value>, errors: &mut Vec<
             }
         }
 
-        // connectivity / panel_connectivity: loader+field at the table level,
-        // or an embedded generator.
-        for section in ["connectivity", "panel_connectivity"] {
-            let Some(tables) = g.get(section).and_then(|v| v.as_object()) else {
-                continue;
-            };
+        // connectivity: loader+field at the table level, or an embedded
+        // generator.
+        if let Some(tables) = g.get("connectivity").and_then(|v| v.as_object()) {
             for (tname, tv) in tables {
-                let path = format!("grids/{gname}/{section}/{tname}");
+                let path = format!("grids/{gname}/connectivity/{tname}");
                 if let Some(loader) = tv.get("loader").and_then(|v| v.as_str())
                     && !loader_names.contains(loader)
                 {

@@ -62,7 +62,7 @@ type Guard struct {
 // roundtrips; the rule engine does not branch on them.
 //
 // The Go binding evaluates region.index_range, region.boundary,
-// region.panel_boundary, region.mask_field, and the where-expression
+// region.mask_field, and the where-expression
 // predicate per query point (RFC §5.2.7).
 type Rule struct {
 	Name           string
@@ -81,9 +81,7 @@ type Rule struct {
 // field (RFC §5.2.8 / §7). Exactly one of Uniform / PerAxis is populated:
 // Uniform holds a closed-set string when the author wrote the
 // string-uniform form; PerAxis holds a {<axis>: BoundaryPolicySpec} map
-// when the author wrote the {by_axis: ...} object form. The string form
-// rejects "panel_dispatch" (which requires the per-axis form's interior /
-// boundary parameters).
+// when the author wrote the {by_axis: ...} object form.
 type BoundaryPolicy struct {
 	Uniform string                          // empty when PerAxis is populated
 	PerAxis map[string]BoundaryPolicySpec   // nil when Uniform is populated
@@ -94,7 +92,7 @@ type BoundaryPolicy struct {
 // optional fields carry the policy's parameters.
 type BoundaryPolicySpec struct {
 	// Kind is one of: "periodic", "reflecting", "one_sided_extrapolation",
-	// "prescribed", "panel_dispatch", "ghosted" (alias for "prescribed"),
+	// "prescribed", "ghosted" (alias for "prescribed"),
 	// "neumann_zero" (alias for "reflecting"), "extrapolate" (alias for
 	// "one_sided_extrapolation").
 	Kind string
@@ -103,12 +101,6 @@ type BoundaryPolicySpec struct {
 	// "unset".
 	Degree    int
 	HasDegree bool
-	// Interior names the metric/distance field used on interior faces
-	// for panel_dispatch (e.g. "dist_xi"). Empty means unset.
-	Interior string
-	// Boundary names the metric/distance field used on panel-boundary
-	// faces for panel_dispatch (e.g. "dist_xi_bnd"). Empty means unset.
-	Boundary string
 	// Description is an optional authorial note. Empty means unset.
 	Description string
 }
@@ -139,9 +131,8 @@ type RuleBinding struct {
 // RuleRegionScope is the parsed object-form `region` per RFC §5.2.7.
 // Only one of the tagged fields is populated for a given Kind.
 type RuleRegionScope struct {
-	Kind  string // "boundary" | "panel_boundary" | "mask_field" | "index_range"
-	Side  string // boundary, panel_boundary
-	Panel int    // panel_boundary
+	Kind  string // "boundary" | "mask_field" | "index_range"
+	Side  string // boundary
 	Field string // mask_field
 	Axis  string // index_range
 	Lo    int    // index_range
@@ -161,11 +152,6 @@ type GridMeta struct {
 	// DimSizes holds the cell count for each named spatial dimension.
 	// Consumed by bind_side_spacing and bind_side_dim_size guards.
 	DimSizes map[string]int64
-	// HasPanelConnectivity is the runtime cubed_sphere marker (RFC §6.4):
-	// true iff the grid carries a panel_connectivity table. Consumed by
-	// region.panel_boundary scope evaluation — applying that scope to a
-	// grid without this marker raises E_REGION_GRID_MISMATCH.
-	HasPanelConnectivity bool
 }
 
 // VariableMeta is the subset of variable metadata consulted by the
@@ -890,9 +876,7 @@ func rewritePass(expr Expression, rules []Rule, ctx RuleContext, changed *bool) 
 // checkScope evaluates a rule's per-query-point scope. Returns true when
 // the rule should fire at the current query point, false otherwise
 // (conservative fall-through). A legacy string region and a missing
-// where_expr pass unconditionally, preserving v0.2 semantics. Returns
-// E_REGION_GRID_MISMATCH when a region.panel_boundary scope is applied
-// to a grid that lacks panel_connectivity metadata (RFC §5.2.7, §6.4).
+// where_expr pass unconditionally, preserving v0.2 semantics.
 func checkScope(r *Rule, bindings map[string]Expression, ctx RuleContext) (bool, error) {
 	if r.RegionScope != nil {
 		ok, err := evalRegion(r.RegionScope, ctx)
@@ -916,74 +900,10 @@ func evalRegion(scope *RuleRegionScope, ctx RuleContext) (bool, error) {
 		return int64(scope.Lo) <= v && v <= int64(scope.Hi), nil
 	case "boundary":
 		return evalBoundary(scope.Side, ctx), nil
-	case "panel_boundary":
-		return evalPanelBoundary(scope.Panel, scope.Side, ctx)
 	case "mask_field":
 		return evalMaskField(scope.Field, ctx), nil
 	}
 	return false, nil
-}
-
-// evalPanelBoundary evaluates a {kind:"panel_boundary", panel, side} scope
-// (RFC §5.2.7, §6.4). Cubed-sphere only: presence of panel_connectivity
-// metadata is the runtime marker for that family. Applying the scope to a
-// grid without it emits E_REGION_GRID_MISMATCH.
-//
-// Canonical cubed-sphere query-point axes are p, i, j (§7 query-point
-// table). Side names map to panel-local axes: xmin/west → -i, xmax/east →
-// +i, ymin/south → -j, ymax/north → +j. Edge detection uses dim_bounds;
-// absent bounds or an unrecognised side fall through (returns false).
-func evalPanelBoundary(panel int, side string, ctx RuleContext) (bool, error) {
-	if ctx.GridName == "" {
-		return false, nil
-	}
-	meta, ok := ctx.Grids[ctx.GridName]
-	if !ok {
-		return false, nil
-	}
-	if !meta.HasPanelConnectivity {
-		return false, newRuleErr("E_REGION_GRID_MISMATCH",
-			fmt.Sprintf("rule region.panel_boundary applied to grid `%s` "+
-				"which has no panel_connectivity metadata (cubed_sphere-only scope)",
-				ctx.GridName))
-	}
-	if len(ctx.QueryPoint) == 0 {
-		return false, nil
-	}
-	p, has := ctx.QueryPoint["p"]
-	if !has {
-		return false, nil
-	}
-	if p != int64(panel) {
-		return false, nil
-	}
-	var axis string
-	var whichHi bool
-	switch side {
-	case "xmin", "west":
-		axis, whichHi = "i", false
-	case "xmax", "east":
-		axis, whichHi = "i", true
-	case "ymin", "south":
-		axis, whichHi = "j", false
-	case "ymax", "north":
-		axis, whichHi = "j", true
-	default:
-		return false, nil
-	}
-	bounds, has := meta.DimBounds[axis]
-	if !has {
-		return false, nil
-	}
-	v, has := ctx.QueryPoint[axis]
-	if !has {
-		return false, nil
-	}
-	target := bounds[0]
-	if whichHi {
-		target = bounds[1]
-	}
-	return v == target, nil
 }
 
 func evalMaskField(field string, ctx RuleContext) bool {
@@ -1477,7 +1397,6 @@ var boundaryPolicyKindValues = map[string]struct{}{
 	"reflecting":              {},
 	"one_sided_extrapolation": {},
 	"prescribed":              {},
-	"panel_dispatch":          {},
 	"ghosted":                 {},
 	"neumann_zero":            {},
 	"extrapolate":             {},
@@ -1552,22 +1471,6 @@ func parseBoundaryPolicySpec(ruleName, axis string, raw interface{}) (BoundaryPo
 		spec.Degree = n
 		spec.HasDegree = true
 	}
-	if iRaw, has := obj["interior"]; has {
-		s, ok := iRaw.(string)
-		if !ok {
-			return BoundaryPolicySpec{}, newRuleErr("E_RULE_PARSE",
-				fmt.Sprintf("rule `%s`: boundary_policy.by_axis.%s.interior must be a string", ruleName, axis))
-		}
-		spec.Interior = s
-	}
-	if bRaw, has := obj["boundary"]; has {
-		s, ok := bRaw.(string)
-		if !ok {
-			return BoundaryPolicySpec{}, newRuleErr("E_RULE_PARSE",
-				fmt.Sprintf("rule `%s`: boundary_policy.by_axis.%s.boundary must be a string", ruleName, axis))
-		}
-		spec.Boundary = s
-	}
 	if descRaw, has := obj["description"]; has {
 		s, ok := descRaw.(string)
 		if !ok {
@@ -1575,12 +1478,6 @@ func parseBoundaryPolicySpec(ruleName, axis string, raw interface{}) (BoundaryPo
 				fmt.Sprintf("rule `%s`: boundary_policy.by_axis.%s.description must be a string", ruleName, axis))
 		}
 		spec.Description = s
-	}
-	if kind == "panel_dispatch" {
-		if spec.Interior == "" || spec.Boundary == "" {
-			return BoundaryPolicySpec{}, newRuleErr("E_RULE_PARSE",
-				fmt.Sprintf("rule `%s`: boundary_policy.by_axis.%s: panel_dispatch requires `interior` and `boundary` field names", ruleName, axis))
-		}
 	}
 	return spec, nil
 }
@@ -1748,17 +1645,6 @@ func parseRegionScope(ruleName string, obj map[string]interface{}) (*RuleRegionS
 			return nil, err
 		}
 		scope.Side = side
-	case "panel_boundary":
-		panel, err := intField("panel")
-		if err != nil {
-			return nil, err
-		}
-		side, err := strField("side")
-		if err != nil {
-			return nil, err
-		}
-		scope.Panel = panel
-		scope.Side = side
 	case "mask_field":
 		fld, err := strField("field")
 		if err != nil {
@@ -1783,7 +1669,7 @@ func parseRegionScope(ruleName string, obj map[string]interface{}) (*RuleRegionS
 		scope.Hi = hi
 	default:
 		return nil, newRuleErr("E_RULE_PARSE",
-			fmt.Sprintf("rule `%s`: unknown region.kind `%s` (closed set: boundary, panel_boundary, mask_field, index_range)", ruleName, kind))
+			fmt.Sprintf("rule `%s`: unknown region.kind `%s` (closed set: boundary, mask_field, index_range)", ruleName, kind))
 	}
 	return scope, nil
 }

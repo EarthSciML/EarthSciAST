@@ -1,10 +1,9 @@
 # Finite-volume grid-metric assembly (esm-xom).
 #
-# Ported from EarthSciDiscretizations/src/fv_stencil.jl (CubedSphere-specific)
-# and refactored against the esm-a3z Grid trait. Every function here takes an
+# Refactored against the esm-a3z Grid trait. Every function here takes an
 # `AbstractCurvilinearGrid` (or `AbstractGrid`) and queries it only through
-# bulk-array trait methods — no struct-field access. Panel connectivity,
-# periodicity, and cross-boundary topology are resolved inside the grid impl's
+# bulk-array trait methods — no struct-field access. Periodicity and
+# cross-boundary topology are resolved inside the grid impl's
 # `neighbor_indices`, so assemblers see a flat-index view of the world.
 #
 # This file ports the **numeric** stencil assembly (precompute weights + apply
@@ -15,8 +14,8 @@
 # Symbolics out of the default load path. See follow-up bead esm-xom-mtk.
 #
 # Dimensionality: the FV Laplacian and gradient stencils here are **2D**
-# (9-point Laplacian, 5-point gradient), matching the cubed-sphere /
-# lat-lon / cartesian-2D usage from ESD. Extension to 3D is follow-up.
+# (9-point Laplacian, 5-point gradient), matching the lat-lon /
+# cartesian-2D usage from ESD. Extension to 3D is follow-up.
 
 # ---------------------------------------------------------------------------
 # Utilities

@@ -13,7 +13,7 @@ ESM today fully specifies continuous PDE systems (models, reactions, coupling,
 domains, interfaces) but stops short of describing *how* those PDEs are
 discretized in space. Every consumer must defer to a language-specific engine
 — currently MethodOfLines.jl (rectangular grids) and EarthSciDiscretizations.jl
-(cubed sphere FV). Python, Rust, Go, and TS bindings therefore cannot produce
+(unstructured FV). Python, Rust, Go, and TS bindings therefore cannot produce
 an ODE/DAE system from a `.esm` file without re-implementing every discretization
 in every language, and the Julia implementations have already diverged in
 coverage and numerics.
@@ -21,9 +21,9 @@ coverage and numerics.
 The goal of this RFC is to extend the existing ESM format with a complete,
 language-agnostic specification of spatial discretization that:
 
-1. Covers the three grid families that currently matter to earth-system modeling:
-   logically-rectangular (MOL), cubed-sphere panel (FV3), and unstructured
-   Voronoi (MPAS, including variable-valence cells).
+1. Covers the grid families that currently matter to earth-system modeling:
+   logically-rectangular (MOL) and unstructured Voronoi (MPAS, including
+   variable-valence cells).
 2. Lets any binding turn a PDE `.esm` file into a discretized ODE/DAE system
    without calling into Julia.
 3. Emits bitwise-identical expression output across bindings on the conformance
@@ -77,7 +77,7 @@ new §5.3 `regrid` op is specified below and is the only AST-level addition.
 
 ## 4. Unifying abstraction: the neighbor selector
 
-All three target grid families reduce to a single stencil template:
+All target grid families reduce to a single stencil template:
 
 ```
 output[target] = ⊕_k coeff_k · var[neighbor_k(target)]
@@ -85,12 +85,11 @@ output[target] = ⊕_k coeff_k · var[neighbor_k(target)]
 
 where `⊕` is `+` for linear schemes and may be `*`, `min`, or `max` for
 reductions (see §4.2). They differ only in how `neighbor_k` is addressed. The
-RFC introduces **one** selector abstraction with four concrete forms:
+RFC introduces **one** selector abstraction with three concrete forms:
 
 | Form | Fields | Grid family |
 |---|---|---|
 | `cartesian` | `axis`, `offset` | Logically-rectangular (MOL) |
-| `panel` | `side ∈ {-i,+i,-j,+j}` (panel-connectivity resolves the target) | Cubed sphere (FV3) |
 | `indirect` | `table`, `index_expr` | Unstructured fixed-valence (e.g. edge→cell) |
 | `reduction` | `table`, `count_expr`, `k_bound`, `combine ∈ {+,*,min,max}` | Unstructured variable-valence (e.g. cell→edges) |
 
@@ -141,7 +140,7 @@ Validation rule (new, applied by the loader after resolving `ref`s): given
 `{op:"index", args:[V, i_1, ..., i_n]}` where `V` is a bare variable name,
 `V` must resolve to either (a) a declared variable (model/reaction/grid
 metric) whose `shape` field (see §11 below and spec §6.1 amendment) has
-length `n`, or (b) a connectivity table declared under a grid (§6.3, §6.4).
+length `n`, or (b) a connectivity table declared under a grid (§6.3).
 Integer bounds are **not** checked statically; out-of-bounds access is a
 runtime concern.
 
@@ -161,7 +160,7 @@ serializable. A rule object has three fields:
 | `replacement` | AST over the same pattern variables | Inline replacement expression. Mutually exclusive with `use`. |
 | `use` | string — a scheme name from `discretizations.<name>` | Use the named scheme; its `applies_to` is matched as a guard (§7.2.1). Mutually exclusive with `replacement`. |
 | `produces` | array of `{kind, emit|value, ...}` entries | Optional; emits additional equations or ghost variables (§9.4). A rule with `produces` alone (no `replacement`/`use`) is legal and means "leave the matched subtree alone and emit these side equations". |
-| `region` | string OR object (optional) | See §5.2.7 below. String form is the legacy advisory tag (no runtime effect). Object form is a normative spatial-scope predicate: the rule applies only at points in scope. Variants: `{kind:"boundary",side:...}`, `{kind:"panel_boundary",panel:int,side:...}`, `{kind:"mask_field",field:...}`, `{kind:"index_range",axis:...,lo:int,hi:int}`. |
+| `region` | string OR object (optional) | See §5.2.7 below. String form is the legacy advisory tag (no runtime effect). Object form is a normative spatial-scope predicate: the rule applies only at points in scope. Variants: `{kind:"boundary",side:...}`, `{kind:"mask_field",field:...}`, `{kind:"index_range",axis:...,lo:int,hi:int}`. |
 
 Pattern variables are strings prefixed by `$`: `"$u"`, `"$x"`. The sub-language
 is a closed AST shape, not a DSL string; every binding can load it with its
@@ -328,7 +327,6 @@ both of which scope rule application **per query point**:
   | `kind` | Required fields | Semantics |
   |---|---|---|
   | `"boundary"` | `side` (axis-side name; e.g. `"xmin"`, `"north"`) | Rule applies only at query points on the named boundary of the enclosing grid. |
-  | `"panel_boundary"` | `panel` (int), `side` | Cubed-sphere-only: rule applies only at (panel, side) edge points. Undefined on other grid families — bindings MUST emit `E_REGION_GRID_MISMATCH` at rewrite time if applied to a non-cubed-sphere grid. |
   | `"mask_field"` | `field` (name) | Rule applies only at query points where the named field (a `data_loaders` entry or a boolean-typed variable) evaluates truthy. Indexed per query point. |
   | `"index_range"` | `axis`, `lo`, `hi` (int, inclusive) | Rule applies only where the named canonical index (`i`, `j`, `k`, …) lies in `[lo, hi]`. |
 
@@ -373,8 +371,8 @@ Specifically:
    step.
 2. The engine determines the **query point** for the match. For
    rules firing inside an equation parameterized by `$target`
-   (cartesian: `[i, j, k, …]`; unstructured: `c` / `e` / `v`;
-   cubed sphere: `[p, i, j]`), the query point is `$target`. For
+   (cartesian: `[i, j, k, …]`; unstructured: `c` / `e` / `v`),
+   the query point is `$target`. For
    rules firing outside a `$target` context (coupling-rule rewrites,
    top-level expressions), the engine MUST emit
    `E_SCOPE_OUTSIDE_TARGET` rather than silently widen scope.
@@ -397,11 +395,7 @@ recommended so authors know their rule is inert in that binding.
 
 **Conformance rollout.** The MVP for v0.3 requires Julia and Rust
 to evaluate `region.boundary`, `region.index_range`,
-`region.panel_boundary`, `region.mask_field`, and the expression form
-of `where`. `region.panel_boundary` is cubed_sphere-only and requires
-`panel_connectivity` (§6.4) on the grid metadata as the runtime family
-marker; applying it to a grid without that marker MUST emit
-`E_REGION_GRID_MISMATCH` at rewrite time.
+`region.mask_field`, and the expression form of `where`.
 
 **`region.mask_field` integration.** Bindings resolve a mask-field
 scope by consulting a per-rewrite-context `mask_fields` table
@@ -437,9 +431,8 @@ rule's stencil reaches.
 
 **Object form (per-axis).** An object `{"by_axis": {<axis>: BoundaryPolicySpec, ...}}`
 where each `BoundaryPolicySpec` is a `{kind, ...}` object. The per-axis form is
-required for cubed-sphere `panel_dispatch` (which carries `interior` /
-`boundary` field-name parameters) and for rules whose axes need different
-policies (e.g. periodic in longitude, reflecting in vertical).
+required for rules whose axes need different policies (e.g. periodic in
+longitude, reflecting in vertical).
 
 The closed set of policy kinds (string values and `BoundaryPolicySpec.kind`):
 
@@ -449,15 +442,14 @@ The closed set of policy kinds (string values and `BoundaryPolicySpec.kind`):
 | `reflecting` | At the edge, the rule's stencil is mirrored across the domain edge so that any out-of-range `index` reads its in-range image. Suitable for closed walls / symmetry boundaries. |
 | `one_sided_extrapolation` | The runtime fills ghost values by extrapolating from the interior. Carries an optional `degree` parameter (`0` constant, `1` linear (default), `2` quadratic, `3` cubic). |
 | `prescribed` | The caller supplies ghost values in the input array; the runtime treats the input as already-extended and the rule fires unmodified at the edge. Used for hand-set Dirichlet, externally-driven BCs, and runtimes whose upstream BC pass already filled ghost cells. |
-| `panel_dispatch` (object form only) | Cubed-sphere panel boundaries: switch between two metric/distance fields based on whether a face is at a panel boundary. Takes sibling fields `interior` and `boundary`, each naming a metric/distance array on the rule's grid (e.g. `{kind: "panel_dispatch", interior: "dist_xi", boundary: "dist_xi_bnd"}`). At a panel-boundary face the runtime substitutes the `boundary` array for the `interior` array in the rule's expansion; on interior faces the `interior` array is used as-is. |
 | `ghosted` | v0.3.x alias for `prescribed` — retained for backwards compatibility with rules authored before v0.3.x. New rules SHOULD use `prescribed`. |
 | `neumann_zero` | v0.3.x alias for `reflecting` — retained for backwards compatibility. New rules SHOULD use `reflecting`. |
 | `extrapolate` | v0.3.x alias for `one_sided_extrapolation` (defaulting to `degree: 1` when omitted). |
 
 The field is **declarative**. The rule engine itself (§5.2 pattern matcher,
 §7.2 expander) does not branch on `boundary_policy`; downstream pipeline
-phases (BC pass §9, ghost-cell synthesis, edge-rule fall-through, panel
-metric selection) consult it. A binding that does not yet implement a
+phases (BC pass §9, ghost-cell synthesis, edge-rule fall-through) consult
+it. A binding that does not yet implement a
 non-`periodic` kind MUST preserve the field through parse/serialize
 roundtrips and MAY emit `W_UNEVAL_BOUNDARY_POLICY` at the first
 non-`periodic` policy it encounters at rewrite time.
@@ -493,31 +485,6 @@ Omission is equivalent to `0` — the rule reads only in-bounds indices and
 needs no input extension. The field is metadata; bindings preserve it across
 roundtrips. Loaders that do not yet implement input extension MAY emit
 `W_UNEVAL_GHOST_WIDTH` at the first non-zero `ghost_width` they encounter.
-
-##### Worked example — FV PPM transport on cubed sphere
-
-```json
-{
-  "name": "flux_1d_ppm_xi",
-  "pattern": { "op": "flux_advect", "args": ["$q"], "dim": "xi" },
-  "where": [ { "guard": "var_has_grid", "pvar": "$q", "grid": "cubed_sphere" } ],
-  "ghost_width": { "by_axis": { "xi": 3, "eta": 3 } },
-  "boundary_policy": {
-    "by_axis": {
-      "xi":  { "kind": "panel_dispatch", "interior": "dist_xi",  "boundary": "dist_xi_bnd"  },
-      "eta": { "kind": "panel_dispatch", "interior": "dist_eta", "boundary": "dist_eta_bnd" }
-    }
-  },
-  "bindings": {
-    "dt": { "kind": "per_step", "description": "Adaptive timestep, set from CFL <= 0.5." }
-  },
-  "replacement": "..."
-}
-```
-
-This declares: a 6-point xi-stencil that reaches 3 ghost cells on each side
-of every face, with the runtime selecting `dist_xi` on interior faces and
-`dist_xi_bnd` on panel-boundary faces of the cubed sphere.
 
 ##### `bindings`
 
@@ -610,7 +577,6 @@ code `E_UNKNOWN_REGRID_METHOD`.
 | `"nearest"` | Nearest-neighbor in the target's index space. Ties broken by lexicographic comparison of source indices. No interpolation; no extrapolation. |
 | `"bilinear"` | Bilinear interpolation over the four surrounding source cells when both source and target are structured; extended to simplex-barycentric on unstructured source meshes. Outside the source convex hull, extrapolation is NOT performed; the result is undefined and bindings MUST either clip to boundary or error (`E_REGRID_OUTSIDE_HULL`). |
 | `"conservative"` | First-order area-weighted conservative remap (preserves integral of the source field over the target cell). Implementations MUST match the reference area-overlap formulation; higher-order conservative schemes require a spec-version bump. |
-| `"panel_seam"` | Cubed-sphere-only: resolves the (panel, i, j) → (panel', i', j') mapping at a panel seam via `panel_connectivity.neighbors` and `axis_flip` (§6.4.1). Emitted automatically by the `panel` selector's materialization when the stencil crosses a seam (§7.2 panel row, §6.4.2 worked example). Not usable outside cubed_sphere. |
 
 `"custom"` and any other author-supplied method name are **out of MVP**
 and MUST be rejected. Adding a new method name is a minor version bump
@@ -621,9 +587,6 @@ and MUST be rejected. Adding a new method name is a minor version bump
 supplied by the **selector**, not by the author at rule-write time.
 Specifically:
 
-- `panel` selectors emit `method: "panel_seam"` on any cross-seam
-  reference. The selector itself does not expose a `method` field;
-  `"panel_seam"` is fixed for this selector kind.
 - `cartesian`, `indirect`, and `reduction` selectors do NOT emit
   `regrid` wrappers on their own — they address the same grid.
 - When a **coupling** resolves to a cross-grid reference (§11 step 4),
@@ -946,18 +909,17 @@ op for "boundary region" is defined in the MVP slice.
 {
   "grids": {
     "atmos_rect":   { "family": "cartesian",     ... },
-    "mpas_cvmesh":  { "family": "unstructured",  ... },
-    "cubed_c48":    { "family": "cubed_sphere",  ... }
+    "mpas_cvmesh":  { "family": "unstructured",  ... }
   }
 }
 ```
 
 Each key is a grid name; the value is an object whose `family` field selects
-one of three schemas below. All grids support the following common fields:
+one of the schemas below. All grids support the following common fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `family` | ✓ | `"cartesian"`, `"cubed_sphere"`, or `"unstructured"` |
+| `family` | ✓ | `"cartesian"` or `"unstructured"` |
 | `dimensions` | ✓ | Ordered list of logical dimension names |
 | `locations` | | Declared stagger locations (see §11) |
 | `metric_arrays` | | Declarations of metric arrays (see §6.5) |
@@ -1055,100 +1017,6 @@ that use the `indirect` or `reduction` selector name one of these tables in
 The `{loader, field}` pair references an entry of the top-level
 `data_loaders` section; see §8 for the mesh-loader extension this RFC adds.
 
-### 6.4 Family: `cubed_sphere`
-
-```json
-{
-  "family": "cubed_sphere",
-  "dimensions": ["panel", "i", "j"],
-  "extents": { "panel": { "n": 6 }, "i": { "n": "Nc" }, "j": { "n": "Nc" } },
-  "locations": ["cell_center", "i_edge", "j_edge", "vertex"],
-  "panel_connectivity": {
-    "neighbors":  { "shape": [6, 4], "rank": 2, "generator": { "kind": "builtin", "name": "gnomonic_c6_neighbors" } },
-    "axis_flip":  { "shape": [6, 4], "rank": 2, "generator": { "kind": "builtin", "name": "gnomonic_c6_d4_action" } }
-  },
-  "metric_arrays": {
-    "dxC": { "rank": 3, "dims": ["panel","i","j"],
-             "generator": { "kind": "expression", "expr":
-                { "op": "/", "args": [ "cube_edge_length",
-                    { "op": "*", "args": [ "Nc",
-                        { "op": "cos", "args": [ { "op": "atan2", "args": [ "j_coord", "i_coord" ] } ] } ] } ] } } }
-  },
-  "parameters": { "Nc": { "value": 48 }, "cube_edge_length": { "value": 1.0 } }
-}
-```
-
-`panel_connectivity.neighbors[p, side]` gives the neighboring panel index for
-each (panel, side ∈ {0: −i, 1: +i, 2: −j, 3: +j}); `axis_flip[p, side]` is
-a single integer encoding an element of the dihedral group D₄ acting on the
-local (Δi, Δj) displacement.
-
-#### 6.4.1 `axis_flip` D₄ group action (resolves M4)
-
-Each integer `a ∈ {0..7}` encodes an (orientation, mirror) pair as the signed
-permutation of the local axes:
-
-| a | (Δi', Δj') = | description |
-|---|---|---|
-| 0 | (+Δi, +Δj) | identity |
-| 1 | (+Δj, −Δi) | rotate CCW 90° |
-| 2 | (−Δi, −Δj) | rotate 180° |
-| 3 | (−Δj, +Δi) | rotate CW 90° |
-| 4 | (+Δj, +Δi) | reflect across i=j |
-| 5 | (−Δi, +Δj) | reflect across i axis |
-| 6 | (−Δj, −Δi) | reflect across i+j=0 |
-| 7 | (+Δi, −Δj) | reflect across j axis |
-
-This is the full D₄ action, enumerated so two independent bindings produce
-byte-identical index expressions. The table is canonical: 0 is the identity,
-1–3 are rotations in CCW order, 4–7 are reflections in the order
-(main-diag, horizontal, anti-diag, vertical). Deviation from this table
-is non-conforming.
-
-The `{kind:"builtin", "name": ...}` generator encodes that these tables are
-produced by a well-known algorithm rather than a file; the set of legal
-`builtin` names is closed (`gnomonic_c6_neighbors`, `gnomonic_c6_d4_action`
-are the only two defined in v0.2.0). **Versioning policy** (resolves
-gt-j6do new-m8): adding a new `builtin.name` is a **minor version bump**
-(0.2.x), mirroring the `mesh.topology` policy in §8.A. Removing or
-changing the semantics of an existing builtin is a major version bump.
-Each binding MUST validate `builtin.name` against the closed set at
-load time and MUST reject unknown names with `E_UNKNOWN_BUILTIN`.
-
-#### 6.4.2 Worked panel-selector example (resolves m2)
-
-A centered gradient along `i` at target `[p, i, j]`, when `i = Nc-1` (so the
-`+i` neighbor lives on a different panel):
-
-```json
-{ "op": "+", "args": [
-    { "op": "*", "args": [
-        { "op": "/", "args": [ -1, { "op": "*", "args": [ 2, { "op": "index", "args": ["dxC", "p", "i", "j"] } ] } ] },
-        { "op": "index", "args": ["T", "p", { "op": "-", "args": ["i", 1] }, "j"] } ] },
-    { "op": "*", "args": [
-        { "op": "/", "args": [  1, { "op": "*", "args": [ 2, { "op": "index", "args": ["dxC", "p", "i", "j"] } ] } ] },
-        { "op": "regrid", "args": [ { "op": "index", "args": ["T",
-            { "op": "index", "args": ["neighbors", "p", 1] },
-            { "op": "apply_axis_flip", "args": [ { "op": "index", "args": ["axis_flip", "p", 1] },
-                { "op": "+", "args": ["i", 1] }, "j" ] } ] } ],
-          "from": "cubed_c48", "to": "cubed_c48", "method": "panel_seam" } ] }
-]}
-```
-
-**Illustrative, not on-wire** (resolves gt-j6do new-m5). `apply_axis_flip`
-shown above is **NOT a canonical AST op** and MUST NOT appear on the
-canonical wire. It is pedagogical shorthand for the piecewise expansion
-of the D₄ action from §6.4.1. The canonical on-wire form of the
-`+i`-neighbor's (Δi, Δj) substitution at `i = Nc-1` is a `case`
-expression (or equivalent nested `cond` tree) dispatching on the
-`axis_flip[p, 1]` value 0..7, with each branch substituting the
-rotated/reflected (Δi, Δj) per the §6.4.1 table. A worked canonical
-expansion appears in Appendix A (to be filed as a follow-up bead);
-v0.2.0 conformance fixtures under
-`tests/conformance/discretization/step4_cubed_sphere/` carry the full
-piecewise form. Bindings MAY internalize the D₄ action as a callable
-helper but MUST emit the piecewise form at canonicalization time.
-
 ### 6.5 Metric-array generators
 
 A metric array's contents come from exactly one of:
@@ -1157,7 +1025,7 @@ A metric array's contents come from exactly one of:
 |---|---|---|
 | `expression` | `expr` | An ordinary ESM expression; all free variables must be grid `parameters` or (for analytic grids) dimension indices. Computed at discretization time, cached per-session within the rewriting binding. |
 | `loader` | `loader`, `field` | Names an entry in the top-level `data_loaders` map, and a named field produced by that loader. Grid JSON never contains bulk values. See §8 for the loader-extension this RFC adds. |
-| `builtin` | `name` | Names a built-in, canonical generator from a closed list (see §6.4). Used for mathematical tables (D₄ action, standard connectivity) whose definition is textual rather than file-resident. |
+| `builtin` | `name` | Names a built-in, canonical generator from a closed list. Used for mathematical tables (standard connectivity) whose definition is textual rather than file-resident. |
 
 Per design decision, analytic grids use `expression`; irregular grids (MPAS)
 use `loader`. This matches existing loader semantics and keeps `.esm` files
@@ -1203,14 +1071,14 @@ symbolic coefficients.
 | Field | Required | Description |
 |---|---|---|
 | `applies_to` | ✓ | A shallow AST pattern (§5.2 syntax; depth-1, per §7.2.1) identifying the operator this scheme discretizes. It is a **guard only** — pattern-variable bindings flow from the triggering rule by name (§7.2.1); `applies_to` does not itself introduce bindings, and `stencil` / `coeff` see the rule's bindings. |
-| `grid_family` | ✓ | `"cartesian"`, `"cubed_sphere"`, or `"unstructured"` |
+| `grid_family` | ✓ | `"cartesian"` or `"unstructured"` |
 | `combine` | | `"+"` (default), `"*"`, `"min"`, or `"max"` — how stencil entries are combined. |
 | `stencil` | ✓ | Array of `{ selector, coeff }` entries (see §4). Exactly one entry for a `reduction` selector; one-or-more for the others. |
 | `accuracy` | | Informational: truncation order (string) |
 | `order` | | Optional positive integer selecting stencil width / truncation order for families that admit a parameterized order (e.g. centered uniform finite differences via Fornberg-recursion weights: `order: 2` is the classical 3-point stencil, `order: 4` is the 5-point stencil, `order: 6` is the 7-point stencil, …). Centered uniform schemes require even orders; one-sided / upwind schemes may use any positive integer. The parity constraint is enforced by the rule implementation, not the schema. Absence means the rule's per-scheme default applies. See §7.1.2 for a worked comparison of `order: 2` vs `order: 4`. |
 | `requires_locations` | | If set, the operand variable must carry one of these locations |
 | `emits_location` | | The output's staggered location (for staggered schemes) |
-| `target_binding` | | Reserved name for the target index (default: `"$target"`). Per grid family, `$target` resolves to the enclosing equation's LHS index (cartesian: `[i, j, k, ...]`; unstructured: bound to the iteration index of the operand's location, e.g. `c` for `cell`, `e` for `edge`, `v` for `vertex`; cubed sphere: `[p, i, j]`). |
+| `target_binding` | | Reserved name for the target index (default: `"$target"`). Per grid family, `$target` resolves to the enclosing equation's LHS index (cartesian: `[i, j, k, ...]`; unstructured: bound to the iteration index of the operand's location, e.g. `c` for `cell`, `e` for `edge`, `v` for `vertex`). |
 
 The `stencil` entries' `selector.kind` must match `grid_family`. `coeff`
 expressions may reference the grid's metric arrays (as bare strings or
@@ -1225,7 +1093,6 @@ per the grid family:
 | Grid family | `$target` components |
 |---|---|
 | `cartesian` | `[i, j, k, l, m, ...]` — one per dimension, in declaration order of `dimensions` |
-| `cubed_sphere` | `[p, i, j]` (panel, panel-i, panel-j) |
 | `unstructured` | **scalar** — one of `c` (cell), `e` (edge), `v` (vertex); the choice is pinned by the rule below |
 
 **`$target` chooser on unstructured grids (resolves gt-adhm C2).** The
@@ -1267,7 +1134,6 @@ as user variable names within a scheme):
 | Grid family | Reserved local names |
 |---|---|
 | `cartesian` | `i, j, k, l, m` (up to five dims; deeper requires spec bump) |
-| `cubed_sphere` | `p, i, j` |
 | `unstructured` | `c, e, v` (target letter) plus any `k_bound` name introduced by a `reduction` selector |
 
 If a scheme needs >5 cartesian dimensions it must bump the spec version.
@@ -1395,7 +1261,6 @@ expressions:
 | Selector kind | `materialize(selector, target)` |
 |---|---|
 | `cartesian` | For target `[..., axis_idx, ...]`, output the same list with `axis_idx` replaced by `{op:"+", args:[axis_idx, offset]}`. |
-| `panel` | Lookup `panel_connectivity.neighbors[p, side]` for the new panel, and apply `axis_flip[p, side]` (§6.4.1) to the (di, dj) displacement. |
 | `indirect` | Emit `[index_expr]` after `$target`-substitution. `index_expr` is a single index expression into the indexed variable. |
 | `reduction` | Lower to an `arrayop` over the index `k` running `0 .. count_expr - 1`, with element `coeff · index(operand, table[target, k])`, reducing via `combine`. |
 
@@ -1616,7 +1481,7 @@ fixture.
 
 ### 7.5 Dimensional-split schemes (new; resolves esm-okt)
 
-Certain families of transport operators — notably the FV3 Lin–Rood PPM
+Certain families of transport operators — notably the Lin–Rood PPM
 advection (Lin & Rood 1996 MWR) and the CAM5 flux-form semi-Lagrangian
 scheme — are most naturally authored as a **sequence of 1D applications
 along orthogonal axes**, not as a native N-D stencil. A `Discretization`
@@ -1639,7 +1504,7 @@ declaration directly and orchestrate the 1D applications themselves.
 |---|---|---|
 | `kind` | ✓ (value `"dimensional_split"`) | Discriminates this scheme from classic `"stencil"` entries. |
 | `applies_to` | ✓ | Shallow AST pattern for the N-D operator this composite stands in for (guard only, per §7.2.1). |
-| `grid_family` | ✓ | Must be `"cartesian"` or `"cubed_sphere"` — unstructured grids have no intrinsic orthogonal-axis ordering. |
+| `grid_family` | ✓ | Must be `"cartesian"` — unstructured grids have no intrinsic orthogonal-axis ordering. |
 | `axes` | ✓ | Ordered list of spatial axis names (from the target grid's `dimensions`). Each axis is swept once per Lie step and twice (symmetrically) per Strang step. |
 | `inner_rule` | ✓ | Name of a sibling scheme in the file's `discretizations` section. The inner scheme provides the 1D operator applied on each axis; it is typically `kind: "stencil"`, `grid_family: "cartesian"`, with a single-axis cartesian selector. |
 | `splitting` | ✓ | `"lie"`, `"strang"`, or `"none"` — operator-splitting convention (see below). |
@@ -1660,23 +1525,22 @@ declaration directly and orchestrate the 1D applications themselves.
   splitting at dispatch time (e.g. parallel-split solvers), or when the
   file is a static catalogue entry used for documentation only.
 
-**FV3 Lin–Rood worked sketch.** A 2D PPM advection on a cubed-sphere
-panel would look like
+**Worked sketch.** A 2D PPM advection on a cartesian grid would look like
 
 ```json
 { "discretizations": {
-    "fv3_lin_rood_ppm_1d": {
+    "ppm_1d": {
       "kind": "stencil",
-      "grid_family": "cubed_sphere",
+      "grid_family": "cartesian",
       "applies_to": { "op": "adv", "args": ["$u"], "dim": "$x" },
       "stencil": [ /* PPM reconstruction entries, omitted for brevity */ ]
     },
-    "fv3_lin_rood_advection": {
+    "ppm_advection": {
       "kind": "dimensional_split",
       "applies_to": { "op": "adv", "args": ["$u"] },
-      "grid_family": "cubed_sphere",
-      "axes": ["panel_i", "panel_j"],
-      "inner_rule": "fv3_lin_rood_ppm_1d",
+      "grid_family": "cartesian",
+      "axes": ["x", "y"],
+      "inner_rule": "ppm_1d",
       "splitting": "strang",
       "order_of_sweeps": "alternating"
     }
@@ -1684,7 +1548,7 @@ panel would look like
 }
 ```
 
-The rule engine matches the 2D `adv` operator to `fv3_lin_rood_advection`.
+The rule engine matches the 2D `adv` operator to `ppm_advection`.
 Runtimes that can lower Strang-split advection into the inner 1D calls
 do so using `inner_rule` and `axes`; those that cannot simply carry the
 composite through as-is for ESD to execute.
@@ -1700,7 +1564,7 @@ cross-binding fixture.
 ### 7.6 Cross-metric stencil composition (resolves esm-vwo)
 
 A class of covariant PDE operators on curvilinear grids — most
-prominently the full covariant Laplacian on a cubed-sphere panel — does
+prominently the full covariant Laplacian on a curvilinear grid — does
 not fit the single-axis `stencil` shape of §7.1. Their discretization
 requires combining **per-axis 1D stencils** with **metric-tensor
 components** (J, g_xixi, g_etaeta, g_xieta, ginv_*) in a structural way:
@@ -1721,7 +1585,7 @@ distinguished by the presence of `terms` (and, optionally, `kind:
     "<name>": {
       "kind": "cross_metric",              // optional discriminator
       "applies_to": { "op": "laplacian", "args": ["$u"] },
-      "grid_family": "cubed_sphere",
+      "grid_family": "cartesian",
       "axes": ["xi", "eta"],
       "combine": "+",
       "terms": [
@@ -1745,7 +1609,7 @@ The composite-specific fields are:
 | `axes` | ✓ | Ordered list of coordinate axes the composition spans (e.g. `["xi", "eta"]`). Informational; the order does not affect expansion. |
 | `combine` | | How terms are combined. Defaults to `"+"` — the natural choice for a summed tensor expansion. |
 | `terms` | ✓ | Non-empty array of `CrossMetricTerm` entries. |
-| `boundary_fallback` | | Name of another entry in the same `discretizations` block to apply at edges / corners / cross-panel patches where the full stencil cannot be evaluated (e.g. cubed-sphere corner halos with incomplete metric support). When omitted, boundary handling falls through to the model's `boundary_conditions` (§9). |
+| `boundary_fallback` | | Name of another entry in the same `discretizations` block to apply at edges / corners where the full stencil cannot be evaluated (e.g. corner halos with incomplete metric support). When omitted, boundary handling falls through to the model's `boundary_conditions` (§9). |
 
 Each `CrossMetricTerm` has:
 
@@ -1791,70 +1655,20 @@ referenced per-axis scheme sees `$u` / `$target` / `$x` just as if it
 had been selected directly.
 
 **Boundary handling.** When a term's `axis_stencil` cannot be
-materialized at `$target` (edge, corner, or cross-panel halo where the
+materialized at `$target` (edge or corner where the
 required neighbors or metric values are undefined), the engine falls
 back to the composite's `boundary_fallback` if set; otherwise the
 model's `boundary_conditions` (§9) are consulted. Authors are expected
 to ensure that at least one of these resolves the gap for every target
 in the domain.
 
-#### 7.6.3 Worked cubed-sphere full-covariant Laplacian
+#### 7.6.3 Worked full-covariant Laplacian
 
-The canonical consumer is
-`fv_laplacian_full_covariant_cubed_sphere` (ESD rule catalog P1, L). On
-a cubed-sphere panel, the full covariant Laplacian of `u` is
-
-```
-Δu = (1/J) · [ ∂ξ( J · g^{ξξ} · ∂ξ u ) + ∂ξ( J · g^{ξη} · ∂η u )
-             + ∂η( J · g^{ηξ} · ∂ξ u ) + ∂η( J · g^{ηη} · ∂η u ) ]
-```
-
-which the conservative-form FV scheme approximates with a 9-point
-composite. In `CrossMetricStencilRule` form (using `ginv_*` for the
-inverse-metric flux coefficients and splitting the Jacobian-weighted
-derivatives into per-axis 2nd-order schemes `d2_dxi2_panel` and
-`d2_deta2_panel` and cross-derivative `d2_dxieta_panel`):
-
-```jsonc
-{
-  "discretizations": {
-    "fv_laplacian_full_covariant_cubed_sphere": {
-      "kind": "cross_metric",
-      "applies_to": { "op": "laplacian", "args": ["$u"] },
-      "grid_family": "cubed_sphere",
-      "axes": ["xi", "eta"],
-      "combine": "+",
-      "terms": [
-        { "axis_stencil": "d2_dxi2_panel",    "metric_component": "ginv_xixi",   "sign": 1 },
-        { "axis_stencil": "d2_deta2_panel",   "metric_component": "ginv_etaeta", "sign": 1 },
-        { "axis_stencil": "d2_dxieta_panel",  "metric_component": "ginv_xieta",  "sign": 1 },
-        { "axis_stencil": "d2_dxieta_panel",  "metric_component": "ginv_etaxi",  "sign": 1 }
-      ],
-      "boundary_fallback": "fv_laplacian_edge_onesided_cubed_sphere",
-      "accuracy": "O(h^2)",
-      "requires_locations": ["cell_center"],
-      "emits_location": "cell_center",
-      "reference": {
-        "notes": "Ronchi, Iacono & Paolucci (1996), J. Comput. Phys. 124, for the gnomonic cubed-sphere metric; the FV-form expansion here follows Putman & Lin (2007)."
-      }
-    }
-  }
-}
-```
-
-At `$target = [p, i, j]`, the expansion produces a 9-point stencil
-whose stencil weights fold `ginv_*(p, i, j)` into the two diagonal
-per-axis stencils and the symmetric cross-derivative stencil. Bindings
-that only need structural round-trip may treat the composite
-opaquely; bindings that execute discretization (ESD et al.) realize
-the expansion above via `metric_eval` and the named per-axis schemes.
-
-**Degenerate cartesian case.** On a uniform cartesian grid
-`g_xieta ≡ 0` and `g_xixi = g_etaeta = 1`, so the composite reduces
-to the standard 5-point Laplacian. The conformance fixture
-`tests/discretizations/cross_metric_cartesian.esm` exercises this
-degenerate case and is the cross-language round-trip anchor for
-§7.6.
+On a uniform cartesian grid the cross-derivative metric `g_xieta ≡ 0`
+and `g_xixi = g_etaeta = 1`, so a `CrossMetricStencilRule` for the
+Laplacian reduces to the standard 5-point Laplacian. The conformance
+fixture `tests/discretizations/cross_metric_cartesian.esm` exercises
+this case and is the cross-language round-trip anchor for §7.6.
 
 #### 7.6.4 Validation
 
@@ -1953,8 +1767,7 @@ Go) parse and round-trip `kind: "flux_form_semi_lagrangian"` schemes
 losslessly and reject structural violations of the discriminator contract
 (stencil-on-FFSL, missing `cfl_policy`, FFSL-field-on-stencil). Execution
 of the reconstruction / remap pair is **out of scope** for v0.2.0 and is
-tracked in ESD (`cam5_fv_ffsl_advection`, P1; `fv3_lin_rood_advection`, P1,
-composes FFSL with dimensional-split). The conformance manifest adds
+tracked in ESD (`cam5_fv_ffsl_advection`, P1). The conformance manifest adds
 `tests/discretizations/cam5_ffsl_advection.esm` — a minimal 1D FFSL rule
 with centered reconstruction and conservative remap — as the cross-binding
 fixture.
@@ -1965,9 +1778,9 @@ fixture.
 Several earth-system operators take a different concrete form depending on
 the grid family on which they are evaluated. The canonical example is PPM
 advection: on a Cartesian interior the scheme is the 4-point Colella–Woodward
-stencil; on a cubed-sphere panel boundary the scheme uses the panel
-selectors of §7 to walk across the seam. v0.2 forced authors to fork a single
-operator into two named `discretizations` entries (one per family) and a
+stencil; on an unstructured mesh the scheme uses the indirect/reduction
+selectors of §7 to walk the connectivity tables. v0.2 forced authors to fork a
+single operator into two named `discretizations` entries (one per family) and a
 sibling rule for each; this duplicated metadata (`applies_to`, `accuracy`,
 `order`, `requires_locations`, `emits_location`, …) and entangled the
 operator name with the grid topology.
@@ -1999,8 +1812,8 @@ Discretization `kind`), and `grid_dispatch` does not nest cross-metric
 variants. Authors who need per-family cross-metric composites declare two
 sibling `discretizations` entries instead.
 
-**Worked example.** A single PPM scheme covering both Cartesian interior
-and cubed-sphere panel boundaries:
+**Worked example.** A single PPM scheme covering both a Cartesian interior
+and an unstructured mesh:
 
 ```json
 {
@@ -2016,9 +1829,9 @@ and cubed-sphere panel boundaries:
           "stencil":     [ /* 4-point Colella–Woodward */ ]
         },
         {
-          "grid_family": "cubed_sphere",
+          "grid_family": "unstructured",
           "kind":        "stencil",
-          "stencil":     [ /* panel-selector stencil */ ]
+          "stencil":     [ /* reduction-selector stencil */ ]
         }
       ]
     }
@@ -2042,7 +1855,7 @@ for the v0.3 schema bump and is tracked as follow-up beads
 engines pick up runtime selection separately, mirroring the FFSL
 trajectory of §7.7). The conformance manifest adds
 `tests/discretizations/grid_dispatch_ppm.esm` — a PPM scheme with
-Cartesian and cubed-sphere variants — as the cross-binding fixture.
+a cartesian variant — as the cross-binding fixture.
 
 
 ### 7.9 Multi-output stencil schemes (`multi_output_stencil`, resolves ess-7hb)
@@ -2191,7 +2004,7 @@ document is now superseded by this normative section.*
 ## 8. Amendments to §8 (`data_loaders`) — inline (resolves C4)
 
 v0.2.0 extends `data_loaders` with a new `kind: "mesh"` that covers MPAS-
-style connectivity and metric provision. The RFC's Step 4 acceptance depends
+style connectivity and metric provision. The RFC's Step 3 acceptance depends
 on these additions; they are therefore part of this RFC, not an unscheduled
 follow-up.
 
@@ -2307,7 +2120,7 @@ model-level section, structurally parallel to `coupling`. This is a
 | Field | Required | Description |
 |---|---|---|
 | `variable` | ✓ | Name of the model variable the BC constrains. |
-| `side` | ✓ | Boundary side: `"xmin"`, `"xmax"`, `"ymin"`, ..., `"panel_seam"` (cubed sphere), `"mesh_boundary"` (unstructured). |
+| `side` | ✓ | Boundary side: `"xmin"`, `"xmax"`, `"ymin"`, ..., `"mesh_boundary"` (unstructured). |
 | `kind` | ✓ | `"constant"`, `"dirichlet"`, `"neumann"`, `"robin"`, `"zero_gradient"`, `"periodic"`, `"flux_contrib"` (for component-contributed flux terms, see §9.3). |
 | `value` | | Expression or number; semantics per `kind`. |
 | `robin_alpha` / `_beta` / `_gamma` | | As in spec §11.5, when `kind: "robin"`. |
@@ -2430,7 +2243,7 @@ A rule may emit additional equations via `produces[k]`:
 | `kind` | Meaning |
 |---|---|
 | `algebraic` | Emit the `emit`/`value` expression as an algebraic constraint (= 0). |
-| `ghost_var` | Declare a new ghost-cell variable with indices; the rule body defines it. Ghost variables are local to the discretized output and are not visible to `free_variables` on the original continuous model (validation rule: loader must reject a pre-discretization `.esm` that references a `ghost_var`). **Naming discipline** (resolves gt-j6do open question 5): ghost variable names are **scheme-scoped** and MUST follow the pattern `<scheme_name>__<logical_name>__<side>` — double-underscore separated, where `<scheme_name>` is the containing `discretizations.<name>` key, `<logical_name>` is author-supplied (typically the variable being ghosted, e.g. `u`), and `<side>` is the BC side (`xmin`, `xmax`, `panel_seam`, …) or `interior` if the ghost is not side-specific. Two schemes declaring `ghost_u_xmin` collide unless the scheme names differ; the `<scheme_name>__` prefix makes collisions impossible at the spec level. The canonical on-wire form uses this naming; a scheme author who writes a bare `ghost_u_xmin` has it rewritten to `<scheme>__u__xmin` at loader time, with a warning. |
+| `ghost_var` | Declare a new ghost-cell variable with indices; the rule body defines it. Ghost variables are local to the discretized output and are not visible to `free_variables` on the original continuous model (validation rule: loader must reject a pre-discretization `.esm` that references a `ghost_var`). **Naming discipline** (resolves gt-j6do open question 5): ghost variable names are **scheme-scoped** and MUST follow the pattern `<scheme_name>__<logical_name>__<side>` — double-underscore separated, where `<scheme_name>` is the containing `discretizations.<name>` key, `<logical_name>` is author-supplied (typically the variable being ghosted, e.g. `u`), and `<side>` is the BC side (`xmin`, `xmax`, `mesh_boundary`, …) or `interior` if the ghost is not side-specific. Two schemes declaring `ghost_u_xmin` collide unless the scheme names differ; the `<scheme_name>__` prefix makes collisions impossible at the spec level. The canonical on-wire form uses this naming; a scheme author who writes a bare `ghost_u_xmin` has it rewritten to `<scheme>__u__xmin` at loader time, with a warning. |
 
 The v1 `state_var` option is **removed** from the MVP (resolves m9); there
 was no compelling worked example. It can be re-added with a spec-version
@@ -2505,7 +2318,7 @@ discretized ODE/DAE system via the following deterministic pipeline:
    `models.*` and to every entry of `models.*.boundary_conditions`. Emit
    additional equations from `rules[*].produces`. **The rule engine**
    is responsible for wrapping any cross-grid `index` expression it
-   emits (e.g. a scheme's cross-panel stencil reference) in a `regrid`
+   emits (e.g. a scheme's cross-grid stencil reference) in a `regrid`
    node with `method` supplied by the emitting selector (§5.3,
    §7.2). A rule that emits a cross-grid reference without a `regrid`
    wrapper is a scheme bug and MUST be flagged by the loader's validator
@@ -2604,7 +2417,7 @@ Because coefficients are kept symbolic and §5.4 defines a normative normal
 form, bit-identity across bindings reduces to AST equality after
 canonicalization. This closes the gap identified in review C3.
 
-### 13.1 Rollout — 4 steps with acceptance criteria
+### 13.1 Rollout — 3 steps with acceptance criteria
 
 Each step lands reference implementations in **at least Julia + Rust** and
 extends the conformance harness such that Julia and Rust emit bitwise-
@@ -2717,19 +2530,6 @@ MPAS edge-gradient + cell-divergence (§7.3).
 - Full MPAS `x1.2562` mesh loads and the discretization step completes
   without error in both Julia and Rust (solve step not required in CI).
 
-#### Step 4 — Cubed-sphere panel-aware selector
-
-**Scope:** `cubed_sphere` family. `panel` selector. `panel_connectivity`
-tables with the `gnomonic_c6_*` builtins. D₄ `axis_flip` action (§6.4.1).
-FV-flux scheme parity with `EarthSciDiscretizations.jl` on the C48 cubed
-sphere. `regrid` op wraps cross-panel references.
-
-**Acceptance:**
-- Steady-state advection on C48 matches `EarthSciDiscretizations.jl` to
-  round-off in a Julia runtime solve.
-- Rust emits bit-identical canonical AST for the discretization-only step;
-  solve step is out of scope for the Rust conformance test.
-
 ## 14. Risks and open questions
 
 1. **Pattern-matcher vocabulary.** §5.2.4 ships a closed guard list. Known
@@ -2758,7 +2558,7 @@ sphere. `regrid` op wraps cross-panel references.
    DAE assembler or reject algebraic-producing rewrites (resolves review
    Q5). This is a binding-documentation requirement, not a spec gap.
 7. **Spec-version gate.** The RFC is a breaking change (0.1 → 0.2) but
-   Steps 2, 3, 4 extend 0.2 additively within 0.2.x. Step 1 lands the
+   Steps 2 and 3 extend 0.2 additively within 0.2.x. Step 1 lands the
    0.2.0 release; subsequent steps roll in as 0.2.x minor versions.
 
 ## 15. Why not alternatives
@@ -2806,8 +2606,8 @@ The RFC differs from OpenFOAM in three deliberate ways:
    symbolic AST and defer numerics to the ODE/DAE assembler. This is
    what lets §13 demand bit-identity.
 3. **Grid families are closed; schemes are open.** OpenFOAM's
-   `fvSchemes` assumes a polyhedral FV mesh. ESM declares three grid
-   families up front (cartesian, cubed_sphere, unstructured) and closes
+   `fvSchemes` assumes a polyhedral FV mesh. ESM declares its grid
+   families up front (cartesian, unstructured) and closes
    that list at v0.2; new families require a spec version bump. This
    trades OpenFOAM's flexibility for cross-binding testability.
 
@@ -2852,7 +2652,7 @@ liability; this is the mistake §15.1 would make in a different dialect.
 ## 16. Deliverable checklist
 
 This RFC is the deliverable of gt-dq0f (v1) and gt-yx9y (v2 revision).
-Implementation work is tracked separately under the 4-step rollout. On
+Implementation work is tracked separately under the 3-step rollout. On
 acceptance of this RFC:
 
 - `spec.version` bumps to `0.2.0-draft` on the branch that lands Step 1,
@@ -2869,7 +2669,6 @@ acceptance of this RFC:
   - `rules.max_passes`, `passthrough` flags (per §5.2.5, §11)
   - `coupling.<c>.regrid_method` (v2.1 addenda; closed set per §5.3)
   - Closed `regrid.method` enum per §5.3 (v2.1 addenda)
-  - Closed `builtin.name` enum per §6.4.1 versioning policy (v2.1 addenda)
 - `esm-spec.md` gains:
   - A new top-level section §16 "Discretization" that cross-references
     this RFC for rationale and §6/§7/§5 for normative grammar.
@@ -2949,8 +2748,6 @@ diff quickly.
 - **M3 (`$e` target binding).** Resolved: §7.1.1 defines `$target` and
   its components per grid family; `$e` for edge-operand schemes is an
   implicit alias for `$target`.
-- **M4 (axis_flip group action).** Resolved: §6.4.1 enumerates the D₄
-  action with an 8-row table.
 - **M5 (time-dependent loader BCs).** Resolved: §8.A.3 specifies the
   mechanism end-to-end; `t` is explicit, face coords declared via
   `face_coords` on the BC entry.
@@ -2962,15 +2759,12 @@ diff quickly.
 - **M8 (rollout skipped infrastructure).** Resolved: §13 rewritten. Step 1
   is pure infrastructure (rule engine, canonical form, index extension,
   arrayed-variable schema, BC-op schema, migration tooling). Step 1b is
-  the first scheme set. Steps 2, 3, 4 follow.
+  the first scheme set. Steps 2 and 3 follow.
 
 **Minor issues:**
 
 - **m1 (`grid_spacing` duplication).** Addressed in §6.1: domain-level
   field becomes advisory when a grid refines the domain.
-- **m2 (panel selector worked example).** Addressed in §6.4.2.
-- **m3 (`<analytic on cube>` placeholder).** Addressed in §6.4 example
-  (concrete gnomonic metric using `atan2`, `cos`).
 - **m4 (guard name inconsistency).** Addressed: renamed to
   `dim_is_spatial_dim_of` (§5.2.4).
 - **m5 (spatialization responsibility vague).** Addressed in §11
@@ -3077,12 +2871,11 @@ findings it resolves and the section(s) that carry the normative text.
 
 - **F7 — §5.3 / §7.2 `regrid.method` closed set.** `method` now
   validates against a closed enum (`"nearest"`, `"bilinear"`,
-  `"conservative"`, `"panel_seam"`) with normative semantics.
+  `"conservative"`) with normative semantics.
   Unknown methods raise `E_UNKNOWN_REGRID_METHOD` at load.
-  Emitter discipline pinned: `panel` selectors emit `"panel_seam"`
-  fixedly; couplings supply method via new `coupling.<c>.regrid_method`
-  field; authored literals validate at parse. Resolves gt-adhm **M1**
-  and gt-j6do **open question 3**.
+  Emitter discipline pinned: couplings supply method via new
+  `coupling.<c>.regrid_method` field; authored literals validate at
+  parse. Resolves gt-adhm **M1** and gt-j6do **open question 3**.
 
 - **F8 — §9.2.1 worked periodic-BC example.** New subsection. Periodic
   declared once at the canonical side (xmin); the pair is implicit.
@@ -3113,10 +2906,6 @@ findings it resolves and the section(s) that carry the normative text.
   `<scheme>__<logical>__<side>`). Resolves gt-j6do **open question 5**.
 - §5.2 rule-field table adds `use`, `produces`, and `region`; defines
   `region` as advisory. Resolves gt-j6do **new-m2, new-m3, new-m4**.
-- §6.4.2 `apply_axis_flip` clarified as **not** an on-wire op; the
-  canonical form is the piecewise expansion. Resolves gt-j6do **new-m5**.
-- §6.4.1 builtin versioning policy pinned: adding a name is a minor
-  version bump. Resolves gt-j6do **new-m8**.
 - §5.4.9 comparator-memoization implementation note. Resolves gt-adhm **m1**.
 - §5.4.4 zero-elimination iterates across integer and float zeros
   together. Resolves gt-adhm **m3**.

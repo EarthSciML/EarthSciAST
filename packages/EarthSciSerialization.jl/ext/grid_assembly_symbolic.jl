@@ -5,17 +5,13 @@
 # trait-typed grid and queries it only through bulk-array methods
 # (`metric_ginv`, `metric_jacobian`, `coord_jacobian`,
 # `coord_jacobian_second`, `neighbor_indices`, `cell_widths`, `n_cells`).
-# No struct-field access (no `grid.J`, no `grid.dξ`, no `CubedSphereGrid`).
+# No struct-field access (no `grid.J`, no `grid.dξ`, no concrete grid type).
 #
-# Reformulation vs. the ESD source: ESD's `_build_symbolic_ghost_extension`
-# baked panel connectivity into a 3-axis ghost-extended array indexed by
-# `(panel, i, j)` so ArrayOps could use offset indexing. Under the trait,
-# panel/periodic/MPAS topology is hidden inside `neighbor_indices`, which
-# returns flat indices. So the trait-based "ghost extension" is a per-cell
-# stencil-point gather table: `u_ext[c, k]` is `u_sym` evaluated at the
-# k-th stencil point of flat cell `c`. Indexing collapses from
-# `(panel, i+o, j+o)` to flat `(c, k)` and works for every grid family the
-# trait covers.
+# Under the trait, periodic / unstructured topology is hidden inside
+# `neighbor_indices`, which returns flat indices. So the trait-based "ghost
+# extension" is a per-cell stencil-point gather table: `u_ext[c, k]` is
+# `u_sym` evaluated at the k-th stencil point of flat cell `c`. Indexing is
+# flat `(c, k)` and works for every grid family the trait covers.
 #
 # Stencil point conventions (matching the numeric `FVLaplacianStencil` /
 # `FVGradientStencil` packed-column layout):
@@ -27,8 +23,7 @@
 # API (`SymbolicUtils.SymReal`, `SymbolicUtils.idxs_for_arrayop`,
 # `SymbolicUtils.Const`, `SymbolicUtils.ArrayOp`). This is what
 # `Project.toml` declares as compatible (`Symbolics = "7"`) and what
-# `Pkg.test` resolves to. ESD uses the same API, so the trait-based port
-# is a near-mechanical refactor of the cubed-sphere code.
+# `Pkg.test` resolves to. ESD uses the same API.
 
 # ---------------------------------------------------------------------------
 # ArrayOp utilities (ported from ESD src/operators/arrayop_utils.jl)
@@ -168,10 +163,8 @@ Per-cell stencil-point gather table from a flat field array `u_sym` and
 the K-point `neighbor_table`. Returns `(N, K) Array{Any}` of `unwrap`'d
 expressions: `out[c, k] = unwrap(u_sym[neighbor_table[c, k]])`.
 
-Trait analog of ESD's cubed-sphere-specific
-`_build_symbolic_ghost_extension(u_sym, grid::CubedSphereGrid)`. Cross-panel
-boundary references are resolved inside `neighbor_indices`, so this helper
-is grid-family-agnostic.
+Boundary-crossing references are resolved inside `neighbor_indices`, so this
+helper is grid-family-agnostic.
 """
 function _build_symbolic_ghost_extension(u_sym::AbstractVector,
         neighbor_table::AbstractMatrix{Int})
@@ -212,7 +205,6 @@ Build a `SymbolicUtils.ArrayOp{SymReal}` for the full covariant Laplacian
 on `AbstractCurvilinearGrid`, operating on a flat field array `u_sym` of
 length `n_cells(grid)`. Output is a 1-D ArrayOp indexed by flat cell `c`.
 
-Trait reformulation of ESD's cubed-sphere `fv_laplacian_extended(u_ext, grid::CubedSphereGrid)`.
 Reuses the numeric `precompute_laplacian_stencil(grid)` for weight assembly,
 then composes a symbolic 9-point sum:
 
@@ -245,7 +237,6 @@ Build two `SymbolicUtils.ArrayOp{SymReal}`s for the gradient
 `target` is passed through to `coord_jacobian(grid, target)`. Operates on a
 flat field array `u_sym` of length `n_cells(grid)`.
 
-Trait reformulation of ESD's cubed-sphere `fv_gradient_extended(u_ext, grid, dim)`.
 The chain rule `∂u/∂t = (∂ξ/∂t)·∂u/∂ξ + (∂η/∂t)·∂u/∂η` is encoded in the
 precomputed weight arrays from `precompute_gradient_stencil`.
 """
@@ -289,8 +280,8 @@ end
 # / `_match_dv`. The recursion shape is unchanged; what changes is:
 #
 # * Per-cell stencil-point evaluation uses the flat `(c, k)` gather table
-#   built from `neighbor_indices` instead of the cubed-sphere `(p, i+o, j+o)`
-#   offset access into a ghost-extended array.
+#   built from `neighbor_indices` instead of multi-axis offset access into a
+#   ghost-extended array.
 # * Chain-rule coefficients query `coord_jacobian(grid, target)` and
 #   `coord_jacobian_second(grid, target)` instead of `grid.dξ_dlon` etc.
 # ---------------------------------------------------------------------------

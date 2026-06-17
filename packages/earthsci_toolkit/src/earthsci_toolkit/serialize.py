@@ -926,7 +926,7 @@ def _serialize_grid_metric_array(array: GridMetricArray) -> Dict[str, Any]:
 
 
 def _serialize_grid_connectivity(conn: GridConnectivity) -> Dict[str, Any]:
-    """Serialize a grid connectivity / panel_connectivity entry (RFC §6.3–§6.4)."""
+    """Serialize a grid connectivity entry (RFC §6.3–§6.4)."""
     result: Dict[str, Any] = {
         "shape": list(conn.shape),
         "rank": conn.rank,
@@ -966,11 +966,6 @@ def _serialize_grid(grid: Grid) -> Dict[str, Any]:
         result["connectivity"] = {
             name: _serialize_grid_connectivity(c)
             for name, c in grid.connectivity.items()
-        }
-    if grid.panel_connectivity:
-        result["panel_connectivity"] = {
-            name: _serialize_grid_connectivity(c)
-            for name, c in grid.panel_connectivity.items()
         }
     if grid.metric_arrays:
         result["metric_arrays"] = {

@@ -15,7 +15,6 @@
 # Index shape is family-dependent:
 #   rectilinear 2D:     idx = (i, j)         cell = (i, j)
 #   rectilinear 3D:     idx = (i, j, k)      cell = (i, j, k)
-#   block_structured:   idx = (panel, i, j)  cell = (panel, i, j)
 #   unstructured:       idx = (cell_id,)     cell = cell_id
 #
 # Options keys are snake_case on the wire (GRIDS_API.md §2.2); this file
@@ -100,8 +99,7 @@ is any callable `factory(grid_data) -> GridAccessor`, where `grid_data`
 is the RFC §6 grid dict (e.g. `EsmFile.grids["g1"].data`).
 
 Family names match the RFC §6 enum (`"cartesian"`, `"lat_lon"`,
-`"stretched_lat_lon"`, `"cubed_sphere"`, `"stretched_cubed_sphere"`,
-`"mpas"`, `"duo"`).
+`"stretched_lat_lon"`, `"mpas"`, `"duo"`).
 
 Replacing an existing entry returns the previous factory. This is the
 ESS → ESD handshake: ESS owns the trait + registry; ESD registers

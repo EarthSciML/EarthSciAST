@@ -72,16 +72,6 @@ function buildContext(fixture: Record<string, unknown>): RuleContext {
           }
         }
       }
-      let panelConnectivity: { neighbors: number[][]; axis_flip: number[][] } | undefined
-      if (typeof meta.panel_connectivity === 'object' && meta.panel_connectivity !== null) {
-        const pc = meta.panel_connectivity as Record<string, unknown>
-        if (Array.isArray(pc.neighbors) && Array.isArray(pc.axis_flip)) {
-          panelConnectivity = {
-            neighbors: pc.neighbors as number[][],
-            axis_flip: pc.axis_flip as number[][],
-          }
-        }
-      }
       let dimSizes: Record<string, number> | undefined
       if (typeof meta.dim_sizes === 'object' && meta.dim_sizes !== null) {
         dimSizes = {}
@@ -96,7 +86,6 @@ function buildContext(fixture: Record<string, unknown>): RuleContext {
         nonuniform_dims: asStringArray(meta.nonuniform_dims),
         dim_bounds: dimBounds,
         dim_sizes: dimSizes,
-        panel_connectivity: panelConnectivity,
       }
     }
   }

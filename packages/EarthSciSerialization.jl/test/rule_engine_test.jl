@@ -226,31 +226,6 @@ const ESM_Expr = EarthSciSerialization.Expr
             @test_throws RuleEngineError parse_rules([obj])
         end
 
-        @testset "string-form rejects panel_dispatch (object-form-only)" begin
-            json = """{"name": "r", "pattern": "\$a", "replacement": "\$a",
-                       "boundary_policy": "panel_dispatch"}"""
-            obj = JSON3.read(json)
-            @test_throws RuleEngineError parse_rules([obj])
-        end
-
-        @testset "per-axis boundary_policy with panel_dispatch" begin
-            json = """
-            {"name": "ppm", "pattern": "\$a", "replacement": "\$a",
-             "boundary_policy": {"by_axis": {
-               "xi":  {"kind": "panel_dispatch", "interior": "dist_xi",  "boundary": "dist_xi_bnd"},
-               "eta": {"kind": "panel_dispatch", "interior": "dist_eta", "boundary": "dist_eta_bnd"}
-             }}}
-            """
-            obj = JSON3.read(json)
-            rules = parse_rules([obj])
-            bp = rules[1].boundary_policy
-            @test bp isa Dict
-            @test bp["xi"].kind == "panel_dispatch"
-            @test bp["xi"].interior == "dist_xi"
-            @test bp["xi"].boundary == "dist_xi_bnd"
-            @test bp["eta"].kind == "panel_dispatch"
-        end
-
         @testset "per-axis one_sided_extrapolation with degree" begin
             json = """
             {"name": "r", "pattern": "\$a", "replacement": "\$a",
@@ -263,15 +238,6 @@ const ESM_Expr = EarthSciSerialization.Expr
             spec = rules[1].boundary_policy["x"]
             @test spec.kind == "one_sided_extrapolation"
             @test spec.degree == 2
-        end
-
-        @testset "panel_dispatch requires interior + boundary" begin
-            json = """
-            {"name": "r", "pattern": "\$a", "replacement": "\$a",
-             "boundary_policy": {"by_axis": {"xi": {"kind": "panel_dispatch"}}}}
-            """
-            obj = JSON3.read(json)
-            @test_throws RuleEngineError parse_rules([obj])
         end
 
         @testset "rejects out-of-range degree" begin

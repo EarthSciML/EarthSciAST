@@ -84,7 +84,7 @@
           "description": "Diagonal term: g^{eta eta} · ∂²/∂η² (= 1 · d2_deta2 on a uniform cartesian grid)."
         }
       ],
-      "description": "2D full-covariant Laplacian composite on a uniform cartesian grid. The off-diagonal g_xieta term is omitted because g_xieta ≡ 0 on a cartesian grid — in the cubed-sphere setting a third term weighted by 2·g_xieta · ∂²/∂ξ∂η would appear here; see docs/rfcs/discretization.md §7.4 for the worked curvilinear example."
+      "description": "2D full-covariant Laplacian composite on a uniform cartesian grid. The off-diagonal g_xieta term is omitted because g_xieta ≡ 0 on a cartesian grid — on a general curvilinear grid a third term weighted by 2·g_xieta · ∂²/∂ξ∂η would appear here; see docs/rfcs/discretization.md §7.4 for the worked curvilinear example."
     }
   }
 }

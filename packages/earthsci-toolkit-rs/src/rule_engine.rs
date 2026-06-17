@@ -100,8 +100,6 @@ pub enum RuleRegion {
     Tag(String),
     /// `{kind:"boundary", side}` — rule applies only on the named axis side.
     Boundary { side: String },
-    /// `{kind:"panel_boundary", panel, side}` — cubed_sphere only.
-    PanelBoundary { panel: i64, side: String },
     /// `{kind:"mask_field", field}` — rule applies where the named
     /// field is truthy. Resolved at rewrite time against
     /// [`RuleContext::mask_fields`].
@@ -112,8 +110,6 @@ pub enum RuleRegion {
 
 /// Closed set of policy kinds accepted in either the string-form
 /// `boundary_policy` or as [`BoundaryPolicySpec::kind`] (RFC §5.2.8 / §7).
-/// `PanelDispatch` is object-form only because it carries required
-/// `interior`/`boundary` parameters; the string form rejects it.
 ///
 /// `Ghosted`/`NeumannZero`/`Extrapolate` are v0.3.x backwards-compatible
 /// aliases for `Prescribed`/`Reflecting`/`OneSidedExtrapolation`.
@@ -123,7 +119,6 @@ pub enum BoundaryPolicyKind {
     Reflecting,
     OneSidedExtrapolation,
     Prescribed,
-    PanelDispatch,
     Ghosted,
     NeumannZero,
     Extrapolate,
@@ -137,7 +132,6 @@ impl BoundaryPolicyKind {
             BoundaryPolicyKind::Reflecting => "reflecting",
             BoundaryPolicyKind::OneSidedExtrapolation => "one_sided_extrapolation",
             BoundaryPolicyKind::Prescribed => "prescribed",
-            BoundaryPolicyKind::PanelDispatch => "panel_dispatch",
             BoundaryPolicyKind::Ghosted => "ghosted",
             BoundaryPolicyKind::NeumannZero => "neumann_zero",
             BoundaryPolicyKind::Extrapolate => "extrapolate",
@@ -150,7 +144,6 @@ impl BoundaryPolicyKind {
             "reflecting" => Some(BoundaryPolicyKind::Reflecting),
             "one_sided_extrapolation" => Some(BoundaryPolicyKind::OneSidedExtrapolation),
             "prescribed" => Some(BoundaryPolicyKind::Prescribed),
-            "panel_dispatch" => Some(BoundaryPolicyKind::PanelDispatch),
             "ghosted" => Some(BoundaryPolicyKind::Ghosted),
             "neumann_zero" => Some(BoundaryPolicyKind::NeumannZero),
             "extrapolate" => Some(BoundaryPolicyKind::Extrapolate),
@@ -167,10 +160,6 @@ pub struct BoundaryPolicySpec {
     /// `OneSidedExtrapolation` / `Extrapolate`: extrapolation order
     /// (0..=3). `None` means default (linear).
     pub degree: Option<i64>,
-    /// `PanelDispatch`: name of the metric field for interior faces.
-    pub interior: Option<String>,
-    /// `PanelDispatch`: name of the metric field for panel-boundary faces.
-    pub boundary: Option<String>,
     pub description: Option<String>,
 }
 
@@ -179,8 +168,6 @@ impl BoundaryPolicySpec {
         Self {
             kind,
             degree: None,
-            interior: None,
-            boundary: None,
             description: None,
         }
     }
@@ -188,12 +175,10 @@ impl BoundaryPolicySpec {
 
 /// Authorial form of a rule's `boundary_policy` (RFC §5.2.8 / §7). Either
 /// a closed-set string applied uniformly to every axis the rule's stencil
-/// reaches, or a per-axis map (required for `panel_dispatch` and for
-/// axis-heterogeneous rules).
+/// reaches, or a per-axis map (required for axis-heterogeneous rules).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoundaryPolicy {
-    /// Uniform string form. Excludes `PanelDispatch`, which requires the
-    /// per-axis form.
+    /// Uniform string form.
     Uniform(BoundaryPolicyKind),
     /// `{by_axis: {<axis>: BoundaryPolicySpec}}` per-axis form.
     PerAxis(HashMap<String, BoundaryPolicySpec>),
@@ -254,8 +239,8 @@ pub struct RuleBinding {
 /// parse time.
 ///
 /// `boundary_policy` declares behavior at domain edges (RFC §5.2.8 / §7) —
-/// either a uniform string form or a per-axis map (required for
-/// `panel_dispatch`). `ghost_width` declares per-axis ghost-cell padding
+/// either a uniform string form or a per-axis map. `ghost_width` declares
+/// per-axis ghost-cell padding
 /// the rule's stencil reaches (RFC §5.2.8 / §7). `bindings` declares the
 /// time-varying / static symbols the replacement may reference
 /// (RFC §5.2.8). All three fields are stored verbatim; the rule engine
@@ -333,25 +318,6 @@ pub struct GridMeta {
     /// Per-dim cell counts (from `dimensions[].size`), used by
     /// `bind_side_spacing` / `bind_side_dim_size` guards (§5.2.4).
     pub dim_sizes: HashMap<String, i64>,
-    /// Cubed-sphere panel connectivity tables (RFC §6.4). Present only
-    /// on `cubed_sphere` grids; its presence is the runtime marker used
-    /// by `region.panel_boundary` scope evaluation (RFC §5.2.7) to
-    /// distinguish cubed-sphere from other grid families. Applying a
-    /// `panel_boundary`-scoped rule to a grid without this field emits
-    /// `E_REGION_GRID_MISMATCH`.
-    pub panel_connectivity: Option<PanelConnectivity>,
-}
-
-/// Cubed-sphere panel-connectivity tables (RFC §6.4). `neighbors[p][s]`
-/// gives the neighboring panel index at (panel `p`, side `s` ∈ {0:−i,
-/// 1:+i, 2:−j, 3:+j}); `axis_flip[p][s]` encodes the D₄ group element
-/// (§6.4.1) acting on local (Δi, Δj) displacements when crossing that
-/// seam. Consumed by `region.panel_boundary` scope evaluation and,
-/// downstream, by `regrid` with `method: "panel_seam"`.
-#[derive(Debug, Clone, Default)]
-pub struct PanelConnectivity {
-    pub neighbors: Vec<Vec<i64>>,
-    pub axis_flip: Vec<Vec<i64>>,
 }
 
 /// Subset of variable metadata consumed by the closed-set guards.
@@ -497,7 +463,6 @@ const BOUNDARY_POLICY_KIND_VALUES: &[&str] = &[
     "reflecting",
     "one_sided_extrapolation",
     "prescribed",
-    "panel_dispatch",
     "ghosted",
     "neumann_zero",
     "extrapolate",
@@ -520,8 +485,7 @@ fn parse_boundary_policy(
                 ),
             ));
         }
-        // Safe: we just validated against the string-values list which
-        // never contains panel_dispatch.
+        // Safe: we just validated against the string-values list above.
         let kind = BoundaryPolicyKind::from_str(s).expect("validated above");
         return Ok(Some(BoundaryPolicy::Uniform(kind)));
     }
@@ -604,26 +568,6 @@ fn parse_boundary_policy_spec(
         }
         spec.degree = Some(n);
     }
-    if let Some(s) = obj.get("interior") {
-        spec.interior = Some(s.as_str().ok_or_else(|| {
-            RuleEngineError::new(
-                "E_RULE_PARSE",
-                format!(
-                    "rule `{rule_name}`: boundary_policy.by_axis.{axis}.interior must be a string"
-                ),
-            )
-        })?.to_string());
-    }
-    if let Some(s) = obj.get("boundary") {
-        spec.boundary = Some(s.as_str().ok_or_else(|| {
-            RuleEngineError::new(
-                "E_RULE_PARSE",
-                format!(
-                    "rule `{rule_name}`: boundary_policy.by_axis.{axis}.boundary must be a string"
-                ),
-            )
-        })?.to_string());
-    }
     if let Some(s) = obj.get("description") {
         spec.description = Some(s.as_str().ok_or_else(|| {
             RuleEngineError::new(
@@ -633,16 +577,6 @@ fn parse_boundary_policy_spec(
                 ),
             )
         })?.to_string());
-    }
-    if matches!(kind, BoundaryPolicyKind::PanelDispatch)
-        && (spec.interior.is_none() || spec.boundary.is_none())
-    {
-        return Err(RuleEngineError::new(
-            "E_RULE_PARSE",
-            format!(
-                "rule `{rule_name}`: boundary_policy.by_axis.{axis}: panel_dispatch requires `interior` and `boundary` field names"
-            ),
-        ));
     }
     Ok(spec)
 }
@@ -849,10 +783,6 @@ fn parse_region(
         "boundary" => Ok(Some(RuleRegion::Boundary {
             side: str_field("side")?,
         })),
-        "panel_boundary" => Ok(Some(RuleRegion::PanelBoundary {
-            panel: int_field("panel")?,
-            side: str_field("side")?,
-        })),
         "mask_field" => Ok(Some(RuleRegion::MaskField {
             field: str_field("field")?,
         })),
@@ -865,7 +795,7 @@ fn parse_region(
             "E_RULE_PARSE",
             format!(
                 "rule `{name}`: unknown region.kind `{other}` \
-                 (closed set: boundary, panel_boundary, mask_field, index_range)"
+                 (closed set: boundary, mask_field, index_range)"
             ),
         )),
     }
@@ -1258,23 +1188,6 @@ mod tests {
                         }
                     }
                 }
-                if let Some(pc) = v.get("panel_connectivity").and_then(|x| x.as_object()) {
-                    let parse_table = |key: &str| -> Vec<Vec<i64>> {
-                        pc.get(key)
-                            .and_then(|x| x.as_array())
-                            .map(|rows| {
-                                rows.iter()
-                                    .filter_map(|r| r.as_array())
-                                    .map(|r| r.iter().filter_map(|x| x.as_i64()).collect())
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    };
-                    meta.panel_connectivity = Some(PanelConnectivity {
-                        neighbors: parse_table("neighbors"),
-                        axis_flip: parse_table("axis_flip"),
-                    });
-                }
                 out.grids.insert(k.clone(), meta);
             }
         }
@@ -1397,43 +1310,6 @@ mod tests {
     }
 
     #[test]
-    fn boundary_policy_string_form_rejects_panel_dispatch() {
-        // panel_dispatch needs interior/boundary parameters → object form only.
-        let err = parse_one(serde_json::json!({
-            "name": "r",
-            "pattern": "$a",
-            "replacement": "$a",
-            "boundary_policy": "panel_dispatch",
-        }))
-        .unwrap_err();
-        assert_eq!(err.code, "E_RULE_PARSE");
-    }
-
-    #[test]
-    fn boundary_policy_per_axis_panel_dispatch() {
-        let r = parse_one(serde_json::json!({
-            "name": "ppm",
-            "pattern": "$a",
-            "replacement": "$a",
-            "boundary_policy": {
-                "by_axis": {
-                    "xi":  {"kind": "panel_dispatch", "interior": "dist_xi",  "boundary": "dist_xi_bnd"},
-                    "eta": {"kind": "panel_dispatch", "interior": "dist_eta", "boundary": "dist_eta_bnd"}
-                }
-            },
-        }))
-        .unwrap();
-        let map = match r.boundary_policy.unwrap() {
-            BoundaryPolicy::PerAxis(m) => m,
-            _ => panic!("expected per-axis form"),
-        };
-        let xi = &map["xi"];
-        assert!(matches!(xi.kind, BoundaryPolicyKind::PanelDispatch));
-        assert_eq!(xi.interior.as_deref(), Some("dist_xi"));
-        assert_eq!(xi.boundary.as_deref(), Some("dist_xi_bnd"));
-    }
-
-    #[test]
     fn boundary_policy_per_axis_one_sided_extrapolation_with_degree() {
         let r = parse_one(serde_json::json!({
             "name": "r",
@@ -1455,20 +1331,6 @@ mod tests {
             BoundaryPolicyKind::OneSidedExtrapolation
         ));
         assert_eq!(map["x"].degree, Some(2));
-    }
-
-    #[test]
-    fn boundary_policy_panel_dispatch_requires_interior_and_boundary() {
-        let err = parse_one(serde_json::json!({
-            "name": "r",
-            "pattern": "$a",
-            "replacement": "$a",
-            "boundary_policy": {
-                "by_axis": {"xi": {"kind": "panel_dispatch"}}
-            },
-        }))
-        .unwrap_err();
-        assert_eq!(err.code, "E_RULE_PARSE");
     }
 
     #[test]

@@ -986,8 +986,8 @@ structural constraints (family, metric_arrays, connectivity, generators,
 etc.). Post-parse validation in `coerce_grids` enforces the semantic
 constraints not expressible in pure JSON Schema: loader-refs must point
 at existing `data_loaders` entries, and `kind: "builtin"` names must be
-from the closed set {gnomonic_c6_neighbors, gnomonic_c6_d4_action}
-(RFC §6.4.1).
+from the closed set of canonical builtin generators (RFC §6.4.1; the set
+is currently empty).
 """
 struct Grid
     data::Dict{String,Any}

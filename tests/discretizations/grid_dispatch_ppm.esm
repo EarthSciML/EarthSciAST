@@ -2,10 +2,10 @@
   "esm": "0.3.0",
   "metadata": {
     "name": "PpmGridDispatch",
-    "description": "Discretization rule: PPM advection authored as a single scheme with a `grid_dispatch` block (RFC §7.8). The cartesian variant carries the interior 4-point PPM-like stencil; the cubed_sphere variant uses panel selectors at panel boundaries. Loaders pick the variant whose grid_family matches the active grid at expansion time, eliminating the need for two sibling discretizations.",
+    "description": "Discretization rule: PPM advection authored as a single scheme with a `grid_dispatch` block (RFC §7.8). The cartesian variant carries the interior 4-point PPM-like stencil. Loaders pick the variant whose grid_family matches the active grid at expansion time, eliminating the need for sibling discretizations.",
     "authors": ["esm-fpb"],
     "created": "2026-04-27T00:00:00Z",
-    "tags": ["discretization", "grid-dispatch", "advection", "ppm", "cartesian", "cubed-sphere"]
+    "tags": ["discretization", "grid-dispatch", "advection", "ppm", "cartesian"]
   },
   "models": {
     "Empty": {
@@ -25,7 +25,7 @@
       "applies_to": { "op": "grad", "args": ["$u"], "dim": "$x" },
       "accuracy": "O(dx^3)",
       "free_variables": ["$u", "$x"],
-      "description": "PPM-like advection scheme with grid-family variants. The cartesian branch encodes the interior 4-point stencil (FV3 §6.5); the cubed_sphere branch uses panel selectors at panel boundaries (FV3 §6.6). Loaders dispatch on the active grid's family.",
+      "description": "PPM-like advection scheme with grid-family variants. The cartesian branch encodes the interior 4-point stencil (FV3 §6.5). Loaders dispatch on the active grid's family.",
       "grid_dispatch": [
         {
           "grid_family": "cartesian",
@@ -47,21 +47,6 @@
             {
               "selector": { "kind": "cartesian", "axis": "$x", "offset": 2 },
               "coeff":    { "op": "/", "args": [-1, { "op": "*", "args": [12, "dx"] }] }
-            }
-          ]
-        },
-        {
-          "grid_family": "cubed_sphere",
-          "kind": "stencil",
-          "combine": "+",
-          "stencil": [
-            {
-              "selector": { "kind": "panel", "side": "$x", "di": -1, "dj": 0 },
-              "coeff":    { "op": "/", "args": [-1, { "op": "*", "args": [2, "dx"] }] }
-            },
-            {
-              "selector": { "kind": "panel", "side": "$x", "di": 1, "dj": 0 },
-              "coeff":    { "op": "/", "args": [1, { "op": "*", "args": [2, "dx"] }] }
             }
           ]
         }

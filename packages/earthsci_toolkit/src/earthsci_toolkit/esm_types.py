@@ -74,7 +74,7 @@ RuleRegion = Union[str, Dict[str, Any]]
 Spatial scope of a rule or equation (discretization RFC §7.2).
 A string is a legacy advisory tag with no runtime effect.
 A dict with 'kind' is a normative scoping predicate: boundary,
-panel_boundary, mask_field, or index_range.
+mask_field, or index_range.
 """
 
 
@@ -740,8 +740,8 @@ class GridMetricGenerator:
     ``kind`` discriminates how values are produced:
     - ``"expression"``: field ``expr`` holds an Expr tree / literal.
     - ``"loader"``: fields ``loader`` (data_loader name) and ``field`` (variable).
-    - ``"builtin"``: field ``name`` names a builtin generator (e.g.
-      ``gnomonic_c6_neighbors``, ``gnomonic_c6_d4_action``).
+    - ``"builtin"``: field ``name`` names a builtin generator. The set of
+      recognized builtin names is currently empty.
     """
     kind: str
     expr: Optional[Any] = None  # Expr for kind == "expression"
@@ -762,7 +762,7 @@ class GridMetricArray:
 
 @dataclass
 class GridConnectivity:
-    """Grid connectivity table / panel_connectivity entry (RFC §6.3–§6.4)."""
+    """Grid connectivity table (RFC §6.3–§6.4)."""
     shape: List[Union[int, str]]
     rank: int
     loader: Optional[str] = None
@@ -782,8 +782,7 @@ class Grid:
     """Top-level grid declaration (RFC §6).
 
     ``family`` discriminates structure: ``cartesian`` uses ``extents``;
-    ``unstructured`` uses ``connectivity``; ``cubed_sphere`` uses
-    ``extents`` + ``panel_connectivity``.
+    ``unstructured`` uses ``connectivity``.
     """
     family: str
     dimensions: List[str]
@@ -795,7 +794,6 @@ class Grid:
     domain: Optional[str] = None
     extents: Dict[str, GridExtent] = field(default_factory=dict)
     connectivity: Dict[str, GridConnectivity] = field(default_factory=dict)
-    panel_connectivity: Dict[str, GridConnectivity] = field(default_factory=dict)
 
 
 @dataclass

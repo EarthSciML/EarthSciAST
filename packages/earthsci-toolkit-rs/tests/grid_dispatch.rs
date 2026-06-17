@@ -3,7 +3,7 @@
 //! Verifies the Rust binding parses and schema-validates the PPM
 //! grid_dispatch fixture and rejects the structural authoring errors the
 //! schema forbids: parent grid_family alongside grid_dispatch, an inline
-//! body alongside grid_dispatch, and fewer than two variants.
+//! body alongside grid_dispatch, and a variant missing its grid_family.
 
 use earthsci_toolkit::{EsmError, load};
 
@@ -35,21 +35,6 @@ fn grid_dispatch_with_inline_stencil_is_rejected() {
     doc["discretizations"]["ppm_advection"]["stencil"] = serde_json::json!([
         { "selector": { "kind": "cartesian", "axis": "$x", "offset": 0 }, "coeff": 1 }
     ]);
-    let bad = serde_json::to_string(&doc).unwrap();
-    match load(&bad) {
-        Err(EsmError::SchemaValidation(_)) => {}
-        other => panic!("expected SchemaValidation error, got {other:?}"),
-    }
-}
-
-#[test]
-fn grid_dispatch_with_single_variant_is_rejected() {
-    let doc: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
-    let mut doc = doc;
-    let arr = doc["discretizations"]["ppm_advection"]["grid_dispatch"]
-        .as_array_mut()
-        .expect("grid_dispatch must be an array");
-    arr.truncate(1);
     let bad = serde_json::to_string(&doc).unwrap();
     match load(&bad) {
         Err(EsmError::SchemaValidation(_)) => {}

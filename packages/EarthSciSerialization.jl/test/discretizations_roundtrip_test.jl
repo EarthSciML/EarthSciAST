@@ -102,14 +102,13 @@ end
     @test !haskey(scheme, "grid_family")
     @test !haskey(scheme, "stencil")
     @test scheme["grid_dispatch"] isa AbstractVector
-    @test length(scheme["grid_dispatch"]) == 2
+    @test length(scheme["grid_dispatch"]) == 1
 
     families = [v["grid_family"] for v in scheme["grid_dispatch"]]
-    @test families == ["cartesian", "cubed_sphere"]
+    @test families == ["cartesian"]
 
     # Each variant carries its own stencil body.
     @test length(scheme["grid_dispatch"][1]["stencil"]) == 4
-    @test length(scheme["grid_dispatch"][2]["stencil"]) == 2
 end
 
 @testset "RFC §7.9 multi_output_stencil structure" begin

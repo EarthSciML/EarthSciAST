@@ -3,7 +3,7 @@
 //!
 //! Per the 2026-04-22 grid-inversion decision, ESS owns the public
 //! accessor signatures; per-family realization (cartesian, lat_lon,
-//! cubed_sphere, mpas, duo, …) lives in ESD. ESD impls register
+//! mpas, duo, …) lives in ESD. ESD impls register
 //! themselves against an ESM-wire-form family name via [`register_factory`];
 //! consumers obtain an accessor from a parsed [`crate::types::Grid`] via
 //! [`build_accessor`].
@@ -19,10 +19,8 @@ use thiserror::Error;
 
 /// Cell identifier.
 ///
-/// Structured families (cartesian, lat_lon, cubed_sphere panel-local)
-/// carry logical `(i, j)` indices. Unstructured families (mpas, duo)
-/// carry a flat cell id. Cubed-sphere impls embed the panel index in
-/// the flat form when returning cross-panel neighbors.
+/// Structured families (cartesian, lat_lon) carry logical `(i, j)`
+/// indices. Unstructured families (mpas, duo) carry a flat cell id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CellId {
     /// Logical `(i, j)` index for structured / block-structured families.
@@ -76,7 +74,7 @@ pub enum GridAccessorError {
 /// (e.g., by a `rayon` parallel metric evaluator).
 pub trait GridAccessor: Send + Sync {
     /// Grid family name matching the ESM wire form
-    /// (`"cartesian"`, `"lat_lon"`, `"cubed_sphere"`, `"mpas"`, `"duo"`, …).
+    /// (`"cartesian"`, `"lat_lon"`, `"mpas"`, `"duo"`, …).
     fn family(&self) -> &str;
 
     /// Returns the cell-center coordinates at logical index `(i, j)`.
@@ -94,9 +92,8 @@ pub trait GridAccessor: Send + Sync {
     /// Returns the neighboring cell ids of `cell`.
     ///
     /// Order is family-defined but deterministic within a given grid
-    /// (required by `GRIDS_API.md` §6.1). For cubed-sphere families,
-    /// cross-panel neighbors are returned as [`CellId::Flat`] with a
-    /// panel-embedded id; same-panel neighbors may be returned as
+    /// (required by `GRIDS_API.md` §6.1). Unstructured families return
+    /// neighbors as [`CellId::Flat`]; structured families may return
     /// [`CellId::Logical`].
     fn neighbors(&self, cell: CellId) -> Result<Vec<CellId>, GridAccessorError>;
 
@@ -248,7 +245,6 @@ mod tests {
             domain: None,
             extents: None,
             connectivity: None,
-            panel_connectivity: None,
         }
     }
 
@@ -303,10 +299,10 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap();
         __reset_registry_for_tests();
 
-        let grid = minimal_grid("cubed_sphere");
+        let grid = minimal_grid("mpas");
         match build_accessor(&grid) {
             Ok(_) => panic!("expected NoFactory error"),
-            Err(GridAccessorError::NoFactory(f)) => assert_eq!(f, "cubed_sphere"),
+            Err(GridAccessorError::NoFactory(f)) => assert_eq!(f, "mpas"),
             Err(other) => panic!("expected NoFactory, got {other:?}"),
         }
     }

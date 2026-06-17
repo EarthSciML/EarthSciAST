@@ -114,8 +114,7 @@ describe('listGridFamilies', () => {
   it('returns families in sorted order', () => {
     registerGridFamily('lat_lon', stubFactory('lat_lon'))
     registerGridFamily('cartesian', stubFactory('cartesian'))
-    registerGridFamily('cubed_sphere', stubFactory('cubed_sphere'))
-    expect(listGridFamilies()).toEqual(['cartesian', 'cubed_sphere', 'lat_lon'])
+    expect(listGridFamilies()).toEqual(['cartesian', 'lat_lon'])
   })
 
   it('returns an empty array when the registry is empty', () => {

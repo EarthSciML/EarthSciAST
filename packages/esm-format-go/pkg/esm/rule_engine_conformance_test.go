@@ -139,9 +139,6 @@ func buildFixtureContext(raw json.RawMessage) (RuleContext, error) {
 		if arr, ok := v["nonuniform_dims"].([]interface{}); ok {
 			meta.NonuniformDims = stringSlice(arr)
 		}
-		if _, ok := v["panel_connectivity"].(map[string]interface{}); ok {
-			meta.HasPanelConnectivity = true
-		}
 		if db, ok := v["dim_bounds"].(map[string]interface{}); ok {
 			meta.DimBounds = map[string][2]int64{}
 			for dim, raw := range db {

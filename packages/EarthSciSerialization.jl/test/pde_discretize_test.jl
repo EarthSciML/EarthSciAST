@@ -8,7 +8,7 @@
 # stub keeps these unit tests fast and dependency-free.
 #
 # The end-to-end integration against REAL EarthSciDiscretizations grids
-# (`LatLonGrid`, `CubedSphereGrid`) lives in
+# (`LatLonGrid`) lives in
 # `pde_discretize_esd_integration_test.jl` (ess-d1e).
 
 using Test

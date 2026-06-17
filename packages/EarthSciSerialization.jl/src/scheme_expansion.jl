@@ -6,7 +6,7 @@
 # `expand_scheme` runtime invoked by the rule engine when a rule's replacement
 # is `use: <scheme>`.
 #
-# Supports: cartesian (esm-j1u). Cubed-sphere `panel` selector lands in a follow-up bead.
+# Supports: cartesian (esm-j1u).
 
 # ============================================================================
 # Parsing — discretizations.<name>
@@ -35,10 +35,10 @@ function parse_scheme(name::AbstractString, raw)::Scheme
     grid_family_raw === nothing && throw(RuleEngineError("E_SCHEME_PARSE",
         "scheme $sname: missing required field `grid_family`"))
     grid_family = String(grid_family_raw)
-    grid_family in ("cartesian", "cubed_sphere", "unstructured") ||
+    grid_family in ("cartesian", "unstructured") ||
         throw(RuleEngineError("E_SCHEME_PARSE",
             "scheme $sname: unknown grid_family `$grid_family` " *
-            "(closed set: cartesian, cubed_sphere, unstructured)"))
+            "(closed set: cartesian, unstructured)"))
 
     combine_raw = _getkey(raw, "combine"; default="+")
     combine = String(combine_raw)
@@ -151,10 +151,9 @@ function _parse_selector(scheme_name::String, grid_family::String, raw)::Selecto
             "scheme $scheme_name: cartesian selector `offset` must be integer"))
         return CartesianSelector(String(axis_raw), Int(offset_raw))
     end
-    # cubed_sphere panel selector: deferred to follow-up bead.
     throw(RuleEngineError("E_SCHEME_PARSE",
         "scheme $scheme_name: selector kind `$kind` not yet supported " *
-        "(supported: cartesian; cubed_sphere panel selector is not yet implemented)"))
+        "(supported: cartesian)"))
 end
 
 """
@@ -179,10 +178,10 @@ function parse_multi_output_stencil_scheme(name::AbstractString, raw)::MultiOutp
 
     grid_family_raw = _getkey(raw, "grid_family"; default=nothing)
     grid_family = grid_family_raw === nothing ? "cartesian" : String(grid_family_raw)
-    grid_family in ("cartesian", "cubed_sphere", "unstructured") ||
+    grid_family in ("cartesian", "unstructured") ||
         throw(RuleEngineError("E_SCHEME_PARSE",
             "scheme $sname: unknown grid_family `$grid_family` " *
-            "(closed set: cartesian, cubed_sphere, unstructured)"))
+            "(closed set: cartesian, unstructured)"))
 
     outputs_raw = _getkey(raw, "outputs"; default=nothing)
     outputs_raw === nothing && throw(RuleEngineError("E_SCHEME_PARSE",

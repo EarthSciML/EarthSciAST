@@ -2,11 +2,11 @@
 #
 # We exercise the extend_with_ghosts / fill_ghost_cells! / vector-variant
 # routines against (a) a periodic 2D Cartesian grid with trivial identity
-# metric, and (b) a minimal two-panel test grid that swaps axes on crossing
+# metric, and (b) a minimal two-block test grid that swaps axes on crossing
 # so that the corner ghost (two edge crossings) composes to a non-trivial
-# flat index. That second grid stands in for the cubed-sphere corner-fill
-# case until an ESD-side CubedSphereGrid registers the ESS Grid trait
-# (dependency noted in the esm-dlz bead description).
+# flat index. That second grid is a synthetic stand-in for any grid family
+# whose boundary crossings re-map the local axes, exercising the generic
+# `neighbor_indices`-composed corner-fill path.
 
 using Test
 using EarthSciSerialization

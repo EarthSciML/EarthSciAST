@@ -15,10 +15,10 @@
 export type Dtype = 'float64' | 'float32'
 
 /**
- * Cell index. Block-structured families use a compound index
- * (`[panel, i, j]`); rectilinear families use `[i, j]` or a flat
- * scalar. The accessor instance defines the convention; consumers
- * pass the index shape the accessor hands out in `neighbors`.
+ * Cell index. Block-structured families use a compound index;
+ * rectilinear families use `[i, j]` or a flat scalar. The accessor
+ * instance defines the convention; consumers pass the index shape
+ * the accessor hands out in `neighbors`.
  */
 export type CellIndex = number | readonly number[]
 
@@ -41,7 +41,7 @@ export interface CellCenter {
  * and adds the three accessor methods called out in gt-j2b8.
  */
 export interface GridAccessor {
-  /** Family name per GRIDS_API §1, e.g. `"cubed_sphere"`. */
+  /** Family name per GRIDS_API §1, e.g. `"cartesian"`. */
   readonly family: string
   /** Element precision. Cross-binding conformance is promised at `"float64"`. */
   readonly dtype: Dtype
@@ -50,8 +50,8 @@ export interface GridAccessor {
 
   /**
    * Cell center at logical index `(i, j)`. For families with more than
-   * two logical indices (e.g. cubed_sphere panels), wrap the extra
-   * indices in the accessor's factory closure and expose a 2-D view.
+   * two logical indices, wrap the extra indices in the accessor's
+   * factory closure and expose a 2-D view.
    */
   cell_centers(i: number, j: number): CellCenter
 

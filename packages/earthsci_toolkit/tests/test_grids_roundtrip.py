@@ -1,8 +1,8 @@
 """
 Round-trip tests for §6 top-level `grids` schema support (gt-5kq3).
 
-These tests verify the minimal viable round-trip path for the three
-grid families (cartesian, unstructured, cubed_sphere) as laid out in
+These tests verify the minimal viable round-trip path for the
+grid families (cartesian, unstructured) as laid out in
 docs/rfcs/discretization.md §6. Fixtures live at repo-root
 ``tests/grids/*.esm`` and are shared across language bindings.
 """
@@ -24,7 +24,6 @@ GRIDS_DIR = REPO_ROOT / "tests" / "grids"
 FIXTURES = [
     ("cartesian_uniform", "atmos_rect", "cartesian"),
     ("unstructured_mpas", "mpas_cvmesh", "unstructured"),
-    ("cubed_sphere_c48", "cubed_c48", "cubed_sphere"),
 ]
 
 
@@ -99,16 +98,6 @@ def test_loader_generator_references_validate():
         )
 
 
-def test_builtin_generators_accepted():
-    """Cubed-sphere builtins resolve to known names."""
-    esm = load(GRIDS_DIR / "cubed_sphere_c48.esm")
-    panel = esm.grids["cubed_c48"].panel_connectivity
-    assert panel["neighbors"].generator is not None
-    assert panel["neighbors"].generator.kind == "builtin"
-    assert panel["neighbors"].generator.name == "gnomonic_c6_neighbors"
-    assert panel["axis_flip"].generator.name == "gnomonic_c6_d4_action"
-
-
 def test_expression_generator_roundtrips():
     """Expression generators survive load -> save structurally."""
     original = _load_fixture_json("cartesian_uniform")
@@ -136,17 +125,3 @@ def test_unknown_loader_raises(tmp_path):
         load(broken)
     msg = str(excinfo.value)
     assert "E_UNKNOWN_LOADER" in msg or "no_such_loader" in msg
-
-
-def test_unknown_builtin_raises(tmp_path):
-    """A builtin generator with an unknown name is rejected."""
-    data = _load_fixture_json("cubed_sphere_c48")
-    data = copy.deepcopy(data)
-    data["grids"]["cubed_c48"]["panel_connectivity"]["neighbors"]["generator"]["name"] = \
-        "not_a_real_builtin"
-    broken = tmp_path / "broken.esm"
-    broken.write_text(json.dumps(data))
-    with pytest.raises(Exception) as excinfo:
-        load(broken)
-    msg = str(excinfo.value)
-    assert "E_UNKNOWN_BUILTIN" in msg or "not_a_real_builtin" in msg

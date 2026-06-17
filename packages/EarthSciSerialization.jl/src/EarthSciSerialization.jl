@@ -125,7 +125,7 @@ export
     # Rule engine (RFC §5.2, §5.2.7, §5.2.8)
     Rule, Guard, RuleContext, RuleEngineError, RuleBinding,
     BoundaryPolicy, BoundaryPolicySpec, GhostWidth,
-    RuleRegion, RegionBoundary, RegionPanelBoundary,
+    RuleRegion, RegionBoundary,
     RegionMaskField, RegionIndexRange,
     match_pattern, apply_bindings, rewrite,
     check_guards, check_guard, check_scope,

@@ -40,7 +40,7 @@ The signatures below are language-agnostic; per-binding spellings are in §3.
 | `metric_jacobian(grid)` | `J = sqrt(det g)` per cell | `(N_cells,)` |
 | `metric_dgij_dxk(grid)` | `∂g_ij/∂x^k` per cell (Christoffel inputs and cross-metric stencils) | `(N_cells, n_dims, n_dims, n_dims)` |
 | `coord_jacobian(grid, target)` | `∂(comp_axis)/∂(target_axis)` for `target ∈ {:lon,:lat, …}` | `(N_cells, n_dims, target_dims)` |
-| `coord_jacobian_second(grid, target)` | `∂²(comp)/∂(target)∂(target)` (cubed-sphere chain-rule) | `(N_cells, n_dims, target_dims, target_dims)` |
+| `coord_jacobian_second(grid, target)` | `∂²(comp)/∂(target)∂(target)` (curvilinear chain-rule) | `(N_cells, n_dims, target_dims, target_dims)` |
 
 ### Tier S — Staggered / face-centered (Arakawa, MPAS, duo)
 
@@ -76,15 +76,15 @@ acceptance bar.
 **The trait contract is whole-grid arrays, never scalar-per-cell.** The audit
 of `EarthSciDiscretizations/refinery/rig/src/grids/` shows the existing API
 is mixed: `cell_volume(grid, i, j, k)` returns a scalar, `metric_eval(grid,
-:g, i, j, k)` returns a tuple, while `CubedSphereGrid` already stores
+:g, i, j, k)` returns a tuple, while curvilinear families already store
 metrics as bulk arrays (`grid.J`, `grid.ginv_ξξ`, …) that assembly logic
 indexes directly. The trait standardizes on the bulk form.
 
 **Why bulk arrays:**
 
 1. *Scaling.* A 1000-cell grid means 1000 dispatches and 1000 small
-   allocations for any per-cell call. The cubed-sphere FV stencil
-   precompute already loops over `(p, i, j)` and reads precomputed bulk
+   allocations for any per-cell call. The curvilinear FV stencil
+   precompute already loops over cells and reads precomputed bulk
    arrays; the Cartesian/lat-lon paths pay an avoidable overhead to
    reconstruct the same.
 2. *SIMD / GPU.* Bulk arrays are the only form that compiles to vectorized
@@ -165,7 +165,7 @@ pub trait CurvilinearGrid: Grid {
 
 `StaggeredGrid: Grid`, `VerticalGrid: Grid`, `UnstructuredGrid: Grid` are
 analogous supertraits; a grid family composes them (`impl Grid + Curvilinear
-+ Staggered for ArakawaCubedSphere`). Sentinel: `i64::MIN`.
++ Staggered for ArakawaGrid`). Sentinel: `i64::MIN`.
 
 ### Python (`earthsci_toolkit`)
 
@@ -265,14 +265,13 @@ return `(data, shape)` pairs in row-major layout. Sentinel: `-1`.
 ## 4. Optional method tiers
 
 A grid declares its capability set by implementing the corresponding tier
-interface(s). The mapping below is normative for ESD's seven existing
+interface(s). The mapping below is normative for ESD's six existing
 families:
 
 | Grid family | C | M | S | V | U |
 |---|---|---|---|---|---|
 | `CartesianGrid` | ✓ | – | – | – | – |
 | `LatLonGrid` | ✓ | ✓ | – | – | – |
-| `CubedSphereGrid` | ✓ | ✓ | – | – | – |
 | `ArakawaGrid` | ✓ | – | ✓ | – | – |
 | `MpasGrid` | ✓ | ✓ | ✓ | – | ✓ |
 | `DuoGrid` | ✓ | – | ✓ | – | ✓ |
@@ -302,13 +301,12 @@ or at type-check time (Python with `TypeGuard` / TypeScript).
   construction (`Send + Sync` in Rust; documented as such for other
   bindings).
 
-## 6. Migration path (all 7 ESD grid families)
+## 6. Migration path (all 6 ESD grid families)
 
 | Family | Today | Trait-mapped form | Notes |
 |---|---|---|---|
 | `CartesianGrid` | `cell_volume(g, i, j, k)`, `metric_eval(g, :dx, …)` | Tier C; `metric_eval` symbols become `cell_widths(:x)`, etc. | Fits cleanly. |
 | `LatLonGrid` | `metric_eval(g, :g_lonlon, j, i)` etc. (scalar) | Tier C+M; promote `:g_lonlon`/`:g_latlat`/`:g_lonlat` into the `(N,2,2)` `metric_g` array | Ragged-row helpers (`nlon(g,j)`, `row_offset`) become internal — they were only ever used to *flatten* ragged 2D into 1D, which the trait already requires. |
-| `CubedSphereGrid` | bulk arrays already (`grid.J`, `grid.ginv_ξξ`, …) | Tier C+M; existing fields are exposed via the trait getters with no shape change | Lowest-friction migration; existing assembly logic is already array-shaped. |
 | `ArakawaGrid` | `u_face(g,i,j)`, `v_face(g,i,j)`, `variable_shape(g,:h)` | Tier C+S; per-stagger accessors become `face_area(g, :u)` / `face_area(g, :v)`; `variable_shape` becomes a separate non-trait helper specific to FV staggering | Cleanly tier-S. |
 | `MpasGrid` | per-cell helpers + `MpasMeshData` fields | Tier C+M+S+U; `cell_neighbor_table` exposes the variable-arity adjacency; `edge_length`/`cell_distance` already vector-shaped | Highest tier count; pads variable-valence neighborhoods to `max_valence`. |
 | `DuoGrid` | minimal accessors over icosahedron-subdivision fields | Tier C+S+U | Currently sparse public API; trait formalizes what's there. |

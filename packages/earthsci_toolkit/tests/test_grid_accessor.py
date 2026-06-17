@@ -67,7 +67,7 @@ def test_register_and_dispatch():
 
 def test_unknown_family_raises():
     with pytest.raises(UnknownGridFamilyError):
-        get_grid_accessor(_make_grid("cubed_sphere"))
+        get_grid_accessor(_make_grid("nonexistent"))
 
 
 def test_duplicate_registration_rejected():
@@ -106,5 +106,4 @@ def test_get_rejects_non_grid():
 def test_registered_families_sorted():
     register_grid_accessor("unstructured", _FakeAccessor)
     register_grid_accessor("cartesian", _FakeAccessor)
-    register_grid_accessor("cubed_sphere", _FakeAccessor)
-    assert registered_grid_families() == ["cartesian", "cubed_sphere", "unstructured"]
+    assert registered_grid_families() == ["cartesian", "unstructured"]

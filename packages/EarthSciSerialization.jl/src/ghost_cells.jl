@@ -1,19 +1,19 @@
 # Trait-generic ghost-cell gathering (esm-dlz).
 #
-# Ports EarthSciDiscretizations/src/ghost_cells.jl from its CubedSphere-specific
-# form (which reads PANEL_CONNECTIVITY + rotation_matrices and branches
-# per-direction over `(6, ni+2Ng, nj+2Ng)` panel arrays) into a form that only
-# calls `neighbor_indices(grid, axis, ±g)`. The output layout is flat-first: for
+# Resolves ghost cells purely through `neighbor_indices(grid, axis, ±g)`, with
+# no struct-field access and no per-family branching — boundary-crossing
+# connectivity is entirely the grid impl's responsibility. The output layout
+# is flat-first: for
 # a D-axis grid with halo width `Ng` the extended tensor has shape
 # `(N_cells, 2Ng+1, …, 2Ng+1)` with one trailing `(2Ng+1,)` dimension per axis,
 # so `ext[c, g1+Ng+1, …, gD+Ng+1]` is the value at the cell reached by stepping
 # `g1` cells along `axes[1]`, `g2` along `axes[2]`, … from cell `c`.
 #
-# Corner cells (e.g. `(gi, gj) = (+Ng, +Ng)` on a cubed-sphere that crosses two
-# panel edges) are resolved via composition of `neighbor_indices` calls — axes
-# are applied one at a time, so a cubed-sphere panel-corner fill emerges from
-# the grid impl's `neighbor_indices(..., axis, ±g)` returning a valid flat index
-# after each crossing. No extra trait method is required for scalar ghosts.
+# Corner cells (e.g. `(gi, gj) = (+Ng, +Ng)` on a grid where two boundary
+# crossings compose) are resolved via composition of `neighbor_indices` calls —
+# axes are applied one at a time, so a corner fill emerges from the grid impl's
+# `neighbor_indices(..., axis, ±g)` returning a valid flat index after each
+# crossing. No extra trait method is required for scalar ghosts.
 #
 # The vector-field variant (`extend_with_ghosts_vector`) applies a rotation to
 # each `(u1, u2)` pair before storing; the rotation tensor is supplied by the
@@ -32,7 +32,7 @@ the value of `u` at the cell reached by stepping `g_1` cells along `axes[1]`,
 `g_2` along `axes[2]`, … from cell `c`. The center column
 `(g_1, …, g_D) = (0, …, 0)` equals `u[c]`.
 
-Boundary-crossing connectivity (panel crossings on cubed-sphere, periodic wrap,
+Boundary-crossing connectivity (periodic wrap, unstructured neighbor tables,
 etc.) is resolved inside the grid's `neighbor_indices`; ESS merely composes
 them. `neighbor_indices` sentinels (`0`) are resolved by clamping to the source
 cell, producing a well-defined extended tensor even at open boundaries.
@@ -130,8 +130,8 @@ end
 Vector-field variant of [`extend_with_ghosts`](@ref) for a 2-component field
 `(u1, u2)` on a 2D grid (`length(axes) == 2`). Each ghost value is rotated by
 the provided per-position 2×2 matrix so the stored components are expressed in
-the *query cell's* local basis — necessary for cubed-sphere panel crossings
-and other curvilinear grids where the basis changes across panel edges.
+the *query cell's* local basis — necessary for curvilinear grids where the
+local basis changes from cell to cell.
 
 The `rotation` argument has shape `(N_cells, 2Ng+1, 2Ng+1, 4)`, where
 `rotation[c, g_ξ+Ng+1, g_η+Ng+1, :]` holds `(M11, M12, M21, M22)` — the rotation

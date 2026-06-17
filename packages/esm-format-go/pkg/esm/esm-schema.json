@@ -115,7 +115,7 @@
     },
     "grids": {
       "type": "object",
-      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured/cubed_sphere topology with dimensions, staggering locations, metric arrays, and (for unstructured/cubed-sphere) connectivity tables. See docs/rfcs/discretization.md §6.",
+      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured topology with dimensions, staggering locations, metric arrays, and (for unstructured) connectivity tables. See docs/rfcs/discretization.md §6.",
       "additionalProperties": {
         "$ref": "#/$defs/Grid"
       }
@@ -431,7 +431,7 @@
         },
         "side": {
           "type": "string",
-          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'panel_seam', 'mesh_boundary'). See RFC §9.2."
+          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'mesh_boundary'). See RFC §9.2."
         },
         "table": {
           "type": "string",
@@ -722,6 +722,10 @@
         },
         "_comment": {
           "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/RuleRegion",
+          "description": "Optional spatial scope. When present, marks this equation as scoped to a region (e.g. a boundary or initialization point); the discretization engine dispatches it to region-specific rules rather than the interior rule pass."
         }
       }
     },
@@ -3032,7 +3036,7 @@
         },
         "side": {
           "type": "string",
-          "description": "Boundary side the BC applies to. Closed-vocabulary axis sides ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'tmin', 'tmax'), grid-family-specific seams ('panel_seam' for cubed-sphere), or generic unstructured boundary markers ('mesh_boundary'). Authors MAY introduce additional named sides (e.g., 'north', 'surface') provided the grid they reference declares them."
+          "description": "Boundary side the BC applies to. Closed-vocabulary axis sides ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'tmin', 'tmax') or generic unstructured boundary markers ('mesh_boundary'). Authors MAY introduce additional named sides (e.g., 'north', 'surface') provided the grid they reference declares them."
         },
         "kind": {
           "type": "string",
@@ -3252,7 +3256,7 @@
     },
     "GridMetricGenerator": {
       "type": "object",
-      "description": "Generator for a grid metric array. Exactly one kind per §6.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables — currently 'gnomonic_c6_neighbors' and 'gnomonic_c6_d4_action'; adding a new builtin is a minor version bump per §6.4.1).",
+      "description": "Generator for a grid metric array. Exactly one kind per §6.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables — currently empty; adding a new builtin is a minor version bump per §6.4.1).",
       "required": [
         "kind"
       ],
@@ -3290,7 +3294,7 @@
         },
         "name": {
           "type": "string",
-          "description": "For kind='builtin': canonical name from the closed set defined in §6.4 (currently 'gnomonic_c6_neighbors', 'gnomonic_c6_d4_action'). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
+          "description": "For kind='builtin': canonical name from the closed set defined in §6.4 (currently empty). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
         }
       },
       "allOf": [
@@ -3375,7 +3379,7 @@
         },
         "shape": {
           "type": "array",
-          "description": "Optional declared shape (parameter names or integer literals per dimension). Used by connectivity/panel tables; redundant with dim/dims for metric arrays."
+          "description": "Optional declared shape (parameter names or integer literals per dimension). Used by connectivity tables; redundant with dim/dims for metric arrays."
         },
         "generator": {
           "$ref": "#/$defs/GridMetricGenerator"
@@ -3409,13 +3413,13 @@
         },
         "generator": {
           "$ref": "#/$defs/GridMetricGenerator",
-          "description": "Alternative to loader/field: for generator-backed connectivity (e.g., cubed-sphere panel_connectivity uses kind='builtin')."
+          "description": "Alternative to loader/field: for generator-backed connectivity."
         }
       }
     },
     "GridExtent": {
       "type": "object",
-      "description": "Per-dimension extent for cartesian or cubed_sphere grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).",
+      "description": "Per-dimension extent for cartesian grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).",
       "required": [
         "n"
       ],
@@ -3443,7 +3447,7 @@
     },
     "Grid": {
       "type": "object",
-      "description": "A named discretization grid. The `family` selects one of three topologies (cartesian / unstructured / cubed_sphere) per docs/rfcs/discretization.md §6.1-§6.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
+      "description": "A named discretization grid. The `family` selects one of two topologies (cartesian / unstructured) per docs/rfcs/discretization.md §6.1-§6.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
       "required": [
         "family",
         "dimensions"
@@ -3454,8 +3458,7 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "unstructured",
-            "cubed_sphere"
+            "unstructured"
           ]
         },
         "description": {
@@ -3495,7 +3498,7 @@
         },
         "extents": {
           "type": "object",
-          "description": "Per-dimension extents. Required for 'cartesian' and 'cubed_sphere'; not used by 'unstructured'.",
+          "description": "Per-dimension extents. Required for 'cartesian'; not used by 'unstructured'.",
           "additionalProperties": {
             "$ref": "#/$defs/GridExtent"
           }
@@ -3503,13 +3506,6 @@
         "connectivity": {
           "type": "object",
           "description": "Unstructured-family connectivity tables. Keys are table names (e.g., cellsOnEdge). Required for 'unstructured'; forbidden otherwise.",
-          "additionalProperties": {
-            "$ref": "#/$defs/GridConnectivity"
-          }
-        },
-        "panel_connectivity": {
-          "type": "object",
-          "description": "Cubed-sphere panel_connectivity tables (e.g., neighbors, axis_flip). Required for 'cubed_sphere'; forbidden otherwise. Typically built from the gnomonic_c6_* builtins.",
           "additionalProperties": {
             "$ref": "#/$defs/GridConnectivity"
           }
@@ -3547,24 +3543,6 @@
           "then": {
             "required": [
               "connectivity"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "family": {
-                "const": "cubed_sphere"
-              }
-            },
-            "required": [
-              "family"
-            ]
-          },
-          "then": {
-            "required": [
-              "extents",
-              "panel_connectivity"
             ]
           }
         }
@@ -3706,7 +3684,6 @@
               "type": "string",
               "enum": [
                 "boundary",
-                "panel_boundary",
                 "mask_field",
                 "index_range"
               ],
@@ -3714,7 +3691,7 @@
             },
             "side": {
               "type": "string",
-              "description": "For kind='boundary' and kind='panel_boundary': the boundary side (e.g. 'xmin', 'xmax', 'west', 'east', 'south', 'north', 'top', 'bottom'). Site-specific sides (seams) are permitted when declared by the grid.",
+              "description": "For kind='boundary': the boundary side (e.g. 'xmin', 'xmax', 'west', 'east', 'south', 'north', 'top', 'bottom'). Site-specific sides are permitted when declared by the grid.",
               "enum": [
                 "xmin",
                 "xmax",
@@ -3730,14 +3707,8 @@
                 "north",
                 "top",
                 "bottom",
-                "panel_seam",
                 "mesh_boundary"
               ]
-            },
-            "panel": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "For kind='panel_boundary' (cubed_sphere): panel index. Combined with 'side' to identify a specific panel edge."
             },
             "field": {
               "type": "string",
@@ -3745,7 +3716,7 @@
             },
             "axis": {
               "type": "string",
-              "description": "For kind='index_range': canonical grid-family index name (cartesian: 'i', 'j', 'k', 'l', 'm'; cubed_sphere: 'i', 'j'; unstructured: 'c', 'e', 'v' or a reduction 'k_bound' name)."
+              "description": "For kind='index_range': canonical grid-family index name (cartesian: 'i', 'j', 'k', 'l', 'm'; unstructured: 'c', 'e', 'v' or a reduction 'k_bound' name)."
             },
             "lo": {
               "type": "integer",
@@ -3770,24 +3741,6 @@
               },
               "then": {
                 "required": [
-                  "side"
-                ]
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "kind": {
-                    "const": "panel_boundary"
-                  }
-                },
-                "required": [
-                  "kind"
-                ]
-              },
-              "then": {
-                "required": [
-                  "panel",
                   "side"
                 ]
               }
@@ -3917,7 +3870,7 @@
       ]
     },
     "BoundaryPolicy": {
-      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC §5.2.8 / §7). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] — a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec — a {kind, ...} object). The per-axis form is required for cubed-sphere 'panel_dispatch' and for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, panel metric selection, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
+      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC §5.2.8 / §7). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] — a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec — a {kind, ...} object). The per-axis form is for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
       "oneOf": [
         {
           "type": "string",
@@ -3967,12 +3920,11 @@
             "reflecting",
             "one_sided_extrapolation",
             "prescribed",
-            "panel_dispatch",
             "ghosted",
             "neumann_zero",
             "extrapolate"
           ],
-          "description": "Closed-set tag. 'periodic' wraps around. 'reflecting' mirrors across the edge. 'one_sided_extrapolation' fills ghost values from interior using the 'degree' parameter. 'prescribed' declares the caller supplies ghost values; the runtime treats the input as already-extended. 'panel_dispatch' (cubed-sphere only) selects between two metric/distance fields based on whether a face lies at a panel boundary; takes 'interior' and 'boundary' field names. 'ghosted' is retained as a v0.3.x alias for 'prescribed' (caller-supplied ghost cells via an upstream BC pass). 'neumann_zero' is retained as a v0.3.x alias for 'reflecting' (mirror BC, zero flux). 'extrapolate' is retained as a v0.3.x alias for 'one_sided_extrapolation' (defaulting to linear when 'degree' is omitted)."
+          "description": "Closed-set tag. 'periodic' wraps around. 'reflecting' mirrors across the edge. 'one_sided_extrapolation' fills ghost values from interior using the 'degree' parameter. 'prescribed' declares the caller supplies ghost values; the runtime treats the input as already-extended. 'ghosted' is retained as a v0.3.x alias for 'prescribed' (caller-supplied ghost cells via an upstream BC pass). 'neumann_zero' is retained as a v0.3.x alias for 'reflecting' (mirror BC, zero flux). 'extrapolate' is retained as a v0.3.x alias for 'one_sided_extrapolation' (defaulting to linear when 'degree' is omitted)."
         },
         "degree": {
           "description": "one_sided_extrapolation / extrapolate: extrapolation order. 0 = constant (zeroth-order), 1 = linear (default if omitted), 2 = quadratic, 3 = cubic. Higher orders are rejected by the schema.",
@@ -3980,36 +3932,11 @@
           "minimum": 0,
           "maximum": 3
         },
-        "interior": {
-          "type": "string",
-          "description": "panel_dispatch: name of the metric/distance field used for interior (non-panel-boundary) faces of this axis. The field must be addressable on the rule's grid (e.g. 'dist_xi' on a cubed-sphere grid)."
-        },
-        "boundary": {
-          "type": "string",
-          "description": "panel_dispatch: name of the metric/distance field used for panel-boundary faces of this axis (e.g. 'dist_xi_bnd')."
-        },
         "description": {
           "type": "string",
           "description": "Free-form authorial note explaining the policy choice."
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "panel_dispatch"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "interior",
-              "boundary"
-            ]
-          }
-        }
-      ]
+      }
     },
     "GhostWidth": {
       "description": "Required ghost-cell padding per axis for a rule (RFC §5.2.8 / §7). The runtime preparing inputs to a rule SHALL extend each axis's input array by at least 'ghost_width[axis]' cells on each side, using the rule's declared 'boundary_policy' for that axis to fill the extension. Two authorial forms are accepted: (1) a non-negative INTEGER — uniform width applied to every axis the rule's stencil reaches; (2) an OBJECT with 'by_axis' giving per-axis non-negative integers. Omission is equivalent to 0 (rule reads only in-bounds indices). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
@@ -4069,7 +3996,7 @@
     },
     "NeighborSelector": {
       "type": "object",
-      "description": "Discretization stencil neighbor selector (RFC §4, §7.2). The selector.kind tag discriminates between cartesian, panel, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
+      "description": "Discretization stencil neighbor selector (RFC §4, §7.2). The selector.kind tag discriminates between cartesian, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
       "required": [
         "kind"
       ],
@@ -4078,30 +4005,16 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "panel",
             "indirect",
             "reduction"
           ],
-          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian↔cartesian, cubed_sphere↔panel, unstructured↔indirect|reduction)."
+          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian↔cartesian, unstructured↔indirect|reduction)."
         },
         "axis": {
           "description": "cartesian: axis name (string or pattern variable e.g. \"$x\"). Ignored for other kinds."
         },
         "offset": {
           "description": "cartesian: integer offset along the axis. May be a pattern variable or an expression node for symbolic strides."
-        },
-        "side": {
-          "description": "panel: cubed-sphere face side identifier (\"east\", \"west\", \"north\", \"south\", \"ne\", \"nw\", \"se\", \"sw\") or a pattern variable.",
-          "type": [
-            "string",
-            "number"
-          ]
-        },
-        "di": {
-          "description": "panel: local panel-i displacement (integer or pattern variable)."
-        },
-        "dj": {
-          "description": "panel: local panel-j displacement (integer or pattern variable)."
         },
         "index_expr": {
           "description": "indirect: single index expression producing the neighbor's index in the indexed variable (AST).",
@@ -4253,10 +4166,9 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
-          "description": "Grid family this scheme targets; the stencil's selector.kind must match this family. dimensional_split requires \"cartesian\" or \"cubed_sphere\" (unstructured grids have no intrinsic orthogonal-axis ordering)."
+          "description": "Grid family this scheme targets; the stencil's selector.kind must match this family. dimensional_split requires \"cartesian\" (unstructured grids have no intrinsic orthogonal-axis ordering)."
         },
         "combine": {
           "type": "string",
@@ -4497,11 +4409,11 @@
         },
         "grid_dispatch": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": {
             "$ref": "#/$defs/DiscretizationVariant"
           },
-          "description": "RFC §7.8: family-keyed variant table. When present, the scheme declares two or more grid-family-specific bodies in place of an inline one — each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies — e.g. PPM on cartesian interiors vs. cubed-sphere panels — without forking the scheme name."
+          "description": "RFC §7.8: family-keyed variant table. When present, the scheme declares one or more grid-family-specific bodies in place of an inline one — each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies — e.g. different cartesian vs. unstructured stencils — without forking the scheme name."
         }
       },
       "allOf": [
@@ -4783,7 +4695,6 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
           "description": "Grid family this variant targets; selected when the active grid's family equals this value."
@@ -5215,7 +5126,7 @@
     },
     "CrossMetricStencilRule": {
       "type": "object",
-      "description": "Cross-metric composite stencil rule (RFC §7.4). Expresses operators whose discretization does not fit the single-axis stencil shape — specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a cubed-sphere panel, which combines ∂/∂ξ and ∂/∂η stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `Σ_terms[ sign_t · metric_component_t($target) · axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
+      "description": "Cross-metric composite stencil rule (RFC §7.4). Expresses operators whose discretization does not fit the single-axis stencil shape — specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a curvilinear grid, which combines ∂/∂ξ and ∂/∂η stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `Σ_terms[ sign_t · metric_component_t($target) · axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
       "required": [
         "applies_to",
         "grid_family",
@@ -5237,10 +5148,9 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
-          "description": "Grid family this composite targets. In practice cross-metric composites are primarily used on 'cubed_sphere' (curvilinear, non-orthogonal panels) and 'cartesian' (as a conformance-friendly degenerate case where off-diagonal metric components vanish)."
+          "description": "Grid family this composite targets. In practice cross-metric composites are primarily used on curvilinear grids; 'cartesian' is a conformance-friendly degenerate case where off-diagonal metric components vanish."
         },
         "axes": {
           "type": "array",
@@ -5271,7 +5181,7 @@
         },
         "boundary_fallback": {
           "type": "string",
-          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges, corners, or cross-panel boundaries where the composite's full stencil cannot be evaluated (e.g. cubed-sphere corner halos with incomplete metric support). Optional — when omitted, boundary handling falls through to the model's boundary_conditions."
+          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges or corners where the composite's full stencil cannot be evaluated (e.g. corner halos with incomplete metric support). Optional — when omitted, boundary handling falls through to the model's boundary_conditions."
         },
         "accuracy": {
           "type": "string",
@@ -5425,7 +5335,6 @@
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
           "description": "Grid family this scheme targets. When present, the stencil selectors must be compatible with this family."

@@ -241,10 +241,10 @@ func TestFfslDiscretizationStructuralAsserts(t *testing.T) {
 }
 
 // TestGridDispatchScheme exercises the RFC §7.8 grid_dispatch fixture: a
-// single Discretization with cartesian + cubed_sphere variants in lieu of an
+// single Discretization with a cartesian variant in lieu of an
 // inline body. Verifies parent-level GridFamily / Stencil are absent,
-// GridDispatch carries both variants in declaration order, and the round-trip
-// preserves variant bodies.
+// GridDispatch carries the variant, and the round-trip preserves variant
+// bodies.
 func TestGridDispatchScheme(t *testing.T) {
 	repoRoot := filepath.Join("..", "..", "..", "..")
 	raw, err := os.ReadFile(filepath.Join(repoRoot, "tests/discretizations/grid_dispatch_ppm.esm"))
@@ -265,22 +265,16 @@ func TestGridDispatchScheme(t *testing.T) {
 	if len(d.Stencil) != 0 {
 		t.Errorf("parent Stencil must be empty when grid_dispatch is set; got %d entries", len(d.Stencil))
 	}
-	if len(d.GridDispatch) != 2 {
-		t.Fatalf("expected 2 grid_dispatch variants; got %d", len(d.GridDispatch))
+	if len(d.GridDispatch) != 1 {
+		t.Fatalf("expected 1 grid_dispatch variant; got %d", len(d.GridDispatch))
 	}
-	families := []string{d.GridDispatch[0].GridFamily, d.GridDispatch[1].GridFamily}
-	want := []string{"cartesian", "cubed_sphere"}
+	families := []string{d.GridDispatch[0].GridFamily}
+	want := []string{"cartesian"}
 	if !reflect.DeepEqual(families, want) {
 		t.Errorf("variant grid_family order = %v, want %v", families, want)
 	}
 	if got := len(d.GridDispatch[0].Stencil); got != 4 {
 		t.Errorf("cartesian variant stencil len = %d, want 4", got)
-	}
-	if got := len(d.GridDispatch[1].Stencil); got != 2 {
-		t.Errorf("cubed_sphere variant stencil len = %d, want 2", got)
-	}
-	if got := d.GridDispatch[1].Stencil[0].Selector.Kind; got != "panel" {
-		t.Errorf("cubed_sphere variant first selector kind = %q, want \"panel\"", got)
 	}
 
 	// Round-trip the document and confirm the dispatch block survives.

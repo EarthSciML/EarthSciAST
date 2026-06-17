@@ -56,10 +56,8 @@ from .esm_types import (
 
 # Valid names for the ``builtin`` grid metric/connectivity generator kind
 # (RFC §6.5, §6.4.1). Keep in sync with schema $defs/GridMetricGenerator.
-_GRID_BUILTIN_NAMES = frozenset({
-    "gnomonic_c6_neighbors",
-    "gnomonic_c6_d4_action",
-})
+# The recognized builtin set is currently empty.
+_GRID_BUILTIN_NAMES = frozenset()
 
 
 class SchemaValidationError(Exception):
@@ -1315,7 +1313,7 @@ def _parse_grid_connectivity(
     section: str,
     data_loaders: Dict[str, Any],
 ) -> GridConnectivity:
-    """Parse a grid connectivity / panel_connectivity entry (RFC §6.3–§6.4)."""
+    """Parse a grid connectivity entry (RFC §6.3–§6.4)."""
     context = f"grids['{grid_name}'].{section}['{conn_id}']"
     if "shape" not in conn_data:
         raise ValueError(f"{context}: missing required 'shape'")
@@ -1365,7 +1363,7 @@ def _parse_grid(
                 f"grids['{grid_name}']: missing required field '{required}' (RFC §6)"
             )
     family = grid_data["family"]
-    valid_families = {"cartesian", "unstructured", "cubed_sphere"}
+    valid_families = {"cartesian", "unstructured"}
     if family not in valid_families:
         raise ValueError(
             f"grids['{grid_name}']: invalid family '{family}' "
@@ -1395,13 +1393,6 @@ def _parse_grid(
             data_loaders=data_loaders,
         )
 
-    panel_connectivity: Dict[str, GridConnectivity] = {}
-    for cname, cdata in (grid_data.get("panel_connectivity") or {}).items():
-        panel_connectivity[cname] = _parse_grid_connectivity(
-            cname, cdata, grid_name=grid_name, section="panel_connectivity",
-            data_loaders=data_loaders,
-        )
-
     return Grid(
         family=family,
         dimensions=list(grid_data["dimensions"]),
@@ -1413,7 +1404,6 @@ def _parse_grid(
         domain=grid_data.get("domain"),
         extents=extents,
         connectivity=connectivity,
-        panel_connectivity=panel_connectivity,
     )
 
 

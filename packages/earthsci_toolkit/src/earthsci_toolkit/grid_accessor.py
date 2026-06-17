@@ -13,7 +13,7 @@ minimum grid-object fields) and the bead gt-6trd surface:
 - ``metric_eval(name, i, j)`` → scalar metric field value at cell (i, j)
 
 The registry keys on ``Grid.family`` (e.g. ``"cartesian"``,
-``"cubed_sphere"``, ``"unstructured"``, ``"lat_lon"``, …). A factory
+``"unstructured"``, ``"lat_lon"``, …). A factory
 takes a parsed :class:`earthsci_toolkit.esm_types.Grid` and returns a
 :class:`GridAccessor` bound to it.
 """

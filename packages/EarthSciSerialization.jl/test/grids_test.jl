@@ -1,10 +1,10 @@
 """
 grids_test.jl — Round-trip coverage for RFC §6 top-level `grids` (gt-5kq3).
 
-These tests load the three canonical grids fixtures (cartesian_uniform,
-unstructured_mpas, cubed_sphere_c48), re-serialize them, reload, and assert
-the grids tree survives intact. Comparison is done against the raw JSON
-tree (via JSON3 -> plain Dict) so key-ordering does not matter.
+These tests load the canonical grids fixtures (cartesian_uniform,
+unstructured_mpas), re-serialize them, reload, and assert the grids tree
+survives intact. Comparison is done against the raw JSON tree (via
+JSON3 -> plain Dict) so key-ordering does not matter.
 """
 
 using Test
@@ -31,8 +31,7 @@ end
     @test isdir(_GRIDS_FIXTURES_DIR)
 
     fixtures = ["cartesian_uniform.esm",
-                "unstructured_mpas.esm",
-                "cubed_sphere_c48.esm"]
+                "unstructured_mpas.esm"]
 
     for fname in fixtures
         @testset "Round-trip $(fname)" begin
@@ -101,7 +100,8 @@ end
 
     # Unknown builtin name -> E_UNKNOWN_BUILTIN.
     # Schema allows kind="builtin" but the semantic check rejects names
-    # outside the canonical closed set (RFC §6.4.1).
+    # outside the canonical closed set (RFC §6.4.1; the set is currently empty,
+    # so every builtin name is rejected).
     @testset "E_UNKNOWN_BUILTIN" begin
         bad = Dict(
             "esm" => "0.2.0",
@@ -111,13 +111,11 @@ end
                 "equations" => Any[Dict("lhs" => "D(T)", "rhs" => "0")],
             )),
             "grids" => Dict("g" => Dict(
-                "family" => "cubed_sphere",
-                "dimensions" => Any["panel", "i", "j"],
-                "extents" => Dict("panel" => Dict("n" => 6),
-                                  "i" => Dict("n" => 4),
-                                  "j" => Dict("n" => 4)),
-                "panel_connectivity" => Dict("neighbors" => Dict(
-                    "shape" => Any[6, 4], "rank" => 2,
+                "family" => "cartesian",
+                "dimensions" => Any["x"],
+                "extents" => Dict("x" => Dict("n" => 8, "spacing" => "uniform")),
+                "metric_arrays" => Dict("dx" => Dict(
+                    "rank" => 0,
                     "generator" => Dict("kind" => "builtin",
                                         "name" => "not_a_real_builtin"),
                 )),

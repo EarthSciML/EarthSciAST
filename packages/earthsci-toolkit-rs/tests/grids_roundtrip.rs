@@ -2,7 +2,7 @@
 //!
 //! Loads each conformance fixture under `tests/grids/`, serializes it back,
 //! and asserts JSON-value equality after normalizing both sides through
-//! `serde_json::Value`. A fourth test mutates one fixture in-memory to point
+//! `serde_json::Value`. A final test mutates one fixture in-memory to point
 //! at a missing loader and asserts the parser rejects it.
 
 use earthsci_toolkit::{EsmFile, load, save};
@@ -64,12 +64,6 @@ fn roundtrip_unstructured() {
     assert_roundtrip(fixture);
 }
 
-#[test]
-fn roundtrip_cubed_sphere() {
-    let fixture = include_str!("../../../tests/grids/cubed_sphere_c48.esm");
-    assert_roundtrip(fixture);
-}
-
 /// Rewriting the MPAS connectivity loader name to something not in
 /// `data_loaders` must cause `load` to fail (unknown-loader reference per
 /// §6.4 wiring).
@@ -90,21 +84,5 @@ fn rejects_unknown_loader() {
     assert!(
         msg.contains("does_not_exist") || msg.contains("unknown data_loader"),
         "error should mention the bad loader name: got {msg}"
-    );
-}
-
-/// A metric-array builtin with an unrecognized name must be rejected with
-/// E_UNKNOWN_BUILTIN (§6.4.1).
-#[test]
-fn rejects_unknown_builtin() {
-    let fixture = include_str!("../../../tests/grids/cubed_sphere_c48.esm");
-    let mutated = fixture.replace("gnomonic_c6_neighbors", "not_a_real_builtin");
-    assert_ne!(fixture, mutated);
-
-    let err = load(&mutated).expect_err("load should reject unknown builtin");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("E_UNKNOWN_BUILTIN") || msg.contains("not_a_real_builtin"),
-        "error should flag the unknown builtin: got {msg}"
     );
 }

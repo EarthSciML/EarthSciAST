@@ -21,8 +21,6 @@
         "cartesian",
         "lat_lon",
         "stretched_lat_lon",
-        "cubed_sphere",
-        "stretched_cubed_sphere",
         "mpas",
         "duo",
         "arakawa",

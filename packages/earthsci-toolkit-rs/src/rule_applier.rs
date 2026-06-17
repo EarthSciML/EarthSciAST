@@ -476,61 +476,8 @@ fn eval_region(region: &RuleRegion, ctx: &RuleContext) -> Result<bool, RuleEngin
             None => false,
         }),
         RuleRegion::Boundary { side } => Ok(eval_boundary(side, ctx)),
-        RuleRegion::PanelBoundary { panel, side } => eval_panel_boundary(*panel, side, ctx),
         RuleRegion::MaskField { field } => Ok(eval_mask_field(field, ctx)),
     }
-}
-
-/// Evaluate a `{kind:"panel_boundary", panel, side}` scope (RFC §5.2.7,
-/// §6.4). Cubed-sphere only: presence of `GridMeta::panel_connectivity`
-/// is the runtime marker for that family. Applying the scope to a grid
-/// without it emits `E_REGION_GRID_MISMATCH`.
-///
-/// Canonical cubed-sphere query-point axes are `p`, `i`, `j` (§7 query-
-/// point table). `side` names map to the panel-local axes:
-/// `xmin`/`west` → `-i`, `xmax`/`east` → `+i`, `ymin`/`south` → `-j`,
-/// `ymax`/`north` → `+j`. Edge detection uses `GridMeta::dim_bounds`;
-/// absent bounds or an unrecognised `side` fall through (returns `Ok(false)`).
-fn eval_panel_boundary(panel: i64, side: &str, ctx: &RuleContext) -> Result<bool, RuleEngineError> {
-    let Some(grid_name) = &ctx.grid_name else {
-        return Ok(false);
-    };
-    let Some(meta) = ctx.grids.get(grid_name) else {
-        return Ok(false);
-    };
-    if meta.panel_connectivity.is_none() {
-        return Err(RuleEngineError::new(
-            "E_REGION_GRID_MISMATCH",
-            format!(
-                "rule region.panel_boundary applied to grid `{grid_name}` \
-                 which has no panel_connectivity metadata (cubed_sphere-only scope)"
-            ),
-        ));
-    }
-    if ctx.query_point.is_empty() {
-        return Ok(false);
-    }
-    let Some(p) = ctx.query_point.get("p") else {
-        return Ok(false);
-    };
-    if *p != panel {
-        return Ok(false);
-    }
-    let (axis, which_hi) = match side {
-        "xmin" | "west" => ("i", false),
-        "xmax" | "east" => ("i", true),
-        "ymin" | "south" => ("j", false),
-        "ymax" | "north" => ("j", true),
-        _ => return Ok(false),
-    };
-    let Some(bounds) = meta.dim_bounds.get(axis) else {
-        return Ok(false);
-    };
-    let Some(v) = ctx.query_point.get(axis) else {
-        return Ok(false);
-    };
-    let target = if which_hi { bounds[1] } else { bounds[0] };
-    Ok(*v == target)
 }
 
 fn eval_mask_field(field: &str, ctx: &RuleContext) -> bool {

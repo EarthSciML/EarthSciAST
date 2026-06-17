@@ -179,36 +179,6 @@ func TestBoundaryPolicyStringFormRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestBoundaryPolicyStringFormRejectsPanelDispatch(t *testing.T) {
-	// panel_dispatch needs interior/boundary parameters → object form only.
-	raw := []byte(`[{"name": "r", "pattern": "$a", "replacement": "$a", "boundary_policy": "panel_dispatch"}]`)
-	_, err := ParseRules(raw)
-	re, ok := err.(*RuleEngineError)
-	if !ok || re.Code != "E_RULE_PARSE" {
-		t.Errorf("got %v, want E_RULE_PARSE", err)
-	}
-}
-
-func TestBoundaryPolicyPerAxisPanelDispatch(t *testing.T) {
-	body := `{
-		"name": "ppm",
-		"pattern": "$a",
-		"replacement": "$a",
-		"boundary_policy": {"by_axis": {
-			"xi":  {"kind": "panel_dispatch", "interior": "dist_xi",  "boundary": "dist_xi_bnd"},
-			"eta": {"kind": "panel_dispatch", "interior": "dist_eta", "boundary": "dist_eta_bnd"}
-		}}
-	}`
-	r := parseOneRule(t, body)
-	if r.BoundaryPolicy == nil || r.BoundaryPolicy.PerAxis == nil {
-		t.Fatalf("expected per-axis form: %+v", r.BoundaryPolicy)
-	}
-	xi := r.BoundaryPolicy.PerAxis["xi"]
-	if xi.Kind != "panel_dispatch" || xi.Interior != "dist_xi" || xi.Boundary != "dist_xi_bnd" {
-		t.Errorf("xi spec wrong: %+v", xi)
-	}
-}
-
 func TestBoundaryPolicyPerAxisOneSidedExtrapolationDegree(t *testing.T) {
 	body := `{
 		"name": "r",
@@ -222,16 +192,6 @@ func TestBoundaryPolicyPerAxisOneSidedExtrapolationDegree(t *testing.T) {
 	x := r.BoundaryPolicy.PerAxis["x"]
 	if x.Kind != "one_sided_extrapolation" || !x.HasDegree || x.Degree != 2 {
 		t.Errorf("x spec wrong: %+v", x)
-	}
-}
-
-func TestBoundaryPolicyPanelDispatchRequiresInteriorAndBoundary(t *testing.T) {
-	raw := []byte(`[{"name": "r", "pattern": "$a", "replacement": "$a",
-		"boundary_policy": {"by_axis": {"xi": {"kind": "panel_dispatch"}}}}]`)
-	_, err := ParseRules(raw)
-	re, ok := err.(*RuleEngineError)
-	if !ok || re.Code != "E_RULE_PARSE" {
-		t.Errorf("got %v, want E_RULE_PARSE", err)
 	}
 }
 

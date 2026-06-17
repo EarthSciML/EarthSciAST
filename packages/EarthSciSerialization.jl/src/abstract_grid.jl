@@ -1,7 +1,7 @@
 # Grid trait per RFC docs/rfcs/grid-trait.md (esm-a3z).
 #
 # ESS owns the trait; concrete per-family implementations (CartesianGrid,
-# CubedSphereGrid, LatLonGrid, …) live in EarthSciDiscretizations and register
+# LatLonGrid, …) live in EarthSciDiscretizations and register
 # themselves via the existing GridAccessor hook. The trait here is the
 # bulk-array contract: every Tier-C/M/S/V/U method returns whole-grid arrays
 # shaped per RFC §1, never scalar-per-cell.
@@ -39,8 +39,8 @@ Scalar-per-cell access is NOT part of the trait contract.
 
 Boundary sentinel (Julia): `neighbor_indices` returns `0` for cells whose
 neighbor sits outside the grid. Implementations that wrap (periodic,
-cubed-sphere panel crossings, MPAS ragged connectivity) hide the wrap
-inside the returned array so consumers never see the sentinel.
+MPAS ragged connectivity) hide the wrap inside the returned array so
+consumers never see the sentinel.
 """
 abstract type AbstractGrid end
 
@@ -135,7 +135,7 @@ function cell_widths end
 
 Flat cell index of the neighbor `offset` cells along `axis`. Shape: `(N,)`.
 Negative `offset` is "before"; positive is "after". Boundary sentinel is
-`0` (Julia is 1-indexed, so `0` is unambiguous). Cross-panel / periodic
+`0` (Julia is 1-indexed, so `0` is unambiguous). Cross-boundary / periodic
 topology is resolved inside the implementation — consumers should receive
 a valid flat index for every interior cell.
 """

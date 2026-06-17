@@ -65,10 +65,7 @@ export class GridValidationError extends Error {
  * Closed set of canonical grid builtins (RFC §6.4.1). Adding a new name
  * here is a minor version bump.
  */
-const KNOWN_GRID_BUILTINS = new Set<string>([
-  'gnomonic_c6_neighbors',
-  'gnomonic_c6_d4_action',
-])
+const KNOWN_GRID_BUILTINS = new Set<string>([])
 
 // Embedded ESM schema - browser-compatible (no file system access required)
 const schema = {
@@ -171,7 +168,7 @@ const schema = {
     },
     "grids": {
       "type": "object",
-      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured/cubed_sphere topology with dimensions, staggering locations, metric arrays, and (for unstructured/cubed-sphere) connectivity tables. See docs/rfcs/discretization.md \u00a76.",
+      "description": "Named discretization grids (v0.2.0). Each entry declares a cartesian/unstructured topology with dimensions, staggering locations, metric arrays, and (for unstructured) connectivity tables. See docs/rfcs/discretization.md \u00a76.",
       "additionalProperties": {
         "$ref": "#/$defs/Grid"
       }
@@ -487,7 +484,7 @@ const schema = {
         },
         "side": {
           "type": "string",
-          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'panel_seam', 'mesh_boundary'). See RFC \u00a79.2."
+          "description": "For the 'bc' pattern-match op: the BC side to match (e.g., 'xmin', 'xmax', 'ymin', 'mesh_boundary'). See RFC \u00a79.2."
         },
         "table": {
           "type": "string",
@@ -3088,7 +3085,7 @@ const schema = {
         },
         "side": {
           "type": "string",
-          "description": "Boundary side the BC applies to. Closed-vocabulary axis sides ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'tmin', 'tmax'), grid-family-specific seams ('panel_seam' for cubed-sphere), or generic unstructured boundary markers ('mesh_boundary'). Authors MAY introduce additional named sides (e.g., 'north', 'surface') provided the grid they reference declares them."
+          "description": "Boundary side the BC applies to. Closed-vocabulary axis sides ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax', 'tmin', 'tmax') or generic unstructured boundary markers ('mesh_boundary'). Authors MAY introduce additional named sides (e.g., 'north', 'surface') provided the grid they reference declares them."
         },
         "kind": {
           "type": "string",
@@ -3308,7 +3305,7 @@ const schema = {
     },
     "GridMetricGenerator": {
       "type": "object",
-      "description": "Generator for a grid metric array. Exactly one kind per \u00a76.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables \u2014 currently 'gnomonic_c6_neighbors' and 'gnomonic_c6_d4_action'; adding a new builtin is a minor version bump per \u00a76.4.1).",
+      "description": "Generator for a grid metric array. Exactly one kind per \u00a76.5: 'expression' (analytic, computed at discretization time from grid parameters), 'loader' (pulled from a named data_loaders entry), or 'builtin' (from a closed set of canonical tables \u2014 the set is currently empty; adding a new builtin is a minor version bump per \u00a76.4.1).",
       "required": [
         "kind"
       ],
@@ -3346,7 +3343,7 @@ const schema = {
         },
         "name": {
           "type": "string",
-          "description": "For kind='builtin': canonical name from the closed set defined in \u00a76.4 (currently 'gnomonic_c6_neighbors', 'gnomonic_c6_d4_action'). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
+          "description": "For kind='builtin': canonical name from the closed set defined in \u00a76.4 (the set is currently empty). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN."
         }
       },
       "allOf": [
@@ -3431,7 +3428,7 @@ const schema = {
         },
         "shape": {
           "type": "array",
-          "description": "Optional declared shape (parameter names or integer literals per dimension). Used by connectivity/panel tables; redundant with dim/dims for metric arrays."
+          "description": "Optional declared shape (parameter names or integer literals per dimension). Used by connectivity tables; redundant with dim/dims for metric arrays."
         },
         "generator": {
           "$ref": "#/$defs/GridMetricGenerator"
@@ -3465,13 +3462,13 @@ const schema = {
         },
         "generator": {
           "$ref": "#/$defs/GridMetricGenerator",
-          "description": "Alternative to loader/field: for generator-backed connectivity (e.g., cubed-sphere panel_connectivity uses kind='builtin')."
+          "description": "Alternative to loader/field: for generator-backed connectivity."
         }
       }
     },
     "GridExtent": {
       "type": "object",
-      "description": "Per-dimension extent for cartesian or cubed_sphere grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).",
+      "description": "Per-dimension extent for cartesian grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).",
       "required": [
         "n"
       ],
@@ -3499,7 +3496,7 @@ const schema = {
     },
     "Grid": {
       "type": "object",
-      "description": "A named discretization grid. The `family` selects one of three topologies (cartesian / unstructured / cubed_sphere) per docs/rfcs/discretization.md \u00a76.1-\u00a76.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
+      "description": "A named discretization grid. The `family` selects one of two topologies (cartesian / unstructured) per docs/rfcs/discretization.md \u00a76.1-\u00a76.4. Each grid also carries optional staggering locations, metric array declarations, and its own parameter block reusing the ordinary ESM Parameter schema.",
       "required": [
         "family",
         "dimensions"
@@ -3510,8 +3507,7 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "unstructured",
-            "cubed_sphere"
+            "unstructured"
           ]
         },
         "description": {
@@ -3551,7 +3547,7 @@ const schema = {
         },
         "extents": {
           "type": "object",
-          "description": "Per-dimension extents. Required for 'cartesian' and 'cubed_sphere'; not used by 'unstructured'.",
+          "description": "Per-dimension extents. Required for 'cartesian'; not used by 'unstructured'.",
           "additionalProperties": {
             "$ref": "#/$defs/GridExtent"
           }
@@ -3559,13 +3555,6 @@ const schema = {
         "connectivity": {
           "type": "object",
           "description": "Unstructured-family connectivity tables. Keys are table names (e.g., cellsOnEdge). Required for 'unstructured'; forbidden otherwise.",
-          "additionalProperties": {
-            "$ref": "#/$defs/GridConnectivity"
-          }
-        },
-        "panel_connectivity": {
-          "type": "object",
-          "description": "Cubed-sphere panel_connectivity tables (e.g., neighbors, axis_flip). Required for 'cubed_sphere'; forbidden otherwise. Typically built from the gnomonic_c6_* builtins.",
           "additionalProperties": {
             "$ref": "#/$defs/GridConnectivity"
           }
@@ -3603,24 +3592,6 @@ const schema = {
           "then": {
             "required": [
               "connectivity"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "family": {
-                "const": "cubed_sphere"
-              }
-            },
-            "required": [
-              "family"
-            ]
-          },
-          "then": {
-            "required": [
-              "extents",
-              "panel_connectivity"
             ]
           }
         }
@@ -3762,7 +3733,6 @@ const schema = {
               "type": "string",
               "enum": [
                 "boundary",
-                "panel_boundary",
                 "mask_field",
                 "index_range"
               ],
@@ -3770,7 +3740,7 @@ const schema = {
             },
             "side": {
               "type": "string",
-              "description": "For kind='boundary' and kind='panel_boundary': the boundary side (e.g. 'xmin', 'xmax', 'west', 'east', 'south', 'north', 'top', 'bottom'). Site-specific sides (seams) are permitted when declared by the grid.",
+              "description": "For kind='boundary': the boundary side (e.g. 'xmin', 'xmax', 'west', 'east', 'south', 'north', 'top', 'bottom'). Site-specific sides (seams) are permitted when declared by the grid.",
               "enum": [
                 "xmin",
                 "xmax",
@@ -3786,14 +3756,8 @@ const schema = {
                 "north",
                 "top",
                 "bottom",
-                "panel_seam",
                 "mesh_boundary"
               ]
-            },
-            "panel": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "For kind='panel_boundary' (cubed_sphere): panel index. Combined with 'side' to identify a specific panel edge."
             },
             "field": {
               "type": "string",
@@ -3801,7 +3765,7 @@ const schema = {
             },
             "axis": {
               "type": "string",
-              "description": "For kind='index_range': canonical grid-family index name (cartesian: 'i', 'j', 'k', 'l', 'm'; cubed_sphere: 'i', 'j'; unstructured: 'c', 'e', 'v' or a reduction 'k_bound' name)."
+              "description": "For kind='index_range': canonical grid-family index name (cartesian: 'i', 'j', 'k', 'l', 'm'; unstructured: 'c', 'e', 'v' or a reduction 'k_bound' name)."
             },
             "lo": {
               "type": "integer",
@@ -3826,24 +3790,6 @@ const schema = {
               },
               "then": {
                 "required": [
-                  "side"
-                ]
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "kind": {
-                    "const": "panel_boundary"
-                  }
-                },
-                "required": [
-                  "kind"
-                ]
-              },
-              "then": {
-                "required": [
-                  "panel",
                   "side"
                 ]
               }
@@ -3973,7 +3919,7 @@ const schema = {
       ]
     },
     "BoundaryPolicy": {
-      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC \u00a75.2.8 / \u00a77). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] \u2014 a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec \u2014 a {kind, ...} object). The per-axis form is required for cubed-sphere 'panel_dispatch' and for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, panel metric selection, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
+      "description": "Behavior of a rule at the domain edges of any grid the pattern resolves on (RFC \u00a75.2.8 / \u00a77). Omission is equivalent to 'periodic' for backwards compatibility with v0.2/v0.3 rules that implicitly assumed wrap-around indexing. Two authorial forms are accepted: (1) a STRING from the closed set ['periodic','ghosted','neumann_zero','extrapolate','reflecting','one_sided_extrapolation','prescribed'] \u2014 a uniform policy across all axes whose ghost values, when needed, are governed by the rule's 'ghost_width'; (2) an OBJECT with a 'by_axis' map declaring per-axis policy entries (each entry is a BoundaryPolicySpec \u2014 a {kind, ...} object). The per-axis form is required for rules that need different policies on different axes (e.g. periodic in latitude, reflecting in vertical). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement (ghost-cell synthesis, edge fall-through) is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
       "oneOf": [
         {
           "type": "string",
@@ -4023,12 +3969,11 @@ const schema = {
             "reflecting",
             "one_sided_extrapolation",
             "prescribed",
-            "panel_dispatch",
             "ghosted",
             "neumann_zero",
             "extrapolate"
           ],
-          "description": "Closed-set tag. 'periodic' wraps around. 'reflecting' mirrors across the edge. 'one_sided_extrapolation' fills ghost values from interior using the 'degree' parameter. 'prescribed' declares the caller supplies ghost values; the runtime treats the input as already-extended. 'panel_dispatch' (cubed-sphere only) selects between two metric/distance fields based on whether a face lies at a panel boundary; takes 'interior' and 'boundary' field names. 'ghosted' is retained as a v0.3.x alias for 'prescribed' (caller-supplied ghost cells via an upstream BC pass). 'neumann_zero' is retained as a v0.3.x alias for 'reflecting' (mirror BC, zero flux). 'extrapolate' is retained as a v0.3.x alias for 'one_sided_extrapolation' (defaulting to linear when 'degree' is omitted)."
+          "description": "Closed-set tag. 'periodic' wraps around. 'reflecting' mirrors across the edge. 'one_sided_extrapolation' fills ghost values from interior using the 'degree' parameter. 'prescribed' declares the caller supplies ghost values; the runtime treats the input as already-extended. 'ghosted' is retained as a v0.3.x alias for 'prescribed' (caller-supplied ghost cells via an upstream BC pass). 'neumann_zero' is retained as a v0.3.x alias for 'reflecting' (mirror BC, zero flux). 'extrapolate' is retained as a v0.3.x alias for 'one_sided_extrapolation' (defaulting to linear when 'degree' is omitted)."
         },
         "degree": {
           "description": "one_sided_extrapolation / extrapolate: extrapolation order. 0 = constant (zeroth-order), 1 = linear (default if omitted), 2 = quadratic, 3 = cubic. Higher orders are rejected by the schema.",
@@ -4036,36 +3981,11 @@ const schema = {
           "minimum": 0,
           "maximum": 3
         },
-        "interior": {
-          "type": "string",
-          "description": "panel_dispatch: name of the metric/distance field used for interior (non-panel-boundary) faces of this axis. The field must be addressable on the rule's grid (e.g. 'dist_xi' on a cubed-sphere grid)."
-        },
-        "boundary": {
-          "type": "string",
-          "description": "panel_dispatch: name of the metric/distance field used for panel-boundary faces of this axis (e.g. 'dist_xi_bnd')."
-        },
         "description": {
           "type": "string",
           "description": "Free-form authorial note explaining the policy choice."
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "panel_dispatch"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "interior",
-              "boundary"
-            ]
-          }
-        }
-      ]
+      }
     },
     "GhostWidth": {
       "description": "Required ghost-cell padding per axis for a rule (RFC \u00a75.2.8 / \u00a77). The runtime preparing inputs to a rule SHALL extend each axis's input array by at least 'ghost_width[axis]' cells on each side, using the rule's declared 'boundary_policy' for that axis to fill the extension. Two authorial forms are accepted: (1) a non-negative INTEGER \u2014 uniform width applied to every axis the rule's stencil reaches; (2) an OBJECT with 'by_axis' giving per-axis non-negative integers. Omission is equivalent to 0 (rule reads only in-bounds indices). Bindings preserve this field across parse/serialize roundtrips; semantic enforcement is per-binding and may be a no-op while the rest of the discretization pipeline matures.",
@@ -4125,7 +4045,7 @@ const schema = {
     },
     "NeighborSelector": {
       "type": "object",
-      "description": "Discretization stencil neighbor selector (RFC \u00a74, \u00a77.2). The selector.kind tag discriminates between cartesian, panel, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
+      "description": "Discretization stencil neighbor selector (RFC \u00a74, \u00a77.2). The selector.kind tag discriminates between cartesian, indirect, and reduction selectors. Additional per-kind fields are permitted so that pattern variables such as $x can appear in e.g. axis/offset positions.",
       "required": [
         "kind"
       ],
@@ -4134,30 +4054,16 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "panel",
             "indirect",
             "reduction"
           ],
-          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian\u2194cartesian, cubed_sphere\u2194panel, unstructured\u2194indirect|reduction)."
+          "description": "Selector family; must agree with the enclosing Discretization's grid_family (cartesian\u2194cartesian, unstructured\u2194indirect|reduction)."
         },
         "axis": {
           "description": "cartesian: axis name (string or pattern variable e.g. \"$x\"). Ignored for other kinds."
         },
         "offset": {
           "description": "cartesian: integer offset along the axis. May be a pattern variable or an expression node for symbolic strides."
-        },
-        "side": {
-          "description": "panel: cubed-sphere face side identifier (\"east\", \"west\", \"north\", \"south\", \"ne\", \"nw\", \"se\", \"sw\") or a pattern variable.",
-          "type": [
-            "string",
-            "number"
-          ]
-        },
-        "di": {
-          "description": "panel: local panel-i displacement (integer or pattern variable)."
-        },
-        "dj": {
-          "description": "panel: local panel-j displacement (integer or pattern variable)."
         },
         "index_expr": {
           "description": "indirect: single index expression producing the neighbor's index in the indexed variable (AST).",
@@ -4309,10 +4215,9 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
-          "description": "Grid family this scheme targets; the stencil's selector.kind must match this family. dimensional_split requires \"cartesian\" or \"cubed_sphere\" (unstructured grids have no intrinsic orthogonal-axis ordering)."
+          "description": "Grid family this scheme targets; the stencil's selector.kind must match this family. dimensional_split requires \"cartesian\" (unstructured grids have no intrinsic orthogonal-axis ordering)."
         },
         "combine": {
           "type": "string",
@@ -4553,11 +4458,11 @@ const schema = {
         },
         "grid_dispatch": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": {
             "$ref": "#/$defs/DiscretizationVariant"
           },
-          "description": "RFC \u00a77.8: family-keyed variant table. When present, the scheme declares two or more grid-family-specific bodies in place of an inline one \u2014 each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies \u2014 e.g. PPM on cartesian interiors vs. cubed-sphere panels \u2014 without forking the scheme name."
+          "description": "RFC \u00a77.8: family-keyed variant table. When present, the scheme declares one or more grid-family-specific bodies in place of an inline one \u2014 each variant carries its own `grid_family` plus the body fields (stencil / kind / axes / inner_rule / splitting / order_of_sweeps / terms / boundary_fallback / reconstruction / remap / limiter / cfl_policy / dimensions / combine) that would otherwise live on the parent. The loader picks the variant whose `grid_family` matches the active grid family at expansion time and substitutes its body in place of the parent's. Top-level `grid_family` and any inline body field MUST be absent when `grid_dispatch` is present; shared fields (`applies_to`, `accuracy`, `order`, `requires_locations`, `emits_location`, `target_binding`, `ghost_vars`, `free_variables`, `description`, `reference`) remain on the parent and apply to every variant. Each variant's `grid_family` MUST be unique within the array; ordering is not significant. The use case is operators whose form differs across grid topologies without forking the scheme name."
         }
       },
       "allOf": [
@@ -4839,7 +4744,6 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
           "description": "Grid family this variant targets; selected when the active grid's family equals this value."
@@ -5271,7 +5175,7 @@ const schema = {
     },
     "CrossMetricStencilRule": {
       "type": "object",
-      "description": "Cross-metric composite stencil rule (RFC \u00a77.4). Expresses operators whose discretization does not fit the single-axis stencil shape \u2014 specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a cubed-sphere panel, which combines \u2202/\u2202\u03be and \u2202/\u2202\u03b7 stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `\u03a3_terms[ sign_t \u00b7 metric_component_t($target) \u00b7 axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
+      "description": "Cross-metric composite stencil rule (RFC \u00a77.4). Expresses operators whose discretization does not fit the single-axis stencil shape \u2014 specifically covariant PDE operators on curvilinear grids where metric-tensor components (J, g_xixi, g_etaeta, g_xieta, ginv_*) weight a sum of per-axis stencil applications. The canonical example is the full covariant Laplacian on a curvilinear grid, which combines \u2202/\u2202\u03be and \u2202/\u2202\u03b7 stencils with metric weights in a 9-point composite.\n\nExpansion semantics: given a rule match at $target, the composite expands to `\u03a3_terms[ sign_t \u00b7 metric_component_t($target) \u00b7 axis_stencil_t(field, axes_t) ]`, where each `axis_stencil_t` is the expansion of the referenced Discretization at $target along its declared axis. The composite's own `combine` field (default '+') determines how terms are combined.",
       "required": [
         "applies_to",
         "grid_family",
@@ -5293,10 +5197,9 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
-          "description": "Grid family this composite targets. In practice cross-metric composites are primarily used on 'cubed_sphere' (curvilinear, non-orthogonal panels) and 'cartesian' (as a conformance-friendly degenerate case where off-diagonal metric components vanish)."
+          "description": "Grid family this composite targets. In practice cross-metric composites are primarily used on 'cartesian' (as a conformance-friendly degenerate case where off-diagonal metric components vanish)."
         },
         "axes": {
           "type": "array",
@@ -5327,7 +5230,7 @@ const schema = {
         },
         "boundary_fallback": {
           "type": "string",
-          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges, corners, or cross-panel boundaries where the composite's full stencil cannot be evaluated (e.g. cubed-sphere corner halos with incomplete metric support). Optional \u2014 when omitted, boundary handling falls through to the model's boundary_conditions."
+          "description": "Name of another Discretization or CrossMetricStencilRule (in the same discretizations block) to apply at edges or corners where the composite's full stencil cannot be evaluated (e.g. corner halos with incomplete metric support). Optional \u2014 when omitted, boundary handling falls through to the model's boundary_conditions."
         },
         "accuracy": {
           "type": "string",
@@ -5387,7 +5290,6 @@ const schema = {
           "type": "string",
           "enum": [
             "cartesian",
-            "cubed_sphere",
             "unstructured"
           ],
           "description": "Grid family this scheme targets."
@@ -5940,8 +5842,8 @@ function cleanReactionSystems(reactionSystems: any): any {
 /**
  * Post-schema validation for grid metric/connectivity generators (RFC §6.5).
  *
- * For every `GridMetricGenerator` found under `grids.<name>.metric_arrays`,
- * `grids.<name>.connectivity`, or `grids.<name>.panel_connectivity`:
+ * For every `GridMetricGenerator` found under `grids.<name>.metric_arrays`
+ * or `grids.<name>.connectivity`:
  *   - kind='loader' requires the loader name to exist in top-level
  *     `data_loaders`. Otherwise throws `E_UNKNOWN_LOADER`.
  *   - kind='builtin' requires the `name` to be in the closed
@@ -5993,13 +5895,13 @@ function validateGridGenerators(data: any): void {
       }
     }
 
-    for (const bucket of ['connectivity', 'panel_connectivity'] as const) {
+    for (const bucket of ['connectivity'] as const) {
       if (g[bucket] && typeof g[bucket] === 'object') {
         for (const [tblName, tbl] of Object.entries(g[bucket])) {
           if (!tbl || typeof tbl !== 'object') continue
           const t = tbl as Record<string, any>
-          // Connectivity tables may have either a generator (cubed-sphere
-          // builtin) or a loader/field pair (unstructured).
+          // Connectivity tables may have either a generator or a
+          // loader/field pair (unstructured).
           if ('generator' in t) {
             checkGenerator(t.generator, `grids.${gridName}.${bucket}.${tblName}.generator`)
           } else if ('loader' in t) {
@@ -6135,8 +6037,7 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   // Step 4c: Grid generator validation (RFC §6).
   //   - For kind='loader': the referenced loader name must exist in top-level data_loaders.
   //   - For kind='builtin': name must be one of the closed set of canonical builtins
-  //     (currently gnomonic_c6_neighbors, gnomonic_c6_d4_action); unknown names
-  //     are rejected with E_UNKNOWN_BUILTIN per §6.4.1.
+  //     (currently empty); unknown names are rejected with E_UNKNOWN_BUILTIN per §6.4.1.
   validateGridGenerators(loweredData)
 
   // Step 5: Dimensional analysis — emit warnings but never fail the load.

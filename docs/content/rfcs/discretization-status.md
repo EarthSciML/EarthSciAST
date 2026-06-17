@@ -7,17 +7,15 @@ beads.
 
 ## §6 Grids — landed (gt-5kq3, v2.1)
 
-Top-level `grids` map with `cartesian` / `unstructured` / `cubed_sphere`
+Top-level `grids` map with `cartesian` / `unstructured`
 families is in `esm-schema.json`. Each grid declares `dimensions`,
-`locations`, `metric_arrays`, `connectivity` (unstructured) and
-`panel_connectivity` (cubed sphere). Loader-backed geometry works by
-reference:
+`locations`, `metric_arrays` and `connectivity` (unstructured).
+Loader-backed geometry works by reference:
 
 - `GridMetricGenerator.kind = "loader"` + `{loader, field}` (schema line ~1947–1986)
 - `GridConnectivity.{loader, field}` (schema line ~2016–2040)
-- `GridMetricGenerator.kind = "builtin"` with closed name set
-  (`gnomonic_c6_neighbors`, `gnomonic_c6_d4_action`); unknown names reject
-  with `E_UNKNOWN_BUILTIN`.
+- `GridMetricGenerator.kind = "builtin"` with a closed name set (currently
+  empty); unknown names reject with `E_UNKNOWN_BUILTIN`.
 
 The `tests/grids/unstructured_mpas.esm` fixture rounds-trips in all five
 bindings and exercises both loader-backed connectivity and loader-backed

@@ -662,7 +662,7 @@ type InitialConditions struct {
 type BoundaryCondition struct {
 	// Variable is the name of the model variable the BC constrains.
 	Variable string `json:"variable"`
-	// Side identifies the boundary side (e.g. "xmin", "xmax", "panel_seam").
+	// Side identifies the boundary side (e.g. "xmin", "xmax", "mesh_boundary").
 	Side string `json:"side"`
 	// Kind is the BC kind: "constant", "dirichlet", "neumann", "robin",
 	// "zero_gradient", "periodic", "flux_contrib", or "interface".
@@ -703,7 +703,7 @@ type BCContributedBy struct {
 // Grid is a named discretization grid declared at the top-level `grids` map.
 // See docs/rfcs/discretization.md §6.
 type Grid struct {
-	Family             string                         `json:"family"` // "cartesian" | "unstructured" | "cubed_sphere"
+	Family             string                         `json:"family"` // "cartesian" | "unstructured"
 	Description        *string                        `json:"description,omitempty"`
 	Dimensions         []string                       `json:"dimensions"`
 	Locations          []string                       `json:"locations,omitempty"`
@@ -712,10 +712,9 @@ type Grid struct {
 	Domain             *string                        `json:"domain,omitempty"`
 	Extents            map[string]GridExtent          `json:"extents,omitempty"`
 	Connectivity       map[string]GridConnectivity    `json:"connectivity,omitempty"`
-	PanelConnectivity  map[string]GridConnectivity    `json:"panel_connectivity,omitempty"`
 }
 
-// GridExtent is a per-dimension extent (cartesian / cubed_sphere). `N` is an
+// GridExtent is a per-dimension extent (cartesian). `N` is an
 // integer literal or a parameter-reference string; `Spacing` is optional and
 // only meaningful for cartesian ('uniform' or 'nonuniform').
 type GridExtent struct {
@@ -742,7 +741,7 @@ type GridMetricGenerator struct {
 	Name   *string     `json:"name,omitempty"`
 }
 
-// GridConnectivity is an unstructured/cubed-sphere connectivity table (§6.3 /
+// GridConnectivity is an unstructured connectivity table (§6.3 /
 // §6.4). Entries are either loader-backed (Loader+Field) or generator-backed
 // (Generator).
 type GridConnectivity struct {
@@ -930,7 +929,7 @@ type Discretization struct {
 	Terms              []CrossMetricTerm `json:"terms,omitempty"`
 
 	// BoundaryFallback names another discretization (in the same block) to
-	// apply at edges / corners / cross-panel boundaries where the composite
+	// apply at edges / corners where the composite
 	// stencil cannot be evaluated. Cross-metric composite only.
 	BoundaryFallback   string            `json:"boundary_fallback,omitempty"`
 

@@ -2352,12 +2352,10 @@ end
 # ========================================
 # PDE discretization on AbstractCurvilinearGrid (esm-2qw)
 # ========================================
-# Port of EarthSciDiscretizations' SciMLBase.discretize(sys::PDESystem,
-# disc::FVCubedSphere) refactored against the esm-a3z Grid trait. The original
-# code took a CubedSphereGrid and addressed cells with (panel, i, j) tuples;
-# this version takes any AbstractCurvilinearGrid and uses flat cell indices
-# resolved via neighbor_indices(grid, axis, ±1). The chain-rule transform
-# from computational (ξ, η) to physical (target) coordinates uses
+# Curvilinear PDE discretization against the esm-a3z Grid trait. Takes any
+# AbstractCurvilinearGrid and uses flat cell indices resolved via
+# neighbor_indices(grid, axis, ±1). The chain-rule transform from
+# computational (ξ, η) to physical (target) coordinates uses
 # coord_jacobian(grid, target) and coord_jacobian_second(grid, target).
 
 """
@@ -2375,8 +2373,8 @@ Returns an `ODEProblem` ready for `solve`.
 The grid is queried only through the esm-a3z Grid trait — no struct fields:
 
   - `n_cells(grid)`, `cell_centers(grid, axis)`, `cell_widths(grid, axis)`
-  - `neighbor_indices(grid, axis, ±1)` for ξ/η stencil neighbors. Cross-panel
-    / periodic / cubed-sphere connectivity is resolved inside the impl.
+  - `neighbor_indices(grid, axis, ±1)` for ξ/η stencil neighbors. Periodic
+    and cross-boundary connectivity is resolved inside the impl.
     Sentinel `0` (boundary) falls back to the cell itself.
   - `coord_jacobian(grid, target)`        — `(N, 2, 2)`, `∂(comp)/∂(target)`
   - `coord_jacobian_second(grid, target)` — `(N, 2, 2, 2)`, second derivs
@@ -2445,7 +2443,7 @@ function EarthSciSerialization.discretize(
     # Differential resolves to a `(:target, k)` axis, which `_resolve_axis`
     # does only for a spatial IV that is NOT one of the two computational
     # axes. When every spatial IV is itself a computational axis — e.g. a
-    # PDE written in (xi, eta) discretized on its own cubed-sphere grid —
+    # PDE written in (xi, eta) discretized on its own (xi, eta) grid —
     # the transform is a structural no-op and `cj`/`cj2` stay untouched.
     # Calling them eagerly there would force every grid's `coord_jacobian`
     # to accept the `:auto`-derived target symbol (e.g. `:xi_eta`) even
@@ -2467,7 +2465,7 @@ function EarthSciSerialization.discretize(
 
     # Neighbor index arrays. Boundary sentinels (0) fall back to self so the
     # generated stencils stay well-defined; concrete grids that wrap (periodic,
-    # cubed-sphere, MPAS) hide the boundary inside neighbor_indices.
+    # MPAS) hide the boundary inside neighbor_indices.
     # Non-periodic boundary cells use self-fallback (zero-ghost convention).
     self_idx = collect(1:N)
     _safe(arr) = map((n, s) -> n == 0 ? s : n, arr, self_idx)

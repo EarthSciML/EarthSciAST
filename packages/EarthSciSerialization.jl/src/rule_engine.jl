@@ -49,7 +49,6 @@ Spatial scope of a rule (RFC §5.2.7). Abstract type with four concrete
 variants:
 
 - [`RegionBoundary`](@ref) — `{kind:"boundary", side}`
-- [`RegionPanelBoundary`](@ref) — `{kind:"panel_boundary", panel, side}`
 - [`RegionMaskField`](@ref) — `{kind:"mask_field", field}`
 - [`RegionIndexRange`](@ref) — `{kind:"index_range", axis, lo, hi}`
 
@@ -64,16 +63,6 @@ abstract type RuleRegion end
 `{kind:"boundary", side}` scope (RFC §5.2.7).
 """
 struct RegionBoundary <: RuleRegion
-    side::String
-end
-
-"""
-    RegionPanelBoundary(panel::Int, side::String)
-
-`{kind:"panel_boundary", panel, side}` scope (cubed_sphere only).
-"""
-struct RegionPanelBoundary <: RuleRegion
-    panel::Int
     side::String
 end
 
@@ -122,7 +111,7 @@ RuleBinding(kind::AbstractString;
     RuleBinding(String(kind), default, description === nothing ? nothing : String(description))
 
 """
-    BoundaryPolicySpec(kind, degree, interior, boundary, description)
+    BoundaryPolicySpec(kind, degree, description)
 
 A single per-axis boundary-policy entry (RFC §5.2.8 / §7). `kind` is one of
 the closed-set tags listed in [`_BOUNDARY_POLICY_KIND_VALUES`](@ref); the
@@ -130,10 +119,6 @@ remaining fields are kind-specific:
 
 - `degree::Union{Int,Nothing}` — `one_sided_extrapolation` / `extrapolate`:
   extrapolation order (0..3). `nothing` means default (linear).
-- `interior::Union{String,Nothing}` — `panel_dispatch`: name of the metric
-  field for interior faces.
-- `boundary::Union{String,Nothing}` — `panel_dispatch`: name of the metric
-  field for panel-boundary faces.
 - `description::Union{String,Nothing}` — free-form authorial note.
 
 Stored verbatim; the rule engine does not branch on the policy.
@@ -141,19 +126,13 @@ Stored verbatim; the rule engine does not branch on the policy.
 struct BoundaryPolicySpec
     kind::String
     degree::Union{Int,Nothing}
-    interior::Union{String,Nothing}
-    boundary::Union{String,Nothing}
     description::Union{String,Nothing}
 end
 
 BoundaryPolicySpec(kind::AbstractString;
                    degree::Union{Int,Nothing}=nothing,
-                   interior::Union{Nothing,AbstractString}=nothing,
-                   boundary::Union{Nothing,AbstractString}=nothing,
                    description::Union{Nothing,AbstractString}=nothing) =
     BoundaryPolicySpec(String(kind), degree,
-                       interior === nothing ? nothing : String(interior),
-                       boundary === nothing ? nothing : String(boundary),
                        description === nothing ? nothing : String(description))
 
 """
@@ -201,9 +180,8 @@ concrete [`RuleRegion`](@ref) object (normative per-point scope).
 `boundary_policy` declares behavior at domain edges (RFC §5.2.8 / §7). It is
 one of: `nothing` (default — equivalent to `"periodic"`), a `String` from
 the closed set (uniform across all axes), or a
-`Dict{String,BoundaryPolicySpec}` (per-axis form, required for
-`panel_dispatch` and for axis-heterogeneous policies). Stored verbatim;
-the rule engine does not branch on it.
+`Dict{String,BoundaryPolicySpec}` (per-axis form, for axis-heterogeneous
+policies). Stored verbatim; the rule engine does not branch on it.
 
 `ghost_width` declares per-axis ghost-cell padding the rule's stencil
 reaches (RFC §5.2.8 / §7). It is one of: `nothing` (default — 0), an
@@ -1028,11 +1006,8 @@ end
 
 # Closed set of policy kinds accepted in either the string-form
 # `boundary_policy` or in `BoundaryPolicySpec.kind` (RFC §5.2.8 / §7).
-# `panel_dispatch` is object-form only; the string form rejects it because
-# it carries required interior/boundary parameters.
 const _BOUNDARY_POLICY_KIND_VALUES = (
     "periodic", "reflecting", "one_sided_extrapolation", "prescribed",
-    "panel_dispatch",
     # v0.3.x backwards-compatible aliases
     "ghosted", "neumann_zero", "extrapolate",
 )
@@ -1092,18 +1067,9 @@ function _parse_boundary_policy_spec(name::String, axis::String, raw)::BoundaryP
             "rule $name: boundary_policy.by_axis.$axis.degree must be between 0 and 3, got $d"))
         degree = d
     end
-    interior_raw = _getkey(raw, "interior"; default=nothing)
-    interior = interior_raw === nothing ? nothing : String(interior_raw)
-    boundary_raw = _getkey(raw, "boundary"; default=nothing)
-    boundary = boundary_raw === nothing ? nothing : String(boundary_raw)
     desc_raw = _getkey(raw, "description"; default=nothing)
     desc = desc_raw === nothing ? nothing : String(desc_raw)
-    if kind == "panel_dispatch"
-        (interior !== nothing && boundary !== nothing) ||
-            throw(RuleEngineError("E_RULE_PARSE",
-                "rule $name: boundary_policy.by_axis.$axis: panel_dispatch requires `interior` and `boundary` field names"))
-    end
-    return BoundaryPolicySpec(kind, degree, interior, boundary, desc)
+    return BoundaryPolicySpec(kind, degree, desc)
 end
 
 function _parse_ghost_width(name::String, raw)::GhostWidth
@@ -1198,13 +1164,6 @@ function _parse_region(name::String, raw)::Union{String,RuleRegion,Nothing}
             side === nothing && throw(RuleEngineError("E_RULE_PARSE",
                 "rule $name: region.boundary requires `side`"))
             return RegionBoundary(String(side))
-        elseif k == "panel_boundary"
-            panel = _getkey(raw, "panel"; default=nothing)
-            side = _getkey(raw, "side"; default=nothing)
-            (panel === nothing || side === nothing) && throw(RuleEngineError(
-                "E_RULE_PARSE",
-                "rule $name: region.panel_boundary requires `panel` and `side`"))
-            return RegionPanelBoundary(Int(panel), String(side))
         elseif k == "mask_field"
             field = _getkey(raw, "field"; default=nothing)
             field === nothing && throw(RuleEngineError("E_RULE_PARSE",
@@ -1220,7 +1179,7 @@ function _parse_region(name::String, raw)::Union{String,RuleRegion,Nothing}
             return RegionIndexRange(String(axis), Int(lo), Int(hi))
         end
         throw(RuleEngineError("E_RULE_PARSE",
-            "rule $name: unknown region.kind `$k` (closed set: boundary, panel_boundary, mask_field, index_range)"))
+            "rule $name: unknown region.kind `$k` (closed set: boundary, mask_field, index_range)"))
     end
     throw(RuleEngineError("E_RULE_PARSE",
         "rule $name: `region` must be a string (legacy advisory) or object (normative scope)"))
@@ -1394,52 +1353,6 @@ function _eval_region(r::RegionBoundary, b::Dict{String,Expr}, ctx::RuleContext)
     v = ctx.query_point[idx_name]
     target = which == :lo ? Int(dim_bounds[1]) : Int(dim_bounds[2])
     return v == target
-end
-
-"""
-    _eval_region(r::RegionPanelBoundary, bindings, ctx) -> Bool
-
-Evaluate a `{kind:"panel_boundary", panel, side}` scope against
-`ctx.query_point` (RFC §5.2.7, §6.4). Cubed_sphere only.
-
-A grid is recognized as cubed_sphere when its metadata entry in
-`ctx.grids` carries a `"panel_connectivity"` sub-dict (the
-`neighbors` / `axis_flip` tables of §6.4). Applying the rule to a grid
-without that marker throws [`RuleEngineError`](@ref) with code
-`E_REGION_GRID_MISMATCH`.
-
-The canonical cubed_sphere query-point axes are `p`, `i`, `j` (§7 query-
-point table). `side` names map to the panel-local axes: `xmin`/`west` →
-`-i`, `xmax`/`east` → `+i`, `ymin`/`south` → `-j`, `ymax`/`north` → `+j`.
-Edge detection uses the `dim_bounds` entries on the grid; absence or a
-side name outside the closed set falls through (returns `false`).
-"""
-function _eval_region(r::RegionPanelBoundary, ::Dict{String,Expr}, ctx::RuleContext)::Bool
-    ctx.grid_name === nothing && return false
-    meta = get(ctx.grids, ctx.grid_name, nothing)
-    meta === nothing && return false
-    haskey(meta, "panel_connectivity") || throw(RuleEngineError(
-        "E_REGION_GRID_MISMATCH",
-        "rule region.panel_boundary applied to grid `$(ctx.grid_name)` " *
-        "which has no panel_connectivity metadata (cubed_sphere-only scope)"))
-    isempty(ctx.query_point) && return false
-    haskey(ctx.query_point, "p") || return false
-    ctx.query_point["p"] == r.panel || return false
-    side_map = Dict(
-        "xmin" => ("i", :lo), "xmax" => ("i", :hi),
-        "west" => ("i", :lo), "east" => ("i", :hi),
-        "ymin" => ("j", :lo), "ymax" => ("j", :hi),
-        "south" => ("j", :lo), "north" => ("j", :hi),
-    )
-    haskey(side_map, r.side) || return false
-    (axis, which) = side_map[r.side]
-    bounds = get(meta, "dim_bounds", nothing)
-    bounds === nothing && return false
-    haskey(bounds, axis) || return false
-    axis_bounds = bounds[axis]
-    target = which == :lo ? Int(axis_bounds[1]) : Int(axis_bounds[2])
-    haskey(ctx.query_point, axis) || return false
-    return ctx.query_point[axis] == target
 end
 
 function _eval_region(r::RegionMaskField, b::Dict{String,Expr}, ctx::RuleContext)::Bool

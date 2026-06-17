@@ -50,12 +50,9 @@ class Guard:
 
 # Closed set of policy kinds accepted in either the string-form
 # ``boundary_policy`` or in :class:`BoundaryPolicySpec.kind`
-# (RFC §5.2.8 / §7). ``panel_dispatch`` is object-form only because it
-# carries required ``interior``/``boundary`` parameters; the string form
-# rejects it.
+# (RFC §5.2.8 / §7).
 _BOUNDARY_POLICY_KIND_VALUES = (
     "periodic", "reflecting", "one_sided_extrapolation", "prescribed",
-    "panel_dispatch",
     # v0.3.x backwards-compatible aliases
     "ghosted", "neumann_zero", "extrapolate",
 )
@@ -78,17 +75,11 @@ class BoundaryPolicySpec:
 
     - ``degree``: ``one_sided_extrapolation`` / ``extrapolate`` —
       extrapolation order (0..3). ``None`` means default (linear).
-    - ``interior``: ``panel_dispatch`` — name of the metric field for
-      interior faces.
-    - ``boundary``: ``panel_dispatch`` — name of the metric field for
-      panel-boundary faces.
     - ``description``: free-form authorial note.
     """
 
     kind: str
     degree: Optional[int] = None
-    interior: Optional[str] = None
-    boundary: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -122,22 +113,22 @@ class Rule:
     """A rewrite rule (RFC §5.2, §5.2.7, §5.2.8).
 
     ``region`` may be ``None``, a legacy advisory ``str``, or a ``dict``
-    representing an object scope variant (``{kind: "boundary"/"panel_boundary"
+    representing an object scope variant (``{kind: "boundary"
     /"mask_field"/"index_range", ...}``). ``where_expr`` is an optional
     per-query-point predicate ``Expr`` — mutually exclusive with the
     ``where`` guard list at the author level, structurally discriminated
     by JSON shape at parse time.
 
     The Python binding evaluates ``region.index_range``, ``region.boundary``,
-    and the ``where_expr`` predicate per query point. ``region.panel_boundary``
-    and ``region.mask_field`` parse and round-trip but do not evaluate
-    (conservative fall-through, equivalent to RFC §5.2.7's W_UNEVAL_SCOPE).
+    and the ``where_expr`` predicate per query point. ``region.mask_field``
+    parses and round-trips but does not evaluate (conservative fall-through,
+    equivalent to RFC §5.2.7's W_UNEVAL_SCOPE).
 
     ``boundary_policy`` declares behavior at domain edges (RFC §5.2.8 / §7).
     It is one of: ``None`` (default — equivalent to ``"periodic"``), a
     ``str`` from the closed set (uniform across all axes), or a
     ``Dict[str, BoundaryPolicySpec]`` (per-axis form, required for
-    ``panel_dispatch`` and for axis-heterogeneous policies). Stored
+    axis-heterogeneous policies). Stored
     verbatim; the rule engine does not branch on it.
 
     ``ghost_width`` declares per-axis ghost-cell padding the rule's stencil
@@ -663,14 +654,6 @@ def check_scope(rule: Rule, bindings: Bindings, ctx: RuleContext) -> bool:
 _CANONICAL_INDEX_NAMES = ("i", "j", "k", "l", "m")
 
 
-_PANEL_SIDES: Dict[str, tuple] = {
-    "xmin": ("i", False), "west": ("i", False),
-    "xmax": ("i", True),  "east": ("i", True),
-    "ymin": ("j", False), "south": ("j", False),
-    "ymax": ("j", True),  "north": ("j", True),
-}
-
-
 def _eval_region(region: Mapping[str, Any], ctx: RuleContext) -> bool:
     kind = region.get("kind")
     if kind == "index_range":
@@ -688,44 +671,9 @@ def _eval_region(region: Mapping[str, Any], ctx: RuleContext) -> bool:
     if kind == "boundary":
         side = region.get("side")
         return isinstance(side, str) and _eval_boundary(side, ctx)
-    if kind == "panel_boundary":
-        return _eval_panel_boundary(region, ctx)
     if kind == "mask_field":
         return _eval_mask_field(region, ctx)
     return False
-
-
-def _eval_panel_boundary(region: Mapping[str, Any], ctx: RuleContext) -> bool:
-    grid_name = ctx.grid_name
-    if grid_name is None:
-        raise RuleEngineError(
-            "E_REGION_GRID_MISMATCH",
-            "region.panel_boundary requires a grid context (grid_name not set)",
-        )
-    meta = ctx.grids.get(grid_name)
-    if meta is None or "panel_connectivity" not in meta:
-        raise RuleEngineError(
-            "E_REGION_GRID_MISMATCH",
-            f"region.panel_boundary requires a cubed-sphere grid with panel_connectivity; "
-            f"grid '{grid_name}' has none",
-        )
-    panel = region.get("panel")
-    if not isinstance(panel, int):
-        return False
-    if ctx.query_point.get("p") != panel:
-        return False
-    side = region.get("side")
-    if not isinstance(side, str) or side not in _PANEL_SIDES:
-        return False
-    dim, which_hi = _PANEL_SIDES[side]
-    bounds = meta.get("dim_bounds", {}).get(dim)
-    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
-        return False
-    v = ctx.query_point.get(dim)
-    if v is None:
-        return False
-    target = bounds[1] if which_hi else bounds[0]
-    return v == target
 
 
 def _eval_mask_field(region: Mapping[str, Any], ctx: RuleContext) -> bool:
@@ -956,11 +904,11 @@ def parse_rule(obj: Mapping[str, Any], name: Optional[str] = None) -> Rule:
         region = region_raw  # legacy advisory tag
     elif isinstance(region_raw, Mapping):
         kind = region_raw.get("kind")
-        if kind not in ("boundary", "panel_boundary", "mask_field", "index_range"):
+        if kind not in ("boundary", "mask_field", "index_range"):
             raise RuleEngineError(
                 "E_RULE_PARSE",
                 f"rule {name}: unknown region.kind `{kind}` "
-                f"(closed set: boundary, panel_boundary, mask_field, index_range)",
+                f"(closed set: boundary, mask_field, index_range)",
             )
         region = dict(region_raw)
     else:
@@ -1067,35 +1015,15 @@ def _parse_boundary_policy_spec(
                 f"rule {rule_name}: boundary_policy.by_axis.{axis}.degree must be between 0 and 3, got {degree}",
             )
         degree_val = degree
-    interior = raw.get("interior")
-    if interior is not None and not isinstance(interior, str):
-        raise RuleEngineError(
-            "E_RULE_PARSE",
-            f"rule {rule_name}: boundary_policy.by_axis.{axis}.interior must be a string",
-        )
-    boundary = raw.get("boundary")
-    if boundary is not None and not isinstance(boundary, str):
-        raise RuleEngineError(
-            "E_RULE_PARSE",
-            f"rule {rule_name}: boundary_policy.by_axis.{axis}.boundary must be a string",
-        )
     desc = raw.get("description")
     if desc is not None and not isinstance(desc, str):
         raise RuleEngineError(
             "E_RULE_PARSE",
             f"rule {rule_name}: boundary_policy.by_axis.{axis}.description must be a string",
         )
-    if kind == "panel_dispatch":
-        if interior is None or boundary is None:
-            raise RuleEngineError(
-                "E_RULE_PARSE",
-                f"rule {rule_name}: boundary_policy.by_axis.{axis}: panel_dispatch requires `interior` and `boundary` field names",
-            )
     return BoundaryPolicySpec(
         kind=kind,
         degree=degree_val,
-        interior=interior,
-        boundary=boundary,
         description=desc,
     )
 

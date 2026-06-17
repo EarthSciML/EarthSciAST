@@ -49,7 +49,7 @@ pub struct EsmFile {
     pub interfaces: Option<HashMap<String, serde_json::Value>>,
 
     /// Named discretization grids (v0.2.0). Each entry declares a
-    /// cartesian/unstructured/cubed_sphere topology per docs/rfcs/discretization.md §6.
+    /// cartesian/unstructured topology per docs/rfcs/discretization.md §6.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grids: Option<HashMap<String, Grid>>,
 
@@ -1383,8 +1383,8 @@ pub struct Domain {
 /// applies:
 /// * `expression`: analytic expression, with `expr` set.
 /// * `loader`: pulled from a `data_loaders` entry; `loader` + `field` set.
-/// * `builtin`: closed set (currently `gnomonic_c6_neighbors`,
-///   `gnomonic_c6_d4_action`) selected by `name`.
+/// * `builtin`: closed set selected by `name` (currently empty; adding a
+///   name is a minor version bump per §6.4.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridMetricGenerator {
     /// One of `"expression"`, `"loader"`, `"builtin"`.
@@ -1429,9 +1429,8 @@ pub struct GridMetricArray {
     pub generator: GridMetricGenerator,
 }
 
-/// Unstructured / cubed-sphere connectivity table (§6.3, §6.4). Either
-/// `loader` + `field` are set (data-loader-backed) or `generator` is set
-/// (builtin / expression).
+/// Unstructured connectivity table (§6.3). Either `loader` + `field` are
+/// set (data-loader-backed) or `generator` is set (builtin / expression).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridConnectivity {
     /// Ordered list of dimension sizes (parameter names or integer literals).
@@ -1448,15 +1447,15 @@ pub struct GridConnectivity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
 
-    /// Alternative to loader/field: generator-backed connectivity (e.g.,
-    /// cubed-sphere `panel_connectivity` via `kind = "builtin"`).
+    /// Alternative to loader/field: generator-backed connectivity via
+    /// `kind = "builtin"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generator: Option<GridMetricGenerator>,
 }
 
-/// Per-dimension extent for cartesian or cubed_sphere grids. `n` is either
-/// an integer literal or a parameter-name string; `spacing` is `"uniform"`
-/// or `"nonuniform"` for cartesian.
+/// Per-dimension extent for cartesian grids. `n` is either an integer
+/// literal or a parameter-name string; `spacing` is `"uniform"` or
+/// `"nonuniform"` for cartesian.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridExtent {
     /// Integer literal or parameter-name string naming the dimension count.
@@ -1468,10 +1467,10 @@ pub struct GridExtent {
 }
 
 /// A named discretization grid (§6.1-§6.5). The `family` field selects one of
-/// three topologies: `"cartesian"`, `"unstructured"`, or `"cubed_sphere"`.
+/// two topologies: `"cartesian"` or `"unstructured"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Grid {
-    /// One of `"cartesian"`, `"unstructured"`, `"cubed_sphere"`.
+    /// One of `"cartesian"`, `"unstructured"`.
     pub family: String,
 
     /// Human-readable description.
@@ -1497,7 +1496,7 @@ pub struct Grid {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
 
-    /// Per-dimension extents (required for `"cartesian"` and `"cubed_sphere"`).
+    /// Per-dimension extents (required for `"cartesian"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extents: Option<HashMap<String, GridExtent>>,
 
@@ -1505,9 +1504,4 @@ pub struct Grid {
     /// Required for `family = "unstructured"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectivity: Option<HashMap<String, GridConnectivity>>,
-
-    /// Cubed-sphere panel connectivity (e.g. `neighbors`, `axis_flip`).
-    /// Required for `family = "cubed_sphere"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub panel_connectivity: Option<HashMap<String, GridConnectivity>>,
 }

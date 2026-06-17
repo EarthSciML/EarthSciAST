@@ -67,15 +67,12 @@ export interface Guard {
  */
 export type RuleRegionScope =
   | { kind: 'boundary'; side: string }
-  | { kind: 'panel_boundary'; panel: number; side: string }
   | { kind: 'mask_field'; field: string }
   | { kind: 'index_range'; axis: string; lo: number; hi: number }
 
 /**
  * Closed set of policy kinds accepted in the string-form `boundary_policy`
- * or as `BoundaryPolicySpec.kind` (RFC §5.2.8 / §7). `panel_dispatch` is
- * object-form only because it carries required `interior`/`boundary`
- * parameters; the string form rejects it.
+ * or as `BoundaryPolicySpec.kind` (RFC §5.2.8 / §7).
  *
  * `ghosted`/`neumann_zero`/`extrapolate` are v0.3.x backwards-compatible
  * aliases for `prescribed`/`reflecting`/`one_sided_extrapolation`.
@@ -85,23 +82,20 @@ export type BoundaryPolicyKind =
   | 'reflecting'
   | 'one_sided_extrapolation'
   | 'prescribed'
-  | 'panel_dispatch'
   | 'ghosted'
   | 'neumann_zero'
   | 'extrapolate'
 
 /**
- * String-form `boundary_policy` values (uniform across all axes). Excludes
- * `panel_dispatch`, which requires the per-axis object form.
+ * String-form `boundary_policy` values (uniform across all axes).
  */
-export type BoundaryPolicyString = Exclude<BoundaryPolicyKind, 'panel_dispatch'>
+export type BoundaryPolicyString = BoundaryPolicyKind
 
 const BOUNDARY_POLICY_KIND_VALUES: readonly BoundaryPolicyKind[] = [
   'periodic',
   'reflecting',
   'one_sided_extrapolation',
   'prescribed',
-  'panel_dispatch',
   'ghosted',
   'neumann_zero',
   'extrapolate',
@@ -125,10 +119,6 @@ export interface BoundaryPolicySpec {
   kind: BoundaryPolicyKind
   /** one_sided_extrapolation / extrapolate: order 0..3 (default linear=1). */
   degree?: number
-  /** panel_dispatch: name of the metric field for interior faces. */
-  interior?: string
-  /** panel_dispatch: name of the metric field for panel-boundary faces. */
-  boundary?: string
   /** Free-form authorial note. */
   description?: string
 }
@@ -137,7 +127,7 @@ export interface BoundaryPolicySpec {
  * Authorial form of a rule's `boundary_policy` (RFC §5.2.8 / §7). Either:
  * (1) a closed-set string applied uniformly to every axis the rule's
  * stencil reaches, or (2) an object with `by_axis` declaring per-axis
- * policies (required for `panel_dispatch` and for axis-heterogeneous rules).
+ * policies (required for axis-heterogeneous rules).
  */
 export type BoundaryPolicy =
   | BoundaryPolicyString
@@ -184,9 +174,8 @@ export interface Rule {
    * applies only at query points inside the scope. The TypeScript
    * binding evaluates `regionScope.index_range` and `regionScope.boundary`
    * (and the where-expression predicate) per query point; the
-   * `panel_boundary` and `mask_field` variants parse and round-trip but
-   * do not evaluate (conservative fall-through, equivalent to
-   * W_UNEVAL_SCOPE).
+   * `mask_field` variant parses and round-trips but does not evaluate
+   * (conservative fall-through, equivalent to W_UNEVAL_SCOPE).
    */
   regionScope?: RuleRegionScope
   /**
@@ -197,9 +186,9 @@ export interface Rule {
   whereExpr?: Expr
   /**
    * Behavior at domain edges (RFC §5.2.8 / §7). Either a closed-set
-   * string (uniform across axes) or a `{by_axis}` object (per-axis,
-   * required for `panel_dispatch`). Omission == 'periodic'. Stored
-   * verbatim; the rule engine does not branch on this field.
+   * string (uniform across axes) or a `{by_axis}` object (per-axis).
+   * Omission == 'periodic'. Stored verbatim; the rule engine does not
+   * branch on this field.
    */
   boundaryPolicy?: BoundaryPolicy
   /**
@@ -231,11 +220,6 @@ export interface GridMeta {
    * bind_side_dim_size guards.
    */
   dim_sizes?: Record<string, number>
-  /**
-   * Cubed-sphere panel connectivity table. Presence signals that this grid
-   * is a cubed-sphere and unlocks region.panel_boundary scope evaluation.
-   */
-  panel_connectivity?: { neighbors: number[][]; axis_flip: number[][] }
 }
 
 export interface VariableMeta {
@@ -759,40 +743,9 @@ function evalRegion(region: RuleRegionScope, ctx: RuleContext): boolean {
     }
     case 'boundary':
       return evalBoundary(region.side, ctx)
-    case 'panel_boundary':
-      return evalPanelBoundary(region, ctx)
     case 'mask_field':
       return evalMaskField(region, ctx)
   }
-}
-
-function evalPanelBoundary(region: RuleRegionScope & { kind: 'panel_boundary' }, ctx: RuleContext): boolean {
-  if (ctx.grid_name === undefined || !ctx.query_point) return false
-  const meta = ctx.grids[ctx.grid_name]
-  if (meta === undefined || !meta.panel_connectivity) {
-    throw new RuleEngineError(
-      'E_REGION_GRID_MISMATCH',
-      `region.panel_boundary requires a cubed-sphere grid with panel_connectivity; grid '${ctx.grid_name}' has none`
-    )
-  }
-  // Check panel coordinate (query_point uses 'p' key for panel index)
-  const p = ctx.query_point['p']
-  if (p === undefined || p !== region.panel) return false
-  // Map side to (dim, isMax) using panel-local i/j axes
-  const panelSides: Record<string, [string, boolean]> = {
-    xmin: ['i', false], west: ['i', false],
-    xmax: ['i', true],  east: ['i', true],
-    ymin: ['j', false], south: ['j', false],
-    ymax: ['j', true],  north: ['j', true],
-  }
-  const entry = panelSides[region.side]
-  if (entry === undefined) return false
-  const [dim, whichHi] = entry
-  const bounds = meta.dim_bounds?.[dim]
-  if (bounds === undefined) return false
-  const v = ctx.query_point[dim]
-  if (v === undefined) return false
-  return v === (whichHi ? bounds[1] : bounds[0])
 }
 
 function evalMaskField(region: RuleRegionScope & { kind: 'mask_field' }, ctx: RuleContext): boolean {
@@ -1169,24 +1122,6 @@ function parseBoundaryPolicySpec(
     }
     spec.degree = d
   }
-  if (o.interior !== undefined) {
-    if (typeof o.interior !== 'string') {
-      throw new RuleEngineError(
-        E_RULE_PARSE,
-        `rule \`${ruleName}\`: boundary_policy.by_axis.${axis}.interior must be a string`,
-      )
-    }
-    spec.interior = o.interior
-  }
-  if (o.boundary !== undefined) {
-    if (typeof o.boundary !== 'string') {
-      throw new RuleEngineError(
-        E_RULE_PARSE,
-        `rule \`${ruleName}\`: boundary_policy.by_axis.${axis}.boundary must be a string`,
-      )
-    }
-    spec.boundary = o.boundary
-  }
   if (o.description !== undefined) {
     if (typeof o.description !== 'string') {
       throw new RuleEngineError(
@@ -1195,14 +1130,6 @@ function parseBoundaryPolicySpec(
       )
     }
     spec.description = o.description
-  }
-  if (kind === 'panel_dispatch') {
-    if (spec.interior === undefined || spec.boundary === undefined) {
-      throw new RuleEngineError(
-        E_RULE_PARSE,
-        `rule \`${ruleName}\`: boundary_policy.by_axis.${axis}: panel_dispatch requires \`interior\` and \`boundary\` field names`,
-      )
-    }
   }
   return spec
 }
@@ -1353,8 +1280,6 @@ function parseRegionScope(
   switch (kind) {
     case 'boundary':
       return { kind, side: str('side') }
-    case 'panel_boundary':
-      return { kind, panel: int('panel'), side: str('side') }
     case 'mask_field':
       return { kind, field: str('field') }
     case 'index_range':
@@ -1362,7 +1287,7 @@ function parseRegionScope(
     default:
       throw new RuleEngineError(
         E_RULE_PARSE,
-        `rule \`${ruleName}\`: unknown region.kind \`${kind}\` (closed set: boundary, panel_boundary, mask_field, index_range)`,
+        `rule \`${ruleName}\`: unknown region.kind \`${kind}\` (closed set: boundary, mask_field, index_range)`,
       )
   }
 }

@@ -35,7 +35,7 @@ Every fixture exercises **two** independent contracts (GRIDS_API §4):
    the SHA-256 of the resulting bytes must match across bindings.
 
 2. **Query-point fallback.** When the primary SHA check fails (e.g.
-   transcendental-math ULP divergence on stretched cubed sphere), the
+   transcendental-math ULP divergence on stretched curvilinear grids), the
    runner falls back to pointwise comparisons through the GridAccessor
    surface (`cell_center`, `neighbors`, `metric_eval`). Fields are
    compared with relative tolerance `tolerances.default_rel` (default
@@ -66,8 +66,6 @@ EarthSciDiscretizations/
         manifest.json
         fixtures/
           cart_64x64x32.esm        # optional — inline grid files
-      cubed_sphere/
-        manifest.json
       mpas/
         manifest.json
         fixtures/

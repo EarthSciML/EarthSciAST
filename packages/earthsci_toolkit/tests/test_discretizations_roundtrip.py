@@ -91,12 +91,11 @@ def test_grid_dispatch_structure() -> None:
     assert "grid_family" not in scheme
     assert "stencil" not in scheme
     assert isinstance(scheme["grid_dispatch"], list)
-    assert len(scheme["grid_dispatch"]) == 2
+    assert len(scheme["grid_dispatch"]) == 1
     families = [v["grid_family"] for v in scheme["grid_dispatch"]]
-    assert families == ["cartesian", "cubed_sphere"]
+    assert families == ["cartesian"]
     # Each variant carries its own body (per §7.8 mutual-exclusion contract).
     assert len(scheme["grid_dispatch"][0]["stencil"]) == 4
-    assert len(scheme["grid_dispatch"][1]["stencil"]) == 2
 
 
 def test_multi_output_stencil_structure() -> None:

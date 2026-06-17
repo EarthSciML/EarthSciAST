@@ -257,41 +257,6 @@ describe('rule engine — boundary_policy + ghost_width (esm-bet)', () => {
     }
   })
 
-  it('rejects panel_dispatch in string-form (object-form-only)', () => {
-    try {
-      parseRules([
-        {
-          name: 'r',
-          pattern: '$a',
-          replacement: '$a',
-          boundary_policy: 'panel_dispatch',
-        },
-      ])
-      throw new Error('expected throw')
-    } catch (e) {
-      expect(e).toBeInstanceOf(RuleEngineError)
-    }
-  })
-
-  it('parses per-axis boundary_policy with panel_dispatch', () => {
-    const r = parseOne({
-      name: 'ppm',
-      pattern: '$a',
-      replacement: '$a',
-      boundary_policy: {
-        by_axis: {
-          xi: { kind: 'panel_dispatch', interior: 'dist_xi', boundary: 'dist_xi_bnd' },
-          eta: { kind: 'panel_dispatch', interior: 'dist_eta', boundary: 'dist_eta_bnd' },
-        },
-      },
-    })
-    expect(typeof r.boundaryPolicy).toBe('object')
-    const bp = r.boundaryPolicy as { by_axis: Record<string, { kind: string; interior?: string; boundary?: string }> }
-    expect(bp.by_axis.xi!.kind).toBe('panel_dispatch')
-    expect(bp.by_axis.xi!.interior).toBe('dist_xi')
-    expect(bp.by_axis.xi!.boundary).toBe('dist_xi_bnd')
-  })
-
   it('parses per-axis one_sided_extrapolation with degree', () => {
     const r = parseOne({
       name: 'r',
@@ -304,22 +269,6 @@ describe('rule engine — boundary_policy + ghost_width (esm-bet)', () => {
     const bp = r.boundaryPolicy as { by_axis: Record<string, { kind: string; degree?: number }> }
     expect(bp.by_axis.x!.kind).toBe('one_sided_extrapolation')
     expect(bp.by_axis.x!.degree).toBe(2)
-  })
-
-  it('rejects panel_dispatch missing interior/boundary', () => {
-    try {
-      parseRules([
-        {
-          name: 'r',
-          pattern: '$a',
-          replacement: '$a',
-          boundary_policy: { by_axis: { xi: { kind: 'panel_dispatch' } } },
-        },
-      ])
-      throw new Error('expected throw')
-    } catch (e) {
-      expect(e).toBeInstanceOf(RuleEngineError)
-    }
   })
 
   it('rejects out-of-range degree', () => {

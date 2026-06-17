@@ -569,11 +569,9 @@ function coerce_function_tables(data)::Dict{String,FunctionTable}
 end
 
 # Closed set of allowed builtin generator names (RFC §6.4.1).
-# Adding to this set is a minor version bump.
-const _GRID_BUILTIN_NAMES = Set([
-    "gnomonic_c6_neighbors",
-    "gnomonic_c6_d4_action",
-])
+# Adding to this set is a minor version bump. Currently empty; no builtin
+# generators are defined.
+const _GRID_BUILTIN_NAMES = Set{String}()
 
 """
     coerce_grids(data, data_loaders) -> Dict{String,Grid}
@@ -588,10 +586,10 @@ constraints not captured by JSON Schema:
   (E_UNKNOWN_LOADER).
 * `metric_arrays[*].generator.kind == "builtin"` — the `name` must be one
   of the canonical builtins in `_GRID_BUILTIN_NAMES` (E_UNKNOWN_BUILTIN).
-* `connectivity[*]` and `panel_connectivity[*]` generators get the same
-  treatment (loader → must exist; builtin → must be canonical). Flat
-  connectivity entries that use top-level `loader`/`field` keys (the
-  unstructured pattern) are also validated.
+* `connectivity[*]` generators get the same treatment (loader → must
+  exist; builtin → must be canonical). Flat connectivity entries that use
+  top-level `loader`/`field` keys (the unstructured pattern) are also
+  validated.
 
 `data_loaders` is the already-coerced `Dict{String,DataLoader}` (or `nothing`).
 """
@@ -621,7 +619,7 @@ function _validate_grid_refs(gname::String, grid::Dict{String,Any}, loader_names
     end
 
     # connectivity: either flat loader/field form, or a generator subdict.
-    for cfield in ("connectivity", "panel_connectivity")
+    for cfield in ("connectivity",)
         if haskey(grid, cfield) && grid[cfield] isa AbstractDict
             for (cname, centry) in grid[cfield]
                 centry isa AbstractDict || continue
@@ -702,9 +700,11 @@ function _validate_grid_generator(path::String, gen::AbstractDict, loader_names:
     elseif kind == "builtin"
         bname = string(get(gen, "name", ""))
         if !(bname in _GRID_BUILTIN_NAMES)
+            allowed = isempty(_GRID_BUILTIN_NAMES) ? "(none defined)" :
+                      join(sort!(collect(_GRID_BUILTIN_NAMES)), ", ")
             throw(ParseError(
                 "[E_UNKNOWN_BUILTIN] $(path).name is '$bname'; must be one of " *
-                join(sort!(collect(_GRID_BUILTIN_NAMES)), ", ")))
+                allowed))
         end
     end
     return

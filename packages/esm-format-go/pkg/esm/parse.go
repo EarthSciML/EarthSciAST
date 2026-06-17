@@ -164,12 +164,9 @@ func LoadString(jsonStr string) (*EsmFile, error) {
 }
 
 // knownGridBuiltins is the closed set of grid builtin generator names per
-// docs/rfcs/discretization.md §6.4.1. Adding a new name is a minor version
-// bump.
-var knownGridBuiltins = map[string]struct{}{
-	"gnomonic_c6_neighbors":  {},
-	"gnomonic_c6_d4_action":  {},
-}
+// docs/rfcs/discretization.md §6.4.1. The set is currently empty; adding a
+// new name is a minor version bump.
+var knownGridBuiltins = map[string]struct{}{}
 
 // validateGrids checks grid cross-references against top-level data_loaders
 // and the closed builtin set (RFC §6.4 / §6.5).
@@ -187,14 +184,6 @@ func validateGrids(esmFile *EsmFile) error {
 		for cName, c := range grid.Connectivity {
 			if err := validateGridConnectivity(
 				fmt.Sprintf("grids.%s.connectivity.%s", gridName, cName),
-				&c, esmFile); err != nil {
-				return err
-			}
-		}
-		// Cubed-sphere panel_connectivity
-		for cName, c := range grid.PanelConnectivity {
-			if err := validateGridConnectivity(
-				fmt.Sprintf("grids.%s.panel_connectivity.%s", gridName, cName),
 				&c, esmFile); err != nil {
 				return err
 			}
@@ -217,7 +206,7 @@ func validateGridGenerator(path string, g *GridMetricGenerator, esmFile *EsmFile
 			return fmt.Errorf("%s: kind=builtin requires a name", path)
 		}
 		if _, ok := knownGridBuiltins[*g.Name]; !ok {
-			return fmt.Errorf("%s: E_UNKNOWN_BUILTIN: unknown grid builtin %q (allowed: gnomonic_c6_neighbors, gnomonic_c6_d4_action)", path, *g.Name)
+			return fmt.Errorf("%s: E_UNKNOWN_BUILTIN: unknown grid builtin %q (no builtins are currently defined)", path, *g.Name)
 		}
 	}
 	return nil

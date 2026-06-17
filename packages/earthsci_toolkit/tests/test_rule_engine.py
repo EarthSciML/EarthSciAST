@@ -347,48 +347,6 @@ class TestBoundaryPolicy:
             )
         assert exc.value.code == "E_RULE_PARSE"
 
-    def test_uniform_string_form_rejects_panel_dispatch(self):
-        # panel_dispatch is object-form-only — it requires interior/boundary parameters.
-        with pytest.raises(RuleEngineError) as exc:
-            parse_rule(
-                {
-                    "name": "r",
-                    "pattern": "$a",
-                    "replacement": "$a",
-                    "boundary_policy": "panel_dispatch",
-                }
-            )
-        assert exc.value.code == "E_RULE_PARSE"
-
-    def test_per_axis_form_panel_dispatch(self):
-        r = parse_rule(
-            {
-                "name": "r",
-                "pattern": "$a",
-                "replacement": "$a",
-                "boundary_policy": {
-                    "by_axis": {
-                        "xi": {
-                            "kind": "panel_dispatch",
-                            "interior": "dist_xi",
-                            "boundary": "dist_xi_bnd",
-                        },
-                        "eta": {
-                            "kind": "panel_dispatch",
-                            "interior": "dist_eta",
-                            "boundary": "dist_eta_bnd",
-                        },
-                    }
-                },
-            }
-        )
-        assert isinstance(r.boundary_policy, dict)
-        xi = r.boundary_policy["xi"]
-        assert isinstance(xi, BoundaryPolicySpec)
-        assert xi.kind == "panel_dispatch"
-        assert xi.interior == "dist_xi"
-        assert xi.boundary == "dist_xi_bnd"
-
     def test_per_axis_form_one_sided_extrapolation_with_degree(self):
         r = parse_rule(
             {
@@ -405,20 +363,6 @@ class TestBoundaryPolicy:
         spec = r.boundary_policy["x"]
         assert spec.kind == "one_sided_extrapolation"
         assert spec.degree == 2
-
-    def test_panel_dispatch_requires_interior_and_boundary(self):
-        with pytest.raises(RuleEngineError) as exc:
-            parse_rule(
-                {
-                    "name": "r",
-                    "pattern": "$a",
-                    "replacement": "$a",
-                    "boundary_policy": {
-                        "by_axis": {"xi": {"kind": "panel_dispatch"}}
-                    },
-                }
-            )
-        assert exc.value.code == "E_RULE_PARSE"
 
     def test_per_axis_form_rejects_invalid_degree(self):
         with pytest.raises(RuleEngineError) as exc:

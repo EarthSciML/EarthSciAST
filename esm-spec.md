@@ -66,7 +66,7 @@ The full authoring stance, normatively:
 | `coupling` | | Composition and coupling rules |
 | `domains` | | Named spatial/temporal domain specifications (see Section 11) |
 | `interfaces` | | Geometric connections between domains of different dimensionality (see Section 12) |
-| `grids` | | Named discretization grids (cartesian / unstructured / cubed_sphere) — see docs/rfcs/discretization.md §6 |
+| `grids` | | Named discretization grids (cartesian / unstructured) — see docs/rfcs/discretization.md §6 |
 | `staggering_rules` | | Named staggering conventions that declare where quantities live on a grid (e.g. MPAS unstructured C-grid) — see docs/rfcs/discretization.md §7.4 |
 | `discretizations` | | Named discretization schemes mapping PDE operators to stencil templates (§7.1) or cross-metric composites for curvilinear covariant operators (§7.4) — see docs/rfcs/discretization.md §7 |
 

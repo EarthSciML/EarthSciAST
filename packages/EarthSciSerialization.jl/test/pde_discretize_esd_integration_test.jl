@@ -1,8 +1,8 @@
 # End-to-end integration test for the PDE discretization pipeline (ess-d1e):
 #   EarthSciSerialization.discretize(::PDESystem, ::AbstractCurvilinearGrid)
-# exercised against REAL EarthSciDiscretizations (ESD) curvilinear grids —
-# a `LatLonGrid` and a `CubedSphereGrid` — rather than the inline Cartesian
-# stub used by `pde_discretize_test.jl`.
+# exercised against a REAL EarthSciDiscretizations (ESD) curvilinear grid —
+# a `LatLonGrid` — rather than the inline Cartesian stub used by
+# `pde_discretize_test.jl`.
 #
 # VERDICT (2026-05-17): the real-grid PDE path works as-is for the
 # `LatLonGrid`. Method-of-manufactured-solutions (MMS) convergence is a
@@ -11,21 +11,15 @@
 # decay of a heat equation. One ESS-side seam was found and fixed:
 # `discretize` eagerly called `coord_jacobian(grid, target)` even when no
 # derivative needs the chain-rule transform, which made the natural
-# `target = :auto` default error on a `(xi, eta)` cubed-sphere PDE (the
-# auto-derived `:xi_eta` is not a target ESD's `coord_jacobian` accepts).
-# `discretize` now fetches `coord_jacobian` lazily. Two pre-existing
-# limitations are documented, not fixed (out of scope — each has a follow-up
+# `target = :auto` default error on a `(xi, eta)` PDE (the auto-derived
+# `:xi_eta` is not a target ESD's `coord_jacobian` accepts).
+# `discretize` now fetches `coord_jacobian` lazily. One pre-existing
+# limitation is documented, not fixed (out of scope — it has a follow-up
 # bead):
 #   * ess-gp3 — the discretizer has no boundary-condition handling for
 #     NON-periodic axes, so the `LatLonGrid` pole rows (pole_policy=:none →
 #     sentinel 0 → self-fallback) carry an O(1) stencil error; interior
 #     convergence is unaffected and is what this test asserts.
-#   * ess-3g6 — the `CubedSphereGrid` chain-rule path (a PDE written in
-#     physical (lon, lat) on a cubed-sphere grid) needs `cell_centers(grid,
-#     :lon)`, which ESD's cubed sphere does not expose; only the
-#     computational (xi, eta) path is integration-tested here, as a
-#     structural smoke test (a globally smooth MMS does not exist across the
-#     six panel seams).
 #
 # ESD is a DOWNSTREAM consumer of ESS's Grid trait and is deliberately not a
 # hard dependency of ESS (that would be a circular dependency). This file
@@ -267,58 +261,6 @@ end
             err = maximum(abs.(sol.u[end] .- decay .* prob.u0))
             @info "LatLonGrid heat-equation solve" decay err
             @test err < 0.02                   # matches the analytic decay
-        end
-
-        @testset "CubedSphereGrid — smoke test (panel-crossing stencil)" begin
-            # The cubed sphere's computational (xi, eta) axes are per-panel
-            # and neighbor_indices stitches the six panels together. A
-            # globally smooth MMS does not exist across the panel seams, so
-            # this is a structural smoke test: the pipeline must consume a
-            # real CubedSphereGrid and produce a solvable ODEProblem. It also
-            # guards the `target = :auto` seam fix — a (xi, eta) PDE on a
-            # cubed-sphere grid no longer forces `coord_jacobian(:xi_eta)`.
-            function cs_prob(grid, ic)
-                @parameters xi eta
-                @variables u(..)
-                Dxi  = Differential(xi)
-                Deta = Differential(eta)
-                eq  = [D_(u(t_, xi, eta)) ~
-                       Dxi(Dxi(u(t_, xi, eta))) + Deta(Deta(u(t_, xi, eta)))]
-                bcs = [u(0, xi, eta) ~ ic(xi, eta)]
-                domains = [
-                    t_  ∈ Interval(0.0, 1.0),
-                    xi  ∈ Interval(-1.0, 1.0),
-                    eta ∈ Interval(-1.0, 1.0),
-                ]
-                @named sys = PDESystem(eq, bcs, domains,
-                                       [t_, xi, eta], [u(t_, xi, eta)])
-                # target = :auto (default) → derives :xi_eta; the lazy
-                # coord_jacobian fix means this no longer errors.
-                return EarthSciSerialization.discretize(
-                    sys, grid; xi_axis = :xi, eta_axis = :eta)
-            end
-
-            grid = EarthSciDiscretizations.CubedSphereGrid(4; R = 1.0)
-            @test grid isa EarthSciSerialization.AbstractCurvilinearGrid
-            ncell = EarthSciSerialization.n_cells(grid)
-            @test ncell == 6 * 4 * 4
-
-            # constant field → zero discrete Laplacian on every panel, and
-            # the solve leaves the field unchanged.
-            prob_c = cs_prob(grid, (xi, eta) -> 3.0)
-            @test prob_c isa ODEProblem
-            @test length(prob_c.u0) == ncell
-            du_c = prob_c.f(prob_c.u0, prob_c.p, 0.0)
-            @test maximum(abs, du_c) < 1e-10
-            sol_c = solve(prob_c, Tsit5())
-            @test sol_c.retcode == ReturnCode.Success
-            @test maximum(abs.(sol_c.u[end] .- 3.0)) < 1e-8
-
-            # non-constant field → the discrete operator is live (nonzero du),
-            # confirming the panel-crossing stencil is actually assembled.
-            prob_v = cs_prob(grid, (xi, eta) -> sin(2 * xi) + cos(eta))
-            du_v = prob_v.f(prob_v.u0, prob_v.p, 0.0)
-            @test maximum(abs, du_v) > 1e-6
         end
 
     end
