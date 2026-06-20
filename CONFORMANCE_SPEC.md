@@ -648,6 +648,104 @@ golden example in `tests/conformance/determinism/manifest.json`, in two phases:
   and to each other. See `tests/conformance/determinism/README.md` for the
   adapter contract.
 
+### 5.6 Closed Semiring Registry (normative)
+
+> This is the normative form of RFC `semiring-faq-unified-ir` §5.1 / §5.2 / §5.6.
+> The `aggregate` node (canonical tag for the former `arrayop`) is a **semiring
+> FAQ**: a reduction `⊕_C ⊗_k factor_k` over a set of index ranges. The semiring
+> fixes the two operators and — critically for cross-binding agreement — their
+> **identity elements**. These rules are exercised by the worked-example fixtures
+> in `tests/valid/aggregate/` and the per-binding evaluator suites (see §5.6.4).
+
+**Governing principle.** The `(⊕, ⊗)` operators and **both** identity elements
+(`0̄`, the value of an empty `⊕`-reduction; `1̄`, the value of an empty
+`⊗`-product) are fixed by the registry table below and **MUST NOT be written
+into the file**. Two bindings that disagree on an identity disagree on the value
+of an empty or degenerate contraction — a different model, not different
+formatting — so the §5.2 tolerances do **not** apply to the identity contract
+(an empty `sum_product` is exactly `0`, an empty `min_sum` is exactly `+∞`).
+
+#### 5.6.1 The registry
+
+`semiring` is a **closed enum** (adding a row is a spec change, never a
+per-file extension). The five rows, with their normative identities:
+
+| `semiring` | ⊕ (reduce) | `0̄` (empty ⊕) | ⊗ | `1̄` (empty ⊗) | Domain | Role |
+|---|---|---|---|---|---|---|
+| `sum_product` *(default)* | `+` | `0` | `×` | `1` | ℝ | einsum / FVM-diffusion & ESD discretization |
+| `max_product` | `max` | `−∞` | `×` | `1` | ℝ≥0 | best-path / saturation |
+| `min_sum` *(tropical)* | `min` | `+∞` | `+` | `0` | ℝ∪{+∞} | shortest-path / least-cost |
+| `max_sum` | `max` | `−∞` | `+` | `0` | ℝ∪{−∞} | longest-path |
+| `bool_and_or` *(relational)* | `∨` (or) | `false` (`0`) | `∧` (and) | `true` (`1`) | 𝔹 | existence / `distinct` / join |
+
+The enum spelling is normative: `"sum_product"`, `"max_product"`, `"min_sum"`,
+`"max_sum"`, `"bool_and_or"`. The schema (`esm-schema.json`, the `semiring`
+property on `ExpressionNode`) restates the identities inline and pins the
+`default` to `sum_product`. `bool_and_or` is the only index-set-producing
+semiring (it drives `distinct` / `skolem`, §5.5); the M1 numeric evaluators
+reject it for array-valued reductions.
+
+#### 5.6.2 Identity resolution and back-compat
+
+1. **`semiring` is authoritative** and supersedes a legacy `reduce` field when
+   both are present (`semiring: "min_sum"` reduces with `min` even if
+   `reduce: "+"` is also written).
+2. **Legacy `reduce`-only shorthand** maps to the same `⊕` / `0̄`: `"+"`→`0`,
+   `"max"`→`−∞`, `"min"`→`+∞`, `"*"`→`1`. A pre-semiring `reduce: "+"` file is
+   therefore identical to `semiring: "sum_product"` — back-compatible by
+   construction. Absent both, the default is `sum_product`.
+3. **An unregistered `semiring` is a hard error** in every binding (the enum is
+   closed); it is also a schema violation (enum constraint), so non-evaluating
+   bindings reject it at validation time
+   (`tests/invalid/aggregate/unregistered_semiring.esm`).
+
+#### 5.6.3 Empty / degenerate reductions
+
+Every binding MUST return the registry `0̄` for an empty `⊕`-reduction, sourced
+from the table and **never** hardcoded from the file. This holds for a fixed
+empty range (`{"j": [1, 0]}`), an empty categorical set, and a per-cell dynamic
+bound that resolves to zero (e.g. an isolated mesh cell with no neighbours). An
+unmatched value-equality `join` row and a `filter`-false combination likewise
+contribute `0̄` (they add nothing under any `⊕`). Concretely: an empty
+`sum_product` is `0`, an empty `min_sum` is `+∞`, an empty `max_product` /
+`max_sum` is `−∞`. (The non-finite identities are not integrable as ODE rates,
+so they are asserted at the per-binding unit level rather than through a solve.)
+
+#### 5.6.4 Index-set registry and the `aggregate` tag
+
+A `ranges` entry MAY be a dense `[lo, hi]` / `[lo, step, hi]` tuple **or** an
+index-set reference `{"from": <name>}` / `{"from": <name>, "of": [<parents>]}`
+resolved against the document `index_sets` registry (RFC §5.2): `interval` →
+`[1, size]`, `categorical` → `[1, |members|]`, `ragged` → a per-cell dynamic
+bound. An undeclared `from` name is a hard error — no implicit interval is
+inferred. The canonical `op: "aggregate"` tag and the deprecated `op: "arrayop"`
+alias are evaluated identically (§5.6).
+
+#### 5.6.5 Conformance requirement
+
+The shared fixtures under `tests/valid/aggregate/` carry inline `tests`
+assertions that **all evaluating bindings check against the same `expected`
+values**, so agreement is the cross-binding semiring-equivalence proof:
+
+| Fixture | Exercises |
+|---|---|
+| `fvm_diffusion_sum_product.esm` | default `sum_product` contraction (§7.1) + the empty-range `0̄` identity (`0`) |
+| `min_sum_tropical.esm` | `min_sum` `⊕ = min` over an additive body |
+| `max_product_saturation.esm` | `max_product` `⊕ = max` over a product body |
+| `categorical_index_set.esm` | a `categorical` `{from}` contraction (cardinality = member count) |
+
+- **Julia, Rust, Python** evaluate every fixture and match its inline
+  `expected` (`packages/EarthSciSerialization.jl/test/aggregate_conformance_test.jl`,
+  `packages/earthsci-toolkit-rs/tests/aggregate_conformance_tests.rs`,
+  `packages/earthsci_toolkit/tests/test_aggregate_conformance.py`), and each
+  asserts the full `0̄` / `1̄` identity table (including the non-finite rows) in
+  its evaluator unit suite.
+- **Go, TypeScript** parse + schema-validate every valid fixture and reject the
+  invalid ones, covering the additive fields (`op:"aggregate"`, the `semiring`
+  enum, `ranges` `{from}` references, the `index_sets` registry) with no
+  evaluator (`packages/esm-format-go/pkg/esm/aggregate_fixtures_test.go`,
+  `packages/earthsci-toolkit/src/aggregate-fixtures.test.ts`).
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

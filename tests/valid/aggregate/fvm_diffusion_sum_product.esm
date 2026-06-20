@@ -1,0 +1,99 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "fvm_diffusion_sum_product",
+    "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §7.1; bead ess-my4.1.5). The default `sum_product` semiring — the (+,0;×,1) ring that today's FVM diffusion / ESD discretization contraction compiles to. State `flux[i]` accumulates the sum-of-products contraction Sum_{j in faces} i*j (the einsum kernel a finite-volume diffusion stencil lowers to), an exact constant rate from zero initial conditions: flux[1]=Sum_{j=1..3}1*j=6, flux[2]=Sum_{j=1..3}2*j=12 at t=1. Companion state `degenerate[i]` reduces over an EMPTY contraction range (j in [1,0]): under sum_product the empty +-reduction returns the normative 0-bar identity (0), so degenerate[i] stays 0. The contracted index j is drawn from the `faces` interval index set via `{from}` (RFC §5.2); the output index i uses a dense range so every binding sizes the state array identically. Exercises the default (omitted) semiring, a `{from}` interval index-set contraction range, and the empty-reduction 0-bar identity (§5.1) through the full simulate pipeline. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.slit"
+    ],
+    "tags": [
+      "aggregate",
+      "semiring",
+      "sum_product",
+      "index-set",
+      "conformance",
+      "fvm",
+      "diffusion",
+      "ess-my4.1.5"
+    ]
+  },
+  "models": {
+    "FvmDiffusionSumProduct": {
+      "tolerance": {
+        "rel": 1e-6,
+        "abs": 1e-9
+      },
+      "index_sets": {
+        "faces": { "kind": "interval", "size": 3 }
+      },
+      "variables": {
+        "flux": { "type": "state", "shape": ["i"] },
+        "degenerate": { "type": "state", "shape": ["i"] }
+      },
+      "equations": [
+        {
+          "_comment": "D(flux[i])/dt = sum_{j in faces} i*j (default sum_product). flux[1]=6, flux[2]=12 at t=1.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["flux", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 2] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 2], "j": { "from": "faces" } },
+            "expr": { "op": "*", "args": ["i", "j"] }
+          }
+        },
+        {
+          "_comment": "D(degenerate[i])/dt = sum_{j in empty} i*j = 0-bar(sum_product) = 0. Stays 0.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["degenerate", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 2] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "semiring": "sum_product",
+            "ranges": { "i": [1, 2], "j": [1, 0] },
+            "expr": { "op": "*", "args": ["i", "j"] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "fvm_sum_product_t1",
+          "description": "Constant-RHS contraction from zero ICs. flux[i]=6i at t=1; degenerate[i]=0 (empty sum_product = 0-bar).",
+          "initial_conditions": {
+            "flux[1]": 0.0,
+            "flux[2]": 0.0,
+            "degenerate[1]": 0.0,
+            "degenerate[2]": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "flux[1]", "time": 1.0, "expected": 6.0 },
+            { "variable": "flux[2]", "time": 1.0, "expected": 12.0 },
+            { "variable": "degenerate[1]", "time": 1.0, "expected": 0.0 },
+            { "variable": "degenerate[2]", "time": 1.0, "expected": 0.0 }
+          ]
+        }
+      ]
+    }
+  }
+}
