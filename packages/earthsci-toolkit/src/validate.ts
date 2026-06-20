@@ -327,6 +327,16 @@ function validateEquationBalance(model: Model, modelPath: string): StructuralErr
 function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: EsmFile): StructuralError[] {
     const errors: StructuralError[] = [];
     const declaredVariables = new Set(Object.keys(model.variables || {}));
+    // Declared index sets are a legitimate, non-variable identifier namespace
+    // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
+    // as a positional operand — the value-invention form
+    // `aggregate(args:["faces"], ...)` enumerates over the `faces` set itself
+    // (the mesh-edge enumeration of ess-my4.3.10 / §7.3). Such a name is not a
+    // declared variable, so credit the model's `index_sets` keys here, exactly
+    // as the binder symbols below credit aggregate range / `index` positions
+    // (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined reference
+    // still matches neither set and is flagged.
+    const declaredIndexSets = new Set(Object.keys(model.index_sets || {}));
 
     // Check equations
     for (let i = 0; i < (model.equations || []).length; i++) {
@@ -357,7 +367,7 @@ function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: Es
                 }
             } else {
                 // Local reference
-                if (!declaredVariables.has(varRef) && !boundSymbols.has(varRef)) {
+                if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
                     errors.push({
                         path: `${equationPath}/lhs`,
                         code: 'undefined_variable',
@@ -383,7 +393,7 @@ function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: Es
                 }
             } else {
                 // Local reference
-                if (!declaredVariables.has(varRef) && !boundSymbols.has(varRef)) {
+                if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
                     errors.push({
                         path: `${equationPath}/rhs`,
                         code: 'undefined_variable',
