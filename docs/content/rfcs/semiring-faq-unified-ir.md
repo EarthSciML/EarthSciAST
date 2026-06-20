@@ -138,8 +138,31 @@ field reproduces today's semantics exactly.
 ```
 
 ### 5.1 Semiring
-A named `(⊕, ⊗)` pair. Initial registry: `sum_product` (default, = today),
-`max_product`, `min_sum` (tropical), `bool_and_or` (relational). The
+A named `(⊕, ⊗)` pair. A semiring is fully specified by its two operators **and
+their identity elements** `(0̄, 1̄)` — the latter are normative, not decorative:
+they are the value an empty `⊕`-reduction returns and the value an empty
+`⊗`-product returns, so every binding must agree on them or empty/degenerate
+index sets diverge. (The current evaluator already encodes the `sum_product` row
+implicitly: `_combine_with_reducer` returns `0.0` for an empty `+` and `1.0` for
+an empty `*`.) The initial registry is closed and exhaustive — adding a semiring
+is a spec change, not a per-file extension:
+
+| `semiring` | ⊕ (`reduce`) | 0̄ (⊕-identity / empty reduce) | ⊗ | 1̄ (⊗-identity / empty product) | Value domain | Role |
+|---|---|---|---|---|---|---|
+| `sum_product` *(default)* | `+` | `0` | `×` | `1` | ℝ | today's einsum / ESD discretization |
+| `max_product` | `max` | `-∞` | `×` | `1` | ℝ≥0 | best-path / saturation |
+| `min_sum` *(tropical)* | `min` | `+∞` | `+` | `0` | ℝ∪{+∞} | shortest-path / cost |
+| `max_sum` | `max` | `-∞` | `+` | `0` | ℝ∪{-∞} | longest-path |
+| `bool_and_or` *(relational)* | `∨` (OR) | `false` | `∧` (AND) | `true` | 𝔹 | existence / join / `distinct` (§5.5) |
+
+Notes that bindings MUST honor: (1) the `reduce` field names ⊕ only; the matching
+⊗ and both identities come from this table, never from the file. (2) `±∞`
+identities are represented per binding (`Inf`/`-Inf` in Julia, `f64::INFINITY` in
+Rust, `np.inf` in Python) and are the *result* of an empty reduction — they are
+never written into a file or a Skolem key (floats are forbidden in keys, §A.5).
+(3) `bool_and_or` is the only semiring whose node may be **index-set-producing**
+rather than array-producing (§5.5, §6); its ⊕/⊗ spelling is fixed as OR/AND here
+to remove the ordering ambiguity. The
 non-semiring statistical reducers ESI needs (`count`, `mean`, `weighted_mean`)
 are **derived sugar**, not core: they desugar to a small fixed combination of
 semiring-primitive FAQs (`count` = `sum_product` of `1`; `mean` = `sum / count`;
@@ -162,11 +185,72 @@ declared index set. An index set is one of:
 which the evaluator already handles via per-cell dynamic bounds. This single
 mechanism unifies ESM grid dims and ESI categorical dims.
 
+**Where index sets are declared.** A `{ "from": <name> }` reference resolves
+against a single document-scoped registry, `index_sets`, that **unifies** today's
+two separate declaration sites — ESM `domain.spatial` dims and ESI `index_sets` —
+under one shape (both remain accepted as aliases for back-compat). Each entry is
+one of the three kinds in the list above:
+
+```json
+"index_sets": {
+  "cells":         { "kind": "interval",    "size": 64 },
+  "county":        { "kind": "categorical", "members": ["..."] },
+  "edges":         { "kind": "derived",     "from_faq": "<id of a §5.5 node>" },
+  "edges_of_cell": { "kind": "ragged", "of": ["cells"],
+                     "offsets": "n_edges_on_cell", "values": "edge_of_cell" }
+}
+```
+
+A reference resolves by name to exactly one entry; the resolver MUST error on an
+undeclared name (no implicit interval inference) so that a typo can't silently
+become an empty set.
+
+**How a ragged set binds to its backing array.** A `kind: "ragged"` set is the
+named, first-class form of the per-cell dynamic bound the evaluator already
+expands (`_expand_int_range_dyn`). It binds to **two keyed factors (§5.4)** drawn
+from `args`/`const_arrays`: an `offsets`/length factor giving `|set(i)|` for each
+parent tuple `i` (e.g. MPAS `nEdgesOnCell`), and a `values` factor giving the
+member at `(i, k)` for `k ∈ 1…|set(i)|` (e.g. `edgesOnCell`). Iterating
+`{from:"edges_of_cell", of:["i"]}` is therefore exactly the existing
+`[1, index(n_edges_on_cell, i)]` dynamic bound plus a gather through the `values`
+factor — no new evaluator path, only a name and a declared binding. CSR/offset
+layout (`offsets[i]…offsets[i+1]`) is the canonical encoding; a fixed-valence
+grid is the degenerate constant-`offsets` case.
+
 ### 5.3 Value-equality joins (`on`)
 Today factors combine only by sharing an index *name* (positional). `join.on`
 adds combination by **value equality of key columns**, subsuming ESI `join` and
 making connectivity gathers first-class instead of nested-`index` tricks. A
 positional einsum is the degenerate case (join on the shared index itself).
+
+The relational semantics are fixed (not implementation-defined), because
+multiplicity changes the aggregate's *value*, not just its performance:
+
+- **Join kind: inner only.** `join.on` is an **inner equi-join**: a contributed
+  product term exists only for index combinations whose key columns are equal on
+  *every* listed pair. Rows with no match contribute **nothing** — which, under any
+  semiring, is the additive identity `0̄` (§5.1), so a missing match adds zero to a
+  `sum_product` aggregate and leaves a `min_sum` aggregate at `+∞`. There is no
+  outer/left-join variant in v1; a "keep unmatched with a default" need is expressed
+  explicitly with a `filter`/`ifelse`, not by a join mode.
+- **Cardinality: many-to-many is defined, not an error.** If a key value occurs `m`
+  times on the left and `n` times on the right, the join yields all `m·n` combined
+  tuples, each contributing one `⊗`-product term to the enclosing `⊕`-reduction
+  (standard relational-algebra / FAQ semantics). This is intentional — categorical
+  disaggregation (ESI) relies on it — so it is **specified, not guarded against**. The
+  one obligation it places on the author: the surrounding semiring's `⊕` must be the
+  intended way to combine duplicates (it is, for the supported associative-commutative
+  ⊕s — §A.5).
+- **Key columns must be exact-equality types.** Join keys are integer IDs or
+  categorical-member ids (strings compared by Unicode code point, §A.5);
+  **floating-point join keys are forbidden**, for the same reason floats are
+  forbidden in Skolem keys — equality is not portable across bindings. A spatial /
+  inequality ("theta") join is explicitly **out of scope** for `join.on` (§8.1, §A.8
+  treat it as a separate spatial-index operator).
+- **Null / missing keys.** A key column that is absent or null on a row makes that
+  row unmatchable: it joins to nothing and therefore contributes `0̄`. Nulls never
+  compare equal (not even to each other). Emitting `null` into a key column is a
+  front-end error, surfaced at build time, not silently dropped.
 
 ### 5.4 Keyed factors
 Unify "const array", "state array", and "ESI table" as one concept: a **keyed
@@ -184,7 +268,9 @@ Two primitives close the value-invention gap:
 Together: enumerate the unique edges (`distinct` Boolean FAQ over faces), name each
 by a Skolem key, and expose the result as an index set that a geometric FAQ
 (§5.2) consumes. An optional `{"op": "rank"}` assigns dense integers for the
-array backend.
+array backend. **The order and numbering these primitives produce are fixed by the
+normative determinism rules in §5.7** — they are part of the IR's semantics, not a
+binding's discretion.
 
 ### 5.6 Node name (`op` tag) and concept name
 "ArrayOp" describes only the dense sum-product specialization; the generalized
@@ -209,6 +295,52 @@ two separate concerns:
   deprecated and files migrate on their own schedule. No deprecation window is
   forced — the alias may live indefinitely, since a serialization tag is an
   identifier, not a description.
+
+### 5.7 Cross-binding determinism (normative)
+
+The value-invention primitives of §5.5 (`distinct`, `skolem`, `rank`) and the
+joins of §5.3 produce **index sets and dense IDs that other nodes consume**, so
+two bindings that disagree on their order or numbering produce *different models*,
+not merely different formatting. Because `earthsci-toolkit` is parallel native
+implementations (Julia, Rust, Python, …) verified by a conformance suite — not one
+core behind FFI — this determinism is **normative spec, stated here**, not an
+implementation detail deferred to an appendix. (Appendix A.5 keeps the per-language
+*rationale* and the hash-randomization footguns; the rules below are the contract.)
+
+**Governing principle.** Every emitted set, key, and dense ID is a **pure function
+of a defined total order over tuples**. No observable output may depend on
+hash-table iteration order or a language-native hash value.
+
+1. **Total order.** Lexicographic over tuple fields: integers by value; strings by
+   Unicode code-point (UTF-8 byte) order, *not* locale collation. **Floats are
+   forbidden in keys** (keep keys integer/categorical IDs); if a float is
+   unavoidable it MUST be normalized (`-0.0`→`0.0`, NaN rejected) via the existing
+   `canonicalize` float formatting before comparison.
+2. **`distinct`** = sort by the total order, then drop adjacent duplicates. The
+   output order **is** the sorted order — never first-seen / insertion order
+   (non-portable: Rust `HashSet` is randomly seeded, Julia `Dict`/`Set` order is
+   unspecified, Python `set` order is `PYTHONHASHSEED`-sensitive).
+3. **`rank`** = dense IDs assigned by position in the sorted `distinct` sequence.
+   The numbering **base is pinned in `CONFORMANCE_SPEC.md`** (Julia 1-based,
+   Rust/Python 0-based); conformance asserts on the canonical numbering and each
+   binding converts at its boundary.
+4. **`skolem`** = a **canonical tuple**, not a hash: for a symmetric relation sort
+   the components (undirected edge `(min(u,v), max(u,v))`), for a directed one
+   preserve order. The dense ID then comes from `rank`. Hashing stays off the
+   determinism-critical path entirely. (If a fixed-width fingerprint is ever truly
+   required, it MUST be a seed-pinned portable hash — e.g. XXH3-64 seed 0 — over a
+   canonical byte serialization, **never** a native `hash()`/`Base.hash`.)
+5. **`join` / group-by aggregate.** Hashing may be used only to *bucket*; the
+   emitted result MUST be sorted by the canonical key. The semiring `⊕` used to
+   combine duplicates must be associative + commutative (all registry ⊕s are), so
+   input and parallel order cannot change the result; for floating-point ⊕, do the
+   final reduction sequentially in canonical order to avoid last-ULP drift.
+
+Conformance (the suite must add this — it currently asserts only *semantic* graph
+equivalence and tolerates "minor formatting differences"): feed identical mesh /
+table inputs to all bindings and assert **byte-identical serialized index sets and
+identical dense-ID arrays**, including adversarial inputs (duplicate edges, reversed
+orientation, permuted input order) to prove order-independence.
 
 ## 6. Evaluator changes
 
@@ -328,6 +460,95 @@ Additive only (Draft 2020-12). On the `AggregateQuery` object (`op` ∈
 
 New Expression ops: `skolem` (variadic), `rank` (unary over an index set), `true`.
 Index sets gain a registry entry mirroring ESM `domain` dims and ESI `index_sets`.
+
+**Concrete patch.** Against the current schema, where `arrayop` is an `op` enum
+value on `$defs/ExpressionNode` (`additionalProperties: false`, so each new field
+must be declared), the additive Draft-2020-12 changes are:
+
+```jsonc
+// $defs/ExpressionNode
+{
+  "properties": {
+    // 1. op enum gains the canonical + value-invention tags ("arrayop" stays).
+    "op": { "enum": [ /* …existing… */, "aggregate", "skolem", "rank", "true" ] },
+
+    // 2. named semiring; absent ⇒ sum_product (today). Closed enum (§5.1).
+    "semiring": {
+      "type": "string",
+      "enum": ["sum_product", "max_product", "min_sum", "max_sum", "bool_and_or"],
+      "default": "sum_product"
+    },
+
+    // 3. ranges[*] becomes a union: existing [lo,hi]/[lo,step,hi] tuple,
+    //    OR a reference to a declared index set (§5.2), optionally ragged.
+    "ranges": {
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "array", "items": { "type": "integer" },
+            "minItems": 2, "maxItems": 3 },                 // unchanged: today
+          { "type": "object", "additionalProperties": false,
+            "required": ["from"],
+            "properties": {
+              "from": { "type": "string" },                 // index_sets key
+              "of":   { "type": "array", "items": { "type": "string" } }
+            } }
+        ]
+      }
+    },
+
+    // 4. value-equality joins (§5.3): inner equi-join, key pairs [factorIdx, col].
+    "join": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false,
+        "required": ["on"],
+        "properties": { "on": {
+          "type": "array", "minItems": 1,
+          "items": { "type": "array", "items": { "type": "string" },
+                     "minItems": 2, "maxItems": 2 } } } }
+    },
+
+    // 5. value-invention + predicate fields (§5.5).
+    "distinct": { "type": "boolean", "default": false },
+    "key":      { "$ref": "#/$defs/Expression" },   // Skolem term
+    "filter":   { "$ref": "#/$defs/Expression" }    // boolean predicate
+  }
+}
+```
+
+```jsonc
+// NEW $defs/IndexSet + document-scoped registry (referenced from Model/Domain).
+"IndexSet": {
+  "type": "object", "required": ["kind"], "additionalProperties": false,
+  "properties": {
+    "kind": { "enum": ["interval", "categorical", "derived", "ragged"] },
+    "size":    { "type": "integer" },                       // interval
+    "members": { "type": "array" },                         // categorical
+    "from_faq":{ "type": "string" },                        // derived (§5.5 node id)
+    "of":      { "type": "array", "items": { "type": "string" } }, // ragged parents
+    "offsets": { "type": "string" },                        // ragged: length/CSR factor
+    "values":  { "type": "string" }                         // ragged: member factor
+  },
+  "allOf": [
+    { "if": { "properties": { "kind": { "const": "interval" } } },
+      "then": { "required": ["size"] } },
+    { "if": { "properties": { "kind": { "const": "categorical" } } },
+      "then": { "required": ["members"] } },
+    { "if": { "properties": { "kind": { "const": "derived" } } },
+      "then": { "required": ["from_faq"] } },
+    { "if": { "properties": { "kind": { "const": "ragged" } } },
+      "then": { "required": ["of", "offsets", "values"] } }
+  ]
+}
+// on $defs/Model (and accepted as an alias of Domain.spatial / ESI index_sets):
+"index_sets": { "type": "object", "additionalProperties": { "$ref": "#/$defs/IndexSet" } }
+```
+
+All of the above are additive: a file using none of the new keys validates
+exactly as today (the §9 strict-superset promise). The conformance fixtures in
+`tests/` gain a `valid/aggregate/` set (one fixture per worked example, §7) and an
+`invalid/aggregate/` set (undeclared `from` name, float join key, `null` in a key
+column, missing ragged `offsets`/`values`) so each rule above is exercised both
+ways.
 
 ### 8.1 Required geometry op: `intersect_polygon` (leaf) + `polygon_area` (FAQ)
 
@@ -551,10 +772,14 @@ sorted unique rows), `np.lexsort`, and `searchsorted`-based joins; reuse the
 existing `canonicalize.py` total order. *Reject* pandas (dtype coercion, shifting
 sort defaults) and bare `set`/`hash()` (PYTHONHASHSEED-sensitive).
 
-### A.5 The cross-binding determinism spec (the normative deliverable)
+### A.5 The cross-binding determinism spec (rationale for the normative §5.7)
 
-This is the normative deliverable: a spec all three implementations must
-honor so their outputs are byte-identical. **Governing principle: every emitted set
+> The contract itself is now **normative §5.7** in the main body. This appendix
+> retains the per-language rationale, the hash-randomization footguns, and the
+> conformance-suite detail that motivate each rule there.
+
+The determinism contract is what makes the three implementations'
+outputs byte-identical. **Governing principle: every emitted set
 is a pure function of a defined total order over tuples; no observable output ever
 depends on hash-table iteration order or a language-native hash value.**
 
