@@ -1,0 +1,79 @@
+{
+  "category": "determinism_conformance",
+  "version": "1.0",
+  "description": "Static golden example for the cross-binding determinism contract (CONFORMANCE_SPEC.md §5.5, RFC semiring-faq-unified-ir §5.7). Each fixture pins a byte-identical serialized index set and the canonical dense-ID array a conforming producer MUST emit for the value-invention primitives (skolem / distinct / rank) and group-by aggregate joins. Adversarial input variants (permuted, duplicated, reversed orientation) MUST collapse to the identical golden output, proving order-, duplicate-, and orientation-independence. Until the M2 join impls and M3 relational engine land producers, the harness (scripts/run-determinism-conformance.py --self-test) asserts the contract against an embedded reference implementation; M2/M3 register per-binding adapters and the same golden is asserted byte-for-byte across Julia / Rust / Python.",
+  "canonical_rank_base": 0,
+  "rank_base_pin": {
+    "_doc": "rank assigns dense IDs by position in the sorted distinct sequence. Conformance asserts on the CANONICAL numbering (0-based, language-neutral position). Each binding emits in its native base and the adapter declares it; the harness normalizes reported IDs to canonical via (reported - emission_base) before comparison. Go/TS receive the additive schema only (no evaluator/producer) and are N/A here.",
+    "julia": 1,
+    "rust": 0,
+    "python": 0
+  },
+  "bindings_required": [],
+  "bindings_optional": ["julia", "rust", "python"],
+  "fixtures": [
+    {
+      "id": "edge_enumeration",
+      "primitive": "skolem_distinct_rank",
+      "skolem": "undirected",
+      "doc": "Enumerate the unique undirected edges of a 2-triangle mesh (two faces sharing edge {2,3}). Directed edges are derived by traversing consecutive vertices of each face (with wraparound); skolem canonicalizes each to (min,max); distinct sorts by total order and drops adjacent duplicates; rank assigns dense IDs by position. The shared edge appears in both faces with OPPOSITE orientation and MUST collapse to a single canonical key.",
+      "inputs": {
+        "canonical": { "faces": [[1, 2, 3], [3, 2, 4]] },
+        "variants": {
+          "permuted_faces": { "faces": [[3, 2, 4], [1, 2, 3]] },
+          "reversed_winding": { "faces": [[3, 2, 1], [4, 2, 3]] },
+          "duplicate_face": { "faces": [[1, 2, 3], [3, 2, 4], [1, 2, 3]] }
+        }
+      },
+      "expected": {
+        "index_set": [[1, 2], [1, 3], [2, 3], [2, 4], [3, 4]],
+        "serialized": "[[1,2],[1,3],[2,3],[2,4],[3,4]]",
+        "dense_ids_canonical": [0, 1, 2, 3, 4]
+      }
+    },
+    {
+      "id": "directed_arcs",
+      "primitive": "skolem_distinct_rank",
+      "skolem": "directed",
+      "doc": "Distinct over a directed relation: orientation is significant, so (1,2) and (2,1) are DISTINCT keys (contrast edge_enumeration). skolem preserves tuple order; exact-duplicate arcs are dropped by distinct; output is sorted by total order.",
+      "inputs": {
+        "canonical": { "tuples": [[1, 2], [2, 1], [2, 3], [1, 2]] },
+        "variants": {
+          "permuted_input": { "tuples": [[2, 3], [1, 2], [2, 1], [1, 2]] },
+          "duplicate_arc": { "tuples": [[1, 2], [2, 1], [2, 3], [1, 2], [2, 3]] }
+        }
+      },
+      "expected": {
+        "index_set": [[1, 2], [2, 1], [2, 3]],
+        "serialized": "[[1,2],[2,1],[2,3]]",
+        "dense_ids_canonical": [0, 1, 2]
+      }
+    },
+    {
+      "id": "group_by_sum",
+      "primitive": "group_by_sum",
+      "doc": "Group-by aggregate under the integer (+) semiring with STRING keys. Exercises (a) total order on strings = Unicode code-point (UTF-8 byte) order, NOT locale collation: code-point order is 'B'(U+0042) < 'Z'(U+005A) < 'a'(U+0061), whereas a case-insensitive locale would interleave 'a' among the capitals; (b) associativity+commutativity of (+) — permuting the input rows cannot change any bucket sum; (c) emit sorted by canonical key, never hash-bucket order. dense_ids_canonical ranks the emitted (sorted) distinct keys.",
+      "inputs": {
+        "canonical": { "rows": [["B", 2], ["a", 5], ["B", 3], ["Z", 1], ["a", 4]] },
+        "variants": {
+          "permuted_rows": { "rows": [["a", 4], ["Z", 1], ["B", 2], ["a", 5], ["B", 3]] }
+        }
+      },
+      "expected": {
+        "index_set": [["B", 5], ["Z", 1], ["a", 9]],
+        "serialized": "[[\"B\",5],[\"Z\",1],[\"a\",9]]",
+        "dense_ids_canonical": [0, 1, 2]
+      }
+    }
+  ],
+  "negative_controls": [
+    {
+      "id": "first_seen_order",
+      "doc": "A producer that emits distinct results in first-seen / hash-iteration order instead of sorted total order MUST be flagged as a mismatch by the harness. Validated in scripts/run-determinism-conformance.py self-test by feeding the comparator a deliberately mis-ordered index set and asserting it is rejected."
+    },
+    {
+      "id": "float_in_key",
+      "doc": "Floats are forbidden in keys. A producer that admits a float key component MUST raise rather than silently bucket on a platform-dependent float repr. Validated in the self-test by asserting the reference primitives reject a float-keyed tuple."
+    }
+  ]
+}

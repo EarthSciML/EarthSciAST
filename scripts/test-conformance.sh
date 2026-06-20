@@ -309,6 +309,24 @@ run_grid_conformance_self_test() {
     fi
 }
 
+# Sanity-check the cross-binding determinism harness (ess-my4.5). Until the M2
+# join impls and M3 relational engine land per-binding producers, the harness
+# asserts the §5.5 determinism contract against an embedded reference
+# implementation and the static golden example
+# (tests/conformance/determinism/manifest.json): byte-identity to the golden,
+# adversarial-variant collapse, rank base-pin round-trip, and negative controls.
+# When producers exist, the same golden is asserted byte-for-byte across bindings.
+run_determinism_conformance_self_test() {
+    log "Running determinism-conformance harness self-test..."
+    if python3 "$SCRIPT_DIR/run-determinism-conformance.py" --self-test; then
+        success "Determinism-conformance harness self-test passed"
+        return 0
+    else
+        error "Determinism-conformance harness self-test failed"
+        return 1
+    fi
+}
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -406,6 +424,13 @@ main() {
             success "Grid-conformance runner self-test completed"
         else
             error "Grid-conformance runner self-test failed"
+            exit 1
+        fi
+
+        if run_determinism_conformance_self_test; then
+            success "Determinism-conformance harness self-test completed"
+        else
+            error "Determinism-conformance harness self-test failed"
             exit 1
         fi
 

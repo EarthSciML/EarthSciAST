@@ -475,12 +475,21 @@ After individual language test runners complete, a comparison script analyzes re
 | **Substitution** | 100% | Expression substitution must be deterministic |
 | **Graph Structure** | 95% | Node/edge sets must match; property differences acceptable |
 | **Simulation** | 90% | Numerical tolerance for ODE solutions |
+| **Relational index sets / dense IDs** | 100% (byte-identical) | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** and **NOT** subject to the "minor formatting differences" tolerances above — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
+
+> **Note.** The thresholds above for display/graph/simulation deliberately
+> tolerate cosmetic and numerical differences. The determinism contract in
+> **§5.5** is the exception: relational index sets and dense-ID arrays must be
+> **byte-identical** across bindings. See §5.5 for the normative rules and the
+> adversarial harness that enforces them.
 
 ### 5.3 Divergence Analysis
 
 The comparison system categorizes divergences as:
 
-- **Critical**: Different validation results, expression structure changes
+- **Critical**: Different validation results, expression structure changes, **any
+  byte-level difference in a relational index set or any difference in a
+  dense-ID array** (the §5.5 determinism contract — these are never "minor")
 - **Major**: Significant display formatting differences, graph topology changes
 - **Minor**: Cosmetic differences in formatting, property metadata
 - **Acceptable**: Known implementation limitations or language-specific constraints
@@ -522,6 +531,122 @@ The comparison system categorizes divergences as:
   ]
 }
 ```
+
+### 5.5 Cross-Binding Determinism Contract (normative)
+
+> This is the normative form of RFC `semiring-faq-unified-ir` §5.7. The RFC's
+> Appendix A.5 retains the per-language rationale and the hash-randomization
+> footguns; **the rules below are the contract.** They are exercised by the
+> adversarial harness in `tests/conformance/determinism/` (see §5.5.4).
+
+`earthsci-toolkit` is **parallel native implementations** (Julia, Rust,
+Python, …) verified by this suite — not one core behind FFI. The
+value-invention primitives `distinct`, `skolem`, and `rank`, together with
+value-equality and group-by joins, produce **index sets and dense IDs that
+other nodes consume**. Two bindings that disagree on the *order* or *numbering*
+of those outputs produce **different models**, not merely different formatting.
+This determinism is therefore **normative spec**, not an implementation detail,
+and the §5.2 "minor formatting differences" tolerances explicitly do **not**
+apply to it (§5.2, §5.3).
+
+**Governing principle.** Every emitted set, key, and dense ID MUST be a **pure
+function of a defined total order over tuples**. No observable output may depend
+on hash-table iteration order or a language-native hash value.
+
+#### 5.5.1 The rules
+
+1. **Total order.** Lexicographic over tuple fields: integers by value; strings
+   by **Unicode code-point order, equivalently UTF-8 byte order**, *not* locale
+   collation. (For valid UTF-8 the two orders coincide; e.g. `"B"` (U+0042) <
+   `"Z"` (U+005A) < `"a"` (U+0061) — a case-insensitive locale would interleave
+   them, which is forbidden.) **Floats are forbidden in keys** — keep keys
+   integer / categorical IDs. If a float is genuinely unavoidable it MUST be
+   normalized (`-0.0`→`0.0`, `NaN` rejected) via the existing `canonicalize`
+   float formatting before comparison, never compared as a raw native float.
+
+2. **`distinct`** = sort by the total order, then drop **adjacent** duplicates.
+   The output order **is** the sorted order. It MUST NOT be first-seen /
+   insertion order, which is non-portable (Rust `HashSet` is randomly seeded,
+   Julia `Dict`/`Set` order is unspecified, Python `set` order is
+   `PYTHONHASHSEED`-sensitive — see §5.5.2).
+
+3. **`rank`** = dense IDs assigned by position in the sorted `distinct`
+   sequence. Conformance asserts on the **canonical 0-based numbering** (position
+   in the sequence, language-neutral). Each binding emits in its own base and
+   converts at the boundary; the conformance adapter declares its base and the
+   harness normalizes reported IDs via `canonical = reported − emission_base`.
+   The bases are **pinned**:
+
+   | Binding | Emission base | Role |
+   |---|---|---|
+   | **Conformance (canonical)** | **0** | The numbering the suite asserts on. |
+   | Julia | 1 | Native 1-based arrays; converts +1 at its boundary. |
+   | Rust | 0 | Native 0-based. |
+   | Python | 0 | Native 0-based. |
+   | Go, TypeScript | — | Additive schema only; no evaluator/producer (N/A). |
+
+4. **`skolem`** = a canonical **tuple**, never a hash. For a **symmetric**
+   relation, sort the components (an undirected edge is `(min(u,v), max(u,v))`);
+   for a **directed** relation, preserve order (so `(1,2)` and `(2,1)` are
+   distinct). The dense ID then comes from `rank`. Hashing stays off the
+   determinism-critical path entirely. *If* a fixed-width fingerprint is ever
+   genuinely required, it MUST be a **portable, seed-pinned, non-cryptographic
+   hash** (e.g. XXH3-64 seed 0) over a **canonical byte serialization** (fixed
+   field order, little-endian ints, length-prefixed UTF-8 strings) — **never** a
+   native `hash()` / `Base.hash` / `DefaultHasher`.
+
+5. **`join` / group-by aggregate.** Hashing MAY be used only to *bucket*; the
+   emitted result MUST be **sorted by the canonical key**. The semiring `⊕` used
+   to combine duplicates MUST be associative + commutative (every registry `⊕` —
+   sum, product, min, max, count, boolean-or — is), so input and parallel order
+   cannot change the result. For a **floating-point** `⊕`, the per-bucket
+   reduction MUST be done sequentially in canonical order to avoid last-ULP
+   drift.
+
+#### 5.5.2 The hash-randomization footguns this neutralizes
+
+| Binding | Footgun | Effect |
+|---|---|---|
+| Rust | `HashMap`/`HashSet` default to SipHash-1-3 with a per-instance random seed | "arbitrary" iteration order |
+| Python | `hash()` of `str`/`bytes` is SipHash keyed by per-process `PYTHONHASHSEED` | set/dict order varies per run |
+| Julia | `Dict`/`Set` iteration order is an unspecified implementation detail; `Base.hash` is process-seeded and not cross-version / cross-language stable | order varies; hashes not portable |
+
+Each footgun affects **only** hash-table iteration order and runtime hash
+values. Sorting every output (rules 2, 5) and using content-defined keys (rule
+4) makes every primitive a pure function of its input multiset, immune to all
+three.
+
+#### 5.5.3 Canonical serialization
+
+"Byte-identical serialized index set" means the canonical byte form: **compact
+JSON** (`,` and `:` separators, no spaces), **UTF-8** (no `\uXXXX` escaping),
+tuples serialized as arrays, in the §5.5.1-rule-2 sorted order. This is the same
+canonical-JSON discipline the round-trip idempotence contract relies on
+(`tests/conformance/README.md`). Two conforming bindings MUST produce
+byte-for-byte identical serialized index sets and identical dense-ID arrays
+(after rule-3 base normalization).
+
+#### 5.5.4 Conformance requirement and the adversarial harness
+
+The suite MUST feed **identical** mesh / table inputs to every producing binding
+and assert **byte-identical serialized index sets and identical dense-ID
+arrays** — including adversarial inputs designed to break order-dependence:
+**duplicate** edges/rows, **reversed orientation**, and **permuted input
+order**. All such variants MUST collapse to the identical canonical output.
+
+This is implemented by `scripts/run-determinism-conformance.py` against the
+golden example in `tests/conformance/determinism/manifest.json`, in two phases:
+
+- **Now** (parallel to M1, before any producer exists): `--self-test` asserts
+  the contract against an embedded reference implementation of the primitives —
+  byte-identity to the committed golden, adversarial-variant collapse, rank
+  base-pin round-trip, and negative controls (it must *reject* unsorted output
+  and float keys). Wired into `scripts/test-conformance.sh`.
+- **Later** (M2 value-equality joins, M3 relational engine): each binding ships
+  a thin adapter (discovered via `$EARTHSCI_DETERMINISM_ADAPTER_<BINDING>` or on
+  `PATH`); the runner asserts every adapter's output byte-identical to the golden
+  and to each other. See `tests/conformance/determinism/README.md` for the
+  adapter contract.
 
 ## 6. CI Integration
 
