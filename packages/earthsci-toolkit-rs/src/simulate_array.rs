@@ -335,13 +335,19 @@ impl ArrayCompiled {
         // clone so the caller's model — and its serialized form — is untouched;
         // every downstream consumer then sees only dense interval ranges.
         let mut model_owned = model.clone();
-        resolve_aggregate_ranges(&mut model_owned)?;
-        // Resolve `join.on` value-equality clauses (RFC §5.3). After range
-        // resolution every range is a concrete interval, so a join over loop
-        // indices is the degenerate positional case (a no-op for the dense
-        // einsum — byte-identical to the no-join form); a join over non-loop
-        // data-derived columns is rejected here (M3) rather than mis-combined.
+        // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
+        // aggregate range still carries its `{ "from": <index set> }` linkage so
+        // the join key columns' member values can be read. A join whose key
+        // columns resolve to the same loop symbol is the degenerate positional
+        // no-op (byte-identical to the no-join form); a join over two distinct
+        // loop symbols is the data-derived value-equality case and is lowered
+        // into a member-equality `filter` over the contraction; a join over a
+        // genuine (non-loop) data column is rejected rather than mis-combined.
         crate::join::resolve_aggregate_joins(&mut model_owned)?;
+        // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
+        // into a concrete `[lo, hi]` interval before shape inference / rule
+        // building, so every downstream consumer sees only dense intervals.
+        resolve_aggregate_ranges(&mut model_owned)?;
         let model = &model_owned;
 
         // (0) Reject spatial differential operators anywhere in the model's

@@ -119,7 +119,10 @@ fn run_model_test(
         &opts,
     ) {
         Ok(s) => s,
-        Err(e) => panic!("[{fixture_name}/{model_name}/{}] simulate failed: {e}", t.id),
+        Err(e) => panic!(
+            "[{fixture_name}/{model_name}/{}] simulate failed: {e}",
+            t.id
+        ),
     };
     for a in &t.assertions {
         check_assertion(fixture_name, model_name, model, t, a, &sol);
@@ -134,7 +137,11 @@ fn check_assertion(
     a: &ModelTestAssertion,
     sol: &Solution,
 ) {
-    let slot = match sol.state_variable_names.iter().position(|n| n == &a.variable) {
+    let slot = match sol
+        .state_variable_names
+        .iter()
+        .position(|n| n == &a.variable)
+    {
         Some(i) => i,
         None => panic!(
             "[{fixture_name}/{model_name}/{}] unknown assertion variable '{}'. Known: {:?}",
@@ -145,7 +152,12 @@ fn check_assertion(
         .time
         .iter()
         .enumerate()
-        .min_by(|(_, x), (_, y)| (*x - a.time).abs().partial_cmp(&(*y - a.time).abs()).unwrap())
+        .min_by(|(_, x), (_, y)| {
+            (*x - a.time)
+                .abs()
+                .partial_cmp(&(*y - a.time).abs())
+                .unwrap()
+        })
         .map(|(i, _)| i)
         .unwrap_or(0);
     let actual = sol.state[slot][tix];
@@ -157,7 +169,11 @@ fn check_assertion(
     assert!(
         approximately_equal(actual, a.expected, rel, abs),
         "[{fixture_name}/{model_name}/{}] assertion failed: {} @ t={} expected {} got {} (rel_tol={rel}, abs_tol={abs})",
-        t.id, a.variable, a.time, a.expected, actual
+        t.id,
+        a.variable,
+        a.time,
+        a.expected,
+        actual
     );
 }
 
@@ -170,7 +186,10 @@ fn fixture(name: &str) -> PathBuf {
 /// every inline assertion matches.
 fn run_named(name: &str) {
     let ran = run_fixture(&fixture(name));
-    assert!(ran >= 1, "{name}: expected an inline `tests` block, found none");
+    assert!(
+        ran >= 1,
+        "{name}: expected an inline `tests` block, found none"
+    );
 }
 
 /// §7.1 default `sum_product` FVM-diffusion contraction, plus the empty-range
@@ -199,22 +218,36 @@ fn categorical_index_set() {
 }
 
 /// §7.2 MOVES running-exhaust contraction as the DEGENERATE POSITIONAL join:
-/// the `on` key columns are the aggregate's own loop indices, so the
+/// the `on` key columns resolve to the aggregate's own loop indices, so the
 /// value-equality gate admits every (sourceType x fuelType) combination — the
 /// existing dense einsum combines the factors positionally and the compiled
 /// artifact is byte-identical to the join-free form (RFC §5.3 / §7.2). This is
 /// the join form all three evaluating bindings agree on, so the same inline
 /// `expected` (running_exhaust[1]=9, [2]=18) is checked here as in Julia/Python.
-///
-/// The sibling `join_disaggregation_m2m{,_permuted}.esm` fixtures are
-/// deliberately NOT registered here: they exercise a TRUE value-equality join
-/// over duplicate data-derived keys (m·n cardinality), which the dense Rust
-/// evaluator does not yet drive — it would treat the loop-index key column as
-/// the positional no-op and compute the full product, not the gated m·n. That
-/// engine is M3 (see `src/join.rs`); Julia and Python evaluate those fixtures,
-/// and their inline `expected` acts as a tripwire if they are wired in here
-/// before the value-equality engine lands.
 #[test]
 fn join_moves_running_exhaust() {
     run_named("join_moves_running_exhaust.esm");
+}
+
+/// §5.3 TRUE value-equality (data-derived) join exercising the defined
+/// many-to-many cardinality: the shared categorical member `"coal"` recurs with
+/// multiplicity 2 on each side, so the `[["i","j"]]` join over the distinct
+/// `sources`/`factors` sets admits coal(2)×coal(2) = 4 combinations (oil/gas
+/// unmatched → 0̄), giving count(1)=4 — not the join-free 3×3 = 9. Rust now
+/// drives this through `simulate` (the build-time pass lowers the join into a
+/// member-equality `filter`; see `src/join.rs`), so the same inline `expected`
+/// baked into the shared fixture is asserted cross-binding with Julia/Python.
+#[test]
+fn join_disaggregation_m2m_cardinality() {
+    run_named("join_disaggregation_m2m.esm");
+}
+
+/// §5.7 rule 5 determinism twin of [`join_disaggregation_m2m_cardinality`]: the
+/// same value-equality join with the categorical members declared in a permuted
+/// order. Matching is by member *value* (Unicode code point), not declared
+/// position, so `"coal"` still matches 2×2 = 4 regardless of order — count(1)=4,
+/// identical to the canonical fixture. Pins order-independence of the join.
+#[test]
+fn join_disaggregation_m2m_permuted_determinism() {
+    run_named("join_disaggregation_m2m_permuted.esm");
 }

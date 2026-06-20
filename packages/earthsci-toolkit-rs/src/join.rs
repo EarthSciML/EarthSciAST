@@ -34,26 +34,37 @@
 //! last-ULP drift.
 //!
 //! **Build-time, same artifact.** Like [`crate::aggregate::resolve_aggregate_ranges`],
-//! [`resolve_aggregate_joins`] runs once on an owned model before shape
-//! inference. The **degenerate positional case** — a join whose key columns are
-//! already the aggregate's declared loop indices (the common dense-categorical
-//! disaggregation, §7.2) — needs no runtime matching: the existing dense einsum
-//! already combines those factors positionally, so resolution is a structural
-//! no-op and evaluation stays byte-identical to the no-join form. A join over
-//! key columns that are *not* loop indices would require the runtime
-//! value-equality engine over data-derived factor columns (the ragged / derived
-//! factor model the dense Rust evaluator does not yet carry — M3); that is
-//! rejected with a clear error, mirroring the ragged/derived range handling,
-//! rather than silently mis-combined.
+//! [`resolve_aggregate_joins`] runs once on an owned model — **before** range
+//! resolution, while each range still carries its `{ "from": <index set> }`
+//! linkage — and classifies every `[left, right]` key pair:
+//!
+//! - **Degenerate positional (no-op).** Both keys resolve to the *same* loop
+//!   symbol — e.g. `["src", "sourceType"]`, where `sourceType` is the set `src`
+//!   draws `{from}` (the common dense-categorical disaggregation, §7.2). The
+//!   dense einsum already combines those factors positionally, so resolution is
+//!   a structural no-op and evaluation stays byte-identical to the no-join form.
+//! - **Data-derived value-equality.** The keys resolve to two *distinct* loop
+//!   symbols — e.g. `["i", "j"]` over two categorical sets with duplicate
+//!   members. The pair is lowered into a member-value-equality predicate ANDed
+//!   into the node's `filter`: the contraction admits `(i, j)` iff the key
+//!   columns carry equal members, so a key occurring `m`×`n` times contributes
+//!   all `m·n` ⊗-terms (the defined many-to-many cardinality). Codes are assigned
+//!   by rank in the sorted union of the pair's distinct values (the dense-coding
+//!   form of [`inner_equi_join`]'s bucket-and-probe — same equality classes,
+//!   independent of declared member order), so the evaluator reuses its existing
+//!   `filter` gate with no new value-equality path on the hot loop.
+//! - **Unsupported.** The `left` key resolves to no loop symbol (a join keyed on
+//!   a genuine data column, not an iterated index); rejected with a clear error
+//!   rather than silently mis-combined.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::aggregate::{ReduceKind, is_aggregate_op};
 use crate::simulate::CompileError;
-use crate::types::{Expr, ExpressionNode, Model};
+use crate::types::{Expr, ExpressionNode, IndexSet, Model, RangeSpec};
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):
 /// an integer ID or a categorical member. **Floats are forbidden in keys**
@@ -269,80 +280,83 @@ fn num_to_json(v: f64) -> Value {
     }
 }
 
-/// Resolve / validate every `join.on` clause in `model` (RFC §5.3), in place.
-/// Call once on an owned model **after** [`crate::aggregate::resolve_aggregate_ranges`]
-/// (so all ranges are concrete intervals) and before shape inference.
+/// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
+/// an owned model **before** [`crate::aggregate::resolve_aggregate_ranges`], so
+/// each aggregate range still carries its `{ "from": <index set> }` linkage and
+/// the join key columns' member values can be read.
 ///
-/// For the **degenerate positional case** — every join key column is a declared
-/// loop index of its aggregate node — the join is a structural no-op: the dense
-/// einsum already combines those factors positionally, so the compiled artifact
-/// and every emitted value are byte-identical to the no-join form. A join key
-/// column that is *not* a declared loop index would need the runtime
-/// value-equality engine over data-derived factor columns, which the dense Rust
-/// evaluator does not yet drive (M3); it is rejected with a clear error rather
-/// than silently mis-combined — mirroring the ragged/derived range rejection in
-/// [`crate::aggregate`].
+/// Each `[left, right]` key pair is classified (see the module docs): a pair
+/// resolving to one loop symbol is a positional no-op, a pair over two distinct
+/// loop symbols is lowered into a member-value-equality `filter`, and a pair
+/// whose `left` names no loop symbol is an unsupported data-column join.
 pub fn resolve_aggregate_joins(model: &mut Model) -> Result<(), CompileError> {
-    for eq in &model.equations {
-        validate_expr_joins(&eq.lhs)?;
-        validate_expr_joins(&eq.rhs)?;
+    let index_sets = model.index_sets.clone().unwrap_or_default();
+    for eq in &mut model.equations {
+        lower_expr_joins(&mut eq.lhs, &index_sets)?;
+        lower_expr_joins(&mut eq.rhs, &index_sets)?;
     }
-    if let Some(init_eqs) = &model.initialization_equations {
+    if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            validate_expr_joins(&eq.lhs)?;
-            validate_expr_joins(&eq.rhs)?;
+            lower_expr_joins(&mut eq.lhs, &index_sets)?;
+            lower_expr_joins(&mut eq.rhs, &index_sets)?;
         }
     }
-    for var in model.variables.values() {
-        if let Some(expr) = &var.expression {
-            validate_expr_joins(expr)?;
+    for var in model.variables.values_mut() {
+        if let Some(expr) = &mut var.expression {
+            lower_expr_joins(expr, &index_sets)?;
         }
     }
     Ok(())
 }
 
-/// Recursively validate `join` clauses on a node and all its children.
-fn validate_expr_joins(expr: &Expr) -> Result<(), CompileError> {
+/// Recursively lower `join` clauses on a node and all its children.
+fn lower_expr_joins(
+    expr: &mut Expr,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
 
-    if let Some(joins) = &node.join {
-        validate_node_joins(node, joins)?;
+    if node.join.is_some() {
+        lower_node_joins(node, index_sets)?;
     }
 
-    for a in &node.args {
-        validate_expr_joins(a)?;
+    for a in &mut node.args {
+        lower_expr_joins(a, index_sets)?;
     }
-    if let Some(b) = &node.expr {
-        validate_expr_joins(b)?;
+    if let Some(b) = &mut node.expr {
+        lower_expr_joins(b, index_sets)?;
     }
-    if let Some(f) = &node.filter {
-        validate_expr_joins(f)?;
+    if let Some(f) = &mut node.filter {
+        lower_expr_joins(f, index_sets)?;
     }
-    if let Some(l) = &node.lower {
-        validate_expr_joins(l)?;
+    if let Some(l) = &mut node.lower {
+        lower_expr_joins(l, index_sets)?;
     }
-    if let Some(u) = &node.upper {
-        validate_expr_joins(u)?;
+    if let Some(u) = &mut node.upper {
+        lower_expr_joins(u, index_sets)?;
     }
-    if let Some(vals) = &node.values {
+    if let Some(vals) = &mut node.values {
         for v in vals {
-            validate_expr_joins(v)?;
+            lower_expr_joins(v, index_sets)?;
         }
     }
-    if let Some(axes) = &node.axes {
-        for v in axes.values() {
-            validate_expr_joins(v)?;
+    if let Some(axes) = &mut node.axes {
+        for v in axes.values_mut() {
+            lower_expr_joins(v, index_sets)?;
         }
     }
     Ok(())
 }
 
-/// Validate one aggregate node's join clauses against its declared loop indices.
-fn validate_node_joins(
-    node: &ExpressionNode,
-    joins: &[crate::types::JoinClause],
+/// Classify and lower one aggregate node's join clauses (see the module docs):
+/// each data-derived pair becomes a member-value-equality predicate ANDed into
+/// the node `filter`, positional pairs are dropped as no-ops, and the resolved
+/// `join` clauses are consumed.
+fn lower_node_joins(
+    node: &mut ExpressionNode,
+    index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
     if !is_aggregate_op(&node.op) {
         return Err(CompileError::InterpreterBuildError {
@@ -354,21 +368,23 @@ fn validate_node_joins(
         });
     }
 
-    // The loop indices in scope: range keys (the iterated index symbols) plus
-    // any output indices. A join key column naming one of these is positional.
-    let mut declared: HashSet<&str> = HashSet::new();
-    if let Some(ranges) = &node.ranges {
-        for k in ranges.keys() {
-            declared.insert(k.as_str());
-        }
-    }
-    if let Some(out) = &node.output_idx {
-        for k in out {
-            declared.insert(k.as_str());
+    let joins = node.join.take().unwrap_or_default();
+    let ranges = node.ranges.clone().unwrap_or_default();
+
+    // The loop symbols in scope (an aggregate's output indices also appear as
+    // range keys). A join key naming one of these is positional on that symbol.
+    let declared: HashSet<&str> = ranges.keys().map(String::as_str).collect();
+    // index-set name -> the loop symbol(s) drawing `{from}` it, so a clause may
+    // name the dimension (`"sourceType"`) instead of the loop symbol (`"src"`).
+    let mut set_to_syms: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (sym, spec) in &ranges {
+        if let RangeSpec::IndexSetRef { from, .. } = spec {
+            set_to_syms.entry(from.as_str()).or_default().push(sym);
         }
     }
 
-    for clause in joins {
+    let mut conjuncts: Vec<Expr> = Vec::new();
+    for clause in &joins {
         if clause.on.is_empty() {
             return Err(CompileError::InterpreterBuildError {
                 details: "`join` clause has an empty `on` list; at least one [left, right] \
@@ -377,28 +393,241 @@ fn validate_node_joins(
             });
         }
         for pair in &clause.on {
-            // The left key column drives matching. In the degenerate positional
-            // case it is one of the node's loop indices, so the existing dense
-            // gather already combines the factors positionally — no runtime
-            // join. A non-loop-index column would need the data-derived
-            // value-equality engine (M3).
             let left = pair[0].as_str();
-            if !declared.contains(left) {
-                return Err(CompileError::UnsupportedFeatureError {
+            let right = pair[1].as_str();
+
+            // The left key drives matching; it must name a loop symbol. A left
+            // key that names neither a loop symbol nor an index set bound by one
+            // is a join keyed on a genuine data column — the unsupported case.
+            let sym_l = resolve_key(left, &declared, &set_to_syms).ok_or_else(|| {
+                CompileError::UnsupportedFeatureError {
                     feature: "value-equality join over data-derived columns".to_string(),
                     message: format!(
-                        "join key column '{left}' is not a declared loop index of this \
-                         aggregate ({declared:?}); a value-equality join over data-derived \
-                         factor columns requires the per-key bucket/gather engine that the \
-                         dense Rust evaluator does not yet drive (M2 supports the degenerate \
-                         positional join — key columns that are loop indices; RFC \
-                         semiring-faq-unified-ir §5.3)"
+                        "join key column '{left}' does not resolve to a loop index of this \
+                         aggregate ({declared:?}); a value-equality join keyed on a genuine data \
+                         column requires the relational gather the dense Rust evaluator does not \
+                         drive (RFC semiring-faq-unified-ir §5.3)"
+                    ),
+                }
+            })?;
+
+            // A right key resolving to the same loop symbol — or to no loop
+            // symbol — is the degenerate positional case: the factors already
+            // combine on that shared symbol, so the join is a structural no-op.
+            let Some(sym_r) = resolve_key(right, &declared, &set_to_syms) else {
+                continue;
+            };
+            if sym_l == sym_r {
+                continue;
+            }
+
+            // Data-derived value-equality: admit (sym_l, sym_r) iff their key
+            // columns carry equal member values. Lower to a coded-table equality
+            // predicate the evaluator gates on like any other `filter`.
+            let (pos_l, vals_l) = key_column(&sym_l, &ranges, index_sets)?;
+            let (pos_r, vals_r) = key_column(&sym_r, &ranges, index_sets)?;
+            let (codes_l, codes_r) = encode_columns(&vals_l, &vals_r);
+            conjuncts.push(Expr::Operator(ExpressionNode {
+                op: "==".into(),
+                args: vec![
+                    code_lookup(&pos_l, &codes_l, &sym_l),
+                    code_lookup(&pos_r, &codes_r, &sym_r),
+                ],
+                ..Default::default()
+            }));
+        }
+    }
+
+    if !conjuncts.is_empty() {
+        // Each gate is 0/1, so a product is their conjunction; fold in any
+        // pre-existing filter so a combination survives only if every gate and
+        // the original predicate hold.
+        if let Some(existing) = node.filter.take() {
+            conjuncts.push(*existing);
+        }
+        let pred = if conjuncts.len() == 1 {
+            conjuncts.pop().unwrap()
+        } else {
+            Expr::Operator(ExpressionNode {
+                op: "*".into(),
+                args: conjuncts,
+                ..Default::default()
+            })
+        };
+        node.filter = Some(Box::new(pred));
+    }
+
+    Ok(())
+}
+
+/// Resolve a join key to the loop symbol it denotes: the key itself if it is a
+/// declared range symbol, else the unique range symbol drawing `{from}` an index
+/// set of that name (RFC §5.3 — a clause may name the dimension instead of the
+/// loop symbol). `None` if it resolves to no single loop symbol (a positional /
+/// non-loop key, handled by the caller).
+fn resolve_key(
+    key: &str,
+    declared: &HashSet<&str>,
+    set_to_syms: &HashMap<&str, Vec<&str>>,
+) -> Option<String> {
+    if declared.contains(key) {
+        return Some(key.to_string());
+    }
+    match set_to_syms.get(key) {
+        Some(syms) if syms.len() == 1 => Some(syms[0].to_string()),
+        _ => None,
+    }
+}
+
+/// The 1-based positions and per-position key values of a loop symbol's key
+/// column (RFC §5.3). A categorical range contributes its declared members
+/// (validated as exact-equality keys); an interval range — or a bare dense
+/// integer interval — contributes the integer index itself.
+fn key_column(
+    sym: &str,
+    ranges: &HashMap<String, RangeSpec>,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(Vec<i64>, Vec<JoinKey>), CompileError> {
+    match ranges.get(sym) {
+        Some(RangeSpec::IndexSetRef { from, of }) => {
+            if of.as_ref().is_some_and(|p| !p.is_empty()) {
+                return Err(CompileError::UnsupportedFeatureError {
+                    feature: "value-equality join over a ragged key column".to_string(),
+                    message: format!(
+                        "join key '{sym}' references index set '{from}' with a dependent `of` \
+                         (ragged) binding; equi-join keys must be dense interval / categorical \
+                         columns (RFC semiring-faq-unified-ir §5.3)"
                     ),
                 });
             }
+            let set = index_sets.get(from.as_str()).ok_or_else(|| {
+                CompileError::InterpreterBuildError {
+                    details: format!(
+                        "join key '{sym}' references index set '{from}', which is not declared \
+                             in the model `index_sets` registry (RFC semiring-faq-unified-ir §5.3)"
+                    ),
+                }
+            })?;
+            match set.kind.as_str() {
+                "categorical" => {
+                    let members = set.members.as_ref().ok_or_else(|| {
+                        CompileError::InterpreterBuildError {
+                            details: format!(
+                                "categorical index set '{from}' (join key '{sym}') has no `members`"
+                            ),
+                        }
+                    })?;
+                    let positions: Vec<i64> = (1..=members.len() as i64).collect();
+                    let vals = members
+                        .iter()
+                        .map(|m| join_key_member(m, from))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok((positions, vals))
+                }
+                "interval" => {
+                    let size = set
+                        .size
+                        .ok_or_else(|| CompileError::InterpreterBuildError {
+                            details: format!(
+                                "interval index set '{from}' (join key '{sym}') has no `size`"
+                            ),
+                        })?;
+                    let positions: Vec<i64> = (1..=size).collect();
+                    let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
+                    Ok((positions, vals))
+                }
+                other => Err(CompileError::UnsupportedFeatureError {
+                    feature: "value-equality join over a non-enumerable key column".to_string(),
+                    message: format!(
+                        "join key '{sym}' references index set '{from}' of kind '{other}'; only \
+                         interval (integer IDs) and categorical members can be equi-joined (RFC \
+                         semiring-faq-unified-ir §5.3)"
+                    ),
+                }),
+            }
         }
+        Some(RangeSpec::Interval([lo, hi])) => {
+            let positions: Vec<i64> = (*lo..=*hi).collect();
+            let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
+            Ok((positions, vals))
+        }
+        None => Err(CompileError::InterpreterBuildError {
+            details: format!("join key '{sym}' has no declared range on this aggregate"),
+        }),
     }
-    Ok(())
+}
+
+/// Validate one categorical member used as a join key and project it to a
+/// [`JoinKey`] (RFC §5.3 / §5.7 rule 1): integer IDs and string members pass;
+/// floats and nulls are build-time errors (equality is not portable).
+fn join_key_member(m: &Value, set_name: &str) -> Result<JoinKey, CompileError> {
+    JoinKey::from_json(m).map_err(|e| {
+        let why = match e {
+            KeyError::Float(f) => format!("floating-point member {f}"),
+            KeyError::Null => "null member".to_string(),
+            KeyError::NonScalar => "non-scalar member".to_string(),
+        };
+        CompileError::InterpreterBuildError {
+            details: format!(
+                "{why} in join key index set '{set_name}': join keys must be integer IDs or \
+                 categorical members — floats / nulls are forbidden (equality is not portable \
+                 across bindings; RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1)"
+            ),
+        }
+    })
+}
+
+/// Assign each key value an integer code by its rank in the sorted union of the
+/// two columns' distinct values ([`JoinKey`] total order, §5.7 rule 1): equal
+/// values get equal codes across both columns, so code equality is exactly
+/// member-value equality. This is the dense-coding form of [`inner_equi_join`]'s
+/// bucket-and-probe and yields the same equality classes, independent of the
+/// declared member order (the permuted-fixture determinism property). Codes
+/// start at 1 so 0 stays free for the unused fill of a code table (see
+/// [`code_lookup`]).
+fn encode_columns(vals_l: &[JoinKey], vals_r: &[JoinKey]) -> (Vec<i64>, Vec<i64>) {
+    let mut union: BTreeSet<JoinKey> = BTreeSet::new();
+    for v in vals_l.iter().chain(vals_r.iter()) {
+        union.insert(v.clone());
+    }
+    let codes: BTreeMap<JoinKey, i64> = union
+        .into_iter()
+        .enumerate()
+        .map(|(i, k)| (k, i as i64 + 1))
+        .collect();
+    let map = |vals: &[JoinKey]| -> Vec<i64> { vals.iter().map(|k| codes[k]).collect() };
+    (map(vals_l), map(vals_r))
+}
+
+/// Build `index(makearray(<code table>), sym)` — a constant per-position code
+/// table indexed by the loop symbol. The table spans `[1, max position]` so the
+/// 1-based `index` lookup reads the code for the symbol's current value; the
+/// contraction visits only the column's own positions, so any lower fill (code
+/// 0, which no real value carries) is never read.
+fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
+    let hi = positions.iter().copied().max().unwrap_or(0);
+    let code_at: HashMap<i64, i64> = positions
+        .iter()
+        .copied()
+        .zip(codes.iter().copied())
+        .collect();
+    let mut regions: Vec<Vec<[i64; 2]>> = Vec::with_capacity(hi.max(0) as usize);
+    let mut values: Vec<Expr> = Vec::with_capacity(hi.max(0) as usize);
+    for p in 1..=hi {
+        regions.push(vec![[p, p]]);
+        values.push(Expr::Integer(code_at.get(&p).copied().unwrap_or(0)));
+    }
+    let table = Expr::Operator(ExpressionNode {
+        op: "makearray".into(),
+        regions: Some(regions),
+        values: Some(values),
+        ..Default::default()
+    });
+    Expr::Operator(ExpressionNode {
+        op: "index".into(),
+        args: vec![table, Expr::Variable(sym.to_string())],
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
@@ -636,11 +865,78 @@ mod tests {
         assert_eq!(canonical_serialize_kv(&rows), r#"[[3,0],[4,2]]"#);
     }
 
-    // --- Build-time resolution pass ----------------------------------------
+    // --- Key-column coding (the data-derived value-equality core) -----------
+
+    #[test]
+    fn encode_columns_equal_codes_for_equal_members() {
+        // The m2m disaggregation columns: "coal" recurs (mult. 2) on each side.
+        let l = vec![
+            JoinKey::Cat("coal".into()),
+            JoinKey::Cat("coal".into()),
+            JoinKey::Cat("oil".into()),
+        ];
+        let r = vec![
+            JoinKey::Cat("coal".into()),
+            JoinKey::Cat("coal".into()),
+            JoinKey::Cat("gas".into()),
+        ];
+        let (cl, cr) = encode_columns(&l, &r);
+        // "coal" gets one code shared across both columns; oil/gas differ.
+        assert_eq!(cl[0], cl[1], "both 'coal' on the left share a code");
+        assert_eq!(cl[0], cr[0], "'coal' == 'coal' across columns");
+        assert_eq!(cl[0], cr[1]);
+        assert_ne!(cl[2], cr[2], "'oil' != 'gas'");
+        assert_ne!(cl[0], cl[2], "'coal' != 'oil'");
+        // The defined m·n cardinality: coal(2) × coal(2) = 4 admitted combos.
+        let admitted = (0..3)
+            .flat_map(|a| (0..3).map(move |b| (a, b)))
+            .filter(|&(a, b)| cl[a] == cr[b])
+            .count();
+        assert_eq!(admitted, 4, "coal 2×2 matches; oil/gas unmatched");
+    }
+
+    #[test]
+    fn encode_columns_is_independent_of_member_order() {
+        // Permuting the declared member order leaves the equality classes (and so
+        // the admitted-combination count) unchanged — the determinism property of
+        // join_disaggregation_m2m_permuted.esm.
+        let count = |l: &[JoinKey], r: &[JoinKey]| {
+            let (cl, cr) = encode_columns(l, r);
+            (0..l.len())
+                .flat_map(|a| (0..r.len()).map(move |b| (a, b)))
+                .filter(|&(a, b)| cl[a] == cr[b])
+                .count()
+        };
+        let cat = |s: &str| JoinKey::Cat(s.into());
+        let canonical = count(
+            &[cat("coal"), cat("coal"), cat("oil")],
+            &[cat("coal"), cat("coal"), cat("gas")],
+        );
+        let permuted = count(
+            &[cat("oil"), cat("coal"), cat("coal")],
+            &[cat("gas"), cat("coal"), cat("coal")],
+        );
+        assert_eq!(canonical, permuted, "value-equality is order-independent");
+        assert_eq!(canonical, 4);
+    }
+
+    // --- Build-time resolution / lowering pass ------------------------------
     //
-    // These exercise the per-node validator directly (the public
+    // These exercise the per-node lowering directly (the public
     // `resolve_aggregate_joins(model)` walk is covered end-to-end by the
-    // join_filter.esm integration test, against a real parsed model).
+    // join_filter.esm integration test and the m2m conformance fixtures).
+
+    fn categorical(members: &[&str]) -> IndexSet {
+        IndexSet {
+            kind: "categorical".into(),
+            size: None,
+            members: Some(members.iter().map(|m| Value::from(*m)).collect()),
+            from_faq: None,
+            of: None,
+            offsets: None,
+            values: None,
+        }
+    }
 
     fn agg_with_join(joins: Vec<JoinClause>, ranges: Vec<&str>) -> Expr {
         let mut range_map = HashMap::new();
@@ -659,27 +955,85 @@ mod tests {
     }
 
     #[test]
+    fn lowers_data_derived_join_to_member_equality_filter() {
+        // `[["i","j"]]` over two distinct categorical sets is the data-derived
+        // case: it must synthesize a member-equality `filter` and consume `join`.
+        let mut range_map = HashMap::new();
+        range_map.insert(
+            "i".to_string(),
+            RangeSpec::IndexSetRef {
+                from: "sources".into(),
+                of: None,
+            },
+        );
+        range_map.insert(
+            "j".to_string(),
+            RangeSpec::IndexSetRef {
+                from: "factors".into(),
+                of: None,
+            },
+        );
+        let mut expr = Expr::Operator(ExpressionNode {
+            op: "aggregate".into(),
+            ranges: Some(range_map),
+            output_idx: Some(vec![]),
+            join: Some(vec![JoinClause {
+                on: vec![["i".into(), "j".into()]],
+            }]),
+            expr: Some(Box::new(Expr::Number(1.0))),
+            ..Default::default()
+        });
+        let mut isets = HashMap::new();
+        isets.insert("sources".to_string(), categorical(&["coal", "coal", "oil"]));
+        isets.insert("factors".to_string(), categorical(&["coal", "coal", "gas"]));
+
+        lower_expr_joins(&mut expr, &isets).unwrap();
+        let Expr::Operator(node) = &expr else {
+            panic!("expr is not an operator");
+        };
+        assert!(node.join.is_none(), "resolved join must be consumed");
+        let filter = node
+            .filter
+            .as_ref()
+            .expect("data-derived join adds a filter");
+        let Expr::Operator(f) = filter.as_ref() else {
+            panic!("filter is not an operator");
+        };
+        assert_eq!(f.op, "==", "a single key pair lowers to one equality gate");
+    }
+
+    #[test]
     fn accepts_degenerate_positional_join() {
-        // join key columns src/fuel ARE declared loop indices ⇒ positional no-op.
+        // key columns src/fuel resolve to their own loop symbols (the index-set
+        // names name the same dimension) ⇒ positional no-op: no filter is
+        // synthesized and the join is consumed.
         let join = vec![JoinClause {
             on: vec![
                 ["src".into(), "sourceType".into()],
                 ["fuel".into(), "fuelType".into()],
             ],
         }];
-        let expr = agg_with_join(join, vec!["src", "fuel"]);
-        assert!(validate_expr_joins(&expr).is_ok());
+        let mut expr = agg_with_join(join, vec!["src", "fuel"]);
+        lower_expr_joins(&mut expr, &HashMap::new()).unwrap();
+        let Expr::Operator(node) = &expr else {
+            panic!("expr is not an operator");
+        };
+        assert!(node.join.is_none(), "resolved join must be consumed");
+        assert!(
+            node.filter.is_none(),
+            "a degenerate positional join adds no filter"
+        );
     }
 
     #[test]
     fn rejects_non_positional_join_as_unsupported() {
-        // Left key column 'srcCol' is NOT a loop index ⇒ needs the data-derived
-        // engine (M3) ⇒ clear UnsupportedFeatureError.
+        // Left key column 'srcCol' resolves to no loop index ⇒ a join keyed on a
+        // genuine data column ⇒ clear UnsupportedFeatureError.
         let join = vec![JoinClause {
             on: vec![["srcCol".into(), "sourceType".into()]],
         }];
-        let expr = agg_with_join(join, vec!["src", "fuel"]);
-        let err = validate_expr_joins(&expr).unwrap_err();
+        let mut expr = agg_with_join(join, vec!["src", "fuel"]);
+        let err = lower_expr_joins(&mut expr, &HashMap::new()).unwrap_err();
         match err {
             CompileError::UnsupportedFeatureError { feature, message } => {
                 assert!(feature.contains("value-equality join"));
@@ -692,14 +1046,14 @@ mod tests {
     #[test]
     fn rejects_empty_on_list() {
         let join = vec![JoinClause { on: vec![] }];
-        let expr = agg_with_join(join, vec!["src"]);
-        assert!(validate_expr_joins(&expr).is_err());
+        let mut expr = agg_with_join(join, vec!["src"]);
+        assert!(lower_expr_joins(&mut expr, &HashMap::new()).is_err());
     }
 
     #[test]
     fn rejects_join_on_non_aggregate_op() {
         // A `join` smuggled onto a non-aggregate op is a build error.
-        let bogus = Expr::Operator(ExpressionNode {
+        let mut bogus = Expr::Operator(ExpressionNode {
             op: "+".into(),
             join: Some(vec![JoinClause {
                 on: vec![["a".into(), "b".into()]],
@@ -707,14 +1061,14 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        assert!(validate_expr_joins(&bogus).is_err());
+        assert!(lower_expr_joins(&mut bogus, &HashMap::new()).is_err());
     }
 
     #[test]
     fn noop_when_no_join_present() {
-        // An aggregate node with no join clause validates trivially, and the
-        // walk recurses into nested children without spurious errors.
-        let agg = Expr::Operator(ExpressionNode {
+        // An aggregate node with no join clause resolves trivially, and the walk
+        // recurses into nested children without spurious errors.
+        let mut agg = Expr::Operator(ExpressionNode {
             op: "aggregate".into(),
             ranges: Some(HashMap::from([(
                 "i".to_string(),
@@ -725,6 +1079,10 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        assert!(validate_expr_joins(&agg).is_ok());
+        lower_expr_joins(&mut agg, &HashMap::new()).unwrap();
+        let Expr::Operator(node) = &agg else {
+            panic!("expr is not an operator");
+        };
+        assert!(node.filter.is_none(), "no join ⇒ no synthesized filter");
     }
 }
