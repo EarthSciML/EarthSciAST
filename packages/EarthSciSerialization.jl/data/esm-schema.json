@@ -390,6 +390,36 @@
             ]
           }
         },
+        "join": {
+          "type": "array",
+          "description": "For arrayop / aggregate: optional value-equality combination of factors by key columns — an inner equi-join (RFC semiring-faq-unified-ir §5.3), subsuming ESI join and making connectivity gathers first-class. Each entry is a join clause whose \"on\" lists one or more key-column pairs [left, right]; a ⊗-product term is contributed only for index combinations whose key columns are equal on EVERY listed pair, and an unmatched row contributes the additive identity (the empty ⊕-reduction value), adding nothing under any semiring. Inner-only — there is no outer/left variant; many-to-many is defined, not an error (m·n product terms, each a ⊗-term into the enclosing ⊕-reduction); key columns must be exact-equality types (integer IDs or categorical members compared by Unicode code point) — floating-point join keys are forbidden. Absent ⇒ factors combine only by shared index name (positional einsum), exactly as today.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "on"
+            ],
+            "properties": {
+              "on": {
+                "type": "array",
+                "description": "The key-column pairs to equi-join on. Each pair is a 2-element array [left, right] naming the two factor key columns whose values must compare equal. At least one pair is required.",
+                "minItems": 1,
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        },
+        "filter": {
+          "$ref": "#/$defs/Expression",
+          "description": "For arrayop / aggregate: optional boolean predicate Expression that restricts which index combinations contribute a ⊗-product term to the reduction (RFC semiring-faq-unified-ir §5.3 / §7.2). May reference any index symbol in scope (an entry of output_idx or a contracted index). Combinations for which the predicate evaluates false contribute the additive identity (the empty ⊕-reduction value) — the explicit way to express a guarded sum or a \"keep unmatched with a default\", as opposed to a join mode."
+        },
         "regions": {
           "type": "array",
           "description": "For makearray: list of sub-region boxes of the output array. Each region is an array of [start, stop] pairs, one per output dimension. The nth region is filled with the nth entry of values. Overlapping regions are permitted; later regions overwrite earlier ones. Mirrors SymbolicUtils.ArrayMaker.regions.",

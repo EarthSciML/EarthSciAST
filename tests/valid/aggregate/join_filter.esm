@@ -1,0 +1,86 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "join_filter",
+    "description": "M2 schema fixture (RFC semiring-faq-unified-ir §5.3 / §7.2; bead ess-my4.2.1): an `aggregate` node carrying the two additive M2 fields — a value-equality `join` (inner equi-join of factors on key-column pairs) and a boolean `filter` predicate. Exercises the schema deltas: `join` is an array of `{ \"on\": [[left, right], …] }` clauses (each pair exactly length-2, at least one pair), and `filter` is a `$ref` Expression restricting which index combinations contribute a ⊗-product term. Models the ESI-style MOVES contraction `aggregate(derive(join…))` (§7.2): sum over the categorical `src`/`fuel` index sets of `activity·base_rate`, combining factors by value equality of (src↔sourceType, fuel↔fuelType) and keeping only rows whose `base_rate` is positive. This is the strict-superset additive form of an ordinary arrayop and validates against the schema with no evaluator.",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.capable"
+    ],
+    "tags": [
+      "aggregate",
+      "join",
+      "filter",
+      "semiring",
+      "conformance",
+      "schema"
+    ]
+  },
+  "models": {
+    "EmissionsAggregate": {
+      "index_sets": {
+        "sourceType": {
+          "kind": "categorical",
+          "members": [
+            "onroad",
+            "nonroad"
+          ]
+        },
+        "fuelType": {
+          "kind": "categorical",
+          "members": [
+            "gasoline",
+            "diesel"
+          ]
+        }
+      },
+      "variables": {
+        "emissions": {
+          "type": "state"
+        },
+        "activity": {
+          "type": "parameter"
+        },
+        "base_rate": {
+          "type": "parameter"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": ["emissions"],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "src": { "from": "sourceType" },
+              "fuel": { "from": "fuelType" }
+            },
+            "join": [
+              { "on": [["src", "sourceType"], ["fuel", "fuelType"]] }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                { "op": "index", "args": ["base_rate", "src"] },
+                0
+              ]
+            },
+            "reduce": "+",
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["activity", "src"] },
+                { "op": "index", "args": ["base_rate", "src"] }
+              ]
+            },
+            "args": ["activity", "base_rate"]
+          }
+        }
+      ]
+    }
+  }
+}
