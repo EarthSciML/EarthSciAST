@@ -30,6 +30,7 @@ using JSON3
     include("data_loader_fixtures_test.jl")
     include("arrayed_vars_test.jl")
     include("canonicalize_test.jl")
+    include("relational_test.jl")
     include("rule_engine_test.jl")
     include("rule_engine_conformance_test.jl")
     include("scheme_expansion_test.jl")
