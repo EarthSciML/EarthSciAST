@@ -32,7 +32,7 @@ from ._monitoring import track_performance
 from .esm_types import (
     ReactionSystem,
     ContinuousEvent, DiscreteEvent, Expr, ExprNode, EsmFile,
-    AffectEquation, FunctionalAffect,
+    AffectEquation, FunctionalAffect, is_aggregate_op,
 )
 from .flatten import (
     FlattenedEquation,
@@ -46,6 +46,8 @@ from .flatten import (
 from .numpy_interpreter import (
     EvalContext,
     NumpyInterpreterError,
+    _RaggedRange,
+    _resolve_range_spec,
     eval_expr,
 )
 from .reactions import lower_reactions_to_equations
@@ -859,7 +861,7 @@ def _collect_algebraic_substitutions(
     for eq in equations:
         lhs = eq.lhs
         rhs = eq.rhs
-        if isinstance(lhs, ExprNode) and lhs.op == "arrayop":
+        if isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op):
             body = lhs.expr
             if isinstance(body, ExprNode) and body.op == "index" and body.args:
                 head = body.args[0]
@@ -868,7 +870,7 @@ def _collect_algebraic_substitutions(
                     if (
                         len(idx_syms) == len(body.args) - 1
                         and isinstance(rhs, ExprNode)
-                        and rhs.op == "arrayop"
+                        and is_aggregate_op(rhs.op)
                         and rhs.expr is not None
                     ):
                         subs[head] = (idx_syms, rhs.expr)
@@ -957,13 +959,76 @@ def _rebind_index_syms(
     return expr
 
 
-def _iter_arrayop_points(lhs: ExprNode) -> Tuple[List[str], List[List[int]]]:
-    """Return ``(output_idx_symbols, expanded_ranges)`` for an arrayop LHS."""
+def _iter_arrayop_points(
+    lhs: ExprNode, ctx: EvalContext
+) -> Tuple[List[str], List[List[int]]]:
+    """Return ``(output_idx_symbols, expanded_ranges)`` for an aggregate LHS.
+
+    Output ranges may be dense ``[lo, hi]`` tuples or ``{"from": <name>}``
+    index-set references (RFC §5.2), resolved against ``ctx.index_sets``.
+    """
     if lhs.ranges is None or lhs.output_idx is None:
-        raise SimulationError("arrayop LHS missing output_idx/ranges")
+        raise SimulationError("aggregate / arrayop LHS missing output_idx/ranges")
     syms = [s for s in lhs.output_idx if isinstance(s, str)]
-    ranges = [_expand_range(lhs.ranges[s]) for s in syms]
+    ranges: List[List[int]] = []
+    for s in syms:
+        resolved = _resolve_range_spec(lhs.ranges[s], ctx)
+        if isinstance(resolved, _RaggedRange):
+            raise SimulationError(
+                f"aggregate / arrayop output index {s!r} cannot reference a "
+                f"ragged index set (RFC §5.2)"
+            )
+        ranges.append(_expand_range(resolved))
     return syms, ranges
+
+
+def _aggregate_needs_interpreter(node: Any) -> bool:
+    """True if an aggregate / arrayop node uses a feature beyond the simulation
+    fast path's reach — a named ``semiring`` or any ``{"from": ...}`` index-set
+    range reference (RFC §5.1 / §5.2). Such nodes are evaluated through the full
+    NumPy interpreter, which carries the semiring and index-set semantics, rather
+    than the hand-rolled einsum unroll below.
+    """
+    if not isinstance(node, ExprNode):
+        return False
+    if getattr(node, "semiring", None) is not None:
+        return True
+    return any(isinstance(v, dict) for v in (node.ranges or {}).values())
+
+
+def _scatter_arrayop_rhs(
+    lhs: ExprNode,
+    rhs: Expr,
+    idx_exprs: List[Expr],
+    head: str,
+    ctx: EvalContext,
+    shapes: Dict[str, Tuple[int, ...]],
+    state_layout: Dict[str, slice],
+    dy: np.ndarray,
+) -> None:
+    """Evaluate an aggregate RHS through the interpreter and scatter into ``dy``.
+
+    Used for the ``aggregate(D(index(var, i…)), ranges) = aggregate(…)`` ODE form
+    when the RHS carries a named semiring or index-set range references: the full
+    interpreter produces the output-box array and each element is written to the
+    matching flat-state slot. The LHS and RHS output boxes share index symbols,
+    so element ``multi`` of the result maps to ``var[idx_exprs(multi)]``.
+    """
+    result = np.asarray(eval_expr(rhs, ctx), dtype=float)
+    syms, ranges = _iter_arrayop_points(lhs, ctx)
+    shape = shapes[head]
+    layout_start = state_layout[head].start
+    it = np.ndindex(*(len(r) for r in ranges)) if ranges else [()]
+    prev_locals = dict(ctx.locals)
+    try:
+        for multi in it:
+            for s, pos in zip(syms, multi):
+                ctx.locals[s] = ranges[syms.index(s)][pos]
+            idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
+            flat_pos = layout_start + _linear_pos(shape, idx_vals)
+            dy[flat_pos] = float(result[multi]) if result.ndim else float(result)
+    finally:
+        ctx.locals = prev_locals
 
 
 def _apply_equation_to_dy(
@@ -1004,15 +1069,26 @@ def _apply_equation_to_dy(
                 dy[flat_pos] = val
                 return
 
-    # Case B: arrayop LHS wrapping D(index(var, ...)).
-    if isinstance(lhs, ExprNode) and lhs.op == "arrayop" and lhs.expr is not None:
+    # Case B: aggregate / arrayop LHS wrapping D(index(var, ...)).
+    if isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op) and lhs.expr is not None:
         body = lhs.expr
         if isinstance(body, ExprNode) and body.op == "D" and body.args:
             inner = body.args[0]
             if isinstance(inner, ExprNode) and inner.op == "index" and inner.args:
                 head = inner.args[0]
                 if isinstance(head, str) and head in state_layout:
-                    syms, ranges = _iter_arrayop_points(lhs)
+                    # Nodes using a named semiring or {"from": ...} index sets are
+                    # evaluated through the full interpreter (which carries those
+                    # semantics) and scattered into dy; the dense sum-product fast
+                    # path below is preserved byte-for-byte for existing fixtures.
+                    if (_aggregate_needs_interpreter(rhs)
+                            or _aggregate_needs_interpreter(lhs)):
+                        _scatter_arrayop_rhs(
+                            lhs, rhs, inner.args[1:], head, ctx, shapes,
+                            state_layout, dy,
+                        )
+                        return
+                    syms, ranges = _iter_arrayop_points(lhs, ctx)
                     idx_exprs = inner.args[1:]
                     # RHS is typically an arrayop with the same ranges — the
                     # body is what we evaluate point-by-point. Fall through to
@@ -1023,7 +1099,7 @@ def _apply_equation_to_dy(
                     rhs_reduce = "+"
                     rhs_contract_syms: List[str] = []
                     rhs_contract_ranges: List[List[int]] = []
-                    if isinstance(rhs, ExprNode) and rhs.op == "arrayop":
+                    if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op):
                         rhs_body = rhs.expr
                         rhs_reduce = rhs.reduce if rhs.reduce is not None else "+"
                         rhs_out_syms = {
@@ -1159,6 +1235,7 @@ def _simulate_with_numpy(
                 observed_values={},
                 y=y,
                 t=t,
+                index_sets=flat.index_sets,
             )
             dy = np.zeros(total_size, dtype=float)
             for eq in working_equations:

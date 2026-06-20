@@ -66,6 +66,8 @@ def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
             result["expr"] = _serialize_expression(expr.expr)
         if expr.reduce is not None:
             result["reduce"] = expr.reduce
+        if getattr(expr, "semiring", None) is not None:
+            result["semiring"] = expr.semiring
         if expr.ranges is not None:
             result["ranges"] = expr.ranges
         if expr.regions is not None:
@@ -393,6 +395,9 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
         result["guesses"] = guesses_out
     if model.system_kind is not None:
         result["system_kind"] = model.system_kind
+    # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2).
+    if getattr(model, "index_sets", None):
+        result["index_sets"] = model.index_sets
 
     return result
 

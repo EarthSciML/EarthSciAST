@@ -29,11 +29,13 @@ def _ctx(
     values: Dict[str, np.ndarray],
     params: Dict[str, float] | None = None,
     t: float = 0.0,
+    index_sets: Dict[str, object] | None = None,
 ) -> EvalContext:
     """Build an :class:`EvalContext` from a dict of ``{name: ndarray}``.
 
     Variables are laid out in insertion order, each taking
     ``int(np.prod(arr.shape))`` slots in a shared flat state vector.
+    ``index_sets`` supplies the document-scoped index-set registry (RFC §5.2).
     """
     state_layout: Dict[str, slice] = {}
     state_shapes: Dict[str, Tuple[int, ...]] = {}
@@ -54,6 +56,7 @@ def _ctx(
         observed_values={},
         y=y,
         t=t,
+        index_sets=index_sets or {},
     )
 
 
@@ -302,3 +305,177 @@ def test_arrayop_stencil_fallback_unchanged() -> None:
     )
     out = eval_expr(expr, ctx)
     np.testing.assert_allclose(out, [1.0 + 100.0, 10.0 + 1000.0, 100.0 + 10000.0])
+
+
+# ---------------------------------------------------------------------------
+# M1: semiring parameterization, index-set registry, aggregate dispatch
+# (RFC semiring-faq-unified-ir §5.1 / §5.2 / §5.4 / §5.6; bead ess-my4.1.4)
+# ---------------------------------------------------------------------------
+
+
+def _scalar_aggregate(semiring, body, ranges, reduce=None, op="aggregate"):
+    return ExprNode(op=op, args=[], output_idx=[], semiring=semiring,
+                    reduce=reduce, expr=body, ranges=ranges)
+
+
+def test_five_semirings_evaluate_with_correct_values() -> None:
+    """Each registry semiring contracts a body with its (⊕, ⊗) pair (§5.1)."""
+    # a = [3, 1, 4], b = [2, 5, 1]; index i over [1,3].
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0]), "b": np.array([2.0, 5.0, 1.0])})
+    ia = ExprNode(op="index", args=["a", "i"])
+    ib = ExprNode(op="index", args=["b", "i"])
+    prod = ExprNode(op="*", args=[ia, ib])   # ⊗ = × body
+    summ = ExprNode(op="+", args=[ia, ib])   # ⊗ = + body
+    rng = {"i": [1, 3]}
+
+    # sum_product: Σ a_i·b_i = 6 + 5 + 4 = 15
+    assert eval_expr(_scalar_aggregate("sum_product", prod, rng), ctx) == pytest.approx(15.0)
+    # max_product: max a_i·b_i = max(6, 5, 4) = 6
+    assert eval_expr(_scalar_aggregate("max_product", prod, rng), ctx) == pytest.approx(6.0)
+    # min_sum (tropical): min a_i+b_i = min(5, 6, 5) = 5
+    assert eval_expr(_scalar_aggregate("min_sum", summ, rng), ctx) == pytest.approx(5.0)
+    # max_sum: max a_i+b_i = max(5, 6, 5) = 6
+    assert eval_expr(_scalar_aggregate("max_sum", summ, rng), ctx) == pytest.approx(6.0)
+    # bool_and_or: ⋁ (a_i>2 ∧ b_i>2). a>2:[T,F,T], b>2:[F,T,F] → all F → 0
+    bool_body = ExprNode(op="and", args=[
+        ExprNode(op=">", args=[ia, 2]), ExprNode(op=">", args=[ib, 2])])
+    assert eval_expr(_scalar_aggregate("bool_and_or", bool_body, rng), ctx) == pytest.approx(0.0)
+    # bool_and_or true case: ⋁ (a_i>2 ∧ b_i>0). a>2:[T,F,T], b>0:[T,T,T] → [T,F,T] → 1
+    bool_true = ExprNode(op="and", args=[
+        ExprNode(op=">", args=[ia, 2]), ExprNode(op=">", args=[ib, 0])])
+    assert eval_expr(_scalar_aggregate("bool_and_or", bool_true, rng), ctx) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("semiring,expected", [
+    ("sum_product", 0.0),
+    ("max_product", -np.inf),
+    ("min_sum", np.inf),
+    ("max_sum", -np.inf),
+    ("bool_and_or", 0.0),
+])
+def test_empty_reduction_returns_semiring_identity(semiring, expected) -> None:
+    """An empty contraction returns the semiring's 0̄ identity (§5.1)."""
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    out = eval_expr(_scalar_aggregate(semiring, body, {"i": [1, 0]}), ctx)
+    assert out == expected
+
+
+def test_aggregate_is_alias_for_arrayop() -> None:
+    """op:aggregate and op:arrayop evaluate identically (§5.6)."""
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    agg = _scalar_aggregate(None, body, {"i": [1, 3]}, op="aggregate")
+    arr = _scalar_aggregate(None, body, {"i": [1, 3]}, op="arrayop")
+    assert eval_expr(agg, ctx) == eval_expr(arr, ctx) == pytest.approx(8.0)
+
+
+def test_no_semiring_defaults_to_sum_product_unchanged() -> None:
+    """Absent semiring reproduces today's sum-of-products semantics (§9)."""
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0]), "b": np.array([2.0, 5.0, 1.0])})
+    prod = ExprNode(op="*", args=[
+        ExprNode(op="index", args=["a", "i"]),
+        ExprNode(op="index", args=["b", "i"])])
+    # No semiring, no reduce → "+" over products = 15.
+    assert eval_expr(_scalar_aggregate(None, prod, {"i": [1, 3]}), ctx) == pytest.approx(15.0)
+
+
+def test_semiring_supersedes_reduce_field() -> None:
+    """When both are present the semiring's ⊕ wins over `reduce` (§5.1)."""
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    # reduce says "+" but semiring max_product ⊕ = max → 4, not 8.
+    node = _scalar_aggregate("max_product", body, {"i": [1, 3]}, reduce="+")
+    assert eval_expr(node, ctx) == pytest.approx(4.0)
+
+
+def test_unregistered_semiring_raises() -> None:
+    ctx = _ctx({"a": np.array([1.0, 2.0])})
+    body = ExprNode(op="index", args=["a", "i"])
+    node = _scalar_aggregate("tropical_max", body, {"i": [1, 2]})
+    with pytest.raises(NumpyInterpreterError, match="unregistered semiring"):
+        eval_expr(node, ctx)
+
+
+def test_index_set_interval_and_categorical_resolution() -> None:
+    """A {"from": name} range resolves an interval / categorical set (§5.2)."""
+    idx = {"cells": {"kind": "interval", "size": 3},
+           "county": {"kind": "categorical", "members": ["X", "Y", "Z"]}}
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0])}, index_sets=idx)
+    body = ExprNode(op="index", args=["a", "i"])
+    assert eval_expr(_scalar_aggregate(None, body, {"i": {"from": "cells"}}), ctx) == pytest.approx(8.0)
+    assert eval_expr(_scalar_aggregate(None, body, {"i": {"from": "county"}}), ctx) == pytest.approx(8.0)
+
+
+def test_undeclared_from_name_errors() -> None:
+    """A range 'from' an undeclared set errors — no implicit interval (§5.2)."""
+    ctx = _ctx({"a": np.array([1.0, 2.0])}, index_sets={"cells": {"kind": "interval", "size": 2}})
+    body = ExprNode(op="index", args=["a", "i"])
+    node = _scalar_aggregate(None, body, {"i": {"from": "typo"}})
+    with pytest.raises(NumpyInterpreterError, match="undeclared index set"):
+        eval_expr(node, ctx)
+
+
+def test_derived_index_set_not_supported_in_m1() -> None:
+    ctx = _ctx({"a": np.array([1.0])}, index_sets={"e": {"kind": "derived", "from_faq": "x"}})
+    body = ExprNode(op="index", args=["a", "i"])
+    with pytest.raises(NumpyInterpreterError, match="derived"):
+        eval_expr(_scalar_aggregate(None, body, {"i": {"from": "e"}}), ctx)
+
+
+def test_ragged_index_set_dynamic_per_parent_bound() -> None:
+    """A ragged inner set iterates [1..offsets[parent]] per parent (§5.2)."""
+    idx = {
+        "cells": {"kind": "interval", "size": 2},
+        "edges_of_cell": {"kind": "ragged", "of": ["i"],
+                          "offsets": "nedges", "values": "edges"},
+    }
+    # cell 1 has 2 edges, cell 2 has 3 edges.
+    ctx = _ctx({"nedges": np.array([2.0, 3.0])}, index_sets=idx)
+    # out[i] = Σ_{k=1..nedges[i]} k  → [1+2, 1+2+3] = [3, 6]
+    node = ExprNode(op="aggregate", args=[], output_idx=["i"], expr="k",
+                    ranges={"i": {"from": "cells"},
+                            "k": {"from": "edges_of_cell", "of": ["i"]}})
+    np.testing.assert_allclose(eval_expr(node, ctx), [3.0, 6.0])
+
+
+def test_ragged_output_index_rejected() -> None:
+    idx = {"edges_of_cell": {"kind": "ragged", "of": ["i"],
+                            "offsets": "nedges", "values": "edges"}}
+    ctx = _ctx({"nedges": np.array([2.0])}, index_sets=idx)
+    node = ExprNode(op="aggregate", args=[], output_idx=["k"], expr="k",
+                    ranges={"k": {"from": "edges_of_cell", "of": ["i"]}})
+    with pytest.raises(NumpyInterpreterError, match="ragged"):
+        eval_expr(node, ctx)
+
+
+def test_array_output_with_semiring_and_from() -> None:
+    """Array-producing aggregate: out[i] over an index set, no contraction."""
+    idx = {"cells": {"kind": "interval", "size": 3}}
+    ctx = _ctx({"a": np.array([3.0, 1.0, 4.0]), "b": np.array([2.0, 5.0, 1.0])},
+               index_sets=idx)
+    prod = ExprNode(op="*", args=[
+        ExprNode(op="index", args=["a", "i"]),
+        ExprNode(op="index", args=["b", "i"])])
+    node = ExprNode(op="aggregate", args=[], output_idx=["i"], semiring="sum_product",
+                    expr=prod, ranges={"i": {"from": "cells"}})
+    np.testing.assert_allclose(eval_expr(node, ctx), [6.0, 5.0, 4.0])
+
+
+def test_expr_contains_array_op_recognizes_aggregate() -> None:
+    node = ExprNode(op="aggregate", args=[], output_idx=[],
+                    expr=ExprNode(op="index", args=["a", "i"]), ranges={"i": [1, 2]})
+    assert expr_contains_array_op(node) is True
+
+
+def test_matvec_contraction_with_two_indices_sum_product() -> None:
+    """y[i] = Σ_k A[i,k]·x[k] via sum_product over a 2D factor."""
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])
+    ctx = _ctx({"A": A, "x": np.array([5.0, 6.0])})
+    body = ExprNode(op="*", args=[
+        ExprNode(op="index", args=["A", "i", "k"]),
+        ExprNode(op="index", args=["x", "k"])])
+    node = ExprNode(op="aggregate", args=[], output_idx=["i"], semiring="sum_product",
+                    expr=body, ranges={"i": [1, 2], "k": [1, 2]})
+    # [1*5+2*6, 3*5+4*6] = [17, 39]
+    np.testing.assert_allclose(eval_expr(node, ctx), [17.0, 39.0])

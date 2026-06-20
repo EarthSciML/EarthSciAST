@@ -185,6 +185,10 @@ class FlattenedSystem:
     discrete_events: List[DiscreteEvent] = field(default_factory=list)
     domain: Optional[Domain] = None
     metadata: FlattenMetadata = field(default_factory=FlattenMetadata)
+    # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
+    # merged across the flattened models. Threaded to the evaluator so it can
+    # resolve arrayop / aggregate range references of the form {"from": <name>}.
+    index_sets: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def variables(self) -> Dict[str, str]:
@@ -206,7 +210,7 @@ class FlattenedSystem:
 
 _SPATIAL_OPS = {"grad", "div", "laplacian", "curl"}
 _ARRAY_OPS = {
-    "arrayop", "makearray", "index", "broadcast",
+    "aggregate", "arrayop", "makearray", "index", "broadcast",
     "reshape", "transpose", "concat",
 }
 
@@ -236,12 +240,12 @@ def _expr_to_string(expr: Expr) -> str:
             dim = expr.dim or ""
             return f"{op}({inner}, {dim})" if dim else f"{op}({inner})"
 
-        if op == "arrayop":
+        if op in ("aggregate", "arrayop"):
             body = _expr_to_string(expr.expr) if expr.expr is not None else ""
             idxs = ",".join(str(i) for i in (expr.output_idx or []))
             ranges = expr.ranges or {}
             ranges_str = ",".join(f"{k}={v}" for k, v in ranges.items())
-            return f"arrayop[{idxs}]({body}; {ranges_str})"
+            return f"{op}[{idxs}]({body}; {ranges_str})"
 
         if op == "makearray":
             vals = ",".join(_expr_to_string(v) for v in (expr.values or []))
@@ -285,10 +289,10 @@ def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = N
             return expr
         return f"{prefix}.{expr}"
     if isinstance(expr, ExprNode):
-        # For arrayop, index symbols (output_idx and ranges keys) are local to
-        # the expression body and must not be namespaced.
+        # For aggregate / arrayop, index symbols (output_idx and ranges keys) are
+        # local to the expression body and must not be namespaced.
         local_leave = set(leave_alone)
-        if expr.op == "arrayop":
+        if expr.op in ("aggregate", "arrayop"):
             if expr.output_idx:
                 for sym in expr.output_idx:
                     if isinstance(sym, str):
@@ -338,7 +342,7 @@ def _lhs_dependent_var(lhs: Expr) -> Optional[str]:
                     if isinstance(head, str):
                         return head
             return None
-        if lhs.op == "arrayop" and lhs.expr is not None:
+        if lhs.op in ("aggregate", "arrayop") and lhs.expr is not None:
             return _lhs_dependent_var(lhs.expr)
         # Algebraic equation: LHS is a complex expression — not a single var.
         return None
@@ -883,6 +887,12 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
 
     # Step 3: assemble the final FlattenedSystem from the per-component pieces.
     flat = FlattenedSystem(metadata=metadata)
+    # Merge each model's document-scoped index-set registry (RFC §5.2) so the
+    # evaluator can resolve {"from": <name>} range references at simulation time.
+    for model in esm_file.models.values():
+        model_index_sets = getattr(model, "index_sets", None)
+        if model_index_sets:
+            flat.index_sets.update(model_index_sets)
     seen_lhs: Dict[str, FlattenedEquation] = {}
     for comp in components.values():
         for name, var in comp.state_vars.items():
@@ -1131,7 +1141,7 @@ def _collect_index_uses(
                 _collect_index_uses(a, state_vars, out, bound_indices)
             return
 
-        if expr.op == "arrayop":
+        if expr.op in ("aggregate", "arrayop"):
             # Iterate the output box (via `ranges` if provided, else via the
             # output_idx symbols we cannot resolve). For each concrete point
             # inherit bound_indices and walk the body.
@@ -1141,7 +1151,14 @@ def _collect_index_uses(
             for k in ranges.keys():
                 if k not in idx_syms:
                     idx_syms.append(k)
-            if idx_syms and all(s in ranges for s in idx_syms):
+            # Only enumerate concretely when every index has a dense [lo, hi]
+            # range. Index-set references ({"from": ...}, RFC §5.2) are resolved
+            # by the evaluator against the registry, not here; fall back to a
+            # plain child walk so this collector never chokes on them.
+            dense_ranges = all(
+                isinstance(ranges.get(s), (list, tuple)) for s in idx_syms
+            )
+            if idx_syms and all(s in ranges for s in idx_syms) and dense_ranges:
                 # Enumerate Cartesian product of index ranges.
                 value_lists = [_expand_range(ranges[s]) for s in idx_syms]
                 def rec(pos: int, current: Dict[str, int]) -> None:

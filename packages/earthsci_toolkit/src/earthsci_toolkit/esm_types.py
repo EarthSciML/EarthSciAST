@@ -23,11 +23,18 @@ class ExprNode:
     upper: Optional['Expr'] = None  # upper integration bound (for integral operator)
 
     # Array-op extensions (schema §ExpressionNode). None unless the op uses them.
-    # arrayop:
+    # arrayop / aggregate ("aggregate" is the canonical op tag; "arrayop" is a
+    # deprecated alias — RFC semiring-faq-unified-ir §5.6):
     output_idx: Optional[List[Union[str, int]]] = None
     expr: Optional['Expr'] = None
-    reduce: Optional[str] = None  # default "+"
-    ranges: Optional[Dict[str, List[int]]] = None
+    reduce: Optional[str] = None  # default "+"; names only the semiring ⊕ operator
+    # Named semiring (⊕, ⊗) parameterizing the reduction (RFC §5.1). When present
+    # it supersedes ``reduce``; absent ⇒ "sum_product" (today's semantics).
+    semiring: Optional[str] = None
+    # Each range value is EITHER a dense integer tuple ([start, stop] or
+    # [start, step, stop]) OR an index-set reference {"from": <name>, "of": [...]}
+    # resolved against the document ``index_sets`` registry (RFC §5.2).
+    ranges: Optional[Dict[str, Union[List[int], Dict[str, Any]]]] = None
     # makearray:
     regions: Optional[List[List[List[int]]]] = None
     values: Optional[List['Expr']] = None
@@ -67,6 +74,18 @@ class ExprNode:
 
 # Recursive type definition for expressions
 Expr = Union[int, float, str, ExprNode]
+
+
+# The canonical aggregate op tag and its deprecated alias (RFC
+# semiring-faq-unified-ir §5.6). Every dispatch site MUST treat the two
+# identically. ``aggregate`` is canonical; ``arrayop`` continues to parse and
+# evaluate as an exact synonym so existing files are unaffected.
+AGGREGATE_OPS: Tuple[str, str] = ("aggregate", "arrayop")
+
+
+def is_aggregate_op(op: Any) -> bool:
+    """True if ``op`` is the aggregate node tag or its deprecated ``arrayop`` alias."""
+    return op in AGGREGATE_OPS
 
 
 RuleRegion = Union[str, Dict[str, Any]]
@@ -146,6 +165,11 @@ class Model:
     guesses: Dict[str, Union[float, 'Expr']] = field(default_factory=dict)
     # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
     system_kind: Optional[str] = None
+    # Document-scoped registry of named index sets (RFC semiring-faq-unified-ir
+    # §5.2), keyed by name. Each entry is an IndexSet dict: interval / categorical
+    # / derived / ragged. Referenced from arrayop / aggregate range specs of the
+    # form {"from": <name>}. Empty ⇒ resolution falls back to domain.spatial.
+    index_sets: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -52,6 +52,10 @@ class EvalContext:
     y: np.ndarray
     t: float
     locals: Dict[str, int] = field(default_factory=dict)
+    # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
+    # keyed by name. Used to resolve arrayop / aggregate range references of the
+    # form {"from": <name>}. Empty ⇒ no named sets are declared.
+    index_sets: Dict[str, Any] = field(default_factory=dict)
 
 
 class NumpyInterpreterError(Exception):
@@ -145,6 +149,127 @@ def _broadcast_fn(fn: str) -> Callable:
     if fn not in table:
         raise NumpyInterpreterError(f"Unsupported broadcast fn: {fn}")
     return table[fn]
+
+
+# Closed semiring registry (RFC semiring-faq-unified-ir §5.1). Each entry fixes
+# the (⊕, ⊗) operator pair AND both identity elements: ``zero`` (0̄) is the value
+# of an empty ⊕-reduction and ``one`` (1̄) the value of an empty ⊗-product. The
+# ``reduce`` field of a node names only ⊕; ⊗ and the identities come from this
+# table, never from the file. Adding a semiring is a spec change, not a per-file
+# extension, so this registry is closed and exhaustive.
+_SEMIRINGS: Dict[str, Dict[str, Any]] = {
+    "sum_product": {"oplus": "+",   "zero": 0.0,      "otimes": "*",   "one": 1.0},
+    "max_product": {"oplus": "max", "zero": -np.inf,  "otimes": "*",   "one": 1.0},
+    "min_sum":     {"oplus": "min", "zero": np.inf,   "otimes": "+",   "one": 0.0},
+    "max_sum":     {"oplus": "max", "zero": -np.inf,  "otimes": "+",   "one": 0.0},
+    "bool_and_or": {"oplus": "or",  "zero": 0.0,      "otimes": "and", "one": 1.0},
+}
+
+
+def _resolve_semiring(expr: ExprNode) -> Tuple[str, float, str]:
+    """Return ``(reduce_op ⊕, empty_zero 0̄, otimes ⊗)`` for an aggregate node.
+
+    When ``semiring`` is present it supersedes ``reduce``: the ⊕/⊗ operators and
+    both identities come from the closed registry (:data:`_SEMIRINGS`). When it
+    is absent the legacy behaviour is reproduced exactly — ⊕ is the ``reduce``
+    field (default ``"+"``), ⊗ is ``"*"``, and an empty reduction returns ``0.0``
+    as it does today (the implicit ``sum_product`` row, RFC §5.1).
+    """
+    semiring = getattr(expr, "semiring", None)
+    if semiring is not None:
+        sr = _SEMIRINGS.get(semiring)
+        if sr is None:
+            raise NumpyInterpreterError(
+                f"unregistered semiring {semiring!r}; the closed registry is "
+                f"{sorted(_SEMIRINGS)} (RFC semiring-faq-unified-ir §5.1)"
+            )
+        return sr["oplus"], sr["zero"], sr["otimes"]
+    return (expr.reduce or "+"), 0.0, "*"
+
+
+@dataclass
+class _RaggedRange:
+    """A resolved ragged / dependent inner index set (RFC §5.2, ``kind: ragged``).
+
+    The member count for each parent tuple is read from the ``offsets`` keyed
+    factor at iteration time; the range over the inner index is the per-parent
+    dynamic bound ``[1 .. offsets[parent]]``. The actual member at position ``k``
+    is gathered through the ``values`` factor by the node body itself (an
+    ``index(values, parent…, k)`` reference), so the evaluator only needs the
+    bound here — mirroring the Julia ``_expand_int_range_dyn`` dynamic bound.
+    """
+
+    name: str
+    of: List[str]
+    offsets: str
+    values: Optional[str]
+
+
+def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
+    """Resolve one arrayop / aggregate range spec against the index-set registry.
+
+    ``spec`` is either a dense integer tuple (``[lo, hi]`` / ``[lo, step, hi]``,
+    as today) or an index-set reference ``{"from": <name>, "of": [...]}`` (RFC
+    §5.2). Returns a dense list spec for interval / categorical / dense ranges
+    (to be expanded by :func:`_expand_range`) or a :class:`_RaggedRange` for
+    ragged sets. Raises on an undeclared ``from`` name (no implicit interval
+    inference, so a typo cannot silently become an empty set) and on ``derived``
+    sets, whose materialization is not part of M1 (RFC §5.5).
+    """
+    if not isinstance(spec, dict):
+        return spec  # dense list — unchanged (today's path)
+    name = spec.get("from")
+    if name is None:
+        raise NumpyInterpreterError(
+            f"arrayop / aggregate range reference {spec!r} is missing 'from'"
+        )
+    entry = ctx.index_sets.get(name)
+    if entry is None:
+        raise NumpyInterpreterError(
+            f"undeclared index set {name!r} referenced by a range 'from'; "
+            f"declared index sets are {sorted(ctx.index_sets)} "
+            f"(RFC semiring-faq-unified-ir §5.2: no implicit interval inference)"
+        )
+    kind = entry.get("kind")
+    if kind == "interval":
+        return [1, int(entry["size"])]
+    if kind == "categorical":
+        return [1, len(entry.get("members") or [])]
+    if kind == "ragged":
+        of = list(spec.get("of") or entry.get("of") or [])
+        return _RaggedRange(
+            name=name, of=of,
+            offsets=entry["offsets"], values=entry.get("values"),
+        )
+    if kind == "derived":
+        raise NumpyInterpreterError(
+            f"index set {name!r} is kind 'derived'; data-derived index-set "
+            f"materialization (RFC §5.5) is not part of M1"
+        )
+    raise NumpyInterpreterError(
+        f"index set {name!r} has unknown kind {kind!r}"
+    )
+
+
+def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: Dict[str, int]) -> List[int]:
+    """Expand a ragged inner set to ``[1 .. offsets[parent]]`` for one parent tuple.
+
+    ``binding`` supplies the (1-based) parent index values named in ``rr.of``.
+    The per-parent length is read from the ``offsets`` keyed factor.
+    """
+    off = _resolve_symbol(rr.offsets, ctx)
+    if isinstance(off, np.ndarray) and off.ndim > 0:
+        try:
+            parent_idx = tuple(int(binding[p]) - 1 for p in rr.of)
+        except KeyError as exc:
+            raise NumpyInterpreterError(
+                f"ragged index set {rr.name!r} parent index {exc.args[0]!r} is "
+                f"not bound; declare it in 'of' and an enclosing range"
+            )
+        n = int(round(float(off[parent_idx])))
+    else:
+        n = int(round(float(off)))
+    return list(range(1, n + 1))
 
 
 def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
@@ -306,7 +431,9 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
     # --- array ops ---
     if op == "index":
         return _eval_index(expr, ctx)
-    if op == "arrayop":
+    # "aggregate" is the canonical op tag; "arrayop" is its deprecated alias
+    # (RFC semiring-faq-unified-ir §5.6). Both dispatch identically.
+    if op in ("aggregate", "arrayop"):
         return _eval_arrayop(expr, ctx)
     if op == "makearray":
         return _eval_makearray(expr, ctx)
@@ -507,33 +634,62 @@ def _eval_arrayop_vectorized(
 
 
 def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
-    """Evaluate an arrayop body over its output index box.
+    """Evaluate an aggregate / arrayop body over its output index box.
 
     Returns an ndarray whose shape is the cartesian product of the ranges for
-    each symbolic index in ``output_idx``.  Tries a vectorized numpy fast path
-    first (einsum for ``+`` reduction, combined outer-reduce for ``*/max/min``);
-    falls back to a scalar loop for bodies with affine subscripts, bare variable
-    names, or other unsupported structure.
+    each symbolic index in ``output_idx``. The reduction over contracted indices
+    is parameterized by the node's ``semiring`` (RFC semiring-faq-unified-ir
+    §5.1): the ⊕ operator and the empty-reduction identity 0̄ come from the closed
+    registry. Range references of the form ``{"from": <name>}`` are resolved
+    against the index-set registry (§5.2). A vectorized numpy fast path (einsum /
+    outer-reduce) is used when the semiring's ⊗ is multiplication; the scalar
+    loop covers every other case (``+``/``∧`` products, ragged bounds, affine
+    subscripts, bare names).
     """
     if expr.expr is None:
-        raise NumpyInterpreterError("arrayop requires an 'expr' body")
+        raise NumpyInterpreterError("aggregate / arrayop requires an 'expr' body")
     output_idx = list(expr.output_idx or [])
-    ranges = expr.ranges or {}
+    raw_ranges = expr.ranges or {}
 
     out_syms: List[str] = [s for s in output_idx if isinstance(s, str)]
     for s in out_syms:
-        if s not in ranges:
+        if s not in raw_ranges:
             raise NumpyInterpreterError(
-                f"arrayop output index {s!r} has no declared range"
+                f"aggregate / arrayop output index {s!r} has no declared range"
             )
 
+    reducer, empty_zero, otimes = _resolve_semiring(expr)
+
+    # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
+    # pass through unchanged, so existing arrayop fixtures are byte-for-byte
+    # identical; ragged sets become per-parent dynamic bounds.
+    resolved: Dict[str, Any] = {
+        s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges
+    }
+
     from .flatten import _expand_range  # local import to avoid cycle
-    out_ranges_exp = [_expand_range(ranges[s]) for s in out_syms]
+
+    out_ranges_exp: List[List[int]] = []
+    for s in out_syms:
+        rs = resolved[s]
+        if isinstance(rs, _RaggedRange):
+            raise NumpyInterpreterError(
+                f"output index {s!r} cannot reference a ragged index set: ragged "
+                f"sets are per-parent and have no dense output extent (RFC §5.2)"
+            )
+        out_ranges_exp.append(_expand_range(rs))
     out_shape = tuple(len(r) for r in out_ranges_exp)
 
-    reduce_syms: List[str] = [s for s in ranges if s not in out_syms]
-    red_ranges_exp = [_expand_range(ranges[s]) for s in reduce_syms]
-    reducer = expr.reduce or "+"
+    reduce_syms: List[str] = [s for s in raw_ranges if s not in out_syms]
+    ragged_reduce = any(isinstance(resolved[s], _RaggedRange) for s in reduce_syms)
+
+    if ragged_reduce:
+        return _eval_arrayop_ragged(
+            expr, ctx, out_syms, out_ranges_exp, out_shape,
+            reduce_syms, resolved, reducer, empty_zero,
+        )
+
+    red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
 
     # Pre-compute 0-based index lists for the fast path.
     sym_0based: Dict[str, List[int]] = {}
@@ -542,11 +698,16 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     for s, r in zip(reduce_syms, red_ranges_exp):
         sym_0based[s] = [x - 1 for x in r]
 
-    fast = _eval_arrayop_vectorized(
-        expr.expr, ctx, out_syms, reduce_syms, sym_0based, out_shape, reducer
-    )
-    if fast is not None:
-        return fast
+    # The vectorized path multiplies factors, so it is valid only when the
+    # semiring's ⊗ is × (sum_product, max_product, and the legacy no-semiring
+    # case). For ⊗ = + (min_sum / max_sum) or ⊗ = ∧ (bool_and_or) the body is a
+    # sum / conjunction and the scalar loop carries the correct semantics.
+    if otimes == "*":
+        fast = _eval_arrayop_vectorized(
+            expr.expr, ctx, out_syms, reduce_syms, sym_0based, out_shape, reducer
+        )
+        if fast is not None:
+            return fast
 
     # Scalar fallback: hoist the cartesian reduction product outside the output loop.
     out = np.zeros(out_shape, dtype=float)
@@ -564,18 +725,81 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             finally:
                 ctx.locals = prev
         else:
-            acc: Optional[float] = None
-            prev = dict(ctx.locals)
-            try:
-                ctx.locals.update(local_binding)
-                for red_point in cartesian_red:
-                    for s, v in zip(reduce_syms, red_point):
-                        ctx.locals[s] = v
-                    val = float(eval_expr(expr.expr, ctx))
-                    acc = _reduce_step(reducer, acc, val)
-            finally:
-                ctx.locals = prev
-            out[multi_idx] = acc if acc is not None else 0.0
+            out[multi_idx] = _reduce_over(
+                expr.expr, ctx, local_binding, reduce_syms, cartesian_red,
+                reducer, empty_zero,
+            )
+    return out
+
+
+def _reduce_over(
+    body: Expr,
+    ctx: EvalContext,
+    local_binding: Dict[str, int],
+    reduce_syms: List[str],
+    cartesian_red: List[Tuple[int, ...]],
+    reducer: str,
+    empty_zero: float,
+) -> float:
+    """Reduce ``body`` over the contracted-index cartesian product with ⊕.
+
+    Returns the semiring's empty-reduction identity ``empty_zero`` (0̄) when the
+    contracted ranges are empty (RFC §5.1).
+    """
+    acc: Optional[float] = None
+    prev = dict(ctx.locals)
+    try:
+        ctx.locals.update(local_binding)
+        for red_point in cartesian_red:
+            for s, v in zip(reduce_syms, red_point):
+                ctx.locals[s] = v
+            val = float(eval_expr(body, ctx))
+            acc = _reduce_step(reducer, acc, val)
+    finally:
+        ctx.locals = prev
+    return acc if acc is not None else empty_zero
+
+
+def _eval_arrayop_ragged(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+    reduce_syms: List[str],
+    resolved: Dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+) -> np.ndarray:
+    """Scalar evaluation path for aggregates whose contracted bounds are ragged.
+
+    A ragged reduce range depends on the enclosing (output) indices via its
+    ``offsets`` factor, so the contracted ranges are recomputed for each output
+    point — the named, first-class form of the per-parent dynamic bound (RFC
+    §5.2). Non-ragged reduce ranges in the same node expand statically.
+    """
+    from .flatten import _expand_range  # local import to avoid cycle
+
+    out = np.zeros(out_shape, dtype=float)
+    it = np.ndindex(*out_shape) if out_shape else [()]
+    for multi_idx in it:
+        local_binding: Dict[str, int] = {}
+        for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
+            local_binding[s] = r[pos]
+        parent_binding = dict(ctx.locals)
+        parent_binding.update(local_binding)
+        red_ranges: List[List[int]] = []
+        for s in reduce_syms:
+            rs = resolved[s]
+            if isinstance(rs, _RaggedRange):
+                red_ranges.append(_expand_ragged(rs, ctx, parent_binding))
+            else:
+                red_ranges.append(_expand_range(rs))
+        cartesian_red = _cartesian(red_ranges)
+        out[multi_idx] = _reduce_over(
+            expr.expr, ctx, local_binding, reduce_syms, cartesian_red,
+            reducer, empty_zero,
+        )
     return out
 
 
@@ -589,6 +813,11 @@ def _cartesian(lists: List[List[int]]) -> List[Tuple[int, ...]]:
 
 
 def _reduce_step(op: str, acc: Optional[float], val: float) -> float:
+    if op == "or":
+        # bool_and_or ⊕ (logical OR over 0.0/1.0-valued terms, RFC §5.1).
+        if acc is None:
+            return 1.0 if val != 0.0 else 0.0
+        return 1.0 if (acc != 0.0 or val != 0.0) else 0.0
     if acc is None:
         return val
     if op == "+":
@@ -774,7 +1003,7 @@ def expr_contains_array_op(expr: Expr) -> bool:
         return False
     if isinstance(expr, ExprNode):
         if expr.op in {
-            "arrayop", "makearray", "index", "broadcast",
+            "aggregate", "arrayop", "makearray", "index", "broadcast",
             "reshape", "transpose", "concat",
         }:
             return True
