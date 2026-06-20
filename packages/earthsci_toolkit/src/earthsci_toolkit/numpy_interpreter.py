@@ -32,6 +32,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from .cadence import Partition
+from .cadence import partition as _partition_model
 from .esm_types import Expr, ExprNode
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
@@ -1259,6 +1261,30 @@ def fold_constant_expr(
             f"fold_constant_expr expected a scalar result, got array of shape {result.shape}"
         )
     return float(result)
+
+
+def build_partition(model: Dict[str, Any]) -> Partition:
+    """Run the build-time cadence-partition pass over a parsed model.
+
+    This is the dependency-partition analysis (``CONFORMANCE_SPEC.md`` §5.7, the
+    ESS ``structural_simplify`` analogue) the build phase runs *before* it
+    compiles the per-step hot tree: it classifies every node by cadence
+    (``const ⊏ discrete ⊏ continuous``, ``class(node) = max`` over inputs, the
+    gather rule classing index expressions independently of the array), derives
+    the two-threshold materialization frontier, and checks the three guards. It
+    **generalises** the constant-fold :func:`fold_constant_expr` already
+    performs — applied once at the ``const`` threshold and again at the
+    ``discrete`` one — so topology FAQs fold via the relational engine in the
+    ``const`` / ``discrete`` phase and never reach the hot path. The per-step
+    ``_Node`` tree the rest of this module builds for existing (all-continuous)
+    rules is **unchanged**: the partition only schedules which sub-DAGs are
+    pre-evaluated into buffers the hot tree then reads as constants.
+
+    Thin delegator to :func:`earthsci_toolkit.cadence.partition`; see that module
+    for the full contract. Raises
+    :class:`earthsci_toolkit.cadence.CadenceError` on a guard violation.
+    """
+    return _partition_model(model)
 
 
 def evaluate(expr: Expr, bindings: Dict[str, float]) -> float:

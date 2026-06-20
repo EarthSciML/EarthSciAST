@@ -177,6 +177,14 @@ from .relational import (
     serialize_canonical,
 )
 
+# Build-time cadence-partition pass — the structural_simplify analogue (RFC
+# semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7)
+from .cadence import (
+    CadenceError,
+    Partition,
+    partition,
+)
+
 # Analysis tier - unit validation
 from .units import (
     validate_units,
@@ -460,6 +468,10 @@ __all__ = [
     "group_aggregate",
     "canonical_index_set_json",
     "serialize_canonical",
+    # Build-time cadence-partition pass (structural_simplify analogue)
+    "CadenceError",
+    "Partition",
+    "partition",
 
     # Unit validation
     "validate_units",

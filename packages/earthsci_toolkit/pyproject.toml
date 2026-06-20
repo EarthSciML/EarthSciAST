@@ -46,6 +46,7 @@ Issues = "https://github.com/ctessum/EarthSciSerialization/issues"
 [project.scripts]
 esm-migrate = "earthsci_toolkit.cli.migrate:main"
 earthsci-determinism-adapter-python = "earthsci_toolkit.cli.determinism_adapter:main"
+earthsci-cadence-adapter-python = "earthsci_toolkit.cli.cadence_adapter:main"
 
 [project.optional-dependencies]
 dev = [
