@@ -1,0 +1,213 @@
+{
+  "category": "geometry_conformance",
+  "version": "1.0",
+  "description": "Static golden example for the cross-binding conservative-regridding geometry tolerance contract (CONFORMANCE_SPEC.md §5.8, RFC semiring-faq-unified-ir §8.1 + Appendix B.5). This is the tolerance-mode analogue of tests/conformance/determinism/: the ONE byte-identical anchor is the integer bin-Skolem candidate overlap-pair index set (the broad-phase spatial join, §5.8.5, governed by the §5.5 determinism contract); the physical invariants (global conservation + partition-of-unity, §5.8.3) are the PRIMARY gate; per-pair overlap areas / weights are compared with a combined relative + absolute tolerance and a sliver floor (§5.8.2). Each producing binding (Julia / Python; Rust folds in once its S2 FFI lands) ships a thin adapter (scripts/run-geometry-conformance.py + $EARTHSCI_GEOMETRY_ADAPTER_<BINDING>) and the runner asserts: (1) the candidate set is byte-identical to this golden after base normalization — for the canonical input AND the adversarial permuted-input-order variant, which MUST collapse to the identical set; (2) partition-of-unity holds to a tight epsilon and, where the target tiles the source domain, conservation holds within tolerance; (3) per-pair areas agree with the golden (and, when ≥2 bindings run together, with the reference binding) within atol + rtol·A_ref, sub-atol slivers treated as zero. The embedded reference implementation (pure-Python bin-Skolem broad phase + planar Sutherland–Hodgman clip + shoelace area) is the --self-test green check; spherical areas are S2/GeometryOps-derived and gated cross-binding rather than against a hand golden.",
+  "reference_binding": "julia",
+  "base_pin": {
+    "_doc": "candidate_overlap_pairs returns (src_idx, tgt_idx) positional indices into the input arrays. Julia is 1-based, Python is 0-based. Conformance asserts on the CANONICAL 0-based numbering; each adapter declares its base and the harness normalizes via (reported - base) before serializing/comparing. Rust (when it lands) is 0-based.",
+    "julia": 1,
+    "python": 0,
+    "rust": 0
+  },
+  "bindings_required": ["julia", "python"],
+  "bindings_optional": ["rust"],
+  "tolerances": {
+    "_doc": "The spec pins only atol ≈ 1e-15·R² (the sliver floor); rtol is empirically calibrated and the conservation tolerance is application-set, so these are documented defaults the runner uses unless a fixture overrides area_rtol. atol per fixture = area_atol_factor · characteristic_length². partition-of-unity is exact by construction (tight epsilon).",
+    "area_rtol": 1e-9,
+    "area_atol_factor": 1e-15,
+    "partition_of_unity_atol": 1e-12,
+    "conservation_atol": 1e-9
+  },
+  "fixtures": [
+    {
+      "id": "planar_coarsen",
+      "manifold": "planar",
+      "dx": 1.0,
+      "dy": 1.0,
+      "characteristic_length": 1.0,
+      "conservation_exact": true,
+      "doc": "Conservative coarsening: four unit source cells tiling [0,2]² remap onto one [0,2]² target cell. Every source is fully contained, so A_i0 = 1, A_j = 4, W_i0 = 0.25, partition-of-unity is exact, and conservation is exact (the target tiles the source domain). The candidate set is all four (i,0).",
+      "F_src": [1.0, 2.0, 3.0, 4.0],
+      "src_areas": [1.0, 1.0, 1.0, 1.0],
+      "inputs": {
+        "canonical": {
+          "src": [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]],
+            [[0.0, 1.0], [1.0, 1.0], [1.0, 2.0], [0.0, 2.0]],
+            [[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]]
+          ],
+          "tgt": [
+            [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+          ]
+        }
+      },
+      "expected": {
+        "candidate_index_set": [[0, 0], [1, 0], [2, 0], [3, 0]],
+        "candidate_serialized": "[[0,0],[1,0],[2,0],[3,0]]",
+        "areas": [[0, 0, 1.0], [1, 0, 1.0], [2, 0, 1.0], [3, 0, 1.0]],
+        "partition_of_unity_max_residual": 0.0,
+        "conservation_residual": 0.0
+      }
+    },
+    {
+      "id": "planar_tiling_tangent_slivers",
+      "manifold": "planar",
+      "dx": 1.0,
+      "dy": 1.0,
+      "characteristic_length": 1.0,
+      "conservation_exact": true,
+      "doc": "Adversarial tangent slivers inside a perfect tiling. Source {S0=[0,1]², S1=[1,2]×[0,1]} and target {T0=[0,1]², T1=[1,2]×[0,1]} share the column-1 spatial bins, so the candidate set is all four (i,j) — including the edge-adjacent pairs (0,1) and (1,0) whose true overlap is a zero-area line. Those slivers MUST floor to zero (§5.8.2); the surviving set is the diagonal. partition-of-unity and conservation are both exact. The reversed_order variant permutes both grids and MUST collapse to the identical candidate set after the index remap (§5.8.5).",
+      "F_src": [10.0, 20.0],
+      "src_areas": [1.0, 1.0],
+      "inputs": {
+        "canonical": {
+          "src": [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]
+          ],
+          "tgt": [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]
+          ]
+        },
+        "variants": {
+          "reversed_order": {
+            "src": [
+              [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]],
+              [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            ],
+            "tgt": [
+              [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]],
+              [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            ],
+            "src_order": [1, 0],
+            "tgt_order": [1, 0]
+          }
+        }
+      },
+      "expected": {
+        "candidate_index_set": [[0, 0], [0, 1], [1, 0], [1, 1]],
+        "candidate_serialized": "[[0,0],[0,1],[1,0],[1,1]]",
+        "areas": [[0, 0, 1.0], [0, 1, 0.0], [1, 0, 0.0], [1, 1, 1.0]],
+        "partition_of_unity_max_residual": 0.0,
+        "conservation_residual": 0.0
+      }
+    },
+    {
+      "id": "planar_partial_overlap",
+      "manifold": "planar",
+      "dx": 1.0,
+      "dy": 1.0,
+      "characteristic_length": 1.0,
+      "conservation_exact": false,
+      "doc": "A single source cell [0,1]² and a single target cell [0.5,1.5]² overlapping in the [0.5,1]² quarter (area 0.25). Exercises a genuine fractional area through the tolerance check; partition-of-unity is still exact (W_00 = 1). Conservation is NOT asserted — the target sticks out of the source domain, so mass is legitimately not conserved (§5.8.3).",
+      "F_src": [7.0],
+      "src_areas": [1.0],
+      "inputs": {
+        "canonical": {
+          "src": [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+          ],
+          "tgt": [
+            [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
+          ]
+        }
+      },
+      "expected": {
+        "candidate_index_set": [[0, 0]],
+        "candidate_serialized": "[[0,0]]",
+        "areas": [[0, 0, 0.25]],
+        "partition_of_unity_max_residual": 0.0
+      }
+    },
+    {
+      "id": "planar_disjoint",
+      "manifold": "planar",
+      "dx": 1.0,
+      "dy": 1.0,
+      "characteristic_length": 1.0,
+      "conservation_exact": false,
+      "doc": "A source cell [0,1]² and a far-away target cell [5,6]² occupy disjoint spatial bins, so the broad phase produces NO candidates at all — the empty index set. Validates that the bin-Skolem join correctly excludes non-overlapping cells before any clipping (§5.8.5: candidate set is a superset of the surviving set, but disjoint cells are not even candidates).",
+      "F_src": [3.0],
+      "src_areas": [1.0],
+      "inputs": {
+        "canonical": {
+          "src": [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+          ],
+          "tgt": [
+            [[5.0, 5.0], [6.0, 5.0], [6.0, 6.0], [5.0, 6.0]]
+          ]
+        }
+      },
+      "expected": {
+        "candidate_index_set": [],
+        "candidate_serialized": "[]",
+        "areas": [],
+        "partition_of_unity_max_residual": 0.0
+      }
+    },
+    {
+      "id": "spherical_polar",
+      "manifold": "spherical",
+      "dx": 90.0,
+      "dy": 10.0,
+      "characteristic_length": 1.0,
+      "conservation_exact": false,
+      "doc": "Pole-touching spherical cells: two lon-sectors {[0,90], [90,180]} × lat [80,90] whose top edge collapses to the north pole (great-circle edges, the spherical-clip-not-planar-clip regime), remapped onto the union sector. The candidate set is manifold-independent (integer lon/lat binning) and reference-reproducible; the overlap areas are spherical excess, so they are gated CROSS-BINDING (Julia/GeometryOps vs Python/S2) within the §5.8.2 tolerance rather than against a hand golden. partition-of-unity is exact by construction regardless of the edge model (§5.8.3). The permuted variant MUST collapse to the identical candidate set.",
+      "F_src": [1.0, 1.0],
+      "inputs": {
+        "canonical": {
+          "src": [
+            [[0.0, 80.0], [90.0, 80.0], [90.0, 90.0], [0.0, 90.0]],
+            [[90.0, 80.0], [180.0, 80.0], [180.0, 90.0], [90.0, 90.0]]
+          ],
+          "tgt": [
+            [[0.0, 80.0], [180.0, 80.0], [180.0, 90.0], [0.0, 90.0]]
+          ]
+        },
+        "variants": {
+          "reversed_src": {
+            "src": [
+              [[90.0, 80.0], [180.0, 80.0], [180.0, 90.0], [90.0, 90.0]],
+              [[0.0, 80.0], [90.0, 80.0], [90.0, 90.0], [0.0, 90.0]]
+            ],
+            "tgt": [
+              [[0.0, 80.0], [180.0, 80.0], [180.0, 90.0], [0.0, 90.0]]
+            ],
+            "src_order": [1, 0],
+            "tgt_order": [0]
+          }
+        }
+      },
+      "expected": {
+        "candidate_index_set": [[0, 0], [1, 0]],
+        "candidate_serialized": "[[0,0],[1,0]]",
+        "partition_of_unity_max_residual": 0.0
+      }
+    }
+  ],
+  "negative_controls": [
+    {
+      "id": "reorder",
+      "doc": "A candidate set delivered in producer/hash order rather than sorted total order MUST still canonicalize to the golden (the harness re-sorts after base normalization — order-independence is the contract). Validated in --self-test by feeding a rotated-but-complete set and asserting it passes, while an INCOMPLETE set is rejected."
+    },
+    {
+      "id": "missing_pair",
+      "doc": "A candidate set missing a true candidate pair MUST be rejected — the broad phase is complete (a superset of the surviving set), so a dropped candidate is a conformance failure. Validated in --self-test."
+    },
+    {
+      "id": "float_in_key",
+      "doc": "A float component in a spatial-bin key is forbidden (§5.8.5) — keys are integers minted by floor(). A producer that leaks a raw coordinate into a key MUST raise rather than bucket on a platform-dependent float repr. Validated in --self-test."
+    },
+    {
+      "id": "area_off",
+      "doc": "An overlap area outside atol + rtol·A_ref MUST be flagged. Validated in --self-test by perturbing a golden area by 1.0 and asserting rejection — a harness that cannot detect a violation is worthless."
+    },
+    {
+      "id": "partition_of_unity_broken",
+      "doc": "A partition-of-unity residual above the tight epsilon MUST be flagged — Σ_i W_ij = 1 is exact by construction, so any real deviation is a producer bug. Validated in --self-test."
+    }
+  ]
+}

@@ -371,6 +371,76 @@ run_determinism_conformance_python() {
             --output "$OUTPUT_DIR/determinism/python_report.json"
 }
 
+# Sanity-check the cross-binding conservative-regridding geometry harness
+# (ess-my4.4.8) — the tolerance-mode analogue of the determinism gate. The
+# --self-test asserts the §5.8 geometry contract against an embedded reference
+# (bin-Skolem broad phase + planar Sutherland–Hodgman clip + shoelace area) and
+# the static golden (tests/conformance/geometry/manifest.json): the candidate
+# overlap-pair set is byte-identical, every permuted variant collapses to it,
+# planar areas + invariants reproduce the golden, and the harness rejects
+# non-conforming output (reorder/missing-pair/float-in-key/area-off/partition-of-
+# unity negative controls). Runs green parallel to the producers.
+run_geometry_conformance_self_test() {
+    log "Running geometry-conformance harness self-test..."
+    if python3 "$SCRIPT_DIR/run-geometry-conformance.py" --self-test; then
+        success "Geometry-conformance harness self-test passed"
+        return 0
+    else
+        error "Geometry-conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Drive the REAL conservative-regridding assemblies (ess-my4.4.6 Julia /
+# ess-my4.4.7 Python) through the geometry harness. Each binding's adapter builds
+# the regridder over the shared golden mesh inputs and the runner asserts: the
+# bin-Skolem candidate set is byte-identical to the golden (after base
+# normalization), partition-of-unity holds to a tight epsilon, conservation holds
+# for the tiling fixtures, and per-pair planar areas are within the §5.8.2
+# tolerance. The spherical narrow phase folds in when the optional clip backend
+# (Julia GeometryOps / Python spherely) is present; absent it, the candidate set
+# is still gated. Julia + Python are the first-cut producers; Rust joins once its
+# S2 FFI lands (ess-my4.4.10/.11/.12).
+run_geometry_conformance_julia() {
+    if ! check_language_availability "julia" "$JULIA_DIR"; then
+        warning "Julia unavailable — skipping Julia geometry producer check"
+        return 0
+    fi
+    log "Running geometry conformance with the Julia regridding assembly..."
+    EARTHSCI_GEOMETRY_ADAPTER_JULIA="julia --project=$JULIA_DIR $JULIA_DIR/scripts/geometry_adapter.jl" \
+        python3 "$SCRIPT_DIR/run-geometry-conformance.py" \
+            --bindings julia \
+            --output "$OUTPUT_DIR/geometry/julia_report.json"
+}
+run_geometry_conformance_python() {
+    if ! check_language_availability "python" "$PYTHON_DIR"; then
+        warning "Python unavailable — skipping Python geometry producer check"
+        return 0
+    fi
+    log "Running geometry conformance with the Python regridding assembly..."
+    EARTHSCI_GEOMETRY_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.geometry_adapter" \
+        python3 "$SCRIPT_DIR/run-geometry-conformance.py" \
+            --bindings python \
+            --output "$OUTPUT_DIR/geometry/python_report.json"
+}
+# The cross-binding drain: run Julia + Python TOGETHER so the runner can assert
+# per-pair area agreement between the bindings (the §5.8.2 "against the reference
+# binding" check), on top of each binding's golden comparison. Requires both
+# available; skipped otherwise (the per-binding runs above still gate each one).
+run_geometry_conformance_cross() {
+    if ! check_language_availability "julia" "$JULIA_DIR" \
+        || ! check_language_availability "python" "$PYTHON_DIR"; then
+        warning "Julia or Python unavailable — skipping cross-binding geometry drain"
+        return 0
+    fi
+    log "Running cross-binding geometry conformance (Julia + Python drain)..."
+    EARTHSCI_GEOMETRY_ADAPTER_JULIA="julia --project=$JULIA_DIR $JULIA_DIR/scripts/geometry_adapter.jl" \
+    EARTHSCI_GEOMETRY_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.geometry_adapter" \
+        python3 "$SCRIPT_DIR/run-geometry-conformance.py" \
+            --bindings julia,python \
+            --output "$OUTPUT_DIR/geometry/cross_report.json"
+}
+
 # Sanity-check the cross-binding cadence-partition harness (ess-my4.3.6). Until
 # the per-binding partition-pass implementations land (ess-my4.3.7 Julia +
 # Rust/Python siblings), the harness asserts the §5.7 cadence contract against an
@@ -570,6 +640,34 @@ main() {
             success "Determinism Python producer check completed"
         else
             error "Determinism Python producer check failed"
+            exit 1
+        fi
+
+        if run_geometry_conformance_self_test; then
+            success "Geometry-conformance harness self-test completed"
+        else
+            error "Geometry-conformance harness self-test failed"
+            exit 1
+        fi
+
+        if run_geometry_conformance_julia; then
+            success "Geometry Julia producer check completed"
+        else
+            error "Geometry Julia producer check failed"
+            exit 1
+        fi
+
+        if run_geometry_conformance_python; then
+            success "Geometry Python producer check completed"
+        else
+            error "Geometry Python producer check failed"
+            exit 1
+        fi
+
+        if run_geometry_conformance_cross; then
+            success "Cross-binding geometry drain completed"
+        else
+            error "Cross-binding geometry drain failed"
             exit 1
         fi
 
