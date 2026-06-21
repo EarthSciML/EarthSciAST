@@ -16,9 +16,10 @@
 #       `edges` materializes to the determinism golden [[1,2],[1,3],[2,3],[2,4],
 #       [3,4]] and the downstream geometric `area_eff` FAQ integrates over it;
 #   (2) the conservative-regridder overlap-join .esm materializes its
-#       `candidate_pairs` derived set via the bin-Skolem equi-join, byte-identical
-#       to the imperative conservative_regrid.jl candidate set (the prior
-#       two-layer hand-coordinated result). [The full regridder ODE assembly is F3.]
+#       `candidate_pairs` derived set via the bin-Skolem equi-join, asserted
+#       against the explicit canonical candidate set. This is the broad phase the
+#       end-to-end regridder .esm builds on; the full assembly is driven through
+#       the evaluator in geometry_overlap_join_conformance_test.jl.
 
 using Test
 using EarthSciSerialization
@@ -116,26 +117,6 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         # (order-independence, §5.5 rule 2).
         @test ESS.materialize_value_invention(mj, aligned, params).members["candidate_set"] ==
               ESS.materialize_value_invention(mj, aligned, params).members["candidate_set"]
-    end
-
-    @testset "regridder: byte-identical to imperative conservative_regrid.jl" begin
-        # The prior two-layer hand-coordinated candidate set. Unit cells strictly
-        # inside one bin each so the polygon bbox spans a single bin — the bin-
-        # Skolem equi-join then matches conservative_regrid.candidate_overlap_pairs.
-        rel = "tests/valid/geometry/conservative_regrid_overlap_join.esm"
-        mj = ESS._select_model_json(_vi_raw(rel), "ConservativeRegridOverlapJoin")
-        params = Dict("dx" => 1.0, "dy" => 1.0, "atol" => 1e-12)
-
-        cell(x) = [x+0.1 0.1; x+0.9 0.1; x+0.9 0.9; x+0.1 0.9]
-        src_polys = [cell(0.0), cell(1.0), cell(2.0)]
-        tgt_polys = [cell(0.0), cell(1.0), cell(2.0)]
-        imperative = ESS.candidate_overlap_pairs(src_polys, tgt_polys, 1.0, 1.0)
-
-        corners = Dict("src_lon" => Float64[0.1, 1.1, 2.1], "src_lat" => Float64[0.1, 0.1, 0.1],
-                       "tgt_lon" => Float64[0.1, 1.1, 2.1], "tgt_lat" => Float64[0.1, 0.1, 0.1])
-        ours = ESS.materialize_value_invention(mj, corners, params).members["candidate_set"]
-        @test ours == imperative
-        @test ours == [(1, 1), (2, 2), (3, 3)]
     end
 
     @testset "guard: a CONTINUOUS relational node is rejected (§5.7 guard 2)" begin

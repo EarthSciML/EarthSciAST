@@ -38,18 +38,21 @@ Two phases, one harness (mirrors the determinism gate):
     identity it claims to be, conservation is exact for the tiling fixtures, and
     the harness actually REJECTS non-conforming output (negative controls).
 
-  * PRODUCERS (live — the M4 assemblies ess-my4.4.6 / .4.7 have landed): each
-    binding ships a thin adapter registered via
-    $EARTHSCI_GEOMETRY_ADAPTER_<BINDING> (or on PATH as
-    earthsci-geometry-adapter-<binding>). The default run mode invokes each
-    adapter on the same manifest — over the canonical input AND every adversarial
-    variant — and asserts its candidate set is byte-identical to the golden, its
-    invariants hold to tolerance, and its per-pair areas agree with the golden
-    (and, when ≥2 bindings run together, with the reference binding) within the
-    §5.8.2 tolerance. The first cut gates Julia + Python; Rust folds into the
-    same gate once its S2 FFI binding lands (ess-my4.4.10/.11/.12).
+  * PRODUCERS (RETIRED, bead ess-3lj.3): each binding once shipped a thin adapter
+    registered via $EARTHSCI_GEOMETRY_ADAPTER_<BINDING> that drove its imperative
+    conservative-regridding assembly through this harness. Those assemblies
+    (conservative_regrid.jl / regrid.rs / conservative_regrid.py) and their
+    adapters (geometry_adapter.jl / cli.geometry_adapter) have been deleted in
+    favor of a single end-to-end-evaluable document
+    (tests/valid/geometry/conservative_regrid_overlap_join.esm) driven through the
+    evaluator — the broad phase + polygon_area FAQ run per-binding (Julia/Python/
+    Rust) and Julia evaluates the full assembly end-to-end
+    (test/geometry_overlap_join_conformance_test.jl). The `--bindings` producer
+    mode below is dormant (the env-registered adapters no longer exist); the
+    harness is exercised via `--self-test`, which still guards the §5.8 contract
+    against the embedded reference + static golden.
 
-See tests/conformance/geometry/README.md for the adapter contract.
+See tests/conformance/geometry/README.md for the (historical) adapter contract.
 
 Usage:
     python scripts/run-geometry-conformance.py --self-test

@@ -58,7 +58,6 @@ pub mod reactions;
 pub mod ref_loading;
 pub mod reference_resolution;
 pub mod registered_functions;
-pub mod regrid;
 pub mod relational;
 pub mod rule_applier;
 pub mod rule_engine;
@@ -136,7 +135,6 @@ pub use reference_resolution::{
 pub use registered_functions::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
-pub use regrid::{ConservativeRegridder, Overlap};
 pub use relational::{
     FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct, equijoin,
     group_aggregate, rank, rank_with_base, serialize_keys, serialize_pairs, skolem, skolem_edge,

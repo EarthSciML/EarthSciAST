@@ -452,8 +452,8 @@ def polygon_area(ring: np.ndarray, manifold: str, radius: float = 1.0) -> float:
     sum (``radius`` = sphere radius / characteristic length, default the unit
     sphere). Returns ``0.0`` for a degenerate (< 3 vertex) ring — an empty clip.
     This is the imperative **cross-check oracle** for the ``sum_product``
-    ``polygon_area`` FAQ: the production overlap area now routes through that FAQ
-    (:func:`earthsci_toolkit.conservative_regrid.overlap_area`) for both manifolds,
+    ``polygon_area`` FAQ: the production polygon area now routes through that FAQ
+    (:func:`earthsci_toolkit.area_faq.polygon_area_via_faq`) for both manifolds,
     and this function encodes the same formula the FAQ body does.
     """
     ring = np.asarray(ring, dtype=float)

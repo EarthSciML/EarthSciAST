@@ -191,16 +191,14 @@ from .geometry import (
     MANIFOLDS,
 )
 
-# Conservative-regridding assembly — the end-to-end A.8 pipeline (overlap join →
-# A_ij → A_j → apply → normalize) composed from the M1/M2/M3 machinery plus the
-# intersect_polygon clip leaf (RFC semiring-faq-unified-ir §A.8; bead ess-my4.4.7).
-from .conservative_regrid import (
-    Regridder,
-    build_regridder,
-    candidate_overlap_pairs,
-    cell_bin_keys,
-    overlap_area,
-)
+# polygon_area as a sum_product FAQ over the clipped ring — the executable form of
+# the area FAQ, evaluated through the same interpreter the array simulator uses
+# (RFC semiring-faq-unified-ir §8.1; bead ess-d4g.1). The imperative polygon_area
+# above is its cross-check oracle. The end-to-end conservative-regridding pipeline
+# now lives as a single evaluable document
+# (tests/valid/geometry/conservative_regrid_overlap_join.esm) driven through the
+# evaluator, not an imperative Python assembly (bead ess-3lj.3).
+from .area_faq import polygon_area_via_faq
 
 # Build-time cadence-partition pass — the structural_simplify analogue (RFC
 # semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7)
@@ -509,12 +507,8 @@ __all__ = [
     "densify_parallel_edges",
     "area_tolerance_ok",
     "MANIFOLDS",
-    # Conservative-regridding assembly (overlap join → A_ij → A_j → apply → normalize)
-    "Regridder",
-    "build_regridder",
-    "candidate_overlap_pairs",
-    "cell_bin_keys",
-    "overlap_area",
+    # polygon_area as a sum_product FAQ over the clipped ring (ess-d4g.1)
+    "polygon_area_via_faq",
     # Build-time cadence-partition pass (structural_simplify analogue)
     "CadenceError",
     "Partition",

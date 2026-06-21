@@ -374,9 +374,9 @@ Imperative **cross-check oracle** for the `sum_product` `polygon_area` FAQ. Plan
 ⇒ shoelace / Gauss–Green; spherical / geodesic ⇒ the spherical-excess sum
 (`radius` = sphere radius / characteristic length, default the unit sphere).
 Returns `0.0` for a degenerate (< 3 vertex) ring — an empty clip. The production
-overlap area now routes through the FAQ ([`overlap_area`](@ref) →
-[`_polygon_area_via_faq`](@ref)) for both manifolds; this function encodes the same
-formula the FAQ body does, kept as the independent oracle.
+polygon area now routes through the FAQ ([`_polygon_area_via_faq`](@ref)) for both
+manifolds; this function encodes the same formula the FAQ body does, kept as the
+independent oracle.
 """
 function polygon_area(ring::AbstractMatrix, manifold::AbstractString; radius::Real=1.0)::Float64
     r = Matrix{Float64}(ring)

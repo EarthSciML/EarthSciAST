@@ -1175,36 +1175,40 @@ producing binding under a **declared manifold** and asserts, in priority order:
 Adversarial inputs target the geometry failure modes specifically: **near-tangent
 slivers** (must pass via the floor), **antimeridian- and pole-crossing cells**
 (must be clipped on the sphere, not the plane), and **permuted input order** (the
-candidate set must stay byte-identical). The first cut gates **Julia + Python**
-(both native spherical stacks); **Rust** folds into the same gate once its S2 FFI
-binding lands (`ess-my4.4.10`/`.11`/`.12`). The golden inputs and per-binding
-adapter contract live under `tests/conformance/geometry/`, established by the gate
-bead — the tolerance-mode analogue of `tests/conformance/determinism/` (§5.5.4).
-Unlike the determinism and cadence gates, the assertion is **tolerance +
-invariant** on areas / weights and **byte-identity** only on the integer
-candidate index set.
+candidate set must stay byte-identical). The §5.8 contract is asserted by the
+harness **self-test** (against the embedded reference + golden, including the
+permuted and negative-control variants) together with the per-binding broad-phase
++ `polygon_area`-FAQ suites and the reference-binding `.esm`-through-evaluator test
+(below); the earlier per-binding producer adapters were retired (`ess-3lj.3`). The
+golden inputs live under `tests/conformance/geometry/`, the tolerance-mode analogue
+of `tests/conformance/determinism/` (§5.5.4). Unlike the determinism and cadence
+gates, the assertion is **tolerance + invariant** on areas / weights and
+**byte-identity** only on the integer candidate index set.
 
-The **Python producing-binding assembly** that realizes this end-to-end pipeline
-(broad-phase bin-Skolem candidate join → `A_ij` clip + `polygon_area` FAQ → `A_j`
-row-sum → apply → normalize) is
-`packages/earthsci_toolkit/src/earthsci_toolkit/conservative_regrid.py`
-(`build_regridder` / `Regridder`, bead ess-my4.4.7), composed from the existing
-M1/M2/M3 machinery plus the `intersect_polygon` leaf and exercised end-to-end by
-`packages/earthsci_toolkit/tests/test_conservative_regrid.py` (candidate-set
-determinism, partition-of-unity exactness, global conservation). The **Julia
-producing-binding assembly** is the sibling
-`packages/EarthSciSerialization.jl/src/conservative_regrid.jl` (`build_regridder`
-/ `Regridder`, bead ess-my4.4.6), composed identically from the relational engine
-(`Relational`: `skolem` bins / `equijoin` / `distinct`) plus the
-`intersect_polygon` leaf, and exercised on the SAME worked grids by
-`packages/EarthSciSerialization.jl/test/conservative_regrid_test.jl`. Its IR form
-— the `A_j` row-sum and the apply `sum_product` FAQs written as an ESM document
-and run through the tree-walk evaluator — is the worked fixture
-`tests/valid/geometry/conservative_regrid_assembly.esm`, evaluated end-to-end
-(conservation + partition-of-unity) by
-`packages/EarthSciSerialization.jl/test/geometry_assembly_conformance_test.jl`.
-The Rust assembly (ess-my4.4.12) is the third sibling producing binding the gate
-compares against.
+The conservative regridder is realized as a **single end-to-end-evaluable
+document**, `tests/valid/geometry/conservative_regrid_overlap_join.esm` (bead
+ess-3lj.3), rather than an imperative per-binding assembly. The document composes
+the whole A.8 pipeline — broad-phase bin-Skolem candidate join (the value-invention
+front-door, §5.5 / RFC §6.1) → `A_ij` `intersect_polygon` clip + `polygon_area`
+FAQ → `A_j` row-sum → apply → normalize — and is driven through the evaluator. The
+reference binding (**Julia**) evaluates it end-to-end and asserts the conservation
++ partition-of-unity invariants and the spherical Van Oosterom–Strackee /
+analytic-rectangle oracle values in
+`packages/EarthSciSerialization.jl/test/geometry_overlap_join_conformance_test.jl`.
+The two cross-binding building blocks run in every evaluating binding: the
+**broad-phase candidate set** is materialized by the value-invention front-door
+(`materialize_value_invention`, Julia/Python/Rust, §5.5) and the **`polygon_area`
+FAQ** is the executable area path (`area_faq`'s `polygon_area_via_faq` /
+`polygon_area_faq`, Julia/Python/Rust, bead ess-d4g.1). **Go / TypeScript** schema-
+and structurally validate the document (no evaluator / polygon clip — §5.8 N/A per
+the table above).
+
+The earlier imperative producing-binding assemblies (`conservative_regrid.jl` /
+`regrid.rs` / `conservative_regrid.py`, `build_regridder` / `Regridder`, beads
+ess-my4.4.6 / .4.7 / .4.12) and their §5.8.6 cross-binding adapters were **retired**
+with this consolidation. The harness `scripts/run-geometry-conformance.py` still
+guards the §5.8 candidate-set / invariant / area contract against its embedded
+reference + static golden via `--self-test`.
 
 ## 6. CI Integration
 

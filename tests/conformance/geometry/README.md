@@ -4,6 +4,18 @@ The adversarial harness for the **conservative-regridding geometry tolerance
 contract** — `CONFORMANCE_SPEC.md` §5.8, the normative form of RFC
 `semiring-faq-unified-ir` §8.1 and Appendix B.5.
 
+> **Per-binding adapters RETIRED (bead ess-3lj.3).** The imperative
+> conservative-regridding assemblies (`conservative_regrid.jl` / `regrid.rs` /
+> `conservative_regrid.py`) and their `$EARTHSCI_GEOMETRY_ADAPTER_<BINDING>`
+> adapters have been deleted in favor of a single end-to-end-evaluable document,
+> `tests/valid/geometry/conservative_regrid_overlap_join.esm`, driven through the
+> evaluator (Julia evaluates it end-to-end in
+> `test/geometry_overlap_join_conformance_test.jl`; the broad phase + `polygon_area`
+> FAQ run per-binding in Julia/Python/Rust). The harness below remains as the
+> **`--self-test`** contract guard (embedded reference + static golden); the
+> `--bindings <producer>` mode and the adapter sections in this file are
+> **historical**. The golden `manifest.json` still backs the self-test.
+
 ## Why this exists
 
 `earthsci-toolkit` is **parallel native implementations** (Julia/GeometryOps,

@@ -60,7 +60,6 @@ using JSON3
     include("geometry_conformance_test.jl")
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
-    include("conservative_regrid_test.jl")
     include("tree_walk_join_test.jl")
     include("cartesian_2d_diffusion_e2e_test.jl")
     include("latlon_diffusion_e2e_test.jl")

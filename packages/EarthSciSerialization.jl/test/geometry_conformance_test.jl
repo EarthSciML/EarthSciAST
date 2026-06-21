@@ -144,10 +144,10 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     end
 
     # --- spherical polygon_area as a sum_product FAQ over the clip ring ---
-    # The production overlap_area routes the per-pair area through the generic
-    # aggregate machinery (_polygon_area_via_faq → _resolve_indices → evaluate_expr);
-    # the imperative polygon_area / _spherical_signed_area loops are now only the
-    # cross-check oracle. The spherical sibling of the planar shoelace FAQ (ess-d4g.1).
+    # The polygon_area FAQ routes the area through the generic aggregate machinery
+    # (_polygon_area_via_faq → _resolve_indices → evaluate_expr); the imperative
+    # polygon_area / _spherical_signed_area loops are now only the cross-check
+    # oracle. The spherical sibling of the planar shoelace FAQ (ess-d4g.1).
     @testset "spherical area FAQ (Van Oosterom–Strackee fan) evaluates octant to π/2" begin
         octant = [0.0 0.0; 90.0 0.0; 0.0 90.0]
         faq = ESS._polygon_area_via_faq(ESS.close_ring(octant), "spherical")
@@ -165,16 +165,14 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         end
     end
 
-    @testset "overlap_area spherical path equals the FAQ over the clipped ring" begin
-        # overlap_area clips then areas-via-FAQ; with GeometryOps the spherical clip
-        # of two squares is the [1,2]² box, whose spherical-excess area the FAQ and
-        # the oracle agree on to the great-circle tolerance.
+    @testset "spherical clip area: FAQ over the clipped ring matches the oracle" begin
+        # With GeometryOps the spherical clip of two squares is the [1,2]² box,
+        # whose spherical-excess area the FAQ path (_polygon_area_via_faq) and the
+        # imperative polygon_area oracle agree on to the great-circle tolerance.
         if ESS._spherical_clip_available()
-            oa = ESS.overlap_area(_SQUARE_A, _SQUARE_B, "spherical")
             clipped = ESS.intersect_polygon(_SQUARE_A, _SQUARE_B, "spherical")
             faq = ESS._polygon_area_via_faq(ESS.close_ring(clipped), "spherical")
-            @test isapprox(oa, faq; rtol=1e-12, atol=1e-14)
-            @test ESS.area_tolerance_ok(oa, ESS.polygon_area(clipped, "spherical"); rtol=1e-9)
+            @test ESS.area_tolerance_ok(faq, ESS.polygon_area(clipped, "spherical"); rtol=1e-9)
         else
             @test_skip "GeometryOps spherical clip extension not loaded"
         end
