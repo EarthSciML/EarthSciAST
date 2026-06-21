@@ -249,6 +249,69 @@ def test_spherical_clip_overlapping_squares_with_spherely() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 2d. Polar-edge densification — great-circle-edge accuracy (ess-my4.4.9)
+# --------------------------------------------------------------------------- #
+
+def _true_cell_area(lon1: float, lon2: float, lat1: float, lat2: float) -> float:
+    """Exact area of a lon-lat cell on the unit sphere: ``Δλ·(sin φ₂ − sin φ₁)``.
+
+    The small-circle (true parallel-edge) area — the ground truth the
+    great-circle-edge ``polygon_area`` is compared against (RFC §B.4).
+    """
+    return math.radians(lon2 - lon1) * (
+        math.sin(math.radians(lat2)) - math.sin(math.radians(lat1))
+    )
+
+
+def test_densification_reduces_coarse_polar_cell_area_error() -> None:
+    """A coarse polar cell's great-circle-edge area error collapses under densification (RFC §B.4)."""
+    # A 30°-wide coarse cell at high latitude.
+    cell = np.array([[0.0, 60.0], [30.0, 60.0], [30.0, 80.0], [0.0, 80.0]])
+    a_true = _true_cell_area(0.0, 30.0, 60.0, 80.0)
+    a_coarse = geom.polygon_area(cell, "spherical")
+    err_coarse = abs(a_coarse - a_true) / a_true
+    # The undensified great-circle cell really is off by a few percent (≈3.6%
+    # here — the ~4% the RFC quotes for a 30° polar cell).
+    assert err_coarse > 0.02
+    # Densify the parallel edges to ≤1° segments → the error collapses by >100×.
+    dense = geom.densify_parallel_edges(cell, 1.0)
+    assert dense.shape[0] > cell.shape[0]  # vertices were inserted
+    a_dense = geom.polygon_area(dense, "spherical")
+    err_dense = abs(a_dense - a_true) / a_true
+    assert err_dense < err_coarse  # densification reduces the error
+    assert err_dense < 1e-3  # and converges to the true area
+    # Monotone: finer densification ⇒ smaller error.
+    err_5 = (
+        abs(geom.polygon_area(geom.densify_parallel_edges(cell, 5.0), "spherical") - a_true)
+        / a_true
+    )
+    assert err_dense < err_5 < err_coarse
+
+
+def test_densification_only_touches_parallel_edges_and_is_opt_in() -> None:
+    # Two meridian edges (constant lon) + two 1°-wide parallel edges.
+    quad = np.array([[0.0, 0.0], [0.0, 10.0], [1.0, 10.0], [1.0, 0.0]])
+    dense = geom.densify_parallel_edges(quad, 0.5)
+    # Only the two parallels split (1° > 0.5° ⇒ one interior point each); the two
+    # 10° meridians are left whole — a meridian is already a great circle.
+    assert dense.shape[0] == 4 + 2
+    # A cell already finer than the segment cap is unchanged.
+    assert geom.densify_parallel_edges(quad, 5.0).shape[0] == 4
+    # Off-by-default opt-in: a non-positive cap is rejected.
+    with pytest.raises(geom.GeometryError):
+        geom.densify_parallel_edges(quad, 0.0)
+
+
+def test_densified_vertices_stay_on_the_parallel() -> None:
+    """Inserted vertices lie exactly on the parallel (constant latitude)."""
+    cell = np.array([[0.0, 70.0], [40.0, 70.0], [40.0, 71.0], [0.0, 71.0]])
+    dense = geom.densify_parallel_edges(cell, 10.0)
+    # Every vertex shares a latitude with one of the two parallel edges.
+    lats = {round(float(v), 9) for v in dense[:, 1]}
+    assert lats == {70.0, 71.0}
+
+
+# --------------------------------------------------------------------------- #
 # 3. B.5 / §5.8.2 area-tolerance gate
 # --------------------------------------------------------------------------- #
 

@@ -324,6 +324,60 @@ def close_ring(ring: np.ndarray) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
+# Polar-edge densification — great-circle-edge accuracy (RFC §B.4 / §5.8.4)
+# --------------------------------------------------------------------------- #
+
+def densify_parallel_edges(
+    ring: object, max_segment_deg: float, *, lat_atol: float = 1e-9
+) -> np.ndarray:
+    """Subdivide each *parallel* edge of a lon-lat ``ring`` into short great-circle segments.
+
+    Each parallel edge (constant latitude) wider than ``max_segment_deg`` degrees
+    of longitude is split into great-circle segments at most ``max_segment_deg``
+    wide, inserting the intermediate vertices **on the parallel** (linear in
+    lon-lat).
+
+    The ``spherical`` / ``geodesic`` manifolds model every polygon edge — the
+    clip's and the ``polygon_area`` FAQ's — as a **great-circle geodesic** (RFC
+    §B.4 / §5.8.4). A lon-lat cell edge running along a parallel is a *small
+    circle*, not a great circle, so a single wide great-circle edge bows off the
+    parallel and a coarse polar cell carries a real area error: ≈4% for a 30° cell
+    next to the pole, ≈1% at 15°, scaling with the **square of the cell's
+    longitude width**. Replacing one wide parallel edge with many short
+    great-circle chords that each stay on the parallel drives that error toward
+    zero — the standard mitigation (XIOS) for coarse polar lat-lon grids.
+
+    This is an **opt-in pre-clip** step: apply it to each operand before
+    :func:`intersect_polygon` (and the ``polygon_area`` FAQ) when polar accuracy
+    matters. It is **off by default** — nothing in the evaluator calls it — so the
+    default clip / area behaviour is unchanged. Only parallel edges are touched: a
+    meridian already lies on a great circle, and a slanted edge is not a parallel,
+    so both are returned whole. ``max_segment_deg`` must be positive; ``lat_atol``
+    (degrees) is the tolerance for judging an edge to lie along a parallel. Returns
+    the densified ring as ``[n, 2]`` *distinct* lon-lat vertices (implicit closure
+    preserved).
+    """
+    if not max_segment_deg > 0:
+        raise GeometryError(
+            f"densify_parallel_edges max_segment_deg must be positive, got {max_segment_deg}"
+        )
+    r = _as_ring(ring, who="ring")
+    n = r.shape[0]
+    out: List[np.ndarray] = []
+    for i in range(n):
+        a = r[i]
+        b = r[(i + 1) % n]
+        out.append(a)
+        dlon = b[0] - a[0]
+        if abs(a[1] - b[1]) <= lat_atol and abs(dlon) > max_segment_deg:
+            n_seg = math.ceil(abs(dlon) / max_segment_deg)
+            for k in range(1, n_seg):
+                t = k / n_seg
+                out.append(a + t * (b - a))
+    return np.asarray(out, dtype=float)
+
+
+# --------------------------------------------------------------------------- #
 # Reference area (the same formula the polygon_area FAQ body encodes)
 # --------------------------------------------------------------------------- #
 

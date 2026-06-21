@@ -1075,9 +1075,12 @@ lat-lon plane is wrong at the poles and the antimeridian). Because GeometryOps
 three bindings share the *same geometric model* — their residual differences are
 floating-point, not modelling, which is what keeps the §5.8.2 tolerances small. A
 lat-lon edge along a parallel is a *small circle*, not a great circle, so coarse
-polar cells carry a real edge-model error (RFC §B.4); the contract offers
-**densification** of parallel edges into short great-circle segments where polar
-accuracy matters.
+polar cells carry a real edge-model error (RFC §B.4); the contract offers an
+**opt-in** densification — `densify_parallel_edges(ring, max_segment_deg)` in the
+per-binding kernels, subdividing each parallel edge into short great-circle
+segments — where polar accuracy matters. It is **off by default**, so the
+great-circle-edge behaviour (and every existing conformance result) is unchanged
+unless a producer requests it.
 
 #### 5.8.5 The byte-identical candidate set
 

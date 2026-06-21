@@ -264,6 +264,63 @@ function close_ring(ring::AbstractMatrix)::Matrix{Float64}
 end
 
 # --------------------------------------------------------------------------- #
+# Polar-edge densification — great-circle-edge accuracy (RFC §B.4 / §5.8.4)
+# --------------------------------------------------------------------------- #
+
+"""
+    densify_parallel_edges(ring, max_segment_deg; lat_atol=1e-9) -> Matrix{Float64}
+
+Subdivide each *parallel* edge (constant latitude) of a lon-lat `ring` into
+great-circle segments at most `max_segment_deg` degrees of longitude wide,
+inserting the intermediate vertices **on the parallel** (linear in lon-lat).
+
+The `spherical` / `geodesic` manifolds model every polygon edge — the clip's and
+the `polygon_area` FAQ's — as a **great-circle geodesic** (RFC §B.4 / §5.8.4). A
+lon-lat cell edge running along a parallel is a *small circle*, not a great
+circle, so a single wide great-circle edge bows off the parallel and a coarse
+polar cell carries a real area error: ≈4% for a 30° cell next to the pole, ≈1% at
+15°, scaling with the **square of the cell's longitude width**. Replacing one
+wide parallel edge with many short great-circle chords that each stay on the
+parallel drives that error toward zero — the standard mitigation (XIOS) for
+coarse polar lat-lon grids.
+
+This is an **opt-in pre-clip** step: apply it to each operand before
+[`intersect_polygon`](@ref) (and the `polygon_area` FAQ) when polar accuracy
+matters. It is **off by default** — nothing in the evaluator calls it — so the
+default clip / area behaviour is unchanged. Only parallel edges are touched: a
+meridian already lies on a great circle, and a slanted edge is not a parallel, so
+both are returned whole. `max_segment_deg` must be positive; `lat_atol` (degrees)
+is the tolerance for judging an edge to lie along a parallel. The result is the
+densified ring as `n×2` *distinct* lon-lat vertices (implicit closure preserved).
+"""
+function densify_parallel_edges(ring, max_segment_deg::Real; lat_atol::Real=1e-9)::Matrix{Float64}
+    max_segment_deg > 0 || throw(GeometryError(
+        "densify_parallel_edges max_segment_deg must be positive, got $(max_segment_deg)"))
+    r = _as_ring(_to_matrix(ring), "ring")
+    n = size(r, 1)
+    out = Tuple{Float64,Float64}[]
+    for i in 1:n
+        ax = r[i, 1]; ay = r[i, 2]
+        j = i == n ? 1 : i + 1
+        bx = r[j, 1]; by = r[j, 2]
+        push!(out, (ax, ay))
+        dlon = bx - ax
+        if abs(ay - by) <= lat_atol && abs(dlon) > max_segment_deg
+            nseg = ceil(Int, abs(dlon) / max_segment_deg)
+            for k in 1:nseg-1
+                t = k / nseg
+                push!(out, (ax + t * dlon, ay + t * (by - ay)))
+            end
+        end
+    end
+    m = Matrix{Float64}(undef, length(out), 2)
+    for (k, pt) in enumerate(out)
+        m[k, 1] = pt[1]; m[k, 2] = pt[2]
+    end
+    return m
+end
+
+# --------------------------------------------------------------------------- #
 # Reference area (the same formula the polygon_area FAQ body encodes)
 # --------------------------------------------------------------------------- #
 

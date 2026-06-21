@@ -143,6 +143,50 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         @test ESS.polygon_area(octant, "geodesic") == ESS.polygon_area(octant, "spherical")
     end
 
+    # --- polar-edge densification — great-circle-edge accuracy (ess-my4.4.9) ---
+    # Exact area of a lon-lat cell on the unit sphere (small-circle parallel
+    # edges): A = Δλ·(sinφ₂ − sinφ₁). The great-circle-edge model (the spherical
+    # clip and the spherical area) mis-models the parallels, so a coarse polar
+    # cell carries a real area error (RFC §B.4); densifying the parallel edges
+    # into short great-circle segments drives it toward zero.
+    _true_cell_area(lo1, lo2, la1, la2) = deg2rad(lo2 - lo1) * (sind(la2) - sind(la1))
+
+    @testset "densification reduces coarse polar-cell area error (B.4)" begin
+        cell = [0.0 60.0; 30.0 60.0; 30.0 80.0; 0.0 80.0]  # 30°-wide high-latitude cell
+        a_true = _true_cell_area(0.0, 30.0, 60.0, 80.0)
+        a_coarse = ESS.polygon_area(cell, "spherical")
+        err_coarse = abs(a_coarse - a_true) / a_true
+        # The undensified great-circle cell is off by a few percent (≈3.6% here —
+        # the ~4% the RFC quotes for a 30° polar cell).
+        @test err_coarse > 0.02
+        dense = ESS.densify_parallel_edges(cell, 1.0)  # ≤1° segments
+        @test size(dense, 1) > size(cell, 1)           # vertices were inserted
+        a_dense = ESS.polygon_area(dense, "spherical")
+        err_dense = abs(a_dense - a_true) / a_true
+        @test err_dense < err_coarse                   # densification reduces the error
+        @test err_dense < 1e-3                          # and converges to the true area
+        # Monotone: finer densification ⇒ smaller error.
+        err_5 = abs(ESS.polygon_area(ESS.densify_parallel_edges(cell, 5.0), "spherical") - a_true) / a_true
+        @test err_dense < err_5 < err_coarse
+    end
+
+    @testset "densification only touches parallel edges and is opt-in" begin
+        # Two meridian edges (constant lon) + two 1°-wide parallel edges.
+        quad = [0.0 0.0; 0.0 10.0; 1.0 10.0; 1.0 0.0]
+        dense = ESS.densify_parallel_edges(quad, 0.5)
+        # Only the two parallels split (1° > 0.5° ⇒ one interior point each); the
+        # two 10° meridians are left whole — a meridian is already a great circle.
+        @test size(dense, 1) == 4 + 2
+        # A cell already finer than the segment cap is unchanged.
+        @test size(ESS.densify_parallel_edges(quad, 5.0), 1) == 4
+        # Off-by-default opt-in: a non-positive cap is rejected.
+        @test_throws ESS.GeometryError ESS.densify_parallel_edges(quad, 0.0)
+        # Inserted vertices lie exactly on the parallel (constant latitude).
+        cell = [0.0 70.0; 40.0 70.0; 40.0 71.0; 0.0 71.0]
+        d2 = ESS.densify_parallel_edges(cell, 10.0)
+        @test Set(round(d2[i, 2]; digits=9) for i in 1:size(d2, 1)) == Set([70.0, 71.0])
+    end
+
     # --- spherical clip via GeometryOps + Girard cross-check ---
     @testset "spherical clip via GeometryOps + Girard cross-check" begin
         ring = ESS.intersect_polygon(_SQUARE_A, _SQUARE_B, "spherical")

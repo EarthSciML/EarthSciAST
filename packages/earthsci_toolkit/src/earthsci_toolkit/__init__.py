@@ -186,6 +186,7 @@ from .geometry import (
     GeometryBackendUnavailable,
     intersect_polygon,
     polygon_area,
+    densify_parallel_edges,
     area_tolerance_ok,
     MANIFOLDS,
 )
@@ -497,6 +498,7 @@ __all__ = [
     "GeometryBackendUnavailable",
     "intersect_polygon",
     "polygon_area",
+    "densify_parallel_edges",
     "area_tolerance_ok",
     "MANIFOLDS",
     # Conservative-regridding assembly (overlap join → A_ij → A_j → apply → normalize)

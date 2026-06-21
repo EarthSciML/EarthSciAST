@@ -699,7 +699,14 @@ boundary that makes `acos` a leaf but `Σ coeff·acos(…)` a FAQ:
   snap-rounding) that lives in *how* the floating point is evaluated. The IR
   orchestrates it; the evaluator provides the implementation (the same status as
   `acos`/`sqrt`). It carries a `manifold` flag (planar / spherical / geodesic), and
-  its cross-binding conformance is **tolerance-based**, not bit-for-bit.
+  its cross-binding conformance is **tolerance-based**, not bit-for-bit. The
+  `spherical` / `geodesic` manifolds model **every edge as a great-circle geodesic**
+  — including a lon-lat edge along a parallel, which is a *small circle*, not a great
+  circle — so a coarse polar cell carries an edge-model area error (≈4% for a 30°
+  cell next to the pole, scaling with the square of the cell's longitude width); the
+  optional `densify_parallel_edges` pre-clip step (Appendix B.4), off by default,
+  drives it toward zero. This great-circle-edge assumption is part of the op contract
+  (`esm-schema.json` `manifold` description).
 - **`polygon_area` — an ordinary `sum_product` FAQ, not a new op.** The area of a
   vertex ring is `½ Σ_k (x_k·y_{k+1} − x_{k+1}·y_k)` (planar shoelace / Gauss–Green)
   or the spherical-excess sum `Σ angles − (n−2)π`, i.e. a `sum_product` aggregate over
@@ -1209,9 +1216,15 @@ of the cell's longitude width**, so it is severe only for coarse polar cells and
 **2+ orders of magnitude smaller at typical few-degree climate resolution**. Only
 **YAC** natively distinguishes great-circle vs latitude-parallel edges per grid; the
 standard mitigation elsewhere (XIOS) is to **densify** a parallel edge into many short
-great-circle segments. So the clip op's `manifold`/edge contract should state the
-great-circle-edge assumption explicitly, and ESS should offer densification for coarse
-lat-lon grids if polar accuracy matters. Because GeometryOps (Julia) and S2 (Python,
+great-circle segments. So the clip op's `manifold`/edge contract **states the
+great-circle-edge assumption explicitly** (§8.1, `esm-schema.json`), and ESS **offers**
+densification for coarse lat-lon grids where polar accuracy matters: the per-binding
+kernels expose `densify_parallel_edges(ring, max_segment_deg)`, which subdivides each
+parallel edge into great-circle segments at most `max_segment_deg` wide (vertices
+inserted *on* the parallel). It is an opt-in pre-clip step, **off by default** so the
+great-circle-edge behaviour is unchanged unless requested; densifying a 30° polar cell
+to 1° segments cuts its area error from ≈3.6% to <0.01% (a fixture in the Julia and
+Python geometry suites). Because GeometryOps (Julia) and S2 (Python,
 Rust) both make the great-circle-edge assumption, the three bindings share the *same
 geometric model* — their differences are floating-point, not modelling, which keeps the
 §B.5 tolerances small.
