@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 
-use crate::simulate::CompileError;
+use crate::compile_error::CompileError;
 use crate::types::{Expr, IndexSet, Model, RangeSpec};
 
 /// The ⊕/⊗ operators the evaluator can fold with, each carrying its normative

@@ -117,7 +117,10 @@ fn run_model_test(
         &opts,
     ) {
         Ok(s) => s,
-        Err(e) => panic!("[{fixture_name}/{model_name}/{}] simulate failed: {e}", t.id),
+        Err(e) => panic!(
+            "[{fixture_name}/{model_name}/{}] simulate failed: {e}",
+            t.id
+        ),
     };
     for a in &t.assertions {
         check_assertion(fixture_name, model_name, model, t, a, &sol);
@@ -181,7 +184,10 @@ fn fixture(name: &str) -> PathBuf {
 /// every inline assertion matches.
 fn run_named(name: &str) {
     let ran = run_fixture(&fixture(name));
-    assert!(ran >= 1, "{name}: expected an inline `tests` block, found none");
+    assert!(
+        ran >= 1,
+        "{name}: expected an inline `tests` block, found none"
+    );
 }
 
 /// acos / asin / atan / atan2 scalar leaves, integrated as constant RHS from

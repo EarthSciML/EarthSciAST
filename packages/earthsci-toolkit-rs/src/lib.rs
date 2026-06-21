@@ -74,6 +74,10 @@ pub mod wasm;
 
 pub mod performance;
 
+// Non-gated: the `CompileError` type is also named by the WASM-compiled
+// `aggregate` / `join` passes, so it cannot live inside the gated `simulate`.
+pub mod compile_error;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simulate;
 
@@ -164,6 +168,7 @@ pub use error::EsmError;
 pub use lower_enums::{EnumLoweringError, lower_enums};
 pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
 
+pub use compile_error::CompileError;
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "simd")]
 pub use reactions::compute_conservation_weights_simd;
@@ -171,8 +176,8 @@ pub use reactions::compute_conservation_weights_simd;
 pub use reactions::stoichiometric_matrix_parallel;
 #[cfg(not(target_arch = "wasm32"))]
 pub use simulate::{
-    CompileError, Compiled, ResolvedExpr, SimulateError, SimulateOptions, Solution,
-    SolutionMetadata, SolverChoice, fold_constant_expr, interpret, simulate,
+    Compiled, ResolvedExpr, SimulateError, SimulateOptions, Solution, SolutionMetadata,
+    SolverChoice, fold_constant_expr, interpret, simulate,
 };
 pub use units::{
     Dimension, Unit, UnitError, build_unit_env, check_dimensional_consistency, convert_units,

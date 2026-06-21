@@ -95,10 +95,16 @@ fn run(manifest_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::erro
 /// `{index_set, serialized, dense_ids_canonical}`. Dense IDs are emitted in
 /// Rust's native 0-based base; the runner base-normalizes before comparison.
 fn compute_payload(fx: &Value, payload: &Value) -> Result<Value, Box<dyn std::error::Error>> {
-    let primitive = fx.get("primitive").and_then(|v| v.as_str()).ok_or("fixture.primitive")?;
+    let primitive = fx
+        .get("primitive")
+        .and_then(|v| v.as_str())
+        .ok_or("fixture.primitive")?;
     match primitive {
         "skolem_distinct_rank" => {
-            let mode = fx.get("skolem").and_then(|v| v.as_str()).ok_or("fixture.skolem")?;
+            let mode = fx
+                .get("skolem")
+                .and_then(|v| v.as_str())
+                .ok_or("fixture.skolem")?;
             let edges = edges_from_payload(payload)?;
             let keys: Vec<Key> = match mode {
                 "undirected" => edges
@@ -123,10 +129,15 @@ fn compute_payload(fx: &Value, payload: &Value) -> Result<Value, Box<dyn std::er
             }))
         }
         "group_by_sum" => {
-            let rows_json = payload.get("rows").and_then(|v| v.as_array()).ok_or("payload.rows")?;
+            let rows_json = payload
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .ok_or("payload.rows")?;
             let mut rows: Vec<(Key, Num)> = Vec::with_capacity(rows_json.len());
             for row in rows_json {
-                let pair = row.as_array().ok_or("group row must be a [key,value] array")?;
+                let pair = row
+                    .as_array()
+                    .ok_or("group row must be a [key,value] array")?;
                 let key = Key::try_from_json(pair.first().ok_or("group row needs a key")?)?;
                 let val = pair.get(1).ok_or("group row needs a value")?;
                 let num = val

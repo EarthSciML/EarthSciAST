@@ -63,7 +63,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::aggregate::{ReduceKind, is_aggregate_op};
-use crate::simulate::CompileError;
+use crate::compile_error::CompileError;
 use crate::types::{Expr, ExpressionNode, IndexSet, Model, RangeSpec};
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):

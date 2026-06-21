@@ -29,7 +29,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use crate::flatten::{FlattenError, FlattenedSystem, flatten, flatten_model};
+use crate::flatten::{FlattenedSystem, flatten, flatten_model};
 use crate::types::{EsmFile, Expr, Model};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -42,59 +42,10 @@ use diffsol::{
 // Errors
 // ============================================================================
 
-/// Errors raised when building a [`Compiled`] model from a flattened system.
-#[derive(Error, Debug)]
-pub enum CompileError {
-    /// The flattened system contains a feature the v1 simulator does not support
-    /// (e.g. continuous or discrete events).
-    #[error("Unsupported feature '{feature}': {message}")]
-    UnsupportedFeatureError {
-        /// Feature name (e.g. `"continuous_events"`).
-        feature: String,
-        /// Why this is rejected and what to do about it.
-        message: String,
-    },
-
-    /// The flattened system has independent variables other than `["t"]`
-    /// (i.e. is a hybrid spatial / temporal system, not a pure ODE).
-    #[error(
-        "Unsupported dimensionality {independent_variables:?}: v1 only supports pure ODEs (independent_variables == [\"t\"]). Spatial / hybrid systems require the future Rust PDE bead."
-    )]
-    UnsupportedDimensionalityError {
-        /// The actual independent variables found.
-        independent_variables: Vec<String>,
-    },
-
-    /// The interpreter could not build a callable representation of the
-    /// flattened equations.
-    #[error("Interpreter build failed: {details}")]
-    InterpreterBuildError {
-        /// Human-readable failure description.
-        details: String,
-    },
-
-    /// A spatial differential operator (`grad`, `div`, `laplacian`, ...) was
-    /// found in an equation reaching the simulator. Per the canonical
-    /// pipeline contract, ESD discretization rules MUST rewrite these into
-    /// `arrayop` AST before any binding's simulator evaluates the equations.
-    /// Encountering one here means `discretize` was skipped or did not
-    /// rewrite this node — silently producing zeros (the previous behavior)
-    /// would mask a broken pipeline. (esm-i7b)
-    #[error(
-        "UnreachableSpatialOperatorError: encountered '{op}' node in simulation evaluation. \
-         Spatial operators must be rewritten by ESD discretization rules before reaching the \
-         simulator. Pipeline contract violated."
-    )]
-    UnreachableSpatialOperatorError {
-        /// The offending operator name (e.g. `"grad"`).
-        op: String,
-    },
-
-    /// The convenience constructors flattened the input first; that step
-    /// failed.
-    #[error("Flatten failed: {0}")]
-    Flatten(#[from] FlattenError),
-}
+// `CompileError` is defined in the non-gated `crate::compile_error` module so
+// the WASM-compiled `aggregate` / `join` passes can name it; re-exported here
+// to preserve the native `crate::simulate::CompileError` path.
+pub use crate::compile_error::CompileError;
 
 /// Errors raised when running [`Compiled::simulate`] or the convenience
 /// [`simulate`] free function.

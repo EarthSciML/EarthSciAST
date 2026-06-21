@@ -96,5 +96,8 @@
     "d3-zoom": "^3.0.0",
     "solid-element": "^1.9.1",
     "solid-js": "^1.8.0"
+  },
+  "overrides": {
+    "undici": "^7.28.0"
   }
 }

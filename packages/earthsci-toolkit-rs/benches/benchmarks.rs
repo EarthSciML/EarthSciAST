@@ -77,6 +77,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             domain: None,
             coupletype: None,
             subsystems: None,
+            index_sets: None,
             name: Some(format!("model_{i}")),
             variables,
             equations,
