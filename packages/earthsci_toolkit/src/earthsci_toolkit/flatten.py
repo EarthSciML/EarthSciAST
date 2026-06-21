@@ -212,6 +212,11 @@ _SPATIAL_OPS = {"grad", "div", "laplacian", "curl"}
 _ARRAY_OPS = {
     "aggregate", "arrayop", "makearray", "index", "broadcast",
     "reshape", "transpose", "concat",
+    # The conservative-regridding geometry kernel leaf (RFC §8.1): its clipped
+    # overlap ring is array-valued, so a model carrying only an intersect_polygon
+    # observed (no aggregate) must still route to the NumPy simulate path. Mirrors
+    # numpy_interpreter.expr_contains_array_op, which lists it too.
+    "intersect_polygon",
 }
 
 

@@ -16,7 +16,7 @@ This enables atmospheric chemistry simulation in Python.
 
 import numpy as np
 import sympy as sp
-from typing import Dict, List, Tuple, Optional, Union, Any, Callable
+from typing import Dict, List, Set, Tuple, Optional, Union, Any, Callable
 from dataclasses import dataclass
 
 # Optional scipy import - only needed for actual simulation
@@ -1174,6 +1174,120 @@ def _apply_equation_to_dy(
     return
 
 
+def _expr_referenced_names(expr: Expr) -> Set[str]:
+    """Collect every bare-string leaf (a variable / observed reference) in ``expr``.
+
+    Index symbols and other non-variable strings are gathered too; callers
+    intersect the result with a known name set to keep only the meaningful
+    references. Walks ``args``, the aggregate ``expr`` body, ``values``, and the
+    join ``filter`` / ``key`` predicates so a dependency edge is never missed.
+    """
+    refs: Set[str] = set()
+    stack: List[Any] = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, str):
+            refs.add(e)
+        elif isinstance(e, ExprNode):
+            stack.extend(e.args)
+            if e.expr is not None:
+                stack.append(e.expr)
+            if e.values:
+                stack.extend(e.values)
+            if e.filter is not None:
+                stack.append(e.filter)
+            if e.key is not None:
+                stack.append(e.key)
+    return refs
+
+
+def _order_observed_equations(
+    observed_eqs: List[Tuple[str, Expr]],
+    observed_names: Set[str],
+) -> List[Tuple[str, Expr]]:
+    """Dependency-order observed assignments so each follows the observeds it reads.
+
+    An observed depends on another observed whose name appears anywhere in its
+    RHS (an operand, an aggregate body, a clip leaf, …). Returns ``(name, rhs)``
+    pairs in evaluation order via a Kahn sweep that preserves declaration order
+    among independent observeds. Any observed left in a cycle (a self-referential
+    algebraic block the point-wise driver cannot resolve) is appended in
+    declaration order so the run still proceeds — the evaluator then surfaces a
+    clear unresolved-symbol error rather than the driver hanging.
+    """
+    rhs_by_name: Dict[str, Expr] = dict(observed_eqs)
+    deps: Dict[str, Set[str]] = {}
+    for name, rhs in observed_eqs:
+        refs = _expr_referenced_names(rhs) & observed_names
+        refs.discard(name)
+        deps[name] = refs
+
+    ordered: List[Tuple[str, Expr]] = []
+    placed: Set[str] = set()
+    remaining = [name for name, _ in observed_eqs]
+    progress = True
+    while remaining and progress:
+        progress = False
+        still: List[str] = []
+        for name in remaining:
+            if deps[name] <= placed:
+                ordered.append((name, rhs_by_name[name]))
+                placed.add(name)
+                progress = True
+            else:
+                still.append(name)
+        remaining = still
+    for name in remaining:  # cyclic / dangling — keep declaration order
+        ordered.append((name, rhs_by_name[name]))
+    return ordered
+
+
+def _time_varying_observeds(
+    ordered_observed: List[Tuple[str, Expr]],
+    state_names: Set[str],
+) -> Set[str]:
+    """Names of observeds that change in time (transitively reference a state or ``t``).
+
+    ``ordered_observed`` is already dependency-sorted, so a single forward pass
+    propagates time-variance: an observed is time-varying if it references a
+    state variable, ``t``, or another already-seen time-varying observed.
+    The complement is constant along the trajectory and can be evaluated once
+    and broadcast instead of re-sampled at every output node (the common case
+    for a fixed-geometry clip/area whose inputs are constants/parameters).
+    """
+    state_and_t = set(state_names) | {"t"}
+    varying: Set[str] = set()
+    for name, rhs in ordered_observed:
+        refs = _expr_referenced_names(rhs)
+        if (refs & state_and_t) or (refs & varying):
+            varying.add(name)
+    return varying
+
+
+def _materialize_observeds(
+    ordered_observed: List[Tuple[str, Expr]],
+    ctx: EvalContext,
+) -> None:
+    """Evaluate observed assignments into ``ctx`` in dependency order.
+
+    Array-valued observeds (e.g. a clipped polygon ring) are registered in
+    ``ctx.derived_rings`` under their namespaced name so a downstream aggregate
+    body can ``index`` into them by name; an ``intersect_polygon`` body
+    additionally self-registers its clip ring under its node ``id`` (RFC §8.1),
+    which is how a ``kind:"derived"`` index set resolves its data-dependent
+    extent. Scalar observeds go to ``ctx.observed_values`` for bare-name
+    resolution. This is what lets a geometry model — ``clip = intersect_polygon``,
+    ``area = sum_product FAQ(clip)``, ``D(tracer) = -area·tracer`` — integrate
+    end-to-end through :func:`simulate` (RFC §8.1; CONFORMANCE_SPEC.md §5.8).
+    """
+    for name, rhs in ordered_observed:
+        val = eval_expr(rhs, ctx)
+        if isinstance(val, np.ndarray) and val.ndim > 0:
+            ctx.derived_rings[name] = val
+        else:
+            ctx.observed_values[name] = float(val)
+
+
 def _simulate_with_numpy(
     flat: FlattenedSystem,
     tspan: Tuple[float, float],
@@ -1187,6 +1301,7 @@ def _simulate_with_numpy(
     try:
         shapes = infer_variable_shapes(flat)
         state_names = list(flat.state_variables.keys())
+        observed_names: Set[str] = set(flat.observed_variables.keys())
 
         # Layout: concatenate every state variable's flattened payload.
         state_layout: Dict[str, slice] = {}
@@ -1203,9 +1318,26 @@ def _simulate_with_numpy(
                 "Flattened system has no state variables to integrate"
             )
 
+        # Partition equations: an observed assignment is ``name = <body>`` whose
+        # LHS is an observed variable name (flatten lowers each observed's
+        # `expression` to such an equation). These are materialized into the eval
+        # context in dependency order BEFORE the state derivatives each RHS call,
+        # so an observed `clip = intersect_polygon(...)` ring and the
+        # `area = sum_product FAQ(clip)` that consumes it are available when
+        # `D(tracer) = -area·tracer` evaluates. Everything else (state ODEs,
+        # algebraic constraints) flows through the existing driver path.
+        observed_eqs: List[Tuple[str, Expr]] = []
+        driver_equations: List[FlattenedEquation] = []
+        for eq in flat.equations:
+            if isinstance(eq.lhs, str) and eq.lhs in observed_names:
+                observed_eqs.append((eq.lhs, eq.rhs))
+            else:
+                driver_equations.append(eq)
+        ordered_observed = _order_observed_equations(observed_eqs, observed_names)
+
         # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
         working_equations, _eliminated = _collect_algebraic_substitutions(
-            list(flat.equations)
+            driver_equations
         )
         if _eliminated:
             working_equations = [
@@ -1252,6 +1384,15 @@ def _simulate_with_numpy(
                 t=t,
                 index_sets=flat.index_sets,
             )
+            # Materialize array-valued observeds + derived rings and scalar
+            # observeds into the context (dependency-ordered) so the state
+            # derivatives below can reference them. Re-run each call because an
+            # observed may depend on the current state y (and the derived_rings /
+            # observed_values registries are fresh per EvalContext).
+            try:
+                _materialize_observeds(ordered_observed, ctx)
+            except NumpyInterpreterError as exc:
+                raise SimulationError(str(exc)) from exc
             dy = np.zeros(total_size, dtype=float)
             for eq in working_equations:
                 try:
@@ -1275,10 +1416,78 @@ def _simulate_with_numpy(
         elem_names = _element_names(state_names, shapes)
         t_out, y_out = _densify_solution(sol, tspan)
 
+        # Expose scalar observed trajectories alongside the states (parity with
+        # the scalar SymPy path) so callers / conformance fixtures can assert on
+        # algebraic quantities like `area`. Re-evaluate the observeds from the
+        # state trajectory at each output time; array-valued observeds (e.g. the
+        # clip ring) are not scalar rows and are skipped.
+        out_vars: List[str] = list(elem_names)
+        if ordered_observed and y_out.size:
+            try:
+                varying = _time_varying_observeds(ordered_observed, set(state_names))
+                if not varying:
+                    # All observeds are constant along the trajectory: evaluate
+                    # once and broadcast, instead of re-clipping at every one of
+                    # the (dense) output nodes.
+                    ctx = EvalContext(
+                        state_layout=state_layout,
+                        state_shapes=shapes,
+                        param_values=param_values,
+                        observed_values={},
+                        y=y_out[:, 0],
+                        t=float(t_out[0]),
+                        index_sets=flat.index_sets,
+                    )
+                    _materialize_observeds(ordered_observed, ctx)
+                    scalar_obs = [
+                        n for n, _ in ordered_observed if n in ctx.observed_values
+                    ]
+                    if scalar_obs:
+                        obs_block = np.vstack([
+                            np.full(t_out.size, ctx.observed_values[n], dtype=float)
+                            for n in scalar_obs
+                        ])
+                        y_out = np.vstack([y_out, obs_block])
+                        out_vars.extend(scalar_obs)
+                else:
+                    obs_rows: Dict[str, np.ndarray] = {
+                        name: np.empty(t_out.size, dtype=float)
+                        for name, _ in ordered_observed
+                    }
+                    obs_is_scalar: Dict[str, bool] = {
+                        name: True for name, _ in ordered_observed
+                    }
+                    for j in range(t_out.size):
+                        ctx = EvalContext(
+                            state_layout=state_layout,
+                            state_shapes=shapes,
+                            param_values=param_values,
+                            observed_values={},
+                            y=y_out[:, j],
+                            t=float(t_out[j]),
+                            index_sets=flat.index_sets,
+                        )
+                        _materialize_observeds(ordered_observed, ctx)
+                        for name, _ in ordered_observed:
+                            if name in ctx.observed_values:
+                                obs_rows[name][j] = ctx.observed_values[name]
+                            else:
+                                obs_is_scalar[name] = False
+                    scalar_obs = [n for n, _ in ordered_observed if obs_is_scalar[n]]
+                    if scalar_obs:
+                        obs_block = np.vstack([obs_rows[n] for n in scalar_obs])
+                        y_out = np.vstack([y_out, obs_block])
+                        out_vars.extend(scalar_obs)
+            except NumpyInterpreterError:
+                # Output-time observed recovery is cosmetic; never fail an
+                # otherwise-successful integration because a post-hoc observed
+                # sample could not be evaluated.
+                out_vars = list(elem_names)
+
         return SimulationResult(
             t=t_out,
             y=y_out,
-            vars=elem_names,
+            vars=out_vars,
             success=sol.success,
             message=sol.message,
             nfev=sol.nfev,
