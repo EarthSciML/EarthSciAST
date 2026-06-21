@@ -81,7 +81,7 @@ pub struct GeometryError {
 }
 
 impl GeometryError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         GeometryError {
             message: message.into(),
         }
@@ -231,6 +231,72 @@ pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
     Ok(p.area())
 }
 
+/// Unsigned `polygon_area` of an overlap ring under `manifold` — the value the
+/// `polygon_area` `sum_product` FAQ computes (RFC §8.1). Planar ⇒ shoelace /
+/// Gauss–Green; spherical / geodesic ⇒ the great-circle-edge area in **steradians**
+/// (unit sphere) via `s2geometry`. A degenerate (< 3 vertex) ring — an empty clip —
+/// is `0.0`. This is the reference area the conservative-regridding assembly
+/// ([`crate::regrid`]) consumes as the build-once factor `A_ij`, the same formula
+/// the FAQ body encodes (mirrors Python `geometry.polygon_area`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn polygon_area(ring: &[(f64, f64)], manifold: Manifold) -> Result<f64, GeometryError> {
+    match manifold {
+        Manifold::Planar => Ok(shoelace_area(ring)),
+        Manifold::Spherical | Manifold::Geodesic => spherical_area(ring),
+    }
+}
+
+/// On `wasm32` only the planar area is available (the S2 backend is not built for
+/// wasm); a spherical / geodesic `polygon_area` is an error there.
+#[cfg(target_arch = "wasm32")]
+pub fn polygon_area(ring: &[(f64, f64)], manifold: Manifold) -> Result<f64, GeometryError> {
+    match manifold {
+        Manifold::Planar => Ok(shoelace_area(ring)),
+        Manifold::Spherical | Manifold::Geodesic => Err(GeometryError::new(
+            "spherical/geodesic polygon_area requires the native s2bindings backend, \
+             which is not built for wasm32",
+        )),
+    }
+}
+
+/// The B.5 / §5.8.2 **sliver floor** factor: `atol ≈ 1e-15·R²`. Near-tangent
+/// overlaps are the regime where two clippers legitimately disagree on whether a
+/// tiny intersection even exists, so sub-`atol` areas are treated as
+/// equal-to-zero. Mirrors Python `geometry.SLIVER_ATOL_FACTOR`.
+pub const SLIVER_ATOL_FACTOR: f64 = 1e-15;
+
+/// The absolute sliver floor `atol = 1e-15·R²` for a sphere radius /
+/// characteristic length `radius` (§5.8.2). On the unit sphere (`radius = 1`) this
+/// is `1e-15` steradians; for a physical area multiply the characteristic length
+/// into `radius`.
+pub fn sliver_atol(radius: f64) -> f64 {
+    SLIVER_ATOL_FACTOR * radius * radius
+}
+
+/// The combined relative + absolute area-agreement gate with a sliver floor
+/// (B.5 / CONFORMANCE_SPEC.md §5.8.2):
+///
+/// ```text
+/// |A_x − A_ref| ≤ atol + rtol·|A_ref|,   atol = 1e-15·radius²
+/// ```
+///
+/// Sub-`atol` areas are snapped to zero first, so a "present-but-tiny" overlap and
+/// an "absent" one **both pass** — the snapping / tie-break regime MUST NOT fail
+/// conformance (§5.8.2). `rtol` is empirically calibrated to the **loosest** binding
+/// pair (GeometryOps-vs-S2); Rust and Python share the S2 core and agree far
+/// tighter. This is the Rust analogue of Python `geometry.area_tolerance_ok`, the
+/// primitive that folds the Rust binding into the cross-binding tolerance gate.
+pub fn area_tolerance_ok(area_x: f64, area_ref: f64, rtol: f64, radius: f64) -> bool {
+    let atol = sliver_atol(radius);
+    let a_x = if area_x.abs() <= atol { 0.0 } else { area_x };
+    let a_ref = if area_ref.abs() <= atol {
+        0.0
+    } else {
+        area_ref
+    };
+    (a_x - a_ref).abs() <= atol + rtol * a_ref.abs()
+}
+
 /// Orient a ring counter-clockwise (positive signed area).
 fn orient_ccw(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
     if shoelace_signed_area(ring) < 0.0 {
@@ -344,5 +410,53 @@ mod tests {
             sph, geo,
             "geodesic clips along great circles, same as spherical"
         );
+    }
+
+    #[test]
+    fn polygon_area_dispatches_on_manifold() {
+        // The unit-overlap square: planar shoelace area 1.
+        let ring = [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)];
+        assert!((polygon_area(&ring, Manifold::Planar).unwrap() - 1.0).abs() < TOL);
+        // A spherical octant triangle is π/2 steradians on the unit sphere.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let octant = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
+            let area = polygon_area(&octant, Manifold::Spherical).unwrap();
+            assert!(
+                (area - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                "area {area}"
+            );
+        }
+    }
+
+    // §5.8.2 area-tolerance gate (mirrors Python `test_geometry_kernel.py`).
+    #[test]
+    fn tolerance_exact_match_passes() {
+        assert!(area_tolerance_ok(1.0, 1.0, 1e-12, 1.0));
+    }
+
+    #[test]
+    fn tolerance_sub_atol_slivers_are_zero() {
+        // "present-but-tiny" and "absent" both pass: below the 1e-15 floor.
+        assert!(area_tolerance_ok(1e-20, 0.0, 1e-12, 1.0));
+        assert!(area_tolerance_ok(0.0, 1e-20, 1e-12, 1.0));
+    }
+
+    #[test]
+    fn tolerance_gross_disagreement_fails() {
+        assert!(!area_tolerance_ok(1.0, 2.0, 1e-9, 1.0));
+    }
+
+    #[test]
+    fn tolerance_relative_band_scales_with_reference() {
+        // A 1e-6 relative error passes at rtol 1e-5 but fails at rtol 1e-7.
+        assert!(area_tolerance_ok(1.0 + 1e-6, 1.0, 1e-5, 1.0));
+        assert!(!area_tolerance_ok(1.0 + 1e-6, 1.0, 1e-7, 1.0));
+    }
+
+    #[test]
+    fn sliver_floor_scales_with_radius_squared() {
+        assert_eq!(sliver_atol(1.0), 1e-15);
+        assert!((sliver_atol(1000.0) - 1e-15 * 1e6).abs() < 1e-30);
     }
 }
