@@ -16,7 +16,7 @@ using EarthSciSerialization: AbstractCurvilinearGrid, AbstractGrid,
     extend_with_ghosts, fill_ghost_cells!, extend_with_ghosts_vector
 
 # ---------------------------------------------------------------------------
-# Test grid 1: periodic 2D Cartesian (reused pattern from grid_assembly_test).
+# Test grid 1: periodic 2D Cartesian.
 # Column-major flat: c = i + (j-1)*Nx,  i ∈ 1:Nx, j ∈ 1:Ny.  Periodic wrap.
 # ---------------------------------------------------------------------------
 

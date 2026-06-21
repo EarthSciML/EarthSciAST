@@ -40,9 +40,8 @@ function _eval1(expr::ESM.Expr; u_vals=Dict{String,Float64}(),
     # Anchor with a dummy state "_probe" whose derivative = expr so we
     # can read the result out of du[1].
     # Qualify ESM.Equation explicitly: the test suite earlier loads
-    # ModelingToolkit (pde_discretize_test, grid_assembly_symbolic_test),
-    # whose `Equation` export shadows ESM's at the Main namespace level
-    # under MTK 11.
+    # ModelingToolkit (pde_discretize_test), whose `Equation` export shadows
+    # ESM's at the Main namespace level under MTK 11.
     vars["_probe"] = ModelVariable(StateVariable; default=0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])

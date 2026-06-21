@@ -44,7 +44,6 @@ include("scheme_expansion.jl")
 include("discretize.jl")
 include("grid_accessor.jl")
 include("abstract_grid.jl")
-include("grid_assembly.jl")
 include("ghost_cells.jl")
 include("mtk_export.jl")
 include("geometry.jl")
@@ -180,11 +179,6 @@ export
     metric_g, metric_ginv, metric_jacobian, metric_dgij_dxk,
     coord_jacobian, coord_jacobian_second,
     # Trait-generic ghost-cell gathering (esm-dlz; ported from ESD src/ghost_cells.jl)
-    extend_with_ghosts, fill_ghost_cells!, extend_with_ghosts_vector,
-    # Symbolic ArrayOp assembly (esm-tet; ported from ESD src/discretization.jl)
-    # — concrete methods live in ext/grid_assembly_symbolic.jl, loaded with MTK.
-    fv_laplacian_extended, fv_gradient_extended,
-    laplacian_neighbor_table, gradient_neighbor_table,
-    const_wrap, get_idx_vars, make_arrayop, evaluate_arrayop
+    extend_with_ghosts, fill_ghost_cells!, extend_with_ghosts_vector
 
 end # module EarthSciSerialization

@@ -25,15 +25,31 @@ using Symbolics: Num
 const SymUtils = Symbolics.SymbolicUtils
 using DomainSets: Interval
 
-# Symbolic ArrayOp grid-assembly port (esm-tet) — these methods extend the
-# stub functions declared in src/grid_assembly.jl. Pulled in early so other
-# code in this ext can call them if needed.
-using EarthSciSerialization: AbstractCurvilinearGrid,
-    n_cells, cell_widths, neighbor_indices,
-    metric_ginv, metric_jacobian,
-    coord_jacobian, coord_jacobian_second,
-    precompute_laplacian_stencil, precompute_gradient_stencil
-include("grid_assembly_symbolic.jl")
+# The PDE `discretize` path (below) consumes the Grid trait through
+# `EarthSciSerialization.`-qualified calls; only the abstract grid type is
+# referenced bare (in method signatures), so that is all we import here.
+using EarthSciSerialization: AbstractCurvilinearGrid
+
+# ArrayOp construction primitives for the `arrayop` → Symbolics lowering path.
+# Relocated here from the former ext/grid_assembly_symbolic.jl when the dead
+# covariant-FV stencil assembly was retired (ess-4g1): that file (and its
+# numeric counterpart src/grid_assembly.jl) is gone, but these three
+# primitives stay load-bearing for the live `arrayop` node lowering — see the
+# ConstSR / get_idx_vars / SymReal uses below.
+const SymReal = SymUtils.SymReal
+const ConstSR = SymUtils.Const{SymReal}
+
+"""
+    get_idx_vars(ndim) -> Vector
+
+`ndim` symbolic integer index variables drawn from the shared ArrayOp index
+pool (`SymbolicUtils.idxs_for_arrayop(SymReal)`), so indices interoperate
+cleanly when ArrayOps are composed.
+"""
+function get_idx_vars(ndim::Int)
+    idxs_arr = SymUtils.idxs_for_arrayop(SymReal)
+    return [idxs_arr[d] for d in 1:ndim]
+end
 
 # ========================================
 # ESM Expr → Symbolics conversion

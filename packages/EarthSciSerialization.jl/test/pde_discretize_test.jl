@@ -23,10 +23,9 @@ using Symbolics
 using DomainSets: Interval
 using OrdinaryDiffEqTsit5
 
-# Reuse the test grid from grid_assembly_test.jl. To avoid duplicate-method
-# warnings when both files are run in the same `@testset`, we define a fresh
-# struct under a different name and only override the trait methods this
-# test actually consumes.
+# Self-contained Cartesian test grid. To avoid duplicate-method warnings when
+# several test files run in the same session, we define a fresh struct under a
+# unique name and only override the trait methods this test actually consumes.
 
 struct PDETestCartesianGrid <: AbstractCurvilinearGrid
     Nx::Int

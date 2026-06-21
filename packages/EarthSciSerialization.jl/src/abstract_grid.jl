@@ -244,3 +244,23 @@ metric_jacobian(g::AbstractCurvilinearGrid)                = _trait_err("metric_
 metric_dgij_dxk(g::AbstractCurvilinearGrid)                = _trait_err("metric_dgij_dxk", g)
 coord_jacobian(g::AbstractCurvilinearGrid, ::Symbol)       = _trait_err("coord_jacobian", g)
 coord_jacobian_second(g::AbstractCurvilinearGrid, ::Symbol) = _trait_err("coord_jacobian_second", g)
+
+# ---------------------------------------------------------------------------
+# Grid-width helpers
+# ---------------------------------------------------------------------------
+
+"""
+    _uniform_dx(grid, axis) -> Float64
+
+Return the uniform per-cell width on `axis` if `cell_widths(grid, axis)` is
+constant; otherwise throw. The PDE discretization path assumes uniform
+computational-space widths (dξ, dη); non-uniform computational-space widths
+are a follow-up.
+"""
+function _uniform_dx(grid::AbstractGrid, axis::Symbol)
+    widths = cell_widths(grid, axis)
+    w0 = first(widths)
+    all(w -> w ≈ w0, widths) ||
+        throw(ArgumentError("discretize currently requires uniform $(axis) widths; got non-uniform cell_widths($axis)"))
+    return Float64(w0)
+end

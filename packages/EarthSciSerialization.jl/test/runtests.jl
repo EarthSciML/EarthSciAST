@@ -46,7 +46,6 @@ using JSON3
     include("ghost_cells_test.jl")
     include("pde_discretize_test.jl")
     include("pde_discretize_esd_integration_test.jl")
-    include("grid_assembly_symbolic_test.jl")
     include("mtk_export_test.jl")
     include("tree_walk_test.jl")
     include("tree_walk_e2e_discretize_test.jl")
