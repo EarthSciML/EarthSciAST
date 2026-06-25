@@ -573,10 +573,12 @@ function _build_evaluator_impl(model::Model;
     end
 
     # ---- Build per-derivative compiled-IR list ----
-    # Each entry is (state_index, compiled-node). The RHS is inlined with
-    # observed variables, index ops are resolved to flat-slot references,
-    # then compiled to the compact `_Node` form.
-    rhs_list = Tuple{Int,_Node}[]
+    # Each entry is (state_index, resolved-RHS-expr). The RHS is inlined with
+    # observed variables and index ops are resolved to flat-slot references here;
+    # compilation to the compact `_Node` form is deferred to a single batched
+    # `_cse_compile_scalar` pass after the loop, so common subexpressions are
+    # eliminated across equations as well as within one RHS (ess-r7h).
+    scalar_entries = Tuple{Int,Expr}[]
     # Array (`arrayop`) derivative equations compile to whole-array kernels
     # (ess-dhq) instead of N per-cell scalar nodes — see section 4b.
     vec_kernels = _VecKernel[]
@@ -594,7 +596,7 @@ function _build_evaluator_impl(model::Model;
             rhs = isempty(resolved_obs) ? eq.rhs :
                   _sub_preserving(eq.rhs, resolved_obs)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, _const_arrays)
-            push!(rhs_list, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs)))
+            push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_indexed_D_lhs(eq.lhs)
             # D(index(var, k...)) = expr  — indexed scalar derivative
@@ -615,7 +617,7 @@ function _build_evaluator_impl(model::Model;
             rhs = isempty(resolved_obs) ? eq.rhs :
                   _sub_preserving(eq.rhs, resolved_obs)
             rhs_r = _resolve_indices(rhs, array_var_info, var_map, _const_arrays)
-            push!(rhs_list, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs)))
+            push!(scalar_entries, (idx, rhs_r))
 
         elseif _is_arrayop_D_lhs(eq.lhs)
             # arrayop(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_arrayop(...)
@@ -783,19 +785,32 @@ function _build_evaluator_impl(model::Model;
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
+    # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
+    # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
+    # canonical_json key (within one RHS or across equations) are compiled once
+    # into a prelude that fills a per-call scratch cache, and each occurrence is a
+    # `_NK_CACHED` ref. Numerically identical to per-equation `_compile`; with no
+    # shared subexpressions the prelude is empty and the rhs nodes are byte-identical.
+    rhs_list, scalar_prelude, scalar_cache, cse_diag =
+        _cse_compile_scalar(scalar_entries, var_map, param_sym_set, reg_funcs)
+
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
     # ---- Closure ----
-    f! = _make_rhs(rhs_list, vec_kernels)
+    f! = _make_rhs(rhs_list, scalar_prelude, scalar_cache, vec_kernels)
 
     # Diagnostics for the N-independence property (ess-dhq acceptance #3): the
     # number of array kernels and total compiled `_VecNode`s must be invariant
     # across grid sizes; only the embedded slot/value vectors grow with N.
+    # `n_cse_slots` / `n_cse_occurrences` witness the CSE evaluate-once property
+    # (ess-r7h #2): distinct cached subexpressions vs total replaced occurrences.
     diag = (; n_vec_kernels = length(vec_kernels),
               n_scalar_entries = length(rhs_list),
               template_node_count =
-                  sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0))
+                  sum(_count_vecnodes(vk.template) for vk in vec_kernels; init=0),
+              n_cse_slots = cse_diag.n_slots,
+              n_cse_occurrences = cse_diag.n_occurrences)
 
     return f!, u0, p, tspan_default, var_map, diag
 end
@@ -954,6 +969,7 @@ const _NK_PARAM        = UInt8(3)   # read p.<sym>
 const _NK_TIME         = UInt8(4)   # return t
 const _NK_OP           = UInt8(5)   # apply op to children
 const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
+const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
 
 struct _Node
     kind::UInt8
@@ -1122,6 +1138,187 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
 end
 
 # ============================================================
+# 3b. Common-subexpression elimination (ess-r7h) — eval-time memo, approach (a)
+# ============================================================
+#
+# APPROACH (a) — eval-time memoization. The serialized IR and the canonical
+# goldens are UNCHANGED: CSE only restructures how the *compiled* tree-walk
+# evaluator computes a RHS, so results are numerically identical and the
+# cross-binding PDE-sim conformance suite (ess-fmw, rhs_rtol=1e-9) is untouched
+# by construction. Lives only in this Julia evaluator (the bead's named main
+# beneficiary); other bindings need no change because numeric output is the same.
+#
+# KEY = `canonical_json(expr)` from canonicalize.jl — the existing,
+# cross-binding-identical canonical form. Two subexpressions are "common" iff
+# their canonical_json bytes are equal; keying on this is conformance-safe by
+# construction (the same identity all five bindings already agree on). NO
+# parallel canonicalizer is introduced — `canonical_json` IS the key.
+#
+# SHARING HANDLE = a value-number (Int cache slot) per distinct canonical key.
+# This realizes the RFC §6.1 "node id as a DAG vertex" role in compiled space:
+# a shared subexpression is named once and referenced from each use site by a
+# `_NK_CACHED` leaf carrying that slot.
+#
+# DAG = the value-numbered data-dependency graph `_compile_cse` walks: children
+# are compiled (and hoisted) before their parent, so a cached subexpression's
+# slot is always lower than the slots referencing it — the prelude is therefore
+# already topologically ordered. (cadence.jl's §5.7 graph is index-set cycle
+# detection over raw JSON, not an expression-CSE DAG; the reuse here is of the
+# *canonical identity*, not that specific pass.)
+#
+# EVALUATOR MEMO POINT = a per-`f!`-call scratch `cache::Vector{Float64}`. The
+# prelude evaluates each distinct cached subexpression exactly ONCE per RHS call
+# into `cache` (slot order); every occurrence then reads `cache[slot]` via
+# `_NK_CACHED`. A subexpression occurring K times is thus evaluated once.
+#
+# BIT-EXACTNESS: a cached subexpression's definition is compiled from its
+# original (first-seen) operand order — identical to what `_compile` emits
+# inline today — so each occurrence reads back the exact bytes it would have
+# computed. With no common subexpressions the prelude is empty and `_compile_cse`
+# produces the identical `_Node` tree `_compile` would, so f! is unchanged for
+# models with nothing to share.
+#
+# SCOPE — why CSE lives on the scalar tree-walk path, not the vectorized
+# (ess-dhq) arrayop path. After ess-dhq, redundancy is removed at three layers:
+#   * cross-grid-cell  — eliminated by whole-array kernels (one broadcast per
+#                        structural cell group), so the same stencil is never
+#                        re-walked per cell;
+#   * intra-expression — eliminated at DISCRETIZE time: `discretize` canonicalizes
+#                        each per-cell RHS (discretize.jl), and canonicalization
+#                        already merges like additive/multiplicative terms. The
+#                        2D-Laplacian interior body, for instance, lands as
+#                        `16*(u[i-1,j]+u[i+1,j]+u[i,j-1]+u[i,j+1]+(-4*u[i,j]))`
+#                        — every gather appears exactly once, nothing to share;
+#   * cross-equation / intra-RHS-across-nonlinear-contexts — SURVIVES canonicalize
+#                        (it normalizes one expression at a time, and does not
+#                        combine `sin(a+b)` with `cos(a+b)` or a shared reaction
+#                        flux `k*A*B` across several species balances). This is
+#                        exactly the scalar/indexed-D tree-walk path, and it is
+#                        where this CSE pass fires.
+# Conformance PDE fixtures are pure single-field arrayops (n_scalar_entries==0)
+# whose canonicalized templates carry no duplicate sub-node, so vectorized-path
+# CSE would be a no-op on them. Cross-KERNEL sharing for COUPLED multi-field PDEs
+# (one array subexpression reused across several arrayop equations) is a genuine
+# future case — keyed structurally on the post-merge `_VecNode` rather than on
+# `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
+
+# Ops `_compile` handles specially (closed functions, array/aggregate producers,
+# unresolved/illegal-in-RHS markers). CSE never hoists a node rooted at one of
+# these and never rewrites their operands — such subtrees delegate to plain
+# `_compile`. Everything else is the scalar arithmetic / comparison /
+# transcendental family that `_compile` lowers to a plain `_NK_OP`, which is
+# exactly what `_compile_cse` reconstructs, so hoisting those is sound.
+const _CSE_OPAQUE_OPS = Set{String}([
+    "fn", "const", "enum", "call", "D", "grad", "div", "laplacian",
+    "arrayop", "aggregate", "makearray", "broadcast", "reshape",
+    "transpose", "concat", "index", "bc",
+])
+
+# A node is a CSE hoist/recurse candidate iff it is an OpExpr whose op is not
+# opaque. Leaves (state/param/literal/time) are never hoisted — caching a leaf
+# costs more than the bare read it would replace.
+_cse_hoistable(e::OpExpr) = !(e.op in _CSE_OPAQUE_OPS)
+_cse_hoistable(::Expr) = false
+
+# Canonical-form key for a subexpression, or `nothing` if it cannot be
+# canonicalized (e.g. a non-finite literal). A `nothing` key disables sharing
+# for that subtree — CSE is a pure optimization and silently declines anything
+# it cannot key safely.
+function _cse_key(e::Expr)
+    try
+        return canonical_json(e)
+    catch err
+        err isa CanonicalizeError && return nothing
+        rethrow()
+    end
+end
+
+# Count pass: tally canonical_json occurrences of every hoistable subexpression
+# across all RHS trees. A key seen >= 2 times is worth hoisting.
+function _cse_count!(e::Expr, counts::Dict{String,Int})
+    (e isa OpExpr && _cse_hoistable(e)) || return
+    k = _cse_key(e)
+    k === nothing || (counts[k] = get(counts, k, 0) + 1)
+    for a in e.args
+        _cse_count!(a, counts)
+    end
+    return
+end
+
+# Mutable CSE compile context: the set of cached keys, the slot assigned to each
+# (assigned lazily, in topological order, at first compile), the prelude
+# definitions (`defs[s]` computes `cache[s]`), and the shared scratch the
+# `_NK_CACHED` nodes read from.
+mutable struct _CSEContext
+    cached::Set{String}
+    slot::Dict{String,Int}
+    defs::Vector{_Node}
+    cache::Vector{Float64}
+end
+
+# Compile `expr` to a `_Node`, hoisting any subexpression whose canonical key is
+# in `ctx.cached` into the prelude and replacing it with a `_NK_CACHED` ref.
+# Falls back to plain `_compile` for leaves and opaque ops, so the result is
+# identical to `_compile` wherever nothing is hoisted.
+function _compile_cse(expr::Expr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+    (expr isa OpExpr && _cse_hoistable(expr)) ||
+        return _compile(expr, var_map, param_syms, reg_funcs)
+
+    key = _cse_key(expr)
+    if key !== nothing && key in ctx.cached
+        s = get(ctx.slot, key, 0)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, handler=ctx.cache)
+        # First occurrence: compile children first (assigning them lower slots,
+        # keeping `defs` topologically ordered), reserve this slot, register the
+        # def, and return a ref. Every later occurrence hits the `s != 0` path.
+        children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+                         for a in expr.args]
+        defnode = _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+        s = length(ctx.defs) + 1
+        ctx.slot[key] = s
+        push!(ctx.defs, defnode)
+        return _mknode(kind=_NK_CACHED, idx=s, handler=ctx.cache)
+    end
+    # Not cached: reconstruct the same `_NK_OP` node `_compile` would, but with
+    # hoisted children.
+    children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+                     for a in expr.args]
+    return _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+end
+
+# Compile a batch of scalar `(state_index, resolved_rhs_expr)` entries with
+# cross-equation + intra-expression CSE. Returns the compiled rhs list, the
+# prelude (slot-ordered def nodes), the shared cache vector, and a diagnostic
+# `(; n_slots, n_occurrences)` that witnesses the evaluate-once property
+# (criterion #2: distinct evaluations == distinct canonical subexpressions).
+function _cse_compile_scalar(entries::Vector{Tuple{Int,Expr}},
+                             var_map, param_syms, reg_funcs)
+    counts = Dict{String,Int}()
+    for (_, e) in entries
+        _cse_count!(e, counts)
+    end
+    cached = Set{String}()
+    n_occ = 0
+    for (k, c) in counts
+        if c >= 2
+            push!(cached, k)
+            n_occ += c
+        end
+    end
+    cache = Float64[]
+    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache)
+    rhs_list = Tuple{Int,_Node}[]
+    for (idx, e) in entries
+        push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))
+    end
+    # Size the scratch to the number of slots. `cache` is the SAME object the
+    # `_NK_CACHED` nodes captured, so this in-place resize is visible to them.
+    resize!(cache, length(ctx.defs))
+    diag = (; n_slots = length(ctx.defs), n_occurrences = n_occ)
+    return rhs_list, ctx.defs, cache, diag
+end
+
+# ============================================================
 # 4. Compiled walker
 # ============================================================
 
@@ -1135,6 +1332,13 @@ end
         return getfield(p, n.sym)
     elseif k === _NK_TIME
         return t
+    elseif k === _NK_CACHED
+        # Common-subexpression reference (ess-r7h). The value was computed once
+        # into the per-call scratch cache by the CSE prelude (see `_make_rhs`);
+        # every occurrence reads it here instead of re-walking the subtree. The
+        # cache vector is captured in `handler` at build time, so this needs no
+        # extra eval argument and the recursive `_eval_node` family is unchanged.
+        @inbounds return (n.handler::Vector{Float64})[n.idx]
     elseif k === _NK_CONTRACTION
         return _eval_contraction(n, u, p, t)
     else
@@ -1910,8 +2114,20 @@ end
 # steady state (ess-9cc), so it can be reused across every RK stage without GC
 # pressure. Property pinned by the `@allocated f!(du,u,p,t) == 0` test.
 function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
+                   cse_prelude::AbstractVector{_Node},
+                   cse_cache::Vector{Float64},
                    vec_kernels::AbstractVector{_VecKernel})
     function f!(du, u, p, t)
+        # CSE prelude (ess-r7h): evaluate each distinct shared subexpression
+        # exactly once per call into the scratch cache, in slot order. `defs[s]`
+        # references only slots < s (topological), so each read is already
+        # filled. Every slot is overwritten each call, so there is no staleness;
+        # the cache makes `f!` non-reentrant (one instance per integrator, which
+        # is how ODE RHS closures are used). Empty prelude ⇒ this loop is a no-op
+        # and f! is identical to the pre-CSE evaluator.
+        @inbounds for s in 1:length(cse_prelude)
+            cse_cache[s] = _eval_node(cse_prelude[s], u, p, t)
+        end
         @inbounds for k in 1:length(rhs_list)
             idx_and_node = rhs_list[k]
             du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t)
