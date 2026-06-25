@@ -319,10 +319,7 @@ def test_discretize_single_entry_with_gdd():
     assert disc["metadata"]["system_class"] == "ode"            # PDE -> ODE in one call
     assert disc["models"]["Heat"]["variables"]["u"]["shape"] == ["x"]
 
-    # strip discretize()'s diagnostic provenance (pre-existing; not schema-valid)
-    for k in ("system_class", "dae_info", "discretized_from"):
-        disc["metadata"].pop(k, None)
-    f = et.load(disc)
+    f = et.load(disc)   # loads directly: discretize's diagnostic metadata is now schema-valid
     ic = {f"u[{i}]": math.sin(math.pi * i / 5) for i in range(1, 5)}
     r = simulate(f, (0.0, 0.1), initial_conditions=ic, method="LSODA")
     assert r.success

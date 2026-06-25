@@ -178,6 +178,23 @@
           "items": {
             "$ref": "#/$defs/Reference"
           }
+        },
+        "system_class": {
+          "type": "string",
+          "enum": ["ode", "dae"],
+          "description": "Diagnostic stamped by discretize(): whether the resolved system is a pure ODE or a DAE (RFC §12)."
+        },
+        "dae_info": {
+          "type": "object",
+          "description": "Diagnostic stamped by discretize(): algebraic-equation accounting (RFC §12).",
+          "properties": {
+            "algebraic_equation_count": { "type": "integer" },
+            "per_model": { "type": "object", "additionalProperties": { "type": "integer" } }
+          }
+        },
+        "discretized_from": {
+          "type": "string",
+          "description": "Diagnostic stamped by discretize(): the metadata.name of the source document this was discretized from."
         }
       }
     },
