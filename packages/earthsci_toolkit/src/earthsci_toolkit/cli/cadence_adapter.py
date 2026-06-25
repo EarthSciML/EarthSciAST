@@ -29,6 +29,7 @@ from typing import Any, Dict, List
 from earthsci_toolkit.cadence import (
     canonical_serialize,
     compute_fold,
+    model_from_doc,
     partition,
 )
 
@@ -38,11 +39,11 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> Dict[str, Any]:
+    # model_from_doc attaches the document's top-level `data_loaders` so the
+    # loader-seeded cadence refinement (§5.7.2) can resolve a discrete variable's
+    # data_ingest source loader.
     doc = json.loads((repo_root / fixture_rel).read_text())
-    models = doc.get("models", {})
-    if model_name not in models:
-        raise ValueError(f"{fixture_rel}: model {model_name!r} not found")
-    return models[model_name]
+    return model_from_doc(doc, model_name)
 
 
 def _compute_fixture(fixture: Dict[str, Any], repo_root: Path = REPO_ROOT) -> Dict[str, Any]:

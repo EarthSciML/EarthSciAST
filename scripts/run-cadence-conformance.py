@@ -99,6 +99,20 @@ def _join(*classes: str) -> str:
     return RANK_CLASS[max(CLASS_RANK[c] for c in classes)] if classes else "const"
 
 
+def _loader_without_temporal(var: dict, model: dict) -> bool:
+    """True iff `var` is a discrete variable whose `data_ingest` refresh names a
+    DataLoader — found in the document's top-level `data_loaders`, attached to the
+    model by `load_model` — that declares no `temporal` block. Such a loader
+    describes non-time-varying data, so its output variable seeds CONST (folds at
+    bind), not DISCRETE (RFC pure-io-data-loaders §4.6 / §5.7.2)."""
+    refresh = var.get("refresh")
+    if not isinstance(refresh, dict) or refresh.get("kind") != "data_ingest":
+        return False
+    loaders = model.get("data_loaders") or {}
+    loader = loaders.get(refresh.get("source"))
+    return isinstance(loader, dict) and "temporal" not in loader
+
+
 def seed_leaf(leaf: Any, model: dict) -> str:
     """Seed a leaf's cadence from its declared role (§5.7 leaf-seed table):
     state → continuous, parameter/literal → const, discrete → discrete. The
@@ -117,6 +131,14 @@ def seed_leaf(leaf: Any, model: dict) -> str:
         if kind == "state":
             return "continuous"
         if kind == "discrete":
+            # Loader-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
+            # §5.7.2): a discrete variable fed by a `data_ingest` refresh whose
+            # source DataLoader declares no `temporal` block is non-time-varying
+            # and seeds CONST (folds at bind). With `temporal` (or any other
+            # trigger / an unresolvable source) it keeps the declared DISCRETE
+            # seed and refreshes on each ingest event.
+            if _loader_without_temporal(variables[leaf], model):
+                return "const"
             return "discrete"
         if kind == "brownian":
             return "continuous"
@@ -389,7 +411,14 @@ def load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict:
     models = doc.get("models", {})
     if model_name not in models:
         raise CadenceError(f"{fixture_rel}: model {model_name!r} not found")
-    return models[model_name]
+    model = models[model_name]
+    # Attach the document's top-level `data_loaders` so the loader-seeded cadence
+    # refinement (§5.7.2) can resolve a `discrete` variable's `data_ingest`
+    # source loader and decide DISCRETE (temporal) vs CONST (no temporal).
+    loaders = doc.get("data_loaders")
+    if loaders and "data_loaders" not in model:
+        model = {**model, "data_loaders": loaders}
+    return model
 
 
 def model_nodes(model: dict):

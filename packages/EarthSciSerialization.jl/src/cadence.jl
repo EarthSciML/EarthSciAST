@@ -112,7 +112,15 @@ function load_model_json(path::AbstractString, model_name::AbstractString)
     models = get(doc, "models", Dict{String,Any}())
     haskey(models, model_name) ||
         throw(CadenceError("$(path): model $(repr(model_name)) not found"))
-    return models[model_name]
+    model = models[model_name]
+    # Attach the document's top-level `data_loaders` so the loader-seeded cadence
+    # refinement (§5.7.2) can resolve a `discrete` variable's `data_ingest`
+    # source loader and decide `discrete` (temporal) vs `const` (no temporal).
+    loaders = get(doc, "data_loaders", nothing)
+    if isa(loaders, AbstractDict) && !haskey(model, "data_loaders")
+        model = merge(model, Dict{String,Any}("data_loaders" => loaders))
+    end
+    return model
 end
 
 # ── Classification (§5.7.2–5.7.3) ───────────────────────────────────────────
@@ -141,7 +149,12 @@ function seed_leaf(leaf, model)
     if haskey(variables, leaf)
         kind = get(variables[leaf], "type", nothing)
         kind == "state" && return "continuous"
-        kind == "discrete" && return "discrete"
+        # Loader-seeded cadence refinement (§5.7.2): a discrete variable fed by a
+        # `data_ingest` refresh whose source loader has no `temporal` block is
+        # non-time-varying and seeds `const` (folds at bind). With `temporal` (or
+        # any other trigger / unresolvable source) it keeps the `discrete` seed.
+        kind == "discrete" &&
+            return _loader_without_temporal(variables[leaf], model) ? "const" : "discrete"
         kind == "brownian" && return "continuous"
         (kind == "parameter" || kind == "observed") && return "const"
         throw(CadenceError("leaf $(repr(leaf)): unknown variable kind $(repr(kind))"))
@@ -149,6 +162,24 @@ function seed_leaf(leaf, model)
     # index-set name, bound index symbol (i, k, e, f, le), relation tag
     # ("edge"), or numeric-string literal — all `const`.
     return "const"
+end
+
+"""
+    _loader_without_temporal(var, model) -> Bool
+
+True iff `var` is a discrete variable whose `data_ingest` refresh names a
+DataLoader — found in the document's top-level `data_loaders`, attached to the
+model by [`load_model_json`](@ref) — that declares no `temporal` block. Such a
+loader describes non-time-varying data, so its output variable seeds `const`
+(folds at bind), not `discrete` (RFC pure-io-data-loaders §4.6 / §5.7.2).
+"""
+function _loader_without_temporal(var, model)
+    refresh = get(var, "refresh", nothing)
+    (isa(refresh, AbstractDict) && get(refresh, "kind", nothing) == "data_ingest") || return false
+    loaders = get(model, "data_loaders", nothing)
+    isa(loaders, AbstractDict) || return false
+    loader = get(loaders, get(refresh, "source", nothing), nothing)
+    return isa(loader, AbstractDict) && !haskey(loader, "temporal")
 end
 
 """

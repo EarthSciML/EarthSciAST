@@ -71,6 +71,39 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
             Dict{String,Any}("variables" => Dict{String,Any}("omega" => Dict{String,Any}("type" => "parameter")))) == "continuous"
     end
 
+    @testset "loader-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin
+        # A discrete variable fed by a `data_ingest` refresh resolves through its
+        # source loader's `temporal` block (RFC pure-io-data-loaders §4.6): the
+        # SAME declaration seeds DISCRETE under a temporal loader and CONST (folds
+        # at bind) under a non-temporal one.
+        variables = Dict{String,Any}(
+            "c" => Dict{String,Any}("type" => "state", "shape" => Any["cells"]),
+            "bc" => Dict{String,Any}("type" => "discrete", "shape" => Any["cells"],
+                "refresh" => Dict{String,Any}("kind" => "data_ingest", "source" => "bc_loader")))
+        bc = Dict{String,Any}("op" => "index", "args" => Any["bc", "i"])
+
+        # Loader WITH temporal -> DISCRETE (refreshes on each ingest).
+        with_temporal = Dict{String,Any}("variables" => variables,
+            "data_loaders" => Dict{String,Any}("bc_loader" =>
+                Dict{String,Any}("kind" => "grid", "temporal" => Dict{String,Any}("frequency" => "PT6H"))))
+        @test C.classify(bc, with_temporal) == "discrete"
+
+        # Loader WITHOUT temporal -> CONST (non-time-varying, folds at bind).
+        no_temporal = Dict{String,Any}("variables" => variables,
+            "data_loaders" => Dict{String,Any}("bc_loader" => Dict{String,Any}("kind" => "static")))
+        @test C.classify(bc, no_temporal) == "const"
+
+        # No loaders attached / unresolvable source -> keeps the declared discrete seed.
+        @test C.classify(bc, Dict{String,Any}("variables" => variables)) == "discrete"
+
+        # load_model_json attaches the document's top-level data_loaders so the
+        # refinement can resolve the source loader.
+        m = C.load_model_json(
+            joinpath(REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
+            "LoaderTemporalSeed")
+        @test haskey(m, "data_loaders") && haskey(m["data_loaders"], "bc_loader")
+    end
+
     # --- Negative controls: the guards must REJECT non-conforming input. ------
 
     @testset "neg: wrong expect_cadence is flagged (guard 3)" begin

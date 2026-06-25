@@ -1,7 +1,7 @@
 {
   "category": "cadence_partition_conformance",
   "version": "1.0",
-  "description": "Static golden for the cross-binding dependency-partition (cadence) contract (CONFORMANCE_SPEC.md §5.7, RFC semiring-faq-unified-ir §6.1). Each fixture pins the golden the partition pass MUST reproduce in every binding: the cadence CLASS of every annotated node (const ⊏ discrete ⊏ continuous, class(node)=max over inputs, the gather rule classing index expressions independently of the array), the SET of materialization points (where the frontier cut fires — a lower-cadence sub-DAG feeding a higher-cadence parent), and the byte-identical CONST-folded buffers. The fixtures cover the §6.1 trio plus a discrete-remesh sibling: a mixed stencil (all three classes, both frontier thresholds, the gather split), a pure-topology rule (all CONST, empty hot tree — folds entirely into the artifact), a pure-pointwise rule (all CONTINUOUS, empty per-event handler, no materialization), and a discrete-remesh stencil. The per-binding partition-pass implementations have landed (ess-my4.3.7 Julia, ess-my4.3.8 Rust, ess-my4.3.9 Python): each binding registers a thin adapter and the runner asserts the SAME golden across Julia / Rust / Python. `bindings_required` lists all three, so a missing or mismatching producer fails the gate; the embedded REFERENCE classifier + folder remains the --self-test green check. See tests/conformance/cadence/README.md for the adapter contract.",
+  "description": "Static golden for the cross-binding dependency-partition (cadence) contract (CONFORMANCE_SPEC.md §5.7, RFC semiring-faq-unified-ir §6.1). Each fixture pins the golden the partition pass MUST reproduce in every binding: the cadence CLASS of every annotated node (const ⊏ discrete ⊏ continuous, class(node)=max over inputs, the gather rule classing index expressions independently of the array), the SET of materialization points (where the frontier cut fires — a lower-cadence sub-DAG feeding a higher-cadence parent), and the byte-identical CONST-folded buffers. The fixtures cover the §6.1 trio plus a discrete-remesh sibling and a loader-seeded matched pair: a mixed stencil (all three classes, both frontier thresholds, the gather split), a pure-topology rule (all CONST, empty hot tree — folds entirely into the artifact), a pure-pointwise rule (all CONTINUOUS, empty per-event handler, no materialization), a discrete-remesh stencil, and loader_temporal_seed / loader_const_seed — two models IDENTICAL except that one DataLoader declares a `temporal` block and the other does not, so the SAME `discrete`+`data_ingest` variable seeds DISCRETE (with-temporal) vs CONST (no-temporal), the loader-seeded-cadence contract of RFC pure-io-data-loaders §4.6 (bead ess-v9a.5). The per-binding partition-pass implementations have landed (ess-my4.3.7 Julia, ess-my4.3.8 Rust, ess-my4.3.9 Python): each binding registers a thin adapter and the runner asserts the SAME golden across Julia / Rust / Python. `bindings_required` lists all three, so a missing or mismatching producer fails the gate; the embedded REFERENCE classifier + folder remains the --self-test green check. See tests/conformance/cadence/README.md for the adapter contract.",
   "class_order": ["const", "discrete", "continuous"],
   "bindings_required": ["julia", "rust", "python"],
   "bindings_optional": [],
@@ -145,6 +145,52 @@
           "provenance": "bind",
           "array": "coeff",
           "doc": "The DISCRETE coefficient gather index(coeff,i,k) feeding the CONTINUOUS product — materialized into a per-event buffer, recomputed on each remesh event. The §6.1 analogue of mixed_stencil's CONST coeff, which instead folded at compile."
+        }
+      ],
+      "const_fold": {
+        "inputs": {},
+        "expected": {}
+      }
+    },
+    {
+      "id": "loader_temporal_seed",
+      "fixture": "tests/valid/cadence/loader_temporal_seed.esm",
+      "model": "LoaderTemporalSeed",
+      "doc": "Loader-seeded DISCRETE (RFC pure-io-data-loaders §4.6, bead ess-v9a.5): the BC-relaxation RHS D(c[i])/dt = bc[i] - c[i], where `bc` is declared `discrete` with a `data_ingest` refresh naming the top-level loader `bc_loader`, and that loader HAS a `temporal` block. A loader with `temporal` is time-varying, so the partition seeds `bc` DISCRETE (refresh trigger = the loader's update times). The discrete bc[i] gather feeds the CONTINUOUS subtraction, materializing at the DISCRETE->CONTINUOUS threshold (bind provenance — recomputed by the per-event handler on each ingest, not folded at compile). The c-loads are CONTINUOUS (hot tree). Matched-pair sibling of loader_const_seed (identical but for the loader's `temporal`).",
+      "class_summary": { "const": 0, "discrete": 1, "continuous": 3 },
+      "hot_tree_empty": false,
+      "event_handler_empty": false,
+      "materialization_points": [
+        {
+          "label": "bc",
+          "kind": "expr_edge",
+          "threshold": "discrete->continuous",
+          "provenance": "bind",
+          "array": "bc",
+          "doc": "The DISCRETE loader-output gather index(bc,i) feeding the CONTINUOUS subtraction — materialized into a per-event buffer the hot path reads as a constant, recomputed by the per-event handler when `bc_loader` advances to its next temporal record. Bind provenance (external resource); no compile-time golden bytes (the value comes from the runtime data source)."
+        }
+      ],
+      "const_fold": {
+        "inputs": {},
+        "expected": {}
+      }
+    },
+    {
+      "id": "loader_const_seed",
+      "fixture": "tests/valid/cadence/loader_const_seed.esm",
+      "model": "LoaderConstSeed",
+      "doc": "Loader-seeded CONST (RFC pure-io-data-loaders §4.6, bead ess-v9a.5): the matched-pair sibling of loader_temporal_seed — the SAME RHS D(c[i])/dt = bc[i] - c[i] and the SAME `discrete`+`data_ingest` declaration of `bc`, but the loader `bc_loader` declares NO `temporal` block. A loader without `temporal` is non-time-varying (§4.6: `temporal` optional, absence ⇒ non-time-varying), so the partition refines the declared DISCRETE seed down to CONST: `bc` folds at bind (external-resource provenance) and never refreshes. The const bc[i] gather feeds the CONTINUOUS subtraction at the CONST->CONTINUOUS threshold; because nothing is DISCRETE, the per-event handler is EMPTY (the only structural difference from the temporal sibling). Toggling the loader's `temporal` block — and nothing else — is what flips bc between the two cadences.",
+      "class_summary": { "const": 1, "discrete": 0, "continuous": 3 },
+      "hot_tree_empty": false,
+      "event_handler_empty": true,
+      "materialization_points": [
+        {
+          "label": "bc",
+          "kind": "expr_edge",
+          "threshold": "const->continuous",
+          "provenance": "bind",
+          "array": "bc",
+          "doc": "The CONST loader-output gather index(bc,i) feeding the CONTINUOUS subtraction — folds at bind (the loader has no `temporal`, so the field is loaded once and never refreshed) into a buffer the hot path reads as a constant. Bind provenance distinguishes it from a compile-folded document literal; no compile-time golden bytes (the value comes from the external resource)."
         }
       ],
       "const_fold": {

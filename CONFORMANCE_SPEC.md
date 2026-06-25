@@ -904,6 +904,26 @@ declared class: a `CONST`/`DISCRETE` leaf whose bytes are inline folds at
 **compile**; one loaded from an external resource (NetCDF mesh/met) folds at
 **bind**. Same algebra, same propagation.
 
+**Loader-seeded refinement (RFC `pure-io-data-loaders` §4.6).** When a
+`discrete` variable's `refresh` is a `data_ingest` trigger, its `source` names a
+`DataLoader` in the document's top-level `data_loaders`. The loader's `temporal`
+block is what makes its outputs time-varying, and it is the loader — not the
+variable's own declaration — that fixes the seed:
+
+- a loader **with** `temporal` keeps the variable `DISCRETE` (its refresh trigger
+  is the loader's update times) and folds it at **bind**;
+- a loader **without** `temporal` describes non-time-varying data (`temporal` is
+  optional; absence ⇒ non-time-varying), so the same variable is refined down to
+  `CONST` — loaded once, still folding at **bind**.
+
+Any other refresh trigger (`schedule` / `remesh`) or a `source` that resolves to
+no loader keeps the declared `DISCRETE` seed. This is the one context in which a
+leaf's seed reads a document field outside its own declaration; it is resolved at
+build time, before propagation, so the rest of the pass is unchanged. The
+worked-example pair `loader_temporal_seed` (→ `DISCRETE`) and `loader_const_seed`
+(→ `CONST`) in `tests/valid/cadence/` are identical models that differ only in the
+loader's `temporal` block.
+
 #### 5.7.3 Propagation and the gather rule
 
 Walk the inter-node DAG bottom-up; `class(n) = max` over inputs. The DAG spans

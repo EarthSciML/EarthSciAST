@@ -28,6 +28,7 @@ from earthsci_toolkit.cadence import (
     classify,
     compute_fold,
     fold_edge_enumeration,
+    model_from_doc,
     partition,
 )
 
@@ -43,8 +44,11 @@ def _load_manifest() -> dict:
 
 
 def _load_model(fixture: dict) -> dict:
+    # model_from_doc attaches the document's top-level `data_loaders` so the
+    # loader-seeded cadence refinement (§5.7.2) resolves a discrete variable's
+    # data_ingest source loader.
     doc = json.loads((REPO_ROOT / fixture["fixture"]).read_text())
-    return doc["models"][fixture["model"]]
+    return model_from_doc(doc, fixture["model"])
 
 
 def _fixtures():
@@ -101,6 +105,53 @@ def test_expect_cadence_annotations_agree(fixture):
     class — the pass does not raise on a conforming fixture (guard 3)."""
     # ``partition`` runs check_expect_cadence and raises on disagreement.
     partition(_load_model(fixture))
+
+
+# ── loader-seeded cadence: a DataLoader's `temporal` block drives the seed ───
+
+
+def test_loader_temporal_seeds_discrete_no_temporal_seeds_const():
+    """§5.7.2 / RFC pure-io-data-loaders §4.6: a discrete variable fed by a
+    ``data_ingest`` refresh resolves through its source loader's ``temporal``
+    block — DISCRETE when the loader is time-varying, CONST (folds at bind) when
+    it is not. The SAME variable declaration; only the loader differs."""
+    variables = {
+        "c": {"type": "state", "shape": ["cells"]},
+        "bc": {
+            "type": "discrete",
+            "shape": ["cells"],
+            "refresh": {"kind": "data_ingest", "source": "bc_loader"},
+        },
+    }
+    bc = {"op": "index", "args": ["bc", "i"]}
+
+    with_temporal = {
+        "variables": variables,
+        "data_loaders": {"bc_loader": {"kind": "grid", "temporal": {"frequency": "PT6H"}}},
+    }
+    assert classify(bc, with_temporal) == "discrete"
+
+    no_temporal = {
+        "variables": variables,
+        "data_loaders": {"bc_loader": {"kind": "static"}},
+    }
+    assert classify(bc, no_temporal) == "const"
+
+    # No loaders attached / unresolvable source → keeps the declared DISCRETE seed.
+    assert classify(bc, {"variables": variables}) == "discrete"
+
+
+def test_model_from_doc_attaches_loaders():
+    """model_from_doc lifts the document's top-level ``data_loaders`` onto the
+    model so the refinement resolves the source loader — without mutating the
+    parsed document."""
+    doc = {
+        "models": {"M": {"variables": {}, "equations": []}},
+        "data_loaders": {"bc_loader": {"kind": "static"}},
+    }
+    model = model_from_doc(doc, "M")
+    assert "bc_loader" in model["data_loaders"]
+    assert "data_loaders" not in doc["models"]["M"]  # original document untouched
 
 
 # ── the adapter: byte-identical to the golden ───────────────────────────────

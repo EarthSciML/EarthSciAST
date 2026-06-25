@@ -1,0 +1,102 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "loader_temporal_seed",
+    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 + RFC pure-io-data-loaders §4.6; CONFORMANCE_SPEC.md §5.7.2; bead ess-v9a.5): the LOADER-SEEDED-DISCRETE path. A boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i], where `c` is integrated state (CONTINUOUS) and `bc` is a field read from a DataLoader. The model variable `bc` is declared `discrete` with a `data_ingest` refresh naming the top-level loader `bc_loader`, and that loader HAS a `temporal` block — so its outputs are time-varying: the partition seeds `bc` DISCRETE (it refreshes on each ingest event, piecewise-constant between them; the refresh trigger is the loader's update times derived from `temporal`). The discrete bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the DISCRETE->CONTINUOUS threshold (bind provenance — a loaded external resource): recomputed by the per-event handler when the loader advances to the next record, NOT folded once at compile. This is the matched-pair sibling of loader_const_seed.esm: the two models are IDENTICAL except this loader declares `temporal` and that one does not — the SAME `discrete`+`data_ingest` variable declaration therefore seeds DISCRETE here and CONST there, which is exactly the §4.6 'loader with temporal vs without' contract. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator (the top-level `data_loaders` block is attached to the model at load so the pass can resolve the loader's `temporal`); the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.nux"
+    ],
+    "tags": [
+      "cadence-partition",
+      "loader-seeded",
+      "data-loader",
+      "temporal",
+      "discrete-variable",
+      "refresh-trigger",
+      "data-ingest",
+      "materialization-point",
+      "conformance",
+      "schema",
+      "ess-v9a.5"
+    ]
+  },
+  "data_loaders": {
+    "bc_loader": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/bc/o3_{date:%Y%m%d%H}.nc"
+      },
+      "temporal": {
+        "frequency": "PT6H",
+        "file_period": "P1D",
+        "records_per_file": 4
+      },
+      "variables": {
+        "bc": {
+          "file_variable": "boundary_o3",
+          "units": "mol/mol",
+          "description": "Time-varying boundary-condition field, refreshed every 6 h as the loader advances to the next record. Its `temporal` block makes the loader output DISCRETE (RFC pure-io-data-loaders §4.6)."
+        }
+      }
+    }
+  },
+  "models": {
+    "LoaderTemporalSeed": {
+      "index_sets": {
+        "cells": { "kind": "interval", "size": 4 }
+      },
+      "variables": {
+        "c": {
+          "type": "state",
+          "shape": ["cells"],
+          "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
+        },
+        "bc": {
+          "type": "discrete",
+          "shape": ["cells"],
+          "refresh": { "kind": "data_ingest", "source": "bc_loader" },
+          "description": "Boundary-condition field read from the `bc_loader` DataLoader. The loader declares a `temporal` block, so this output is time-varying: DISCRETE cadence, refreshed on each ingest event (the refresh trigger is the loader's update times). Materialized into a per-event buffer (bind provenance), recomputed when the loader advances to the next record."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(c[i])/dt = bc[i] - c[i]. Pointwise BC relaxation. bc[i] is DISCRETE (loader WITH temporal) and feeds the CONTINUOUS subtraction, so it materializes at the DISCRETE->CONTINUOUS threshold (per-event handler); the c-loads are CONTINUOUS (hot tree).",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["c", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 4] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expect_cadence": "continuous",
+            "ranges": { "i": [1, 4] },
+            "expr": {
+              "op": "-",
+              "expect_cadence": "continuous",
+              "args": [
+                {
+                  "op": "index",
+                  "args": ["bc", "i"],
+                  "expect_cadence": "discrete"
+                },
+                {
+                  "op": "index",
+                  "args": ["c", "i"],
+                  "expect_cadence": "continuous"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

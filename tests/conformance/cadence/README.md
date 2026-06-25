@@ -37,9 +37,11 @@ tests/conformance/cadence/
                       #   materialization-point set, CONST-fold buffers)
 ```
 
-The three fixtures themselves are valid ESM files under
+The fixtures themselves are valid ESM files under
 `tests/valid/cadence/` (`mixed_stencil.esm`, `pure_topology.esm`,
-`pure_pointwise.esm`) — they validate against the schema with no evaluator
+`pure_pointwise.esm`, `discrete_remesh_stencil.esm`, and the loader-seeded pair
+`loader_temporal_seed.esm` / `loader_const_seed.esm`) — they validate against the
+schema with no evaluator
 (like `tests/valid/aggregate/discrete_variable_refresh.esm`) and carry an
 `expect_cadence` assertion on every meaningful node. The runner is
 `scripts/run-cadence-conformance.py` (a self-contained sibling of
@@ -55,6 +57,8 @@ classifier + folder** — the §5.7 contract as code — and the committed golde
 | `pure_topology` | all `CONST` | empty hot tree — the whole edge-enumeration folds into the artifact (the mechanism by which an unstructured-mesh discretization drops its imperative edge construction) |
 | `pure_pointwise` | all `CONTINUOUS` | empty per-event handler, no materialization; the analytic continuous-`t` forcing `sin(omega·t)` stays `CONTINUOUS` (not `DISCRETE`) — classify by cadence, not by role |
 | `discrete_remesh_stencil` | `DISCRETE` topology + `CONTINUOUS` hot path | the §6.1 worked-trace **discrete-mesh path** (ess-my4.3.10): `mixed_stencil` with the topology (`nbr`/`coeff`) declared `discrete` (an AMR remesh-reloadable mesh) so the SAME topology gathers materialize at the `DISCRETE→CONTINUOUS` threshold — recomputed by the per-event handler on each remesh event instead of folding once at compile. With `mixed_stencil` (CONST topology) this is the const-vs-discrete topology pair: "mesh primitives as document literals → topology folds at compile; reloaded/refined mesh → same nodes are DISCRETE and re-run on the remesh event." |
+| `loader_temporal_seed` | loader-seeded `DISCRETE` + `CONTINUOUS` hot path | **loader-seeded cadence** (RFC `pure-io-data-loaders` §4.6, ess-v9a.5): a `discrete` variable fed by a `data_ingest` refresh whose source `DataLoader` declares a `temporal` block seeds `DISCRETE` (refresh trigger = the loader's update times) and materializes at `DISCRETE→CONTINUOUS` (bind provenance, recomputed on each ingest). |
+| `loader_const_seed` | loader-seeded `CONST` + `CONTINUOUS` hot path | the matched-pair sibling: IDENTICAL model, but the loader declares **no** `temporal`, so the SAME `discrete`+`data_ingest` variable is refined to `CONST` (folds at bind, never refreshes) and materializes at `CONST→CONTINUOUS`; the per-event handler is empty. Toggling the loader's `temporal` block alone flips the variable between the two cadences. |
 
 The numeric tail of the §7.3 worked example — the downstream `sum_product`
 geometric FAQ that consumes the materialized edge set as a *primitive* index set

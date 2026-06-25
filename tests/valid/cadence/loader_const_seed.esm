@@ -1,0 +1,98 @@
+{
+  "esm": "0.6.0",
+  "metadata": {
+    "name": "loader_const_seed",
+    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 + RFC pure-io-data-loaders §4.6; CONFORMANCE_SPEC.md §5.7.2; bead ess-v9a.5): the LOADER-SEEDED-CONST path. The matched-pair sibling of loader_temporal_seed.esm — the SAME boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i] and the SAME `discrete` + `data_ingest` declaration of `bc`, but the top-level loader `bc_loader` declares NO `temporal` block. A loader without `temporal` describes non-time-varying data (RFC pure-io-data-loaders §4.6: `temporal` is optional; absence ⇒ non-time-varying), so the partition REFINES the declared DISCRETE seed down to CONST: the field is loaded once and folds at bind (external-resource provenance), never refreshing. The const bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the CONST->CONTINUOUS threshold — and because nothing is DISCRETE, the per-event handler is EMPTY (unlike the temporal sibling). This is the whole point of the bead: toggling the loader's `temporal` block — and nothing else — flips the same loader-output variable between DISCRETE and CONST, exactly matching §6.1. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator (the top-level `data_loaders` block is attached to the model at load so the pass can see the loader has no `temporal`); the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.nux"
+    ],
+    "tags": [
+      "cadence-partition",
+      "loader-seeded",
+      "data-loader",
+      "non-temporal",
+      "discrete-variable",
+      "refresh-trigger",
+      "data-ingest",
+      "bind-fold",
+      "materialization-point",
+      "conformance",
+      "schema",
+      "ess-v9a.5"
+    ]
+  },
+  "data_loaders": {
+    "bc_loader": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/bc/o3_climatology.nc"
+      },
+      "variables": {
+        "bc": {
+          "file_variable": "boundary_o3",
+          "units": "mol/mol",
+          "description": "Non-time-varying boundary-condition field (a fixed climatology): the loader declares NO `temporal` block, so this output is loaded once and folds at bind — CONST, not DISCRETE (RFC pure-io-data-loaders §4.6)."
+        }
+      }
+    }
+  },
+  "models": {
+    "LoaderConstSeed": {
+      "index_sets": {
+        "cells": { "kind": "interval", "size": 4 }
+      },
+      "variables": {
+        "c": {
+          "type": "state",
+          "shape": ["cells"],
+          "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
+        },
+        "bc": {
+          "type": "discrete",
+          "shape": ["cells"],
+          "refresh": { "kind": "data_ingest", "source": "bc_loader" },
+          "description": "Boundary-condition field read from the `bc_loader` DataLoader. The loader declares NO `temporal` block, so the partition refines this loader output down to CONST: loaded once and folded at bind (external-resource provenance), never refreshing. Declared `discrete`+`data_ingest` identically to the temporal sibling — the loader's missing `temporal` is what makes the difference."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(c[i])/dt = bc[i] - c[i]. Identical to loader_temporal_seed.esm, but bc[i] is CONST (loader WITHOUT temporal): it folds at bind and feeds the CONTINUOUS subtraction at the CONST->CONTINUOUS threshold. No DISCRETE node anywhere, so the per-event handler is empty.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["c", "i"] }],
+              "wrt": "t"
+            },
+            "ranges": { "i": [1, 4] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expect_cadence": "continuous",
+            "ranges": { "i": [1, 4] },
+            "expr": {
+              "op": "-",
+              "expect_cadence": "continuous",
+              "args": [
+                {
+                  "op": "index",
+                  "args": ["bc", "i"],
+                  "expect_cadence": "const"
+                },
+                {
+                  "op": "index",
+                  "args": ["c", "i"],
+                  "expect_cadence": "continuous"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

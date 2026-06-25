@@ -8,7 +8,7 @@
 //! `compare_to_golden`: class summary, materialization-threshold multiset, and
 //! byte-identical CONST-folded buffers.
 
-use earthsci_toolkit::cadence::{compute_fold, partition_model};
+use earthsci_toolkit::cadence::{compute_fold, model_with_loaders, partition_model};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -49,9 +49,11 @@ fn rust_partition_matches_golden() {
         let model_name = fx["model"].as_str().expect("model name");
 
         let doc = load_json(rel);
-        let model = &doc["models"][model_name];
+        // Attach the document's `data_loaders` so loader-seeded discrete
+        // variables resolve to DISCRETE (temporal) / CONST (no temporal), §5.7.2.
+        let model = model_with_loaders(&doc["models"][model_name], &doc);
         let partition =
-            partition_model(model).unwrap_or_else(|e| panic!("[{id}] partition pass failed: {e}"));
+            partition_model(&model).unwrap_or_else(|e| panic!("[{id}] partition pass failed: {e}"));
 
         // (a) class summary — every annotated node's derived class.
         assert_eq!(

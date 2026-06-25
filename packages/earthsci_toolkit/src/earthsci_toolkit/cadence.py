@@ -112,6 +112,7 @@ __all__ = [
     "fold_rank",
     "compute_fold",
     "canonical_serialize",
+    "model_from_doc",
     "model_rhs_nodes",
     "MaterializationPoint",
     "Partition",
@@ -146,6 +147,21 @@ def cadence_join(*classes: str) -> str:
     return CLASS_ORDER[max(_CLASS_RANK[c] for c in classes)]
 
 
+def _loader_without_temporal(var: Mapping[str, Any], model: Mapping[str, Any]) -> bool:
+    """True iff ``var`` is a discrete variable whose ``data_ingest`` refresh names
+    a DataLoader — found in the document's top-level ``data_loaders``, attached to
+    the model by :func:`model_from_doc` — that declares no ``temporal`` block.
+    Such a loader describes non-time-varying data, so its output variable seeds
+    ``const`` (folds at bind), not ``discrete`` (RFC pure-io-data-loaders §4.6 /
+    §5.7.2)."""
+    refresh = var.get("refresh")
+    if not isinstance(refresh, Mapping) or refresh.get("kind") != "data_ingest":
+        return False
+    loaders = model.get("data_loaders") or {}
+    loader = loaders.get(refresh.get("source"))
+    return isinstance(loader, Mapping) and "temporal" not in loader
+
+
 def seed_leaf(leaf: Any, model: Mapping[str, Any]) -> str:
     """Seed a leaf's cadence from its declared role (§5.7 leaf-seed table).
 
@@ -170,7 +186,12 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any]) -> str:
         if kind in ("state", "brownian"):
             return "continuous"
         if kind == "discrete":
-            return "discrete"
+            # Loader-seeded cadence refinement (§5.7.2): a discrete variable fed
+            # by a ``data_ingest`` refresh whose source loader has no ``temporal``
+            # block is non-time-varying and seeds ``const`` (folds at bind). With
+            # ``temporal`` (or any other trigger / unresolvable source) it keeps
+            # the declared ``discrete`` seed and refreshes on each ingest event.
+            return "const" if _loader_without_temporal(variables[leaf], model) else "discrete"
         if kind in ("parameter", "observed"):
             # parameter = CONST. An ``observed`` leaf resolves to its defining
             # expression's class elsewhere; none of the §6.1 fixtures read an
@@ -463,6 +484,23 @@ def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any])
 
 
 # === The pass ===============================================================
+
+
+def model_from_doc(doc: Mapping[str, Any], model_name: str) -> Dict[str, Any]:
+    """Extract the named model from a parsed ``.esm`` document, attaching the
+    document's top-level ``data_loaders`` so the loader-seeded cadence refinement
+    (§5.7.2) can resolve a ``discrete`` variable's ``data_ingest`` source loader.
+
+    Returns a shallow copy with ``data_loaders`` added (the parsed document is
+    left unmutated). Raises :class:`CadenceError` if the model is absent."""
+    models = doc.get("models", {}) or {}
+    if model_name not in models:
+        raise CadenceError(f"model {model_name!r} not found")
+    model = models[model_name]
+    loaders = doc.get("data_loaders")
+    if loaders and "data_loaders" not in model:
+        model = {**model, "data_loaders": loaders}
+    return model
 
 
 def model_rhs_nodes(model: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
