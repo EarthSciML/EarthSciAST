@@ -380,156 +380,6 @@ export type DiscreteEvent1 =
       [k: string]: unknown;
     };
 /**
- * A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, error-norm, or convergence-order). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and only valid on a 0-D component. Error-norm reductions (L2_error, Linf_error) require `reference`. The `convergence_order` reduction requires `grid_refs` on the enclosing test, `reference`, and `expected_order`; `expected` is not used for convergence assertions.
- */
-export type Assertion = Assertion1 & {
-  /**
-   * Name of the variable or species to check. Use the local name (e.g., "O3") or a scoped reference relative to this component (e.g., "subsystem.X").
-   */
-  variable: string;
-  /**
-   * Simulation time at which to evaluate the assertion. Must lie within [time_span.start, time_span.end].
-   */
-  time: number;
-  /**
-   * Expected scalar value of the variable at the given time.
-   */
-  expected?: number;
-  tolerance?: Tolerance2;
-  /**
-   * Spatial-point evaluation: map from the enclosing component's domain dimension name (e.g., "x", "lon") to the numeric coordinate at which to sample the field. All keys MUST be names of dimensions declared in the component's domain.spatial. Mutually exclusive with `reduce`.
-   */
-  coords?: {
-    [k: string]: number;
-  };
-  /**
-   * Domain reduction: collapse the spatial field to a single scalar before comparison. `integral`/`mean`/`max`/`min` are pure reductions; `L2_error`/`Linf_error` require a `reference` solution and compute ||u_actual - u_reference||_norm; `convergence_order` requires `grid_refs` on the enclosing test, `reference`, and `expected_order`, and asserts the measured log-log convergence slope. Mutually exclusive with `coords`.
-   */
-  reduce?: "integral" | "mean" | "max" | "min" | "L2_error" | "Linf_error" | "convergence_order";
-  /**
-   * Reference (analytic or precomputed) solution required by error-norm reductions. Either an inline Expression evaluated over the component's domain coordinates, or a from_file shape pointing at a precomputed snapshot.
-   */
-  reference?:
-    | Expression
-    | {
-        type: "from_file";
-        path: string;
-        format?: string;
-      };
-  /**
-   * Required when `reduce` is `convergence_order`. The expected numerical convergence rate (e.g., 2.0 for second-order methods). The assertion passes when the measured rate p_obs >= expected_order * (1 - tolerance.rel).
-   */
-  expected_order?: number;
-};
-export type Assertion1 = {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-};
-/**
- * One axis of a parameter sweep: exactly one of values or range must be given.
- */
-export type SweepDimension = {
-  /**
-   * Name of the parameter to vary (local to this component).
-   */
-  parameter: string;
-  /**
-   * Enumerated values to use for this axis.
-   *
-   * @minItems 1
-   */
-  values?: [number, ...number[]];
-  range?: SweepRange;
-} & SweepDimension1;
-export type SweepDimension1 =
-  | {
-      [k: string]: unknown;
-    }
-  | {
-      [k: string]: unknown;
-    };
-/**
- * A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.
- */
-export type Plot = Plot1 & {
-  /**
-   * Identifier unique within this example's plots array.
-   */
-  id: string;
-  type: "line" | "scatter" | "heatmap" | "field_slice" | "field_snapshot";
-  description?: string;
-  x: PlotAxis;
-  /**
-   * Y-axis specification. May be a single PlotAxis, or an array of PlotAxis for inline multi-series line/scatter plots (alternative to the `series` field for the common case of plotting several variables against a shared x-axis).
-   */
-  y: PlotAxis | [PlotAxis, ...PlotAxis[]];
-  value?: PlotValue;
-  /**
-   * Multiple named series for line or scatter plots. Ignored for heatmap and field plots.
-   */
-  series?: PlotSeries[];
-  /**
-   * Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the example's time_span.
-   */
-  at_time?: number;
-  /**
-   * Required for field_slice and field_snapshot when the component domain has more spatial dimensions than the plot's spatial axes (1 for field_slice, 2 for field_snapshot). Maps each non-plotted spatial dimension name to the numeric coordinate at which to slice. Keys MUST be names of dimensions in component.domain.spatial that are not used by `x` (or `y` for field_snapshot).
-   */
-  pinned_coords?: {
-    [k: string]: number;
-  };
-};
-export type Plot1 = {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-} & {
-  [k: string]: unknown;
-};
-/**
- * A named index set (RFC semiring-faq-unified-ir §5.2): the unified declaration shape for an iteration domain referenced from an arrayop / aggregate range via { "from": <name> }. Subsumes ESM grid dimensions (Domain.spatial) and ESI categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.
- */
-export type IndexSet = IndexSet1 & {
-  /**
-   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `aggregate`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by CSR offsets/values factors.
-   */
-  kind: "interval" | "categorical" | "derived" | "ragged";
-  /**
-   * interval: number of members in the dense interval (the grid-axis length). Required when kind is "interval".
-   */
-  size?: number;
-  /**
-   * categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is "categorical".
-   */
-  members?: unknown[];
-  /**
-   * derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is "derived".
-   */
-  from_faq?: string;
-  /**
-   * ragged: the parent index-set name(s) this inner set depends on (e.g. ["cells"] for the edges of each cell). Required when kind is "ragged".
-   */
-  of?: string[];
-  /**
-   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is "ragged".
-   */
-  offsets?: string;
-  /**
-   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is "ragged".
-   */
-  values?: string;
-};
-export type IndexSet1 = {
-  [k: string]: unknown;
-};
-/**
  * A generic, runtime-agnostic description of an external data source reduced to pure I/O: it locates, reads, and slices bytes from disk and describes the data's native grid. It performs no reprojection and no regridding — those are model concerns, chosen per variable, on the model that owns the loader as a subsystem (RFC pure-io-data-loaders §4.1). Authentication and algorithm-specific tuning are runtime-only and not part of the schema.
  */
 export type DataLoader = DataLoader1 & {
@@ -679,6 +529,156 @@ export type GridMetricGenerator2 = {
    * For kind='builtin': canonical name from the closed set defined in §6.4 (currently empty). Unknown names MUST be rejected with E_UNKNOWN_BUILTIN.
    */
   name?: string;
+};
+/**
+ * A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, error-norm, or convergence-order). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and only valid on a 0-D component. Error-norm reductions (L2_error, Linf_error) require `reference`. The `convergence_order` reduction requires `grid_refs` on the enclosing test, `reference`, and `expected_order`; `expected` is not used for convergence assertions.
+ */
+export type Assertion = Assertion1 & {
+  /**
+   * Name of the variable or species to check. Use the local name (e.g., "O3") or a scoped reference relative to this component (e.g., "subsystem.X").
+   */
+  variable: string;
+  /**
+   * Simulation time at which to evaluate the assertion. Must lie within [time_span.start, time_span.end].
+   */
+  time: number;
+  /**
+   * Expected scalar value of the variable at the given time.
+   */
+  expected?: number;
+  tolerance?: Tolerance2;
+  /**
+   * Spatial-point evaluation: map from the enclosing component's domain dimension name (e.g., "x", "lon") to the numeric coordinate at which to sample the field. All keys MUST be names of dimensions declared in the component's domain.spatial. Mutually exclusive with `reduce`.
+   */
+  coords?: {
+    [k: string]: number;
+  };
+  /**
+   * Domain reduction: collapse the spatial field to a single scalar before comparison. `integral`/`mean`/`max`/`min` are pure reductions; `L2_error`/`Linf_error` require a `reference` solution and compute ||u_actual - u_reference||_norm; `convergence_order` requires `grid_refs` on the enclosing test, `reference`, and `expected_order`, and asserts the measured log-log convergence slope. Mutually exclusive with `coords`.
+   */
+  reduce?: "integral" | "mean" | "max" | "min" | "L2_error" | "Linf_error" | "convergence_order";
+  /**
+   * Reference (analytic or precomputed) solution required by error-norm reductions. Either an inline Expression evaluated over the component's domain coordinates, or a from_file shape pointing at a precomputed snapshot.
+   */
+  reference?:
+    | Expression
+    | {
+        type: "from_file";
+        path: string;
+        format?: string;
+      };
+  /**
+   * Required when `reduce` is `convergence_order`. The expected numerical convergence rate (e.g., 2.0 for second-order methods). The assertion passes when the measured rate p_obs >= expected_order * (1 - tolerance.rel).
+   */
+  expected_order?: number;
+};
+export type Assertion1 = {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+};
+/**
+ * One axis of a parameter sweep: exactly one of values or range must be given.
+ */
+export type SweepDimension = {
+  /**
+   * Name of the parameter to vary (local to this component).
+   */
+  parameter: string;
+  /**
+   * Enumerated values to use for this axis.
+   *
+   * @minItems 1
+   */
+  values?: [number, ...number[]];
+  range?: SweepRange;
+} & SweepDimension1;
+export type SweepDimension1 =
+  | {
+      [k: string]: unknown;
+    }
+  | {
+      [k: string]: unknown;
+    };
+/**
+ * A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.
+ */
+export type Plot = Plot1 & {
+  /**
+   * Identifier unique within this example's plots array.
+   */
+  id: string;
+  type: "line" | "scatter" | "heatmap" | "field_slice" | "field_snapshot";
+  description?: string;
+  x: PlotAxis;
+  /**
+   * Y-axis specification. May be a single PlotAxis, or an array of PlotAxis for inline multi-series line/scatter plots (alternative to the `series` field for the common case of plotting several variables against a shared x-axis).
+   */
+  y: PlotAxis | [PlotAxis, ...PlotAxis[]];
+  value?: PlotValue;
+  /**
+   * Multiple named series for line or scatter plots. Ignored for heatmap and field plots.
+   */
+  series?: PlotSeries[];
+  /**
+   * Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the example's time_span.
+   */
+  at_time?: number;
+  /**
+   * Required for field_slice and field_snapshot when the component domain has more spatial dimensions than the plot's spatial axes (1 for field_slice, 2 for field_snapshot). Maps each non-plotted spatial dimension name to the numeric coordinate at which to slice. Keys MUST be names of dimensions in component.domain.spatial that are not used by `x` (or `y` for field_snapshot).
+   */
+  pinned_coords?: {
+    [k: string]: number;
+  };
+};
+export type Plot1 = {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+} & {
+  [k: string]: unknown;
+};
+/**
+ * A named index set (RFC semiring-faq-unified-ir §5.2): the unified declaration shape for an iteration domain referenced from an arrayop / aggregate range via { "from": <name> }. Subsumes ESM grid dimensions (Domain.spatial) and ESI categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.
+ */
+export type IndexSet = IndexSet1 & {
+  /**
+   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `aggregate`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by CSR offsets/values factors.
+   */
+  kind: "interval" | "categorical" | "derived" | "ragged";
+  /**
+   * interval: number of members in the dense interval (the grid-axis length). Required when kind is "interval".
+   */
+  size?: number;
+  /**
+   * categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is "categorical".
+   */
+  members?: unknown[];
+  /**
+   * derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is "derived".
+   */
+  from_faq?: string;
+  /**
+   * ragged: the parent index-set name(s) this inner set depends on (e.g. ["cells"] for the edges of each cell). Required when kind is "ragged".
+   */
+  of?: string[];
+  /**
+   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is "ragged".
+   */
+  offsets?: string;
+  /**
+   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is "ragged".
+   */
+  values?: string;
+};
+export type IndexSet1 = {
+  [k: string]: unknown;
 };
 /**
  * A single coupling rule connecting models, reaction systems, or data loaders.
@@ -1493,7 +1493,7 @@ export interface ESMFormat2 {
    * External data source registrations (by reference).
    */
   data_loaders?: {
-    [k: string]: DataLoader;
+    [k: string]: DataLoader1;
   };
   /**
    * File-local symbol-to-positive-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to positive integers. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.
@@ -1637,10 +1637,10 @@ export interface Model {
   discrete_events?: DiscreteEvent[];
   continuous_events?: ContinuousEvent[];
   /**
-   * Named child models (subsystems), keyed by unique identifier. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: "ParentModel.ChildModel.var". Each subsystem can be defined inline or included by reference via a local file path or URL.
+   * Named child subsystems, keyed by unique identifier. A subsystem is a child model, a pure-I/O data loader (RFC pure-io-data-loaders §4.3), or a reference to an external file containing exactly one of those. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: "ParentModel.ChildModel.var" (and "ParentModel.Loader.var" for a loader subsystem). Each subsystem can be defined inline or included by reference via a local file path or URL.
    */
   subsystems?: {
-    [k: string]: Model | SubsystemRef;
+    [k: string]: Model | DataLoader | SubsystemRef;
   };
   /**
    * Per-variable regridding configuration for fields this model consumes from its data-loader subsystems (RFC pure-io-data-loaders §5.2, §6), keyed by the loader-field variable name. Regridding is a model concern, never a loader concern (the loader is pure I/O); each entry selects or overrides the regridding kernel for one variable and, for scattered-point loaders regridded by cell-averaging, declares the configurable `missing_value` filled into target cells with no contributing source station. Absent ⇒ every consumed loader field is regridded by its staggering-derived default kernel with no missing-value fill configured. Distinct from `Interface.regridding`, which governs dimension-resolution matching at a domain interface.
@@ -1769,11 +1769,176 @@ export interface ContinuousEvent {
   description?: string;
 }
 /**
- * A reference to an external ESM file containing a model or reaction system definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.
+ * File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.
+ */
+export interface DataLoaderSource {
+  /**
+   * Jinja-style URL template with substitutions. Supported: {date:<strftime>} (e.g. {date:%Y%m%d}), {var}, {sector}, {species}. Custom substitutions are allowed and the runtime must accept and pass them through.
+   */
+  url_template: string;
+  /**
+   * Ordered fallback URL templates. Runtime tries each in order, first is primary. Follows the same substitution grammar as url_template.
+   */
+  mirrors?: string[];
+}
+/**
+ * Temporal coverage and record layout for a data source.
+ */
+export interface DataLoaderTemporal {
+  /**
+   * ISO 8601 datetime — first timestamp available from this source.
+   */
+  start?: string;
+  /**
+   * ISO 8601 datetime — last timestamp available from this source.
+   */
+  end?: string;
+  /**
+   * ISO 8601 duration describing how much time one file covers (e.g., "P1D", "P1M", "PT3H").
+   */
+  file_period?: string;
+  /**
+   * ISO 8601 duration describing spacing between samples within a file.
+   */
+  frequency?: string;
+  /**
+   * Number of time records per file. "auto" means read from file at runtime.
+   */
+  records_per_file?: number | "auto";
+  /**
+   * Name of the time coordinate variable in the file. Used when records_per_file is absent or "auto". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback.
+   */
+  time_variable?: string;
+}
+/**
+ * A named metric array declared on a grid (e.g., dx, dcEdge, areaCell). See §6.5.
+ */
+export interface GridMetricArray {
+  /**
+   * Tensor rank of the array: 0 = scalar (uniform spacing), 1 = 1D along a single dim, 2+ = multidimensional.
+   */
+  rank: number;
+  /**
+   * For rank=1: the dimension the array is indexed by (one of the grid's dimensions).
+   */
+  dim?: string;
+  /**
+   * For rank≥2: ordered list of dimensions the array is indexed by.
+   */
+  dims?: string[];
+  /**
+   * Optional declared shape (parameter names or integer literals per dimension). Used by connectivity tables; redundant with dim/dims for metric arrays.
+   */
+  shape?: unknown[];
+  generator: GridMetricGenerator;
+}
+/**
+ * A parameter in a reaction system.
+ */
+export interface Parameter {
+  units?: string;
+  default?: number;
+  /**
+   * Units of the default value, if different from the declared units field. See ModelVariable.default_units for semantics.
+   */
+  default_units?: string;
+  description?: string;
+}
+/**
+ * Per-dimension extent for cartesian grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).
+ */
+export interface GridExtent {
+  n: number | string;
+  spacing?: "uniform" | "nonuniform";
+}
+/**
+ * Unstructured-grid connectivity table (e.g., cellsOnEdge, edgesOnCell). Integer-indexed lookup produced by a mesh loader. See §6.3.
+ */
+export interface GridConnectivity {
+  /**
+   * Ordered list of dimension sizes (parameter names or integer literals). E.g., ['nEdges', 2] for cellsOnEdge.
+   */
+  shape: unknown[];
+  rank: number;
+  /**
+   * Name of a data_loaders entry that supplies this table.
+   */
+  loader?: string;
+  /**
+   * Named field within the referenced loader's output.
+   */
+  field?: string;
+  generator?: GridMetricGenerator2;
+}
+/**
+ * Mesh-loader descriptor (discretization RFC §8.A). Declares which loader fields are integer-typed connectivity tables vs float-typed metric arrays and the topological family the loader serves. Only meaningful when the enclosing DataLoader has kind='mesh'.
+ */
+export interface DataLoaderMesh {
+  /**
+   * Closed topology enum. 'mpas_voronoi' is the v0.2.0 MVP; 'fesom_triangular' and 'icon_triangular' are reserved. Adding a new value is a minor version bump (RFC §8.A.1).
+   */
+  topology: "mpas_voronoi" | "fesom_triangular" | "icon_triangular";
+  /**
+   * Integer-typed fields the loader exposes, which are referenceable from grids.<g>.connectivity.<name>.field (e.g. 'cellsOnEdge', 'edgesOnCell', 'verticesOnEdge', 'nEdgesOnCell').
+   *
+   * @minItems 1
+   */
+  connectivity_fields: [string, ...string[]];
+  /**
+   * Float-typed fields the loader exposes, which are referenceable from grids.<g>.metric_arrays.<name>.generator.field (e.g. 'dcEdge', 'dvEdge', 'areaCell').
+   *
+   * @minItems 1
+   */
+  metric_fields: [string, ...string[]];
+  /**
+   * Map of dimension name → integer extent or the literal string 'from_file'. Values feed grid-level parameters marked value='from_loader' (RFC §6.6).
+   */
+  dimension_sizes?: {
+    [k: string]: number | "from_file";
+  };
+}
+/**
+ * Reproducibility contract a mesh (or grid) loader advertises to bindings (discretization RFC §8.A and §14 item 4). A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.
+ */
+export interface DataLoaderDeterminism {
+  /**
+   * Byte order of on-wire numeric fields.
+   */
+  endian?: "little" | "big";
+  /**
+   * Floating-point format of metric fields.
+   */
+  float_format?: "ieee754_single" | "ieee754_double";
+  /**
+   * Integer width (in bits) of connectivity fields.
+   */
+  integer_width?: 32 | 64;
+}
+/**
+ * A variable exposed by a data loader, mapped from a source-file variable.
+ */
+export interface DataLoaderVariable {
+  /**
+   * Name of the variable inside the source file. May differ from the schema-level variable name.
+   */
+  file_variable: string;
+  /**
+   * Units of the variable as exposed to the schema.
+   */
+  units: string;
+  /**
+   * Optional multiplicative factor or Expression AST applied to convert source-file values to the declared units.
+   */
+  unit_conversion?: number | Expression;
+  description?: string;
+  reference?: Reference;
+}
+/**
+ * A reference to an external ESM file containing a model, reaction system, or data loader definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.
  */
 export interface SubsystemRef {
   /**
-   * Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model or reaction system, which is used as the subsystem definition.
+   * Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader, which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component.
    */
   ref: string;
 }
@@ -2180,18 +2345,6 @@ export interface Species {
   constant?: boolean;
 }
 /**
- * A parameter in a reaction system.
- */
-export interface Parameter {
-  units?: string;
-  default?: number;
-  /**
-   * Units of the default value, if different from the declared units field. See ModelVariable.default_units for semantics.
-   */
-  default_units?: string;
-  description?: string;
-}
-/**
  * A single reaction in a reaction system.
  */
 export interface Reaction {
@@ -2233,159 +2386,6 @@ export interface Tolerance3 {
    * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
    */
   rel?: number;
-}
-/**
- * File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.
- */
-export interface DataLoaderSource {
-  /**
-   * Jinja-style URL template with substitutions. Supported: {date:<strftime>} (e.g. {date:%Y%m%d}), {var}, {sector}, {species}. Custom substitutions are allowed and the runtime must accept and pass them through.
-   */
-  url_template: string;
-  /**
-   * Ordered fallback URL templates. Runtime tries each in order, first is primary. Follows the same substitution grammar as url_template.
-   */
-  mirrors?: string[];
-}
-/**
- * Temporal coverage and record layout for a data source.
- */
-export interface DataLoaderTemporal {
-  /**
-   * ISO 8601 datetime — first timestamp available from this source.
-   */
-  start?: string;
-  /**
-   * ISO 8601 datetime — last timestamp available from this source.
-   */
-  end?: string;
-  /**
-   * ISO 8601 duration describing how much time one file covers (e.g., "P1D", "P1M", "PT3H").
-   */
-  file_period?: string;
-  /**
-   * ISO 8601 duration describing spacing between samples within a file.
-   */
-  frequency?: string;
-  /**
-   * Number of time records per file. "auto" means read from file at runtime.
-   */
-  records_per_file?: number | "auto";
-  /**
-   * Name of the time coordinate variable in the file. Used when records_per_file is absent or "auto". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback.
-   */
-  time_variable?: string;
-}
-/**
- * A named metric array declared on a grid (e.g., dx, dcEdge, areaCell). See §6.5.
- */
-export interface GridMetricArray {
-  /**
-   * Tensor rank of the array: 0 = scalar (uniform spacing), 1 = 1D along a single dim, 2+ = multidimensional.
-   */
-  rank: number;
-  /**
-   * For rank=1: the dimension the array is indexed by (one of the grid's dimensions).
-   */
-  dim?: string;
-  /**
-   * For rank≥2: ordered list of dimensions the array is indexed by.
-   */
-  dims?: string[];
-  /**
-   * Optional declared shape (parameter names or integer literals per dimension). Used by connectivity tables; redundant with dim/dims for metric arrays.
-   */
-  shape?: unknown[];
-  generator: GridMetricGenerator;
-}
-/**
- * Per-dimension extent for cartesian grids. `n` is either an integer literal or a parameter reference naming the dimension count; `spacing` is 'uniform' or 'nonuniform' for cartesian (determines whether metric arrays are scalar or rank-1).
- */
-export interface GridExtent {
-  n: number | string;
-  spacing?: "uniform" | "nonuniform";
-}
-/**
- * Unstructured-grid connectivity table (e.g., cellsOnEdge, edgesOnCell). Integer-indexed lookup produced by a mesh loader. See §6.3.
- */
-export interface GridConnectivity {
-  /**
-   * Ordered list of dimension sizes (parameter names or integer literals). E.g., ['nEdges', 2] for cellsOnEdge.
-   */
-  shape: unknown[];
-  rank: number;
-  /**
-   * Name of a data_loaders entry that supplies this table.
-   */
-  loader?: string;
-  /**
-   * Named field within the referenced loader's output.
-   */
-  field?: string;
-  generator?: GridMetricGenerator2;
-}
-/**
- * Mesh-loader descriptor (discretization RFC §8.A). Declares which loader fields are integer-typed connectivity tables vs float-typed metric arrays and the topological family the loader serves. Only meaningful when the enclosing DataLoader has kind='mesh'.
- */
-export interface DataLoaderMesh {
-  /**
-   * Closed topology enum. 'mpas_voronoi' is the v0.2.0 MVP; 'fesom_triangular' and 'icon_triangular' are reserved. Adding a new value is a minor version bump (RFC §8.A.1).
-   */
-  topology: "mpas_voronoi" | "fesom_triangular" | "icon_triangular";
-  /**
-   * Integer-typed fields the loader exposes, which are referenceable from grids.<g>.connectivity.<name>.field (e.g. 'cellsOnEdge', 'edgesOnCell', 'verticesOnEdge', 'nEdgesOnCell').
-   *
-   * @minItems 1
-   */
-  connectivity_fields: [string, ...string[]];
-  /**
-   * Float-typed fields the loader exposes, which are referenceable from grids.<g>.metric_arrays.<name>.generator.field (e.g. 'dcEdge', 'dvEdge', 'areaCell').
-   *
-   * @minItems 1
-   */
-  metric_fields: [string, ...string[]];
-  /**
-   * Map of dimension name → integer extent or the literal string 'from_file'. Values feed grid-level parameters marked value='from_loader' (RFC §6.6).
-   */
-  dimension_sizes?: {
-    [k: string]: number | "from_file";
-  };
-}
-/**
- * Reproducibility contract a mesh (or grid) loader advertises to bindings (discretization RFC §8.A and §14 item 4). A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.
- */
-export interface DataLoaderDeterminism {
-  /**
-   * Byte order of on-wire numeric fields.
-   */
-  endian?: "little" | "big";
-  /**
-   * Floating-point format of metric fields.
-   */
-  float_format?: "ieee754_single" | "ieee754_double";
-  /**
-   * Integer width (in bits) of connectivity fields.
-   */
-  integer_width?: 32 | 64;
-}
-/**
- * A variable exposed by a data loader, mapped from a source-file variable.
- */
-export interface DataLoaderVariable {
-  /**
-   * Name of the variable inside the source file. May differ from the schema-level variable name.
-   */
-  file_variable: string;
-  /**
-   * Units of the variable as exposed to the schema.
-   */
-  units: string;
-  /**
-   * Optional multiplicative factor or Expression AST applied to convert source-file values to the declared units.
-   */
-  unit_conversion?: number | Expression;
-  description?: string;
-  reference?: Reference;
 }
 /**
  * A file-local enum mapping symbolic names to positive integers (esm-spec.md §9.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.

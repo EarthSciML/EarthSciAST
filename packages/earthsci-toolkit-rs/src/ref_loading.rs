@@ -147,9 +147,10 @@ fn resolve_value(
     Ok(value)
 }
 
-/// A referenced file must contain exactly one top-level model or reaction
-/// system. Extract that single entry as a JSON value to inline into the
-/// caller's subsystem slot.
+/// A referenced file must contain exactly one top-level model, reaction
+/// system, or data loader. Extract that single entry as a JSON value to inline
+/// into the caller's subsystem slot. Precedence is models -> reaction_systems
+/// -> data_loaders.
 fn extract_single_system(value: Value, source: &Path) -> Result<Value, String> {
     let obj = value
         .as_object()
@@ -167,9 +168,10 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, String> {
 
     pick_single("models")
         .or_else(|| pick_single("reaction_systems"))
+        .or_else(|| pick_single("data_loaders"))
         .ok_or_else(|| {
             format!(
-                "ref {} must contain exactly one top-level model or reaction system",
+                "ref {} must contain exactly one top-level model, reaction system, or data loader",
                 source.display()
             )
         })
@@ -232,6 +234,78 @@ mod tests {
         let inner_resolved = &value["models"]["Outer"]["subsystems"]["Inner"];
         assert!(inner_resolved.get("variables").is_some());
         assert!(inner_resolved.get("ref").is_none());
+    }
+
+    #[test]
+    fn test_resolve_local_data_loader_ref() {
+        // A subsystem ref to a LOADER-ONLY file (top-level `data_loaders` with
+        // exactly one entry, no `models`) must resolve to the loader object.
+        let dir = TempDir::new().unwrap();
+        let loader = json!({
+            "esm": "0.1.0",
+            "metadata": { "name": "loader-only" },
+            "data_loaders": {
+                "MetData": {
+                    "kind": "grid",
+                    "source": {
+                        "url_template": "https://example.org/data/{date:%Y%m%d}.nc"
+                    },
+                    "grid": {
+                        "family": "cartesian",
+                        "crs": { "projection": "longlat", "datum": "WGS84" },
+                        "dimensions": ["lon", "lat"],
+                        "extents": {
+                            "lon": { "n": "n_lon", "spacing": "uniform" },
+                            "lat": { "n": "n_lat", "spacing": "uniform" }
+                        },
+                        "parameters": {
+                            "n_lon": { "description": "lon cell count" },
+                            "n_lat": { "description": "lat cell count" }
+                        }
+                    },
+                    "variables": {
+                        "T": {
+                            "file_variable": "temperature",
+                            "units": "K",
+                            "description": "Air temperature"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join("loader.esm"),
+            serde_json::to_string(&loader).unwrap(),
+        )
+        .unwrap();
+
+        let mut value = json!({
+            "esm": "0.1.0",
+            "metadata": { "name": "main" },
+            "models": {
+                "Outer": {
+                    "variables": {},
+                    "equations": [],
+                    "subsystems": {
+                        "Met": { "ref": "loader.esm" }
+                    }
+                }
+            }
+        });
+
+        resolve_subsystem_refs(&mut value, dir.path()).unwrap();
+
+        let resolved = &value["models"]["Outer"]["subsystems"]["Met"];
+        // The ref is replaced by the single top-level data loader object.
+        assert!(resolved.get("ref").is_none());
+        assert_eq!(resolved["kind"], "grid");
+        assert!(resolved.get("source").is_some());
+        assert_eq!(
+            resolved["source"]["url_template"],
+            "https://example.org/data/{date:%Y%m%d}.nc"
+        );
+        assert!(resolved.get("variables").is_some());
+        assert_eq!(resolved["variables"]["T"]["file_variable"], "temperature");
     }
 
     #[test]

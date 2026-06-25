@@ -62,6 +62,47 @@ describe('resolveSubsystemRefs', () => {
     expect(inner.variables.x).toBeDefined()
   })
 
+  it('resolves a loader-only file ref into a subsystem', async () => {
+    // Referenced file is loader-only: its sole component is `data_loaders`
+    // (no models / no reaction_systems). The schema allows a DataLoader inside
+    // Model.subsystems, so the first loader is inlined under the parent key.
+    const refContent = JSON.stringify({
+      esm: '0.1.0',
+      metadata: { name: 'met' },
+      data_loaders: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+          variables: {
+            temp: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+          },
+        },
+      },
+    })
+    await fs.writeFile(path.join(tmpDir, 'weather.esm.json'), refContent)
+
+    const file = {
+      esm: '0.1.0',
+      metadata: { name: 'main' },
+      models: {
+        Outer: {
+          variables: {},
+          equations: [],
+          subsystems: {
+            Met: { ref: './weather.esm.json' },
+          },
+        },
+      },
+    } as unknown as EsmFile
+
+    await resolveSubsystemRefs(file, tmpDir)
+    const met = file.models!.Outer!.subsystems!.Met as any
+    expect(met.ref).toBeUndefined()
+    expect(met.kind).toBe('grid')
+    expect(met.source.url_template).toBe('/data/weather_{date:%Y%m%d}.nc')
+    expect(met.variables.temp.file_variable).toBe('T2')
+  })
+
   it('throws RefLoadError when local file is missing', async () => {
     const file = {
       esm: '0.1.0',

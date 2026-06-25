@@ -20,10 +20,40 @@ func TestEsmFileBasicStructure(t *testing.T) {
 		},
 	}
 
-	// Test validation - this should fail because no models or reaction systems
+	// Test validation - this should fail because no models, reaction systems, or data loaders
 	err := esmFile.Validate()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of 'models' or 'reaction_systems' must be present")
+	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
+}
+
+func TestEsmFileWithDataLoaderOnly(t *testing.T) {
+	// Test creating an ESM file whose sole component is a data loader.
+	esmFile := EsmFile{
+		Esm: "0.1.0",
+		Metadata: Metadata{
+			Name:    "LoaderOnly",
+			Authors: []string{"Test Author"},
+		},
+		DataLoaders: map[string]DataLoader{
+			"ERA5_PL": {
+				Kind: "grid",
+				Source: DataLoaderSource{
+					URLTemplate: "cds://reanalysis-era5-pressure-levels/{date:%Y}/era5_pl_{date:%Y}.nc",
+				},
+				Variables: map[string]DataLoaderVariable{
+					"t": {
+						FileVariable: "t",
+						Units:        "K",
+						Description:  strPtr("Air temperature"),
+					},
+				},
+			},
+		},
+	}
+
+	// Test validation - this should pass since data_loaders is present.
+	err := esmFile.Validate()
+	assert.NoError(t, err)
 }
 
 func TestEsmFileWithModel(t *testing.T) {

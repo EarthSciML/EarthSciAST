@@ -46,7 +46,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Sequence, Union
 
-from .esm_types import EsmFile, ExprNode, Equation, Model, ReactionSystem
+from .esm_types import DataLoader, EsmFile, ExprNode, Equation, Model, ReactionSystem
 
 
 # ============================================================
@@ -553,6 +553,9 @@ def _lower_model(model: Model, enums: Dict[str, Dict[str, int]]) -> None:
         ))
     model.initialization_equations[:] = new_init
     for sub in model.subsystems.values():
+        # Data-loader subsystems carry no equations/enums to lower.
+        if isinstance(sub, DataLoader):
+            continue
         _lower_model(sub, enums)
 
 

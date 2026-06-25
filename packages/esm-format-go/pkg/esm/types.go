@@ -1151,9 +1151,9 @@ func (e *EsmFile) Validate() error {
 		return err
 	}
 
-	// At least one of models or reaction_systems must be present
-	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 {
-		return fmt.Errorf("at least one of 'models' or 'reaction_systems' must be present")
+	// At least one of models, reaction_systems, or data_loaders must be present
+	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataLoaders) == 0 {
+		return fmt.Errorf("at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 	}
 
 	return nil

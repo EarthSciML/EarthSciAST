@@ -9,7 +9,7 @@
  * environments.
  */
 
-import type { EsmFile, Model, ReactionSystem } from './types.js'
+import type { DataLoader, EsmFile, Model, ReactionSystem } from './types.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -130,6 +130,18 @@ async function resolveModelRefs(
               resolving,
               [...refChain, subName]
             )
+          }
+        } else if (parsed.data_loaders) {
+          // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
+          // file's sole component is `data_loaders`. The schema allows a
+          // DataLoader inside Model.subsystems, so inline the first loader
+          // keyed by the parent subName. A loader has no subsystems, so there
+          // is nothing to recurse into.
+          const loaderEntries = Object.entries(parsed.data_loaders)
+          const firstEntry = loaderEntries[0]
+          if (firstEntry) {
+            const resolvedLoader = firstEntry[1] as DataLoader
+            model.subsystems![subName] = resolvedLoader
           }
         }
       } finally {

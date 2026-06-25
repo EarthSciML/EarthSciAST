@@ -155,7 +155,7 @@ func TestLoadShouldSucceedWithStructuralValidationFailure(t *testing.T) {
 	if esmFile != nil {
 		validationErr := esmFile.Validate()
 		assert.Error(t, validationErr, "Basic structural validation should fail")
-		assert.Contains(t, validationErr.Error(), "at least one of 'models' or 'reaction_systems' must be present")
+		assert.Contains(t, validationErr.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 	}
 }
 

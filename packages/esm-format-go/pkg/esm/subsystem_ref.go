@@ -181,25 +181,27 @@ func extractRef(value interface{}) (string, bool) {
 	return refStr, true
 }
 
-// extractSingleSystem extracts the single top-level model or reaction system
-// from a referenced ESM file. If the file contains exactly one model, that model
-// is returned. If it contains exactly one reaction system, that is returned.
+// extractSingleSystem extracts the single top-level model, reaction system, or
+// data loader from a referenced ESM file. If the file contains exactly one
+// model, that model is returned. If it contains exactly one reaction system,
+// that is returned. If it contains exactly one data loader, that is returned.
 // If there are multiple systems or none, an error is returned.
 func extractSingleSystem(file *EsmFile, path string) (interface{}, error) {
 	modelCount := len(file.Models)
 	rsCount := len(file.ReactionSystems)
-	total := modelCount + rsCount
+	loaderCount := len(file.DataLoaders)
+	total := modelCount + rsCount + loaderCount
 
 	if total == 0 {
-		return nil, fmt.Errorf("referenced file %q contains no models or reaction systems", path)
+		return nil, fmt.Errorf("referenced file %q contains no models, reaction systems, or data loaders", path)
 	}
 
 	if total > 1 {
 		return nil, fmt.Errorf("referenced file %q contains %d systems (expected exactly 1); "+
-			"models=%d, reaction_systems=%d", path, total, modelCount, rsCount)
+			"models=%d, reaction_systems=%d, data_loaders=%d", path, total, modelCount, rsCount, loaderCount)
 	}
 
-	// Extract the single system
+	// Extract the single system. Precedence: models -> reaction_systems -> data_loaders.
 	if modelCount == 1 {
 		for _, model := range file.Models {
 			// Convert to a generic map for storage in the subsystems interface{} map
@@ -215,14 +217,28 @@ func extractSingleSystem(file *EsmFile, path string) (interface{}, error) {
 		}
 	}
 
-	for _, rs := range file.ReactionSystems {
-		data, err := json.Marshal(rs)
+	if rsCount == 1 {
+		for _, rs := range file.ReactionSystems {
+			data, err := json.Marshal(rs)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal resolved reaction system from %q: %w", path, err)
+			}
+			var result interface{}
+			if err := json.Unmarshal(data, &result); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal resolved reaction system from %q: %w", path, err)
+			}
+			return result, nil
+		}
+	}
+
+	for _, loader := range file.DataLoaders {
+		data, err := json.Marshal(loader)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal resolved reaction system from %q: %w", path, err)
+			return nil, fmt.Errorf("failed to marshal resolved data loader from %q: %w", path, err)
 		}
 		var result interface{}
 		if err := json.Unmarshal(data, &result); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal resolved reaction system from %q: %w", path, err)
+			return nil, fmt.Errorf("failed to unmarshal resolved data loader from %q: %w", path, err)
 		}
 		return result, nil
 	}

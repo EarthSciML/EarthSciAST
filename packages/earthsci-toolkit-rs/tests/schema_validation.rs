@@ -232,6 +232,57 @@ fn test_coupling_validation_errors() {
     }
 }
 
+/// Test that a loader-only document (top-level `data_loaders` as the sole
+/// component, no `models`/`reaction_systems`) validates and loads.
+#[test]
+fn test_loader_only_document_loads() {
+    let fixture = r#"{
+        "esm": "0.1.0",
+        "metadata": { "name": "loader-only" },
+        "data_loaders": {
+            "MetData": {
+                "kind": "grid",
+                "source": {
+                    "url_template": "https://example.org/data/{date:%Y%m%d}.nc"
+                },
+                "grid": {
+                    "family": "cartesian",
+                    "crs": { "projection": "longlat", "datum": "WGS84" },
+                    "dimensions": ["lon", "lat"],
+                    "extents": {
+                        "lon": { "n": "n_lon", "spacing": "uniform" },
+                        "lat": { "n": "n_lat", "spacing": "uniform" }
+                    },
+                    "parameters": {
+                        "n_lon": { "description": "lon cell count" },
+                        "n_lat": { "description": "lat cell count" }
+                    }
+                },
+                "variables": {
+                    "T": {
+                        "file_variable": "temperature",
+                        "units": "K",
+                        "description": "Air temperature"
+                    }
+                }
+            }
+        }
+    }"#;
+
+    let result = load(fixture);
+    let esm = result.expect("loader-only document should validate and load");
+    let loaders = esm
+        .data_loaders
+        .as_ref()
+        .expect("loader-only document must expose data_loaders");
+    assert_eq!(loaders.len(), 1);
+    assert!(loaders.contains_key("MetData"));
+    assert!(
+        esm.models.is_none(),
+        "loader-only document must not have a models block"
+    );
+}
+
 /// Test comprehensive error coverage
 #[test]
 fn test_complete_error_coverage() {

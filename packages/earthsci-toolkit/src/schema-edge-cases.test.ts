@@ -60,6 +60,32 @@ describe('Schema Edge Cases', () => {
       expect(result.esm).toBe("0.1.0")
     })
 
+    it('should pass with only data_loaders (loader-only file)', () => {
+      // RFC pure-io-data-loaders §4.3: a document whose sole component is
+      // `data_loaders` (no models, no reaction_systems) is valid and must load.
+      const loaderOnly = {
+        esm: "0.1.0",
+        metadata: { name: "test" },
+        data_loaders: {
+          "weather": {
+            kind: "grid",
+            source: { url_template: "/data/weather_{date:%Y%m%d}.nc" },
+            variables: {
+              "temp": { file_variable: "T2", units: "K", description: "Temperature" }
+            }
+          }
+        }
+      }
+
+      const errors = validateSchema(loaderOnly)
+      expect(errors).toEqual([])
+
+      // Should not throw when using load()
+      const result = load(loaderOnly)
+      expect(result.esm).toBe("0.1.0")
+      expect(result.data_loaders?.["weather"]?.kind).toBe("grid")
+    })
+
     it('should pass with both models and reaction_systems', () => {
       const withBoth = {
         esm: "0.1.0",

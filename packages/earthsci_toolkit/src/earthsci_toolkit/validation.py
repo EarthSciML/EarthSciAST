@@ -484,32 +484,38 @@ def _validate_coordinate_transform_patterns(transforms, spatial_dims, error_coll
 
 def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
     """
-    Validate that at least one of models or reaction_systems is present and non-empty.
+    Validate that at least one of models, reaction_systems, or data_loaders is
+    present and non-empty.
 
     This ensures that the ESM file contains actual computational content rather than
-    being empty or containing only metadata.
+    being empty or containing only metadata. A loader-only file (sole component
+    `data_loaders`) is valid — it is referenceable as a loader subsystem
+    (RFC pure-io-data-loaders §4.4 / esm-spec §4.7).
     """
     has_models = esm_file.models and len(esm_file.models) > 0
     has_reaction_systems = esm_file.reaction_systems and len(esm_file.reaction_systems) > 0
+    has_data_loaders = esm_file.data_loaders and len(esm_file.data_loaders) > 0
 
-    if not has_models and not has_reaction_systems:
+    if not has_models and not has_reaction_systems and not has_data_loaders:
         error = ESMError(
             code=ErrorCode.MISSING_REQUIRED_FIELD,
-            message="ESM file must contain at least one model or reaction system. Empty files are not valid.",
+            message="ESM file must contain at least one model, reaction system, or data loader. Empty files are not valid.",
             severity=Severity.ERROR,
             context=ErrorContext(
                 path="$",
                 details={
                     "models_count": len(esm_file.models) if esm_file.models else 0,
                     "reaction_systems_count": len(esm_file.reaction_systems) if esm_file.reaction_systems else 0,
+                    "data_loaders_count": len(esm_file.data_loaders) if esm_file.data_loaders else 0,
                     "fix_suggestions": [
                         "Add a model with variables and equations",
                         "Add a reaction system with species and reactions",
+                        "Add a data loader",
                         "Import content from existing ESM files"
                     ]
                 }
             ),
-            fix_suggestion=FixSuggestion("Add at least one model or reaction system to the ESM file")
+            fix_suggestion=FixSuggestion("Add at least one model, reaction system, or data loader to the ESM file")
         )
         error_collector.add_error(error)
 

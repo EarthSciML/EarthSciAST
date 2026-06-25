@@ -20,6 +20,7 @@ from .esm_types import (
     ContinuousEvent,
     CouplingCouple,
     CouplingEntry,
+    DataLoader,
     DiscreteEvent,
     Domain,
     EsmFile,
@@ -511,6 +512,13 @@ def _collect_model(name: str, model: Model, prefix: Optional[str] = None) -> _Co
         ))
 
     for sub_name, sub_model in model.subsystems.items():
+        # A data-loader subsystem (RFC pure-io-data-loaders §4.3) exposes its
+        # variables to the owning model's equations; lowering that consumption
+        # (reprojection / regridding) is a downstream model concern, not part of
+        # plain flattening. Skip it here so a model carrying a loader subsystem
+        # still flattens its own equations.
+        if isinstance(sub_model, DataLoader):
+            continue
         sub_prefix = f"{full_prefix}.{sub_name}"
         sub_component = _collect_model(sub_name, sub_model, sub_prefix)
         component.state_vars.update(sub_component.state_vars)

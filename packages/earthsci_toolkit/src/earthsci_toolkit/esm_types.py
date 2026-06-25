@@ -179,7 +179,10 @@ class Model:
     variables: Dict[str, ModelVariable] = field(default_factory=dict)
     equations: List[Equation] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    subsystems: Dict[str, 'Model'] = field(default_factory=dict)
+    # A subsystem is a child Model or a pure-I/O DataLoader (RFC
+    # pure-io-data-loaders §4.3); ref subsystems are raw {"ref": ...} dicts
+    # until resolve_subsystem_refs replaces them in place.
+    subsystems: Dict[str, Union['Model', 'DataLoader']] = field(default_factory=dict)
     # v0.2.0: model-level boundary conditions keyed by user-supplied id (RFC §9).
     boundary_conditions: Dict[str, 'BoundaryCondition'] = field(default_factory=dict)
     # Model-level default numerical tolerance for inline tests (esm-spec §6.6).

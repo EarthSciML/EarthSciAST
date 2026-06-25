@@ -78,6 +78,63 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 	}
 }
 
+func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	// A loader-only referenced file: its sole component is a single data loader.
+	inner := map[string]interface{}{
+		"esm": "0.1.0",
+		"metadata": map[string]interface{}{
+			"name": "inner-loader",
+		},
+		"data_loaders": map[string]interface{}{
+			"ERA5_PL": map[string]interface{}{
+				"kind": "grid",
+				"source": map[string]interface{}{
+					"url_template": "cds://reanalysis-era5-pressure-levels/{date:%Y}/era5_pl_{date:%Y}.nc",
+				},
+				"variables": map[string]interface{}{
+					"t": map[string]interface{}{
+						"file_variable": "t",
+						"units":         "K",
+						"description":   "Air temperature",
+					},
+				},
+			},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
+
+	file := &EsmFile{
+		Models: map[string]Model{
+			"Outer": {
+				Variables: map[string]ModelVariable{},
+				Equations: []Equation{},
+				Subsystems: map[string]interface{}{
+					"Loader": map[string]interface{}{"ref": "inner.json"},
+				},
+			},
+		},
+	}
+
+	if err := ResolveSubsystemRefs(file, dir); err != nil {
+		t.Fatalf("ResolveSubsystemRefs: %v", err)
+	}
+
+	resolved, ok := file.Models["Outer"].Subsystems["Loader"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Loader not resolved to a map: %T", file.Models["Outer"].Subsystems["Loader"])
+	}
+	if _, hasRef := resolved["ref"]; hasRef {
+		t.Fatalf("Loader still has ref after resolution: %#v", resolved)
+	}
+	if kind, _ := resolved["kind"].(string); kind != "grid" {
+		t.Fatalf("Loader missing/incorrect kind after resolution: %#v", resolved)
+	}
+	if _, hasVars := resolved["variables"]; !hasVars {
+		t.Fatalf("Loader missing variables after resolution: %#v", resolved)
+	}
+}
+
 func TestResolveSubsystemRefs_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	file := &EsmFile{

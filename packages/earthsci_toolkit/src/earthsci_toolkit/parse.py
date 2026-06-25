@@ -556,13 +556,21 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
         for eq_data in model_data["equations"]:
             equations.append(_parse_equation(eq_data))
 
-    # Extract subsystems. Each entry is either a parsed Model or a raw dict
-    # carrying a "ref" field to be resolved later by resolve_subsystem_refs.
+    # Extract subsystems. Each entry is either a parsed Model, a parsed
+    # data loader (RFC pure-io-data-loaders §4.3), or a raw dict carrying a
+    # "ref" field to be resolved later by resolve_subsystem_refs.
     subsystems: Dict[str, Any] = {}
     if "subsystems" in model_data:
         for sub_name, sub_data in model_data["subsystems"].items():
             if isinstance(sub_data, dict) and "ref" in sub_data:
                 subsystems[sub_name] = sub_data
+            elif isinstance(sub_data, dict) and "kind" in sub_data and "source" in sub_data:
+                # Inline data-loader subsystem: discriminated from a Model by
+                # the loader-only required fields (kind + source); a Model has
+                # equations instead. Schema oneOf [Model, DataLoader, SubsystemRef].
+                sub_loader = _parse_data_loader(sub_data)
+                sub_loader.name = sub_name
+                subsystems[sub_name] = sub_loader
             else:
                 sub_model = _parse_model(sub_data)
                 sub_model.name = sub_name
@@ -1811,7 +1819,9 @@ def _resolve_model_subsystems(
 
             parsed = _parse_esm_data(ref_data)
 
-            # Extract the single top-level model
+            # Extract the single top-level model or data loader. A referenced
+            # file with exactly one top-level data loader (RFC pure-io-data-loaders
+            # §4.4) resolves to that loader, named by the parent subsystem key.
             if parsed.models:
                 # Take the first (and expected-only) model
                 sub_model = next(iter(parsed.models.values()))
@@ -1819,9 +1829,15 @@ def _resolve_model_subsystems(
                 # Recursively resolve nested subsystem refs
                 _resolve_model_subsystems(sub_model, new_base, new_seen)
                 resolved_subsystems[sub_name] = sub_model
+            elif parsed.data_loaders:
+                # Single-loader file: a data loader has no subsystems, so there
+                # is nothing further to resolve.
+                sub_loader = next(iter(parsed.data_loaders.values()))
+                sub_loader.name = sub_name
+                resolved_subsystems[sub_name] = sub_loader
             else:
                 raise SubsystemRefError(
-                    f"Subsystem ref '{ref_str}' does not contain a model"
+                    f"Subsystem ref '{ref_str}' does not contain a model or data loader"
                 )
         else:
             # Already a Model object, just recurse into it
