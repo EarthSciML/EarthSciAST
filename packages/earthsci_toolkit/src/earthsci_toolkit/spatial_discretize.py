@@ -31,7 +31,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from dataclasses import replace
+
 from .rule_engine import parse_rule, rewrite, _parse_expr
+from .canonicalize import canonicalize
 from .esm_types import ExprNode
 
 
@@ -136,6 +139,20 @@ def _subst_symbol(node: Any, name: str, value: Any) -> Any:
     return _map_expr(node, lambda n: value if n == name else n)
 
 
+def _canon_for_match(node: Any) -> Any:
+    """Canonical form used for composite-rule pattern matching.
+
+    Normalizes integer-valued floats to ints (so ``^2.0`` and ``^2`` match) and
+    canonicalizes (RFC §5.4 — sorts commutative ``+``/``*`` operands), so a
+    composite rule (e.g. the Godunov ``sqrt(grad²+grad²)`` norm) matches the real
+    component regardless of exponent representation or operand order. Applied to
+    both the expression and the rule pattern, so structural matching aligns.
+    """
+    nums = _map_expr(node, lambda n: int(n)
+                     if isinstance(n, float) and float(n).is_integer() else n)
+    return _to_json(canonicalize(_parse_expr(nums)))
+
+
 def _lift_index_to_nd(body: Any, state: str, dim: str, dims: List[str]) -> Any:
     if len(dims) == 1:
         return body
@@ -178,7 +195,16 @@ def _apply_gdd_rules(expr: Any, rules: Dict[str, Any], dims: List[str],
     composite = [r for op, r in rules.items()
                  if op not in _ATOMIC_OPS and op != "laplacian"]
     if composite:
+        # canonicalize expr + patterns so 2 vs 2.0 and operand order don't block
+        # the multi-node match against the real component form.
+        expr = _canon_for_match(expr)
+        composite = [replace(r, pattern=_parse_expr(_canon_for_match(_to_json(r.pattern))))
+                     for r in composite]
         expr = _to_json(rewrite(_parse_expr(expr), composite))
+        # canonicalize emits its internal `neg` for unary minus; restore the
+        # wire op `-` so the discretized document validates.
+        expr = _map_expr(expr, lambda n: {"op": "-", "args": n["args"]}
+                         if isinstance(n, dict) and n.get("op") == "neg" else n)
         dxs = set(dx_by_dim.values())
         if len(dxs) > 1:
             raise SpatialDiscretizeError(

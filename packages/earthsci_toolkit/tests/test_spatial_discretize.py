@@ -266,6 +266,39 @@ def _serialize(e):
     return __import__("json").dumps(_to_json(e))
 
 
+def test_godunov_matches_real_component_form_via_canonicalization():
+    """The composite Godunov rule (int exponent, x-before-y) must still match a
+    component that writes the norm differently — float exponent ^2.0 AND reversed
+    operand order sqrt(psi_y^2 + psi_x^2) — as the real level_set_fire_spread.esm
+    does. Canonicalization (number-type + commutative sort) bridges the gap."""
+    dx = 0.2
+    comp = {
+        "esm": "0.5.0", "metadata": {"name": "LS"},
+        "domains": {"sq": {"independent_variable": "t",
+            "spatial": {"x": {"min": -1.0, "max": 1.0, "grid_spacing": dx, "units": "m"},
+                        "y": {"min": -1.0, "max": 1.0, "grid_spacing": dx, "units": "m"}},
+            "boundary_conditions": [{"type": "zero_gradient", "dimensions": ["x", "y"]}]}},
+        "models": {"LS": {"domain": "sq", "system_kind": "pde", "variables": {
+            "psi": {"type": "state", "units": "m"},
+            "psi_x": {"type": "observed", "units": "1",
+                      "expression": {"op": "grad", "args": ["psi"], "dim": "x"}},
+            "psi_y": {"type": "observed", "units": "1",
+                      "expression": {"op": "grad", "args": ["psi"], "dim": "y"}},
+            # float exponent 2.0 AND y-term before x-term (vs the rule's int 2, x-first)
+            "grad_mag": {"type": "observed", "units": "1", "expression": {"op": "sqrt", "args": [
+                {"op": "+", "args": [{"op": "^", "args": ["psi_y", 2.0]},
+                                     {"op": "^", "args": ["psi_x", 2.0]}]}]}},
+            "R0": {"type": "parameter", "units": "m/s", "default": 1.0}},
+            "equations": [{"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
+                           "rhs": {"op": "*", "args": [{"op": "-", "args": ["R0"]},
+                                                       "grad_mag"]}}]}},
+    }
+    disc = spatial_discretize(comp, _godunov_norm_2d_rule())
+    body = __import__("json").dumps(_interior(disc, "LS"))
+    assert "grad" not in body and '"max"' in body and '"min"' in body   # matched & lowered
+    assert et.load(disc) is not None                                    # valid (no `neg` leak)
+
+
 def test_heat_runs_end_to_end_via_gdd():
     """laplacian -> d2 (GDD-selected centered) -> simulate; matches analytical."""
     heat = {
