@@ -238,6 +238,44 @@ def _make_regions(interior, state, dims, sizes, bc_by_side):
     return regions, values
 
 
+def _observed_exprs(model: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect observed-variable definitions (name -> expression).
+
+    Supports both the variable-level ``expression`` form (e.g. the level-set's
+    ``psi_x = grad(psi, x)``) and algebraic equations whose LHS is a bare
+    observed name.
+    """
+    obs: Dict[str, Any] = {}
+    for name, v in model.get("variables", {}).items():
+        if v.get("type") == "observed" and v.get("expression") is not None:
+            obs[name] = v["expression"]
+    for eq in model.get("equations", []):
+        lhs = eq.get("lhs")
+        if isinstance(lhs, str) and model.get("variables", {}).get(lhs, {}).get("type") == "observed":
+            obs[lhs] = eq["rhs"]
+    return obs
+
+
+def _resolve_observed(name, raw, cache, stack):
+    if name in cache:
+        return cache[name]
+    if name in stack:
+        raise SpatialDiscretizeError(f"cyclic observed dependency at {name!r}")
+    resolved = _inline_observeds(raw[name], raw, cache, stack | {name})
+    cache[name] = resolved
+    return resolved
+
+
+def _inline_observeds(expr, raw, cache, stack):
+    """Substitute observed-variable names with their (recursively resolved)
+    expressions, so spatial operators surface inline for discretization."""
+    def f(n):
+        if isinstance(n, str) and n in raw:
+            return _resolve_observed(n, raw, cache, stack)
+        return n
+    return _map_expr(expr, f)
+
+
 def _lhs_state(lhs, state_names) -> Optional[str]:
     if isinstance(lhs, dict) and lhs.get("op") == "D" and lhs.get("args"):
         a = lhs["args"][0]
@@ -277,13 +315,19 @@ def spatial_discretize(esm: Dict[str, Any], gdd: Dict[str, Any]) -> Dict[str, An
         for n in state_names:
             model["variables"][n]["shape"] = list(dims)
 
+        # Observed spatial sub-expressions (e.g. psi_x = grad(psi,x)) are inlined
+        # into each state PDE's RHS so their operators discretize in place; the
+        # observed variables are then dropped from the discretized model.
+        obs_raw = _observed_exprs(model)
+        obs_cache: Dict[str, Any] = {}
+
         new_eqs = []
         for eq in model.get("equations", []):
             state = _lhs_state(eq["lhs"], state_names)
             if state is None:
-                new_eqs.append(eq)
-                continue
-            rhs = _apply_gdd_rules(_expand_laplacian(eq["rhs"], dims), rules, dims, dx_by_dim)
+                continue  # observed/algebraic defn — folded in by inlining
+            inlined = _inline_observeds(eq["rhs"], obs_raw, obs_cache, set())
+            rhs = _apply_gdd_rules(_expand_laplacian(inlined, dims), rules, dims, dx_by_dim)
             regions, values = _make_regions(rhs, state, dims, sizes, bc_by_side)
             new_eqs.append({
                 "lhs": {"op": "arrayop", "args": [], "output_idx": list(dims),
@@ -295,6 +339,8 @@ def spatial_discretize(esm: Dict[str, Any], gdd: Dict[str, Any]) -> Dict[str, An
                         "ranges": ranges},
             })
         model["equations"] = new_eqs
+        model["variables"] = {n: v for n, v in model["variables"].items()
+                              if n not in obs_raw}
         model["system_kind"] = "ode"
         model.pop("domain", None)
     return out
