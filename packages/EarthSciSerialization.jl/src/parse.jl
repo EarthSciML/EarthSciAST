@@ -906,6 +906,15 @@ function coerce_model(data::Any)::Model
         end
     end
 
+    # Per-variable regridding configuration for loader-subsystem fields
+    # (RFC pure-io-data-loaders §5.2, §6). Empty when absent.
+    regrid = Dict{String,RegridSpec}()
+    if haskey(data, :regrid) && data.regrid !== nothing
+        for (k, v) in pairs(data.regrid)
+            regrid[string(k)] = coerce_regrid_spec(v)
+        end
+    end
+
     # Backwards compatibility: handle old 'events' field
     if haskey(data, :events)
         mixed_events = [coerce_event(ev) for ev in data.events]
@@ -918,6 +927,7 @@ function coerce_model(data::Any)::Model
                      tolerance=base.tolerance,
                      tests=base.tests,
                      index_sets=index_sets,
+                     regrid=regrid,
                      initialization_equations=initialization_equations,
                      guesses=guesses,
                      system_kind=system_kind)
@@ -961,7 +971,8 @@ function coerce_model(data::Any)::Model
                  initialization_equations=initialization_equations,
                  guesses=guesses,
                  system_kind=system_kind,
-                 index_sets=index_sets)
+                 index_sets=index_sets,
+                 regrid=regrid)
 end
 
 """
@@ -1678,6 +1689,24 @@ function coerce_index_set(data::Any)::IndexSet
     return IndexSet(string(kind_raw); size=size_val, members=members, of=of,
                     offsets=offsets, values=values, from_faq=from_faq,
                     members_raw=members_typed)
+end
+
+"""
+    coerce_regrid_spec(data::Any) -> RegridSpec
+
+Coerce one `regrid` entry (RFC pure-io-data-loaders §5.2, §6). All fields are
+optional; the closed `method` value set is enforced by JSON-schema validation,
+not here.
+"""
+function coerce_regrid_spec(data::Any)::RegridSpec
+    method_raw = _json_get(data, "method")
+    method = method_raw === nothing ? nothing : string(method_raw)
+    mv_raw = _json_get(data, "missing_value")
+    missing_value = mv_raw === nothing ? nothing : Float64(mv_raw)
+    desc_raw = _json_get(data, "description")
+    description = desc_raw === nothing ? nothing : string(desc_raw)
+    return RegridSpec(; method=method, missing_value=missing_value,
+                      description=description)
 end
 
 """

@@ -45,6 +45,7 @@ from .esm_types import (
     OperatorApplyCoupling, CallbackCoupling, EventCoupling,
     Reference, TemporalDomain, SpatialDimension, CoordinateTransform,
     InitialCondition, InitialConditionType, BoundaryCondition, BoundaryConditionKind, BCContributedBy,
+    RegridSpec,
     Tolerance, TimeSpan, Assertion, Test,
     PlotAxis, PlotValue, PlotSeries, Plot,
     SweepRange, SweepDimension, ParameterSweep, Example,
@@ -610,6 +611,20 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     if "index_sets" in model_data and model_data["index_sets"] is not None:
         model.index_sets = dict(model_data["index_sets"])
 
+    # Per-variable regridding configuration for loader-subsystem fields
+    # (RFC pure-io-data-loaders §5.2, §6).
+    if "regrid" in model_data and model_data["regrid"] is not None:
+        rg_map = model_data["regrid"]
+        if not isinstance(rg_map, dict):
+            raise ValueError(
+                "Model 'regrid' must be an object keyed by variable name "
+                "(RFC pure-io-data-loaders §5.2). Got: " + type(rg_map).__name__
+            )
+        model.regrid = {
+            var_name: _parse_regrid_spec(spec_data)
+            for var_name, spec_data in rg_map.items()
+        }
+
     return model
 
 
@@ -655,6 +670,19 @@ def _parse_boundary_condition(bc_id: str, bc_data: Dict[str, Any]) -> BoundaryCo
         face_coords=bc_data.get("face_coords"),
         contributed_by=contributed_by,
         description=bc_data.get("description"),
+    )
+
+
+def _parse_regrid_spec(spec_data: Dict[str, Any]) -> RegridSpec:
+    """Parse a per-variable RegridSpec entry (schema $defs/RegridSpec).
+
+    All fields are optional; the closed ``method`` value set is enforced by
+    JSON-schema validation, not here.
+    """
+    return RegridSpec(
+        method=spec_data.get("method"),
+        missing_value=spec_data.get("missing_value"),
+        description=spec_data.get("description"),
     )
 
 

@@ -1642,6 +1642,12 @@ export interface Model {
   subsystems?: {
     [k: string]: Model | SubsystemRef;
   };
+  /**
+   * Per-variable regridding configuration for fields this model consumes from its data-loader subsystems (RFC pure-io-data-loaders §5.2, §6), keyed by the loader-field variable name. Regridding is a model concern, never a loader concern (the loader is pure I/O); each entry selects or overrides the regridding kernel for one variable and, for scattered-point loaders regridded by cell-averaging, declares the configurable `missing_value` filled into target cells with no contributing source station. Absent ⇒ every consumed loader field is regridded by its staggering-derived default kernel with no missing-value fill configured. Distinct from `Interface.regridding`, which governs dimension-resolution matching at a domain interface.
+   */
+  regrid?: {
+    [k: string]: RegridSpec;
+  };
   tolerance?: Tolerance;
   /**
    * Inline validation tests that exercise this model in isolation. Each test specifies initial conditions, parameter overrides, a time span, and scalar assertions at specific (variable, time) points.
@@ -1770,6 +1776,23 @@ export interface SubsystemRef {
    * Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model or reaction system, which is used as the subsystem definition.
    */
   ref: string;
+}
+/**
+ * Per-variable regridding configuration declared on the model that owns a data loader as a subsystem (RFC pure-io-data-loaders §5.2, §6). Regridding is a model concern, never a loader concern: the loader is pure I/O and the owning model transfers each loaded field onto its target grid. The kernel is chosen per variable and defaults by the variable's staggering/location on its native GDD Grid (cell-centered gridded ⇒ conservative; edge/face-staggered gridded ⇒ B-spline; scattered points ⇒ cell-averaging); `method` overrides that default. `missing_value` is consumed only by cell-averaging (scattered-point) regridding.
+ */
+export interface RegridSpec {
+  /**
+   * Optional explicit override of the regridding kernel for this variable. Absent ⇒ derived from the variable's staggering on its native grid (RFC §5.2): 'conservative' (area-weighted overlap join, mass-conserving) for cell-centered gridded fields; 'bspline' (staggered-grid B-spline interpolation, the interpolating kernel) for edge/face-staggered gridded fields; 'cell_average' (bin-average of the source stations falling within each target cell, with a `missing_value` fill) for scattered-point loaders. These name the abstract kernel selected by the regridding model; each maps to a declarative ESD regridding/*.esm program.
+   */
+  method?: "conservative" | "bspline" | "cell_average";
+  /**
+   * For 'cell_average' regridding of scattered-point loaders: the value filled into a target cell that contains no contributing source station (RFC §5.2) — the point analogue of a no-data fill. Ignored by the 'conservative' and 'bspline' kernels, whose gridded sources always cover the target.
+   */
+  missing_value?: number;
+  /**
+   * Optional human-readable note about this variable's regridding.
+   */
+  description?: string;
 }
 /**
  * Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own.

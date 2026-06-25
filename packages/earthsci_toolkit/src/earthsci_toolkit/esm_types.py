@@ -198,6 +198,25 @@ class Model:
     # / derived / ragged. Referenced from arrayop / aggregate range specs of the
     # form {"from": <name>}. Empty ⇒ resolution falls back to domain.spatial.
     index_sets: Dict[str, Any] = field(default_factory=dict)
+    # Per-variable regridding configuration for fields consumed from data-loader
+    # subsystems (RFC pure-io-data-loaders §5.2, §6), keyed by variable name.
+    # Empty ⇒ no regridding configured.
+    regrid: Dict[str, 'RegridSpec'] = field(default_factory=dict)
+
+
+@dataclass
+class RegridSpec:
+    """Per-variable regridding configuration entry (schema $defs/RegridSpec).
+
+    Declared on a model that owns a data loader as a subsystem (RFC
+    pure-io-data-loaders §5.2, §6). All fields optional. ``method`` overrides
+    the staggering-derived kernel ("conservative" | "bspline" | "cell_average");
+    ``missing_value`` is the no-data fill consumed only by "cell_average"
+    (scattered-point) regridding.
+    """
+    method: Optional[str] = None
+    missing_value: Optional[float] = None
+    description: Optional[str] = None
 
 
 @dataclass

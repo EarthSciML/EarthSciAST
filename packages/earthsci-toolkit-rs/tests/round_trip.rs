@@ -590,3 +590,28 @@ fn test_inline_multi_y_schema_validation() {
     let parsed: EsmFile = load(esm).expect("inline array-form plots.y must pass schema validation");
     assert_eq!(parsed.esm, "0.5.0");
 }
+
+/// Test round-trip for the point cell-averaging `regrid` / `missing_value`
+/// config slot (RFC pure-io-data-loaders §5.2, §6; ess-v9a.6).
+#[test]
+fn test_regrid_point_missing_value_round_trip() {
+    let fixture = include_str!("../../../tests/valid/regrid_point_missing_value.esm");
+
+    let parsed: EsmFile = load(fixture).expect("Failed to parse regrid fixture");
+    let model = parsed.models.as_ref().unwrap().get("OpenAQCoupler").unwrap();
+    let spec = model
+        .regrid
+        .as_ref()
+        .expect("regrid map present")
+        .get("PM2_5")
+        .expect("PM2_5 regrid entry present");
+    assert_eq!(spec.method.as_deref(), Some("cell_average"));
+    assert_eq!(spec.missing_value, Some(-999.0));
+
+    // Idempotent re-save: regrid (incl. missing_value) survives load -> save -> load.
+    let serialized = save(&parsed).expect("Failed to serialize regrid fixture");
+    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse regrid output");
+    let respec = reparsed.models.as_ref().unwrap()["OpenAQCoupler"].regrid.as_ref().unwrap()["PM2_5"].clone();
+    assert_eq!(respec.method.as_deref(), Some("cell_average"));
+    assert_eq!(respec.missing_value, Some(-999.0));
+}

@@ -146,6 +146,7 @@ fn make_model(
         variables.insert(n, v);
     }
     Model {
+        regrid: None,
         name: Some(name.to_string()),
         domain: None,
         index_sets: None,

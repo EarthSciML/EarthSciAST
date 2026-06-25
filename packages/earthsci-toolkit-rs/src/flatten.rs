@@ -1049,6 +1049,7 @@ mod tests {
         models.insert(
             "sys".to_string(),
             Model {
+                regrid: None,
                 name: Some("System".to_string()),
                 domain: None,
                 index_sets: None,

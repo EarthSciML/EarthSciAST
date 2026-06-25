@@ -992,6 +992,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
 | `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — brownian variables present), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses this to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors. |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
+| `regrid` | | Per-variable regridding configuration for fields consumed from data-loader subsystems, keyed by variable name (see Section 8.6). Each entry optionally overrides the regridding `method` and, for scattered-point (cell-averaging) point loaders, declares a `missing_value` no-data fill. |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
 | `examples` | | Inline illustrative examples showing how to run this model (see Section 6.7). |
@@ -1807,6 +1808,25 @@ variables:
 ### 8.6 Regridding — removed (now a model concern)
 
 Earlier revisions carried a loader-level `regridding` block (`fill_value`, `extrapolation`). It has been **removed**: a data loader is pure I/O and performs no regridding. Transferring a loader's native fields onto a consuming model's target grid — and the choice of method (conservative for cell-centered fields, interpolating for staggered fields, cell-averaging with a configurable missing value for scattered points) — is a **model** concern, selected **per variable** on the model that owns the loader as a subsystem (RFC pure-io-data-loaders §4.1, §5.2, §6). A loader that still carries a `regridding` block (or the old `spatial` block) is **rejected** at load: both are unknown properties under the pure-I/O `DataLoader`.
+
+The per-variable choice is expressed by the optional **`Model.regrid`** map (§6.2), keyed by the loader-field variable name. Each entry is a `RegridSpec` with these optional fields:
+
+| Field | Description |
+|---|---|
+| `method` | Explicit override of the regridding kernel: `"conservative"` (area-weighted, mass-conserving — cell-centered gridded fields), `"bspline"` (staggered-grid B-spline interpolation — edge/face-staggered gridded fields), or `"cell_average"` (bin-average of source stations falling in each target cell — scattered points). Absent ⇒ derived from the variable's staggering on its native grid. These name the abstract kernel; each maps to a declarative ESD `regridding/*.esm` program. |
+| `missing_value` | Number consumed **only** by `cell_average` (scattered-point) regridding: the value placed in a target cell that contains **no** contributing source station — the point analogue of a no-data fill. Ignored by the `conservative`/`bspline` kernels. |
+| `description` | Optional human-readable note. |
+
+This is the **point cell-averaging missing_value** slot (RFC §5.2): a point-loader model (e.g. OpenAQ) declares, per regridded variable, the fill returned for empty target cells. It is distinct from `Interface.regridding`, which governs dimension-resolution matching at a domain interface (§11), not loader-field transfer.
+
+```jsonc
+// A model owning an OpenAQ point loader as a subsystem, regridding PM2.5 by
+// cell-averaging with a -999.0 no-data fill for cells with no station:
+"regrid": {
+  "PM2_5": { "method": "cell_average", "missing_value": -999.0,
+             "description": "empty target cells receive the no-data sentinel" }
+}
+```
 
 ### 8.7 Out of scope
 

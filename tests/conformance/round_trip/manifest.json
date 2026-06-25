@@ -91,6 +91,8 @@
     { "id": "valid/reservoir_species_constant",      "path": "valid/reservoir_species_constant.esm",      "tags": ["reactions", "constant-species", "reservoir", "gt-ertm"] },
     { "id": "valid/fractional_stoichiometry",        "path": "valid/fractional_stoichiometry.esm",        "tags": ["reactions", "fractional-stoichiometry", "gt-1e96"] },
 
-    { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] }
+    { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] },
+
+    { "id": "valid/regrid_point_missing_value",      "path": "valid/regrid_point_missing_value.esm",      "tags": ["data_loaders", "regrid", "missing_value", "ess-v9a.6"] }
   ]
 }

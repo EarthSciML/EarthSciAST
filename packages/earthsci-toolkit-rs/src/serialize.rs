@@ -143,6 +143,7 @@ mod tests {
         models.insert(
             "test".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,

@@ -193,3 +193,17 @@ describe('save() — losslessJsonParse compatibility', () => {
     expect(JSON.parse(out)).toEqual(JSON.parse(wire))
   })
 })
+
+describe('save() — regrid / missing_value config slot (ess-v9a.6)', () => {
+  it('round-trips the point cell-averaging regrid fixture losslessly', () => {
+    const text = fixture('regrid_point_missing_value.esm')
+    const parsed = load(text)
+    const spec = (parsed as any).models.OpenAQCoupler.regrid.PM2_5
+    expect(spec.method).toBe('cell_average')
+    expect(spec.missing_value).toBe(-999.0)
+    const first = save(parsed)
+    const second = save(load(first))
+    expect(JSON.parse(first)).toEqual(JSON.parse(second))
+    expect(JSON.parse(first).models.OpenAQCoupler.regrid.PM2_5.missing_value).toBe(-999.0)
+  })
+})

@@ -206,6 +206,7 @@ fn flatten_mixed_model_and_reaction_system() {
     models.insert(
         "dyn".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -396,6 +397,7 @@ fn flatten_conflicting_derivative_raises_error() {
     models.insert(
         "sys".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -510,6 +512,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "A".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -536,6 +539,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "B".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -662,6 +666,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "M".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -688,6 +693,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "S".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -764,6 +770,7 @@ fn flatten_couple_includes_connector_equations() {
     models.insert(
         "A".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -843,6 +850,7 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
         },
     );
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,
@@ -894,6 +902,7 @@ fn flatten_rejects_spatial_operators() {
     models.insert(
         "transport".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,
@@ -962,6 +971,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
     models.insert(
         "pde".to_string(),
         Model {
+            regrid: None,
             domain: None,
             index_sets: None,
             coupletype: None,

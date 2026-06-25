@@ -80,6 +80,7 @@ fn test_structural_validation() {
     // Create a model with equations but no variables (should fail structural validation)
     let variables = HashMap::new();
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,
@@ -254,6 +255,7 @@ fn test_component_graph() {
     };
 
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,
@@ -329,6 +331,7 @@ fn test_pretty_printing() {
 #[test]
 fn test_editing() {
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,

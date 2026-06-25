@@ -972,6 +972,7 @@ mod tests {
         models.insert(
             "model1".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,
@@ -994,6 +995,7 @@ mod tests {
         models.insert(
             "model2".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,
@@ -1062,6 +1064,7 @@ mod tests {
         models.insert(
             "test_model".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,
@@ -1122,6 +1125,7 @@ mod tests {
         models.insert(
             "test_model".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,
@@ -1281,6 +1285,7 @@ mod tests {
         models.insert(
             "source".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,
@@ -1303,6 +1308,7 @@ mod tests {
         models.insert(
             "target".to_string(),
             Model {
+                regrid: None,
                 reference: None,
                 domain: None,
                 index_sets: None,

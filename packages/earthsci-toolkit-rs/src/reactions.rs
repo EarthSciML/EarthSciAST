@@ -207,6 +207,7 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
     let equations = lower_reactions_to_equations(&system.reactions, &system.species)?;
 
     Ok(Model {
+        regrid: None,
         name: None,
         domain: system.domain.clone(),
         index_sets: None,

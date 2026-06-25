@@ -50,6 +50,7 @@ fn test_analysis_features_integration() {
     );
 
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,
@@ -229,6 +230,7 @@ fn test_editing_operations() {
 
     // Create a simple model
     let model = Model {
+        regrid: None,
         domain: None,
         index_sets: None,
         coupletype: None,

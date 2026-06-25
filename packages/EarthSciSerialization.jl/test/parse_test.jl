@@ -171,6 +171,34 @@ using JSON3
         end
     end
 
+    @testset "Round-trip: regrid / missing_value (ess-v9a.6)" begin
+        # Per-variable regrid config slot survives a load -> save -> load cycle
+        # with its typed RegridSpec, including the point cell-averaging
+        # missing_value (RFC pure-io-data-loaders §5.2, §6).
+        variables = Dict("PM2_5" => ModelVariable(StateVariable, default=0.0))
+        lhs = OpExpr("D", Vector{EarthSciSerialization.Expr}([VarExpr("PM2_5")]), wrt="t")
+        rhs = OpExpr("-", Vector{EarthSciSerialization.Expr}([VarExpr("PM2_5")]))
+        regrid = Dict("PM2_5" => EarthSciSerialization.RegridSpec(
+            method="cell_average", missing_value=-999.0,
+            description="empty target cells receive the no-data sentinel"))
+        model = Model(variables, [Equation(lhs, rhs)]; regrid=regrid)
+        original_file = EsmFile("0.6.0", Metadata("regrid_roundtrip"),
+                                models=Dict("OpenAQCoupler" => model))
+        temp_file = tempname() * ".json"
+        try
+            save(original_file, temp_file)
+            loaded = load(temp_file)
+            @test haskey(loaded.models["OpenAQCoupler"].regrid, "PM2_5")
+            spec = loaded.models["OpenAQCoupler"].regrid["PM2_5"]
+            @test spec isa EarthSciSerialization.RegridSpec
+            @test spec.method == "cell_average"
+            @test spec.missing_value == -999.0
+            @test spec.description == "empty target cells receive the no-data sentinel"
+        finally
+            isfile(temp_file) && rm(temp_file)
+        end
+    end
+
     @testset "IO Stream Interface" begin
         # Test with IO streams
         test_json = """

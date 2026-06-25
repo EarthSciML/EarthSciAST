@@ -764,6 +764,32 @@ pub struct Model {
     /// MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_kind: Option<String>,
+
+    /// Per-variable regridding configuration for fields consumed from
+    /// data-loader subsystems (RFC pure-io-data-loaders §5.2, §6), keyed by
+    /// variable name. Regridding is a model concern; an entry may override the
+    /// staggering-derived kernel and, for scattered-point (cell-averaging)
+    /// loaders, declares the no-data `missing_value` fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regrid: Option<HashMap<String, RegridSpec>>,
+}
+
+/// Per-variable regridding configuration entry on a model that owns a data
+/// loader as a subsystem (RFC pure-io-data-loaders §5.2, §6). All fields are
+/// optional. `method` overrides the staggering-derived kernel
+/// ("conservative" | "bspline" | "cell_average"); `missing_value` is the
+/// no-data fill consumed only by "cell_average" (scattered-point) regridding —
+/// the value placed in a target cell with no contributing source station.
+/// The closed `method` value set is enforced by JSON-schema validation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegridSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Variable within a model

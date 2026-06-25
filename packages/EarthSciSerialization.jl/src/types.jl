@@ -548,6 +548,25 @@ struct IndexSet
 end
 
 """
+    RegridSpec
+
+Per-variable regridding configuration declared on a model that owns a data
+loader as a subsystem (RFC pure-io-data-loaders §5.2, §6). All fields are
+optional. `method` overrides the staggering-derived default kernel
+(`"conservative"`, `"bspline"`, or `"cell_average"`); `missing_value` is the
+no-data fill consumed only by `cell_average` (scattered-point) regridding —
+the value placed in a target cell with no contributing source station.
+"""
+struct RegridSpec
+    method::Union{String,Nothing}
+    missing_value::Union{Float64,Nothing}
+    description::Union{String,Nothing}
+
+    RegridSpec(; method=nothing, missing_value=nothing, description=nothing) =
+        new(method, missing_value, description)
+end
+
+"""
     IndexSetRef(from; of)
 
 A reference to a declared `IndexSet`, used as a `ranges[*]` value in place of a
@@ -585,6 +604,10 @@ struct Model
     # Maps a name to its IndexSet declaration; `ranges[*]` `{from: <name>}`
     # references resolve against it. Empty when the model declares none.
     index_sets::Dict{String,IndexSet}
+    # Per-variable regridding configuration for fields consumed from data-loader
+    # subsystems (RFC pure-io-data-loaders §5.2, §6), keyed by variable name.
+    # Empty when the model declares none.
+    regrid::Dict{String,RegridSpec}
 
     # Primary constructor with separate event arrays
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation},
@@ -594,12 +617,14 @@ struct Model
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,Expr}}(),
           system_kind=nothing,
-          index_sets=Dict{String,IndexSet}()) =
+          index_sets=Dict{String,IndexSet}(),
+          regrid=Dict{String,RegridSpec}()) =
         new(Dict{String,ModelVariable}(variables), equations,
             discrete_events, continuous_events, Dict{String,Model}(subsystems),
             domain, tolerance, tests,
             initialization_equations, guesses, system_kind,
-            Dict{String,IndexSet}(index_sets))
+            Dict{String,IndexSet}(index_sets),
+            Dict{String,RegridSpec}(regrid))
 
     # Convenience constructor with optional events and subsystems.
     # Accepts legacy `events=` kwarg as a mixed Vector{EventType} and splits
@@ -616,7 +641,8 @@ struct Model
                    initialization_equations=Equation[],
                    guesses=Dict{String,Union{Float64,Expr}}(),
                    system_kind=nothing,
-                   index_sets=Dict{String,IndexSet}())
+                   index_sets=Dict{String,IndexSet}(),
+                   regrid=Dict{String,RegridSpec}())
         if events !== nothing
             discrete_events = DiscreteEvent[]
             continuous_events = ContinuousEvent[]
@@ -634,7 +660,8 @@ struct Model
                    discrete_events, continuous_events, Dict{String,Model}(subsystems),
                    domain, tolerance, tests,
                    initialization_equations, guesses, system_kind,
-                   Dict{String,IndexSet}(index_sets))
+                   Dict{String,IndexSet}(index_sets),
+                   Dict{String,RegridSpec}(regrid))
     end
 end
 

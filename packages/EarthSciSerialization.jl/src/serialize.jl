@@ -49,6 +49,20 @@ function serialize_index_set(is::IndexSet)::Dict{String,Any}
 end
 
 """
+    serialize_regrid_spec(rs::RegridSpec) -> Dict{String,Any}
+
+Serialize one `regrid` entry (RFC §5.2, §6). Mirrors `coerce_regrid_spec`;
+emits only the fields that are set.
+"""
+function serialize_regrid_spec(rs::RegridSpec)::Dict{String,Any}
+    d = Dict{String,Any}()
+    rs.method !== nothing && (d["method"] = rs.method)
+    rs.missing_value !== nothing && (d["missing_value"] = rs.missing_value)
+    rs.description !== nothing && (d["description"] = rs.description)
+    return d
+end
+
+"""
     serialize_expression(expr::Expr) -> Any
 
 Serialize an Expression to JSON-compatible format.
@@ -383,6 +397,12 @@ function serialize_model(model::Model)::Dict{String,Any}
     if !isempty(model.index_sets)
         result["index_sets"] = Dict{String,Any}(
             k => serialize_index_set(v) for (k, v) in model.index_sets
+        )
+    end
+
+    if !isempty(model.regrid)
+        result["regrid"] = Dict{String,Any}(
+            k => serialize_regrid_spec(v) for (k, v) in model.regrid
         )
     end
 

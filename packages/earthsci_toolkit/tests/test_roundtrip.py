@@ -554,3 +554,26 @@ def test_roundtrip_fractional_stoichiometry():
     ch2o = next(p for p in r1_products if p["species"] == "CH2O")
     assert ch2o["stoichiometry"] == 0.87
     assert isinstance(ch2o["stoichiometry"], float)
+
+
+def test_roundtrip_regrid_point_missing_value():
+    """Point cell-averaging regrid/missing_value config slot round-trips
+    losslessly (RFC pure-io-data-loaders §5.2, §6; ess-v9a.6)."""
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "tests" / "valid" / "regrid_point_missing_value.esm"
+    )
+    original = fixture_path.read_text()
+
+    esm = load(original)
+    spec = esm.models["OpenAQCoupler"].regrid["PM2_5"]
+    assert spec.method == "cell_average"
+    assert spec.missing_value == -999.0
+
+    # Idempotent re-save.
+    dumped = save(esm)
+    dumped2 = save(load(dumped))
+    assert json.loads(dumped) == json.loads(dumped2)
+    rg = json.loads(dumped)["models"]["OpenAQCoupler"]["regrid"]["PM2_5"]
+    assert rg["method"] == "cell_average"
+    assert rg["missing_value"] == -999.0

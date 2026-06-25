@@ -198,6 +198,7 @@ pub fn substitute_in_model(
         .collect();
 
     Model {
+        regrid: None,
         name: model.name.clone(),
         domain: model.domain.clone(),
         index_sets: model.index_sets.clone(),
@@ -497,6 +498,7 @@ pub fn substitute_in_model_with_context(
         .collect();
 
     Model {
+        regrid: None,
         name: model.name.clone(),
         domain: model.domain.clone(),
         index_sets: model.index_sets.clone(),
@@ -811,6 +813,7 @@ mod tests {
         models.insert(
             "Atmosphere".to_string(),
             Model {
+                regrid: None,
                 name: Some("Atmosphere".to_string()),
                 domain: None,
                 index_sets: None,
@@ -897,6 +900,7 @@ mod tests {
         models.insert(
             "Atmosphere".to_string(),
             Model {
+                regrid: None,
                 name: Some("Atmosphere".to_string()),
                 domain: None,
                 index_sets: None,
@@ -986,6 +990,7 @@ mod tests {
         models.insert(
             "Atmosphere".to_string(),
             Model {
+                regrid: None,
                 name: Some("Atmosphere".to_string()),
                 domain: None,
                 index_sets: None,
@@ -1089,6 +1094,7 @@ mod tests {
         models.insert(
             "Atmosphere".to_string(),
             Model {
+                regrid: None,
                 name: Some("Atmosphere".to_string()),
                 domain: None,
                 index_sets: None,
@@ -1277,6 +1283,7 @@ mod tests {
 
         // Create a model with discrete and continuous events
         let model = Model {
+            regrid: None,
             name: Some("TestModel".to_string()),
             domain: None,
             index_sets: None,

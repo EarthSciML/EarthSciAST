@@ -37,7 +37,7 @@ from .esm_types import (
     OperatorComposeCoupling, CouplingCouple, VariableMapCoupling,
     OperatorApplyCoupling, CallbackCoupling, EventCoupling,
     Reference, TemporalDomain, SpatialDimension, CoordinateTransform,
-    InitialCondition, BoundaryCondition,
+    InitialCondition, BoundaryCondition, RegridSpec,
     Tolerance, TimeSpan, Assertion, Test,
     PlotAxis, PlotValue, PlotSeries, Plot,
     SweepRange, SweepDimension, ParameterSweep, Example,
@@ -404,6 +404,12 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2).
     if getattr(model, "index_sets", None):
         result["index_sets"] = model.index_sets
+    # Per-variable regridding configuration (RFC pure-io-data-loaders §5.2, §6).
+    if getattr(model, "regrid", None):
+        result["regrid"] = {
+            var_name: _serialize_regrid_spec(spec)
+            for var_name, spec in model.regrid.items()
+        }
 
     return result
 
@@ -656,6 +662,18 @@ def _serialize_boundary_condition(bc: BoundaryCondition) -> Dict[str, Any]:
     if bc.description is not None:
         bc_dict["description"] = bc.description
     return bc_dict
+
+
+def _serialize_regrid_spec(spec: RegridSpec) -> Dict[str, Any]:
+    """Serialize a per-variable RegridSpec (schema $defs/RegridSpec)."""
+    result: Dict[str, Any] = {}
+    if spec.method is not None:
+        result["method"] = spec.method
+    if spec.missing_value is not None:
+        result["missing_value"] = spec.missing_value
+    if spec.description is not None:
+        result["description"] = spec.description
+    return result
 
 
 def _serialize_data_loader_source(source: DataLoaderSource) -> Dict[str, Any]:

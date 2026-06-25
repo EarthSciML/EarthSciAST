@@ -155,8 +155,8 @@ pub use types::{
     DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation, EsmFile, Expr,
     ExpressionNode, FunctionalAffect, Grid, GridConnectivity, GridExtent, GridMetricArray,
     GridMetricGenerator, Metadata, Model, ModelTest, ModelTestAssertion, ModelVariable, Operator,
-    Reaction, ReactionSystem, RecordsPerFile, Species, StaggeringRule, StoichiometricEntry,
-    TimeSpan, Tolerance, UnitConversion, VariableType,
+    Reaction, ReactionSystem, RecordsPerFile, RegridSpec, Species, StaggeringRule,
+    StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, ValidationResult, validate,

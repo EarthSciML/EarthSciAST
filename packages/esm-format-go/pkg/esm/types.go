@@ -131,6 +131,12 @@ type Model struct {
 	// SystemKind discriminates the MTK system type this model maps to.
 	// One of "ode" (default), "nonlinear", "sde", "pde".
 	SystemKind *string `json:"system_kind,omitempty"`
+	// Regrid holds per-variable regridding configuration for fields consumed
+	// from data-loader subsystems, keyed by variable name (RFC
+	// pure-io-data-loaders §5.2, §6). Regridding is a model concern; an entry
+	// may override the staggering-derived kernel and, for scattered-point
+	// (cell-averaging) loaders, declares the no-data missing_value fill.
+	Regrid map[string]RegridSpec `json:"regrid,omitempty"`
 }
 
 // ========================================
@@ -673,6 +679,21 @@ type BoundaryCondition struct {
 	// when kind="interface". Default false. See RFC §9.2.
 	FluxMatch *bool `json:"flux_match,omitempty"`
 	// Description is a human-readable description.
+	Description *string `json:"description,omitempty"`
+}
+
+// RegridSpec is a per-variable regridding configuration entry on a model that
+// owns a data loader as a subsystem (RFC pure-io-data-loaders §5.2, §6). All
+// fields are optional.
+type RegridSpec struct {
+	// Method optionally overrides the staggering-derived regridding kernel:
+	// "conservative", "bspline", or "cell_average".
+	Method *string `json:"method,omitempty"`
+	// MissingValue is the no-data fill for "cell_average" (scattered-point)
+	// regridding: the value placed in a target cell with no contributing
+	// source station. Ignored by the conservative/bspline kernels.
+	MissingValue *float64 `json:"missing_value,omitempty"`
+	// Description is a human-readable note about this variable's regridding.
 	Description *string `json:"description,omitempty"`
 }
 

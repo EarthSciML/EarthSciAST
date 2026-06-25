@@ -635,6 +635,7 @@ mod tests {
 
     fn create_simple_model() -> Model {
         Model {
+            regrid: None,
             reference: None,
             domain: None,
             index_sets: None,

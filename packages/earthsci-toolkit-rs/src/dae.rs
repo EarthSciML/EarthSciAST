@@ -462,6 +462,7 @@ mod tests {
 
     fn empty_model() -> Model {
         Model {
+            regrid: None,
             name: None,
             domain: None,
             index_sets: None,
