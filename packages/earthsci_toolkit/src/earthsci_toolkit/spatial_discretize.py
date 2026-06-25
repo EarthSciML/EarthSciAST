@@ -53,15 +53,24 @@ def flattened_to_esm(flat: Any, domains: Dict[str, Any],
     resolved equation set on the PDE domain so the spatial pass can lower it.
     ``domains`` is the coupled file's ``domains`` block (re-used verbatim).
     """
+    # flatten() dot-namespaces names (e.g. "LevelSet.psi"); a dot in an array
+    # state name breaks simulate()'s element expansion, so sanitize "." -> "_"
+    # consistently across variable declarations and equation references.
+    rename = {n: n.replace(".", "_")
+              for n in (*flat.state_variables, *flat.observed_variables, *flat.parameters)}
+
+    def _rename(node):
+        return _map_expr(node, lambda x: rename.get(x, x) if isinstance(x, str) else x)
+
     variables: Dict[str, Any] = {}
     for n, v in flat.state_variables.items():
-        variables[n] = {"type": "state", "units": v.units or "1"}
+        variables[rename[n]] = {"type": "state", "units": v.units or "1"}
     for n, v in flat.observed_variables.items():
-        variables[n] = {"type": "observed", "units": v.units or "1"}
+        variables[rename[n]] = {"type": "observed", "units": v.units or "1"}
     for n, v in flat.parameters.items():
-        variables[n] = {"type": "parameter", "units": v.units or "1",
-                        "default": v.default if v.default is not None else 0.0}
-    equations = [{"lhs": _to_json(e.lhs), "rhs": _to_json(e.rhs)}
+        variables[rename[n]] = {"type": "parameter", "units": v.units or "1",
+                                "default": v.default if v.default is not None else 0.0}
+    equations = [{"lhs": _rename(_to_json(e.lhs)), "rhs": _rename(_to_json(e.rhs))}
                  for e in flat.equations]
     return {
         "esm": "0.5.0", "metadata": {"name": name}, "domains": domains,

@@ -256,9 +256,29 @@ def test_coupling_flatten_wires_a_0d_calc_into_the_front():
     body = __import__("json").dumps(model["equations"][0]["rhs"])
     assert "R_base" in body and '"max"' in body and "grad" not in body
 
-    # the coupled, discretized system integrates
-    r = simulate(et.load(disc), (0.0, 0.05), method="LSODA", rtol=1e-6, atol=1e-8)
+    # the coupled, discretized system integrates AND the front advances at the
+    # Rothermel-driven speed R = R_base*(1+wf) = 1.5 (not the default R_0=1).
+    state = next(n for n, v in model["variables"].items() if v["type"] == "state")
+    nn = int(round(2.0 / dx)) + 1
+    r0, speed, tf = 0.4, 1.0 * (1 + 0.5), 0.2
+
+    def X(i):
+        return -1.0 + (i - 1) * dx
+
+    ic = {f"{state}[{i},{j}]": math.hypot(X(i), X(j)) - r0
+          for i in range(1, nn + 1) for j in range(1, nn + 1)}
+    r = simulate(et.load(disc), (0.0, tf), initial_conditions=ic, method="LSODA",
+                 rtol=1e-6, atol=1e-8)
     assert r.success
+
+    jc = (nn + 1) // 2
+    xs = [X(i) for i in range(jc, nn + 1)]
+    vs = [float(np.interp(tf, r.t, r.y[next(k for k, nm in enumerate(r.vars)
+                                            if nm.endswith(f"[{i},{jc}]"))]))
+          for i in range(jc, nn + 1)]
+    front = next(xs[k] + (xs[k + 1] - xs[k]) * (-vs[k]) / (vs[k + 1] - vs[k])
+                 for k in range(len(vs) - 1) if vs[k] <= 0 <= vs[k + 1])
+    assert abs(front - (r0 + speed * tf)) < dx        # front driven by the coupled rate
 
 
 def _serialize(e):
