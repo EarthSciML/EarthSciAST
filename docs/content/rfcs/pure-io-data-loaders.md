@@ -125,7 +125,8 @@ Getting source data onto a model's grid is three composable stages:
 - **Stage 3 — regridding.** A declarative ESD program transfers values onto the
   target GDD `Grid`, with the method chosen **per variable** (§5.2): conservative
   for cell-centered fields, B-spline interpolation for staggered (edge/face)
-  fields, point-interpolation-with-baseline for scattered point sources.
+  fields, and cell-averaging (with a configurable missing-value fill) for
+  scattered point sources.
 
 Stages 2–3 are composed by an ordinary **model** (§6). The loader is that
 model's subsystem.
@@ -331,12 +332,13 @@ location on its GDD `Grid`, which is concrete and deterministic:
   components on Arakawa-C grids. Declarative polynomial evaluation; no
   transcendentals. (A plain `bilinear` kernel is **not** added — it is the
   degree-1 special case of this B-spline and would be redundant.)
-- **Scattered points → interpolated to cell centers with baseline.** Point
-  loaders (OpenAQ) interpolate station values onto target cell centers, with a
-  **baseline** background value where no station is in range. The EarthSciData
-  reference does cell-wise averaging; this RFC keeps point-to-center
-  interpolation-with-baseline as the point mode (exact scattered-interpolation
-  kernel is an implementation detail, §9).
+- **Scattered points → cell-averaging.** Point loaders (OpenAQ) regrid by
+  **averaging the source station values that fall within each target cell** — the
+  method EarthSciData.jl's OpenAQ loader already uses (`_build_cell_station_map`
+  + per-cell mean). A target cell with **no** contributing station receives a
+  **configurable `missing_value`** declared in the JSON; this is the point
+  analogue of a no-data fill, not an interpolation. (Plain bin-average + missing
+  fill — no scattered-interpolation kernel needed.)
 
 Default-by-staggering is a deterministic derivation from the variable's `Grid`
 location, **not** a fuzzy tag inference; an author may override the method per
@@ -409,7 +411,7 @@ flag-day cut rather than a deprecation window:
    and `nei2016_monthly`** (`lambert_conformal`, different params); the rest
    geographic (`longlat`, identity reprojection). Per-variable regridding by
    staggering (centered → conservative, staggered → B-spline); `openaq` is points
-   → point-interpolation-with-baseline.
+   → cell-averaging with a configurable `missing_value` for empty cells.
 3. **Cross-binding lockstep.** The schema change + operator addition land in all
    three ESS bindings (Julia/Rust/Python) + Go/TS generated types simultaneously;
    the ESD rules land with their conformance fixtures; EarthSciModels/EarthSciData
@@ -426,7 +428,8 @@ flag-day cut rather than a deprecation window:
 - **Regridding invariants.** Conservative: `Σ_j A_j F_tgt = Σ_i A_i F_src`
   (conservation) and `Σ_i W_ij = 1` (partition of unity). B-spline: reproduction
   of the spline's polynomial degree exactly on staggered locations. Point:
-  baseline returned where no station is in range.
+  cell mean of contributing stations; the configured `missing_value` for cells
+  with no station.
 - **Cadence.** A loader with `temporal` seeds `DISCRETE` (refreshes on its update
   schedule, memoized between); a loader without `temporal` seeds `CONST` (folds
   at bind). Partition output asserted against the FAQ-IR §6.1 conformance
@@ -447,11 +450,6 @@ flag-day cut rather than a deprecation window:
 1. **Iterative-inverse projections.** `longlat` and spherical `lcc` invert in
    closed form; ellipsoidal datums or `polar_stereographic` edge cases may not.
    Declarative-or-fail: report, don't add an imperative solver.
-2. **Scattered-point interpolation kernel.** The exact point→cell method
-   (cell-averaging à la EarthSciData, inverse-distance, or kriging) and the
-   precise meaning of "baseline" (constant background vs nearest-valid) need a
-   concrete declarative spec; §5.2 fixes the *contract* (interpolate to centers,
-   baseline elsewhere), not the kernel.
 
 ## Appendix A — Projection inventory (`earthsci_data`)
 
@@ -466,7 +464,7 @@ flag-day cut rather than a deprecation window:
 | `usgs3dep` | `EPSG:4326` (~10 m) | `latlon` | identity | static, centered→conservative |
 | `ceds` | geographic (lat-lon) | `latlon` | identity | emissions→conservative |
 | `edgar_v81_monthly` | geographic (lat-lon) | `latlon` | identity | emissions→conservative |
-| `openaq` | `+proj=longlat +datum=WGS84` (point stations) | `unstructured` | identity | point→cell-center interp w/ baseline |
+| `openaq` | `+proj=longlat +datum=WGS84` (point stations) | `unstructured` | identity | cell-average; empty cells→configurable `missing_value` |
 
 > Verified verbatim: `wrf`/`nei2016` (LCC), `geosfp`/`landfire`/`usgs3dep`
 > (longlat), `openaq` (longlat point stations, EarthSciData.jl). `era5`/
