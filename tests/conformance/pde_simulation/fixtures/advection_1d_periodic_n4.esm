@@ -1,0 +1,159 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "advection_1d_periodic_n4",
+    "description": "Discretized 1-D linear advection (upwind, a=1, dx=0.25, nu=4) on 4 cells, periodic. First-derivative stencil with a single-cell left makearray region wrapping u[0]->u[N]. du[i]/dt = -nu (u[i]-u[i-1]).",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.nux"
+    ],
+    "tags": [
+      "arrayop",
+      "conformance",
+      "pde",
+      "simulation",
+      "periodic",
+      "advection"
+    ]
+  },
+  "models": {
+    "Advect1D": {
+      "tolerance": {
+        "rel": 0.001,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
+          },
+          "rhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        4
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        1
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "*",
+                      "args": [
+                        -4.0,
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        -4.0,
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                4
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "i"
+              ]
+            },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

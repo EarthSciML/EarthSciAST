@@ -1226,6 +1226,67 @@ with this consolidation. The harness `scripts/run-geometry-conformance.py` still
 guards the §5.8 candidate-set / invariant / area contract against its embedded
 reference + static golden via `--self-test`.
 
+### 5.9 Cross-Language PDE-Simulation Conformance (normative)
+
+The byte-identity contracts §5.5–§5.7 govern the **rewrite/IR** half of the
+pipeline. This section governs the **simulation** half: the three
+PDE-simulation-capable bindings — **Julia (reference), Python, Rust** — must
+agree, on a **numeric-tolerance** basis, when they evaluate and integrate shared
+**pre-discretized method-of-lines** fixtures (`tests/conformance/pde_simulation/`,
+driven by `scripts/run-pde-simulation-conformance.py`; bead ess-fmw).
+
+Go and TypeScript are **out of scope** — they implement only the rewrite half
+(no `makearray`/spatial lowering, no simulator).
+
+#### 5.9.1 What is compared
+
+For each fixture, every in-scope binding reports two quantities through a thin
+adapter (`$EARTHSCI_PDE_SIM_ADAPTER_<BINDING>`), keyed by bare column-major
+element name (`u[1]`, `u[i,j]`):
+
+1. **Discretized RHS** `f(u, t)` at each declared probe state — pure arithmetic
+   over the same `makearray` stencil, so it must agree to a **tight** tolerance
+   both across bindings (vs the Julia golden) and against an **independent**
+   analytic anchor `L u + b` assembled directly from the operator matrix.
+2. **Integrated trajectory** to the declared horizon with the binding's
+   integrator **pinned in the manifest** — compared (a) across bindings vs the
+   Julia golden at a moderate tolerance and (b) vs the exact matrix-exponential /
+   manufactured solution `expm(L t)·u0 + φ(t)·b` at a looser tolerance that
+   absorbs integrator truncation.
+
+| Band | rtol | atol |
+|------|------|------|
+| RHS (vs golden and vs `L u + b`) | 1e-9 | 1e-11 |
+| Trajectory vs Julia golden (cross-binding) | 1e-6 | 1e-9 |
+| Trajectory vs `expm(L t)` (manufactured) | 1e-4 | 1e-6 |
+
+#### 5.9.2 ⛔ Numeric-tolerance, NOT byte-identical
+
+Trajectories are floating-point evaluation; they legitimately differ in the last
+bits across language math libraries and integrators. Byte-identity MUST NOT be
+asserted on simulation output. The integrator algorithm + step controls are
+pinned per binding in `manifest.json` (`integrators`) so the comparison is
+apples-to-apples; the tolerances are documented there (`tolerances`) and above.
+
+#### 5.9.3 Coverage
+
+Fixtures exercise 1-D diffusion, 2-D diffusion, and 1-D advection across all five
+BC kinds (`dirichlet`, `neumann`, `zero_gradient`, `robin`, `periodic`) with the
+BC ghost cells lowered to single-cell `makearray` regions, plus one operator at
+two grid sizes (the no-scalarization / shape-generality property the Rust and
+Python vectorized evaluators must hold).
+
+#### 5.9.4 Gate
+
+`scripts/run-pde-simulation-conformance.py --self-test` is the always-on
+regression guard: it asserts the committed Julia golden reproduces the
+independent analytic anchors and that the harness rejects perturbed output (no
+live bindings required). The producer mode (run from `test-conformance.sh` for
+Julia/Python/Rust) re-runs each binding and gates it against the golden +
+analytic anchors, **failing loudly** (non-zero exit) on any divergence beyond
+tolerance. This is the capstone that proves the Julia/Python/Rust PDE simulators
+agree.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

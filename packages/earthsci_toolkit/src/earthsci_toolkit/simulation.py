@@ -1315,6 +1315,175 @@ def _materialize_observeds(
             ctx.observed_values[name] = float(val)
 
 
+@dataclass
+class _NumpyRhsBuild:
+    """Everything needed to evaluate (and integrate) a discretized array/PDE
+    RHS: the ``rhs_function(t, y)`` closure plus the layout metadata its callers
+    need after the fact (state names, shapes, layout, params, observeds)."""
+    rhs_function: Callable[[float, Any], Any]
+    y0: Any
+    total_size: int
+    state_names: List[str]
+    shapes: Dict[str, Tuple[int, ...]]
+    state_layout: Dict[str, slice]
+    param_values: Dict[str, float]
+    ordered_observed: List[Tuple[str, Expr]]
+    elem_names: List[str]
+
+
+def _build_numpy_rhs(
+    flat: FlattenedSystem,
+    parameters: Dict[str, float],
+    initial_conditions: Dict[str, float],
+) -> "_NumpyRhsBuild":
+    """Assemble the NumPy-interpreter RHS closure + state layout for a flattened
+    array/PDE system. Shared by :func:`_simulate_with_numpy` (which integrates
+    it) and :func:`evaluate_rhs` (which evaluates it once at a probe state); the
+    cross-language PDE-simulation conformance tier drives the latter so a binding
+    can report f(u, t) at a fixed state, mirroring the Rust ``debug_eval_rhs``."""
+    shapes = infer_variable_shapes(flat)
+    state_names = list(flat.state_variables.keys())
+    observed_names: Set[str] = set(flat.observed_variables.keys())
+
+    # Layout: concatenate every state variable's flattened payload.
+    state_layout: Dict[str, slice] = {}
+    offset = 0
+    for name in state_names:
+        shape = shapes.get(name, ())
+        size = int(np.prod(shape)) if shape else 1
+        state_layout[name] = slice(offset, offset + size)
+        offset += size
+    total_size = offset
+
+    if total_size == 0:
+        raise SimulationError(
+            "Flattened system has no state variables to integrate"
+        )
+
+    # Partition equations: an observed assignment is ``name = <body>`` whose
+    # LHS is an observed variable name (flatten lowers each observed's
+    # `expression` to such an equation). These are materialized into the eval
+    # context in dependency order BEFORE the state derivatives each RHS call,
+    # so an observed `clip = intersect_polygon(...)` ring and the
+    # `area = sum_product FAQ(clip)` that consumes it are available when
+    # `D(tracer) = -area·tracer` evaluates. Everything else (state ODEs,
+    # algebraic constraints) flows through the existing driver path.
+    observed_eqs: List[Tuple[str, Expr]] = []
+    driver_equations: List[FlattenedEquation] = []
+    for eq in flat.equations:
+        if isinstance(eq.lhs, str) and eq.lhs in observed_names:
+            observed_eqs.append((eq.lhs, eq.rhs))
+        else:
+            driver_equations.append(eq)
+    ordered_observed = _order_observed_equations(observed_eqs, observed_names)
+
+    # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
+    working_equations, _eliminated = _collect_algebraic_substitutions(
+        driver_equations
+    )
+    if _eliminated:
+        working_equations = [
+            FlattenedEquation(
+                lhs=_substitute_algebraic(eq.lhs, _eliminated),
+                rhs=_substitute_algebraic(eq.rhs, _eliminated),
+                source_system=eq.source_system,
+            )
+            for eq in working_equations
+        ]
+
+    # Parameter resolution: overrides win over defaults.
+    param_values: Dict[str, float] = {}
+    for pname, pvar in flat.parameters.items():
+        bare = pname.rsplit(".", 1)[-1]
+        if pname in parameters:
+            val = float(parameters[pname])
+        elif bare in parameters:
+            val = float(parameters[bare])
+        else:
+            default = pvar.default
+            val = float(default) if isinstance(default, (int, float)) else 0.0
+        param_values[pname] = val
+        param_values[bare] = val  # also expose via bare name
+
+    # Initial conditions.
+    y0 = np.zeros(total_size, dtype=float)
+    for name in state_names:
+        default = flat.state_variables[name].default
+        if isinstance(default, (int, float)):
+            sl = state_layout[name]
+            y0[sl] = float(default)
+    _apply_initial_conditions(
+        y0, state_layout, shapes, state_names, initial_conditions
+    )
+
+    def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
+        ctx = EvalContext(
+            state_layout=state_layout,
+            state_shapes=shapes,
+            param_values=param_values,
+            observed_values={},
+            y=y,
+            t=t,
+            index_sets=flat.index_sets,
+        )
+        # Materialize array-valued observeds + derived rings and scalar
+        # observeds into the context (dependency-ordered) so the state
+        # derivatives below can reference them. Re-run each call because an
+        # observed may depend on the current state y (and the derived_rings /
+        # observed_values registries are fresh per EvalContext).
+        try:
+            _materialize_observeds(ordered_observed, ctx)
+        except NumpyInterpreterError as exc:
+            raise SimulationError(str(exc)) from exc
+        dy = np.zeros(total_size, dtype=float)
+        for eq in working_equations:
+            try:
+                _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
+            except NumpyInterpreterError as exc:
+                raise SimulationError(str(exc)) from exc
+        if not np.all(np.isfinite(dy)):
+            raise SimulationError("Non-finite derivatives encountered")
+        return dy
+    elem_names = _element_names(state_names, shapes)
+    return _NumpyRhsBuild(
+        rhs_function=rhs_function,
+        y0=y0,
+        total_size=total_size,
+        state_names=state_names,
+        shapes=shapes,
+        state_layout=state_layout,
+        param_values=param_values,
+        ordered_observed=ordered_observed,
+        elem_names=elem_names,
+    )
+
+
+def evaluate_rhs(
+    file_or_flat: Union[EsmFile, FlattenedSystem],
+    state: Dict[str, float],
+    t: float = 0.0,
+    parameters: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    """Evaluate the discretized method-of-lines RHS f(state, t) of an
+    array/PDE model, returning a ``{element_name: derivative}`` map keyed by the
+    column-major element names (``u[1]``, ``u[2,3]``, ...).
+
+    This is the single-shot RHS hook the cross-language PDE-simulation
+    conformance tier (bead ess-fmw) uses to check that Julia, Python, and Rust
+    agree on the *discretized RHS* independently of any integrator. ``state``
+    supplies the value of every state element (same keying as
+    ``initial_conditions`` in :func:`simulate`)."""
+    flat = file_or_flat if isinstance(file_or_flat, FlattenedSystem) else flatten(file_or_flat)
+    if len(flat.independent_variables) > 1:
+        raise UnsupportedDimensionalityError(
+            "evaluate_rhs supports only time-dependent (pre-discretized) systems; "
+            f"got independent variables {sorted(flat.independent_variables)}"
+        )
+    build = _build_numpy_rhs(flat, dict(parameters or {}), dict(state))
+    dy = build.rhs_function(float(t), build.y0)
+    return {name: float(val) for name, val in zip(build.elem_names, dy)}
+
+
 def _simulate_with_numpy(
     flat: FlattenedSystem,
     tspan: Tuple[float, float],
@@ -1326,109 +1495,15 @@ def _simulate_with_numpy(
 ) -> SimulationResult:
     """Simulate a flattened system containing array ops via the NumPy interpreter."""
     try:
-        shapes = infer_variable_shapes(flat)
-        state_names = list(flat.state_variables.keys())
-        observed_names: Set[str] = set(flat.observed_variables.keys())
-
-        # Layout: concatenate every state variable's flattened payload.
-        state_layout: Dict[str, slice] = {}
-        offset = 0
-        for name in state_names:
-            shape = shapes.get(name, ())
-            size = int(np.prod(shape)) if shape else 1
-            state_layout[name] = slice(offset, offset + size)
-            offset += size
-        total_size = offset
-
-        if total_size == 0:
-            raise SimulationError(
-                "Flattened system has no state variables to integrate"
-            )
-
-        # Partition equations: an observed assignment is ``name = <body>`` whose
-        # LHS is an observed variable name (flatten lowers each observed's
-        # `expression` to such an equation). These are materialized into the eval
-        # context in dependency order BEFORE the state derivatives each RHS call,
-        # so an observed `clip = intersect_polygon(...)` ring and the
-        # `area = sum_product FAQ(clip)` that consumes it are available when
-        # `D(tracer) = -area·tracer` evaluates. Everything else (state ODEs,
-        # algebraic constraints) flows through the existing driver path.
-        observed_eqs: List[Tuple[str, Expr]] = []
-        driver_equations: List[FlattenedEquation] = []
-        for eq in flat.equations:
-            if isinstance(eq.lhs, str) and eq.lhs in observed_names:
-                observed_eqs.append((eq.lhs, eq.rhs))
-            else:
-                driver_equations.append(eq)
-        ordered_observed = _order_observed_equations(observed_eqs, observed_names)
-
-        # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
-        working_equations, _eliminated = _collect_algebraic_substitutions(
-            driver_equations
-        )
-        if _eliminated:
-            working_equations = [
-                FlattenedEquation(
-                    lhs=_substitute_algebraic(eq.lhs, _eliminated),
-                    rhs=_substitute_algebraic(eq.rhs, _eliminated),
-                    source_system=eq.source_system,
-                )
-                for eq in working_equations
-            ]
-
-        # Parameter resolution: overrides win over defaults.
-        param_values: Dict[str, float] = {}
-        for pname, pvar in flat.parameters.items():
-            bare = pname.rsplit(".", 1)[-1]
-            if pname in parameters:
-                val = float(parameters[pname])
-            elif bare in parameters:
-                val = float(parameters[bare])
-            else:
-                default = pvar.default
-                val = float(default) if isinstance(default, (int, float)) else 0.0
-            param_values[pname] = val
-            param_values[bare] = val  # also expose via bare name
-
-        # Initial conditions.
-        y0 = np.zeros(total_size, dtype=float)
-        for name in state_names:
-            default = flat.state_variables[name].default
-            if isinstance(default, (int, float)):
-                sl = state_layout[name]
-                y0[sl] = float(default)
-        _apply_initial_conditions(
-            y0, state_layout, shapes, state_names, initial_conditions
-        )
-
-        def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-            ctx = EvalContext(
-                state_layout=state_layout,
-                state_shapes=shapes,
-                param_values=param_values,
-                observed_values={},
-                y=y,
-                t=t,
-                index_sets=flat.index_sets,
-            )
-            # Materialize array-valued observeds + derived rings and scalar
-            # observeds into the context (dependency-ordered) so the state
-            # derivatives below can reference them. Re-run each call because an
-            # observed may depend on the current state y (and the derived_rings /
-            # observed_values registries are fresh per EvalContext).
-            try:
-                _materialize_observeds(ordered_observed, ctx)
-            except NumpyInterpreterError as exc:
-                raise SimulationError(str(exc)) from exc
-            dy = np.zeros(total_size, dtype=float)
-            for eq in working_equations:
-                try:
-                    _apply_equation_to_dy(eq, ctx, shapes, state_layout, dy)
-                except NumpyInterpreterError as exc:
-                    raise SimulationError(str(exc)) from exc
-            if not np.all(np.isfinite(dy)):
-                raise SimulationError("Non-finite derivatives encountered")
-            return dy
+        build = _build_numpy_rhs(flat, parameters, initial_conditions)
+        shapes = build.shapes
+        state_names = build.state_names
+        state_layout = build.state_layout
+        param_values = build.param_values
+        ordered_observed = build.ordered_observed
+        total_size = build.total_size
+        y0 = build.y0
+        rhs_function = build.rhs_function
 
         sol = solve_ivp(
             fun=rhs_function,

@@ -261,6 +261,7 @@ try:
     from .simulation import (
         simulate,
         simulate_with_discrete_events,
+        evaluate_rhs,
         SimulationResult,
         SimulationError,
     )
@@ -622,6 +623,7 @@ if _has_simulation:
     __all__.extend([
         "simulate",
         "simulate_with_discrete_events",
+        "evaluate_rhs",
         "SimulationResult",
         "SimulationError",
     ])

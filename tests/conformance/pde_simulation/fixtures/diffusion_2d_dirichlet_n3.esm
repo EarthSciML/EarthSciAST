@@ -1,0 +1,170 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "diffusion_2d_dirichlet_n3",
+    "description": "Discretized 2-D heat equation on a 3x3 interior grid (h=0.25, kappa=16) with homogeneous Dirichlet BCs (implicit zero ghost on out-of-bounds neighbours).",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.nux"
+    ],
+    "tags": [
+      "arrayop",
+      "conformance",
+      "pde",
+      "simulation",
+      "dirichlet",
+      "diffusion2d"
+    ]
+  },
+  "models": {
+    "Diff2D": {
+      "tolerance": {
+        "rel": 0.001,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "shape": [
+            "i",
+            "j"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": [
+                1,
+                3
+              ],
+              "j": [
+                1,
+                3
+              ]
+            }
+          },
+          "rhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                16.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i",
+                        {
+                          "op": "-",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i",
+                        {
+                          "op": "+",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        -4,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "ranges": {
+              "i": [
+                1,
+                3
+              ],
+              "j": [
+                1,
+                3
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

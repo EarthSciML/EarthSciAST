@@ -1,0 +1,247 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "diffusion_1d_periodic_n4",
+    "description": "Discretized 1-D heat equation on 4 cells (dx=0.2, kappa=25) with periodic boundary conditions. Full-grid arrayop; boundary cells use single-cell makearray regions with the periodic ghost expression.",
+    "authors": [
+      "EarthSciSerialization/polecats/gastown.nux"
+    ],
+    "tags": [
+      "arrayop",
+      "conformance",
+      "pde",
+      "simulation",
+      "periodic",
+      "diffusion"
+    ]
+  },
+  "models": {
+    "Diff1D": {
+      "tolerance": {
+        "rel": 0.001,
+        "abs": 0.0
+      },
+      "variables": {
+        "u": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
+          },
+          "rhs": {
+            "op": "arrayop",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        4
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        4,
+                        4
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "*",
+                      "args": [
+                        24.999999999999996,
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -2,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        24.999999999999996,
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                4
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -2,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        24.999999999999996,
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -2,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "i"
+              ]
+            },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -475,6 +475,75 @@ run_cadence_conformance_python() {
             --output "$OUTPUT_DIR/cadence/python_report.json"
 }
 
+# === PDE-simulation conformance (ess-fmw) ===
+# The simulation analogue of the byte-identity gates. Julia (reference), Python,
+# and Rust evaluate the SAME pre-discretized method-of-lines fixtures
+# (tests/conformance/pde_simulation/) and must agree, within numeric tolerance,
+# on the discretized RHS f(u,t) (tight arithmetic check) AND the integrated
+# trajectory (compared to the Julia golden cross-binding, and to the exact
+# matrix-exponential / manufactured solution). Go and TS are out of scope — they
+# implement only the rewrite half (no makearray lowering, no simulator). The
+# self-test asserts the committed Julia golden reproduces the INDEPENDENT
+# analytic anchors and that the harness rejects perturbed output; the producers
+# re-run each binding and gate it against the golden + analytic, failing loudly
+# on any divergence.
+run_pde_simulation_conformance_self_test() {
+    log "Running PDE-simulation conformance harness self-test..."
+    if python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" --self-test; then
+        success "PDE-simulation conformance harness self-test passed"
+        return 0
+    else
+        error "PDE-simulation conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Julia is the reference binding. Its adapter (self-bootstrapping the dedicated
+# scripts/pde_sim_adapter env with OrdinaryDiffEqTsit5 + JSON3) re-evaluates the
+# fixtures via the tree-walk evaluator + Tsit5 and the runner asserts a match to
+# the committed golden (golden it produced) AND the analytic anchors.
+run_pde_simulation_conformance_julia() {
+    if ! check_language_availability "julia" "$JULIA_DIR"; then
+        warning "Julia unavailable — skipping Julia PDE-simulation producer check"
+        return 0
+    fi
+    log "Running PDE-simulation conformance with the Julia reference simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --bindings julia \
+            --output "$OUTPUT_DIR/pde_simulation/julia_report.json"
+}
+
+# Rust drives the vectorized arrayop evaluator (ArrayCompiled::debug_eval_rhs) +
+# diffsol. `cargo run` provisions the s2bindings shim lib path. ess-fmw.
+run_pde_simulation_conformance_rust() {
+    if ! check_language_availability "rust" "$RUST_DIR"; then
+        warning "Rust unavailable — skipping Rust PDE-simulation producer check"
+        return 0
+    fi
+    log "Running PDE-simulation conformance with the Rust vectorized simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --bindings rust \
+            --output "$OUTPUT_DIR/pde_simulation/rust_report.json"
+}
+
+# Python drives evaluate_rhs (NumPy interpreter) + SciPy solve_ivp. PYTHONPATH is
+# pinned to the repo's package src so the adapter (and the new evaluate_rhs hook)
+# resolve from this checkout, not a stray editable install. ess-fmw.
+run_pde_simulation_conformance_python() {
+    if ! check_language_availability "python" "$PYTHON_DIR"; then
+        warning "Python unavailable — skipping Python PDE-simulation producer check"
+        return 0
+    fi
+    log "Running PDE-simulation conformance with the Python simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.pde_simulation_adapter" \
+    PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --bindings python \
+            --output "$OUTPUT_DIR/pde_simulation/python_report.json"
+}
+
 run_property_corpus() {
     log "Running property-corpus round-trip across bindings..."
     local corpus="$PROJECT_ROOT/tests/property_corpus/expressions"
@@ -635,6 +704,34 @@ main() {
             success "Cadence-partition Python producer check completed"
         else
             error "Cadence-partition Python producer check failed"
+            exit 1
+        fi
+
+        if run_pde_simulation_conformance_self_test; then
+            success "PDE-simulation conformance harness self-test completed"
+        else
+            error "PDE-simulation conformance harness self-test failed"
+            exit 1
+        fi
+
+        if run_pde_simulation_conformance_julia; then
+            success "PDE-simulation Julia producer check completed"
+        else
+            error "PDE-simulation Julia producer check failed"
+            exit 1
+        fi
+
+        if run_pde_simulation_conformance_rust; then
+            success "PDE-simulation Rust producer check completed"
+        else
+            error "PDE-simulation Rust producer check failed"
+            exit 1
+        fi
+
+        if run_pde_simulation_conformance_python; then
+            success "PDE-simulation Python producer check completed"
+        else
+            error "PDE-simulation Python producer check failed"
             exit 1
         fi
 
