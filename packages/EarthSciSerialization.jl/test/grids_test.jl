@@ -31,7 +31,8 @@ end
     @test isdir(_GRIDS_FIXTURES_DIR)
 
     fixtures = ["cartesian_uniform.esm",
-                "unstructured_mpas.esm"]
+                "unstructured_mpas.esm",
+                "lambert_conformal.esm"]
 
     for fname in fixtures
         @testset "Round-trip $(fname)" begin

@@ -3871,6 +3871,9 @@
             "unstructured"
           ]
         },
+        "crs": {
+          "$ref": "#/$defs/GridCRS"
+        },
         "description": {
           "type": "string"
         },
@@ -3953,6 +3956,66 @@
           "then": {
             "required": [
               "connectivity"
+            ]
+          }
+        }
+      ]
+    },
+    "GridCRS": {
+      "type": "object",
+      "description": "Optional coordinate reference system for a grid, orthogonal to the topological `family`: a `cartesian` grid may be geographic (`longlat`) or projected (`lambert_conformal`, ...), and a point dataset may be `unstructured` + `longlat`; grids sharing a `family` can differ only in `crs`. The descriptor names the projection and the parameters a downstream reprojection rule consumes; the grid itself performs no reprojection (RFC pure-io-data-loaders §4.2). Geographic grids use `projection: \"longlat\"` (the identity case).",
+      "required": [
+        "projection"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "projection": {
+          "type": "string",
+          "enum": [
+            "longlat",
+            "lambert_conformal",
+            "mercator",
+            "polar_stereographic",
+            "rotated_pole"
+          ],
+          "description": "Projection family. `longlat` is the geographic identity case (no projection); the others are projected CRSs whose `parameters` drive the downstream reprojection rule."
+        },
+        "datum": {
+          "type": "string",
+          "enum": [
+            "sphere",
+            "WGS84"
+          ],
+          "description": "Geodetic datum. `sphere` is a spherical Earth of radius `R` (required when `datum=sphere`); `WGS84` is the standard ellipsoid."
+        },
+        "R": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Sphere radius in metres, used when `datum=sphere` (e.g. WRF 6370000, NEI2016 6370997)."
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Projection parameters consumed verbatim by the downstream reprojection rule for this `projection` (e.g. Lambert Conformal `{lat_1, lat_2, lat_0, lon_0}`). Absent/empty for `longlat`.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "datum": {
+                "const": "sphere"
+              }
+            },
+            "required": [
+              "datum"
+            ]
+          },
+          "then": {
+            "required": [
+              "R"
             ]
           }
         }

@@ -41,7 +41,7 @@ from .esm_types import (
     Tolerance, TimeSpan, Assertion, Test,
     PlotAxis, PlotValue, PlotSeries, Plot,
     SweepRange, SweepDimension, ParameterSweep, Example,
-    Grid, GridExtent, GridMetricArray, GridMetricGenerator, GridConnectivity,
+    Grid, GridCRS, GridExtent, GridMetricArray, GridMetricGenerator, GridConnectivity,
     StaggeringRule,
 )
 
@@ -964,6 +964,8 @@ def _serialize_grid(grid: Grid) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "family": grid.family,
     }
+    if grid.crs is not None:
+        result["crs"] = _serialize_grid_crs(grid.crs)
     if grid.description is not None:
         result["description"] = grid.description
     result["dimensions"] = list(grid.dimensions)
@@ -989,6 +991,22 @@ def _serialize_grid(grid: Grid) -> Dict[str, Any]:
         }
     if grid.domain is not None:
         result["domain"] = grid.domain
+    return result
+
+
+def _serialize_grid_crs(crs: GridCRS) -> Dict[str, Any]:
+    """Serialize a grid ``crs`` descriptor (RFC pure-io-data-loaders §4.2).
+
+    Number values (``R`` and each ``parameters`` entry) are emitted verbatim
+    so the descriptor round-trips unchanged.
+    """
+    result: Dict[str, Any] = {"projection": crs.projection}
+    if crs.datum is not None:
+        result["datum"] = crs.datum
+    if crs.R is not None:
+        result["R"] = crs.R
+    if crs.parameters:
+        result["parameters"] = dict(crs.parameters)
     return result
 
 

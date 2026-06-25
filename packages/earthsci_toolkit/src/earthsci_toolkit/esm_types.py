@@ -830,15 +830,34 @@ class GridExtent:
 
 
 @dataclass
+class GridCRS:
+    """Optional coordinate reference system for a grid (RFC
+    pure-io-data-loaders §4.2).
+
+    Orthogonal to the topological ``family``: a ``cartesian`` grid may be
+    geographic (``longlat``) or projected (``lambert_conformal``, ...), and a
+    point dataset may be ``unstructured`` + ``longlat``. Names the projection
+    and the parameters a downstream reprojection rule consumes; the grid
+    itself performs no reprojection.
+    """
+    projection: str  # longlat | lambert_conformal | mercator | polar_stereographic | rotated_pole
+    datum: Optional[str] = None  # "sphere" (radius R) | "WGS84"
+    R: Optional[float] = None  # sphere radius in metres, used when datum="sphere"
+    parameters: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
 class Grid:
     """Top-level grid declaration (RFC §6).
 
     ``family`` discriminates structure: ``cartesian`` uses ``extents``;
-    ``unstructured`` uses ``connectivity``.
+    ``unstructured`` uses ``connectivity``. ``crs`` is an optional coordinate
+    reference system orthogonal to ``family`` (RFC pure-io-data-loaders §4.2).
     """
     family: str
     dimensions: List[str]
     name: str = ""
+    crs: Optional[GridCRS] = None
     description: Optional[str] = None
     locations: Optional[List[str]] = None
     metric_arrays: Dict[str, GridMetricArray] = field(default_factory=dict)

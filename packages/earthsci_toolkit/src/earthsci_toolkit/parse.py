@@ -48,7 +48,7 @@ from .esm_types import (
     Tolerance, TimeSpan, Assertion, Test,
     PlotAxis, PlotValue, PlotSeries, Plot,
     SweepRange, SweepDimension, ParameterSweep, Example,
-    Grid, GridExtent, GridMetricArray, GridMetricGenerator, GridConnectivity,
+    Grid, GridCRS, GridExtent, GridMetricArray, GridMetricGenerator, GridConnectivity,
     StaggeringRule,
     FunctionTable, FunctionTableAxis,
 )
@@ -1423,10 +1423,15 @@ def _parse_grid(
             data_loaders=data_loaders,
         )
 
+    crs = None
+    if grid_data.get("crs") is not None:
+        crs = _parse_grid_crs(grid_name, grid_data["crs"])
+
     return Grid(
         family=family,
         dimensions=list(grid_data["dimensions"]),
         name=grid_name,
+        crs=crs,
         description=grid_data.get("description"),
         locations=grid_data.get("locations"),
         metric_arrays=metric_arrays,
@@ -1434,6 +1439,24 @@ def _parse_grid(
         domain=grid_data.get("domain"),
         extents=extents,
         connectivity=connectivity,
+    )
+
+
+def _parse_grid_crs(grid_name: str, crs_data: Dict[str, Any]) -> GridCRS:
+    """Parse a grid ``crs`` descriptor (RFC pure-io-data-loaders §4.2).
+
+    Number values (``R`` and each ``parameters`` entry) are preserved verbatim
+    so the descriptor round-trips unchanged.
+    """
+    if "projection" not in crs_data:
+        raise ValueError(
+            f"grids['{grid_name}'].crs: missing required field 'projection'"
+        )
+    return GridCRS(
+        projection=crs_data["projection"],
+        datum=crs_data.get("datum"),
+        R=crs_data.get("R"),
+        parameters=dict(crs_data.get("parameters") or {}),
     )
 
 

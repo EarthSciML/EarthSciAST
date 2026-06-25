@@ -64,6 +64,15 @@ fn roundtrip_unstructured() {
     assert_roundtrip(fixture);
 }
 
+/// A projected native grid: family `"cartesian"` with a `lambert_conformal`
+/// `crs` (WRF parameters, spherical datum). Asserts the `crs` descriptor
+/// survives the round-trip verbatim (ess-v9a.2).
+#[test]
+fn roundtrip_lambert_conformal() {
+    let fixture = include_str!("../../../tests/grids/lambert_conformal.esm");
+    assert_roundtrip(fixture);
+}
+
 /// Rewriting the MPAS connectivity loader name to something not in
 /// `data_loaders` must cause `load` to fail (unknown-loader reference per
 /// §6.4 wiring).

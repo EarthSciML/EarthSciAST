@@ -1685,6 +1685,12 @@ pub struct Grid {
     /// One of `"cartesian"`, `"unstructured"`.
     pub family: String,
 
+    /// Optional coordinate reference system, orthogonal to `family` (§4.2):
+    /// a `"cartesian"` grid may be geographic (`"longlat"`) or projected
+    /// (`"lambert_conformal"`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crs: Option<GridCrs>,
+
     /// Human-readable description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -1716,4 +1722,31 @@ pub struct Grid {
     /// Required for `family = "unstructured"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectivity: Option<HashMap<String, GridConnectivity>>,
+}
+
+/// Optional coordinate reference system for a grid (RFC pure-io-data-loaders
+/// §4.2), orthogonal to the topological `family`: a `"cartesian"` grid may be
+/// geographic (`"longlat"`) or projected (`"lambert_conformal"`, ...), and a
+/// point dataset may be `"unstructured"` + `"longlat"`. The descriptor names
+/// the projection and the parameters a downstream reprojection rule consumes;
+/// the grid itself performs no reprojection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridCrs {
+    /// Projection family: `"longlat"` (geographic identity) |
+    /// `"lambert_conformal"` | `"mercator"` | `"polar_stereographic"` |
+    /// `"rotated_pole"`.
+    pub projection: String,
+
+    /// Geodetic datum: `"sphere"` (radius `R`) or `"WGS84"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datum: Option<String>,
+
+    /// Sphere radius in metres, used when `datum = "sphere"`.
+    #[serde(default, rename = "R", skip_serializing_if = "Option::is_none")]
+    pub r: Option<f64>,
+
+    /// Projection parameters consumed verbatim by the downstream reprojection
+    /// rule (e.g. Lambert Conformal `{lat_1, lat_2, lat_0, lon_0}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<HashMap<String, f64>>,
 }

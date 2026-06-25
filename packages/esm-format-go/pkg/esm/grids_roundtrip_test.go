@@ -21,6 +21,7 @@ func TestGridsRoundtrip(t *testing.T) {
 	fixtures := []string{
 		"cartesian_uniform.esm",
 		"unstructured_mpas.esm",
+		"lambert_conformal.esm",
 	}
 
 	for _, name := range fixtures {

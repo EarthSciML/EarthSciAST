@@ -237,6 +237,7 @@ mod tests {
     fn minimal_grid(family: &str) -> Grid {
         Grid {
             family: family.to_string(),
+            crs: None,
             description: None,
             dimensions: vec!["x".into(), "y".into()],
             locations: None,

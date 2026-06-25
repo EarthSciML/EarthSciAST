@@ -920,6 +920,7 @@ one of the schemas below. All grids support the following common fields:
 | Field | Required | Description |
 |---|---|---|
 | `family` | ✓ | `"cartesian"` or `"unstructured"` |
+| `crs` | | Coordinate reference system, **orthogonal to `family`** (see §6.1.1) |
 | `dimensions` | ✓ | Ordered list of logical dimension names |
 | `locations` | | Declared stagger locations (see §11) |
 | `metric_arrays` | | Declarations of metric arrays (see §6.5) |
@@ -929,6 +930,37 @@ one of the schemas below. All grids support the following common fields:
 The `parameters` block **reuses** the existing ESM `parameters` schema (§6.2
 of the spec) verbatim. Grid-level parameters are visible to `substitute`,
 `free_variables`, and the conformance harness without any new machinery.
+
+#### 6.1.1 Coordinate reference system — `crs`
+
+`crs` is an **optional** descriptor recording the grid's coordinate reference
+system. It is **orthogonal to `family`** (RFC pure-io-data-loaders §4.2): the
+topological `family` (`cartesian` / `unstructured`) says how cells connect,
+while `crs` says what projection the cell coordinates live in. A geographic
+lat-lon grid and a Lambert-Conformal grid can share `family: "cartesian"` and
+differ only in `crs`; a point-station dataset can be `unstructured` +
+`longlat`. Grids without a `crs` are unchanged.
+
+```json
+"crs": {
+  "projection": "lambert_conformal",
+  "datum": "sphere",
+  "R": 6370000.0,
+  "parameters": { "lat_1": 30.0, "lat_2": 60.0, "lat_0": 38.999996, "lon_0": -97.0 }
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `projection` | ✓ | One of `longlat`, `lambert_conformal`, `mercator`, `polar_stereographic`, `rotated_pole`. `longlat` is the geographic identity case (no projection). |
+| `datum` | | `"sphere"` (a spherical Earth of radius `R`) or `"WGS84"`. |
+| `R` | | Sphere radius in metres. **Required when `datum` is `"sphere"`** (e.g. WRF `6370000`, NEI2016 `6370997`). |
+| `parameters` | | Projection parameters consumed verbatim by a downstream reprojection rule (e.g. Lambert Conformal `{lat_1, lat_2, lat_0, lon_0}`). Absent or empty for `longlat`. |
+
+The grid itself performs **no** reprojection — `crs` only *names* the projection
+and its parameters so a downstream consumer (an ESD `reprojection/` rule) can
+transform native coordinates to a common CRS. The descriptor that *names* the
+projection and the rule that *evaluates* it therefore share one parameter set.
 
 **Interaction with `domains.<d>.spatial.<dim>.grid_spacing`** (review m1):
 if a grid names a domain, any `grid_spacing` the domain declares is advisory

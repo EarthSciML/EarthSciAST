@@ -24,6 +24,7 @@ GRIDS_DIR = REPO_ROOT / "tests" / "grids"
 FIXTURES = [
     ("cartesian_uniform", "atmos_rect", "cartesian"),
     ("unstructured_mpas", "mpas_cvmesh", "unstructured"),
+    ("lambert_conformal", "wrf_lcc", "cartesian"),
 ]
 
 

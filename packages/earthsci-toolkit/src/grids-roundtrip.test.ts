@@ -39,6 +39,12 @@ describe('§6 grids top-level schema — round-trip', () => {
     expect(after).toBeDefined()
     expect(after).toEqual(before)
   })
+
+  it('preserves a projected native grid (lambert_conformal crs, WRF params)', () => {
+    const { before, after } = roundTrip('lambert_conformal.esm')
+    expect(after).toBeDefined()
+    expect(after).toEqual(before)
+  })
 })
 
 describe('§6 grids generator validation', () => {

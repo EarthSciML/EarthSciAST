@@ -703,7 +703,8 @@ type BCContributedBy struct {
 // Grid is a named discretization grid declared at the top-level `grids` map.
 // See docs/rfcs/discretization.md §6.
 type Grid struct {
-	Family             string                         `json:"family"` // "cartesian" | "unstructured"
+	Family             string                         `json:"family"`        // "cartesian" | "unstructured"
+	CRS                *GridCRS                       `json:"crs,omitempty"` // optional coordinate reference system, orthogonal to Family (§4.2)
 	Description        *string                        `json:"description,omitempty"`
 	Dimensions         []string                       `json:"dimensions"`
 	Locations          []string                       `json:"locations,omitempty"`
@@ -712,6 +713,19 @@ type Grid struct {
 	Domain             *string                        `json:"domain,omitempty"`
 	Extents            map[string]GridExtent          `json:"extents,omitempty"`
 	Connectivity       map[string]GridConnectivity    `json:"connectivity,omitempty"`
+}
+
+// GridCRS is the optional coordinate reference system for a grid (RFC
+// pure-io-data-loaders §4.2), orthogonal to the topological Family: a
+// "cartesian" grid may be geographic ("longlat") or projected
+// ("lambert_conformal", ...), and a point dataset may be "unstructured" +
+// "longlat". It names the projection and the parameters a downstream
+// reprojection rule consumes; the grid itself performs no reprojection.
+type GridCRS struct {
+	Projection string             `json:"projection"`           // longlat | lambert_conformal | mercator | polar_stereographic | rotated_pole
+	Datum      *string            `json:"datum,omitempty"`      // "sphere" (radius R) | "WGS84"
+	R          *float64           `json:"R,omitempty"`          // sphere radius in metres, used when datum="sphere"
+	Parameters map[string]float64 `json:"parameters,omitempty"` // projection parameters, e.g. {lat_1, lat_2, lat_0, lon_0}
 }
 
 // GridExtent is a per-dimension extent (cartesian). `N` is an

@@ -133,6 +133,8 @@ export type ExpressionNode = ExpressionNode1 & {
     | "aggregate"
     | "skolem"
     | "rank"
+    | "argmin"
+    | "argmax"
     | "intersect_polygon"
     | "true"
     | "makearray"
@@ -238,6 +240,10 @@ export type ExpressionNode = ExpressionNode1 & {
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
   key?: number | string | ExpressionNode1;
+  /**
+   * For the arg-witness reducers `argmin` / `argmax` (RFC semiring-faq-unified-ir §5.7 rule 6): names the contracted `ranges` index symbol whose value (a 1-based generator id) is RETURNED at the optimum. The op reduces its `expr` body (a declarative scalar FAQ, e.g. a squared-distance metric) over the inner `ranges` candidate domain — optionally pruned by a bin-Skolem `join` / `filter` — and emits the witnessing INDEX rather than the reduced value: `assign[i] = argmin_g dist(point_i, gen_g)`, the nearest-generator assignment. NET-NEW because the closed semiring registry (§5.1) returns values and the value-invention primitives distinct/skolem/rank (§5.5) return sets — neither returns the arg. Materialized at build time as an integer per-element buffer (CONST/DISCRETE cadence, like the §A.8 bin-Skolem `:map` buffers; a CONTINUOUS arg-witness is rejected by §5.7 guard 2). The NORMATIVE tie-break is the SMALLEST arg (smallest generator id): equal `expr` values resolve to the lower index, making the buffer byte-identical across bindings (§5.7). REQUIRED on `argmin` / `argmax`; ignored on any other op. An empty candidate set is an error (no index witnesses the optimum).
+   */
+  arg?: string;
   /**
    * For the `intersect_polygon` geometry-kernel leaf op (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. "planar": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. "spherical": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. "geodesic": ellipsoidal-geodesic edges. Great-circle-edge assumption: under "spherical"/"geodesic" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon`; ignored on any other op.
    */
@@ -1083,6 +1089,8 @@ export type ExpressionNode2 = {
     | "aggregate"
     | "skolem"
     | "rank"
+    | "argmin"
+    | "argmax"
     | "intersect_polygon"
     | "true"
     | "makearray"
@@ -1189,6 +1197,10 @@ export type ExpressionNode2 = {
    */
   key?: number | string | ExpressionNode1;
   /**
+   * For the arg-witness reducers `argmin` / `argmax` (RFC semiring-faq-unified-ir §5.7 rule 6): names the contracted `ranges` index symbol whose value (a 1-based generator id) is RETURNED at the optimum. The op reduces its `expr` body (a declarative scalar FAQ, e.g. a squared-distance metric) over the inner `ranges` candidate domain — optionally pruned by a bin-Skolem `join` / `filter` — and emits the witnessing INDEX rather than the reduced value: `assign[i] = argmin_g dist(point_i, gen_g)`, the nearest-generator assignment. NET-NEW because the closed semiring registry (§5.1) returns values and the value-invention primitives distinct/skolem/rank (§5.5) return sets — neither returns the arg. Materialized at build time as an integer per-element buffer (CONST/DISCRETE cadence, like the §A.8 bin-Skolem `:map` buffers; a CONTINUOUS arg-witness is rejected by §5.7 guard 2). The NORMATIVE tie-break is the SMALLEST arg (smallest generator id): equal `expr` values resolve to the lower index, making the buffer byte-identical across bindings (§5.7). REQUIRED on `argmin` / `argmax`; ignored on any other op. An empty candidate set is an error (no index witnesses the optimum).
+   */
+  arg?: string;
+  /**
    * For the `intersect_polygon` geometry-kernel leaf op (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. "planar": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. "spherical": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. "geodesic": ellipsoidal-geodesic edges. Great-circle-edge assumption: under "spherical"/"geodesic" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon`; ignored on any other op.
    */
   manifold?: "planar" | "spherical" | "geodesic";
@@ -1262,6 +1274,7 @@ export type ExpressionNode2 = {
  */
 export type Grid = Grid1 & {
   family: "cartesian" | "unstructured";
+  crs?: GridCRS;
   description?: string;
   /**
    * Ordered list of logical dimension names.
@@ -1300,6 +1313,32 @@ export type Grid = Grid1 & {
   };
 };
 export type Grid1 = {
+  [k: string]: unknown;
+};
+/**
+ * Optional coordinate reference system for a grid, orthogonal to the topological `family`: a `cartesian` grid may be geographic (`longlat`) or projected (`lambert_conformal`, ...), and a point dataset may be `unstructured` + `longlat`; grids sharing a `family` can differ only in `crs`. The descriptor names the projection and the parameters a downstream reprojection rule consumes; the grid itself performs no reprojection (RFC pure-io-data-loaders §4.2). Geographic grids use `projection: "longlat"` (the identity case).
+ */
+export type GridCRS = GridCRS1 & {
+  /**
+   * Projection family. `longlat` is the geographic identity case (no projection); the others are projected CRSs whose `parameters` drive the downstream reprojection rule.
+   */
+  projection: "longlat" | "lambert_conformal" | "mercator" | "polar_stereographic" | "rotated_pole";
+  /**
+   * Geodetic datum. `sphere` is a spherical Earth of radius `R` (required when `datum=sphere`); `WGS84` is the standard ellipsoid.
+   */
+  datum?: "sphere" | "WGS84";
+  /**
+   * Sphere radius in metres, used when `datum=sphere` (e.g. WRF 6370000, NEI2016 6370997).
+   */
+  R?: number;
+  /**
+   * Projection parameters consumed verbatim by the downstream reprojection rule for this `projection` (e.g. Lambert Conformal `{lat_1, lat_2, lat_0, lon_0}`). Absent/empty for `longlat`.
+   */
+  parameters?: {
+    [k: string]: number;
+  };
+};
+export type GridCRS1 = {
   [k: string]: unknown;
 };
 /**
