@@ -22,6 +22,13 @@ from .mirror import (
     MirrorFallbackError,
     open_with_fallback,
 )
+from .cache import (
+    CacheMiss,
+    cache_path_for_url,
+    cached_fetcher,
+    cached_opener,
+    resolve_data_dir,
+)
 from .variables import (
     UnitConversionError,
     apply_variable_mapping,
@@ -90,6 +97,11 @@ __all__ = [
     "records_for_file",
     "MirrorFallbackError",
     "open_with_fallback",
+    "CacheMiss",
+    "cache_path_for_url",
+    "cached_fetcher",
+    "cached_opener",
+    "resolve_data_dir",
     "UnitConversionError",
     "apply_variable_mapping",
     "apply_unit_conversion",
