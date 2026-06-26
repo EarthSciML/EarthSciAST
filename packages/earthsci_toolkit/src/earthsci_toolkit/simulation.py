@@ -1784,16 +1784,22 @@ def _simulate_with_numpy(
 LoaderProvider = Callable[[LoaderField, float], "np.ndarray"]
 
 
-def _default_loader_provider(field: LoaderField, t: float) -> np.ndarray:
+def _default_loader_provider(
+    field: LoaderField, t: float, target: Optional[Any] = None
+) -> np.ndarray:
     """Execute ``field``'s data loader and return its ``field.var`` array.
 
     Maps the simulation clock ``t`` to an absolute instant via the loader's
     ``temporal.start`` (when present) and calls :func:`load_data`, returning the
-    requested variable as a flat ``float`` array. This is the production path;
-    the reproject + regrid lowering of the raw array onto the consumer's target
-    grid (threading ``field.regrid``) is the C4 driver's responsibility and is
-    layered on top of this seam — C1 establishes the injection + cadence
-    machinery, not the regrid kernel selection.
+    requested variable as a flat ``float`` array.
+
+    When a ``target`` :class:`~earthsci_toolkit.data_loaders.regrid_driver.TargetGrid`
+    is supplied and ``field.regrid`` selects a method, the C4 driver reprojects +
+    horizontally regrids (and, for a 3-D field, reduces ``lev=min``) the raw
+    array onto the target domain grid before flattening — the per-variable
+    lowering layered on top of C1's injection + cadence machinery. If the source
+    exposes no lon/lat coordinates (e.g. a fixture array with no dataset), the
+    raw flattened array is returned unchanged.
     """
     from .data_loaders.runtime import load_data
 
@@ -1806,10 +1812,78 @@ def _default_loader_provider(field: LoaderField, t: float) -> np.ndarray:
 
         when = _coerce_datetime(temporal.start) + _dt.timedelta(seconds=float(t))
     result = load_data(field.loader, time=when)
+    if target is not None:
+        regridded = _regrid_loaded_field(field, result, target)
+        if regridded is not None:
+            return np.asarray(regridded, dtype=float).reshape(-1)
     arr = result.variables[field.var]
     # xarray DataArray → ndarray; already-ndarray passes through.
     values = getattr(arr, "values", arr)
     return np.asarray(values, dtype=float).reshape(-1)
+
+
+def _regrid_loaded_field(
+    field: LoaderField, result: Any, target: Any
+) -> Optional[np.ndarray]:
+    """Apply the C4 regrid driver to a loaded field, or ``None`` to skip it.
+
+    Returns ``None`` (so the caller keeps the raw array) when no regrid method is
+    configured or the source exposes no horizontal coordinates — a genuine
+    regrid error (bad method, shape mismatch) propagates to the simulation-level
+    handler rather than being silently swallowed.
+    """
+    from .data_loaders.regrid_driver import (
+        extract_source_coords,
+        regrid_loader_field,
+    )
+
+    spec = getattr(field, "regrid", None)
+    method = getattr(spec, "method", None) if spec is not None else None
+    if not method:
+        return None
+    arr = result.variables[field.var]
+    values = np.asarray(getattr(arr, "values", arr), dtype=float)
+    ds = getattr(result, "dataset", None)
+    src_lon, src_lat, lev_coord = extract_source_coords(ds, values.ndim)
+    if src_lon is None or src_lat is None:
+        return None
+    if values.ndim >= 3 and lev_coord is None:
+        return None
+    missing = (
+        float(spec.missing_value)
+        if getattr(spec, "missing_value", None) is not None
+        else float("nan")
+    )
+    return regrid_loader_field(
+        values, src_lon, src_lat, target, method,
+        lev_coord=lev_coord, missing_value=missing,
+    )
+
+
+def _build_loader_target(flat: FlattenedSystem) -> Optional[Any]:
+    """Build the cached lon/lat target grid for loader regridding, or ``None``.
+
+    Only built when the system has a projected/spatial domain AND at least one
+    loader field requests a regrid method — otherwise the C1 raw-injection path
+    is used unchanged. A domain that cannot be turned into a grid (missing
+    spacing, unsupported projection) also yields ``None``.
+    """
+    domain = getattr(flat, "domain", None)
+    if domain is None:
+        return None
+    wants_regrid = any(
+        getattr(getattr(f, "regrid", None), "method", None)
+        for f in flat.loader_fields
+    )
+    if not wants_regrid:
+        return None
+    from .data_loaders.regrid_driver import RegridDriverError, build_target_grid
+    from .data_loaders.reproject import ReprojectionError
+
+    try:
+        return build_target_grid(domain)
+    except (RegridDriverError, ReprojectionError):
+        return None
 
 
 def _loader_cadence_boundaries(
@@ -1881,7 +1955,18 @@ def _simulate_with_loaders(
     is a pure function of the state. With no loader fields this function is
     never reached (``simulate`` routes elsewhere)."""
     try:
-        provider = loader_provider or _default_loader_provider
+        if loader_provider is not None:
+            provider = loader_provider
+        else:
+            # Build the lon/lat target grid ONCE (geometry cached) and bind it to
+            # the default provider so each loaded field is reprojected + regridded
+            # onto the domain grid at its cadence. No target ⇒ C1 raw injection.
+            _target = _build_loader_target(flat)
+            if _target is not None:
+                def provider(f: LoaderField, when: float) -> np.ndarray:
+                    return _default_loader_provider(f, when, target=_target)
+            else:
+                provider = _default_loader_provider
         t0, t1 = float(tspan[0]), float(tspan[1])
 
         const_fields = [f for f in flat.loader_fields if f.cadence == "const"]
