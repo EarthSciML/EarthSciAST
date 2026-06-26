@@ -1538,6 +1538,15 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
     models = {}
     if "models" in data:
         for model_name, model_data in data["models"].items():
+            # A top-level model included by reference (schema top-level
+            # `models` oneOf[Model, SubsystemRef]) is carried verbatim as a
+            # {"ref": ...} dict and spliced later by resolve_model_refs —
+            # mirroring how subsystem refs are carried in Model.subsystems.
+            # Resolution is deferred because it needs base_path, which is not
+            # available here.
+            if isinstance(model_data, dict) and "ref" in model_data:
+                models[model_name] = model_data
+                continue
             model = _parse_model(model_data)
             model.name = model_name
             models[model_name] = model
@@ -1950,6 +1959,94 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         _resolve_reaction_system_subsystems(rs, base_path, seen)
 
 
+def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
+    """Resolve all top-level model references in an ESM file.
+
+    The top-level analog of :func:`resolve_subsystem_refs`. Walks
+    ``esm_file.models``; any entry whose value is an unresolved
+    ``{"ref": "<file|url>"}`` dict — carried verbatim by ``_parse_esm_data``
+    and permitted by the schema's top-level ``models``
+    ``oneOf[Model, SubsystemRef]`` — is fetched, schema-validated, and its
+    single top-level model is spliced into ``models[X]`` under the SAME key
+    ``X`` with ``name = X``.
+
+    Because flatten collects the spliced model with prefix ``X``, its flat
+    variable names ``X.<var>`` already equal the coupling-edge endpoint names —
+    a coupled document that imports its components by name assembles with zero
+    coupling-edge rewrites. This generalizes the existing ref mechanism to the
+    top-level ``models`` map; it introduces no new primitive.
+
+    Resolution reuses ``_fetch_ref_content`` + ``_parse_esm_data`` and then
+    recursively resolves the spliced model's own subsystem refs (relative to
+    the referenced file's directory) via ``_resolve_model_subsystems``.
+
+    Must run BEFORE :func:`resolve_subsystem_refs` so that every top-level
+    entry is a concrete ``Model`` before the subsystem walk — which assumes
+    ``model.subsystems`` exists — visits it.
+
+    Args:
+        esm_file: The parsed ESM file to resolve references in (modified in place)
+        base_path: The base directory for resolving relative file paths
+
+    Raises:
+        CircularReferenceError: If circular references are detected
+        SubsystemRefError: If a reference cannot be resolved or does not
+            contain a top-level model
+    """
+    resolved_models: Dict[str, Any] = {}
+    for model_name, model_value in esm_file.models.items():
+        # An already-parsed Model (inline definition) passes through unchanged.
+        if not (isinstance(model_value, dict) and "ref" in model_value):
+            resolved_models[model_name] = model_value
+            continue
+
+        ref_str = model_value["ref"]
+
+        # Circular reference detection. Seed the chain with this ref so a
+        # subsystem inside the referenced file that points back is caught.
+        canonical = os.path.normpath(os.path.join(base_path, ref_str)) \
+            if not ref_str.startswith("http") else ref_str
+        seen = {canonical}
+
+        content = _fetch_ref_content(ref_str, base_path)
+        ref_data = json.loads(content)
+
+        # Determine the base_path for nested refs inside the referenced file.
+        if ref_str.startswith("http://") or ref_str.startswith("https://"):
+            new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
+        else:
+            resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
+            new_base = os.path.dirname(resolved_path)
+
+        # Validate and parse the referenced file.
+        schema = _get_schema()
+        try:
+            validate(ref_data, schema)
+        except jsonschema.ValidationError as e:
+            raise SubsystemRefError(
+                f"Schema validation failed for model ref '{ref_str}': {e.message}"
+            )
+
+        parsed = _parse_esm_data(ref_data)
+
+        # A top-level model ref must resolve to exactly one model. Unlike a
+        # subsystem ref, a data loader or reaction system is not a valid
+        # top-level model component.
+        if not parsed.models:
+            raise SubsystemRefError(
+                f"Model ref '{ref_str}' does not contain a top-level model"
+            )
+
+        sub_model = next(iter(parsed.models.values()))
+        sub_model.name = model_name
+        # Recursively resolve the spliced model's own subsystem refs, relative
+        # to the referenced file's directory.
+        _resolve_model_subsystems(sub_model, new_base, seen)
+        resolved_models[model_name] = sub_model
+
+    esm_file.models = resolved_models
+
+
 # Operator arity requirements: (min_args, max_args). None = unlimited.
 _OPERATOR_ARITY = {
     "+": (2, None), "-": (1, None), "*": (2, None), "/": (2, 2),
@@ -2041,7 +2138,18 @@ def _units_compatible(u1: str, u2: str) -> bool:
 def _build_symbol_tables(data: Dict[str, Any]) -> Dict[str, Any]:
     """Build symbol tables for all systems and global symbols in the file."""
     models = {}
+    # Top-level models included by reference (schema `models`
+    # oneOf[Model, SubsystemRef]). Their variables live in the referenced file,
+    # which is not loaded during structural validation, so they are registered
+    # as known systems with no known variables and var-existence checks against
+    # them are skipped (see _resolve_scoped_ref) — mirroring the leniency
+    # already applied to subsystem-nested refs.
+    ref_systems = set()
     for mname, m in data.get("models", {}).items():
+        if isinstance(m, dict) and "ref" in m:
+            ref_systems.add(mname)
+            models[mname] = {}
+            continue
         var_info = {}
         for vname, vdef in m.get("variables", {}).items():
             var_info[vname] = vdef
@@ -2081,6 +2189,7 @@ def _build_symbol_tables(data: Dict[str, Any]) -> Dict[str, Any]:
         "data_loaders": data_loaders,
         "global_symbols": global_symbols,
         "all_systems": set(models.keys()) | set(reaction_systems.keys()) | set(data_loaders.keys()),
+        "ref_systems": ref_systems,
     }
 
 
@@ -2100,6 +2209,13 @@ def _resolve_scoped_ref(ref: str, tables: Dict[str, Any]) -> tuple:
     var = parts[-1]
     if system not in tables["all_systems"]:
         return (system, var, "no_system")
+    # A model included by reference has its variables in another file not
+    # available during structural validation — accept any var against it
+    # (deferred to resolve_model_refs, which schema-validates the referenced
+    # file, and to coupling/flatten resolution). Mirrors the leniency for
+    # subsystem-nested (3+ part) refs.
+    if system in tables.get("ref_systems", set()):
+        return (system, var, "ok")
     # Check if var exists in that system
     if system in tables["models"]:
         if var in tables["models"][system]:
@@ -3166,7 +3282,14 @@ def load(path_or_string: Union[str, Path, dict]) -> EsmFile:
     # Parse into ESM objects
     esm_file = _parse_esm_data(data)
 
-    # Resolve subsystem references first so subsystems land as concrete Model
+    # Resolve top-level model references first so every entry in
+    # esm_file.models is a concrete Model (rather than a `{ref: ...}` dict)
+    # before resolve_subsystem_refs — which assumes `model.subsystems` exists
+    # — walks them. A model imported by reference splices in under its own key,
+    # so its flat names `X.<var>` already equal the coupling-edge names.
+    resolve_model_refs(esm_file, base_path)
+
+    # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the
     # enum-lowering pass walks their expression trees.
     resolve_subsystem_refs(esm_file, base_path)

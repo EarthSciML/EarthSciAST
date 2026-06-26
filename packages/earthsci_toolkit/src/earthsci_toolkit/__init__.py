@@ -57,6 +57,7 @@ from .parse import (
     CircularReferenceError,
     SubsystemRefError,
     resolve_subsystem_refs,
+    resolve_model_refs,
 )
 from .serialize import save
 
@@ -398,6 +399,7 @@ __all__ = [
     "load",
     "save",
     "resolve_subsystem_refs",
+    "resolve_model_refs",
 
     # Validation
     "validate",

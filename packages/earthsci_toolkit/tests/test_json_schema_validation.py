@@ -26,6 +26,32 @@ from earthsci_toolkit import load
 from earthsci_toolkit.parse import _get_schema
 
 
+def _all_error_messages(error: ValidationError):
+    """Flatten a ValidationError and all its nested sub-errors into messages.
+
+    Top-level ``models`` validates against ``oneOf[Model, SubsystemRef]``, so a
+    model that fails for a concrete reason (missing ``variables``, a wrong field
+    type, …) surfaces that reason inside ``error.context`` under the umbrella
+    "is not valid under any of the given schemas" message. Collecting the whole
+    tree lets a test assert on the specific cause regardless of nesting.
+    """
+    messages = [error.message]
+    for sub in error.context or []:
+        messages.extend(_all_error_messages(sub))
+    return messages
+
+
+def _assert_rejected_with(schema, data, cause_substring):
+    """Assert ``data`` fails schema validation and ``cause_substring`` appears
+    somewhere in the (possibly nested) validation error tree."""
+    with pytest.raises(ValidationError) as excinfo:
+        jsonschema.validate(data, schema)
+    messages = _all_error_messages(excinfo.value)
+    assert any(cause_substring in m for m in messages), (
+        f"expected {cause_substring!r} among validation errors, got: {messages}"
+    )
+
+
 class TestRequiredFieldValidation:
     """Test validation of required fields in all schema objects."""
 
@@ -72,7 +98,9 @@ class TestRequiredFieldValidation:
         """Test validation when model required fields are missing."""
         schema = _get_schema()
 
-        # Missing variables in model
+        # Missing variables in model. Top-level `models` is
+        # oneOf[Model, SubsystemRef]; the concrete cause is nested under the
+        # oneOf umbrella error, so assert on the whole error tree.
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
@@ -82,8 +110,7 @@ class TestRequiredFieldValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="'variables' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'variables' is a required property")
 
         # Missing equations in model
         invalid_data = {
@@ -95,8 +122,7 @@ class TestRequiredFieldValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="'equations' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'equations' is a required property")
 
     def test_missing_reaction_system_required_fields(self):
         """Test validation when reaction system required fields are missing."""
@@ -233,7 +259,9 @@ class TestTypeValidation:
         """Test validation of incorrect model variable field types."""
         schema = _get_schema()
 
-        # type should be string, not number
+        # type should be string, not number. (Top-level `models` is
+        # oneOf[Model, SubsystemRef]; the concrete type error is nested under
+        # the oneOf umbrella.)
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
@@ -244,8 +272,7 @@ class TestTypeValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="123 is not of type 'string'"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "123 is not of type 'string'")
 
         # units should be string, not boolean
         invalid_data = {
@@ -258,8 +285,7 @@ class TestTypeValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="True is not of type 'string'"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "True is not of type 'string'")
 
         # default should be number, not string (when present)
         invalid_data = {
@@ -272,8 +298,7 @@ class TestTypeValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="'not a number' is not of type 'number'"):
-            jsonschema.validate(invalid_data, schema)
+        _assert_rejected_with(schema, invalid_data, "'not a number' is not of type 'number'")
 
     def test_incorrect_reaction_types(self):
         """Test validation of incorrect reaction field types."""
@@ -899,8 +924,9 @@ class TestEdgeCaseValidation:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="'read_vars' is a required property"):
-            jsonschema.validate(invalid_data, schema)
+        # The concrete cause is nested under the top-level `models`
+        # oneOf[Model, SubsystemRef] umbrella error.
+        _assert_rejected_with(schema, invalid_data, "'read_vars' is a required property")
 
 
 class TestIntegrationValidationScenarios:

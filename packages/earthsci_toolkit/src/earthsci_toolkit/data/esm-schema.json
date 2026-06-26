@@ -51,9 +51,16 @@
     },
     "models": {
       "type": "object",
-      "description": "ODE-based model components, keyed by unique identifier.",
+      "description": "ODE-based model components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level model (esm-spec.md §4.7).",
       "additionalProperties": {
-        "$ref": "#/$defs/Model"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/Model"
+          },
+          {
+            "$ref": "#/$defs/SubsystemRef"
+          }
+        ]
       }
     },
     "reaction_systems": {
