@@ -38,12 +38,12 @@ def _esio_format(dl: Any) -> str:
     if path.endswith((".csv", ".txt")):
         return "csv"
     if "format=tiff" in url.lower() or path.endswith((".tif", ".tiff")):
-        return "tiff"
+        return "geotiff"
     ff = str(meta.get("file_format", "")).lower()
     if "netcdf" in ff:
         return "netcdf"
     if "tiff" in ff or "geotiff" in ff:
-        return "tiff"
+        return "geotiff"
     if "csv" in ff:
         return "csv"
     raise ValueError(
@@ -89,8 +89,108 @@ def _to_esio_temporal(temporal: Any) -> Any:
     return esio.LoaderTemporal(**kwargs)
 
 
-def to_esio_loader(field: Any) -> Any:
-    """Project an ESS ``LoaderField`` onto an ``earthsciio.DataLoader``."""
+def _cds_metadata(dl: Any) -> Optional[dict]:
+    """The loader's ``metadata.cds`` block (a CDS dataset descriptor), or ``None``.
+
+    A loader opts into the CDS request path by carrying ``metadata.cds`` with a
+    ``dataset`` id (e.g. ``reanalysis-era5-pressure-levels``) — parallel to the
+    ``metadata.url_defaults`` that drives the ArcGIS bbox fills. ESS stays generic
+    (it does not hard-code ERA5); it only sees "this loader resolves to CDS
+    dataset X", and the esio-side ``era5`` request builder fills in the rest.
+    """
+    meta = getattr(dl, "metadata", None) or {}
+    cds = meta.get("cds")
+    if isinstance(cds, dict) and cds.get("dataset"):
+        return cds
+    return None
+
+
+def _bbox_from_target(target: Any) -> Tuple[float, float, float, float]:
+    """``(min_lon, min_lat, max_lon, max_lat)`` of the target grid's lon/lat env."""
+    import numpy as np
+
+    lon = np.asarray(getattr(target, "center_lon"))
+    lat = np.asarray(getattr(target, "center_lat"))
+    return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
+
+
+def _to_esio_cds_loader(field: Any, target: Any) -> Any:
+    """Project a ``metadata.cds`` loader onto a CDS-backed ``earthsciio.DataLoader``.
+
+    Builds a per-anchor ``cds://<dataset>?<request>`` URL resolver via the esio
+    ``era5`` request builder: the ``area`` comes from the simulation domain
+    (``target``), the variable list maps the loader's NetCDF short names to CDS
+    long names, and the pressure levels come from ``metadata.cds.pressure_levels``
+    (else the full ERA5 set). The downloaded asset is NetCDF, so ``format`` is
+    ``netcdf`` and the registered ``cds`` transport performs the submit/poll/
+    download against ``~/.cdsapirc`` credentials.
+    """
+    import calendar
+
+    import earthsciio as esio
+    from earthsciio import era5 as esio_era5
+
+    dl = field.loader
+    cds = _cds_metadata(dl)
+    dataset = cds["dataset"]
+    if dataset != esio_era5.ERA5_DATASET:
+        raise NotImplementedError(
+            f"no CDS request builder for dataset {dataset!r}; only "
+            f"{esio_era5.ERA5_DATASET!r} is wired (earthsciio.era5)."
+        )
+    if target is None:
+        raise ValueError(
+            f"CDS loader {getattr(dl, 'name', field.name)!r} needs a spatial target "
+            "to build the CDS 'area'; pass provider_factory with target= "
+            "(simulate threads it from the domain)."
+        )
+
+    # NetCDF short names (what the file/reader carries) -> CDS long request names.
+    short_to_long = {short: long for long, short in esio_era5.ERA5_VARIABLES.items()}
+    file_vars = [getattr(v, "file_variable", None) for v in dl.variables.values()]
+    file_vars = [v for v in file_vars if v]
+    long_vars = [short_to_long[v] for v in file_vars if v in short_to_long]
+    if not long_vars:
+        raise ValueError(
+            f"no CDS variables resolved from loader file_variables {file_vars!r}; "
+            f"known ERA5 short names: {sorted(short_to_long)}"
+        )
+
+    min_lon, min_lat, max_lon, max_lat = _bbox_from_target(target)
+    area = esio_era5.era5_area_from_bbox(min_lon, min_lat, max_lon, max_lat)
+    levels = [int(p) for p in (cds.get("pressure_levels")
+                               or esio_era5.ERA5_PRESSURE_LEVELS_HPA)]
+
+    def url(anchor: _dt.datetime) -> str:
+        # ERA5 files are monthly (file_period P1M); one cds:// per (year, month)
+        # so every hourly anchor in a month shares one CDS job + cached blob.
+        days = list(range(1, calendar.monthrange(anchor.year, anchor.month)[1] + 1))
+        return esio_era5.era5_cds_url(
+            anchor.year, anchor.month, days, long_vars, levels, area
+        )
+
+    return esio.DataLoader(
+        name=getattr(dl, "name", field.name),
+        format=str(cds.get("format", "netcdf")),
+        url=url,
+        variables=file_vars,
+        temporal=_to_esio_temporal(getattr(dl, "temporal", None)),
+    )
+
+
+def to_esio_loader(field: Any, target: Any = None) -> Any:
+    """Project an ESS ``LoaderField`` onto an ``earthsciio.DataLoader``.
+
+    ``target`` is the simulation's lon/lat target grid; when present it fills the
+    domain-derived URL parameters — the ArcGIS ImageServer ``{bbox…}``/image-size
+    placeholders for the GeoTIFF loaders (LANDFIRE / USGS 3DEP), and the CDS
+    ``area`` for a ``metadata.cds`` loader (ERA5). A ``metadata.cds`` loader takes
+    the CDS branch (:func:`_to_esio_cds_loader`); everything else expands its
+    ``source.url_template`` directly.
+    """
+    if _cds_metadata(field.loader) is not None:
+        return _to_esio_cds_loader(field, target)
+
     import earthsciio as esio
 
     from .provider import _static_url_substitutions
@@ -100,9 +200,9 @@ def to_esio_loader(field: Any) -> Any:
     src = dl.source
     template = src.url_template
     mirrors = list(getattr(src, "mirrors", []) or [])
-    # constant url fills (version/product/…); no target here ⇒ no server-side bbox
-    # (the bbox-needing loaders are GeoTIFF, which EarthSciIO cannot read anyway).
-    consts = _static_url_substitutions(dl, target=None)
+    # constant url fills (version/product) + the domain-derived WGS84 bbox/image
+    # size for the server-side-subsetting GeoTIFF loaders (now readable: gap G3).
+    consts = _static_url_substitutions(dl, target=target)
 
     def url(anchor: _dt.datetime) -> str:
         return expand_with_mirrors(template, mirrors, date=anchor, variables=consts)[0]
@@ -118,13 +218,18 @@ def to_esio_loader(field: Any) -> Any:
     )
 
 
-def esio_provider_factory(field: Any, window: Optional[Window] = None) -> Any:
+def esio_provider_factory(
+    field: Any, window: Optional[Window] = None, *, target: Any = None
+) -> Any:
     """A ``provider_factory`` building a real ``earthsciio.Provider`` for ``field``.
 
-    Pass to ``simulate(..., provider_factory=esio_provider_factory)``. Requires
-    ``earthsciio`` installed; the EarthSciIO ``Cache`` honours ``EARTHSCIDATADIR``.
+    Pass to ``simulate(..., provider_factory=esio_provider_factory)``. ``simulate``
+    threads the domain ``target`` in (it introspects this ``target`` kwarg), which
+    the loader projection needs for the GeoTIFF bbox / ERA5 CDS ``area``. Requires
+    ``earthsciio`` installed; the EarthSciIO ``Cache`` honours ``EARTHSCIDATADIR``
+    and the ``cds`` transport reads ``~/.cdsapirc`` for ERA5.
     """
     import earthsciio as esio
 
-    esio.register_format_readers()  # idempotent; ensures netcdf/csv are available
-    return esio.Provider(to_esio_loader(field), esio.Cache(), window)
+    esio.register_format_readers()  # idempotent; netcdf/csv/geotiff available
+    return esio.Provider(to_esio_loader(field, target=target), esio.Cache(), window)

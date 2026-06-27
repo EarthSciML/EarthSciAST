@@ -2008,6 +2008,26 @@ def _build_loader_target(flat: FlattenedSystem) -> Optional[Any]:
         return None
 
 
+def _factory_accepts_target(factory: Callable) -> bool:
+    """Whether ``factory`` accepts a ``target`` keyword (so we can thread it in).
+
+    The provider-factory contract is ``(field, window) -> Provider``; a factory
+    that *also* takes ``target=`` (the earthsciio adapter, which needs the domain
+    for the GeoTIFF bbox / CDS ``area``) receives the same target the in-tree
+    default does. A ``**kwargs`` factory counts. Best-effort: an un-introspectable
+    callable is treated as the bare 2-arg contract.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return False
+    if "target" in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _loader_cadence_boundaries(
     discrete_fields: List[LoaderField], t0: float, t1: float
 ) -> List[float]:
@@ -2188,11 +2208,18 @@ def _simulate_with_loaders(
             from .data_loaders.provider import build_default_provider
 
             target = _build_loader_target(flat)
-            # The in-tree default provider also derives server-side-subset URL
-            # fills (WGS84 bbox / image size) from the target grid; an injected
-            # provider_factory keeps the public (field, window) contract.
+            # The in-tree default provider derives server-side-subset URL fills
+            # (WGS84 bbox / image size, and the CDS ERA5 'area') from the target
+            # grid. An injected provider_factory keeps the public (field, window)
+            # contract, but if it ALSO accepts a ``target`` keyword (e.g. the
+            # earthsciio adapter, which needs the domain for the GeoTIFF bbox /
+            # CDS area) we thread the same target through.
             if provider_factory is not None:
-                factory = provider_factory
+                if _factory_accepts_target(provider_factory):
+                    def factory(f, w):
+                        return provider_factory(f, w, target=target)
+                else:
+                    factory = provider_factory
             else:
                 def factory(f, w):
                     return build_default_provider(f, w, target=target)
