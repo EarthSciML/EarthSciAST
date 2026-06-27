@@ -81,6 +81,32 @@ def flattened_to_esm(flat: Any, domains: Dict[str, Any],
     def _rename(node):
         return _map_expr(node, lambda x: rename.get(x, x) if isinstance(x, str) else x)
 
+    # The `domains` block is reused verbatim below, but its expression-form
+    # initial_conditions are written with component-LOCAL variable names (e.g.
+    # ``psi``), while flatten namespaced the states (``LevelSetFireSpread.psi``)
+    # and this adapter underscore-renames them (``LevelSetFireSpread_psi``).
+    # Without remapping, a domain-level expression IC can no longer resolve to
+    # its state and simulate() raises "expression initial condition names unknown
+    # variable". Map each local (and full) name to its renamed flat name and
+    # rewrite the domain ICs to match. Spatial dimension names (x, y, lev) are
+    # not in the rename map, so coordinate references in IC expressions are left
+    # untouched.
+    local_to_renamed: Dict[str, str] = {}
+    for full, new in rename.items():
+        local_to_renamed.setdefault(full.rsplit(".", 1)[-1], new)
+        local_to_renamed[full] = new
+
+    def _rename_local(node):
+        return _map_expr(node, lambda x: local_to_renamed.get(x, x) if isinstance(x, str) else x)
+
+    if local_to_renamed:
+        domains = copy.deepcopy(domains)
+        for dom in domains.values():
+            ic = dom.get("initial_conditions") if isinstance(dom, dict) else None
+            if isinstance(ic, dict) and isinstance(ic.get("values"), dict):
+                ic["values"] = {local_to_renamed.get(k, k): _rename_local(v)
+                                for k, v in ic["values"].items()}
+
     variables: Dict[str, Any] = {}
     for n, v in flat.state_variables.items():
         variables[rename[n]] = {"type": "state", "units": v.units or "1"}
