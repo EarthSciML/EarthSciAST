@@ -152,6 +152,29 @@ def test_cds_loader_builds_era5_request_url(monkeypatch):
     assert isinstance(prov, esio.Provider)
 
 
+def test_cds_loader_window_trims_to_calendar_month_and_days():
+    """GAP-E: with a simulation window the CDS request covers only the window's
+    CALENDAR month + days — not the whole month — and is robust to a drifting
+    provider anchor (ERA5's P1M file period, approximated as fixed seconds from
+    the 1940 availability start, can resolve a November time to an October
+    anchor; the window's calendar month must win)."""
+    t = DataLoaderTemporal(start="1940-01-01T00:00:00Z", frequency="PT1H",
+                           file_period="P1M", time_variable="valid_time")
+    meta = {"cds": {"dataset": "reanalysis-era5-pressure-levels",
+                    "format": "netcdf", "pressure_levels": [1000]}}
+    field = _field("https://data.earthsci.dev/era5/x.nc", temporal=t,
+                   fmt_meta=meta, variables=("u", "t"))
+    target = _Target([-121.6, -121.4], [39.7, 39.9])
+    window = (_dt.datetime(2018, 11, 8, 14, 30), _dt.datetime(2018, 11, 9, 6, 30))
+
+    edl = to_esio_loader(field, target=target, window=window)
+    # Even when handed a DRIFTED October anchor, the window's calendar month wins.
+    _, request = esio.decode_cds_url(edl.url(_dt.datetime(2018, 10, 25, 0)))
+    assert request["month"] == ["11"]             # calendar month of the window
+    assert request["day"] == ["08", "09"]         # only the window's days, not 1-30
+    assert request["pressure_level"] == ["1000"]  # surface-only trim
+
+
 def test_cds_loader_needs_a_target():
     """Without a domain target there is no CDS `area` — fail loud, not silently."""
     meta = {"cds": {"dataset": "reanalysis-era5-pressure-levels"}}

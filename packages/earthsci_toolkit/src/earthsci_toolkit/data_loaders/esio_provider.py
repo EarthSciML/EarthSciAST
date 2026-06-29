@@ -114,7 +114,18 @@ def _bbox_from_target(target: Any) -> Tuple[float, float, float, float]:
     return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
 
 
-def _to_esio_cds_loader(field: Any, target: Any) -> Any:
+def _window_bounds(window: Any) -> Tuple[Any, Any]:
+    """``(start, end)`` datetimes from a ``simulate`` loader window — a
+    ``(start, end)`` tuple/list or an object exposing ``.start``/``.end`` — or
+    ``(None, None)`` when absent."""
+    if window is None:
+        return None, None
+    if isinstance(window, (tuple, list)) and len(window) == 2:
+        return window[0], window[1]
+    return getattr(window, "start", None), getattr(window, "end", None)
+
+
+def _to_esio_cds_loader(field: Any, target: Any, window: Any = None) -> Any:
     """Project a ``metadata.cds`` loader onto a CDS-backed ``earthsciio.DataLoader``.
 
     Builds a per-anchor ``cds://<dataset>?<request>`` URL resolver via the esio
@@ -161,13 +172,32 @@ def _to_esio_cds_loader(field: Any, target: Any) -> Any:
     levels = [int(p) for p in (cds.get("pressure_levels")
                                or esio_era5.ERA5_PRESSURE_LEVELS_HPA)]
 
+    # Calendar-correct months + day-trim from the simulation WINDOW when it is
+    # available. This both (a) trims the request to the days actually simulated —
+    # the whole-month request (all days × 24 h × 37 levels × 16 vars) blows past
+    # the CDS cost limit — and (b) fixes a month error: the esio Provider's
+    # file-period anchor drifts off calendar for ERA5's 1940 availability start
+    # (P1M is approximated as a fixed-seconds period), so a November sim time can
+    # resolve to an October anchor. era5_months_in_span computes the months from
+    # the window by the calendar, ±3 h buffer. Without a window we fall back to
+    # the anchor's whole month (the legacy path; used by unit tests).
+    w_start, w_end = _window_bounds(window)
+    months = (esio_era5.era5_months_in_span(w_start, w_end)
+              if (w_start is not None and w_end is not None) else None)
+
     def url(anchor: _dt.datetime) -> str:
-        # ERA5 files are monthly (file_period P1M); one cds:// per (year, month)
-        # so every hourly anchor in a month shares one CDS job + cached blob.
-        days = list(range(1, calendar.monthrange(anchor.year, anchor.month)[1] + 1))
-        return esio_era5.era5_cds_url(
-            anchor.year, anchor.month, days, long_vars, levels, area
-        )
+        # ERA5 files are monthly (one cds:// per (year, month) → one CDS job +
+        # cached blob). With a window, request only its calendar month(s)/days;
+        # pick the window month nearest the (possibly drifting) provider anchor.
+        if months:
+            year, month, days = min(
+                months,
+                key=lambda ym: abs((ym[0] * 12 + ym[1]) - (anchor.year * 12 + anchor.month)),
+            )
+        else:
+            year, month = anchor.year, anchor.month
+            days = list(range(1, calendar.monthrange(year, month)[1] + 1))
+        return esio_era5.era5_cds_url(year, month, days, long_vars, levels, area)
 
     return esio.DataLoader(
         name=getattr(dl, "name", field.name),
@@ -178,18 +208,20 @@ def _to_esio_cds_loader(field: Any, target: Any) -> Any:
     )
 
 
-def to_esio_loader(field: Any, target: Any = None) -> Any:
+def to_esio_loader(field: Any, target: Any = None, window: Any = None) -> Any:
     """Project an ESS ``LoaderField`` onto an ``earthsciio.DataLoader``.
 
     ``target`` is the simulation's lon/lat target grid; when present it fills the
     domain-derived URL parameters — the ArcGIS ImageServer ``{bbox…}``/image-size
     placeholders for the GeoTIFF loaders (LANDFIRE / USGS 3DEP), and the CDS
-    ``area`` for a ``metadata.cds`` loader (ERA5). A ``metadata.cds`` loader takes
+    ``area`` for a ``metadata.cds`` loader (ERA5). ``window`` is the simulation's
+    absolute ``(start, end)`` time window; a CDS loader uses it to request only
+    the calendar months/days actually simulated. A ``metadata.cds`` loader takes
     the CDS branch (:func:`_to_esio_cds_loader`); everything else expands its
     ``source.url_template`` directly.
     """
     if _cds_metadata(field.loader) is not None:
-        return _to_esio_cds_loader(field, target)
+        return _to_esio_cds_loader(field, target, window)
 
     import earthsciio as esio
 
@@ -232,4 +264,6 @@ def esio_provider_factory(
     import earthsciio as esio
 
     esio.register_format_readers()  # idempotent; netcdf/csv/geotiff available
-    return esio.Provider(to_esio_loader(field, target=target), esio.Cache(), window)
+    return esio.Provider(
+        to_esio_loader(field, target=target, window=window), esio.Cache(), window
+    )
