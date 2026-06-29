@@ -106,6 +106,24 @@ def flattened_to_esm(flat: Any, domains: Dict[str, Any],
                            if v in used_vars}
         loader_subsystems[subkey] = dl
 
+    # Carry each loader field's per-variable regrid spec onto the re-created
+    # model's `regrid` block (keyed by loader var). Re-flatten re-attaches it via
+    # ``model.regrid.get(var)``; without it the discretized loaders lose their
+    # regrid method and bind at NATIVE resolution (a LANDFIRE GeoTIFF is millions
+    # of cells, ERA5 is 17x13) → shape mismatch against the model grid. This is
+    # the regrid analog of carrying the loader fields through discretization.
+    loader_regrid: Dict[str, Any] = {}
+    for lf in loader_fields:
+        spec = getattr(lf, "regrid", None)
+        if spec is None or getattr(spec, "method", None) is None:
+            continue
+        entry: Dict[str, Any] = {"method": spec.method}
+        if getattr(spec, "missing_value", None) is not None:
+            entry["missing_value"] = spec.missing_value
+        if getattr(spec, "description", None):
+            entry["description"] = spec.description
+        loader_regrid[lf.var] = entry
+
     # flatten() dot-namespaces names (e.g. "LevelSet.psi"); a dot in an array
     # state name breaks simulate()'s element expansion, so sanitize "." -> "_"
     # consistently across variable declarations and equation references. Loader
@@ -163,6 +181,8 @@ def flattened_to_esm(flat: Any, domains: Dict[str, Any],
         model["boundary_conditions"] = boundary_conditions
     if loader_subsystems:
         model["subsystems"] = loader_subsystems
+    if loader_regrid:
+        model["regrid"] = loader_regrid
     return {
         "esm": "0.5.0", "metadata": {"name": name}, "domains": domains,
         "models": {name: model},

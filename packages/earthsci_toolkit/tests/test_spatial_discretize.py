@@ -463,3 +463,34 @@ def test_vectorized_stencil_matches_scalar_bit_for_bit():
     av = np.array([np.interp(tf, rv.t, rv.y[i]) for i in range(len(rv.vars))])
     as_ = np.array([np.interp(tf, rs.t, rs.y[i]) for i in range(len(rs.vars))])
     assert np.max(np.abs(av - as_)) == 0.0           # bit-identical
+
+
+def test_flattened_to_esm_carries_loader_regrid():
+    """flattened_to_esm must emit a `regrid` block keyed by loader var so
+    re-flatten re-attaches each loader's regrid method; otherwise discretized
+    loaders bind at NATIVE resolution and the coupled RHS fails combining a
+    millions-of-cells GeoTIFF with a 17x13 ERA5 grid. Regression for the
+    'operands could not be broadcast together with shapes (221,) (3301829,)'."""
+    from types import SimpleNamespace
+
+    from earthsci_toolkit.spatial_discretize import flattened_to_esm
+    from earthsci_toolkit.flatten import LoaderField
+    from earthsci_toolkit.esm_types import (
+        DataLoader, DataLoaderKind, DataLoaderSource, DataLoaderVariable, RegridSpec,
+    )
+
+    loader = DataLoader(
+        name="Met", kind=DataLoaderKind.GRID,
+        source=DataLoaderSource(url_template="http://x/{date}.nc"),
+        variables={"u": DataLoaderVariable(file_variable="u", units="1")},
+    )
+    lf = LoaderField(name="Met.pl.u", owner="Met", subkey="pl", var="u",
+                     loader=loader, cadence="const",
+                     regrid=RegridSpec(method="bspline"))
+    flat = SimpleNamespace(loader_fields=[lf], state_variables={},
+                           observed_variables={}, parameters={}, equations=[])
+    domains = {"d": {"spatial": {"x": {"min": 0.0, "max": 1.0,
+                                       "grid_spacing": 0.5, "units": "m"}}}}
+
+    model = flattened_to_esm(flat, domains)["models"]["Flattened"]
+    assert model["regrid"]["u"]["method"] == "bspline"
