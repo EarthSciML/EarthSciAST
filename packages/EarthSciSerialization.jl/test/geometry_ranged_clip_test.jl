@@ -187,3 +187,75 @@ end
     @test du[vmap["FT1"]] ≈ 10.0 atol = 1e-12
     @test du[vmap["FT2"]] ≈ 20.0 atol = 1e-12     # full-product would be 15.0 — proves the gate fires
 end
+
+# ---------------------------------------------------------------------------
+# Geometry CONSTRUCTED from grid params + LIVE F_src field. The cell polygons are
+# built from a grid origin/spacing (a cartesian cell-corner construction — the LCC
+# construction is the same pattern with trig), so NOTHING is injected but the grid
+# params and the field. The regrid weights (A_ij/A_j) build once at setup; F_tgt is
+# an ODE state computed from a LIVE `param_arrays` F_src buffer, so mutating the
+# buffer updates the output with no rebuild (the loader-refresh path).
+# 4→2 coarsening: F_tgt[j] = mean of the two src cells under tgt cell j.
+# ---------------------------------------------------------------------------
+
+_eq(o, args...) = Dict{String,Any}("op" => o, "args" => collect(Any, args))
+function _cell_corners(x0, dx, nset)
+    # x = x0 + (i-1)*dx + dx*((v==2)+(v==3));  y = (v==3)+(v==4);  c: 1=x, 2=y
+    xstep = _eq("*", dx, _eq("+", _eq("==", "v", 2), _eq("==", "v", 3)))
+    x = _eq("+", x0, _eq("*", _eq("-", "i", 1), dx), xstep)
+    y = _eq("+", _eq("==", "v", 3), _eq("==", "v", 4))
+    _arrop(["i", "v", "c"], ["i" => nset, "v" => "verts", "c" => "coord"],
+           _eq("ifelse", _eq("==", "c", 1), x, y))
+end
+
+function _constructed_live_regrid_esm()
+    ip = Dict{String,Any}("op" => "intersect_polygon", "id" => "overlap_clip",
+        "manifold" => "planar", "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")])
+    clip = _arrop(["i", "j", "w", "c"],
+        ["i" => "src_cells", "j" => "tgt_cells", "w" => "clip_ring", "c" => "coord"], _ix(ip, "w", "c"))
+    vp1 = _eq("+", "v", 1)
+    shoe = _eq("*", 0.5, _eq("-",
+        _eq("*", _ix("clip","i","j","v",1), _ix("clip","i","j",vp1,2)),
+        _eq("*", _ix("clip","i","j",vp1,1), _ix("clip","i","j","v",2))))
+    A_ij = _arrop(["i", "j"], ["i" => "src_cells", "j" => "tgt_cells"], _agg("v", "clip_ring", shoe))
+    A_j  = _arrop(["j"], ["j" => "tgt_cells"], _agg("i", "src_cells", _ix("A_ij", "i", "j")))
+    num  = _agg("i", "src_cells", _eq("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")))
+    rhs  = _arrop(["j"], ["j" => "tgt_cells"], _eq("/", num, _ix("A_j", "j")))
+    lhs  = Dict{String,Any}("op" => "aggregate", "output_idx" => Any["j"],
+        "ranges" => Dict{String,Any}("j" => Dict{String,Any}("from" => "tgt_cells")),
+        "expr" => Dict{String,Any}("op" => "D", "args" => Any[_ix("F_tgt", "j")], "wrt" => "t"))
+    Pd(d) = Dict{String,Any}("type" => "parameter", "default" => d)
+    O(e, shape...) = Dict{String,Any}("type" => "observed", "shape" => collect(Any, shape), "expression" => e)
+    model = Dict{String,Any}(
+        "index_sets" => Dict{String,Any}(
+            "coord" => Dict{String,Any}("kind"=>"interval","size"=>2), "verts" => Dict{String,Any}("kind"=>"interval","size"=>4),
+            "src_cells" => Dict{String,Any}("kind"=>"interval","size"=>4), "tgt_cells" => Dict{String,Any}("kind"=>"interval","size"=>2),
+            "clip_ring" => Dict{String,Any}("kind"=>"derived","from_faq"=>"overlap_clip")),
+        "variables" => Dict{String,Any}(
+            "x0" => Pd(0.0), "dx_src" => Pd(0.5), "dx_tgt" => Pd(1.0),
+            "F_src" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
+            "src_poly" => O(_cell_corners("x0", "dx_src", "src_cells"), "src_cells", "verts", "coord"),
+            "tgt_poly" => O(_cell_corners("x0", "dx_tgt", "tgt_cells"), "tgt_cells", "verts", "coord"),
+            "clip" => O(clip, "src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij" => O(A_ij, "src_cells", "tgt_cells"), "A_j" => O(A_j, "tgt_cells"),
+            "F_tgt" => Dict{String,Any}("type" => "state", "shape" => Any["tgt_cells"])),
+        "equations" => Any[Dict{String,Any}("lhs" => lhs, "rhs" => rhs)])
+    return Dict{String,Any}("esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "constructed_live_regrid"),
+                            "models" => Dict{String,Any}("ConstructedLiveRegrid" => model))
+end
+
+@testset "Constructed geometry + live F_src field through the regrid (M4+)" begin
+    esm = _constructed_live_regrid_esm()
+    F_src = [10.0, 20.0, 30.0, 40.0]               # a LIVE buffer
+    f!, u0, p, _t, vmap = build_evaluator(esm; param_arrays = Dict("F_src" => F_src),
+        initial_conditions = Dict("F_tgt[1]" => 0.0, "F_tgt[2]" => 0.0))
+    du = similar(u0); f!(du, u0, p, 0.0)
+    # nothing injected but grid params + the field — polygons are CONSTRUCTED.
+    @test du[vmap["F_tgt[1]"]] ≈ 15.0 atol = 1e-12   # mean(10,20)
+    @test du[vmap["F_tgt[2]"]] ≈ 35.0 atol = 1e-12   # mean(30,40)
+    # Mutate the SAME live buffer (no rebuild) — F_tgt tracks F_src.
+    F_src .= [100.0, 0.0, 0.0, 0.0]
+    f!(du, u0, p, 0.0)
+    @test du[vmap["F_tgt[1]"]] ≈ 50.0 atol = 1e-12   # mean(100,0)
+    @test du[vmap["F_tgt[2]"]] ≈ 0.0  atol = 1e-12   # mean(0,0)
+end
