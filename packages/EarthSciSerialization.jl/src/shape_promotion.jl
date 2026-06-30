@@ -121,6 +121,47 @@ function _domain_dim_sizes(flat::FlattenedSystem)::Dict{String,Int}
 end
 
 """
+    algebraic_states_to_observeds(flat::FlattenedSystem) -> FlattenedSystem
+
+Reclassify every state variable that is defined by a BARE algebraic equation
+(`x = expr`, no `D(x,t)`) as an observed variable. Such "algebraic states" are a
+DAE authoring form (a quantity constrained by an equation rather than integrated);
+for the tree-walk ODE path they are observeds — derived, inlined, never an ODE
+slot. A pure ODE state (defined by `D(x,t)`) is left untouched. This normalization
+lets `promote_downstream_shapes` lift a feed-forward algebraic physics chain
+authored as states (Rothermel R, midflame U, EMC, …) the same as expression-defined
+observeds. Returns a new system; the input is untouched.
+"""
+function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
+    diff_states = Set{String}()
+    alg_defined = Set{String}()
+    for eq in flat.equations
+        if eq.lhs isa OpExpr && eq.lhs.op == "D" && !isempty(eq.lhs.args) &&
+           eq.lhs.args[1] isa VarExpr
+            push!(diff_states, (eq.lhs.args[1]::VarExpr).name)
+        elseif eq.lhs isa VarExpr
+            push!(alg_defined, (eq.lhs::VarExpr).name)
+        end
+    end
+    new_states = OrderedDict{String,ModelVariable}()
+    new_obs = OrderedDict{String,ModelVariable}(flat.observed_variables)
+    for (k, v) in flat.state_variables
+        if (k in alg_defined) && !(k in diff_states)
+            new_obs[k] = ModelVariable(ObservedVariable; default=v.default, units=v.units,
+                default_units=v.default_units, description=v.description,
+                expression=v.expression, shape=v.shape, location=v.location,
+                noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+        else
+            new_states[k] = v
+        end
+    end
+    return FlattenedSystem(flat.independent_variables, new_states, flat.parameters,
+                           new_obs, flat.equations, flat.continuous_events,
+                           flat.discrete_events, flat.domain, flat.metadata,
+                           flat.index_sets, flat.function_tables)
+end
+
+"""
     promote_downstream_shapes(flat::FlattenedSystem) -> FlattenedSystem
 
 Promote every variable whose defining algebraic equation has an inferred ARRAY
