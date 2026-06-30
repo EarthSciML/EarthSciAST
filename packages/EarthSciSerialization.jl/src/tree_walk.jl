@@ -524,9 +524,30 @@ function _geom_setup_order(setup, defs)
     return order
 end
 
+# A materialized value-invention map buffer (`Dict(position => bin key)`, the
+# `src_bin`/`tgt_bin` broad-phase bins) as a dense vector the setup-time join gate
+# indexes by loop position. Keys are 1-based positions over the buffer's 1-D index
+# set (`_vi_materialize_map!`); the values are the bin keys (a tuple/int from
+# `_vi_skolem`), compared only for equality by the gate.
+function _vi_buf_vector(buf)
+    isempty(buf) && return Any[]
+    n = maximum(Int(k) for k in keys(buf))
+    v = Vector{Any}(undef, n)
+    for (k, val) in buf
+        v[Int(k)] = val
+    end
+    return v
+end
+
 # Evaluate the geometry-setup vars in dependency order into const arrays.
+# `vi_maps` carries any materialized value-invention bin buffers a setup-time
+# broad-phase `join` gates on (RFC §5.3); `param_overrides` carries scalar
+# parameter values (e.g. a sliver-filter `atol`, the bin width `dx`/`dy`) so a
+# setup-time `filter`/quantization that references them resolves.
 function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
-                                     index_sets, derived_extents)
+                                     index_sets, derived_extents;
+                                     vi_maps=Dict{String,Any}(),
+                                     param_overrides=Dict{String,Float64}())
     out = Dict{String,AbstractArray{Float64}}()
     isempty(setup) && return out
     env = Dict{String,Any}()
@@ -536,6 +557,21 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     for (n, v) in model.variables
         v.type == ParameterVariable && !_is_array_shape(v.shape) && v.default !== nothing &&
             (env[n] = Float64(v.default))
+    end
+    # Scalar parameter OVERRIDES win over declared defaults: a setup-time geometry
+    # node may reference `atol`/`dx`/`dy` (the sliver floor / bin quantization),
+    # which are build-time constants known here but often have no `default`.
+    for (k, v) in param_overrides
+        env[String(k)] = Float64(v)
+    end
+    # Materialized value-invention bin buffers (`src_bin`/`tgt_bin`): a setup-time
+    # broad-phase `join` gate reads the per-cell bin key from these so the
+    # denominator row-sum (`A_j_w = Σ_i A_ij`) contracts over exactly the same
+    # candidate set as the numerator — without the gate it sums DENSELY and picks up
+    # the spurious sub-grid slivers a spherical clip emits for edge-adjacent cells,
+    # breaking the partition of unity (RFC §5.3 / §5.8).
+    for (name, buf) in vi_maps
+        env[String(name)] = _vi_buf_vector(buf)
     end
     # Declared shapes (index-set names per dim) — used to resolve join key columns.
     var_shapes = Dict{String,Vector{String}}()
@@ -823,7 +859,8 @@ function _build_evaluator_impl(model::Model;
     _geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
     if !isempty(_geom_setup_vars)
         _geom_setup_arrays = _materialize_geometry_setup(_geom_setup_vars, _geom_defs,
-            model, const_arrays, model.index_sets, _derived_extents)
+            model, const_arrays, model.index_sets, _derived_extents;
+            vi_maps=_vi_maps.maps, param_overrides=parameter_overrides)
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
     # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
