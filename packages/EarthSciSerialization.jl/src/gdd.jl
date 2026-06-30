@@ -132,3 +132,78 @@ function _apply_gdd_to_esm(esm::Dict{String,Any},
 
     return result
 end
+
+# Recursively replace every bare-string leaf equal to `from` with `to` in a JSON
+# AST node — used to rename a catalog rule's spacing token (`dx`) to a model's
+# namespaced grid-spacing parameter (e.g. `LevelSetFireSpread.dx`).
+function _rename_ast_token(node, from::String, to::String)
+    if node isa AbstractDict
+        return Dict{String,Any}(String(k) => _rename_ast_token(v, from, to) for (k, v) in node)
+    elseif node isa AbstractVector
+        return Any[_rename_ast_token(x, from, to) for x in node]
+    else
+        return node == from ? to : node
+    end
+end
+
+"""
+    gdd_to_rules(src; spacing = nothing, names = nothing) -> Vector{Dict{String,Any}}
+
+Convert an ESD discretization-catalog document into rule-engine `rules` — the
+bridge from the declarative catalog format (`{discretizations: {name:
+{applies_to, replacement}}}`, the form the finite-difference catalog files and
+GDD `discretizations` blocks use) to the `{name, pattern, replacement}` rules
+[`discretize`](@ref) consumes (its `applies_to` becomes the rule `pattern`).
+
+`src` is a path to a catalog `.json` file or an already-parsed `Dict`. Only
+entries carrying BOTH `applies_to` and `replacement` are emitted; `use:`-style
+scheme entries (handled by the scheme expander) are skipped. Pass `names` to
+select a subset of catalog entries (in the given order); otherwise all
+convertible entries are returned in iteration order.
+
+`spacing` renames the catalog's grid-spacing token `dx` throughout each
+replacement to a model parameter name (e.g. `"LevelSetFireSpread.dx"`), so a
+namespaced monolithic model binds the same rule the bare-`dx` core model does.
+
+Example — load the 2-D centered `grad` stencils for a level-set front:
+
+```julia
+rules = gdd_to_rules(joinpath(esd, "discretizations", "finite_difference",
+                              "centered_grad_2nd_uniform_cartesian_2d.json");
+                     spacing = "LevelSetFireSpread.dx")
+disc = discretize(flat; grids = grids, rules = rules, promote = true)
+```
+"""
+function gdd_to_rules(src; spacing::Union{Nothing,AbstractString} = nothing,
+                      names::Union{Nothing,AbstractVector} = nothing)::Vector{Dict{String,Any}}
+    cat = if src isa AbstractDict
+        _deep_native(src)
+    else
+        path = String(src)
+        isfile(path) || throw(ArgumentError("gdd_to_rules: no such catalog file '$path'"))
+        _deep_native(JSON3.read(read(path, String)))
+    end
+    cat isa Dict{String,Any} ||
+        throw(ArgumentError("gdd_to_rules: catalog did not parse as a JSON object"))
+    discs = get(cat, "discretizations", nothing)
+    discs isa AbstractDict ||
+        throw(ArgumentError("gdd_to_rules: document has no `discretizations` block"))
+
+    order = names === nothing ? collect(keys(discs)) : [String(n) for n in names]
+    rules = Dict{String,Any}[]
+    for nm in order
+        d = get(discs, nm, nothing)
+        d isa AbstractDict || (names === nothing ? continue :
+            throw(ArgumentError("gdd_to_rules: catalog has no discretization '$nm'")))
+        applies = get(d, "applies_to", nothing)
+        repl = get(d, "replacement", nothing)
+        (applies === nothing || repl === nothing) && continue   # `use:`-scheme entry
+        if spacing !== nothing && String(spacing) != "dx"
+            repl = _rename_ast_token(repl, "dx", String(spacing))
+        end
+        push!(rules, Dict{String,Any}("name" => String(nm),
+                                      "pattern" => _deep_native(applies),
+                                      "replacement" => repl))
+    end
+    return rules
+end

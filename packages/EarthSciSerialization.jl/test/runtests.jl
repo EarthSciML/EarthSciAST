@@ -39,6 +39,8 @@ using JSON3
     include("scheme_expansion_test.jl")
     include("discretization_ref_test.jl")
     include("grid_refs_test.jl")
+    include("gdd_to_rules_test.jl")
+    include("simulate_run_test.jl")
     include("discretize_test.jl")
     include("conformance_discretize_test.jl")
     include("dae_missing_conformance_test.jl")

@@ -51,6 +51,7 @@ include("geometry.jl")
 include("area_faq.jl")
 include("tree_walk.jl")
 include("data_refresh.jl")
+include("simulate.jl")
 include("reproject.jl")
 include("regrid_kernels.jl")
 include("regrid_driver.jl")
@@ -156,7 +157,7 @@ export
     # Discretization pipeline (RFC §11, gt-gbs2)
     discretize,
     # GDD loading and grid_refs resolution (esm-spec §4.7.1, §6.6.2, §6.7.2)
-    resolve_grid_refs,
+    resolve_grid_refs, gdd_to_rules,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
@@ -167,6 +168,9 @@ export
     build_refresh_callback, RefreshBuffers, RefreshError,
     RegridApplier, IdentityRegrid, apply_regrid!,
     provider_refresh_times, provider_is_const, provider_sample,
+    # One-call run entry (load → discretize → build_evaluator → seed → refresh →
+    # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
+    simulate, SimulationResult, seed_expression_ic!,
     # C4 regrid driver — reproject + per-method regrid + lev=min (ess-14f.5, JL-J2).
     ESDRegrid,
     # Inline-test runner (esm-ol5qa; spec §6.6)

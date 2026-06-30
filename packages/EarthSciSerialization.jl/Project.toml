@@ -27,6 +27,7 @@ EarthSciSerializationCatalystExt = ["Catalyst", "ModelingToolkit", "Symbolics"]
 EarthSciSerializationDataRefreshExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciSerializationGeometryOpsExt = ["GeometryOps", "GeoInterface"]
 EarthSciSerializationMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
+EarthSciSerializationSimulateExt = "SciMLBase"
 
 [compat]
 Catalyst = "16"
