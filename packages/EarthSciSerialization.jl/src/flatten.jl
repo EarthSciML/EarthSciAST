@@ -1042,10 +1042,22 @@ end
 Apply a `CouplingVariableMap` entry: substitute the `to` parameter/variable
 with the `from` variable in every flattened equation. For `param_to_var` and
 `conversion_factor`, also promote `to` out of the parameters map.
+
+`loader_names` is the set of top-level `data_loaders` keys. When a
+`param_to_var` binds a **loaded** field (`from`'s owning system is a data
+loader) onto a GRID-SHAPED consumer parameter (`to` carries a non-scalar
+`shape`), the shape is transferred to the loader-qualified `from` name so the
+downstream pointwise lift (§10.5) still recognizes it as an array-shaped operand
+to index per grid cell. Without this, deleting the shaped `to` param would strip
+the field's grid shape and the lift would leave a bare (scalar) reference to the
+loader variable — e.g. `-Meteorology.u_wind * grad(...)` would not be lifted to
+`-index(Meteorology.u_wind, i, j) * …`. (esm-spec §11.5 "BCs from data" +
+§10.4 `param_to_var`.)
 """
 function _apply_variable_map!(equations::Vector{Equation},
                               params::OrderedDict{String, ModelVariable},
-                              entry::CouplingVariableMap)
+                              entry::CouplingVariableMap,
+                              loader_names::Set{String}=Set{String}())
     from = entry.from
     to = entry.to
     transform = entry.transform
@@ -1069,7 +1081,20 @@ function _apply_variable_map!(equations::Vector{Equation},
     # For param_to_var / conversion_factor, remove target param from parameter list.
     if (transform == "param_to_var" || transform == "conversion_factor") &&
        haskey(params, to)
+        to_var = params[to]
         delete!(params, to)
+        # Carry a grid shape from the (deleted) consumer parameter onto the
+        # loader-qualified producer name, so the pointwise lift indexes the
+        # loaded field per cell. Only when `from` is a data-loader variable
+        # (guards against binding a model STATE, which already lives in `states`).
+        if to_var.shape !== nothing && !isempty(to_var.shape) && !haskey(params, from)
+            from_owner = first(split(from, "."; limit=2))
+            if from_owner in loader_names
+                params[from] = ModelVariable(ParameterVariable;
+                    shape=to_var.shape, units=to_var.units,
+                    description=to_var.description)
+            end
+        end
     end
     return
 end
@@ -1384,6 +1409,11 @@ function flatten(file::EsmFile)::FlattenedSystem
     opaque_refs = String[]
     dimension_promotions = NamedTuple[]
 
+    # Top-level data-loader names — used to recognize a `param_to_var` whose
+    # producer is a LOADED field, so a grid-shaped binding keeps its shape.
+    loader_names = file.data_loaders === nothing ? Set{String}() :
+                   Set{String}(String(k) for k in keys(file.data_loaders))
+
     for entry in file.coupling
         push!(coupling_rules_applied, describe_coupling_entry(entry))
         if entry isa CouplingOperatorCompose
@@ -1391,7 +1421,7 @@ function flatten(file::EsmFile)::FlattenedSystem
         elseif entry isa CouplingCouple
             _apply_couple!(equations, entry, file)
         elseif entry isa CouplingVariableMap
-            _apply_variable_map!(equations, params, entry)
+            _apply_variable_map!(equations, params, entry, loader_names)
         elseif entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")
         elseif entry isa CouplingCallback

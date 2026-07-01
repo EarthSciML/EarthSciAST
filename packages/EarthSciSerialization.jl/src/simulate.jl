@@ -140,6 +140,17 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
 end
 
 # --------------------------------------------------------------------------- #
+# CONST-provider materialization: pull one forcing variable's field out of a
+# `provider_sample` result and coerce to a dense Float64 array, preserving the
+# native (e.g. [lon,lat]) shape so a scoped-`ic` fold reads it per cell and the
+# array-gather indexes it. Reuses the same sample-extraction seam as the refresh
+# callback's `IdentityRegrid` (`_regrid_field`: AbstractDict var=>field, or a
+# bare AbstractArray for a single-variable sample).
+# --------------------------------------------------------------------------- #
+_provider_const_field(sample, var::AbstractString) =
+    Array{Float64}(_regrid_field(sample, String(var)))
+
+# --------------------------------------------------------------------------- #
 # Solve seam — the method lives in EarthSciSerializationSimulateExt (SciMLBase).
 # The core fallback (untyped `alg`) fires only when no solver extension is
 # loaded, or `alg` is omitted.
@@ -173,10 +184,14 @@ Keyword arguments
   [`seed_expression_ic!`](@ref).
 * `const_arrays`, `param_arrays` — forwarded to `build_evaluator` (the regridder
   source polygons and the live forcing buffers).
-* `providers::AbstractDict` — `var name => data Provider`; when given, a
-  [`build_refresh_callback`](@ref) is attached so DISCRETE forcing refreshes in
-  place at its cadence (CONST providers ride `const_arrays`). `regrid` selects
-  the [`RegridApplier`](@ref) (default [`IdentityRegrid`](@ref)).
+* `providers::AbstractDict` — `<Loader>.<var> => data Provider`, the loaded-data
+  injection seam. CONST providers ([`provider_is_const`](@ref)) are materialized
+  once at build time into `const_arrays` under their loader variable name — so a
+  scoped-reference `ic(Sys.sp) ~ Loader.var` folds the seeded field into u0 and a
+  loader→consumer `variable_map` binding resolves the consumer gather from it.
+  DISCRETE providers get a [`build_refresh_callback`](@ref) so their forcing
+  refreshes in place at its cadence; `regrid` selects the
+  [`RegridApplier`](@ref) (default [`IdentityRegrid`](@ref)).
 * `reltol`, `abstol`, `saveat` — forwarded to the solver.
 * `model_name` — select one model when the document holds several.
 
@@ -198,10 +213,32 @@ function simulate(input, tspan;
     doc = _prepare_run_doc(input)
 
     overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in parameters)
+
+    # Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
+    # through the Provider seam, never as raw `const_arrays` keyed by internal
+    # consumer names. CONST providers (empty `provider_refresh_times`) are
+    # materialized ONCE at build time into `const_arrays` keyed by their declared
+    # loader variable name — reachable when scoped-`ic` folds `Loader.*` into u0
+    # (R2) and when the loader→consumer `variable_map` binding routes a consumer
+    # gather to the loader name. DISCRETE providers ride the refresh callback.
+    merged_const = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    discrete_providers = Dict{String,Any}()
+    if providers !== nothing
+        t0 = Float64(tspan[1])
+        for (rawk, prov) in providers
+            k = String(rawk)
+            if provider_is_const(prov)
+                merged_const[k] = _provider_const_field(provider_sample(prov, t0), k)
+            else
+                discrete_providers[k] = prov
+            end
+        end
+    end
+
     f!, u0, p, _tspan, var_map = build_evaluator(doc;
         model_name = model_name,
         parameter_overrides = overrides,
-        const_arrays = Dict{String,Any}(String(k) => v for (k, v) in const_arrays),
+        const_arrays = merged_const,
         param_arrays = Dict{String,Any}(String(k) => v for (k, v) in param_arrays))
 
     isempty(initial_conditions) || _apply_initial_conditions!(u0, var_map, initial_conditions)
@@ -209,11 +246,11 @@ function simulate(input, tspan;
 
     cb = nothing
     tstops = Float64[]
-    if providers !== nothing && !isempty(providers)
+    if !isempty(discrete_providers)
         file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
         model = _select_model(file, model_name)
         cb, tstops = build_refresh_callback(model;
-            providers = Dict{String,Any}(String(k) => v for (k, v) in providers),
+            providers = discrete_providers,
             buffers = RefreshBuffers(Dict{String,Any}(String(k) => v for (k, v) in param_arrays)),
             regrid = regrid)
     end

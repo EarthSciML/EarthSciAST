@@ -2,7 +2,7 @@
     "esm": "0.8.0",
     "metadata": {
         "name": "AdvectionReactionLoadedICBC",
-        "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose two-arg grad templates each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data loader via scoped-reference ic equations (ChemistryICs). Runs end to end through EarthSciSerialization.simulate; loaded fields are supplied as const arrays by the runner. lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",
+        "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose two-arg grad templates each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data loader via scoped-reference ic equations (ChemistryICs). Runs end to end through EarthSciSerialization.simulate. Every loaded field is bound from its declared data_loader and injected through the data-Provider seam: the initial fields via the scoped-reference `ic` equations (ChemistryICs -> InitialConditions), the wind field and per-species western inflow BCs via `variable_map` param_to_var couplings (Meteorology.u_wind -> Advection.u_wind, BoundaryConditions.*_inflow -> Advection.*_inflow; spec 11.5 'BCs from data'). lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",
         "authors": [
             "EarthSciML Test Suite"
         ],
@@ -546,6 +546,34 @@
             ],
             "lifting": "pointwise",
             "description": "Spatially lift the 0-D chemistry onto the lon/lat grid and add per-species advection to each species tendency. pointwise lifting evaluates the reaction network independently at each grid cell; the merged reaction+advection state ODEs are array-ified by the flattener's pointwise lift."
+        },
+        {
+            "type": "variable_map",
+            "from": "Meteorology.u_wind",
+            "to": "Advection.u_wind",
+            "transform": "param_to_var",
+            "description": "Loaded wind FIELD (spec 11.5): the grid-shaped Meteorology.u_wind loader variable replaces the constant Advection.u_wind parameter. param_to_var carries the [lon,lat] grid shape onto the loader name so the pointwise lift indexes it per cell."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.O3_inflow",
+            "to": "Advection.O3_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for O3 (spec 11.5 'BCs from data'): BoundaryConditions.O3_inflow feeds the Dirichlet ghost read by grad_lon_inflow."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.NO_inflow",
+            "to": "Advection.NO_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for NO (spec 11.5 'BCs from data')."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.NO2_inflow",
+            "to": "Advection.NO2_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for NO2 (spec 11.5 'BCs from data')."
         }
     ],
     "data_loaders": {
