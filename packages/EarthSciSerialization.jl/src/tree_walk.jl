@@ -960,6 +960,110 @@ function _wrap_bounded_const(arr::Array{Float64,N}, boundary, name::AbstractStri
     return BoundedConstArray{N}(arr, NTuple{N,Symbol}(syms))
 end
 
+# ---- Spatial-operator zeroing for a structurally-non-spatial field ----------
+# The tree-walk path is fed AST whose spatial differential operators have already
+# been rewritten into stencil `arrayop`s (the ESD lowering, esm-spec §i7b): a raw
+# `grad`/`div`/`laplacian` reaching the compiler is a pipeline violation and hard-
+# errors. There is one CORRECT exception: the derivative of a field along a
+# coordinate direction it does not vary over is identically zero. A 0-D scalar
+# (`grad(T,x)` with `T` scalar) and a field arrayed over a NON-spatial index set
+# (`grad(SST,x)` with `SST` shaped `[ocean_cells]`) both have no `x` axis, so the
+# spatial derivative vanishes — this is the ESD rule for a structurally-0-D field,
+# not a stub. A field that DOES carry the differentiated axis is left untouched so
+# a genuinely un-discretized PDE still surfaces the pipeline-violation error.
+
+# The union of declared shape axes of every variable referenced in `expr` — the
+# coordinate directions the sub-expression can actually vary over.
+function _spatial_axes_referenced!(axes::Set{String}, expr::Expr,
+                                   var_shapes::Dict{String,Vector{String}})
+    if expr isa VarExpr
+        sh = get(var_shapes, expr.name, nothing)
+        sh === nothing || union!(axes, sh)
+    elseif expr isa OpExpr
+        for a in expr.args
+            _spatial_axes_referenced!(axes, a, var_shapes)
+        end
+        expr.expr_body === nothing || _spatial_axes_referenced!(axes, expr.expr_body, var_shapes)
+        expr.filter === nothing || _spatial_axes_referenced!(axes, expr.filter, var_shapes)
+    end
+    return axes
+end
+
+# Rewrite every `grad`/`div`/`laplacian` node whose operand carries no axis for the
+# differentiated dimension into a literal `0.0`; recurse elsewhere. `grad`/`div`
+# carry a `dim`; `laplacian` (no single `dim`) is zero exactly when its operand is
+# structurally scalar (no array axis at all).
+function _zero_nonspatial_derivs(expr::Expr, var_shapes::Dict{String,Vector{String}})::Expr
+    if expr isa OpExpr
+        if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
+            axes = _spatial_axes_referenced!(Set{String}(), expr, var_shapes)
+            is_zero = if expr.op == "laplacian"
+                isempty(axes)
+            elseif expr.dim !== nothing
+                !(String(expr.dim) in axes)
+            else
+                isempty(axes)
+            end
+            is_zero && return NumExpr(0.0)
+        end
+        new_args = Expr[_zero_nonspatial_derivs(a, var_shapes) for a in expr.args]
+        new_body = expr.expr_body === nothing ? nothing :
+                   _zero_nonspatial_derivs(expr.expr_body, var_shapes)
+        new_filter = expr.filter === nothing ? nothing :
+                     _zero_nonspatial_derivs(expr.filter, var_shapes)
+        return reconstruct(expr; args=new_args, expr_body=new_body, filter=new_filter)
+    end
+    return expr
+end
+
+# ---- Whole-array declared-shape derivative lift -------------------------------
+# A declared array-shaped state may be integrated by a WHOLE-ARRAY equation
+# `D(SST) = <array-valued rhs>` (bare `VarExpr` LHS, no per-cell `index`). The
+# tree-walk's derivative partition only recognises `D(scalar)`, `D(index(var,k))`,
+# and `arrayop(D(index(var,…)))`, so lift the whole-array form into the `arrayop`
+# per-cell form the machinery already consumes: loop over the state's declared
+# shape index set(s), gathering every array operand of the rhs per cell (a genuine
+# scalar / reduction leaf is left as-is by `_index_array_leaves`). This also lets
+# `_discover_array_cells` enumerate the state's cells from the lifted `arrayop`
+# ranges — a declared array state with a broadcast `ic` and no per-cell equation
+# otherwise resolves to no cells.
+function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
+        var_shapes::Dict{String,Vector{String}}, arrayvars::Set{String},
+        index_sets::AbstractDict)
+    any(eq -> eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D" &&
+              length((eq.lhs::OpExpr).args) == 1 &&
+              (eq.lhs::OpExpr).args[1] isa VarExpr &&
+              (eq.lhs::OpExpr).args[1].name in arrayvars, eqs) || return eqs
+    out = Equation[]
+    for eq in eqs
+        lhs = eq.lhs
+        if lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1 &&
+           lhs.args[1] isa VarExpr && (lhs.args[1]::VarExpr).name in arrayvars
+            vname = (lhs.args[1]::VarExpr).name
+            shape = var_shapes[vname]
+            loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
+            ranges = Dict{String,Any}()
+            for i in eachindex(shape)
+                ranges[loops[i]] = haskey(index_sets, shape[i]) ?
+                    IndexSetRef(shape[i]) : IndexSetRef(shape[i])
+            end
+            idx_args = Expr[VarExpr(vname)]
+            for l in loops
+                push!(idx_args, VarExpr(l))
+            end
+            lhs_body = OpExpr("D", Expr[OpExpr("index", idx_args)]; wrt=lhs.wrt)
+            new_lhs = OpExpr("arrayop", Expr[];
+                             output_idx=Any[l for l in loops], ranges=ranges,
+                             expr_body=lhs_body)
+            new_rhs = _index_array_leaves(eq.rhs, arrayvars, loops)
+            push!(out, Equation(new_lhs, new_rhs; _comment=eq._comment))
+        else
+            push!(out, eq)
+        end
+    end
+    return out
+end
+
 function _build_evaluator_impl(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
                          parameter_overrides::AbstractDict=Dict{String,Float64}(),
@@ -1028,6 +1132,23 @@ function _build_evaluator_impl(model::Model;
             push!(synth, Equation(VarExpr(name), v.expression))
         end
         isempty(synth) || (_model_equations = vcat(model.equations, synth))
+    end
+    # ---- Whole-array declared-shape derivative lift ----
+    # A WHOLE-ARRAY `D(state) = <array rhs>` over a declared shape is lifted into
+    # the per-cell `arrayop` form the derivative partition consumes (see
+    # `_lift_wholearray_deriv_equations`). Spatial-operator zeroing over a
+    # structurally-0-D field is done EARLIER, at the flatten→document boundary
+    # (`flattened_to_esm`), so a raw `grad`/`div`/`laplacian` reaching the compiler
+    # directly (a hand-built Model, never discretized) still hard-errors as the
+    # pipeline-violation guard requires. No-op for a model without a whole-array D.
+    let _var_shapes = Dict{String,Vector{String}}()
+        for (n, v) in model.variables
+            v.shape === nothing && continue
+            _var_shapes[n] = String[String(s) for s in v.shape]
+        end
+        _arrayvars = Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
+        _model_equations = _lift_wholearray_deriv_equations(_model_equations,
+                _var_shapes, _arrayvars, index_sets)
     end
     # The FUSED `polygon_intersection_area` leaf (§8.6.1) triggers the SAME
     # setup-geometry machinery as `intersect_polygon`: an array observed whose
@@ -1372,6 +1493,37 @@ function _build_evaluator_impl(model::Model;
     # array_cells: var_name → sorted list of index-tuples (1-based)
     array_cells = _discover_array_cells(equations, initial_conditions,
                                         array_var_names)
+
+    # A declared array STATE may carry only an `ic` and NO per-cell / whole-array
+    # `D` equation (a constant field held at its initial value, e.g. an ocean
+    # current pinned to 0). Such a state appears in no equation LHS and no per-cell
+    # ic key, so `_discover_array_cells` finds no cells for it — yet it needs one
+    # u0 slot per cell. Enumerate its cells from the declared shape's index-set
+    # extents (interval size / categorical cardinality / derived-set extent), the
+    # same registry the range machinery resolves. No-op for a state whose cells the
+    # equations already pin.
+    for (n, v) in model.variables
+        (v.type == StateVariable && _is_array_shape(v.shape) && !(n in _vi_vars)) || continue
+        (haskey(array_cells, n) && !isempty(array_cells[n])) && continue
+        exts = Int[]
+        ok = true
+        for s in v.shape
+            ss = String(s)
+            e = if haskey(index_sets, ss)
+                is = index_sets[ss]
+                is.kind == "interval" ? is.size :
+                is.kind == "categorical" ? (is.members === nothing ? nothing : length(is.members)) :
+                get(_derived_extents, ss, nothing)
+            else
+                get(_derived_extents, ss, nothing)
+            end
+            e === nothing && (ok = false; break)
+            push!(exts, Int(e))
+        end
+        ok || continue
+        cells = Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))]
+        array_cells[n] = sort!(cells)
+    end
 
     # Scalar state variables: all state vars not treated as arrays.
     for name in state_var_names

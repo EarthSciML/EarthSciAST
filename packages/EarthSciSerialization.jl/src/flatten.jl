@@ -385,6 +385,31 @@ function _namespace_ranges(ranges, prefix::String, local_names::Set{String},
     return out
 end
 
+# Namespace a value-equality `join`'s key-column names (RFC §5.3). A join column
+# may name a value-invention MAP buffer that IS a component-local variable — the
+# conservative regridder's `join.on [[rg_src_bin, rg_tgt_bin]]` gates on the
+# per-cell bin buffers, which are ordinary local `state` variables. Like any
+# other local reference these must be rewritten to `<prefix>.<name>` so they
+# resolve against the namespaced buffer keys after merge (the join resolver and
+# the value-invention front-door key their maps by the namespaced LHS). A column
+# naming a range symbol / index-set member is not a local variable and passes
+# through unchanged — the SAME rule `namespace_expr` applies to a `VarExpr`.
+function _namespace_join(join, prefix::String, local_names::Set{String})
+    join === nothing && return nothing
+    nsname(n) = begin
+        s = String(n)
+        if occursin('.', s)
+            String(split(s, '.')[1]) in local_names ? "$(prefix).$(s)" : s
+        elseif s in local_names
+            "$(prefix).$(s)"
+        else
+            s
+        end
+    end
+    return Any[Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause]
+               for clause in join]
+end
+
 function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
                         idx_names::Set{String}=Set{String}())::EarthSciSerialization.Expr
     ns(x) = x === nothing ? nothing : namespace_expr(x, prefix, local_names, idx_names)
@@ -409,6 +434,9 @@ function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
     # byte-identical to before.
     new_id = (expr.id !== nothing && expr.id in idx_names) ? "$(prefix).$(expr.id)" : expr.id
     new_ranges = _namespace_ranges(expr.ranges, prefix, local_names, idx_names)
+    # A `join.on` key column may name a component-local variable (the regridder's
+    # bin buffers), so namespace it alongside the other variable-bearing fields.
+    new_join = _namespace_join(expr.join, prefix, local_names)
     return reconstruct(expr;
         args=new_args,
         expr_body=ns(expr.expr_body),
@@ -418,7 +446,9 @@ function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
         values=new_values,
         table_axes=new_table_axes,
         id=new_id,
-        ranges=new_ranges)
+        ranges=new_ranges,
+        join=new_join,
+        key=ns(expr.key))
 end
 
 """
@@ -549,6 +579,23 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # (v0.8.0): their plain names are shared across components, so the shape
         # passes through unchanged (empty `idx_names` → no-op).
         v = _namespace_var_shape(var, prefix, idx_names)
+        # Namespace the defining `expression` body too, consistent with the
+        # namespaced key/shape and the synthesized observed equation below.
+        # `_namespace_var_shape` copies `expression` verbatim, so an observed's
+        # array-aggregate / const body otherwise keeps UNQUALIFIED intra-model
+        # references (e.g. an aggregate body `index(rg_src_poly, …)`) even though
+        # its own key became `<prefix>.rg_src_lon`. The geometry / value-invention
+        # front-door (RFC §6.1 / §8.6.1) reads this `expression` DIRECTLY (see
+        # `flattened_to_esm`), so an unqualified ref can no longer resolve against
+        # the prefixed variable keys — rewrite it here so the flattened observed
+        # is self-consistent with its key, shape, and equation form.
+        if v.expression !== nothing
+            v = ModelVariable(v.type; default=v.default, units=v.units,
+                default_units=v.default_units, description=v.description,
+                expression=namespace_expr(v.expression, prefix, local_names, idx_names),
+                shape=v.shape, location=v.location,
+                noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+        end
         if v.type == StateVariable
             states[namespaced] = v
         elseif v.type == ParameterVariable
@@ -1524,18 +1571,45 @@ function flattened_to_esm(flat::FlattenedSystem;
                           name::AbstractString="Flattened",
                           esm_version::AbstractString="0.5.0")::Dict{String,Any}
     sname = String(name)
+    # ---- Spatial-operator zeroing at the flatten→document boundary ----
+    # A `grad`/`div`/`laplacian` over a structurally-0-D field — a scalar, or a
+    # state arrayed over a NON-spatial index set (no axis for the differentiated
+    # dimension) — does not vary along that axis, so its spatial derivative is
+    # identically 0. Rewrite it here, at the lowering boundary into a runnable
+    # tree-walk document, BEFORE the compiler (which by the pipeline-violation
+    # contract hard-errors on any raw spatial operator that survives): a field
+    # that DOES carry the differentiated axis is left untouched, so a genuinely
+    # un-discretized PDE still surfaces the violation. `flattened_to_esm` feeds
+    # only the simulate / tree-walk path (never MTK, never a hand-built `Model`),
+    # so this ESD rule is scoped to exactly that lowering.
+    _vshapes = Dict{String,Vector{String}}()
+    for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
+        for (k, v) in partition
+            v.shape === nothing && continue
+            _vshapes[k] = String[String(s) for s in v.shape]
+        end
+    end
+
     variables = Dict{String,Any}()
     # Order: states, parameters, observeds. A later partition never re-keys an
     # earlier one (flatten guarantees disjoint names), so merge is unambiguous.
     for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in partition
-            variables[k] = serialize_model_variable(v)
+            vv = v.expression === nothing ? v :
+                ModelVariable(v.type; default=v.default, units=v.units,
+                    default_units=v.default_units, description=v.description,
+                    expression=_zero_nonspatial_derivs(v.expression, _vshapes),
+                    shape=v.shape, location=v.location,
+                    noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+            variables[k] = serialize_model_variable(vv)
         end
     end
 
     model = Dict{String,Any}(
         "variables" => variables,
-        "equations" => Any[serialize_equation(eq) for eq in flat.equations],
+        "equations" => Any[serialize_equation(Equation(eq.lhs,
+                            _zero_nonspatial_derivs(eq.rhs, _vshapes); _comment=eq._comment))
+                           for eq in flat.equations],
     )
 
     doc = Dict{String,Any}(

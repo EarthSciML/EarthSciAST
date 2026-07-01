@@ -161,6 +161,15 @@ function serialize_expression(expr::Expr)
         if expr.manifold !== nothing
             result["manifold"] = expr.manifold
         end
+        # Value-invention producer vocabulary (RFC §5.5 / §6.1): the `distinct`
+        # set-former flag and the emitted `key` expression. Emitted only when
+        # present so non-producer nodes round-trip byte-identically.
+        if expr.distinct !== nothing
+            result["distinct"] = expr.distinct
+        end
+        if expr.key !== nothing
+            result["key"] = serialize_expression(expr.key)
+        end
         return result
     else
         throw(ArgumentError("Unknown expression type: $(typeof(expr))"))

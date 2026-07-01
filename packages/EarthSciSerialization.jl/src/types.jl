@@ -164,6 +164,19 @@ struct OpExpr <: Expr
     id::Union{String,Nothing}
     manifold::Union{String,Nothing}
 
+    # ── Value-invention aggregate vocabulary (RFC §5.5 / §6.1) ──
+    # `distinct` — an index-set-PRODUCING aggregate (a `distinct:true` relational
+    #              set former); its emitted `key`s are deduplicated in §5.5.1 sorted
+    #              order to materialise a derived index set (matched by `from_faq`).
+    # `key`       — the skolem/tuple KEY expression the producer emits per surviving
+    #              index combination (`{op:skolem, args:[…]}`). Both live ONLY in the
+    #              raw value-invention front-door (they are read off the raw JSON),
+    #              but MUST survive the typed-IR round-trip so a flattened multi-model
+    #              document's producer is still recognised (else the derived set is
+    #              never sized and the producer's ODE equation is not dropped).
+    distinct::Union{Bool,Nothing}
+    key::Union{Expr,Nothing}
+
     OpExpr(op::String, args::Vector{Expr};
            wrt=nothing, dim=nothing,
            int_var=nothing, lower=nothing, upper=nothing,
@@ -175,6 +188,7 @@ struct OpExpr <: Expr
            table=nothing, table_axes=nothing, output=nothing,
            join=nothing, filter=nothing, join_gates=nothing,
            id=nothing, manifold=nothing,
+           distinct=nothing, key=nothing,
            # `handler_id` was the v0.2.x field for the now-removed `call`
            # op (esm-spec §9.2 closure). Accept and ignore on construction
            # so internal helpers that still pass it through don't break
@@ -184,7 +198,7 @@ struct OpExpr <: Expr
             semiring, ranges,
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
-            id, manifold)
+            id, manifold, distinct, key)
 end
 
 # Accept any AbstractVector of Expr-subtypes (e.g. Vector{VarExpr},
@@ -240,7 +254,8 @@ function reconstruct(e::OpExpr;
         perm = e.perm, axis = e.axis, fn = e.fn, name = e.name, value = e.value,
         table = e.table, table_axes = e.table_axes, output = e.output,
         join = e.join, filter = e.filter, join_gates = e.join_gates,
-        id = e.id, manifold = e.manifold)
+        id = e.id, manifold = e.manifold,
+        distinct = e.distinct, key = e.key)
     return OpExpr(op, args;
         wrt=wrt, dim=dim, int_var=int_var, lower=lower, upper=upper,
         output_idx=output_idx, expr_body=expr_body, reduce=reduce,
@@ -248,7 +263,7 @@ function reconstruct(e::OpExpr;
         shape=shape, perm=perm, axis=axis, fn=fn, name=name, value=value,
         table=table, table_axes=table_axes, output=output,
         join=join, filter=filter, join_gates=join_gates,
-        id=id, manifold=manifold)
+        id=id, manifold=manifold, distinct=distinct, key=key)
 end
 
 # ========================================

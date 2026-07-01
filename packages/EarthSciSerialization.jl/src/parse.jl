@@ -208,6 +208,16 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
                          "(planar / spherical / geodesic); it carries no default"))
     end
 
+    # Value-invention producer vocabulary (RFC §5.5 / §6.1): the `distinct` set-
+    # former flag and the emitted `key` (a skolem/tuple KEY expression). Preserved
+    # through the typed IR so a flattened document's producer is still recognised.
+    kdistinct = kop isa Symbol ? :distinct : "distinct"
+    kkey = kop isa Symbol ? :key : "key"
+    distinct_raw = get(data, kdistinct, nothing)
+    distinct_val = distinct_raw === nothing ? nothing : Bool(distinct_raw)
+    key_raw = get(data, kkey, nothing)
+    key_expr = key_raw === nothing ? nothing : parse_expression(key_raw)
+
     return OpExpr(op, args;
         wrt=(wrt === nothing ? nothing : string(wrt)),
         dim=(dim === nothing ? nothing : string(dim)),
@@ -219,7 +229,8 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
         name=name_str, value=value_native,
         table=table_str, table_axes=table_axes_dict, output=output_native,
         join=join_clauses, filter=filter_expr,
-        id=id_str, manifold=manifold_str)
+        id=id_str, manifold=manifold_str,
+        distinct=distinct_val, key=key_expr)
 end
 
 function _coerce_output_idx(data)
