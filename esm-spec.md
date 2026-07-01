@@ -224,7 +224,8 @@ These accompany `aggregate` in Functional Aggregate Query expressions (RFC semir
 | `skolem` | — | Mint a canonical value (a tuple, not a hash) identifying a relation instance — e.g. an undirected edge sorts its endpoints to `(min, max)`; dense IDs then come from `rank`. Build-time value invention. See RFC semiring-faq-unified-ir §5.7. |
 | `rank` | — | Assign a dense 0-based ID to each element by its position in the sorted `distinct` sequence of the input. Build-time. See RFC §5.7. |
 | `argmin`, `argmax` | `output_idx`, `expr`, `arg` | Index-returning reductions: the index at which the aggregated body attains its minimum / maximum over the contracted index set. |
-| `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells, composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
+| `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells (a ring of data-dependent length), composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
+| `polygon_intersection_area` | `manifold` | Geometry kernel leaf returning the **scalar** overlap area of two cells — the fused `polygon_area ∘ intersect_polygon`. Exposes no ragged clip ring, so a per-pair overlap-area factor `A_ij = polygon_intersection_area(src_i, tgt_j)` is a dense, evaluable `aggregate` (§8.6.1). |
 | `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
 
 ### 4.3 Array / Tensor Semantics
@@ -1691,18 +1692,67 @@ semiring-faq-unified-ir §A.8) — a regridding coupling is just an `aggregate`
 expression over the source field and the (FAQ-constructed or loaded) overlap
 weights. The kernels map cleanly:
 
-- **conservative** (area-weighted, mass-conserving): `A_ij = area(src_i ∩ tgt_j)`
-  via the `intersect_polygon` kernel leaf + a `polygon_area` `sum_product` FAQ,
-  then a `sum_product` apply normalized by a group-by row-sum.
+- **conservative** (area-weighted, mass-conserving): the per-pair overlap area
+  `A_ij = area(src_i ∩ tgt_j)`, then a `sum_product` apply normalized by a
+  group-by row-sum. `A_ij` has two spellings (§8.6.1): the explicit
+  `polygon_area` `sum_product` FAQ over the `intersect_polygon` clip ring, or the
+  fused `polygon_intersection_area` scalar leaf (the densely-evaluable form).
 - **B-spline / bilinear** (interpolating): a `sum_product` over an interpolation
   stencil whose weights are an ordinary FAQ of the source coordinates.
 - **cell-averaging** (scattered points → cells): a bin/`skolem` spatial join
   followed by a `sum_product` mean, with a `missing_value` fill expressed as an
   `ifelse` over the per-cell contributor count.
 
-None of this needs schema support beyond `aggregate` (and the `intersect_polygon`
-leaf): a regridding rule is a normal coupling expression, authored inline or
-referenced as an ESD subsystem.
+None of this needs schema support beyond `aggregate` and the geometry leaves
+(`intersect_polygon`, `polygon_intersection_area`): a regridding rule is a normal
+coupling expression, authored inline or referenced as an ESD subsystem.
+
+#### 8.6.1 Evaluating the overlap weights: the `polygon_intersection_area` leaf
+
+A conservative regrid has two phases. The **broad phase** finds which
+`(src_i, tgt_j)` pairs can overlap — a bin/`skolem` spatial join
+(`floor(coord/dx)` → `skolem` bin key → `distinct` → `join.on` shared bin) that
+produces a sparse `candidate_pairs` index set. This phase is required in
+production: it keeps the regrid `O(#overlaps)` rather than `O(N_src·N_tgt)`. It
+is **build-time value invention** (`skolem`/`distinct`/`rank`), run once when the
+regridder is constructed.
+
+The **narrow phase** computes the overlap area of each candidate pair. Written
+with the general `intersect_polygon` leaf, the clip returns an intersection ring
+whose vertex count is **data-dependent** — a `derived` (`from_faq`) index set of
+per-pair-varying length — and `polygon_area` is an ordinary `sum_product` FAQ
+over that ring. Because the ring extent is ragged and differs per pair, the
+*full-mesh* narrow phase in that form is **not a dense tensor contraction**: it
+is declared structurally but cannot be walked by the dense evaluator (only a
+single fixed-extent clip can). This is the status the worked fixture
+`conservative_regrid_overlap_join.esm` documents.
+
+The `polygon_intersection_area` leaf removes that obstacle. It is the **fused,
+opaque** form of `polygon_area ∘ intersect_polygon`: it takes the two operand
+polygons plus a required `manifold` and returns the **scalar** overlap area
+directly, hiding the clip ring inside the kernel (never surfacing it as an index
+set). Its value is defined to equal `polygon_area(intersect_polygon(a, b))` at
+the same manifold and tolerance, so cross-binding agreement is inherited from its
+two constituent kernels — exactly the `interp.linear` / `interp.bilinear`
+fused-leaf pattern of §9.2 (a named opaque op standing in for an AST composition
+whose intermediate is problematic, here ragged rather than merely verbose). With
+it, the narrow phase over the candidate set is an ordinary **dense** `aggregate`:
+
+```
+A_ij[i, j] = polygon_intersection_area(src_poly_i, tgt_poly_j)     // over candidate_pairs
+```
+
+carrying no ragged intermediate. The whole regrid — build-time candidate set,
+dense narrow-phase `A_ij`, group-by row-sum `A_j`, and the `sum_product` apply
+`F_tgt[j] = Σ_i (A_ij / A_j)·F_src[i]` — is then evaluable end to end, with only
+the candidate-set construction living in the build-time value-invention layer.
+
+Keep both leaves: `intersect_polygon` when the overlap **geometry** itself is
+needed (a centroid, a higher moment, or the ring fed onward), and
+`polygon_intersection_area` for the dominant area-weight case, where only the
+scalar area matters. `polygon_intersection_area` carries the same required
+`manifold` field and the same tolerance-based conformance contract as
+`intersect_polygon` (CONFORMANCE_SPEC §5.8.4).
 
 ### 8.7 Out of scope
 
