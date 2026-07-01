@@ -43,7 +43,9 @@ use crate::aggregate::{
 use crate::flatten::FlattenedSystem;
 use crate::simulate::{CompileError, SimulateError, SimulateOptions, SolutionMetadata};
 use crate::simulate::{SimulateOptions as _SimOpts, Solution, SolverChoice};
-use crate::types::{EsmFile, Expr, ExpressionNode, Model, ModelVariable, RangeSpec, VariableType};
+use crate::types::{
+    EsmFile, Expr, ExpressionNode, IndexSet, Model, ModelVariable, RangeSpec, VariableType,
+};
 use indexmap::IndexMap;
 use ndarray::{ArrayD, ArrayViewD, IxDyn, Slice};
 use smallvec::SmallVec;
@@ -607,7 +609,10 @@ impl ArrayCompiled {
             });
         }
         let (_model_name, model) = models.iter().next().unwrap();
-        Self::from_model(model)
+        // v0.8.0: `index_sets` is document-scoped (one registry shared by all
+        // models), so source it from the file rather than the model.
+        let index_sets = file.index_sets.clone().unwrap_or_default();
+        Self::from_model(model, &index_sets)
     }
 
     /// Build from a [`FlattenedSystem`] — the array-runtime analogue of the
@@ -686,7 +691,6 @@ impl ArrayCompiled {
         // registry and work here.
         let model = Model {
             name: None,
-            index_sets: None,
             coupletype: None,
             reference: None,
             variables,
@@ -701,10 +705,21 @@ impl ArrayCompiled {
             guesses: None,
             system_kind: None,
         };
-        Self::from_model(&model)
+        // Flatten does not carry the document `index_sets` registry today (see
+        // note above), so resolve against an empty registry: dense `[lo, hi]`
+        // ranges — what discretized stencils emit — need no registry.
+        Self::from_model(&model, &HashMap::new())
     }
 
-    pub fn from_model(model: &Model) -> Result<Self, CompileError> {
+    /// Build from a single [`Model`] and the document-scoped `index_sets`
+    /// registry (RFC semiring-faq-unified-ir §5.2, v0.8.0). The registry lives
+    /// on the top-level document and is shared by all models, so it is passed in
+    /// explicitly; pass an empty map for a model with no `{ "from": <set> }`
+    /// range references.
+    pub fn from_model(
+        model: &Model,
+        index_sets: &HashMap<String, IndexSet>,
+    ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
         // before any shape inference or rule building. Operates on an owned
@@ -719,11 +734,11 @@ impl ArrayCompiled {
         // loop symbols is the data-derived value-equality case and is lowered
         // into a member-equality `filter` over the contraction; a join over a
         // genuine (non-loop) data column is rejected rather than mis-combined.
-        crate::join::resolve_aggregate_joins(&mut model_owned)?;
+        crate::join::resolve_aggregate_joins(&mut model_owned, index_sets)?;
         // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
-        resolve_aggregate_ranges(&mut model_owned)?;
+        resolve_aggregate_ranges(&mut model_owned, index_sets)?;
         let model = &model_owned;
 
         // (0) Reject spatial differential operators anywhere in the model's

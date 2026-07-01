@@ -185,10 +185,11 @@ def test_undeclared_from_name_rejected_by_resolver() -> None:
     load(path)
 
     # The build-time resolver rejects the undeclared `{from}`, naming it.
+    # index_sets is document-scoped (v0.8.0): thread the top-level registry in.
     raw = json.loads(path.read_text())
     model_name, model = next(iter(raw["models"].items()))
     with pytest.raises(ReferenceResolutionError) as exc:
-        build_reference_graph(model, model_name)
+        build_reference_graph(model, model_name, index_sets=raw.get("index_sets"))
     assert exc.value.code == E_REF_UNDECLARED_INDEX_SET
     assert "ghost_cells" in str(exc.value)
 

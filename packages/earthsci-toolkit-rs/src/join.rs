@@ -283,27 +283,31 @@ fn num_to_json(v: f64) -> Value {
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
 /// an owned model **before** [`crate::aggregate::resolve_aggregate_ranges`], so
 /// each aggregate range still carries its `{ "from": <index set> }` linkage and
-/// the join key columns' member values can be read.
+/// the join key columns' member values can be read. Since v0.8.0 the
+/// `index_sets` registry is document-scoped (one registry shared by all
+/// models), so it is threaded in explicitly rather than read off the `Model`.
 ///
 /// Each `[left, right]` key pair is classified (see the module docs): a pair
 /// resolving to one loop symbol is a positional no-op, a pair over two distinct
 /// loop symbols is lowered into a member-value-equality `filter`, and a pair
 /// whose `left` names no loop symbol is an unsupported data-column join.
-pub fn resolve_aggregate_joins(model: &mut Model) -> Result<(), CompileError> {
-    let index_sets = model.index_sets.clone().unwrap_or_default();
+pub fn resolve_aggregate_joins(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
     for eq in &mut model.equations {
-        lower_expr_joins(&mut eq.lhs, &index_sets)?;
-        lower_expr_joins(&mut eq.rhs, &index_sets)?;
+        lower_expr_joins(&mut eq.lhs, index_sets)?;
+        lower_expr_joins(&mut eq.rhs, index_sets)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            lower_expr_joins(&mut eq.lhs, &index_sets)?;
-            lower_expr_joins(&mut eq.rhs, &index_sets)?;
+            lower_expr_joins(&mut eq.lhs, index_sets)?;
+            lower_expr_joins(&mut eq.rhs, index_sets)?;
         }
     }
     for var in model.variables.values_mut() {
         if let Some(expr) = &mut var.expression {
-            lower_expr_joins(expr, &index_sets)?;
+            lower_expr_joins(expr, index_sets)?;
         }
     }
     Ok(())
@@ -504,7 +508,7 @@ fn key_column(
                 CompileError::InterpreterBuildError {
                     details: format!(
                         "join key '{sym}' references index set '{from}', which is not declared \
-                             in the model `index_sets` registry (RFC semiring-faq-unified-ir §5.3)"
+                             in the document `index_sets` registry (RFC semiring-faq-unified-ir §5.3)"
                     ),
                 }
             })?;

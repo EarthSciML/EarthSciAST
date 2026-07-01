@@ -30,7 +30,6 @@ fn test_undefined_variable_in_model() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,
@@ -137,7 +136,6 @@ fn test_equation_count_mismatch() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,
@@ -364,7 +362,6 @@ fn test_valid_file_passes() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,

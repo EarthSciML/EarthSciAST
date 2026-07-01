@@ -146,8 +146,9 @@ class ModelVariable:
     default_units: Optional[str] = None
     description: Optional[str] = None
     expression: Optional[Expr] = None
-    # Arrayed-variable shape: ordered dimension names from the enclosing
-    # model's domain.spatial. None means scalar. See discretization RFC §10.2.
+    # Arrayed-variable shape: ordered index-set names drawn from the
+    # document-scoped ``index_sets`` registry (RFC semiring-faq-unified-ir §5.2).
+    # None means scalar.
     shape: Optional[List[str]] = None
     # Staggered-grid location tag (e.g. "cell_center", "edge_normal",
     # "vertex"). None means no explicit staggering. See RFC §10.2.
@@ -183,11 +184,6 @@ class Model:
     guesses: Dict[str, Union[float, 'Expr']] = field(default_factory=dict)
     # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
     system_kind: Optional[str] = None
-    # Document-scoped registry of named index sets (RFC semiring-faq-unified-ir
-    # §5.2), keyed by name. Each entry is an IndexSet dict: interval / categorical
-    # / derived / ragged. Referenced from arrayop / aggregate range specs of the
-    # form {"from": <name>}. Empty ⇒ resolution falls back to domain.spatial.
-    index_sets: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -736,6 +732,13 @@ class EsmFile:
     # variables is expressed via their ``shape``; there is one domain per file,
     # not a map of named domains.
     domain: Optional[Domain] = None
+    # Document-scoped registry of named index sets (RFC semiring-faq-unified-ir
+    # §5.2), keyed by name — the single, document-level declaration site for
+    # every iteration domain shared by all models in the file. Each entry is an
+    # IndexSet dict: interval / categorical / derived / ragged. Referenced from
+    # aggregate range specs of the form {"from": <name>} and from variable
+    # ``shape`` lists. Moved here from ``Model`` in v0.8.0.
+    index_sets: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def esm(self) -> str:

@@ -270,8 +270,19 @@ def _is_node(value) -> bool:
     return isinstance(value, dict) and "op" in value
 
 
-def build_reference_graph(model: dict, model_name: str = "") -> ReferenceGraph:
+def build_reference_graph(
+    model: dict,
+    model_name: str = "",
+    index_sets: Optional[dict] = None,
+) -> ReferenceGraph:
     """Resolve the reference edges of one ``model`` dict into a graph.
+
+    ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
+    as of v0.8.0 lives at the top level of the document rather than on each
+    model. :func:`resolve_references` threads the document registry in for every
+    model. When ``index_sets`` is omitted (a direct caller passing a raw model
+    dict), it falls back to a ``model["index_sets"]`` key for backward
+    compatibility.
 
     Raises :class:`ReferenceResolutionError` on a duplicate node id, an
     undeclared ``ranges[*].from`` index set, a ``from_faq`` naming no node, or
@@ -281,8 +292,11 @@ def build_reference_graph(model: dict, model_name: str = "") -> ReferenceGraph:
     """
     graph = ReferenceGraph(model=model_name)
 
-    # Pass 1 — register declared index sets as vertices.
-    index_sets = model.get("index_sets") or {}
+    # Pass 1 — register declared index sets as vertices. Prefer the
+    # document-scoped registry; fall back to a model-local ``index_sets`` key
+    # only when no registry was supplied (direct raw-model callers).
+    if index_sets is None:
+        index_sets = model.get("index_sets") or {}
     if not isinstance(index_sets, dict):
         index_sets = {}
     for name in index_sets:
@@ -433,10 +447,15 @@ def resolve_references(document: dict) -> Dict[str, ReferenceGraph]:
     models = document.get("models") or {}
     if not isinstance(models, dict):
         return out
+    # The index-set registry is document-scoped (v0.8.0): read it once from the
+    # top level and thread it into every model's graph.
+    doc_index_sets = document.get("index_sets") or {}
+    if not isinstance(doc_index_sets, dict):
+        doc_index_sets = {}
     for model_name, model in models.items():
         if not isinstance(model, dict):
             continue
-        graph = build_reference_graph(model, model_name)
+        graph = build_reference_graph(model, model_name, index_sets=doc_index_sets)
         cyc = graph.detect_cycle()
         if cyc is not None:
             raise ReferenceResolutionError(

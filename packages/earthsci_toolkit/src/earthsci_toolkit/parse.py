@@ -579,11 +579,6 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
         model.guesses = guesses
     if "system_kind" in model_data and model_data["system_kind"] is not None:
         model.system_kind = model_data["system_kind"]
-    # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2).
-    # Carried through verbatim as IndexSet dicts; the schema validates shape and
-    # the arrayop / aggregate evaluator resolves {"from": <name>} references.
-    if "index_sets" in model_data and model_data["index_sets"] is not None:
-        model.index_sets = dict(model_data["index_sets"])
 
     return model
 
@@ -1076,6 +1071,15 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
         domain = _parse_domain(data["domain"])
         _validate_domain(domain)
 
+    # Parse the document-scoped index-set registry (RFC semiring-faq-unified-ir
+    # §5.2). As of v0.8.0 this is a single, top-level registry shared by every
+    # model — a sibling of ``models`` / ``domain`` — not a per-Model field.
+    # Carried through verbatim as IndexSet dicts; the schema validates shape and
+    # the aggregate evaluator resolves {"from": <name>} references.
+    index_sets: Dict[str, Any] = {}
+    if "index_sets" in data and data["index_sets"] is not None:
+        index_sets = dict(data["index_sets"])
+
     # Parse data loaders
     data_loaders: Dict[str, DataLoader] = {}
     if "data_loaders" in data:
@@ -1210,6 +1214,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
         function_tables=function_tables,
         coupling=coupling,
         domain=domain,
+        index_sets=index_sets,
     )
 
 

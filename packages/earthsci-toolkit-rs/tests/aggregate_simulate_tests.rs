@@ -24,7 +24,9 @@ use std::collections::HashMap;
 /// attribute(s) with a trailing comma (e.g. `"reduce": "+",` or
 /// `"semiring": "max_sum",`); `op` is the node tag; `body` is the scalar body
 /// JSON; `lhs_ranges`/`rhs_ranges` are the `ranges` object JSON; `index_sets`
-/// is the model registry JSON (empty string ⇒ omit it).
+/// is the document-scoped registry JSON (empty string ⇒ omit it). Since v0.8.0
+/// the registry is declared at the document top level (a sibling of `models`),
+/// not per-model.
 fn build(
     op: &str,
     var: &str,
@@ -43,8 +45,8 @@ fn build(
         r#"{{
           "esm": "0.6.0",
           "metadata": {{ "name": "aggregate_eval_test" }},
+          {index_sets_field}
           "models": {{ "M": {{
-            {index_sets_field}
             "variables": {{ "{var}": {{ "type": "state", "shape": ["i"] }} }},
             "equations": [{{
               "lhs": {{ "op": "{op}", "args": [], "output_idx": ["i"],
@@ -311,11 +313,12 @@ fn shared_valid_aggregate_fixture_parses_and_resolves() {
         .expect("fixture has a model")
         .clone();
 
-    // The `index_sets` registry deserialized into typed entries.
-    let index_sets = model
+    // The document-scoped `index_sets` registry (v0.8.0) deserialized into typed
+    // entries at the top level — a sibling of `models`, not per-model.
+    let index_sets = file
         .index_sets
         .as_ref()
-        .expect("fixture declares index_sets");
+        .expect("fixture declares top-level index_sets");
     assert_eq!(index_sets["cells"].kind, "interval");
     assert_eq!(index_sets["cells"].size, Some(5));
     assert_eq!(index_sets["county"].kind, "categorical");
@@ -323,7 +326,8 @@ fn shared_valid_aggregate_fixture_parses_and_resolves() {
     // The resolver accepts the fixture's `{from:"cells"}` references (interval
     // size 5) without error — the undeclared-from guard does not false-positive.
     let mut resolved = model;
-    resolve_aggregate_ranges(&mut resolved).expect("fixture `{from}` ranges resolve");
+    resolve_aggregate_ranges(&mut resolved, index_sets)
+        .expect("fixture `{from}` ranges resolve");
 }
 
 /// Cross-bead invalid fixture (bead ess-my4.1.6): the shared resolver-level
@@ -350,7 +354,10 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
         .expect("fixture has a model")
         .clone();
 
-    let err = resolve_aggregate_ranges(&mut model)
+    // v0.8.0: the document-scoped registry is where declarations live; this
+    // fixture declares none, so `{from:"ghost_cells"}` is undeclared.
+    let index_sets = file.index_sets.clone().unwrap_or_default();
+    let err = resolve_aggregate_ranges(&mut model, &index_sets)
         .expect_err("undeclared {from} must be rejected by the resolver");
     let msg = err.to_string();
     assert!(
@@ -374,12 +381,12 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
     let model = r#"{
       "esm": "0.6.0",
       "metadata": { "name": "ragged_dynamic_bound" },
+      "index_sets": {
+        "cells": { "kind": "interval", "size": 2 },
+        "edges_of_cell": { "kind": "ragged", "of": ["cells"],
+                           "offsets": "nedges", "values": "nedges" }
+      },
       "models": { "M": {
-        "index_sets": {
-          "cells": { "kind": "interval", "size": 2 },
-          "edges_of_cell": { "kind": "ragged", "of": ["cells"],
-                             "offsets": "nedges", "values": "nedges" }
-        },
         "variables": {
           "y": { "type": "state", "shape": ["i"] },
           "nedges": { "type": "state", "shape": ["i"] }

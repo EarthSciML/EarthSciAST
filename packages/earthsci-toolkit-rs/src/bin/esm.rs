@@ -2065,6 +2065,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut extracted_esm = earthsci_toolkit::EsmFile {
                 esm: esm_file.esm.clone(),
                 metadata: esm_file.metadata.clone(),
+                // Document-scoped registry (v0.8.0): preserve it on the
+                // extracted component so its `{ "from": <set> }` ranges resolve.
+                index_sets: esm_file.index_sets.clone(),
                 models: None,
                 reaction_systems: None,
                 data_loaders: None,

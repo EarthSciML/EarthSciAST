@@ -198,7 +198,6 @@ pub fn substitute_in_model(
 
     Model {
         name: model.name.clone(),
-        index_sets: model.index_sets.clone(),
         coupletype: model.coupletype.clone(),
         reference: model.reference.clone(),
         variables: model.variables.clone(),
@@ -493,7 +492,6 @@ pub fn substitute_in_model_with_context(
 
     Model {
         name: model.name.clone(),
-        index_sets: model.index_sets.clone(),
         coupletype: model.coupletype.clone(),
         reference: model.reference.clone(),
         variables: model.variables.clone(),
@@ -805,7 +803,6 @@ mod tests {
             Model {
                 name: Some("Atmosphere".to_string()),
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 reference: None,
@@ -887,7 +884,6 @@ mod tests {
             Model {
                 name: Some("Atmosphere".to_string()),
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 reference: None,
@@ -972,7 +968,6 @@ mod tests {
             Model {
                 name: Some("Atmosphere".to_string()),
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 reference: None,
@@ -1071,7 +1066,6 @@ mod tests {
             Model {
                 name: Some("Atmosphere".to_string()),
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 reference: None,
@@ -1255,7 +1249,6 @@ mod tests {
         let model = Model {
             name: Some("TestModel".to_string()),
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             reference: None,

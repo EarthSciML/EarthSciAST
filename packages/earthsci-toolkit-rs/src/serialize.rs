@@ -36,6 +36,7 @@ use crate::{EsmFile, error::EsmError};
 ///         dae_info: None,
 ///         discretized_from: None,
 ///     },
+///     index_sets: None,
 ///     models: None,
 ///     reaction_systems: None,
 ///     data_loaders: None,
@@ -138,7 +139,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),

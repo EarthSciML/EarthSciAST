@@ -387,7 +387,8 @@ def test_canonical_join_filter_fixture_evaluates_as_positional() -> None:
 
     ctx = _ctx(
         {"activity": np.array([10.0, 20.0]), "base_rate": np.array([3.0, 5.0])},
-        index_sets=model["index_sets"],
+        # index_sets is document-scoped (v0.8.0): read it from the top level.
+        index_sets=doc["index_sets"],
     )
     with_join = np.asarray(eval_expr(rhs, ctx))
     without_join = np.asarray(eval_expr(replace(rhs, join=None), ctx))

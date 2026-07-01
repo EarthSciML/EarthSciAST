@@ -607,16 +607,27 @@ fn output_label(eq: &Value, rhs: &Map<String, Value>) -> Option<String> {
     args.first().and_then(|v| v.as_str()).map(str::to_string)
 }
 
-/// Attach the document's top-level `data_loaders` to a model object so the
-/// loader-seeded cadence refinement (§5.7.2) can resolve a `discrete` variable's
-/// `data_ingest` source loader (DISCRETE if it has `temporal`, else CONST).
-/// Returns a clone of `model` with `data_loaders` inserted; if the document
-/// declares none — or the model already carries them — the model is unchanged.
+/// Attach the document's top-level `data_loaders` and `index_sets` to a model
+/// object so the model-scoped passes see them. The loader-seeded cadence
+/// refinement (§5.7.2) resolves a `discrete` variable's `data_ingest` source
+/// loader (DISCRETE if it has `temporal`, else CONST); the acyclic-index-set
+/// guard ([`assert_acyclic_index_sets`]) resolves derived-set `from_faq` edges.
+/// Since v0.8.0 the `index_sets` registry is document-scoped (a single registry
+/// shared by all models, a sibling of `models`), so it is merged down here.
+/// Returns a clone of `model` with the two registries inserted; a registry the
+/// document does not declare — or that the model already carries — is left
+/// unchanged.
 pub fn model_with_loaders(model: &Value, doc: &Value) -> Value {
     let mut model = model.clone();
-    if let (Value::Object(map), Some(loaders)) = (&mut model, doc.get("data_loaders")) {
-        map.entry("data_loaders".to_string())
-            .or_insert_with(|| loaders.clone());
+    if let Value::Object(map) = &mut model {
+        if let Some(loaders) = doc.get("data_loaders") {
+            map.entry("data_loaders".to_string())
+                .or_insert_with(|| loaders.clone());
+        }
+        if let Some(index_sets) = doc.get("index_sets") {
+            map.entry("index_sets".to_string())
+                .or_insert_with(|| index_sets.clone());
+        }
     }
     model
 }

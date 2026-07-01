@@ -197,9 +197,11 @@ def test_derived_range_unmaterialized_raises() -> None:
 def test_planar_fixture_clip_and_area_evaluate() -> None:
     """The shared planar fixture's actual clip + area-FAQ AST evaluates to 1.0."""
     fixture = _VALID_GEOM / "intersect_polygon_planar_area.esm"
-    model = load(str(fixture)).models["PolygonClipAreaPlanar"]
+    doc = load(str(fixture))
+    model = doc.models["PolygonClipAreaPlanar"]
     ctx = _ctx_with_polys()
-    ctx.index_sets = model.index_sets
+    # index_sets is document-scoped (v0.8.0): read it from the top-level file.
+    ctx.index_sets = doc.index_sets
 
     closed = eval_expr(model.variables["clip"].expression, ctx)
     ctx.derived_rings["clip"] = closed  # bind the observed `clip` to its ring

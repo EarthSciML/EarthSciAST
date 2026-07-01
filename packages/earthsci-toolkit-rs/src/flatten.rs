@@ -387,6 +387,7 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
             dae_info: None,
             discretized_from: None,
         },
+        index_sets: None,
         models: Some(models),
         reaction_systems: None,
         data_loaders: None,
@@ -1108,7 +1109,6 @@ mod tests {
             Model {
                 name: Some("System".to_string()),
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 reference: None,

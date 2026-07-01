@@ -14,6 +14,15 @@ pub struct EsmFile {
     /// Authorship, provenance, description
     pub metadata: Metadata,
 
+    /// Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2,
+    /// v0.8.0). A single registry shared by every model in the document; it
+    /// unifies grid dims and categorical index sets and is referenced from
+    /// `aggregate`/`arrayop` `ranges` via `{ "from": <name> }` and from
+    /// variable `shape`s. Declared once at the document top level (a sibling of
+    /// `models`/`domain`), no longer per-`Model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_sets: Option<HashMap<String, IndexSet>>,
+
     /// ODE-based model components, keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, Model>>,
@@ -628,12 +637,6 @@ pub struct Model {
     /// Human-readable model name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-
-    /// Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2).
-    /// Unifies grid dims and categorical index sets; referenced from
-    /// `aggregate`/`arrayop` `ranges` via `{ "from": <name> }`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_sets: Option<HashMap<String, IndexSet>>,
 
     /// Coupling type label
     #[serde(skip_serializing_if = "Option::is_none")]

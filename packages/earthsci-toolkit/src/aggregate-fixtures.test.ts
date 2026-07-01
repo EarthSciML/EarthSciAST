@@ -3,7 +3,7 @@
  * index_sets fixtures (bead ess-my4.1.5; RFC semiring-faq-unified-ir §5.1 /
  * §5.2). Exercises the additive schema deltas — op:"aggregate", the closed
  * `semiring` enum, `ranges` { "from": <index-set> } references, and the
- * model-level `index_sets` registry — through the TypeScript binding's
+ * document-scoped `index_sets` registry — through the TypeScript binding's
  * validate + parse/serialize path. The TS binding does no numeric evaluation,
  * so this is validation / round-trip only (the numeric cross-binding
  * equivalence is asserted by the Julia / Rust / Python evaluator suites).

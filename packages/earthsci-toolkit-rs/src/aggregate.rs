@@ -173,35 +173,38 @@ pub fn is_aggregate_op(op: &str) -> bool {
 }
 
 /// Rewrite every `{ "from": <name> }` range reference in `model` against the
-/// model `index_sets` registry (RFC §5.2). Operates in place; call once on an
-/// owned model before shape inference and rule building so every downstream
-/// consumer sees only resolved [`RangeSpec::Interval`] / [`RangeSpec::RaggedDyn`]
-/// forms (never an `IndexSetRef`).
+/// document-scoped `index_sets` registry (RFC §5.2). Since v0.8.0 the registry
+/// lives on the top-level document (one registry shared by all models), so it
+/// is threaded in explicitly rather than read off the `Model`. Operates in
+/// place; call once on an owned model before shape inference and rule building
+/// so every downstream consumer sees only resolved [`RangeSpec::Interval`] /
+/// [`RangeSpec::RaggedDyn`] forms (never an `IndexSetRef`).
 ///
 /// Interval/categorical sets resolve to static intervals; a `ragged` contracted
 /// index resolves to a [`RangeSpec::RaggedDyn`] dynamic bound. Errors on an
 /// undeclared `from` name (no implicit interval inference), a `ragged` set used
 /// as an output index or referenced without an `of` parent, and a `derived`
 /// set (resolved by the build-time relational layer, not the evaluator).
-pub fn resolve_aggregate_ranges(model: &mut Model) -> Result<(), CompileError> {
-    // Clone the registry so the equations can be mutated without aliasing
-    // `model`. An absent registry is fine: any `{from}` reference then errors
-    // as undeclared (correct), and pure-interval files resolve as no-ops.
-    let index_sets = model.index_sets.clone().unwrap_or_default();
-
+///
+/// An empty registry is fine: any `{from}` reference then errors as undeclared
+/// (correct), and pure-interval files resolve as no-ops.
+pub fn resolve_aggregate_ranges(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
     for eq in &mut model.equations {
-        resolve_expr_ranges(&mut eq.lhs, &index_sets)?;
-        resolve_expr_ranges(&mut eq.rhs, &index_sets)?;
+        resolve_expr_ranges(&mut eq.lhs, index_sets)?;
+        resolve_expr_ranges(&mut eq.rhs, index_sets)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            resolve_expr_ranges(&mut eq.lhs, &index_sets)?;
-            resolve_expr_ranges(&mut eq.rhs, &index_sets)?;
+            resolve_expr_ranges(&mut eq.lhs, index_sets)?;
+            resolve_expr_ranges(&mut eq.rhs, index_sets)?;
         }
     }
     for var in model.variables.values_mut() {
         if let Some(expr) = &mut var.expression {
-            resolve_expr_ranges(expr, &index_sets)?;
+            resolve_expr_ranges(expr, index_sets)?;
         }
     }
     Ok(())
@@ -325,7 +328,7 @@ fn resolve_index_set_ref(
         .ok_or_else(|| CompileError::InterpreterBuildError {
             details: format!(
                 "aggregate range '{idx_name}' references index set '{from}', which is not declared \
-                 in the model `index_sets` registry (no implicit interval inference; RFC \
+                 in the document `index_sets` registry (no implicit interval inference; RFC \
                  semiring-faq-unified-ir §5.2)"
             ),
         })?;

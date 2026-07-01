@@ -76,9 +76,10 @@ type ModelVariable struct {
 	Default     interface{} `json:"default,omitempty"`
 	Description *string     `json:"description,omitempty"`
 	Expression  Expression  `json:"expression,omitempty"` // for observed variables
-	// Shape lists dimension names (drawn from the enclosing model's
-	// domain.spatial) for arrayed variables. Nil means scalar.
-	// See discretization RFC §10.2.
+	// Shape lists index-set names for arrayed variables, drawn from the
+	// document-scoped `index_sets` registry (EsmFile.IndexSets). Nil means
+	// scalar. As of v0.8.0 the iteration domains named here live at document
+	// scope, not on the model. See RFC semiring-faq-unified-ir §5.2 / §6.1.
 	Shape []string `json:"shape,omitempty"`
 	// Location tags the variable's staggered-grid location
 	// (e.g., "cell_center", "edge_normal", "vertex"). Empty means
@@ -590,6 +591,31 @@ type Metadata struct {
 // 9. Main ESM File Structure
 // ========================================
 
+// IndexSet is one entry in the document-scoped `index_sets` registry
+// (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration
+// domain referenced from an `aggregate` range via { "from": <name> } and from
+// arrayed-variable `shape` lists. Exactly one of four kinds — each populating
+// its own subset of fields:
+//
+//   - "interval":    a dense [1..Size] grid axis (Size required).
+//   - "categorical": an explicit enumeration (Members required).
+//   - "derived":     materialized from an index-set-producing node named by
+//     its id (FromFAQ required).
+//   - "ragged":      a per-parent inner set backed by CSR factors (Of,
+//     Offsets, Values required).
+//
+// The Go binding is schema-only: it stores and round-trips these declarations
+// but does not resolve `{from}` references or evaluate the sets.
+type IndexSet struct {
+	Kind    string        `json:"kind"`
+	Size    *int          `json:"size,omitempty"`
+	Members []interface{} `json:"members,omitempty"`
+	FromFAQ *string       `json:"from_faq,omitempty"`
+	Of      []string      `json:"of,omitempty"`
+	Offsets *string       `json:"offsets,omitempty"`
+	Values  *string       `json:"values,omitempty"`
+}
+
 // EsmFile represents the top-level ESM file structure
 type EsmFile struct {
 	Esm             string                    `json:"esm" validate:"required"`
@@ -610,6 +636,14 @@ type EsmFile struct {
 	// v0.4.0). Each entry is a FunctionTable referenced by `table_lookup` AST
 	// op nodes via its key.
 	FunctionTables map[string]FunctionTable `json:"function_tables,omitempty"`
+	// IndexSets is the document-scoped registry of named index sets
+	// (RFC semiring-faq-unified-ir §5.2), keyed by name — the single,
+	// document-level declaration site for every iteration domain shared by all
+	// models in the document. An `aggregate` range references one by name as
+	// { "from": <name> } and arrayed-variable `shape` lists draw dimension
+	// names from it. As of v0.8.0 this moved from a per-Model field to
+	// document scope: one registry, shared by every model.
+	IndexSets map[string]IndexSet `json:"index_sets,omitempty"`
 }
 
 // FunctionTableAxis is a single named axis inside a FunctionTable.
@@ -938,6 +972,7 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 		Coupling        json.RawMessage           `json:"coupling,omitempty"`
 		Domain          *Domain                   `json:"domain,omitempty"`
 		FunctionTables  map[string]FunctionTable  `json:"function_tables,omitempty"`
+		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
 	}
 
 	var temp TempEsmFile
@@ -954,6 +989,7 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 	esm.Enums = temp.Enums
 	esm.Domain = temp.Domain
 	esm.FunctionTables = temp.FunctionTables
+	esm.IndexSets = temp.IndexSets
 
 	// Handle coupling array with proper type deserialization
 	if len(temp.Coupling) > 0 && string(temp.Coupling) != "null" {

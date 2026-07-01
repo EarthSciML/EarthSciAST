@@ -215,8 +215,8 @@ class FlattenedSystem:
     domain: Optional[Domain] = None
     metadata: FlattenMetadata = field(default_factory=FlattenMetadata)
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
-    # merged across the flattened models. Threaded to the evaluator so it can
-    # resolve arrayop / aggregate range references of the form {"from": <name>}.
+    # copied from the top-level document registry. Threaded to the evaluator so
+    # it can resolve aggregate range references of the form {"from": <name>}.
     index_sets: Dict[str, Any] = field(default_factory=dict)
     # Data-loader variables lowered to observed arrays (RFC pure-io-data-loaders
     # §4.3). Each is an external input the simulator executes at the loader's
@@ -982,12 +982,13 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
 
     # Step 3: assemble the final FlattenedSystem from the per-component pieces.
     flat = FlattenedSystem(metadata=metadata)
-    # Merge each model's document-scoped index-set registry (RFC §5.2) so the
-    # evaluator can resolve {"from": <name>} range references at simulation time.
-    for model in esm_file.models.values():
-        model_index_sets = getattr(model, "index_sets", None)
-        if model_index_sets:
-            flat.index_sets.update(model_index_sets)
+    # Thread the document-scoped index-set registry (RFC §5.2) so the evaluator
+    # can resolve {"from": <name>} range references at simulation time. As of
+    # v0.8.0 the registry is a single top-level field on the document, shared by
+    # every model, rather than a per-Model field.
+    doc_index_sets = getattr(esm_file, "index_sets", None)
+    if doc_index_sets:
+        flat.index_sets.update(doc_index_sets)
     seen_lhs: Dict[str, FlattenedEquation] = {}
     for comp in components.values():
         for name, var in comp.state_vars.items():

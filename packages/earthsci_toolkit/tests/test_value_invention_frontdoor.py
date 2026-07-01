@@ -52,7 +52,13 @@ CANDIDATE_GOLDEN = "[[1,1],[2,2],[3,3]]"
 
 def _load_model(rel: str, model_name: str) -> dict:
     doc = json.loads((REPO_ROOT / rel).read_text())
-    return doc["models"][model_name]
+    model = doc["models"][model_name]
+    # index_sets is document-scoped (v0.8.0): it lives at the top level of the
+    # document, not on the model. Thread the shared registry into the raw model
+    # dict the value-invention engine / range resolver operate on.
+    if "index_sets" in doc and "index_sets" not in model:
+        model = {**model, "index_sets": doc["index_sets"]}
+    return model
 
 
 def _empty_ctx(index_sets: dict, derived_extents: dict) -> EvalContext:

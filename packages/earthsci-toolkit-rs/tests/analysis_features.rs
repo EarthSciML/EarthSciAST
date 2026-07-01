@@ -52,7 +52,6 @@ fn test_analysis_features_integration() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,
@@ -231,7 +230,6 @@ fn test_editing_operations() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,

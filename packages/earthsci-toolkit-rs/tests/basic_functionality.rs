@@ -82,7 +82,6 @@ fn test_structural_validation() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,
@@ -256,7 +255,6 @@ fn test_component_graph() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,
@@ -331,7 +329,6 @@ fn test_editing() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,

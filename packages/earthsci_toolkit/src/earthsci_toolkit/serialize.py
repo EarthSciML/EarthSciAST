@@ -376,9 +376,6 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
         result["guesses"] = guesses_out
     if model.system_kind is not None:
         result["system_kind"] = model.system_kind
-    # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2).
-    if getattr(model, "index_sets", None):
-        result["index_sets"] = model.index_sets
 
     return result
 
@@ -792,6 +789,11 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     # Serialize the single shared domain (v0.8.0).
     if esm_file.domain is not None:
         result["domain"] = _serialize_domain(esm_file.domain)
+
+    # Serialize the document-scoped index-set registry (RFC
+    # semiring-faq-unified-ir §5.2). Top-level in v0.8.0 — shared by all models.
+    if getattr(esm_file, "index_sets", None):
+        result["index_sets"] = esm_file.index_sets
 
     # Serialize data loaders
     if esm_file.data_loaders:

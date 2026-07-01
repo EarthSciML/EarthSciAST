@@ -33,7 +33,7 @@ use serde_json::{Map, Value};
 use crate::aggregate::{ReduceKind, effective_reduce_kind};
 use crate::cadence::{self, Cadence};
 use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
-use crate::types::{Expr, Model};
+use crate::types::{Expr, IndexSet, Model};
 
 /// A value-invention build-time materialisation error (the Rust analog of
 /// Julia's `TreeWalkError` value-invention codes).
@@ -1563,11 +1563,11 @@ pub fn materialize_value_invention(
 /// [`crate::aggregate::resolve_aggregate_ranges`] resolves it via the existing
 /// interval arm (handing the resolver the dense extent `[1, n]`). Generalises the
 /// geometry clip-ring handoff (§8.1) to the relational engine.
-pub fn rewrite_derived_index_sets(model: &mut Model, extents: &HashMap<String, i64>) {
-    let Some(sets) = &mut model.index_sets else {
-        return;
-    };
-    for iset in sets.values_mut() {
+pub fn rewrite_derived_index_sets(
+    index_sets: &mut HashMap<String, IndexSet>,
+    extents: &HashMap<String, i64>,
+) {
+    for iset in index_sets.values_mut() {
         if iset.kind != "derived" {
             continue;
         }
@@ -1607,8 +1607,15 @@ pub fn drop_value_invention_equations(model: &mut Model, vi_var_names: &HashSet<
 /// sets to their materialised dense extents and drop the value-invention
 /// equations. After this the existing resolver / array compiler handles the
 /// model with no value-invention-specific path.
-pub fn apply_value_invention(model: &mut Model, result: &ValueInventionResult) {
-    rewrite_derived_index_sets(model, &result.extents);
+///
+/// Since v0.8.0 the `index_sets` registry is document-scoped, so it is threaded
+/// in (and mutated in place) alongside the model rather than living on it.
+pub fn apply_value_invention(
+    model: &mut Model,
+    index_sets: &mut HashMap<String, IndexSet>,
+    result: &ValueInventionResult,
+) {
+    rewrite_derived_index_sets(index_sets, &result.extents);
     drop_value_invention_equations(model, &result.vi_var_names);
 }
 
@@ -1645,7 +1652,16 @@ mod tests {
 
     fn model_json(fixture: &str, model_name: &str) -> Value {
         let doc: Value = serde_json::from_str(fixture).expect("fixture parses");
-        doc["models"][model_name].clone()
+        let mut model = doc["models"][model_name].clone();
+        // v0.8.0: `index_sets` is document-scoped (a sibling of `models`). The
+        // JSON value-invention path expects the model view to carry the sets it
+        // references, so merge the document registry down (mirrors
+        // `cadence::model_with_loaders`).
+        if let (Value::Object(m), Some(is)) = (&mut model, doc.get("index_sets")) {
+            m.entry("index_sets".to_string())
+                .or_insert_with(|| is.clone());
+        }
+        model
     }
 
     fn arr(shape: &[usize], data: Vec<f64>) -> ArrayD<f64> {
@@ -1793,23 +1809,28 @@ mod tests {
         let vi =
             materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
 
-        let mut file = crate::parse::load(EDGE_FIXTURE).expect("fixture loads");
+        let file = crate::parse::load(EDGE_FIXTURE).expect("fixture loads");
+        // v0.8.0: the `index_sets` registry is document-scoped, so it is threaded
+        // in and rewritten in place rather than living on the model.
+        let mut registry = file.index_sets.clone().expect("fixture declares index_sets");
         let model = file
             .models
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .get_mut("EdgeEnumerationAreaEff")
+            .get("EdgeEnumerationAreaEff")
             .unwrap();
 
         // Without the rewrite: the derived output index is rejected.
-        assert!(crate::aggregate::resolve_aggregate_ranges(&mut model.clone()).is_err());
+        assert!(
+            crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err()
+        );
 
         // With the rewrite: the derived `edges` set resolves to the dense [1, 5].
-        rewrite_derived_index_sets(model, &vi.extents);
-        let edges = model.index_sets.as_ref().unwrap().get("edges").unwrap();
+        rewrite_derived_index_sets(&mut registry, &vi.extents);
+        let edges = registry.get("edges").unwrap();
         assert_eq!(edges.kind, "interval");
         assert_eq!(edges.size, Some(5));
-        assert!(crate::aggregate::resolve_aggregate_ranges(model).is_ok());
+        assert!(crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_ok());
     }
 
     #[test]

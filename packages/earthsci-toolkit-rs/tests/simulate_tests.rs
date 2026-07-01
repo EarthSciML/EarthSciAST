@@ -149,7 +149,6 @@ fn make_model(
         regrid: None,
         name: Some(name.to_string()),
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         reference: None,

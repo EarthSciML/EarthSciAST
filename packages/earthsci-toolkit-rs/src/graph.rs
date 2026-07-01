@@ -971,7 +971,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Test Model 1".to_string()),
@@ -992,7 +991,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Test Model 2".to_string()),
@@ -1056,7 +1054,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
@@ -1112,7 +1109,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
@@ -1267,7 +1263,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Source System".to_string()),
@@ -1288,7 +1283,6 @@ mod tests {
             Model {
                 reference: None,
                 domain: None,
-                index_sets: None,
                 coupletype: None,
                 subsystems: None,
                 name: Some("Target System".to_string()),

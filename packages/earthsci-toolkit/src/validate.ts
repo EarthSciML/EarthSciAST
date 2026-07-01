@@ -332,11 +332,13 @@ function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: Es
     // as a positional operand — the value-invention form
     // `aggregate(args:["faces"], ...)` enumerates over the `faces` set itself
     // (the mesh-edge enumeration of ess-my4.3.10 / §7.3). Such a name is not a
-    // declared variable, so credit the model's `index_sets` keys here, exactly
-    // as the binder symbols below credit aggregate range / `index` positions
-    // (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined reference
-    // still matches neither set and is flagged.
-    const declaredIndexSets = new Set(Object.keys(model.index_sets || {}));
+    // declared variable, so credit the document-scoped `index_sets` keys here,
+    // exactly as the binder symbols below credit aggregate range / `index`
+    // positions (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined
+    // reference still matches neither set and is flagged. As of v0.8.0 the
+    // `index_sets` registry is a single, document-level field shared by every
+    // model (a sibling of `models` / `domain`), not a per-model field.
+    const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}));
 
     // Check equations
     for (let i = 0; i < (model.equations || []).length; i++) {

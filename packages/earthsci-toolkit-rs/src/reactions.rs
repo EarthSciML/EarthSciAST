@@ -207,7 +207,6 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
 
     Ok(Model {
         name: None,
-        index_sets: None,
         coupletype: system.coupletype.clone(),
         reference: system.reference.clone(),
         variables,

@@ -489,10 +489,13 @@ def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any])
 def model_from_doc(doc: Mapping[str, Any], model_name: str) -> Dict[str, Any]:
     """Extract the named model from a parsed ``.esm`` document, attaching the
     document's top-level ``data_loaders`` so the loader-seeded cadence refinement
-    (§5.7.2) can resolve a ``discrete`` variable's ``data_ingest`` source loader.
+    (§5.7.2) can resolve a ``discrete`` variable's ``data_ingest`` source loader,
+    and the document-scoped ``index_sets`` registry (v0.8.0, RFC §5.2) so the
+    partition pass can resolve ``ranges[*].from`` / ``from_faq`` references.
 
-    Returns a shallow copy with ``data_loaders`` added (the parsed document is
-    left unmutated). Raises :class:`CadenceError` if the model is absent."""
+    Returns a shallow copy with ``data_loaders`` and ``index_sets`` added (the
+    parsed document is left unmutated). Raises :class:`CadenceError` if the model
+    is absent."""
     models = doc.get("models", {}) or {}
     if model_name not in models:
         raise CadenceError(f"model {model_name!r} not found")
@@ -500,6 +503,11 @@ def model_from_doc(doc: Mapping[str, Any], model_name: str) -> Dict[str, Any]:
     loaders = doc.get("data_loaders")
     if loaders and "data_loaders" not in model:
         model = {**model, "data_loaders": loaders}
+    # index_sets moved to the document top level in v0.8.0; thread it onto the
+    # per-model dict the partition pass reads.
+    index_sets = doc.get("index_sets")
+    if index_sets and "index_sets" not in model:
+        model = {**model, "index_sets": index_sets}
     return model
 
 

@@ -228,8 +228,9 @@ def test_reference_cycle_is_detected():
     assert cyc[0] == cyc[-1]  # closed path
     assert f"{VertexKind.NODE}:edge_faq" in cyc
     assert f"{VertexKind.INDEX_SET}:edges" in cyc
-    # resolve_references surfaces it eagerly as E_REF_CYCLE.
-    doc = {"models": {"M": model}}
+    # resolve_references surfaces it eagerly as E_REF_CYCLE. index_sets is
+    # document-scoped (v0.8.0): declare it at the top level of the document.
+    doc = {"index_sets": model["index_sets"], "models": {"M": model}}
     with pytest.raises(ReferenceResolutionError) as exc:
         resolve_references(doc)
     assert exc.value.code == E_REF_CYCLE
@@ -249,12 +250,16 @@ def test_no_references_empty_graph():
 
 
 def test_resolve_references_multi_model():
+    # index_sets is document-scoped (v0.8.0): the single top-level registry is
+    # shared by every model in the document.
     m1 = {
-        "index_sets": {"cells": {"kind": "interval", "size": 4}},
         "equations": [_eqn(_agg(output_idx=["i"], ranges={"i": {"from": "cells"}}), 0)],
     }
     m2 = {"equations": [_eqn({"op": "D", "args": ["u"], "wrt": "t"}, 0)]}
-    graphs = resolve_references({"models": {"A": m1, "B": m2}})
+    graphs = resolve_references({
+        "index_sets": {"cells": {"kind": "interval", "size": 4}},
+        "models": {"A": m1, "B": m2},
+    })
     assert set(graphs) == {"A", "B"}
     assert len(graphs["A"].edges_of_kind(EdgeKind.RANGE_FROM)) == 1
     assert graphs["B"].edges == []

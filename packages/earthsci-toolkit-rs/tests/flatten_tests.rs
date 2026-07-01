@@ -208,7 +208,6 @@ fn flatten_mixed_model_and_reaction_system() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -398,7 +397,6 @@ fn flatten_conflicting_derivative_raises_error() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -512,7 +510,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -538,7 +535,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -664,7 +660,6 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -690,7 +685,6 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -766,7 +760,6 @@ fn flatten_couple_includes_connector_equations() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -845,7 +838,6 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
     let model = Model {
         regrid: None,
         domain: None,
-        index_sets: None,
         coupletype: None,
         subsystems: None,
         name: Some("Nested".to_string()),
@@ -896,7 +888,6 @@ fn flatten_rejects_spatial_operators() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
@@ -964,7 +955,6 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         Model {
             regrid: None,
             domain: None,
-            index_sets: None,
             coupletype: None,
             subsystems: None,
             name: None,
