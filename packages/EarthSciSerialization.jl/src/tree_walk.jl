@@ -960,62 +960,6 @@ function _wrap_bounded_const(arr::Array{Float64,N}, boundary, name::AbstractStri
     return BoundedConstArray{N}(arr, NTuple{N,Symbol}(syms))
 end
 
-# ---- Spatial-operator zeroing for a structurally-non-spatial field ----------
-# The tree-walk path is fed AST whose spatial differential operators have already
-# been rewritten into stencil `arrayop`s (the ESD lowering, esm-spec §i7b): a raw
-# `grad`/`div`/`laplacian` reaching the compiler is a pipeline violation and hard-
-# errors. There is one CORRECT exception: the derivative of a field along a
-# coordinate direction it does not vary over is identically zero. A 0-D scalar
-# (`grad(T,x)` with `T` scalar) and a field arrayed over a NON-spatial index set
-# (`grad(SST,x)` with `SST` shaped `[ocean_cells]`) both have no `x` axis, so the
-# spatial derivative vanishes — this is the ESD rule for a structurally-0-D field,
-# not a stub. A field that DOES carry the differentiated axis is left untouched so
-# a genuinely un-discretized PDE still surfaces the pipeline-violation error.
-
-# The union of declared shape axes of every variable referenced in `expr` — the
-# coordinate directions the sub-expression can actually vary over.
-function _spatial_axes_referenced!(axes::Set{String}, expr::Expr,
-                                   var_shapes::Dict{String,Vector{String}})
-    if expr isa VarExpr
-        sh = get(var_shapes, expr.name, nothing)
-        sh === nothing || union!(axes, sh)
-    elseif expr isa OpExpr
-        for a in expr.args
-            _spatial_axes_referenced!(axes, a, var_shapes)
-        end
-        expr.expr_body === nothing || _spatial_axes_referenced!(axes, expr.expr_body, var_shapes)
-        expr.filter === nothing || _spatial_axes_referenced!(axes, expr.filter, var_shapes)
-    end
-    return axes
-end
-
-# Rewrite every `grad`/`div`/`laplacian` node whose operand carries no axis for the
-# differentiated dimension into a literal `0.0`; recurse elsewhere. `grad`/`div`
-# carry a `dim`; `laplacian` (no single `dim`) is zero exactly when its operand is
-# structurally scalar (no array axis at all).
-function _zero_nonspatial_derivs(expr::Expr, var_shapes::Dict{String,Vector{String}})::Expr
-    if expr isa OpExpr
-        if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
-            axes = _spatial_axes_referenced!(Set{String}(), expr, var_shapes)
-            is_zero = if expr.op == "laplacian"
-                isempty(axes)
-            elseif expr.dim !== nothing
-                !(String(expr.dim) in axes)
-            else
-                isempty(axes)
-            end
-            is_zero && return NumExpr(0.0)
-        end
-        new_args = Expr[_zero_nonspatial_derivs(a, var_shapes) for a in expr.args]
-        new_body = expr.expr_body === nothing ? nothing :
-                   _zero_nonspatial_derivs(expr.expr_body, var_shapes)
-        new_filter = expr.filter === nothing ? nothing :
-                     _zero_nonspatial_derivs(expr.filter, var_shapes)
-        return reconstruct(expr; args=new_args, expr_body=new_body, filter=new_filter)
-    end
-    return expr
-end
-
 # ---- Whole-array declared-shape derivative lift -------------------------------
 # A declared array-shaped state may be integrated by a WHOLE-ARRAY equation
 # `D(SST) = <array-valued rhs>` (bare `VarExpr` LHS, no per-cell `index`). The

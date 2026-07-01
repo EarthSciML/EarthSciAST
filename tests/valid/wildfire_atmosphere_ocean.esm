@@ -39,7 +39,7 @@
   "models": {
     "AtmosphericDynamics": {
       "reference": {
-        "notes": "Simplified 3D atmospheric dynamics"
+        "notes": "0-D box atmospheric temperature, heated by the wildfire coupling (q_heat). No spatial transport: this component carries no spatial grid, so it is a pure 0-D ODE (D(T)=q_heat)."
       },
       "variables": {
         "T": {
@@ -120,54 +120,13 @@
             ],
             "wrt": "t"
           },
-          "rhs": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "-",
-                    "args": [
-                      "wind_u"
-                    ]
-                  },
-                  {
-                    "op": "grad",
-                    "args": [
-                      "T"
-                    ],
-                    "dim": "x"
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "-",
-                    "args": [
-                      "wind_v"
-                    ]
-                  },
-                  {
-                    "op": "grad",
-                    "args": [
-                      "T"
-                    ],
-                    "dim": "y"
-                  }
-                ]
-              },
-              "q_heat"
-            ]
-          }
+          "rhs": "q_heat"
         }
       ]
     },
     "WildfirePropagation": {
       "reference": {
-        "notes": "Level-set wildfire spread model"
+        "notes": "0-D wildfire state. The level-set front (phi) needs a spatial gradient to propagate; with no spatial resolution here it stays at its initial condition (phi is ic-only, no D-equation), so no cell ignites."
       },
       "variables": {
         "phi": {
@@ -233,62 +192,6 @@
             ]
           },
           "rhs": 10.0
-        },
-        {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "phi"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "-",
-                "args": [
-                  "R_spread"
-                ]
-              },
-              {
-                "op": "sqrt",
-                "args": [
-                  {
-                    "op": "+",
-                    "args": [
-                      {
-                        "op": "^",
-                        "args": [
-                          {
-                            "op": "grad",
-                            "args": [
-                              "phi"
-                            ],
-                            "dim": "x"
-                          },
-                          2
-                        ]
-                      },
-                      {
-                        "op": "^",
-                        "args": [
-                          {
-                            "op": "grad",
-                            "args": [
-                              "phi"
-                            ],
-                            "dim": "y"
-                          },
-                          2
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
         },
         {
           "lhs": {
@@ -408,7 +311,7 @@
     },
     "OceanDynamics": {
       "reference": {
-        "notes": "Simplified 3D ocean dynamics"
+        "notes": "Per-cell ocean surface temperature on the 3-cell ocean grid. Each cell integrates independently (no inter-cell transport: u_ocean is ic-only), driven by the conservatively-regridded atmosphere flux: D(SST[o]) = surface_heat_flux[o]/4.18e6."
       },
       "variables": {
         "SST": {
@@ -1160,33 +1063,10 @@
             "wrt": "t"
           },
           "rhs": {
-            "op": "+",
+            "op": "/",
             "args": [
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "-",
-                    "args": [
-                      "u_ocean"
-                    ]
-                  },
-                  {
-                    "op": "grad",
-                    "args": [
-                      "SST"
-                    ],
-                    "dim": "x"
-                  }
-                ]
-              },
-              {
-                "op": "/",
-                "args": [
-                  "surface_heat_flux",
-                  4180000.0
-                ]
-              }
+              "surface_heat_flux",
+              4180000.0
             ]
           }
         }

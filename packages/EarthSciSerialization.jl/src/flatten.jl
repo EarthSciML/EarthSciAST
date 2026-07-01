@@ -1571,24 +1571,6 @@ function flattened_to_esm(flat::FlattenedSystem;
                           name::AbstractString="Flattened",
                           esm_version::AbstractString="0.5.0")::Dict{String,Any}
     sname = String(name)
-    # ---- Spatial-operator zeroing at the flatten→document boundary ----
-    # A `grad`/`div`/`laplacian` over a structurally-0-D field — a scalar, or a
-    # state arrayed over a NON-spatial index set (no axis for the differentiated
-    # dimension) — does not vary along that axis, so its spatial derivative is
-    # identically 0. Rewrite it here, at the lowering boundary into a runnable
-    # tree-walk document, BEFORE the compiler (which by the pipeline-violation
-    # contract hard-errors on any raw spatial operator that survives): a field
-    # that DOES carry the differentiated axis is left untouched, so a genuinely
-    # un-discretized PDE still surfaces the violation. `flattened_to_esm` feeds
-    # only the simulate / tree-walk path (never MTK, never a hand-built `Model`),
-    # so this ESD rule is scoped to exactly that lowering.
-    _vshapes = Dict{String,Vector{String}}()
-    for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
-        for (k, v) in partition
-            v.shape === nothing && continue
-            _vshapes[k] = String[String(s) for s in v.shape]
-        end
-    end
 
     variables = Dict{String,Any}()
     # Order: states, parameters, observeds. A later partition never re-keys an
@@ -1598,7 +1580,7 @@ function flattened_to_esm(flat::FlattenedSystem;
             vv = v.expression === nothing ? v :
                 ModelVariable(v.type; default=v.default, units=v.units,
                     default_units=v.default_units, description=v.description,
-                    expression=_zero_nonspatial_derivs(v.expression, _vshapes),
+                    expression=v.expression,
                     shape=v.shape, location=v.location,
                     noise_kind=v.noise_kind, correlation_group=v.correlation_group)
             variables[k] = serialize_model_variable(vv)
@@ -1607,8 +1589,8 @@ function flattened_to_esm(flat::FlattenedSystem;
 
     model = Dict{String,Any}(
         "variables" => variables,
-        "equations" => Any[serialize_equation(Equation(eq.lhs,
-                            _zero_nonspatial_derivs(eq.rhs, _vshapes); _comment=eq._comment))
+        "equations" => Any[serialize_equation(Equation(eq.lhs, eq.rhs;
+                            _comment=eq._comment))
                            for eq in flat.equations],
     )
 
