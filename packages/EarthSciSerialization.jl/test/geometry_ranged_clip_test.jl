@@ -110,6 +110,100 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# ON-DISK / SCHEMA-VALID form: the array-producing FAQ op is `aggregate` with a
+# non-empty `output_idx`, NOT the internal `arrayop` alias `shape_promotion.jl`
+# emits (schema v0.8.0 dropped `arrayop` from the op enum — see
+# tests/valid/geometry/conservative_regrid_assembly.esm, where `clip` is an
+# `aggregate` node with output_idx [i,j,w,c] wrapping intersect_polygon). This is
+# the byte-identical 2×2 regrid of the first testset with every array-producing
+# node authored as `aggregate`, proving the ranged (fixed-extent) intersect_polygon
+# clip is materialized through the SAME `_materialize_ranged_clip` path — i.e. the
+# setup dispatch recognizes the on-disk `aggregate` clip, not only `arrayop`.
+# ---------------------------------------------------------------------------
+
+# Array-producing aggregate: `aggregate` op with a non-empty `output_idx` (the
+# schema-valid on-disk spelling of the internal `arrayop`).
+_arrop_agg(oidx, ranges, body) = Dict{String,Any}(
+    "op" => "aggregate", "semiring" => "sum_product", "output_idx" => collect(Any, oidx),
+    "ranges" => Dict{String,Any}(k => Dict{String,Any}("from" => v) for (k, v) in ranges),
+    "args" => Any[], "expr" => body)
+
+function _ranged_clip_regrid_esm_aggregate()
+    ip = Dict{String,Any}("op" => "intersect_polygon", "id" => "overlap_clip",
+        "manifold" => "planar", "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")])
+    clip = _arrop_agg(["i", "j", "w", "c"],
+        ["i" => "src_cells", "j" => "tgt_cells", "w" => "clip_ring", "c" => "coord"],
+        _ix(ip, "w", "c"))
+    vp1 = Dict{String,Any}("op" => "+", "args" => Any["v", 1])
+    shoe = Dict{String,Any}("op" => "*", "args" => Any[0.5,
+        Dict{String,Any}("op" => "-", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any[_ix("clip","i","j","v",1), _ix("clip","i","j",vp1,2)]),
+            Dict{String,Any}("op" => "*", "args" => Any[_ix("clip","i","j",vp1,1), _ix("clip","i","j","v",2)])])])
+    A_ij = _arrop_agg(["i", "j"], ["i" => "src_cells", "j" => "tgt_cells"], _agg("v", "clip_ring", shoe))
+    A_j  = _arrop_agg(["j"], ["j" => "tgt_cells"], _agg("i", "src_cells", _ix("A_ij", "i", "j")))
+    num  = _agg("i", "src_cells", Dict{String,Any}("op" => "*",
+                "args" => Any[_ix("A_ij", "i", "j"), _ix("F_src", "i")]))
+    F_tgt = _arrop_agg(["j"], ["j" => "tgt_cells"], Dict{String,Any}("op" => "/", "args" => Any[num, _ix("A_j", "j")]))
+
+    model = Dict{String,Any}(
+        "variables" => Dict{String,Any}(
+            "src_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells", "verts", "coord"]),
+            "tgt_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["tgt_cells", "verts", "coord"]),
+            "F_src"    => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
+            "clip"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells","clip_ring","coord"], "expression" => clip),
+            "A_ij"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells"], "expression" => A_ij),
+            "A_j"   => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => A_j),
+            "F_tgt" => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => F_tgt),
+            "A11" => Dict{String,Any}("type" => "state", "shape" => Any[]),
+            "A12" => Dict{String,Any}("type" => "state", "shape" => Any[]),
+            "A21" => Dict{String,Any}("type" => "state", "shape" => Any[]),
+            "A22" => Dict{String,Any}("type" => "state", "shape" => Any[]),
+            "FT1" => Dict{String,Any}("type" => "state", "shape" => Any[]),
+            "FT2" => Dict{String,Any}("type" => "state", "shape" => Any[])),
+        "equations" => Any[
+            _D("A11", _ix("A_ij", 1, 1)), _D("A12", _ix("A_ij", 1, 2)),
+            _D("A21", _ix("A_ij", 2, 1)), _D("A22", _ix("A_ij", 2, 2)),
+            _D("FT1", _ix("F_tgt", 1)),   _D("FT2", _ix("F_tgt", 2))])
+    return Dict{String,Any}(
+        "esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "ranged_clip_regrid_2x2_aggregate"),
+        "index_sets" => Dict{String,Any}(
+            "coord" => Dict{String,Any}("kind" => "interval", "size" => 2),
+            "verts" => Dict{String,Any}("kind" => "interval", "size" => 4),
+            "src_cells" => Dict{String,Any}("kind" => "interval", "size" => 2),
+            "tgt_cells" => Dict{String,Any}("kind" => "interval", "size" => 2),
+            "clip_ring" => Dict{String,Any}("kind" => "derived", "from_faq" => "overlap_clip")),
+        "models" => Dict{String,Any}("RangedClipRegrid2x2Agg" => model))
+end
+
+@testset "Ranged intersect_polygon clip authored as on-disk `aggregate` (schema v0.8.0)" begin
+    esm = _ranged_clip_regrid_esm_aggregate()
+
+    src_poly = zeros(2, 4, 2)
+    tgt_poly = zeros(2, 4, 2)
+    src_poly[1, :, :] = [0 0; 1 0; 1 1; 0 1]   # [0,1]²
+    src_poly[2, :, :] = [1 0; 2 0; 2 1; 1 1]   # [1,2]×[0,1]
+    tgt_poly[1, :, :] = [0 0; 1 0; 1 1; 0 1]   # [0,1]²
+    tgt_poly[2, :, :] = [0.5 0; 1.5 0; 1.5 1; 0.5 1]   # [0.5,1.5]×[0,1]
+    F_src = [10.0, 20.0]
+
+    f!, u0, p, _tspan, vmap = build_evaluator(esm;
+        const_arrays = Dict("src_poly" => src_poly, "tgt_poly" => tgt_poly, "F_src" => F_src),
+        initial_conditions = Dict("A11" => 0.0, "A12" => 0.0, "A21" => 0.0,
+                                  "A22" => 0.0, "FT1" => 0.0, "FT2" => 0.0))
+    du = similar(u0)
+    f!(du, u0, p, 0.0)
+
+    # Identical results to the `arrayop`-authored chain — proves the on-disk
+    # `aggregate` ranged clip reaches the dense ranged-clip evaluator.
+    @test du[vmap["A11"]] ≈ 1.0 atol = 1e-12
+    @test du[vmap["A12"]] ≈ 0.5 atol = 1e-12
+    @test du[vmap["A21"]] ≈ 0.0 atol = 1e-12
+    @test du[vmap["A22"]] ≈ 0.5 atol = 1e-12
+    @test du[vmap["FT1"]] ≈ 10.0 atol = 1e-12
+    @test du[vmap["FT2"]] ≈ 15.0 atol = 1e-12
+end
+
+# ---------------------------------------------------------------------------
 # Broad-phase: the A_j / F_tgt apply aggregates carry a `join` on the bin
 # buffers (the bin-skolem spatial join — only candidate pairs sharing a bin
 # contribute) and a sliver `filter`. The setup evaluator honors both, including

@@ -326,10 +326,16 @@ function _geo_eval(expr, env, idx_env, index_sets, derived_extents,
     end
 end
 
-# A clip ranged over an outer index set: an `arrayop` whose body is
-# `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`.
+# A clip ranged over an outer index set: an array-producing aggregate whose body
+# is `index(intersect_polygon(src[outer], tgt[outer]), ring, coord)`. The
+# array-producing form is the on-disk `aggregate` op with a non-empty `output_idx`
+# (schema v0.8.0; the op enum dropped `arrayop`), OR the internal `arrayop` alias
+# `shape_promotion.jl` still emits — `_is_aggregate_op` accepts both, and the
+# non-empty `output_idx` guard keeps a SCALAR reduction (empty `output_idx`) out.
 _is_ranged_clip(rhs) =
-    rhs isa OpExpr && rhs.op == "arrayop" && rhs.expr_body isa OpExpr &&
+    rhs isa OpExpr && _is_aggregate_op(rhs.op) &&
+    rhs.output_idx !== nothing && !isempty(rhs.output_idx) &&
+    rhs.expr_body isa OpExpr &&
     (rhs.expr_body::OpExpr).op == "index" &&
     length((rhs.expr_body::OpExpr).args) >= 1 &&
     (rhs.expr_body::OpExpr).args[1] isa OpExpr &&
