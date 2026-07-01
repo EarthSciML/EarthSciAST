@@ -154,7 +154,7 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
                    op == "<=" ? l <= r :
                    op == "==" ? l == r :
                                 l != r
-        elseif op == "arrayop"
+        elseif op == "arrayop" || op == "aggregate"
             return _build_arrayop_sym(expr, var_dict, t_sym, dim_dict)
         elseif op == "makearray"
             return _build_makearray(expr, var_dict, t_sym, dim_dict)
@@ -493,7 +493,7 @@ function _lhs_arrayop_shapes(equations::Vector{Equation})
     for eq in equations
         lhs = eq.lhs
         lhs isa OpExpr || continue
-        if lhs.op == "arrayop"
+        if lhs.op == "arrayop" || lhs.op == "aggregate"
             lhs.ranges === nothing && continue
             lhs.output_idx === nothing && continue
             isempty(lhs.output_idx) && continue
@@ -1249,9 +1249,51 @@ function ModelingToolkit.System(flat::FlattenedSystem;
     var_dict, t_sym, dim_dict, states, parameters, observed, _ =
         _build_var_dict(flat)
 
+    # ---- Route `ic(var) = <initial value>` equations out of the ODE set ----
+    # (esm-spec v0.8.0) An `ic`-LHS equation declares an initial value (u0 /
+    # variable default), NOT an ODE right-hand side. Mirror the tree-walk
+    # simulate path (src/tree_walk.jl): pull each `ic` equation out before
+    # symbolic lowering and fold its RHS into the target state's default value.
+    # The default is attached via variable metadata (`Symbolics.setdefaultval`)
+    # — the same channel `_build_var_dict` uses for `ModelVariable.default` —
+    # since this MTK System constructor takes no `defaults` keyword. MTK then
+    # wires the default into ODEProblem u0 construction, and a caller-supplied
+    # initial condition still overrides it. Leaving an `ic` node in the equation
+    # set would send it to `_esm_to_symbolic`, which has no handler →
+    # "Unsupported operator: ic".
+    ic_values = Tuple{String,Any}[]
+    dyn_equations = Equation[]
+    for eq in flat.equations
+        if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
+            lop = eq.lhs::OpExpr
+            (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
+                throw(ArgumentError("ic(...) LHS must name a single state variable"))
+            vn = (lop.args[1]::VarExpr).name
+            haskey(var_dict, vn) || throw(ArgumentError(
+                "ic($(vn)) targets unknown variable '$(vn)'"))
+            push!(ic_values,
+                  (vn, _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)))
+        else
+            push!(dyn_equations, eq)
+        end
+    end
+
+    # Fold each ic value into the target state's default via `setdefaultval`,
+    # rewriting the shared handle in both `var_dict` (so the equations, events,
+    # and `state_syms` built below reference the defaulted symbol) and `states`
+    # (so the default rides through into `dvs`). Applied before `eqs` are built.
+    for (vn, val) in ic_values
+        old = var_dict[vn]
+        new = Symbolics.setdefaultval(old, val)
+        var_dict[vn] = new
+        for i in eachindex(states)
+            states[i] === old && (states[i] = new)
+        end
+    end
+
     MTKEquation = ModelingToolkit.Equation
     eqs = Vector{MTKEquation}()
-    for eq in flat.equations
+    for eq in dyn_equations
         lhs = _esm_to_symbolic(eq.lhs, var_dict, t_sym, dim_dict)
         rhs = _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)
         push!(eqs, lhs ~ rhs)
@@ -2056,9 +2098,13 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     end
 
     # 5. Build ESM Model and wrap in EsmFile --------------------------------
+    # NOTE (esm-spec v0.8.0): `domain` moved from the Model to the document
+    # level, so `Model(...)` no longer accepts a `domain=` kwarg. PDE domain
+    # round-trip is still an open gap (gt-vzwk, flagged above), and `esm_domain`
+    # is always `nothing` here, so there is nothing to place at the document
+    # level yet — the kwarg is simply dropped.
     esm_model = Model(esm_vars, esm_equations;
-        discrete_events=disc_events, continuous_events=cont_events,
-        domain=esm_domain)
+        discrete_events=disc_events, continuous_events=cont_events)
 
     # Serialize directly to a Dict so callers can mutate and embed
     # TODO_GAP notes before writing to disk. We bypass the EsmFile type
@@ -2305,7 +2351,7 @@ const _KNOWN_OPS = Set([
     "asin", "acos", "atan", "sqrt", "abs",
     ">", "<", ">=", "<=", "==", "!=",
     "D", "grad", "div", "laplacian",
-    "arrayop", "makearray", "index", "broadcast", "reshape", "transpose",
+    "arrayop", "aggregate", "makearray", "index", "broadcast", "reshape", "transpose",
     "concat", "Pre", "ifelse", "call",
 ])
 

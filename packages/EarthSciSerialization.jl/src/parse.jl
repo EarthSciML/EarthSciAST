@@ -1624,7 +1624,7 @@ function _inline_toplevel_model_refs(raw_data, base_path::String)
             haskey(m, :ref) && !haskey(m, :variables)
     end
     has_stub || return nothing
-    native = _deep_native(raw_data)
+    native = _to_native_json(raw_data)
     _inline_toplevel_model_refs!(native, base_path, Set{String}())
     return native
 end
@@ -1657,7 +1657,7 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
         try
             isfile(refpath) || throw(SubsystemRefError(
                 "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
-            comp = _deep_native(JSON3.read(read(refpath, String)))
+            comp = _to_native_json(JSON3.read(read(refpath, String)))
             comp isa Dict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
             compdir = dirname(refpath)
