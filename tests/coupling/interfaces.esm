@@ -55,7 +55,7 @@
               "O3"
             ]
           },
-          "rhs": 0.0
+          "rhs": 1e-07
         },
         {
           "lhs": {
@@ -64,7 +64,7 @@
               "T"
             ]
           },
-          "rhs": 0.0
+          "rhs": 220.0
         },
         {
           "lhs": {
@@ -107,6 +107,21 @@
             "lower_cells"
           ],
           "description": "Specific humidity on the tropospheric grid"
+        },
+        "O3": {
+          "type": "state",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Tropospheric ozone on the lower-atmosphere grid; relaxed toward the regridded stratospheric boundary O3_boundary (stratosphere-troposphere exchange across the tropopause)"
+        },
+        "tropopause_relax": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1e-06,
+          "description": "Relaxation rate of tropospheric ozone toward the regridded stratospheric ozone boundary"
         },
         "O3_strat": {
           "type": "parameter",
@@ -191,7 +206,7 @@
               "q"
             ]
           },
-          "rhs": 288.0
+          "rhs": 0.01
         },
         {
           "lhs": {
@@ -212,6 +227,38 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "_comment": "Consume the regridded stratospheric ozone boundary: tropospheric O3 relaxes toward O3_boundary (the tropopause regrid output), so the cross-domain regridding is integrated into the dynamics rather than dead.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "tropopause_relax",
+              {
+                "op": "-",
+                "args": [
+                  "O3_boundary",
+                  "O3"
+                ]
+              }
+            ]
+          }
         }
       ]
     },
@@ -253,7 +300,7 @@
               "soil_moisture"
             ]
           },
-          "rhs": 290.0
+          "rhs": 0.3
         },
         {
           "lhs": {
