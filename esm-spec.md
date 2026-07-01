@@ -1604,6 +1604,8 @@ where `net_stoich_X = (stoich as product) − (stoich as substrate)`.
 
 **Reservoir species (`constant: true`).** A species declared with `constant: true` is a *reservoir*: it appears in rate laws as a concentration but no `dX/dt` equation is generated for it. Bindings that target Catalyst emit it as a parameter with `isconstantspecies=true` metadata; other bindings skip the ODE for that species while still evaluating mass-action contributions from it. Typical use: O₂, CH₄, H₂O in tropospheric chemistry where the species participates in many reactions but its concentration is effectively unchanged on the simulation timescale.
 
+**Initial conditions.** A species' initial value is its scalar `species.default` (overridable per run via `test.initial_conditions` / `example.initial_state`). A reaction system has no `equations` field and hosts no `ic` equations of its own; a non-constant, coordinate-dependent, or loaded-field species IC — for example once the reaction system is spatially lifted onto a grid (§10.5) — is declared with a scoped-reference `ic` equation in a model, `ic(Sys.species) ~ <field>` (§11.4.1), not inside the reaction system.
+
 ---
 
 ## 8. Data Loaders
@@ -2662,9 +2664,21 @@ A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate ex
 
 **Run-time overrides.** A test or example MAY override the *scalar* initial value of a state variable for one run via `test.initial_conditions` / `example.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
 
+#### 11.4.1 Scoped-reference ICs (reaction-system species and cross-component ICs)
+
+The `ic` argument MAY be a **scoped reference** (§4.6) to any state variable or species elsewhere in the document — `ic(Chemistry.O3) ~ …` — not only a variable of the enclosing model. The equation still lives in a **model's** `equations` array (ICs are model-hosted): a model whose sole purpose is to declare ICs for other components MAY have an empty `variables` map and carry only `ic` equations (a *dedicated IC model*).
+
+This is how a **reaction system** gets a non-scalar initial condition. A reaction system has no `equations` field, so it cannot host an `ic` equation of its own; a species' initial value is otherwise the scalar `species.default` (§7). When a species needs a coordinate-dependent, loaded-field, or otherwise non-constant IC — most commonly once the reaction system is spatially **lifted** onto a grid through coupling (§10.5) — declare it with a scoped-reference `ic` equation in a model: `ic(Chemistry.O3) ~ InitialFields.O3_field`.
+
+**Resolution timing.** A scoped-reference `ic` equation is resolved on the **flattened** system (§10.7), after the target's owning system is composed and, where the target is spatially lifted, **after the lift** — so the target is the spatially-arrayed variable and the RHS may be a coordinate expression evaluated per grid point, or a reference to a loaded field. Before lifting, a 0-D reaction system's species is scalar and a coordinate-expression IC for it is meaningless.
+
+An `ic` equation MUST NOT be placed inside a reaction system's `constraint_equations` (or anywhere but a model's `equations`); bindings reject it with diagnostic `ic_in_reaction_system`.
+
 ### 11.5 Boundary conditions
 
 Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to an `aggregate` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
+
+**BCs from data.** The boundary-face value may be an `index` into a **loaded variable** (a `data_loaders` field) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(BoundaryData.O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism, with the other variable being a loader field; it needs no special construct.
 
 ---
 
