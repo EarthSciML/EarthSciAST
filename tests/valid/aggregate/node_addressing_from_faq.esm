@@ -15,18 +15,18 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 8
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_enum"
+    }
+  },
   "models": {
     "NodeAddressingDemo": {
-      "index_sets": {
-        "faces": {
-          "kind": "interval",
-          "size": 8
-        },
-        "edges": {
-          "kind": "derived",
-          "from_faq": "edge_enum"
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -39,7 +39,9 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -47,15 +49,29 @@
             "id": "edge_enum",
             "args": [],
             "semiring": "bool_and_or",
-            "output_idx": ["edge"],
-            "expr": { "op": "index", "args": ["u", "f"] },
-            "ranges": { "f": { "from": "faces" } }
+            "output_idx": [
+              "edge"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "f"
+              ]
+            },
+            "ranges": {
+              "f": {
+                "from": "faces"
+              }
+            }
           }
         },
         {
           "lhs": {
             "op": "D",
-            "args": ["flux"],
+            "args": [
+              "flux"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -63,8 +79,18 @@
             "args": [],
             "semiring": "sum_product",
             "output_idx": [],
-            "expr": { "op": "index", "args": ["u", "e"] },
-            "ranges": { "e": { "from": "edges" } }
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "e"
+              ]
+            },
+            "ranges": {
+              "e": {
+                "from": "edges"
+              }
+            }
           }
         }
       ]

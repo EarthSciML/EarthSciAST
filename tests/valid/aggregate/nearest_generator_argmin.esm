@@ -22,74 +22,182 @@
       "ess-os1"
     ]
   },
+  "index_sets": {
+    "points": {
+      "kind": "interval",
+      "size": 4
+    },
+    "generators": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "NearestGeneratorArgmin": {
-      "index_sets": {
-        "points": {
-          "kind": "interval",
-          "size": 4
-        },
-        "generators": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "px": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Point longitudes. A const coordinate factor read only inside the declarative distance FAQ (never a raw join comparison)."
         },
         "py": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Point latitudes."
         },
         "gx": {
           "type": "parameter",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Generator longitudes (the Voronoi seeds the points are assigned to)."
         },
         "gy": {
           "type": "parameter",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Generator latitudes."
         },
         "assign": {
           "type": "state",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Nearest-generator INDEX of each point: assign[i] = argmin_g dist(point_i, gen_g). A value-invention arg-witness output — an integer 1-based generator id buffer materialised at setup (CONST cadence) and dropped from the ODE, exactly as the bin-Skolem `src_bin`/`tgt_bin` buffers are. The §5.7 rule-6 smallest-generator-id tie-break makes it byte-identical across bindings."
         }
       },
       "equations": [
         {
           "_comment": "NEAREST-GENERATOR ASSIGNMENT — assign[i] = argmin_g dist(point_i, gen_g) over the FULL points × generators candidate set (unpruned). A per-element map (output i, no contraction at the outer level) whose body is the `argmin` arg-witness reducer: it contracts the inner range `g` over `generators`, evaluates the squared-Euclidean distance FAQ dist = (px[i]-gx[g])² + (py[i]-gy[g])² at each candidate (squared so the metric is `*`/`-`/`+` only — argmin is invariant to the monotone square, no `sqrt`), and returns the witnessing generator index `arg:\"g\"`. Equidistant generators resolve to the SMALLEST id (§5.7 rule 6): point 3 at 1.5 is exactly 0.25 from both generator 2 (at 1.0) and generator 3 (at 2.0) → generator 2.",
-          "lhs": { "op": "index", "args": ["assign", "i"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "assign",
+              "i"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["i"],
-            "ranges": { "i": { "from": "points" } },
-            "args": ["px", "py", "gx", "gy"],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "py",
+              "gx",
+              "gy"
+            ],
             "expr": {
               "op": "argmin",
-              "args": ["px", "py", "gx", "gy"],
+              "args": [
+                "px",
+                "py",
+                "gx",
+                "gy"
+              ],
               "arg": "g",
-              "ranges": { "g": { "from": "generators" } },
+              "ranges": {
+                "g": {
+                  "from": "generators"
+                }
+              },
               "expr": {
                 "op": "+",
                 "args": [
                   {
                     "op": "*",
                     "args": [
-                      { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] },
-                      { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] }
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "g"] }] },
-                      { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "g"] }] }
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   }
                 ]
@@ -100,35 +208,33 @@
       ]
     },
     "NearestGeneratorBinned": {
-      "index_sets": {
-        "points": {
-          "kind": "interval",
-          "size": 4
-        },
-        "generators": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "px": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Point longitudes."
         },
         "py": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Point latitudes."
         },
         "gx": {
           "type": "parameter",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Generator longitudes."
         },
         "gy": {
           "type": "parameter",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Generator latitudes."
         },
         "binw": {
@@ -138,72 +244,213 @@
         },
         "point_bin": {
           "type": "state",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Integer bin key of each point: skolem(\"bin\", floor(px/binw), floor(py/binw)) — the §A.8 broad-phase quantization. The equi-join column the argmin's candidate prune joins on."
         },
         "gen_bin": {
           "type": "state",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Integer bin key of each generator — identically quantized, so a shared key means a point and generator fall in the same broad-phase bucket."
         },
         "assign_binned": {
           "type": "state",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Nearest-generator INDEX restricted to same-bin candidates: assign_binned[i] = argmin_{g : point_bin[i] = gen_bin[g]} dist(point_i, gen_g). The argmin's `join` (bin-Skolem equi-join, §5.3) prunes the candidate generators to the point's bin before the distance reduction — the SCVT broad phase. CONST-cadence integer buffer, byte-identical across bindings (§5.7 rule 6)."
         }
       },
       "equations": [
         {
           "_comment": "BROAD PHASE 1 — bin each POINT to an integer lat-lon bin key (floor quantization + skolem mint), exactly the §A.8 `src_bin` map.",
-          "lhs": { "op": "index", "args": ["point_bin", "i"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "point_bin",
+              "i"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["i"],
-            "ranges": { "i": { "from": "points" } },
-            "args": ["px", "py", "binw"],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "py",
+              "binw"
+            ],
             "expr": {
               "op": "skolem",
               "args": [
                 "bin",
-                { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["px", "i"] }, "binw"] }] },
-                { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["py", "i"] }, "binw"] }] }
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "px",
+                            "i"
+                          ]
+                        },
+                        "binw"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "py",
+                            "i"
+                          ]
+                        },
+                        "binw"
+                      ]
+                    }
+                  ]
+                }
               ]
             }
           }
         },
         {
           "_comment": "BROAD PHASE 2 — bin each GENERATOR identically (same binw quantization), the §A.8 `tgt_bin` map.",
-          "lhs": { "op": "index", "args": ["gen_bin", "g"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "gen_bin",
+              "g"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["g"],
-            "ranges": { "g": { "from": "generators" } },
-            "args": ["gx", "gy", "binw"],
+            "output_idx": [
+              "g"
+            ],
+            "ranges": {
+              "g": {
+                "from": "generators"
+              }
+            },
+            "args": [
+              "gx",
+              "gy",
+              "binw"
+            ],
             "expr": {
               "op": "skolem",
               "args": [
                 "bin",
-                { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["gx", "g"] }, "binw"] }] },
-                { "op": "floor", "args": [{ "op": "/", "args": [{ "op": "index", "args": ["gy", "g"] }, "binw"] }] }
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "gx",
+                            "g"
+                          ]
+                        },
+                        "binw"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "gy",
+                            "g"
+                          ]
+                        },
+                        "binw"
+                      ]
+                    }
+                  ]
+                }
               ]
             }
           }
         },
         {
           "_comment": "NARROW PHASE — assign_binned[i] = argmin_g dist over ONLY the same-bin candidate generators. The argmin's `join` is the bin-Skolem value-equality equi-join (§5.3): point_bin[i] = gen_bin[g] gates which (i,g) pairs enter the distance reduction (the broad phase), then the squared-Euclidean FAQ + smallest-id tie-break pick the winner (the narrow phase). Builds directly on the landed bin-Skolem join + front-door.",
-          "lhs": { "op": "index", "args": ["assign_binned", "i"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "assign_binned",
+              "i"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["i"],
-            "ranges": { "i": { "from": "points" } },
-            "args": ["px", "py", "gx", "gy", "point_bin", "gen_bin"],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "py",
+              "gx",
+              "gy",
+              "point_bin",
+              "gen_bin"
+            ],
             "expr": {
               "op": "argmin",
-              "args": ["px", "py", "gx", "gy"],
+              "args": [
+                "px",
+                "py",
+                "gx",
+                "gy"
+              ],
               "arg": "g",
-              "ranges": { "g": { "from": "generators" } },
+              "ranges": {
+                "g": {
+                  "from": "generators"
+                }
+              },
               "join": [
-                { "on": [["point_bin", "gen_bin"]] }
+                {
+                  "on": [
+                    [
+                      "point_bin",
+                      "gen_bin"
+                    ]
+                  ]
+                }
               ],
               "expr": {
                 "op": "+",
@@ -211,15 +458,87 @@
                   {
                     "op": "*",
                     "args": [
-                      { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] },
-                      { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] }
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "px",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gx",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "g"] }] },
-                      { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "g"] }] }
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "py",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "gy",
+                              "g"
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   }
                 ]

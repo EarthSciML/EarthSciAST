@@ -14,22 +14,22 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 5
+    },
+    "county": {
+      "kind": "categorical",
+      "members": [
+        "Champaign",
+        "Cook",
+        "Sangamon"
+      ]
+    }
+  },
   "models": {
     "AggregateDemo": {
-      "index_sets": {
-        "cells": {
-          "kind": "interval",
-          "size": 5
-        },
-        "county": {
-          "kind": "categorical",
-          "members": [
-            "Champaign",
-            "Cook",
-            "Sangamon"
-          ]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -43,30 +43,60 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": { "from": "cells" } }
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
             "expr": {
               "op": "-",
-              "args": [{ "op": "index", "args": ["u", "i"] }]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
             },
-            "ranges": { "i": { "from": "cells" } }
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           }
         },
         {
           "lhs": {
             "op": "D",
-            "args": ["total"],
+            "args": [
+              "total"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -74,8 +104,18 @@
             "args": [],
             "output_idx": [],
             "semiring": "sum_product",
-            "expr": { "op": "index", "args": ["u", "i"] },
-            "ranges": { "i": { "from": "cells" } }
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "i"
+              ]
+            },
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           }
         }
       ]

@@ -15,24 +15,24 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    },
+    "fuelType": {
+      "kind": "categorical",
+      "members": [
+        "gasoline",
+        "diesel"
+      ]
+    }
+  },
   "models": {
     "EmissionsAggregate": {
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": [
-            "onroad",
-            "nonroad"
-          ]
-        },
-        "fuelType": {
-          "kind": "categorical",
-          "members": [
-            "gasoline",
-            "diesel"
-          ]
-        }
-      },
       "variables": {
         "emissions": {
           "type": "state"
@@ -48,7 +48,9 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["emissions"],
+            "args": [
+              "emissions"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -56,16 +58,37 @@
             "semiring": "sum_product",
             "output_idx": [],
             "ranges": {
-              "src": { "from": "sourceType" },
-              "fuel": { "from": "fuelType" }
+              "src": {
+                "from": "sourceType"
+              },
+              "fuel": {
+                "from": "fuelType"
+              }
             },
             "join": [
-              { "on": [["src", "sourceType"], ["fuel", "fuelType"]] }
+              {
+                "on": [
+                  [
+                    "src",
+                    "sourceType"
+                  ],
+                  [
+                    "fuel",
+                    "fuelType"
+                  ]
+                ]
+              }
             ],
             "filter": {
               "op": ">",
               "args": [
-                { "op": "index", "args": ["base_rate", "src"] },
+                {
+                  "op": "index",
+                  "args": [
+                    "base_rate",
+                    "src"
+                  ]
+                },
                 0
               ]
             },
@@ -73,11 +96,26 @@
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["activity", "src"] },
-                { "op": "index", "args": ["base_rate", "src"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "activity",
+                    "src"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "base_rate",
+                    "src"
+                  ]
+                }
               ]
             },
-            "args": ["activity", "base_rate"]
+            "args": [
+              "activity",
+              "base_rate"
+            ]
           }
         }
       ]

@@ -15,29 +15,64 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "WrongArity": {
-      "index_sets": {
-        "verts": { "kind": "interval", "size": 4 }
-      },
       "variables": {
-        "poly_a": { "type": "parameter", "shape": ["verts"] },
-        "poly_b": { "type": "parameter", "shape": ["verts"] },
-        "poly_c": { "type": "parameter", "shape": ["verts"] },
-        "u": { "type": "state" },
+        "poly_a": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_b": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_c": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "u": {
+          "type": "state"
+        },
         "clip": {
           "type": "observed",
           "expression": {
             "op": "intersect_polygon",
             "manifold": "spherical",
-            "args": ["poly_a", "poly_b", "poly_c"]
+            "args": [
+              "poly_a",
+              "poly_b",
+              "poly_c"
+            ]
           }
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
-          "rhs": { "op": "-", "args": ["u"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
         }
       ]
     }

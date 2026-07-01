@@ -202,7 +202,7 @@ export type ExpressionNode = ExpressionNode1 & {
       | [number, number, number]
       | {
           /**
-           * Name of a declared index set: a key in Model.index_sets. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set.
+           * Name of a declared index set: a key in the document-scoped top-level index_sets registry. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set.
            */
           from: string;
           /**
@@ -474,42 +474,6 @@ export type Plot1 = {
   [k: string]: unknown;
 };
 /**
- * A named index set (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration domain referenced from an `aggregate` range via { "from": <name> }. Covers grid axes and categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.
- */
-export type IndexSet = IndexSet1 & {
-  /**
-   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `aggregate`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by CSR offsets/values factors.
-   */
-  kind: "interval" | "categorical" | "derived" | "ragged";
-  /**
-   * interval: number of members in the dense interval (the grid-axis length). Required when kind is "interval".
-   */
-  size?: number;
-  /**
-   * categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is "categorical".
-   */
-  members?: unknown[];
-  /**
-   * derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is "derived".
-   */
-  from_faq?: string;
-  /**
-   * ragged: the parent index-set name(s) this inner set depends on (e.g. ["cells"] for the edges of each cell). Required when kind is "ragged".
-   */
-  of?: string[];
-  /**
-   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is "ragged".
-   */
-  offsets?: string;
-  /**
-   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is "ragged".
-   */
-  values?: string;
-};
-export type IndexSet1 = {
-  [k: string]: unknown;
-};
-/**
  * A single coupling rule connecting models, reaction systems, or data loaders.
  */
 export type CouplingEntry =
@@ -595,6 +559,42 @@ export type CouplingEvent2 =
   | {
       [k: string]: unknown;
     };
+/**
+ * A named index set (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration domain referenced from an `aggregate` range via { "from": <name> }. Covers grid axes and categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.
+ */
+export type IndexSet = IndexSet1 & {
+  /**
+   * Which of the four index-set forms this entry is. "interval": a dense [1..size] grid axis. "categorical": an explicit enumeration of members. "derived": a data-derived set materialized from an index-set-producing node (a `distinct` `aggregate`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). "ragged": a per-parent (dependent) inner set backed by CSR offsets/values factors.
+   */
+  kind: "interval" | "categorical" | "derived" | "ragged";
+  /**
+   * interval: number of members in the dense interval (the grid-axis length). Required when kind is "interval".
+   */
+  size?: number;
+  /**
+   * categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is "categorical".
+   */
+  members?: unknown[];
+  /**
+   * derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is "derived".
+   */
+  from_faq?: string;
+  /**
+   * ragged: the parent index-set name(s) this inner set depends on (e.g. ["cells"] for the edges of each cell). Required when kind is "ragged".
+   */
+  of?: string[];
+  /**
+   * ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is "ragged".
+   */
+  offsets?: string;
+  /**
+   * ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is "ragged".
+   */
+  values?: string;
+};
+export type IndexSet1 = {
+  [k: string]: unknown;
+};
 
 export interface ESMFormat2 {
   /**
@@ -636,6 +636,12 @@ export interface ESMFormat2 {
    */
   function_tables?: {
     [k: string]: FunctionTable;
+  };
+  /**
+   * Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single, document-level declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets) shared by all models in the document. An `aggregate` range references one by name as { "from": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.
+   */
+  index_sets?: {
+    [k: string]: IndexSet;
   };
 }
 /**
@@ -748,12 +754,6 @@ export interface Model {
    */
   expression_templates?: {
     [k: string]: ExpressionTemplate;
-  };
-  /**
-   * Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets). An `aggregate` range references one by name as { "from": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.
-   */
-  index_sets?: {
-    [k: string]: IndexSet;
   };
 }
 /**

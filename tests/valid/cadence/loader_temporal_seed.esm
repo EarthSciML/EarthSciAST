@@ -20,6 +20,12 @@
       "ess-v9a.5"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "data_loaders": {
     "bc_loader": {
       "kind": "grid",
@@ -42,19 +48,23 @@
   },
   "models": {
     "LoaderTemporalSeed": {
-      "index_sets": {
-        "cells": { "kind": "interval", "size": 4 }
-      },
       "variables": {
         "c": {
           "type": "state",
-          "shape": ["cells"],
+          "shape": [
+            "cells"
+          ],
           "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
         },
         "bc": {
           "type": "discrete",
-          "shape": ["cells"],
-          "refresh": { "kind": "data_ingest", "source": "bc_loader" },
+          "shape": [
+            "cells"
+          ],
+          "refresh": {
+            "kind": "data_ingest",
+            "source": "bc_loader"
+          },
           "description": "Boundary-condition field read from the `bc_loader` DataLoader. The loader declares a `temporal` block, so this output is time-varying: DISCRETE cadence, refreshed on each ingest event (the refresh trigger is the loader's update times). Materialized into a per-event buffer (bind provenance), recomputed when the loader advances to the next record."
         }
       },
@@ -64,32 +74,60 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["c", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 4] }
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expect_cadence": "continuous",
-            "ranges": { "i": [1, 4] },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
             "expr": {
               "op": "-",
               "expect_cadence": "continuous",
               "args": [
                 {
                   "op": "index",
-                  "args": ["bc", "i"],
+                  "args": [
+                    "bc",
+                    "i"
+                  ],
                   "expect_cadence": "discrete"
                 },
                 {
                   "op": "index",
-                  "args": ["c", "i"],
+                  "args": [
+                    "c",
+                    "i"
+                  ],
                   "expect_cadence": "continuous"
                 }
               ]

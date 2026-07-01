@@ -21,69 +21,102 @@
       "ess-my4.3.10"
     ]
   },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "face_vertices": {
+      "kind": "ragged",
+      "of": [
+        "faces"
+      ],
+      "offsets": "n_verts_on_face",
+      "values": "verts_on_face"
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_set"
+    },
+    "edges_of_cell": {
+      "kind": "ragged",
+      "of": [
+        "cells"
+      ],
+      "offsets": "n_edges_on_cell",
+      "values": "edges_on_cell"
+    }
+  },
   "models": {
     "EdgeEnumerationAreaEff": {
-      "index_sets": {
-        "faces": { "kind": "interval", "size": 2 },
-        "cells": { "kind": "interval", "size": 2 },
-        "face_vertices": {
-          "kind": "ragged",
-          "of": ["faces"],
-          "offsets": "n_verts_on_face",
-          "values": "verts_on_face"
-        },
-        "edges": { "kind": "derived", "from_faq": "edge_set" },
-        "edges_of_cell": {
-          "kind": "ragged",
-          "of": ["cells"],
-          "offsets": "n_edges_on_cell",
-          "values": "edges_on_cell"
-        }
-      },
       "variables": {
         "n_verts_on_face": {
           "type": "parameter",
-          "shape": ["faces"],
+          "shape": [
+            "faces"
+          ],
           "description": "Valence of each face (vertices per face) — the ragged `face_vertices` offsets factor. Document-literal connectivity (CONST)."
         },
         "verts_on_face": {
           "type": "parameter",
-          "shape": ["faces", "local_verts"],
+          "shape": [
+            "faces",
+            "local_verts"
+          ],
           "description": "Vertex ids of each face — the ragged `face_vertices` values factor (CSR member gather). Document-literal connectivity (CONST)."
         },
         "n_edges_on_cell": {
           "type": "parameter",
-          "shape": ["cells"],
+          "shape": [
+            "cells"
+          ],
           "description": "Valence of each cell (edges per cell) — the ragged `edges_of_cell` offsets factor."
         },
         "edges_on_cell": {
           "type": "parameter",
-          "shape": ["cells", "local_edges"],
+          "shape": [
+            "cells",
+            "local_edges"
+          ],
           "description": "Dense edge ids incident on each cell — the ragged `edges_of_cell` values factor; the INVERSION of the face->edge relation (§5.2)."
         },
         "dc": {
           "type": "parameter",
-          "shape": ["edges"],
+          "shape": [
+            "edges"
+          ],
           "description": "Distance between the cell centers sharing each edge (the DUO primal length), keyed by dense edge id."
         },
         "dv": {
           "type": "parameter",
-          "shape": ["edges"],
+          "shape": [
+            "edges"
+          ],
           "description": "Length of each edge (the DUO dual length), keyed by dense edge id."
         },
         "edge_exists": {
           "type": "state",
-          "shape": ["edges"],
+          "shape": [
+            "edges"
+          ],
           "description": "Materialized edge-membership over the derived `edges` set, assigned algebraically from the CONST connectivity (the index-set-producing aggregate output)."
         },
         "edge_dense_id": {
           "type": "state",
-          "shape": ["edges"],
+          "shape": [
+            "edges"
+          ],
           "description": "Dense integer ids over the derived `edges` set (the array-backend index), assigned from the rank."
         },
         "area_eff": {
           "type": "state",
-          "shape": ["cells"],
+          "shape": [
+            "cells"
+          ],
           "description": "Effective cell area, the downstream geometric sum_product FAQ over edges_of_cell — replaces the imperative per-edge Julia loop."
         }
       },
@@ -92,41 +125,87 @@
           "_comment": "(1)+(2) edge_set: the index-set-producing node referenced by index_sets.edges.from_faq. semiring bool_and_or + distinct:true dedups the unique undirected edges discovered from the face->vertex connectivity; ranges iterate each face f and the vertex pairs (a,b) of that face ({from face_vertices, of [f]}); filter a<b keeps each undirected edge once; key mints the canonical Skolem term skolem(edge,a,b); the `true` body marks existence. Output order is the §5.7 sorted order. This is the literal RFC §7.3 form.",
           "lhs": {
             "op": "index",
-            "args": ["edge_exists", "edge"]
+            "args": [
+              "edge_exists",
+              "edge"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "id": "edge_set",
-            "args": ["faces"],
+            "args": [
+              "faces"
+            ],
             "semiring": "bool_and_or",
             "distinct": true,
-            "output_idx": ["edge"],
+            "output_idx": [
+              "edge"
+            ],
             "ranges": {
-              "f": { "from": "faces" },
-              "a": { "from": "face_vertices", "of": ["f"] },
-              "b": { "from": "face_vertices", "of": ["f"] }
+              "f": {
+                "from": "faces"
+              },
+              "a": {
+                "from": "face_vertices",
+                "of": [
+                  "f"
+                ]
+              },
+              "b": {
+                "from": "face_vertices",
+                "of": [
+                  "f"
+                ]
+              }
             },
-            "filter": { "op": "<", "args": ["a", "b"] },
+            "filter": {
+              "op": "<",
+              "args": [
+                "a",
+                "b"
+              ]
+            },
             "key": {
               "op": "skolem",
-              "args": ["edge", "a", "b"]
+              "args": [
+                "edge",
+                "a",
+                "b"
+              ]
             },
-            "expr": { "op": "true", "args": [] }
+            "expr": {
+              "op": "true",
+              "args": []
+            }
           }
         },
         {
           "_comment": "(3) rank: dense integer ids over the derived `edges` set, by position in the sorted distinct sequence (§5.5 / §5.7.3) — what the array backend indexes by.",
           "lhs": {
             "op": "index",
-            "args": ["edge_dense_id", "e"]
+            "args": [
+              "edge_dense_id",
+              "e"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
             "semiring": "sum_product",
-            "output_idx": ["e"],
-            "ranges": { "e": { "from": "edges" } },
-            "expr": { "op": "rank", "args": ["edges"] }
+            "output_idx": [
+              "e"
+            ],
+            "ranges": {
+              "e": {
+                "from": "edges"
+              }
+            },
+            "expr": {
+              "op": "rank",
+              "args": [
+                "edges"
+              ]
+            }
           }
         },
         {
@@ -134,22 +213,49 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["area_eff", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "area_eff",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": { "from": "cells" } }
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           },
           "rhs": {
             "op": "aggregate",
-            "args": ["dc", "dv", "edges_on_cell"],
+            "args": [
+              "dc",
+              "dv",
+              "edges_on_cell"
+            ],
             "semiring": "sum_product",
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "ranges": {
-              "i": { "from": "cells" },
-              "k": { "from": "edges_of_cell", "of": ["i"] }
+              "i": {
+                "from": "cells"
+              },
+              "k": {
+                "from": "edges_of_cell",
+                "of": [
+                  "i"
+                ]
+              }
             },
             "expr": {
               "op": "*",
@@ -157,11 +263,31 @@
                 0.25,
                 {
                   "op": "index",
-                  "args": ["dc", { "op": "index", "args": ["edges_on_cell", "i", "k"] }]
+                  "args": [
+                    "dc",
+                    {
+                      "op": "index",
+                      "args": [
+                        "edges_on_cell",
+                        "i",
+                        "k"
+                      ]
+                    }
+                  ]
                 },
                 {
                   "op": "index",
-                  "args": ["dv", { "op": "index", "args": ["edges_on_cell", "i", "k"] }]
+                  "args": [
+                    "dv",
+                    {
+                      "op": "index",
+                      "args": [
+                        "edges_on_cell",
+                        "i",
+                        "k"
+                      ]
+                    }
+                  ]
                 }
               ]
             }

@@ -16,17 +16,25 @@
       "ess-my4.1.5"
     ]
   },
+  "index_sets": {
+    "paths": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "MinSumTropical": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "paths": { "kind": "interval", "size": 3 }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "dist": { "type": "state", "shape": ["i"] }
+        "dist": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
       },
       "equations": [
         {
@@ -34,21 +42,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["dist", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "dist",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 2] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "min_sum",
-            "ranges": { "i": [1, 2], "j": { "from": "paths" } },
-            "expr": { "op": "+", "args": ["i", "j"] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "j": {
+                "from": "paths"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "i",
+                "j"
+              ]
+            }
           }
         }
       ],
@@ -60,10 +99,21 @@
             "dist[1]": 0.0,
             "dist[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "dist[1]", "time": 1.0, "expected": 2.0 },
-            { "variable": "dist[2]", "time": 1.0, "expected": 3.0 }
+            {
+              "variable": "dist[1]",
+              "time": 1.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "dist[2]",
+              "time": 1.0,
+              "expected": 3.0
+            }
           ]
         }
       ]

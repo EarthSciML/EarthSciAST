@@ -15,14 +15,18 @@
       "migrated_to_v08"
     ]
   },
+  "index_sets": {
+    "upper_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lower_cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "UpperAtmosphere": {
-      "index_sets": {
-        "upper_cells": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "O3": {
           "type": "state",
@@ -85,16 +89,6 @@
       ]
     },
     "LowerAtmosphere": {
-      "index_sets": {
-        "lower_cells": {
-          "kind": "interval",
-          "size": 3
-        },
-        "upper_cells": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "T": {
           "type": "state",

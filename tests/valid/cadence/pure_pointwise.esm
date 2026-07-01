@@ -17,15 +17,20 @@
       "ess-my4.3.6"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "PurePointwiseForcing": {
-      "index_sets": {
-        "cells": { "kind": "interval", "size": 4 }
-      },
       "variables": {
         "u": {
           "type": "state",
-          "shape": ["cells"],
+          "shape": [
+            "cells"
+          ],
           "description": "Integrated state — CONTINUOUS cadence (changes every step)."
         },
         "A": {
@@ -45,7 +50,13 @@
           "lhs": {
             "op": "index",
             "args": [
-              { "op": "D", "args": ["u"], "wrt": "t" },
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "t"
+              },
               "i"
             ]
           },
@@ -57,7 +68,14 @@
                 "op": "-",
                 "expect_cadence": "continuous",
                 "args": [
-                  { "op": "index", "args": ["u", "i"], "expect_cadence": "continuous" }
+                  {
+                    "op": "index",
+                    "args": [
+                      "u",
+                      "i"
+                    ],
+                    "expect_cadence": "continuous"
+                  }
                 ]
               },
               {
@@ -72,7 +90,10 @@
                       {
                         "op": "*",
                         "expect_cadence": "continuous",
-                        "args": ["omega", "t"]
+                        "args": [
+                          "omega",
+                          "t"
+                        ]
                       }
                     ]
                   }

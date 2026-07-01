@@ -18,46 +18,58 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "src_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "clip_ring": {
+      "kind": "derived",
+      "from_faq": "overlap_clip"
+    }
+  },
   "models": {
     "PolygonClipArea": {
-      "index_sets": {
-        "coord": {
-          "kind": "interval",
-          "size": 2
-        },
-        "src_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "tgt_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "clip_ring": {
-          "kind": "derived",
-          "from_faq": "overlap_clip"
-        }
-      },
       "variables": {
         "src_poly": {
           "type": "parameter",
-          "shape": ["src_verts", "coord"],
+          "shape": [
+            "src_verts",
+            "coord"
+          ],
           "description": "Source cell as a closed lon-lat vertex ring: src_poly[v, 1]=lon, src_poly[v, 2]=lat. An ordinary coordinate array — the `poly_a` operand of the clip."
         },
         "tgt_poly": {
           "type": "parameter",
-          "shape": ["tgt_verts", "coord"],
+          "shape": [
+            "tgt_verts",
+            "coord"
+          ],
           "description": "Target cell as a closed lon-lat vertex ring — the `poly_b` operand of the clip."
         },
         "clip": {
           "type": "observed",
-          "shape": ["clip_ring", "coord"],
+          "shape": [
+            "clip_ring",
+            "coord"
+          ],
           "description": "The clipped overlap ring A ∩ B, of data-dependent length: the `intersect_polygon` leaf output. Its `expression` is the kernel leaf; its vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\").",
           "expression": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
             "manifold": "spherical",
-            "args": ["src_poly", "tgt_poly"]
+            "args": [
+              "src_poly",
+              "tgt_poly"
+            ]
           }
         },
         "area": {
@@ -69,15 +81,33 @@
             "semiring": "sum_product",
             "output_idx": [],
             "ranges": {
-              "v": { "from": "clip_ring" }
+              "v": {
+                "from": "clip_ring"
+              }
             },
-            "args": ["clip"],
+            "args": [
+              "clip"
+            ],
             "expr": {
               "op": "*",
               "args": [
                 0.5,
-                { "op": "index", "args": ["clip", "v", 1] },
-                { "op": "index", "args": ["clip", "v", 2] }
+                {
+                  "op": "index",
+                  "args": [
+                    "clip",
+                    "v",
+                    1
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "clip",
+                    "v",
+                    2
+                  ]
+                }
               ]
             }
           }
@@ -93,7 +123,9 @@
           "_comment": "Well-formed ODE that uses the area FAQ: d(tracer)/dt = -area·tracer. `area` is the observed polygon_area over the intersect_polygon ring.",
           "lhs": {
             "op": "D",
-            "args": ["tracer"],
+            "args": [
+              "tracer"
+            ],
             "wrt": "t"
           },
           "rhs": {

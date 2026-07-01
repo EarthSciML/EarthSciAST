@@ -19,39 +19,47 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "candidate_set"
+    }
+  },
   "models": {
     "BinSkolemSpatialJoin": {
-      "index_sets": {
-        "src_cells": {
-          "kind": "interval",
-          "size": 4
-        },
-        "tgt_cells": {
-          "kind": "interval",
-          "size": 4
-        },
-        "candidate_pairs": {
-          "kind": "derived",
-          "from_faq": "candidate_set"
-        }
-      },
       "variables": {
         "src_lon": {
           "type": "parameter",
-          "shape": ["src_cells"],
+          "shape": [
+            "src_cells"
+          ],
           "description": "Source-cell representative longitude (e.g. bbox-min corner). Float coordinate — enters ONLY the integer binning via floor, never a raw join comparison."
         },
         "src_lat": {
           "type": "parameter",
-          "shape": ["src_cells"]
+          "shape": [
+            "src_cells"
+          ]
         },
         "tgt_lon": {
           "type": "parameter",
-          "shape": ["tgt_cells"]
+          "shape": [
+            "tgt_cells"
+          ]
         },
         "tgt_lat": {
           "type": "parameter",
-          "shape": ["tgt_cells"]
+          "shape": [
+            "tgt_cells"
+          ]
         },
         "dx": {
           "type": "parameter",
@@ -64,17 +72,23 @@
         },
         "src_bin": {
           "type": "state",
-          "shape": ["src_cells"],
+          "shape": [
+            "src_cells"
+          ],
           "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)). The `floor` op does the integer quantization — no bespoke binning op."
         },
         "tgt_bin": {
           "type": "state",
-          "shape": ["tgt_cells"],
+          "shape": [
+            "tgt_cells"
+          ],
           "description": "Integer bin key of each target cell — the equi-join column the candidate set joins on."
         },
         "pair_exists": {
           "type": "state",
-          "shape": ["candidate_pairs"],
+          "shape": [
+            "candidate_pairs"
+          ],
           "description": "Membership over the candidate overlap-pair set produced by the bin-Skolem equi-join (the broad phase). The byte-identical integer candidate set of §5.8.5."
         }
       },
@@ -83,16 +97,28 @@
           "_comment": "Bin each SOURCE cell to an integer lat-lon bin key. floor(lon/dx) and floor(lat/dy) are integer bin coordinates (the existing `floor` op — item-3 decision: no new bin op); skolem mints the content-addressed bin key. Per-element map: output_idx [i], no contraction.",
           "lhs": {
             "op": "index",
-            "args": ["src_bin", "i"]
+            "args": [
+              "src_bin",
+              "i"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "ranges": {
-              "i": { "from": "src_cells" }
+              "i": {
+                "from": "src_cells"
+              }
             },
-            "args": ["src_lon", "src_lat", "dx", "dy"],
+            "args": [
+              "src_lon",
+              "src_lat",
+              "dx",
+              "dy"
+            ],
             "expr": {
               "op": "skolem",
               "args": [
@@ -100,13 +126,37 @@
                 {
                   "op": "floor",
                   "args": [
-                    { "op": "/", "args": [{ "op": "index", "args": ["src_lon", "i"] }, "dx"] }
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lon",
+                            "i"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
                   ]
                 },
                 {
                   "op": "floor",
                   "args": [
-                    { "op": "/", "args": [{ "op": "index", "args": ["src_lat", "i"] }, "dy"] }
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lat",
+                            "i"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
                   ]
                 }
               ]
@@ -117,16 +167,28 @@
           "_comment": "Bin each TARGET cell identically — same dx/dy quantization so a shared bin key means the bboxes fall in the same broad-phase bucket.",
           "lhs": {
             "op": "index",
-            "args": ["tgt_bin", "j"]
+            "args": [
+              "tgt_bin",
+              "j"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["j"],
+            "output_idx": [
+              "j"
+            ],
             "ranges": {
-              "j": { "from": "tgt_cells" }
+              "j": {
+                "from": "tgt_cells"
+              }
             },
-            "args": ["tgt_lon", "tgt_lat", "dx", "dy"],
+            "args": [
+              "tgt_lon",
+              "tgt_lat",
+              "dx",
+              "dy"
+            ],
             "expr": {
               "op": "skolem",
               "args": [
@@ -134,13 +196,37 @@
                 {
                   "op": "floor",
                   "args": [
-                    { "op": "/", "args": [{ "op": "index", "args": ["tgt_lon", "j"] }, "dx"] }
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lon",
+                            "j"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
                   ]
                 },
                 {
                   "op": "floor",
                   "args": [
-                    { "op": "/", "args": [{ "op": "index", "args": ["tgt_lat", "j"] }, "dy"] }
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lat",
+                            "j"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
                   ]
                 }
               ]
@@ -151,25 +237,48 @@
           "_comment": "Candidate overlap-pair set = the bin-Skolem EQUI-join: the index-set-producing aggregate (bool_and_or, distinct:true) ranges source i and target j, the M2 `join.on` keeps only (i,j) whose bin keys are EQUAL (join on [src_bin, tgt_bin]), and skolem(\"pair\", i, j) names each surviving candidate. The `true` body marks membership. This is the landed M2 equi-join reused on integer bin keys (§5.8.5) — no spatial-index op in the IR; the index is a physical-operator/planner concern (a non-goal here).",
           "lhs": {
             "op": "index",
-            "args": ["pair_exists", "p"]
+            "args": [
+              "pair_exists",
+              "p"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "id": "candidate_set",
             "semiring": "bool_and_or",
             "distinct": true,
-            "output_idx": ["p"],
+            "output_idx": [
+              "p"
+            ],
             "ranges": {
-              "i": { "from": "src_cells" },
-              "j": { "from": "tgt_cells" }
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
             },
             "join": [
-              { "on": [["src_bin", "tgt_bin"]] }
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
             ],
-            "args": ["src_bin", "tgt_bin"],
+            "args": [
+              "src_bin",
+              "tgt_bin"
+            ],
             "key": {
               "op": "skolem",
-              "args": ["pair", "i", "j"]
+              "args": [
+                "pair",
+                "i",
+                "j"
+              ]
             },
             "expr": {
               "op": "true",

@@ -15,18 +15,18 @@
       "migrated_to_v08"
     ]
   },
+  "index_sets": {
+    "ocean_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "atmos_cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "Ocean3D": {
-      "index_sets": {
-        "ocean_cells": {
-          "kind": "interval",
-          "size": 3
-        },
-        "atmos_cells": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "SST": {
           "type": "state",

@@ -14,26 +14,26 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 64
+    },
+    "levels": {
+      "kind": "interval",
+      "size": 8
+    },
+    "boundary": {
+      "kind": "interval",
+      "size": 24
+    },
+    "edges": {
+      "kind": "interval",
+      "size": 96
+    }
+  },
   "models": {
     "DiscreteFields": {
-      "index_sets": {
-        "cells": {
-          "kind": "interval",
-          "size": 64
-        },
-        "levels": {
-          "kind": "interval",
-          "size": 8
-        },
-        "boundary": {
-          "kind": "interval",
-          "size": 24
-        },
-        "edges": {
-          "kind": "interval",
-          "size": 96
-        }
-      },
       "variables": {
         "c": {
           "type": "state",

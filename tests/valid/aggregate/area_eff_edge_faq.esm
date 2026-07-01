@@ -18,20 +18,25 @@
       "ess-my4.3.10"
     ]
   },
+  "index_sets": {
+    "edges": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
   "models": {
     "AreaEffEdgeFaq": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "edges": {
-          "kind": "interval",
-          "size": 5
-        }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "area_eff": { "type": "state", "shape": ["i"] }
+        "area_eff": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
       },
       "equations": [
         {
@@ -39,21 +44,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["area_eff", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "area_eff",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 2] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
-            "ranges": { "i": [1, 2], "e": { "from": "edges" } },
-            "expr": { "op": "*", "args": ["i", "e"] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "e": {
+                "from": "edges"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "i",
+                "e"
+              ]
+            }
           }
         }
       ],
@@ -65,10 +101,21 @@
             "area_eff[1]": 0.0,
             "area_eff[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "area_eff[1]", "time": 1.0, "expected": 15.0 },
-            { "variable": "area_eff[2]", "time": 1.0, "expected": 30.0 }
+            {
+              "variable": "area_eff[1]",
+              "time": 1.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "area_eff[2]",
+              "time": 1.0,
+              "expected": 30.0
+            }
           ]
         }
       ]

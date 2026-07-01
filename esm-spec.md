@@ -12,13 +12,13 @@ The ESM (`.esm`) format is a JSON-based serialization format for EarthSciML mode
 
 ESM is **language-agnostic**. Every model must be fully self-describing: all equations, variables, parameters, species, and reactions are specified in the format itself. A conforming parser in any language can reconstruct the complete mathematical system from the `.esm` file alone, without access to any particular software package.
 
-The single exception to full specification is **data loaders**, which are inherently runtime-specific (file I/O, format adapters, regridding, large external grids) and are therefore referenced by type/name rather than fully defined. There is no in-file registry of arbitrary user-defined functions or operators: every callable invoked from an expression is drawn from the **closed function registry** (Section 9), whose entries are spec-defined with fixed names, signatures, and tolerances. See `docs/rfcs/closed-function-registry.md` for the rationale.
+The single exception to full specification is **data loaders**, which are inherently runtime-specific (file I/O, format adapters, regridding, large external grids) and are therefore referenced by type/name rather than fully defined. There is no in-file registry of arbitrary user-defined functions or operators: every callable invoked from an expression is drawn from the **closed function registry** (Section 9), whose entries are spec-defined with fixed names, signatures, and tolerances. See `docs/content/rfcs/closed-function-registry.md` for the rationale.
 
 ### 1.1 Authoring Policy: AST first, registry second, factoring third
 
 Authors and reviewers MUST prefer the built-in expression AST (Section 4) over the closed function registry (Section 9). A `{"op": "fn", ...}` node is justified **only** when the desired primitive cannot be written as a finite closed-form composition of the AST ops in §4.2 — typically because it requires non-AST ingredients (calendar arithmetic, polygon clipping). Anything expressible in finite closed form (powers, polynomials, transcendentals, conditionals, piecewise, clip/clamp) belongs in the AST. Reviewers MUST reject `fn` nodes whose body can be written using existing AST ops; `^`, `min`, `max`, `ifelse`, `sign` and the trig / exp / log family already cover ordinary scalar math.
 
-The closed function registry is **closed**: bindings MUST reject any `fn` node whose `name` is not in the spec-defined set for the file's declared `esm` version. There is no per-file declaration of new functions, no `handler_id` lookup, and no out-of-band runtime registry. Adding a primitive requires a spec rev (see `docs/rfcs/closed-function-registry.md` §7).
+The closed function registry is **closed**: bindings MUST reject any `fn` node whose `name` is not in the spec-defined set for the file's declared `esm` version. There is no per-file declaration of new functions, no `handler_id` lookup, and no out-of-band runtime registry. Adding a primitive requires a spec rev (see `docs/content/rfcs/closed-function-registry.md` §7).
 
 The full authoring stance, normatively:
 
@@ -162,7 +162,7 @@ with arity ≥ 2** and return the element-wise extremum across all arguments
 nodes with fewer than two arguments. `min`/`max` are the canonical, AST-level
 encoding of clamp / clip / limiter primitives — `clamp(x, lo, hi)` is
 `{"op": "min", "args": [hi, {"op": "max", "args": [lo, "x"]}]}` — and reviewers
-MUST reject `fn` nodes that only re-implement these in disguise (see §0).
+MUST reject `fn` nodes that only re-implement these in disguise (see §9.2).
 
 The hyperbolic family `sinh`, `cosh`, `tanh` and their inverses `asinh`,
 `acosh`, `atanh` are unary, elementwise transcendentals evaluated exactly like
@@ -214,6 +214,18 @@ by this spec.
 | `reshape` | `shape` | Reshape `args[0]` to the given target shape. See Section 4.3.5. |
 | `transpose` | — (optional `perm`) | Axis permutation of `args[0]`. See Section 4.3.5. |
 | `concat` | `axis` | Concatenate the operand arrays along the given axis. See Section 4.3.5. |
+
+#### Relational / value-invention & geometry (FAQ companions)
+
+These accompany `aggregate` in Functional Aggregate Query expressions (RFC semiring-faq-unified-ir §5). The relational ops (`skolem`, `rank`) run at build/setup time to invent index values and dense IDs; `argmin`/`argmax` are index-returning reductions; `intersect_polygon` is a geometry kernel leaf.
+
+| Op | Fields | Meaning |
+|---|---|---|
+| `skolem` | — | Mint a canonical value (a tuple, not a hash) identifying a relation instance — e.g. an undirected edge sorts its endpoints to `(min, max)`; dense IDs then come from `rank`. Build-time value invention. See RFC semiring-faq-unified-ir §5.7. |
+| `rank` | — | Assign a dense 0-based ID to each element by its position in the sorted `distinct` sequence of the input. Build-time. See RFC §5.7. |
+| `argmin`, `argmax` | `output_idx`, `expr`, `arg` | Index-returning reductions: the index at which the aggregated body attains its minimum / maximum over the contracted index set. |
+| `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells, composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
+| `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
 
 ### 4.3 Array / Tensor Semantics
 
@@ -413,7 +425,7 @@ The following are intentionally *not* represented in the schema:
 
 ### 4.4 Closed Function Invocation (`fn`)
 
-The `fn` op invokes a function from the **closed function registry** defined in Section 9. The set of valid `name` values is fixed by the spec version: bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration of new functions and no `handler_id` lookup. See `docs/rfcs/closed-function-registry.md` for the rationale and addition process.
+The `fn` op invokes a function from the **closed function registry** defined in Section 9. The set of valid `name` values is fixed by the spec version: bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration of new functions and no `handler_id` lookup. See `docs/content/rfcs/closed-function-registry.md` for the rationale and addition process.
 
 Fields:
 
@@ -1007,7 +1019,7 @@ The special variable `"_var"` is a placeholder used in operator-style models. Wh
 
 ### 6.5 Dry Deposition Model Example
 
-A model that computes deposition velocities from surface resistance parameters. This model is coupled to a chemistry system via `couple` to provide deposition loss terms; grid-level application of those losses is expressed via the `discretizations` block (`docs/rfcs/discretization.md` §7), not as an opaque registered operator.
+A model that computes deposition velocities from surface resistance parameters. This model is coupled to a chemistry system via `couple` to provide deposition loss terms; grid-level application of those losses is expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8), not as an opaque registered operator.
 
 ```json
 {
@@ -1648,6 +1660,10 @@ temporal:
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
 
+### 8.4 (Reserved)
+
+The former native-grid descriptor was removed in v0.8.0: a loader exposes any grid geometry it reads (coordinates, connectivity, metric arrays) as ordinary `variables` (§8.5), consumed downstream by `aggregate` FAQs. The subsection number is retained so §8.5–§8.8 references stay stable.
+
 ### 8.5 `variables` — variable mapping
 
 ```
@@ -1845,7 +1861,7 @@ referenced as an ESD subsystem.
 
 Every callable that may appear inside an expression is drawn from this section's **closed registry**. There is no per-file declaration of new functions, no `handler_id` lookup, and no out-of-band runtime extension point. The set of valid `fn` `name` values is fixed by the spec version: bindings MUST reject any `fn` node whose `name` is not declared in §9.2 for the file's `esm` version, with diagnostic code `unknown_closed_function`. Loading MUST fail.
 
-The closed-set rule is a deliberate constraint that recovers cross-binding bit-equivalence: an `.esm` file plus the spec version uniquely determines numerical behavior. The trade-off is that adding a primitive requires a spec rev (the addition process, deprecation policy, and compatibility-matrix discipline are described in `docs/rfcs/closed-function-registry.md` §7).
+The closed-set rule is a deliberate constraint that recovers cross-binding bit-equivalence: an `.esm` file plus the spec version uniquely determines numerical behavior. The trade-off is that adding a primitive requires a spec rev (the addition process, deprecation policy, and compatibility-matrix discipline are described in `docs/content/rfcs/closed-function-registry.md` §7).
 
 A function belongs in the closed registry **only** when **all three** of the following hold:
 
@@ -1857,7 +1873,7 @@ Anything that fails one of these tests does not belong here. The §1.1 authoring
 
 ### 9.2 v1 closed function set
 
-The v1 set is intentionally narrow: calendar arithmetic on UTC time, plus a single search-into-sorted-table primitive that, composed with the existing `index` op, covers the categorical / interpolation lookups motivated in `docs/rfcs/closed-function-registry.md`. All real-valued time inputs are IEEE-754 `binary64` UTC seconds since the Unix epoch (1970-01-01T00:00:00Z, proleptic Gregorian, no leap-second consultation — the deliberate cross-binding contract). All integer outputs are signed 32-bit; bindings MUST raise `closed_function_overflow` if a result would overflow.
+The v1 set is intentionally narrow: calendar arithmetic on UTC time, plus a single search-into-sorted-table primitive that, composed with the existing `index` op, covers the categorical / interpolation lookups motivated in `docs/content/rfcs/closed-function-registry.md`. All real-valued time inputs are IEEE-754 `binary64` UTC seconds since the Unix epoch (1970-01-01T00:00:00Z, proleptic Gregorian, no leap-second consultation — the deliberate cross-binding contract). All integer outputs are signed 32-bit; bindings MUST raise `closed_function_overflow` if a result would overflow.
 
 #### `datetime.*` — calendar decomposition
 
@@ -1900,7 +1916,7 @@ Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left
 
 **Tolerance:** exact (the returned index is integer; the comparison is the IEEE-754 `≥` predicate, which has no rounding tolerance).
 
-The `interp.searchsorted` primitive composes with the existing `index` op (§4.3.3) to express tabulated lookups: `{"op": "index", "args": ["table", {"op": "fn", "name": "interp.searchsorted", "args": ["x", {"op": "const", "value": [...]}]}]}`. Linear blends between adjacent table entries can be written in pure AST (subtract neighbouring `index`-ed values, multiply by a fractional weight, add); the `interp.linear` and `interp.bilinear` primitives below are the **named, opaque** form of those blends — semantically equivalent to the AST composition but exposed as a single `fn` node so that bindings with symbolic-rewriting layers (notably the Julia / MTK extension) can register them as opaque operators and avoid the alias-elimination blow-up that ~10-node-per-lookup AST inlining causes for components with hundreds of lookups (see `docs/rfcs/closed-function-registry.md` and the `interp.linear` / `interp.bilinear` rationale in §9.2 below).
+The `interp.searchsorted` primitive composes with the existing `index` op (§4.3.3) to express tabulated lookups: `{"op": "index", "args": ["table", {"op": "fn", "name": "interp.searchsorted", "args": ["x", {"op": "const", "value": [...]}]}]}`. Linear blends between adjacent table entries can be written in pure AST (subtract neighbouring `index`-ed values, multiply by a fractional weight, add); the `interp.linear` and `interp.bilinear` primitives below are the **named, opaque** form of those blends — semantically equivalent to the AST composition but exposed as a single `fn` node so that bindings with symbolic-rewriting layers (notably the Julia / MTK extension) can register them as opaque operators and avoid the alias-elimination blow-up that ~10-node-per-lookup AST inlining causes for components with hundreds of lookups (see `docs/content/rfcs/closed-function-registry.md` and the `interp.linear` / `interp.bilinear` rationale in §9.2 below).
 
 #### `interp.*` — tensor interpolation
 
@@ -2024,7 +2040,7 @@ The `enums` top-level block declares file-local symbol → positive-integer mapp
 - The `enum` op (§4.5) MUST resolve at load time, before any expression evaluation. After lowering, no `enum`-op nodes remain in the in-memory representation; each is replaced by a `{"op": "const", "value": <integer>}` node. Bindings MUST NOT propagate enum strings into evaluated expressions.
 - An `enum` op that names an undeclared enum (`unknown_enum`) or a symbol not declared under that enum (`unknown_enum_symbol`) MUST be rejected at load time. Loading MUST fail.
 
-**Use with the `index` op:** the canonical use of `enums` is to keep categorical lookups portable. Tables are encoded as `const` arrays; categorical keys are written as `enum` ops; the existing `index` op (§4.3.3) does the actual lookup. See §13 for a worked example using a Wesely-style canopy resistance table.
+**Use with the `index` op:** the canonical use of `enums` is to keep categorical lookups portable. Tables are encoded as `const` arrays; categorical keys are written as `enum` ops; the existing `index` op (§4.3.3) does the actual lookup — the portable form of, e.g., a Wesely-style canopy resistance lookup (`enum` keys indexing a `const` resistance table, as in §4.5).
 
 ### 9.4 Conformance contract
 
@@ -2318,7 +2334,7 @@ A discretization rule therefore names its BC in its identity. `central_grad_lon_
 
 The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized gradient is fully defined with its BC and there is nowhere else a boundary condition could live.
 
-**Choosing a scheme = choosing a rule.** A periodic-BC gradient is a *different* rule (`central_grad_lon_periodic`) whose single interior `aggregate` gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; and a rule for a seam shared with another variable overwrites the face with an `index` into that variable. Bindings ship **default built-in** rules for the common (operator × standard-BC) combinations, so a file MAY use `grad`/`div`/`laplacian` with no in-file rules (as in §13.2). An author overrides by declaring an earlier `match` rule (upwind, WENO, a custom spacing, or a different BC; declaration order wins, §9.6.3).
+**Choosing a scheme = choosing a rule.** A periodic-BC gradient is a *different* rule (`central_grad_lon_periodic`) whose single interior `aggregate` gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; and a rule for a seam shared with another variable overwrites the face with an `index` into that variable. Bindings ship **default built-in** rules for the common (operator × standard-BC) combinations, so a file MAY use `grad`/`div`/`laplacian` with no in-file rules, relying on those built-in defaults. An author overrides by declaring an earlier `match` rule (upwind, WENO, a custom spacing, or a different BC; declaration order wins, §9.6.3).
 
 **Determinism.** Lowering is the single-pass rewrite of §9.6.3 (rules applied in declaration order, replacements not re-scanned). Two bindings expanding the same file MUST produce structurally identical post-lowering ASTs.
 
@@ -2391,7 +2407,7 @@ The coupling section defines how models, reaction systems, and data loaders conn
 }
 ```
 
-Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed via the `discretizations` block plus PDE operators in the model equations themselves; see `docs/rfcs/discretization.md` §7.
+Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier drafts expressed as `operator_apply` coupling entries are now expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8).
 
 ### 10.1 Coupling Types
 
@@ -2564,7 +2580,7 @@ A model's dimensionality is the number of spatial `index_sets` its state variabl
 | **2D** | 2 | Surface fire spread, sea-ice extent, land surface models |
 | **3D** | 3 | Atmospheric dynamics, ocean circulation, subsurface flow |
 
-Models with `"domain": null` (or scalar-only `shape`) are 0D. A 0D model has no spatial axes; when coupled to a spatial system, the lifting strategy (Section 10.5) determines how it maps onto the spatial index sets.
+Models whose state variables carry no (or empty) `shape` are 0D. A 0D model has no spatial axes; when coupled to a spatial system, the lifting strategy (Section 10.5) determines how it maps onto the spatial index sets.
 
 ### 11.3 Domain Fields
 
@@ -2600,6 +2616,13 @@ A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate ex
 
 Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to an `aggregate` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
 
+---
+
+## 12. (Reserved)
+
+The former **Interfaces** section was removed in v0.8.0. Cross-grid coupling between components on different domains is now expressed as ordinary regridding expressions in the coupling relationship between two variables (§8.6, §10.5) — an `aggregate` (FAQ) over index sets, not a separate interface construct. The section number is retained so §13–§15 references stay stable.
+
+---
 
 ## 13. Complete Examples
 
@@ -2791,7 +2814,7 @@ Every equation, species, reaction, parameter, and variable must be present in th
 
 ### Data loaders are the only externally-registered mechanism
 
-Data loaders are runtime-specific: they involve I/O, format adapters, and large external grids that cannot be meaningfully serialized as math. (A loader is pure I/O — it does not regrid; transferring its fields onto a model's target grid is a model concern, §8.) The `.esm` file declares *what* they provide and *what* they need, but delegates *how* to the runtime. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via PDE operators in model equations and named entries in the `discretizations` block (`docs/rfcs/discretization.md` §7). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are drawn from the closed function registry (Section 9), whose entries are spec-pinned with fixed names, signatures, and tolerances.
+Data loaders are runtime-specific: they involve I/O, format adapters, and large external grids that cannot be meaningfully serialized as math. (A loader is pure I/O — it does not regrid; transferring its fields onto a model's target grid is a model concern, §8.) The `.esm` file declares *what* they provide and *what* they need, but delegates *how* to the runtime. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are drawn from the closed function registry (Section 9), whose entries are spec-pinned with fixed names, signatures, and tolerances.
 
 ### Expression AST over string math
 

@@ -13,14 +13,16 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "edges_of_cell": {
+      "kind": "ragged",
+      "of": [
+        "cells"
+      ]
+    }
+  },
   "models": {
     "BadRagged": {
-      "index_sets": {
-        "edges_of_cell": {
-          "kind": "ragged",
-          "of": ["cells"]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -30,7 +32,9 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": -1

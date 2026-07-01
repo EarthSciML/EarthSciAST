@@ -13,17 +13,17 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
   "models": {
     "BadJoinPair": {
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": [
-            "onroad",
-            "nonroad"
-          ]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -33,23 +33,38 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "aggregate",
             "output_idx": [],
             "ranges": {
-              "src": { "from": "sourceType" }
+              "src": {
+                "from": "sourceType"
+              }
             },
             "join": [
-              { "on": [["src"]] }
+              {
+                "on": [
+                  [
+                    "src"
+                  ]
+                ]
+              }
             ],
             "expr": {
               "op": "index",
-              "args": ["u", "src"]
+              "args": [
+                "u",
+                "src"
+              ]
             },
-            "args": ["u"]
+            "args": [
+              "u"
+            ]
           }
         }
       ]

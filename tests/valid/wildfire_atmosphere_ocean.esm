@@ -14,6 +14,16 @@
       "migrated_to_v08"
     ]
   },
+  "index_sets": {
+    "ocean_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "atmos_cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "AtmosphericDynamics": {
       "reference": {
@@ -370,16 +380,6 @@
     "OceanDynamics": {
       "reference": {
         "notes": "Simplified 3D ocean dynamics"
-      },
-      "index_sets": {
-        "ocean_cells": {
-          "kind": "interval",
-          "size": 3
-        },
-        "atmos_cells": {
-          "kind": "interval",
-          "size": 3
-        }
       },
       "variables": {
         "SST": {

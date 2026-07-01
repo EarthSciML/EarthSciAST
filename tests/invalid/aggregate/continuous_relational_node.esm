@@ -14,14 +14,14 @@
       "resolver"
     ]
   },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "ContinuousRelationalNode": {
-      "index_sets": {
-        "faces": {
-          "kind": "interval",
-          "size": 4
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -35,22 +35,35 @@
           "_comment": "REJECTED by §5.7 guard 2: this distinct/value-invention node reads the state variable u in its Skolem key, so class(node) = CONTINUOUS. Relational work may not run on the per-step hot path; declare the leaves CONST (document literals) or DISCRETE (a `discrete` variable refreshed at events) instead.",
           "lhs": {
             "op": "index",
-            "args": ["edge_exists", "e"]
+            "args": [
+              "edge_exists",
+              "e"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
             "distinct": true,
             "semiring": "bool_and_or",
-            "output_idx": ["e"],
+            "output_idx": [
+              "e"
+            ],
             "ranges": {
-              "f": { "from": "faces" }
+              "f": {
+                "from": "faces"
+              }
             },
             "key": {
               "op": "skolem",
               "args": [
                 "edge",
-                { "op": "index", "args": ["u", "f"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "f"
+                  ]
+                }
               ]
             },
             "expr": {
@@ -63,12 +76,16 @@
           "_comment": "An ordinary continuous decay so u is a well-formed state with an ODE alongside the (rejected) value-invention node above.",
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "-",
-            "args": ["u"]
+            "args": [
+              "u"
+            ]
           }
         }
       ]

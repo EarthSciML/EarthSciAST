@@ -25,44 +25,61 @@
       "ess-my4.4.6"
     ]
   },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "src_cells": {
+      "kind": "categorical",
+      "members": [
+        "b0",
+        "b0",
+        "b1",
+        "b1"
+      ]
+    },
+    "tgt_cells": {
+      "kind": "categorical",
+      "members": [
+        "b0",
+        "b0",
+        "b1",
+        "b1"
+      ]
+    },
+    "clip_ring": {
+      "kind": "derived",
+      "from_faq": "overlap_clip"
+    }
+  },
   "models": {
     "ConservativeRegridAssembly": {
-      "index_sets": {
-        "coord": {
-          "kind": "interval",
-          "size": 2
-        },
-        "cell_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "src_cells": {
-          "kind": "categorical",
-          "members": ["b0", "b0", "b1", "b1"]
-        },
-        "tgt_cells": {
-          "kind": "categorical",
-          "members": ["b0", "b0", "b1", "b1"]
-        },
-        "clip_ring": {
-          "kind": "derived",
-          "from_faq": "overlap_clip"
-        }
-      },
       "variables": {
         "A_ij": {
           "type": "parameter",
-          "shape": ["src_cells", "tgt_cells"],
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
           "description": "The build-once sparse overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) — ConservativeRegridding.jl's `intersections` matrix of RAW areas, the static-partition (§6.1) NARROW-phase output the assembly consumes as a factor. Supplied as a const_array at evaluation time (the dedicated Julia test fills it by running the landed planar clip kernel over the fixture grid pair). Entries for non-candidate (different-bin) pairs and sub-`atol` slivers are 0; both are excluded by the join + zero-area filter of the assembly aggregates."
         },
         "F_src": {
           "type": "parameter",
-          "shape": ["src_cells"],
+          "shape": [
+            "src_cells"
+          ],
           "description": "The source field being remapped (a build-once `parameter` here; time-varying F_src is the dynamic-cadence case of §6.1, where the apply FAQ becomes continuous). Supplied as a const_array."
         },
         "dst_areas": {
           "type": "parameter",
-          "shape": ["tgt_cells"],
+          "shape": [
+            "tgt_cells"
+          ],
           "description": "The build-once target-cell area denominator A_j = Σ_i A_ij stored at regridder-build time — ConservativeRegridding.jl's `dst_areas`. The NORMALIZE factor: the apply body divides by dst_areas[j] (the `dst ./= dst_areas` step folded into the FAQ). Supplied as a const_array; the `A_j` FAQ state recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, §5.8.3)."
         },
         "atol": {
@@ -72,23 +89,35 @@
         },
         "src_poly_rep": {
           "type": "parameter",
-          "shape": ["cell_verts", "coord"],
+          "shape": [
+            "cell_verts",
+            "coord"
+          ],
           "description": "A representative source cell as a closed lon-lat vertex ring — the `poly_a` operand of the narrow-phase clip demo. Supplied as a const_array. In the full mesh there is one ring per source cell and the clip runs once per candidate pair to fill each A_ij entry; here it is shown on one representative pair."
         },
         "tgt_poly_rep": {
           "type": "parameter",
-          "shape": ["cell_verts", "coord"],
+          "shape": [
+            "cell_verts",
+            "coord"
+          ],
           "description": "A representative target cell ring — the `poly_b` operand of the clip demo (the target cell that overlaps src_poly_rep on a fractional sub-cell area)."
         },
         "clip": {
           "type": "observed",
-          "shape": ["clip_ring", "coord"],
+          "shape": [
+            "clip_ring",
+            "coord"
+          ],
           "description": "NARROW-PHASE DEMO: the clipped overlap ring A ∩ B for the representative candidate pair — the `intersect_polygon` leaf output, a vertex ring of data-dependent length whose vertices are the derived `clip_ring` index set. One such clip per candidate pair fills the build-once A_ij factor.",
           "expression": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
             "manifold": "planar",
-            "args": ["src_poly_rep", "tgt_poly_rep"]
+            "args": [
+              "src_poly_rep",
+              "tgt_poly_rep"
+            ]
           }
         },
         "A_ij_rep": {
@@ -100,9 +129,13 @@
             "semiring": "sum_product",
             "output_idx": [],
             "ranges": {
-              "v": { "from": "clip_ring" }
+              "v": {
+                "from": "clip_ring"
+              }
             },
-            "args": ["clip"],
+            "args": [
+              "clip"
+            ],
             "expr": {
               "op": "*",
               "args": [
@@ -113,15 +146,55 @@
                     {
                       "op": "*",
                       "args": [
-                        { "op": "index", "args": ["clip", "v", 1] },
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            "v",
+                            1
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            {
+                              "op": "+",
+                              "args": [
+                                "v",
+                                1
+                              ]
+                            },
+                            2
+                          ]
+                        }
                       ]
                     },
                     {
                       "op": "*",
                       "args": [
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 1] },
-                        { "op": "index", "args": ["clip", "v", 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            {
+                              "op": "+",
+                              "args": [
+                                "v",
+                                1
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            "v",
+                            2
+                          ]
+                        }
                       ]
                     }
                   ]
@@ -137,19 +210,29 @@
         },
         "A_j": {
           "type": "state",
-          "shape": ["tgt_cells"],
+          "shape": [
+            "tgt_cells"
+          ],
           "description": "Target-cell area denominator A_j = Σ_i A_ij — the group-by-`j` row-sum of the overlap-area matrix (ConservativeRegridding.jl's `dst_areas`), recomputed by the FAQ from the SAME A_ij that feeds the apply. d(A_j[j])/dt from a zero IC, so du = A_j[j]. The test asserts it reproduces the supplied `dst_areas`, which is the partition-of-unity-by-construction proof (§5.8.3)."
         },
         "F_tgt": {
           "type": "state",
-          "shape": ["tgt_cells"],
+          "shape": [
+            "tgt_cells"
+          ],
           "description": "The regridded field F_tgt[j] = (1/A_j[j])·Σ_i A_ij[i,j]·F_src[i] = Σ_i W_ij·F_src[i] with W_ij = A_ij/A_j — the apply FAQ (sparse mat-vec) with the normalize `/ dst_areas[j]` folded into the body. d(F_tgt[j])/dt from a zero IC, so du = F_tgt[j]. The test asserts conservation Σ_j A_j·F_tgt[j] = Σ_i A_i·F_src[i] and partition-of-unity Σ_i W_ij = 1."
         }
       },
       "equations": [
         {
           "_comment": "NARROW-PHASE DEMO consumer: d(narrow_phase_area)/dt = A_ij_rep (the representative polygon_area(intersect_polygon(...)) overlap area). A_ij_rep is a scalar observed substituted inline; from a zero IC du = A_ij_rep.",
-          "lhs": { "op": "D", "args": ["narrow_phase_area"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "narrow_phase_area"
+            ],
+            "wrt": "t"
+          },
           "rhs": "A_ij_rep"
         },
         {
@@ -157,27 +240,78 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "expr": { "op": "D", "args": [{ "op": "index", "args": ["A_j", "j"] }], "wrt": "t" },
-            "ranges": { "j": [1, 4] }
+            "output_idx": [
+              "j"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "j": [
+                1,
+                4
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["j"],
+            "output_idx": [
+              "j"
+            ],
             "ranges": {
-              "i": { "from": "src_cells" },
-              "j": { "from": "tgt_cells" }
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
             },
             "join": [
-              { "on": [["i", "j"]] }
+              {
+                "on": [
+                  [
+                    "i",
+                    "j"
+                  ]
+                ]
+              }
             ],
             "filter": {
               "op": ">",
-              "args": [{ "op": "index", "args": ["A_ij", "i", "j"] }, "atol"]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
             },
-            "args": ["A_ij"],
-            "expr": { "op": "index", "args": ["A_ij", "i", "j"] }
+            "args": [
+              "A_ij"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            }
           }
         },
         {
@@ -185,37 +319,102 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "expr": { "op": "D", "args": [{ "op": "index", "args": ["F_tgt", "j"] }], "wrt": "t" },
-            "ranges": { "j": [1, 4] }
+            "output_idx": [
+              "j"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F_tgt",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "j": [
+                1,
+                4
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["j"],
+            "output_idx": [
+              "j"
+            ],
             "ranges": {
-              "i": { "from": "src_cells" },
-              "j": { "from": "tgt_cells" }
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
             },
             "join": [
-              { "on": [["i", "j"]] }
+              {
+                "on": [
+                  [
+                    "i",
+                    "j"
+                  ]
+                ]
+              }
             ],
             "filter": {
               "op": ">",
-              "args": [{ "op": "index", "args": ["A_ij", "i", "j"] }, "atol"]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
             },
-            "args": ["A_ij", "F_src", "dst_areas"],
+            "args": [
+              "A_ij",
+              "F_src",
+              "dst_areas"
+            ],
             "expr": {
               "op": "/",
               "args": [
                 {
                   "op": "*",
                   "args": [
-                    { "op": "index", "args": ["A_ij", "i", "j"] },
-                    { "op": "index", "args": ["F_src", "i"] }
+                    {
+                      "op": "index",
+                      "args": [
+                        "A_ij",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "F_src",
+                        "i"
+                      ]
+                    }
                   ]
                 },
-                { "op": "index", "args": ["dst_areas", "j"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "dst_areas",
+                    "j"
+                  ]
+                }
               ]
             }
           }

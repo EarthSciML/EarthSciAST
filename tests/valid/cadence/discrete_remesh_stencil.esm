@@ -19,29 +19,49 @@
       "ess-my4.3.10"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "stencil": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "DiscreteRemeshStencil": {
-      "index_sets": {
-        "cells": { "kind": "interval", "size": 4 },
-        "stencil": { "kind": "interval", "size": 3 }
-      },
       "variables": {
         "u": {
           "type": "state",
-          "shape": ["cells"],
+          "shape": [
+            "cells"
+          ],
           "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
         },
         "nbr": {
           "type": "discrete",
-          "shape": ["cells", "stencil"],
+          "shape": [
+            "cells",
+            "stencil"
+          ],
           "description": "Neighbour index table (mesh topology / connectivity), RELOADED from the refined mesh on each AMR remesh event — a discrete variable (shape fixed at setup, values refresh at the remesh event). DISCRETE cadence; materialized into a per-event buffer (bind provenance), recomputed on each remesh — the analogue of mixed_stencil's CONST nbr that folded at compile.",
-          "refresh": { "kind": "remesh", "hook": "amr_refine" }
+          "refresh": {
+            "kind": "remesh",
+            "hook": "amr_refine"
+          }
         },
         "coeff": {
           "type": "discrete",
-          "shape": ["cells", "stencil"],
+          "shape": [
+            "cells",
+            "stencil"
+          ],
           "description": "Per-edge geometric diffusion coefficients derived from the reloaded mesh geometry, recomputed on the AMR remesh event — discrete variable, DISCRETE cadence; materialized into a per-event buffer (bind provenance).",
-          "refresh": { "kind": "remesh", "hook": "amr_refine" }
+          "refresh": {
+            "kind": "remesh",
+            "hook": "amr_refine"
+          }
         }
       },
       "equations": [
@@ -50,27 +70,56 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 4] }
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expect_cadence": "continuous",
-            "ranges": { "i": [1, 4], "k": { "from": "stencil" } },
+            "ranges": {
+              "i": [
+                1,
+                4
+              ],
+              "k": {
+                "from": "stencil"
+              }
+            },
             "expr": {
               "op": "*",
               "expect_cadence": "continuous",
               "args": [
                 {
                   "op": "index",
-                  "args": ["coeff", "i", "k"],
+                  "args": [
+                    "coeff",
+                    "i",
+                    "k"
+                  ],
                   "expect_cadence": "discrete"
                 },
                 {
@@ -84,14 +133,21 @@
                         "u",
                         {
                           "op": "index",
-                          "args": ["nbr", "i", "k"],
+                          "args": [
+                            "nbr",
+                            "i",
+                            "k"
+                          ],
                           "expect_cadence": "discrete"
                         }
                       ]
                     },
                     {
                       "op": "index",
-                      "args": ["u", "i"],
+                      "args": [
+                        "u",
+                        "i"
+                      ],
                       "expect_cadence": "continuous"
                     }
                   ]

@@ -14,14 +14,17 @@
       "ess-my4.2.5"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
   "models": {
     "EmptyJoinOn": {
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": ["onroad", "nonroad"]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -31,23 +34,34 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "aggregate",
             "output_idx": [],
             "ranges": {
-              "src": { "from": "sourceType" }
+              "src": {
+                "from": "sourceType"
+              }
             },
             "join": [
-              { "on": [] }
+              {
+                "on": []
+              }
             ],
             "expr": {
               "op": "index",
-              "args": ["u", "src"]
+              "args": [
+                "u",
+                "src"
+              ]
             },
-            "args": ["u"]
+            "args": [
+              "u"
+            ]
           }
         }
       ]

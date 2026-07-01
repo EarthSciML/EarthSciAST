@@ -16,22 +16,22 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 12
+    },
+    "local_edges": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_set"
+    }
+  },
   "models": {
     "EdgeEnumeration": {
-      "index_sets": {
-        "faces": {
-          "kind": "interval",
-          "size": 12
-        },
-        "local_edges": {
-          "kind": "interval",
-          "size": 3
-        },
-        "edges": {
-          "kind": "derived",
-          "from_faq": "edge_set"
-        }
-      },
       "variables": {
         "u": {
           "type": "state"

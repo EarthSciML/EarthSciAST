@@ -13,14 +13,14 @@
       "resolver"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "UndeclaredFrom": {
-      "index_sets": {
-        "cells": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -31,24 +31,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": { "from": "ghost_cells" } }
+            "ranges": {
+              "i": {
+                "from": "ghost_cells"
+              }
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
             "expr": {
               "op": "-",
-              "args": [{ "op": "index", "args": ["u", "i"] }]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
             },
-            "ranges": { "i": { "from": "ghost_cells" } }
+            "ranges": {
+              "i": {
+                "from": "ghost_cells"
+              }
+            }
           }
         }
       ]

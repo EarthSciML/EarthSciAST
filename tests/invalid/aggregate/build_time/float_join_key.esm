@@ -15,21 +15,33 @@
       "ess-my4.2.5"
     ]
   },
+  "index_sets": {
+    "keys": {
+      "kind": "categorical",
+      "members": [
+        1.5,
+        2.5
+      ]
+    }
+  },
   "models": {
     "FloatJoinKey": {
-      "index_sets": {
-        "keys": {
-          "kind": "categorical",
-          "members": [1.5, 2.5]
-        }
-      },
       "variables": {
-        "count": { "type": "state", "default": 0.0 }
+        "count": {
+          "type": "state",
+          "default": 0.0
+        }
       },
       "equations": [
         {
           "_comment": "D(count)/dt = sum_{i,j in keys : member(i)==member(j)} 1, but `keys` has FLOAT members -> forbidden join key -> build-time rejection.",
-          "lhs": { "op": "D", "args": ["count"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "count"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "aggregate",
             "args": [],
@@ -37,11 +49,22 @@
             "semiring": "sum_product",
             "reduce": "+",
             "ranges": {
-              "i": { "from": "keys" },
-              "j": { "from": "keys" }
+              "i": {
+                "from": "keys"
+              },
+              "j": {
+                "from": "keys"
+              }
             },
             "join": [
-              { "on": [["i", "j"]] }
+              {
+                "on": [
+                  [
+                    "i",
+                    "j"
+                  ]
+                ]
+              }
             ],
             "expr": 1.0
           }

@@ -87,6 +87,13 @@
       "additionalProperties": {
         "$ref": "#/$defs/FunctionTable"
       }
+    },
+    "index_sets": {
+      "type": "object",
+      "description": "Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single, document-level declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets) shared by all models in the document. An `aggregate` range references one by name as { \"from\": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.",
+      "additionalProperties": {
+        "$ref": "#/$defs/IndexSet"
+      }
     }
   },
   "$defs": {
@@ -374,7 +381,7 @@
                 "properties": {
                   "from": {
                     "type": "string",
-                    "description": "Name of a declared index set: a key in Model.index_sets. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set."
+                    "description": "Name of a declared index set: a key in the document-scoped top-level index_sets registry. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set."
                   },
                   "of": {
                     "type": "array",
@@ -1395,13 +1402,6 @@
           "description": "Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. Loaders MUST expand `apply_expression_template` to a fully-substituted Expression AST at load time (Option A round-trip; the canonical AST after parse-then-emit is the expanded form). Templates do NOT call other templates and do NOT recurse.",
           "additionalProperties": {
             "$ref": "#/$defs/ExpressionTemplate"
-          }
-        },
-        "index_sets": {
-          "type": "object",
-          "description": "Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets). An `aggregate` range references one by name as { \"from\": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.",
-          "additionalProperties": {
-            "$ref": "#/$defs/IndexSet"
           }
         }
       }

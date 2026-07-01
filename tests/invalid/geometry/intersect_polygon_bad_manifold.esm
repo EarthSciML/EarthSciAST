@@ -15,28 +15,57 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "BadManifold": {
-      "index_sets": {
-        "verts": { "kind": "interval", "size": 4 }
-      },
       "variables": {
-        "poly_a": { "type": "parameter", "shape": ["verts"] },
-        "poly_b": { "type": "parameter", "shape": ["verts"] },
-        "u": { "type": "state" },
+        "poly_a": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_b": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "u": {
+          "type": "state"
+        },
         "clip": {
           "type": "observed",
           "expression": {
             "op": "intersect_polygon",
             "manifold": "flat",
-            "args": ["poly_a", "poly_b"]
+            "args": [
+              "poly_a",
+              "poly_b"
+            ]
           }
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
-          "rhs": { "op": "-", "args": ["u"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
         }
       ]
     }
