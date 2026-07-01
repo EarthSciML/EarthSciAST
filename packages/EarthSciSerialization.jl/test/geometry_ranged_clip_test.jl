@@ -113,7 +113,7 @@ end
 # ON-DISK / SCHEMA-VALID form: the array-producing FAQ op is `aggregate` with a
 # non-empty `output_idx`, NOT the internal `arrayop` alias `shape_promotion.jl`
 # emits (schema v0.8.0 dropped `arrayop` from the op enum — see
-# tests/valid/geometry/conservative_regrid_assembly.esm, where `clip` is an
+# tests/valid/geometry/conservative_regrid_overlap_join.esm, where `clip` is an
 # `aggregate` node with output_idx [i,j,w,c] wrapping intersect_polygon). This is
 # the byte-identical 2×2 regrid of the first testset with every array-producing
 # node authored as `aggregate`, proving the ranged (fixed-extent) intersect_polygon

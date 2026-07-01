@@ -2,7 +2,7 @@
   "esm": "0.8.0",
   "metadata": {
     "name": "WildfireAtmosphereOcean",
-    "description": "Coupled wildfire-atmosphere-ocean system. The air-sea coupling remaps the atmosphere-grid sensible heat flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + intersect_polygon/polygon_area narrow phase), not supplied. 0-D<->spatial maps use the coupling lifting field.",
+    "description": "Coupled wildfire-atmosphere-ocean system. The air-sea coupling remaps the atmosphere-grid sensible heat flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
@@ -34,10 +34,6 @@
     "rg_candidate_pairs": {
       "kind": "derived",
       "from_faq": "rg_candidate_set"
-    },
-    "rg_clip_ring": {
-      "kind": "derived",
-      "from_faq": "rg_overlap_clip"
     }
   },
   "models": {
@@ -703,69 +699,6 @@
           ],
           "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
         },
-        "rg_clip": {
-          "type": "observed",
-          "shape": [
-            "atmos_cells",
-            "ocean_cells",
-            "rg_clip_ring",
-            "rg_coord"
-          ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "a",
-              "o",
-              "w",
-              "c"
-            ],
-            "ranges": {
-              "a": {
-                "from": "atmos_cells"
-              },
-              "o": {
-                "from": "ocean_cells"
-              },
-              "w": {
-                "from": "rg_clip_ring"
-              },
-              "c": {
-                "from": "rg_coord"
-              }
-            },
-            "args": [],
-            "expr": {
-              "op": "index",
-              "args": [
-                {
-                  "op": "intersect_polygon",
-                  "id": "rg_overlap_clip",
-                  "manifold": "planar",
-                  "args": [
-                    {
-                      "op": "index",
-                      "args": [
-                        "rg_src_poly",
-                        "a"
-                      ]
-                    },
-                    {
-                      "op": "index",
-                      "args": [
-                        "rg_tgt_poly",
-                        "o"
-                      ]
-                    }
-                  ]
-                },
-                "w",
-                "c"
-              ]
-            }
-          },
-          "description": "NARROW PHASE ranged over all src x tgt pairs: clip[i,j] = intersect_polygon(src_i, tgt_j), a ragged ring (derived rg_clip_ring). The full-mesh narrow phase is declared STRUCTURALLY (schema-valid); op:\"arrayop\" would materialize it densely but is not in the schema op registry \u2014 the same status conservative_regrid_overlap_join.esm documents."
-        },
         "rg_A": {
           "type": "observed",
           "shape": [
@@ -787,93 +720,39 @@
                 "from": "ocean_cells"
               }
             },
-            "args": [],
-            "expr": {
-              "op": "aggregate",
-              "semiring": "sum_product",
-              "output_idx": [],
-              "ranges": {
-                "v": {
-                  "from": "rg_clip_ring"
-                }
-              },
-              "args": [],
-              "expr": {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "-",
-                    "args": [
-                      {
-                        "op": "*",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "rg_clip",
-                              "a",
-                              "o",
-                              "v",
-                              1
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "rg_clip",
-                              "a",
-                              "o",
-                              {
-                                "op": "+",
-                                "args": [
-                                  "v",
-                                  1
-                                ]
-                              },
-                              2
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "*",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "rg_clip",
-                              "a",
-                              "o",
-                              {
-                                "op": "+",
-                                "args": [
-                                  "v",
-                                  1
-                                ]
-                              },
-                              1
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "rg_clip",
-                              "a",
-                              "o",
-                              "v",
-                              2
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
                 ]
               }
+            ],
+            "args": [],
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_src_poly",
+                    "a"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_tgt_poly",
+                    "o"
+                  ]
+                }
+              ]
             }
           },
-          "description": "Overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) computed INLINE from the in-file geometry (planar shoelace FAQ over each clip ring). Replaces the previously supplied weight matrix."
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[a,o] = polygon_intersection_area(rg_src_poly[a], rg_tgt_poly[o]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate \u2014 replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
         },
         "rg_At": {
           "type": "observed",

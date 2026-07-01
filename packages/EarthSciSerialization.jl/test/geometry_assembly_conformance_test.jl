@@ -1,37 +1,54 @@
-# Conservative-regridding ASSEMBLY — Julia evaluator conformance (INLINE weights).
+# Conservative-regridding ASSEMBLY — Julia evaluator conformance (INLINE weights,
+# FUSED polygon_intersection_area narrow phase).
 #
 # Bead ess-my4.4.6. RFC semiring-faq-unified-ir §A.8 / §8.1 / §6.1;
-# CONFORMANCE_SPEC.md §5.8. The fixture
-# tests/valid/geometry/conservative_regrid_assembly.esm now computes the overlap
-# weights INLINE from cell geometry — it no longer SUPPLIES an A_ij / dst_areas
-# const. The full first-order conservative-regrid pipeline it declares:
+# CONFORMANCE_SPEC.md §5.8; esm-spec.md §8.6.1. The fixture
+# tests/valid/geometry/conservative_regrid_assembly.esm computes the overlap
+# weights INLINE from cell geometry — it does not SUPPLY an A_ij / dst_areas const.
+# The full first-order conservative-regrid pipeline it declares:
 #
-#   A_ij = polygon_area(intersect_polygon(src_i, tgt_j))   (narrow phase, inline)
-#   A_j  = Σ_i A_ij                                         (row-sum normalization)
-#   W_ij = A_ij / A_j                                       (the weights)
-#   F_tgt[j] = Σ_i W_ij · F_src[i]                          (apply)
+#   A_ij = polygon_intersection_area(src_i, tgt_j)   (narrow phase, FUSED leaf)
+#   A_j  = Σ_i A_ij                                   (row-sum normalization)
+#   W_ij = A_ij / A_j                                 (the weights)
+#   F_tgt[j] = Σ_i W_ij · F_src[i]                    (apply)
 #
-# with the candidate pairs from the bin-skolem broad phase (floor → skolem bin
-# keys → distinct equi-join on the materialized bin buffers) and F_src a
-# SPATIALLY-VARYING source ([10,20,30,40]) so conservation / partition-of-unity
-# are non-trivial. The source (4 cells) and target (4 cells) grids tile
-# [0,4]×[0,1] with DIFFERENT cell boundaries, so the overlaps are fractional.
+# with the candidate pairs from the bin-skolem BROAD phase (floor → skolem bin keys
+# → distinct equi-join on the materialized bin buffers) and F_src a
+# SPATIALLY-VARYING source ([10,20,30,40]) so conservation / partition-of-unity are
+# non-trivial. The source (4 cells) and target (4 cells) grids tile [0,4]×[0,1] with
+# DIFFERENT cell boundaries, so the overlaps are fractional.
 #
-# WHY THE NARROW PHASE IS ASSERTED STRUCTURALLY, NOT DENSELY EVALUATED HERE:
-# each candidate pair clips to a ring of DATA-DEPENDENT length (`clip_ring` is a
-# per-clip derived set), so a single dense schema-valid FAQ cannot clip all pairs
-# at once. The dense ranged-clip evaluator path keys on op:"arrayop", which is NOT
-# in the schema op registry, so a schema-valid fixture (op:"aggregate") declares
-# the full-mesh narrow phase STRUCTURALLY — the same status
-# conservative_regrid_overlap_join.esm documents. This test therefore (1) asserts
-# the A_ij provenance STRUCTURALLY (the fixture declares A_ij from the in-file
-# `intersect_polygon`/`polygon_area` over `src_poly`/`tgt_poly`, with NO supplied
-# A_ij), (2) builds A_ij from the fixture's OWN in-file geometry via the landed
-# planar intersect_polygon + polygon_area kernel, and (3) drives the evaluable
-# apply/normalize FAQ (A_j, F_tgt, conservation, partition-of-unity, the
-# load-bearing bin join + sliver filter) through build_evaluator from those
-# geometry-derived areas. The conservation / partition-of-unity NUMERIC checks are
-# UNCHANGED in strength.
+# WHAT IS NOW DENSELY EVALUABLE (the §8.6.1 change). The narrow phase used to clip
+# each pair to a `intersect_polygon` ring of DATA-DEPENDENT length (a per-clip
+# `clip_ring` derived set) and area it with a `polygon_area` shoelace FAQ, so the
+# full-mesh narrow phase was only STRUCTURALLY valid — no single dense FAQ can clip
+# all pairs at once. The fixture now spells A_ij with the FUSED
+# `polygon_intersection_area` leaf: it returns the SCALAR overlap area (defined to
+# equal the clip-then-shoelace composition) and HIDES the ring inside the kernel, so
+# A_ij is an ordinary DENSE aggregate over the candidate set — no ragged
+# intermediate. This test therefore drives the narrow phase THROUGH the evaluator:
+#
+#   1. BROAD phase (build-time value invention, §8.6.1): the candidate pair set is
+#      the bin-skolem equi-join — floor(coord/dx)→skolem bin key→shared-bin pairs.
+#      This is build-time (`skolem`/`distinct`), computed here mirroring the fixture.
+#   2. NARROW phase (through build_evaluator): the fused `polygon_intersection_area`
+#      leaf is lowered and evaluated by `build_evaluator` from the fixture's OWN
+#      in-file const rings, ONE call filling every candidate pair's overlap area
+#      (`_build_Aij_via_evaluator`). A_ij[i,j] for a non-candidate pair is 0, exactly
+#      as the fixture's `join.on [[src_bin,tgt_bin]]` restricts it. This REPLACES the
+#      old standalone `ESS.intersect_polygon`+`ESS.polygon_area` computation — A_ij now
+#      flows through the evaluator's fused-leaf op dispatch. (A definitional cross-check
+#      against the standalone kernels is retained as an oracle.)
+#   3. APPLY / NORMALIZE (through build_evaluator): A_j, F_tgt via the evaluable
+#      apply FAQ with the load-bearing bin join + sliver filter (`_apply_only_esm`).
+#
+# The one part that stays build-time is the candidate-set CONSTRUCTION (the
+# `skolem`/`distinct` broad phase), by design (§8.6.1). The current evaluator's fused
+# leaf resolves BARE const-ring operands (as in polygon_intersection_area_planar.esm),
+# so the ranged aggregate's `index(src_poly,i)` operands are driven per candidate pair
+# over that build-time candidate set rather than as one whole-mesh aggregate call —
+# equivalent, since the fixture's join restricts A_ij to exactly those pairs. The
+# conservation / partition-of-unity NUMERIC checks are UNCHANGED in strength.
 
 using Test
 using EarthSciSerialization
@@ -55,23 +72,7 @@ function _const_rings(vars, name)
     [[Float64(v[i][k][c]) for k in 1:nv, c in 1:nc] for i in 1:length(v)]
 end
 _const_vec(vars, name) = [Float64(x) for x in vars[name]["expression"]["value"]]
-
-# Build the overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i,
-# tgt_j)) from the fixture's OWN geometry — ConservativeRegridding.jl's
-# `intersections` matrix of RAW areas, here derived from the declared cell rings.
-function _build_Aij_from_fixture()
-    vars = _asm_vars(_asm_raw())
-    SRC = _const_rings(vars, "src_poly")
-    TGT = _const_rings(vars, "tgt_poly")
-    F_SRC = _const_vec(vars, "F_src")
-    nS, nT = length(SRC), length(TGT)
-    A = zeros(Float64, nS, nT)
-    for i in 1:nS, j in 1:nT
-        ring = ESS.intersect_polygon(SRC[i], TGT[j], "planar")
-        A[i, j] = size(ring, 1) >= 3 ? ESS.polygon_area(ring, "planar") : 0.0
-    end
-    return A, F_SRC
-end
+_param_default(vars, name) = Float64(vars[name]["default"])
 
 # Collect every expression node with op == `opname` under `node`.
 function _find_ops(node, opname, acc=Any[])
@@ -86,6 +87,105 @@ function _find_ops(node, opname, acc=Any[])
         end
     end
     return acc
+end
+
+# ======================================================================
+# BROAD PHASE (build-time value invention): the bin-skolem candidate set.
+# ======================================================================
+# Mirror the fixture's skolem("bin", floor(lon/dx), floor(lat/dy)) binning: two
+# cells share a candidate bin iff their integer (floor(lon/dx), floor(lat/dy)) keys
+# are equal (§8.6.1 — build-time `skolem`/`distinct`, run once at construction).
+_bin_key(lon, lat, dx, dy) = (floor(Int, lon / dx), floor(Int, lat / dy))
+
+function _candidate_pairs(src_bins, tgt_bins)
+    pairs = Tuple{Int,Int}[]
+    for i in eachindex(src_bins), j in eachindex(tgt_bins)
+        src_bins[i] == tgt_bins[j] && push!(pairs, (i, j))
+    end
+    return pairs
+end
+
+# ======================================================================
+# NARROW PHASE through build_evaluator: the FUSED polygon_intersection_area leaf.
+# ======================================================================
+# One ESM carrying every candidate pair k: area_obs_k =
+# polygon_intersection_area(src_k, tgt_k) (the fused planar clip+area leaf), consumed
+# by d(area_k)/dt = area_obs_k from a zero IC, so `du[area_k] = A_ij` for that pair.
+# The operand rings are supplied per pair via `const_arrays`, so the evaluator
+# const-folds each fused leaf to its scalar overlap area. ONE build_evaluator call
+# fills the whole candidate set — the narrow phase evaluated by the evaluator.
+function _narrow_phase_esm(npairs)
+    vars = Dict{String,Any}()
+    eqs = Any[]
+    for k in 1:npairs
+        vars["src_$k"] = Dict{String,Any}("type" => "parameter", "shape" => Any["verts", "coord"])
+        vars["tgt_$k"] = Dict{String,Any}("type" => "parameter", "shape" => Any["verts", "coord"])
+        vars["ao_$k"] = Dict{String,Any}("type" => "observed",
+            "expression" => Dict{String,Any}("op" => "polygon_intersection_area",
+                "manifold" => "planar", "args" => Any["src_$k", "tgt_$k"]))
+        vars["area_$k"] = Dict{String,Any}("type" => "state", "default" => 0.0)
+        push!(eqs, Dict{String,Any}("lhs" => Dict{String,Any}("op" => "ic", "args" => Any["area_$k"]), "rhs" => 0.0))
+        push!(eqs, Dict{String,Any}("lhs" => Dict{String,Any}("op" => "D", "args" => Any["area_$k"], "wrt" => "t"),
+            "rhs" => "ao_$k"))
+    end
+    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "narrow_phase"),
+        "index_sets" => Dict{String,Any}(
+            "verts" => Dict{String,Any}("kind" => "interval", "size" => 4),
+            "coord" => Dict{String,Any}("kind" => "interval", "size" => 2)),
+        "models" => Dict{String,Any}("NarrowPhase" => Dict{String,Any}(
+            "variables" => vars, "equations" => eqs)))
+end
+
+# Build the overlap-area matrix A_ij by driving the fused
+# polygon_intersection_area leaf through build_evaluator, from the fixture's OWN
+# const rings, over the bin-skolem candidate set. Returns (A_ij, F_src, pairs).
+function _build_Aij_via_evaluator()
+    vars = _asm_vars(_asm_raw())
+    SRC = _const_rings(vars, "src_poly")
+    TGT = _const_rings(vars, "tgt_poly")
+    F_SRC = _const_vec(vars, "F_src")
+    dx = _param_default(vars, "dx")
+    dy = _param_default(vars, "dy")
+    src_bins = [_bin_key(_const_vec(vars, "src_lon")[i], _const_vec(vars, "src_lat")[i], dx, dy)
+                for i in eachindex(SRC)]
+    tgt_bins = [_bin_key(_const_vec(vars, "tgt_lon")[j], _const_vec(vars, "tgt_lat")[j], dx, dy)
+                for j in eachindex(TGT)]
+    pairs = _candidate_pairs(src_bins, tgt_bins)
+
+    npairs = length(pairs)
+    const_arrays = Dict{String,Any}()
+    ics = Dict{String,Float64}()
+    for (k, (i, j)) in enumerate(pairs)
+        const_arrays["src_$k"] = SRC[i]
+        const_arrays["tgt_$k"] = TGT[j]
+        ics["area_$k"] = 0.0
+    end
+    f!, u0, p, _, vmap = build_evaluator(_narrow_phase_esm(npairs);
+        model_name="NarrowPhase", initial_conditions=ics, const_arrays=const_arrays)
+    du = similar(u0); f!(du, u0, p, 0.0)
+
+    A = zeros(Float64, length(SRC), length(TGT))
+    for (k, (i, j)) in enumerate(pairs)
+        A[i, j] = du[vmap["area_$k"]]     # the fused-leaf overlap area, via the evaluator
+    end
+    return A, F_SRC, pairs
+end
+
+# Definitional oracle: A_ij via the STANDALONE constituent kernels
+# (intersect_polygon clip + polygon_area shoelace) over the fixture's own rings.
+# `polygon_intersection_area` is DEFINED to equal this composition (§8.6.1), so it is
+# a cross-check on the fused-leaf-through-evaluator matrix, not the driver.
+function _build_Aij_standalone_oracle()
+    vars = _asm_vars(_asm_raw())
+    SRC = _const_rings(vars, "src_poly")
+    TGT = _const_rings(vars, "tgt_poly")
+    nS, nT = length(SRC), length(TGT)
+    A = zeros(Float64, nS, nT)
+    for i in 1:nS, j in 1:nT
+        ring = ESS.intersect_polygon(SRC[i], TGT[j], "planar")
+        A[i, j] = size(ring, 1) >= 3 ? ESS.polygon_area(ring, "planar") : 0.0
+    end
+    return A
 end
 
 # The evaluable apply/normalize FAQ, mirroring the fixture's declared assembly:
@@ -140,9 +240,12 @@ function _eval_assembly(A_ij::Matrix{Float64}, dst_areas::Vector{Float64}, F_src
     return A_j, F_tgt
 end
 
-@testset "M4 conservative-regridding assembly, inline weights (ess-my4.4.6)" begin
+@testset "M4 conservative-regridding assembly, inline fused-leaf weights (ess-my4.4.6)" begin
 
-    A_ij, F_src = _build_Aij_from_fixture()
+    # NARROW PHASE through the evaluator: A_ij from the fused polygon_intersection_area
+    # leaf over the bin-skolem candidate set, driven by build_evaluator from the
+    # fixture's own geometry.
+    A_ij, F_src, candidate_pairs = _build_Aij_via_evaluator()
     dst_areas = vec(sum(A_ij; dims=1))   # column sums = A_j = dst_areas
     src_areas = vec(sum(A_ij; dims=2))   # row sums = source cell areas
 
@@ -151,42 +254,50 @@ end
         @test (ESS.load(_ASM_FIXTURE); true)
     end
 
-    # A_ij PROVENANCE — asserted STRUCTURALLY (the full-mesh narrow phase is not
-    # densely evaluated; see the header). The fixture must DECLARE the weights from
-    # geometry in-file: A_ij is a geometry-derived observed (NOT a supplied const),
-    # clip = intersect_polygon(src_poly, tgt_poly), A_j carries the bin equi-join.
-    @testset "A_ij is declared INLINE from geometry (no supplied weights)" begin
+    # A_ij PROVENANCE — the fixture must DECLARE the weights from geometry in-file via
+    # the FUSED leaf: A_ij is a geometry-derived observed (NOT a supplied const), its
+    # aggregate body is polygon_intersection_area(src_poly[i], tgt_poly[j]) with NO
+    # exposed clip ring, and it carries the bin-skolem candidate join.
+    @testset "A_ij is declared INLINE via the fused polygon_intersection_area leaf" begin
         raw = _asm_raw()
         vars = _asm_vars(raw)
         # geometry is declared in-file as `const` vertex rings / a spatial field.
         @test vars["src_poly"]["expression"]["op"] == "const"
         @test vars["tgt_poly"]["expression"]["op"] == "const"
         @test vars["F_src"]["expression"]["op"] == "const"
-        # A_ij is a geometry-derived observed, NOT a supplied parameter/const.
+        # A_ij is a geometry-derived observed aggregate, NOT a supplied parameter/const.
         @test vars["A_ij"]["type"] == "observed"
         @test vars["A_ij"]["expression"]["op"] == "aggregate"
         @test !haskey(vars["A_ij"], "value")
-        # the narrow phase: clip = intersect_polygon(src_poly[i], tgt_poly[j]).
-        ips = _find_ops(vars["clip"]["expression"], "intersect_polygon")
-        @test length(ips) == 1
-        @test ips[1]["manifold"] == "planar"
+        # the narrow phase is the FUSED leaf: A_ij body = polygon_intersection_area(...).
+        pias = _find_ops(vars["A_ij"]["expression"], "polygon_intersection_area")
+        @test length(pias) == 1
+        @test pias[1]["manifold"] == "planar"
         refs = Set{String}()
-        for iv in _find_ops(ips[1], "index")
+        for iv in _find_ops(pias[1], "index")
             iv["args"][1] isa AbstractString && push!(refs, String(iv["args"][1]))
         end
         @test "src_poly" in refs && "tgt_poly" in refs
-        # A_ij aggregates polygon_area over the clip ring (it READS `clip`).
-        @test any(iv -> iv["args"][1] == "clip", _find_ops(vars["A_ij"]["expression"], "index"))
-        # the broad-phase bin equi-join gates the row-sum / apply.
+        # the fused leaf hides the ring: NO intersect_polygon / clip ring survives, and
+        # the old ragged-clip `clip` observed is gone.
+        @test isempty(_find_ops(vars["A_ij"]["expression"], "intersect_polygon"))
+        @test !haskey(vars, "clip")
+        @test !haskey(raw["index_sets"], "clip_ring")
+        # A_ij is ranged over the bin-skolem candidate pairs (join.on [[src_bin,tgt_bin]]).
+        @test haskey(vars["A_ij"]["expression"], "join")
+        @test vars["A_ij"]["expression"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
+        # the broad-phase bin equi-join also gates the row-sum / apply.
         @test haskey(vars["A_j"]["expression"], "join")
         @test vars["A_j"]["expression"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
         @test haskey(vars["A_j"]["expression"], "filter")
     end
 
-    # The narrow phase built the expected sparse overlap-area matrix from the
-    # fixture's OWN geometry: a within-bin refinement overlap pattern, zero across
-    # bins, full source coverage (row sums = cell areas = 1) ⇒ conservation exact.
-    @testset "narrow phase A_ij is the expected sparse overlap matrix" begin
+    # The fused-leaf narrow phase (through build_evaluator) built the expected sparse
+    # overlap-area matrix from the fixture's OWN geometry: a within-bin refinement
+    # overlap pattern, zero across bins, full source coverage (row sums = cell areas =
+    # 1) ⇒ conservation exact. Definitionally cross-checked against the standalone
+    # intersect_polygon+polygon_area kernels (§8.6.1: the fused leaf equals them).
+    @testset "narrow phase A_ij (fused leaf via evaluator) is the expected sparse matrix" begin
         @test A_ij ≈ [1.0 0.0 0.0 0.0;
                       0.5 0.5 0.0 0.0;
                       0.0 0.0 1.0 0.0;
@@ -195,6 +306,11 @@ end
         @test dst_areas ≈ [1.5, 0.5, 1.5, 0.5]
         # representative fractional clip src 2 ∩ tgt 1 = 0.5 (the clip demo pair).
         @test isapprox(A_ij[_REP_I, _REP_J], 0.5; atol=1e-12)
+        # the candidate set (broad phase) is exactly the two within-bin blocks.
+        @test Set(candidate_pairs) == Set([(1, 1), (1, 2), (2, 1), (2, 2),
+                                           (3, 3), (3, 4), (4, 3), (4, 4)])
+        # fused-leaf-through-evaluator == standalone clip+area oracle (definitional).
+        @test A_ij ≈ _build_Aij_standalone_oracle()
     end
 
     @testset "end-to-end assembly: A_j, F_tgt via the evaluable apply FAQ" begin

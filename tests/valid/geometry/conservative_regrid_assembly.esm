@@ -2,7 +2,7 @@
   "esm": "0.6.0",
   "metadata": {
     "name": "conservative_regrid_assembly",
-    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir \u00a7A.8 / \u00a78.1; CONFORMANCE_SPEC.md \u00a75.8; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) is declared inline as the planar shoelace FAQ over the ranged clip, the candidate pairs come from the bin-skolem broad phase (floor \u2192 skolem bin keys \u2192 distinct equi-join on the materialized bin buffers), A_j = \u03a3_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = \u03a3_i W_ij\u00b7F_src[i] = [40/3, 20, 100/3, 40], conserving global mass \u03a3_j A_j\u00b7F_tgt = \u03a3_i A_i\u00b7F_src = 100 with partition-of-unity \u03a3_i W_ij = 1 by construction. Because each candidate pair clips to a ragged ring (clip_ring is per-clip), the full-mesh narrow phase is schema-and-structurally valid but not densely evaluated by every binding (op:\"arrayop\" would materialize it; it is not in the schema op registry) \u2014 the same status conservative_regrid_overlap_join.esm documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline provenance structurally and drives the apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the geometry-derived areas.",
+    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir \u00a7A.8 / \u00a78.1; CONFORMANCE_SPEC.md \u00a75.8; esm-spec.md \u00a78.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_intersection_area(src_i, tgt_j) is declared inline via the FUSED planar clip+area leaf (\u00a78.6.1), ranged over the bin-skolem candidate pairs; the candidate pairs come from the bin-skolem broad phase (floor \u2192 skolem bin keys \u2192 distinct equi-join on the materialized bin buffers), A_j = \u03a3_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = \u03a3_i W_ij\u00b7F_src[i] = [40/3, 20, 100/3, 40], conserving global mass \u03a3_j A_j\u00b7F_tgt = \u03a3_i A_i\u00b7F_src = 100 with partition-of-unity \u03a3_i W_ij = 1 by construction. Because the fused leaf returns the SCALAR overlap area (defined to equal the intersect_polygon clip + shoelace area) and hides the clip ring inside the kernel, A_ij is an ordinary DENSE aggregate over the candidate set with NO ragged intermediate \u2014 the densely-evaluable narrow phase of \u00a78.6.1, unlike the earlier ragged-clip form conservative_regrid_overlap_join.esm still documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline fused-leaf provenance and drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
     "authors": [
       "EarthSciSerialization/polecats/gastown.nux"
     ],
@@ -12,8 +12,8 @@
       "assembly",
       "overlap-join",
       "bin-skolem",
-      "intersect_polygon",
-      "polygon-area",
+      "polygon_intersection_area",
+      "fused-leaf",
       "sum_product",
       "join",
       "filter",
@@ -44,10 +44,6 @@
     "candidate_pairs": {
       "kind": "derived",
       "from_faq": "candidate_set"
-    },
-    "clip_ring": {
-      "kind": "derived",
-      "from_faq": "overlap_clip"
     }
   },
   "models": {
@@ -351,69 +347,6 @@
           ],
           "description": "Membership over the bin-skolem candidate overlap-pair set (the broad phase), materialized as the derived candidate_pairs index set via from_faq:\"candidate_set\"."
         },
-        "clip": {
-          "type": "observed",
-          "shape": [
-            "src_cells",
-            "tgt_cells",
-            "clip_ring",
-            "coord"
-          ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "i",
-              "j",
-              "w",
-              "c"
-            ],
-            "ranges": {
-              "i": {
-                "from": "src_cells"
-              },
-              "j": {
-                "from": "tgt_cells"
-              },
-              "w": {
-                "from": "clip_ring"
-              },
-              "c": {
-                "from": "coord"
-              }
-            },
-            "args": [],
-            "expr": {
-              "op": "index",
-              "args": [
-                {
-                  "op": "intersect_polygon",
-                  "id": "overlap_clip",
-                  "manifold": "planar",
-                  "args": [
-                    {
-                      "op": "index",
-                      "args": [
-                        "src_poly",
-                        "i"
-                      ]
-                    },
-                    {
-                      "op": "index",
-                      "args": [
-                        "tgt_poly",
-                        "j"
-                      ]
-                    }
-                  ]
-                },
-                "w",
-                "c"
-              ]
-            }
-          },
-          "description": "NARROW PHASE, ranged over ALL src x tgt pairs: clip[i,j] is the clipped overlap ring src_i \u2229 tgt_j from the planar `intersect_polygon` kernel \u2014 a vertex ring of DATA-DEPENDENT length (the derived `clip_ring` set, from_faq:\"overlap_clip\"). Because each pair clips to a ragged ring, this full-mesh narrow phase is declared STRUCTURALLY (schema-valid) and is not densely evaluated by every binding \u2014 the same status conservative_regrid_overlap_join.esm documents; op:\"arrayop\" would materialize it densely but is not in the schema op registry."
-        },
         "A_ij": {
           "type": "observed",
           "shape": [
@@ -435,93 +368,39 @@
                 "from": "tgt_cells"
               }
             },
-            "args": [],
-            "expr": {
-              "op": "aggregate",
-              "semiring": "sum_product",
-              "output_idx": [],
-              "ranges": {
-                "v": {
-                  "from": "clip_ring"
-                }
-              },
-              "args": [],
-              "expr": {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "-",
-                    "args": [
-                      {
-                        "op": "*",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "clip",
-                              "i",
-                              "j",
-                              "v",
-                              1
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "clip",
-                              "i",
-                              "j",
-                              {
-                                "op": "+",
-                                "args": [
-                                  "v",
-                                  1
-                                ]
-                              },
-                              2
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "*",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "clip",
-                              "i",
-                              "j",
-                              {
-                                "op": "+",
-                                "args": [
-                                  "v",
-                                  1
-                                ]
-                              },
-                              1
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "clip",
-                              "i",
-                              "j",
-                              "v",
-                              2
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
                 ]
               }
+            ],
+            "args": [],
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "src_poly",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "tgt_poly",
+                    "j"
+                  ]
+                }
+              ]
             }
           },
-          "description": "The overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) computed INLINE from the in-file geometry \u2014 the planar shoelace sum_product FAQ over each clip ring. This REPLACES the previously supplied const A_ij: the weights are now DECLARED from cell geometry in-file, not hand-supplied. Structural full-mesh (see `clip`); the row-sum / apply halves below consume it as the per-pair overlap-area factor."
+          "description": "NARROW PHASE (densely evaluable): the overlap-area matrix A_ij[i,j] = polygon_intersection_area(src_poly[i], tgt_poly[j]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1). Ranged over the SAME bin-skolem candidate pairs (join.on [[src_bin,tgt_bin]]) as the row-sum / apply, so it is dense over the broad-phase candidate set with NO ragged intermediate: the fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel. This replaces the earlier ragged-ring narrow phase (which surfaced a data-dependent per-clip vertex set and was only structurally valid). The weights are DECLARED from cell geometry in-file, not hand-supplied; the row-sum / apply halves below consume A_ij as the per-pair overlap-area factor."
         },
         "A_j": {
           "type": "observed",
