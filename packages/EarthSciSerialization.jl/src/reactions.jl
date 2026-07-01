@@ -48,7 +48,10 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
     for species in rxn_sys.species
         variables[species.name] = ModelVariable(
             StateVariable,
-            default=1.0,  # Default initial concentration
+            # Honor the species' declared scalar `default` (matching the main
+            # flatten path in flatten.jl `_collect_reaction_system!`); fall back
+            # to 1.0 mol/L only when no default is declared.
+            default=something(species.default, 1.0),
             description="Concentration of species $(species.name)",
             units="mol/L"
         )

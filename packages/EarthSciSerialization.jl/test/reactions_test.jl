@@ -359,4 +359,35 @@ using EarthSciSerialization
         @test haskey(sub_model.variables, "k_sub")
         @test length(sub_model.equations) == 2  # One for each species
     end
+
+    @testset "Species Default Initial Values" begin
+        # derive_odes must honor each species' declared scalar `default` as its
+        # state variable's initial value (matching the main flatten path), and
+        # fall back to 1.0 only when no default is declared.
+        species = [
+            Species("A", default=3.0),   # explicit non-fallback default
+            Species("B"),                # no default -> sensible fallback (1.0)
+            Species("C", default=0.0),   # explicit zero must survive (not fallback)
+        ]
+        reaction = Reaction(Dict("A" => 1, "B" => 1), Dict("C" => 1), VarExpr("k1"))
+        rxn_sys = ReactionSystem(species, [reaction], parameters=[Parameter("k1", 0.1)])
+
+        model = derive_odes(rxn_sys)
+
+        @test model.variables["A"].default == 3.0
+        @test model.variables["B"].default == 1.0
+        @test model.variables["C"].default == 0.0
+
+        # Defaults must also flow through subsystems.
+        sub = ReactionSystem([Species("S", default=7.5)],
+                             [Reaction(Dict("S" => 1), Dict{String,Int}(), VarExpr("k_s"))],
+                             parameters=[Parameter("k_s", 0.2)])
+        main = ReactionSystem([Species("M", default=2.0)],
+                              [Reaction(Dict("M" => 1), Dict{String,Int}(), VarExpr("k_m"))],
+                              parameters=[Parameter("k_m", 0.3)],
+                              subsystems=Dict("sub" => sub))
+        main_model = derive_odes(main)
+        @test main_model.variables["M"].default == 2.0
+        @test main_model.subsystems["sub"].variables["S"].default == 7.5
+    end
 end

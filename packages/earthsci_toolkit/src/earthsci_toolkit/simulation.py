@@ -2228,8 +2228,19 @@ def simulate_reaction_system(
         # Create symbol map
         symbol_map = {name: sp.Symbol(name) for name in species_names}
 
-        # Create initial condition vector
-        y0 = np.array([initial_conditions.get(name, 0.0) for name in species_names])
+        # Create initial condition vector. An explicit `initial_conditions`
+        # override wins; otherwise fall back to the species' declared scalar
+        # `default` (matching the main flatten path in flatten.py
+        # `_collect_reaction_system`), and finally to 0.0 when neither exists.
+        species_defaults = {
+            s.name: s.default
+            for s in reaction_system.species
+            if s.default is not None
+        }
+        y0 = np.array([
+            initial_conditions.get(name, species_defaults.get(name, 0.0))
+            for name in species_names
+        ])
 
         # Lambdify ODEs for fast evaluation
         variables = [symbol_map[name] for name in species_names]
@@ -2370,9 +2381,19 @@ def simulate_with_discrete_events(
         if not species_names:
             raise SimulationError("No species found in reaction system")
 
-        # Create symbol map and initial conditions
+        # Create symbol map and initial conditions. An explicit
+        # `initial_conditions` override wins; otherwise fall back to the
+        # species' declared scalar `default`, and finally to 0.0.
         symbol_map = {name: sp.Symbol(name) for name in species_names}
-        y_current = np.array([initial_conditions.get(name, 0.0) for name in species_names])
+        species_defaults = {
+            s.name: s.default
+            for s in reaction_system.species
+            if s.default is not None
+        }
+        y_current = np.array([
+            initial_conditions.get(name, species_defaults.get(name, 0.0))
+            for name in species_names
+        ])
 
         # Lambdify ODEs for fast evaluation
         variables = [symbol_map[name] for name in species_names]

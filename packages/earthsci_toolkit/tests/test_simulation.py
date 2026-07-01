@@ -272,6 +272,41 @@ class TestSimulationErrors:
         # We just check that we get a result (success or failure)
         assert isinstance(result, SimulationResult)
 
+    def test_species_default_used_as_initial_value(self):
+        """simulate_reaction_system seeds y0 from each species' `default`.
+
+        When an initial condition is omitted, the species' declared scalar
+        `default` (here 3.0) must be used instead of 0.0; an explicit override
+        still wins, and a species with no default falls back to 0.0.
+        """
+        species_A = Species(name="A", default=3.0)
+        species_B = Species(name="B")  # no default -> 0.0 fallback
+        # Effectively frozen reaction so the reported t=0 state is exactly y0.
+        reaction = Reaction(
+            name="slow",
+            reactants={"A": 1.0},
+            products={"B": 1.0},
+            rate_constant=1e-12,
+        )
+        system = ReactionSystem(
+            name="defaults",
+            species=[species_A, species_B],
+            reactions=[reaction],
+        )
+
+        # No initial conditions: A starts at its declared default, B at 0.0.
+        result = simulate(system, {}, (0.0, 1.0))
+        assert result.success, f"Simulation failed: {result.message}"
+        idx = {name: i for i, name in enumerate(result.vars)}
+        assert result.y[idx["A"], 0] == pytest.approx(3.0)
+        assert result.y[idx["B"], 0] == pytest.approx(0.0)
+
+        # An explicit override still wins over the species default.
+        result2 = simulate(system, {"A": 0.5}, (0.0, 1.0))
+        assert result2.success, f"Simulation failed: {result2.message}"
+        idx2 = {name: i for i, name in enumerate(result2.vars)}
+        assert result2.y[idx2["A"], 0] == pytest.approx(0.5)
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

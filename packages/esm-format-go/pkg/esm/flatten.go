@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -24,13 +25,18 @@ func formatStoich(v float64) string {
 
 // FlattenedSystem represents a coupled system flattened into a single system
 type FlattenedSystem struct {
-	StateVariables    []string            // dot-namespaced state variable names
-	Parameters        []string            // dot-namespaced parameter names
-	BrownianVariables []string            // dot-namespaced brownian (Wiener) noise variables
-	Variables         map[string]string   // dot-namespaced variable name -> type
-	Equations         []FlattenedEquation // all equations with namespaced vars
-	Events            []interface{}       // events with namespaced references
-	Metadata          FlattenMetadata     // which systems were flattened
+	StateVariables    []string          // dot-namespaced state variable names
+	Parameters        []string          // dot-namespaced parameter names
+	BrownianVariables []string          // dot-namespaced brownian (Wiener) noise variables
+	Variables         map[string]string // dot-namespaced variable name -> type
+	// InitialValues maps a dot-namespaced reaction-system state variable to its
+	// initial concentration, taken from the species' declared scalar `default`
+	// (falling back to 0.0 when a species declares no default). Mirrors the
+	// per-state `default` the Julia/Rust/Python flatten paths carry.
+	InitialValues map[string]float64
+	Equations     []FlattenedEquation // all equations with namespaced vars
+	Events        []interface{}       // events with namespaced references
+	Metadata      FlattenMetadata     // which systems were flattened
 }
 
 // FlattenedEquation represents a single equation in the flattened system
@@ -60,7 +66,8 @@ func Flatten(file *EsmFile) (*FlattenedSystem, error) {
 	}
 
 	flat := &FlattenedSystem{
-		Variables: make(map[string]string),
+		Variables:     make(map[string]string),
+		InitialValues: make(map[string]float64),
 		Metadata: FlattenMetadata{
 			SourceSystems: make([]string, 0),
 			CouplingRules: make([]string, 0),
@@ -135,11 +142,13 @@ func Flatten(file *EsmFile) (*FlattenedSystem, error) {
 		}
 		allVarNames[systemName] = varNames
 
-		// Register species as state variables
-		for speciesName := range rs.Species {
+		// Register species as state variables, carrying each species' declared
+		// scalar `default` through as the state's initial value.
+		for speciesName, species := range rs.Species {
 			nsName := systemName + "." + speciesName
 			flat.Variables[nsName] = "state"
 			flat.StateVariables = append(flat.StateVariables, nsName)
+			flat.InitialValues[nsName] = speciesInitialValue(species)
 		}
 
 		// Register parameters
@@ -251,6 +260,36 @@ func deriveODEs(rs ReactionSystem, systemName string, varNames map[string]bool) 
 	}
 
 	return equations
+}
+
+// speciesInitialValue returns a species' initial concentration for the
+// flattened initial-state vector: its declared scalar `default` when present,
+// or 0.0 as a sensible fallback when the species declares no default. The
+// parser decodes JSON numbers with UseNumber (json.Number), so that case is
+// handled alongside the float64/int forms produced when structs are built
+// directly in code.
+func speciesInitialValue(s Species) float64 {
+	switch v := s.Default.(type) {
+	case nil:
+		return 0.0
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return 0.0
 }
 
 // buildSumExpression combines signed terms into a single expression string.

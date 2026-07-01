@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,48 @@ func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
 	}
 	if !contains(flat.Parameters, "Chem.k1") {
 		t.Errorf("expected Chem.k1 in parameters, got %v", flat.Parameters)
+	}
+}
+
+func TestFlatten_ReactionSystemHonorsSpeciesDefault(t *testing.T) {
+	// A species' declared scalar `default` must flow through to the flattened
+	// system's initial-value vector. Absent defaults fall back to 0.0.
+	file := &EsmFile{
+		ReactionSystems: map[string]ReactionSystem{
+			"Chem": {
+				Species: map[string]Species{
+					// json.Number is what the UseNumber-based parser produces.
+					"O3":  {Default: json.Number("3.0")},
+					"NO2": {Default: 5.0},              // float64, as built directly in code
+					"NO":  {},                          // no default -> sensible fallback (0.0)
+					"O":   {Default: json.Number("0")}, // explicit zero must survive
+				},
+				Parameters: map[string]Parameter{"k1": {}},
+				Reactions:  []Reaction{},
+			},
+		},
+	}
+
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+
+	cases := map[string]float64{
+		"Chem.O3":  3.0,
+		"Chem.NO2": 5.0,
+		"Chem.NO":  0.0,
+		"Chem.O":   0.0,
+	}
+	for name, want := range cases {
+		got, ok := flat.InitialValues[name]
+		if !ok {
+			t.Errorf("expected initial value for %s, got none (map=%v)", name, flat.InitialValues)
+			continue
+		}
+		if got != want {
+			t.Errorf("initial value for %s = %v, want %v", name, got, want)
+		}
 	}
 }
 
