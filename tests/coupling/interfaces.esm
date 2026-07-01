@@ -2,7 +2,7 @@
   "esm": "0.8.0",
   "metadata": {
     "name": "InterfaceDefinitions",
-    "description": "Test fixture for cross-grid coupling re-expressed as regridding aggregates.\nThe old tropopause/land_atmosphere/ice_atmosphere interfaces (shared lon/lat plus level/pressure selection between two domains) are migrated to v0.8.0: the tropopause coupling is realized as a regridding aggregate inside LowerAtmosphere that remaps stratospheric ozone onto the troposphere; spatial <-> 0-D mappings use the coupling lifting field.\nMigrated to ESM v0.8.0.",
+    "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + intersect_polygon/polygon_area narrow phase), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
@@ -22,7 +22,23 @@
     },
     "lower_cells": {
       "kind": "interval",
-      "size": 3
+      "size": 4
+    },
+    "rg_coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "rg_cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "rg_candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "rg_candidate_set"
+    },
+    "rg_clip_ring": {
+      "kind": "derived",
+      "from_faq": "rg_overlap_clip"
     }
   },
   "models": {
@@ -45,6 +61,22 @@
             "upper_cells"
           ],
           "description": "Temperature on the stratospheric grid"
+        },
+        "O3_field": {
+          "type": "observed",
+          "shape": [
+            "upper_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              5e-08,
+              6e-08,
+              7e-08
+            ],
+            "args": []
+          },
+          "description": "SPATIALLY-VARYING stratospheric ozone field on the 3-cell stratospheric grid (non-uniform on purpose). Coupled onto LowerAtmosphere.O3_strat and regridded onto the troposphere across the tropopause."
         }
       },
       "equations": [
@@ -130,24 +162,446 @@
           "shape": [
             "upper_cells"
           ],
-          "description": "Stratospheric ozone sampled on the upper-atmosphere grid (coupling input), regridded to the troposphere across the tropopause"
+          "description": "Stratospheric ozone sampled on the 3-cell upper-atmosphere grid (a SPATIALLY-VARYING field from UpperAtmosphere), regridded onto the 4-cell troposphere by the inline conservative weights below."
         },
-        "tropopause_weight": {
-          "type": "parameter",
-          "units": "1",
+        "rg_src_poly": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  1,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file SOURCE-grid geometry: one closed lon-lat vertex ring per source cell (the 3-cell stratospheric grid). The `poly_a` operand of the ranged clip \u2014 the weights are computed FROM this geometry, not supplied."
+        },
+        "rg_tgt_poly": {
+          "type": "observed",
           "shape": [
             "lower_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  3,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  3,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file TARGET-grid geometry: one closed lon-lat vertex ring per target cell (the 4-cell tropospheric grid). A GENUINELY DIFFERENT grid (distinct cell count and vertex rings) tiling the same domain, so the overlaps are fractional."
+        },
+        "rg_src_lon": {
+          "type": "observed",
+          "shape": [
             "upper_cells"
           ],
-          "description": "Tropopause regrid weights mapping upper-atmosphere cells onto lower-atmosphere cells over shared lon/lat (the old tropopause interface expressed as a regridding operator; each lower-cell row sums to 1)"
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.0,
+              2.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative longitude (bbox-min) \u2014 enters only the integer binning via floor, never a raw join comparison."
         },
-        "O3_boundary": {
+        "rg_src_lat": {
           "type": "observed",
-          "units": "mol/mol",
+          "shape": [
+            "upper_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative latitude for binning."
+        },
+        "rg_tgt_lon": {
+          "type": "observed",
           "shape": [
             "lower_cells"
           ],
-          "description": "Ozone boundary value on the tropospheric grid, regridded from the stratosphere: O3_boundary[l] = sum_u tropopause_weight[l,u] * O3_strat[u]",
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.5,
+              2.0,
+              3.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative longitude for binning."
+        },
+        "rg_tgt_lat": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative latitude for binning."
+        },
+        "rg_dx": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin width (integer quantization step).",
+          "default": 2.0
+        },
+        "rg_dy": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin height.",
+          "default": 2.0
+        },
+        "rg_atol": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Sliver floor: an overlap area at or below atol is dropped.",
+          "default": 1e-12
+        },
+        "rg_src_bin": {
+          "type": "state",
+          "shape": [
+            "upper_cells"
+          ],
+          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) \u2014 the equi-join column."
+        },
+        "rg_tgt_bin": {
+          "type": "state",
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Integer bin key of each target cell, identically quantized."
+        },
+        "rg_pairs": {
+          "type": "state",
+          "shape": [
+            "rg_candidate_pairs"
+          ],
+          "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
+        },
+        "rg_clip": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "lower_cells",
+            "rg_clip_ring",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l",
+              "w",
+              "c"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              },
+              "w": {
+                "from": "rg_clip_ring"
+              },
+              "c": {
+                "from": "rg_coord"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "intersect_polygon",
+                  "id": "rg_overlap_clip",
+                  "manifold": "planar",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "rg_src_poly",
+                        "u"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "rg_tgt_poly",
+                        "l"
+                      ]
+                    }
+                  ]
+                },
+                "w",
+                "c"
+              ]
+            }
+          },
+          "description": "NARROW PHASE ranged over all src x tgt pairs: clip[i,j] = intersect_polygon(src_i, tgt_j), a ragged ring (derived rg_clip_ring). The full-mesh narrow phase is declared STRUCTURALLY (schema-valid); op:\"arrayop\" would materialize it densely but is not in the schema op registry \u2014 the same status conservative_regrid_overlap_join.esm documents."
+        },
+        "rg_A": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "aggregate",
+              "semiring": "sum_product",
+              "output_idx": [],
+              "ranges": {
+                "v": {
+                  "from": "rg_clip_ring"
+                }
+              },
+              "args": [],
+              "expr": {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "rg_clip",
+                              "u",
+                              "l",
+                              "v",
+                              1
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "rg_clip",
+                              "u",
+                              "l",
+                              {
+                                "op": "+",
+                                "args": [
+                                  "v",
+                                  1
+                                ]
+                              },
+                              2
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "rg_clip",
+                              "u",
+                              "l",
+                              {
+                                "op": "+",
+                                "args": [
+                                  "v",
+                                  1
+                                ]
+                              },
+                              1
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "rg_clip",
+                              "u",
+                              "l",
+                              "v",
+                              2
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) computed INLINE from the in-file geometry (planar shoelace FAQ over each clip ring). Replaces the previously supplied weight matrix."
+        },
+        "rg_At": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
           "expression": {
             "op": "aggregate",
             "semiring": "sum_product",
@@ -155,26 +609,171 @@
               "l"
             ],
             "ranges": {
-              "l": {
-                "from": "lower_cells"
-              },
               "u": {
                 "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
               }
             },
-            "args": [
-              "tropopause_weight",
-              "O3_strat"
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
             ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "rg_A",
+                "u",
+                "l"
+              ]
+            }
+          },
+          "description": "Target-cell area denominator A_j = \u03a3_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter \u2014 the row-sum normalization, computed from geometry, not supplied."
+        },
+        "rg_W": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_At",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "The conservative regrid weights W_ij = A_ij/A_j over the candidate pairs. Partition-of-unity \u03a3_i W_ij = 1 by construction (denominator is the row-sum of the same areas)."
+        },
+        "O3_boundary": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
             "expr": {
               "op": "*",
               "args": [
                 {
                   "op": "index",
                   "args": [
-                    "tropopause_weight",
-                    "l",
-                    "u"
+                    "rg_W",
+                    "u",
+                    "l"
                   ]
                 },
                 {
@@ -186,10 +785,191 @@
                 }
               ]
             }
-          }
+          },
+          "description": "Ozone boundary value on the tropospheric grid, regridded from the stratosphere via the INLINE conservative weights: O3_boundary[l] = \u03a3_u W[u,l]\u00b7O3_strat[u], W = A/A_l from cell geometry (the old tropopause interface as a real overlap-weighted regrid)."
         }
       },
       "equations": [
+        {
+          "_comment": "BROAD PHASE (1a): bin each SOURCE cell to an integer lon-lat bin key.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_src_bin",
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lon",
+                            "u"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lat",
+                            "u"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1b): bin each TARGET cell identically.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin",
+              "l"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lon",
+                            "l"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lat",
+                            "l"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_pairs",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "bool_and_or",
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "id": "rg_candidate_set",
+            "distinct": true,
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "key": {
+              "op": "skolem",
+              "args": [
+                "pair",
+                "u",
+                "l"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
         {
           "lhs": {
             "op": "ic",
@@ -383,11 +1163,11 @@
   "coupling": [
     {
       "type": "variable_map",
-      "from": "UpperAtmosphere.O3",
+      "from": "UpperAtmosphere.O3_field",
       "to": "LowerAtmosphere.O3_strat",
       "transform": "param_to_var",
       "lifting": "pointwise",
-      "description": "Stratospheric ozone supplied to the lower atmosphere on the upper grid; LowerAtmosphere regrids it to the troposphere (O3_boundary) across the tropopause"
+      "description": "Spatially-varying stratospheric ozone field supplied to the lower atmosphere on the 3-cell upper grid; LowerAtmosphere regrids it onto the 4-cell troposphere (O3_boundary) via the inline conservative overlap weights across the tropopause."
     },
     {
       "type": "variable_map",
