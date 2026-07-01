@@ -27,6 +27,19 @@ PYTHON_DIR="$PROJECT_ROOT/packages/earthsci_toolkit"
 RUST_DIR="$PROJECT_ROOT/packages/earthsci-toolkit-rs"
 GO_DIR="$PROJECT_ROOT/packages/esm-format-go"
 
+# Prefer the Python binding's virtualenv if it exists, so every `python3` call in
+# this script (the pytest suite, the conformance runners, and the per-binding
+# producers) resolves to an interpreter that has the toolkit and its deps
+# (pytest, jsonschema, scipy, numpy) installed. A bare system `python3` (e.g.
+# Homebrew) typically lacks these. Falls back to whatever `python3` is on PATH
+# when the venv is absent (e.g. a CI image where the deps are provisioned
+# globally). Create it with:  cd packages/earthsci_toolkit && python3 -m venv
+# .venv && .venv/bin/pip install -e '.[test]'
+PYVENV_BIN="$PYTHON_DIR/.venv/bin"
+if [ -x "$PYVENV_BIN/python3" ]; then
+    export PATH="$PYVENV_BIN:$PATH"
+fi
+
 # Test categories
 VALID_TESTS_DIR="$TESTS_DIR/valid"
 INVALID_TESTS_DIR="$TESTS_DIR/invalid"
@@ -349,7 +362,12 @@ run_determinism_conformance_python() {
         return 0
     fi
     log "Running determinism conformance with the Python relational engine..."
+    # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the cadence /
+    # PDE-sim Python producers). Without it, `python3 -m earthsci_toolkit...`
+    # can't import the package (the venv carries only deps, not an editable
+    # install), so the adapter emits no output and the producer fails.
     EARTHSCI_DETERMINISM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.determinism_adapter" \
+    PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-determinism-conformance.py" \
             --bindings python \
             --output "$OUTPUT_DIR/determinism/python_report.json"
