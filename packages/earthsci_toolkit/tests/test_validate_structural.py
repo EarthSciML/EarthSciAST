@@ -58,6 +58,79 @@ class TestStructuralValidation:
             error_text = ' '.join(str(e) for e in all_errors).lower()
             assert any(keyword in error_text for keyword in ["undefined", "reference", "variable", "unknown"])
 
+    def test_var_placeholder_tolerated_in_nested_operator(self, fixtures_dir):
+        """`_var` (the reserved operator placeholder, spec §6.4) must be accepted
+        as a valid reference at ANY nesting depth in a model's equations —
+        including nested inside an operator such as the canonical advection idiom
+        ``grad(_var, dim)`` — not merely in the top-level ``D(_var)`` derivative
+        position. Regression test for the false
+        ``undefined variable reference '_var'`` structural error."""
+        advection = {
+            "esm": "0.2.0",
+            "metadata": {"name": "Advection"},
+            "models": {
+                "Advection": {
+                    "variables": {
+                        "c": {"type": "state", "units": "kg/m^3", "default": 0.0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1.0},
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [
+                                {"op": "-", "args": ["u"]},
+                                {"op": "grad", "args": ["_var"], "dim": "lon"},
+                            ]},
+                        }
+                    ],
+                }
+            },
+        }
+        # load() runs the structural reference-resolution check; it must NOT
+        # raise on the nested `_var` placeholder.
+        load(json.dumps(advection))
+        # And validate() must not surface an undefined-reference error for `_var`.
+        result = validate(advection)
+        ref_errors = [
+            e for e in (result.schema_errors + result.structural_errors)
+            if "undefined variable reference" in e.message and "_var" in e.message
+        ]
+        assert ref_errors == [], (
+            "_var must never be flagged as an undefined variable reference; got "
+            f"{[e.message for e in ref_errors]}"
+        )
+
+    def test_genuine_undefined_ref_still_caught_alongside_var(self, fixtures_dir):
+        """The `_var` tolerance must be placeholder-specific, not a blanket skip:
+        a genuinely misspelled variable nested in the same operator position is
+        STILL reported as an undefined variable reference."""
+        bad = {
+            "esm": "0.2.0",
+            "metadata": {"name": "Advection"},
+            "models": {
+                "Advection": {
+                    "variables": {
+                        "c": {"type": "state", "units": "kg/m^3", "default": 0.0},
+                        "u": {"type": "parameter", "units": "m/s", "default": 1.0},
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [
+                                {"op": "-", "args": ["u"]},
+                                # `typo_missing` is not a declared variable and
+                                # is not the reserved `_var` placeholder.
+                                {"op": "grad", "args": ["typo_missing"], "dim": "lon"},
+                            ]},
+                        }
+                    ],
+                }
+            },
+        }
+        with pytest.raises(SchemaValidationError) as exc_info:
+            load(json.dumps(bad))
+        assert "undefined variable reference 'typo_missing'" in str(exc_info.value)
+
     def test_type_mismatch_in_expressions(self, fixtures_dir):
         """Test type consistency in expressions."""
         invalid_esm = {

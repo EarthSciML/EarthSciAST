@@ -1728,6 +1728,17 @@ def _check_variable_references(data: Dict[str, Any], tables: Dict[str, Any], err
                     continue
                 refs = _walk_expression_strings(eq[side])
                 for ref in refs:
+                    # `_var` is the reserved operator placeholder (spec §6.4):
+                    # in an operator-style model it is substituted with each
+                    # matching state variable of the target system at
+                    # operator_compose time. It is never a declared symbol, so
+                    # it is a valid reference at ANY nesting depth — not merely
+                    # in the top-level `D(_var)` derivative position, but also
+                    # when nested inside an operator, e.g. the canonical
+                    # advection idiom `grad(_var, dim)`. Skip it so it is not
+                    # flagged as an undefined variable reference.
+                    if ref == "_var":
+                        continue
                     if "." in ref:
                         # 3+ part refs may use subsystem nesting; only check top-level system
                         if ref.count(".") > 1:
