@@ -126,6 +126,7 @@ Where:
 > **Binding status (2026-07-02)**: Julia implemented (`_merge_subsystem_index_sets!` in `parse.jl`, called from `_resolve_subsystem_ref` for every §4.7 subsystem edge, local and remote; fixtures `tests/valid/subsystem_mesh_lib.esm` + `tests/valid/subsystem_index_set_merge.esm`, `tests/invalid/template_imports/subsystem_index_set_conflict.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) at every subsystem-ref resolution, merge the loaded file's top-level `index_sets` (post-metaparameter-fold) into the importing document's registry; (2) treat deep-equal redeclaration as idempotent (structural equality over kind/size/members/of/offsets/values/from_faq); (3) reject non-equal collisions with the stable `subsystem_index_set_conflict` diagnostic; (4) drive the shared fixtures (schema-only bindings assert schema acceptance per `resolver_only`). Note: the Julia raw-level top-level-model `{ref}` inline path (`_inline_toplevel_model_refs!`) is a distinct mechanism and does not yet merge `index_sets`; it merges only `function_tables`/`data_loaders`/`enums`.
 >
 > **Go port (2026-07-03)**: implemented (`mergeSubsystemIndexSets` + `indexSetDeepEqual` in `subsystem_ref.go`; the importing document's `file.IndexSets` registry is threaded through `resolveSubsystemRefs`/`resolveSubsystemMap` and each mounted file's folded top-level `index_sets` merge in, transitively through nested mounts). `subsystem_index_set_merge.esm` loads with `vertices` merged in (size 4) and `cells` deep-equal-idempotent; `subsystem_index_set_conflict.esm` is rejected with `subsystem_index_set_conflict` (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `mergeSubsystemIndexSets` in `packages/earthsci-toolkit/src/ref-loading.ts`, called from `resolveModelRefs` at every model subsystem-ref resolution with the importing document's `file.index_sets` threaded as the registry; deep-equal via `deepEqual` (numeric-literal-aware), non-equal collision → `subsystem_index_set_conflict`, absent name added. Matches the Julia reference (registry threaded only through the model walk, not reaction systems). The `subsystem_index_set_conflict.esm` fixture is rejected with the exact code (`src/template-imports.test.ts` invalid loop, via `resolveSubsystemRefs`).
 
 ### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -136,6 +137,7 @@ Where:
 > **Binding status (2026-07-02)**: Julia implemented (`_validate_makearray_regions`, both §9.6.4 validator sites in `lower_expression_templates.jl`; fixtures `tests/valid/makearray_empty_region_min_extent.esm`, `tests/invalid/template_imports/makearray_region_inverted.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) walk the expanded, folded tree's `makearray.regions`, skipping `expression_templates` blocks and non-integer (unfolded) bound entries; (2) accept `stop == start − 1` as empty; (3) reject `stop < start − 1` with the stable `makearray_region_inverted` diagnostic; (4) drive the two shared fixtures (schema-only bindings TS/Go assert schema acceptance per the `resolver_only` flag in `expected_errors.json`).
 >
 > **Go port (2026-07-03)**: implemented (`validateMakearrayRegions` + `asInt64Strict` in `lower_expression_templates.go`, run at both §9.6.4 validator sites — the no-machinery fast path and the post-fixpoint return). `makearray_empty_region_min_extent.esm` loads at default N=2 (empty bound `[2,1]`) and is rejected at N=1 (inverted `[2,0]`) with `makearray_region_inverted`; the shared invalid fixture is rejected (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `validateMakearrayRegions` in `packages/earthsci-toolkit/src/lower_expression_templates.ts`, run on the expanded/folded form at both `lowerExpressionTemplates` validator sites (fast path + full path), skipping `expression_templates` and non-integer bounds. `makearray_empty_region_min_extent.esm` loads clean at default `N = 2` (interior folds to `[2, 1]`); the same file rebound `N = 1` (loader API) and `makearray_region_inverted.esm` are rejected with `makearray_region_inverted`. Tests in `src/expression-templates.test.ts` + the `src/template-imports.test.ts` invalid-fixture loop.
 
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -393,7 +395,7 @@ Where:
 
 ### EXPR-09-F: Import Renaming, Namespacing, and Free-Name Rebinding (esm-spec §9.7.7)
 
-> **Binding status**: Julia (reference) = implemented; Python / Rust / TypeScript / Go =
+> **Binding status**: Julia (reference) = implemented; Python / Rust / Go =
 > pending port (wave 2 of RFC `docs/content/rfcs/template-import-renaming.md` §10).
 >
 > **Go port (2026-07-03)**: implemented in `packages/esm-format-go/pkg/esm/template_imports.go`
@@ -402,6 +404,15 @@ Where:
 > Goldens `import_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond`
 > byte-identical; `rename_unknown_name` / `rebind_unknown_free_name` / `rename_collision` /
 > `rename_invalid_identifier` raise the mapped diagnostics (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `applyEdgeRenames` + `renameWalk` /
+> `renameDecl` / `nameMap` / `collectBoundSyms` / `collectRefNames` in
+> `packages/earthsci-toolkit/src/template_imports.ts`, called from
+> `resolveImportEntry` after `bindings`/`only` and before the merge; `where` added
+> to `META_SUBST_SKIP_KEYS`. Byte-identity (via `toEqual`) confirmed against the
+> Julia goldens for `import_rename_two_instances`, `import_rebind_keyed_factors`,
+> `import_rename_diamond`; the four invalid fixtures raise the exact codes
+> (`rename_unknown_name`, `rebind_unknown_free_name`, `rename_collision`,
+> `rename_invalid_identifier`). Tests in `src/template-imports.test.ts`.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -425,6 +436,17 @@ Where:
 > added to `metaSubstSkipKeys`). Goldens `constrained_match_scope`, `two_div_two_meshes`,
 > `per_variable_scheme_literal_args` byte-identical (models.m.variables); `constraint_unknown_index_set`
 > raises `template_constraint_unknown_index_set` (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `where` structural validation in
+> `validateTemplates`, plus `componentShapeEnv` / `whereSatisfied` /
+> `registeredWhere` and the `whereConstraint`/`shapeEnv` threading through the
+> §9.6.3 engine (`onePass` / `rewriteToFixpoint`) in
+> `packages/earthsci-toolkit/src/lower_expression_templates.ts`; `where` added to
+> `META_SUBST_SKIP_KEYS` (G-008). Byte-identity confirmed for
+> `constrained_match_scope`, `two_div_two_meshes`, `per_variable_scheme_literal_args`;
+> `constraint_unknown_index_set` rejected at load with
+> `template_constraint_unknown_index_set`. The two non-fixture pins
+> (filter-before-priority, compound-arg-conservative) are unit-tested. Tests in
+> `src/expression-templates.test.ts`.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

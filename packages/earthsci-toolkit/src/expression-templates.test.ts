@@ -887,3 +887,213 @@ describe('scalar_field_param conformance fixture', () => {
     expect(vars.area_spherical.expression.manifold).toBe('spherical')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Static match-scoping constraints (`where`, esm-spec §9.6.1 / §9.6.3;
+// docs/content/rfcs/match-pattern-scoping-constraints.md). Drives the shared
+// cross-binding conformance fixtures + the two non-fixture unit pins (§10.6).
+// ---------------------------------------------------------------------------
+
+describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
+  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const fixture = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8'))
+  const golden = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8'))
+  const lower = (name: string) => lowerExpressionTemplates(fixture(name)) as any
+
+  it('constrained_match_scope: fires only where the shape constraint holds', () => {
+    // div(F_edge) rewritten (F over [edges]); div(F_cell) constraint-excluded,
+    // survives as the un-lowered rewrite-target (loading is permissive).
+    const out = lower('constrained_match_scope')
+    expect(out.models).toEqual(golden('constrained_match_scope').models)
+    expect(out.models.m.variables.div_edge.expression).toEqual({
+      op: '*',
+      args: ['inv_area', 'F_edge'],
+    })
+    expect(out.models.m.variables.div_cell.expression).toEqual({ op: 'div', args: ['F_cell'] })
+  })
+
+  it('two_div_two_meshes: identical patterns routed by shape at equal priority', () => {
+    // Without `where`, the declaration-order tie-break would send BOTH div
+    // nodes to fv_div_mesh_a. Constraints filter before selection, so each div
+    // lowers by its own mesh's rule.
+    const out = lower('two_div_two_meshes')
+    expect(out.models).toEqual(golden('two_div_two_meshes').models)
+    expect(out.models.m.variables.div_a.expression).toEqual({
+      op: '*',
+      args: ['inv_area_a', 'F_a'],
+    })
+    expect(out.models.m.variables.div_b.expression).toEqual({
+      op: '*',
+      args: ['inv_area_b', 'F_b'],
+    })
+  })
+
+  it('per_variable_scheme_literal_args: ground-pattern per-variable selector', () => {
+    // Sanctioned per-variable mechanism (no `where`): a non-parameter string in
+    // an args position is a literal. upwind1_D_u (priority 10) fires only on
+    // D(u, x); central_D_any captures every other D(·, x).
+    const out = lower('per_variable_scheme_literal_args')
+    expect(out.models).toEqual(golden('per_variable_scheme_literal_args').models)
+    expect(out.models.m.variables.du.expression).toEqual({ op: '*', args: ['upwind_coef', 'u'] })
+    expect(out.models.m.variables.dv.expression).toEqual({ op: '*', args: ['central_coef', 'v'] })
+  })
+
+  it('constraint_unknown_index_set: unknown shape name rejected at registration', () => {
+    const err = JSON.parse(
+      fs.readFileSync(path.join(confDir, 'constraint_unknown_index_set', 'error.json'), 'utf8'),
+    )
+    let caught: unknown
+    try {
+      lowerExpressionTemplates(fixture('constraint_unknown_index_set'))
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ExpressionTemplateError)
+    expect((caught as ExpressionTemplateError).code).toBe(err.code)
+    expect((caught as ExpressionTemplateError).code).toBe('template_constraint_unknown_index_set')
+  })
+
+  // --- non-fixture unit pins (match-pattern-scoping-constraints RFC §10.6) ---
+
+  it('constraints filter BEFORE priority (excluded high-priority rule never shadows)', () => {
+    // A high-priority (100) shape-constrained rule is excluded at div(F_cell)
+    // because F_cell is not over [edges]; a low-priority (0) generic rule must
+    // still fire there. Pins that `where` is part of eligibility, not selection.
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'filter_before_priority', authors: ['t'] },
+      index_sets: { cells: { kind: 'interval', size: 3 }, edges: { kind: 'interval', size: 5 } },
+      models: {
+        m: {
+          variables: {
+            F_cell: { type: 'state', units: '1', shape: ['cells'] },
+            d: {
+              type: 'observed',
+              units: '1',
+              shape: ['cells'],
+              expression: { op: 'div', args: ['F_cell'] },
+            },
+          },
+          equations: [],
+          expression_templates: {
+            hi_edges_only: {
+              params: ['F'],
+              priority: 100,
+              match: { op: 'div', args: ['F'] },
+              where: { F: { shape: ['edges'] } },
+              body: { op: 'edge_div', args: ['F'] },
+            },
+            lo_generic: {
+              params: ['F'],
+              priority: 0,
+              match: { op: 'div', args: ['F'] },
+              body: { op: 'generic_div', args: ['F'] },
+            },
+          },
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
+    expect(out.models.m.variables.d.expression).toEqual({ op: 'generic_div', args: ['F_cell'] })
+  })
+
+  it('compound argument fails the constraint conservatively (no error, no rewrite)', () => {
+    // A `where` constraint holds only for a BARE variable-reference binding; a
+    // compound sub-AST fails conservatively — the node is left un-lowered, and
+    // loading stays permissive (no error).
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'compound_arg_conservative', authors: ['t'] },
+      index_sets: { edges: { kind: 'interval', size: 5 } },
+      models: {
+        m: {
+          variables: {
+            F: { type: 'state', units: '1', shape: ['edges'] },
+            d: {
+              type: 'observed',
+              units: '1',
+              shape: ['edges'],
+              expression: { op: 'div', args: [{ op: '*', args: [2, 'F'] }] },
+            },
+          },
+          equations: [],
+          expression_templates: {
+            fv: {
+              params: ['F'],
+              match: { op: 'div', args: ['F'] },
+              where: { F: { shape: ['edges'] } },
+              body: { op: '*', args: ['inv_area', 'F'] },
+            },
+          },
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
+    // The div of a compound flux is NOT rewritten (bare-var-only judgment).
+    expect(out.models.m.variables.d.expression).toEqual({
+      op: 'div',
+      args: [{ op: '*', args: [2, 'F'] }],
+    })
+  })
+
+  it('`where` without `match` is a malformed declaration', () => {
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'where_without_match', authors: ['t'] },
+      index_sets: { edges: { kind: 'interval', size: 5 } },
+      models: {
+        m: {
+          variables: {},
+          equations: [],
+          expression_templates: {
+            bad: { params: ['F'], where: { F: { shape: ['edges'] } }, body: 'F' },
+          },
+        },
+      },
+    }
+    let caught: unknown
+    try {
+      lowerExpressionTemplates(JSON.parse(JSON.stringify(src)))
+    } catch (e) {
+      caught = e
+    }
+    expect((caught as ExpressionTemplateError).code).toBe(
+      'apply_expression_template_invalid_declaration',
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Pin 1: makearray empty vs inverted region bounds (esm-spec §4.3.2 / §9.6.4).
+// docs/content/rfcs matches _validate_makearray_regions in the Julia reference.
+// ---------------------------------------------------------------------------
+
+describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
+  const validDir = path.resolve(__dirname, '../../..', 'tests/valid')
+
+  it('empty bound [start, start-1] loads clean at the minimum extent', () => {
+    // tests/valid/makearray_empty_region_min_extent.esm folds the interior
+    // region [2, N-1] to [2, 1] at the default N = 2 — the canonical empty
+    // bound, which contributes no elements and MUST load.
+    const text = fs.readFileSync(path.join(validDir, 'makearray_empty_region_min_extent.esm'), 'utf8')
+    const f = load(text, { basePath: validDir }) as any
+    const regions = f.models.Advection.equations[0].rhs.regions
+    expect(regions[0][0]).toEqual([2, 1])
+  })
+
+  it('inverted bound [2, 0] at N = 1 (loader API) is rejected', () => {
+    // Re-binding N = 1 folds the interior region to [2, 0] — inverted
+    // (stop < start - 1) — which MUST fail with makearray_region_inverted.
+    const text = fs.readFileSync(path.join(validDir, 'makearray_empty_region_min_extent.esm'), 'utf8')
+    let caught: unknown
+    try {
+      load(text, { basePath: validDir, metaparameters: { N: 1 } })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ExpressionTemplateError)
+    expect((caught as ExpressionTemplateError).code).toBe('makearray_region_inverted')
+  })
+})
