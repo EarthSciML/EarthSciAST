@@ -1070,12 +1070,19 @@ fn apply_couple(
 fn apply_variable_map(
     from: &str,
     to: &str,
-    transform: &str,
+    _transform: &str,
     factor: Option<f64>,
     per_system: &mut [SystemBlock],
 ) {
-    let replacement = match (transform, factor) {
-        ("conversion_factor", Some(f)) => Expr::Operator(ExpressionNode {
+    // `factor` is a scaling coefficient; the schema restricts it to the scaling
+    // transforms (additive / multiplicative / conversion_factor), so apply it
+    // uniformly whenever present. This matches Python and Julia — Rust previously
+    // scaled only for `conversion_factor`, silently dropping the factor for
+    // additive / multiplicative. A factor of 1.0 is a no-op and left unwrapped.
+    // (Parameter removal for param_to_var/conversion_factor is in the collection
+    // phase, so this function no longer needs `transform`.)
+    let replacement = match factor {
+        Some(f) if f != 1.0 => Expr::Operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Variable(from.to_string()), Expr::Number(f)],
             wrt: None,

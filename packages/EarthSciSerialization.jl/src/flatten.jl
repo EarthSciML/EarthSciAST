@@ -1109,9 +1109,14 @@ function _apply_variable_map!(equations::Vector{Equation},
     to = entry.to
     transform = entry.transform
 
-    # Build replacement Expr
+    # Build replacement Expr. `factor` is a scaling coefficient (schema restricts
+    # it to the scaling transforms — additive / multiplicative / conversion_factor;
+    # a bare param_to_var / identity may not carry one). Apply it uniformly here
+    # so all three bindings agree — Julia/Rust previously scaled only for
+    # `conversion_factor`, silently dropping it for additive/multiplicative while
+    # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
     replacement::EarthSciSerialization.Expr = VarExpr(from)
-    if transform == "conversion_factor" && entry.factor !== nothing
+    if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr("*",
             EarthSciSerialization.Expr[NumExpr(entry.factor::Float64), VarExpr(from)])
     end

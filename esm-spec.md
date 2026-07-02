@@ -2505,11 +2505,13 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 | Transform | Description |
 |---|---|
-| `param_to_var` | Replace a constant parameter with a time-varying variable from another system |
-| `identity` | Direct assignment without type change |
-| `additive` | Add the source variable as an additional term |
-| `multiplicative` | Multiply the target by the source variable |
-| `conversion_factor` | Apply a unit conversion factor (specified in the `factor` field) |
+| `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. |
+| `identity` | Direct assignment without type change. Takes no `factor`. |
+| `additive` | Scaled replacement: `target := factor · source`. (To *add* a source/sink term to an existing tendency, use a `couple` `additive` equation — §10.3.) |
+| `multiplicative` | Scaled replacement: `target := factor · source`. (To *scale* an existing tendency by a source, use a `couple` `multiplicative` equation — §10.3.) |
+| `conversion_factor` | Scaled replacement applying a unit conversion: `target := factor · source`. |
+
+Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
 
 ### 10.5 Coupling across grids and dimensionality
 
