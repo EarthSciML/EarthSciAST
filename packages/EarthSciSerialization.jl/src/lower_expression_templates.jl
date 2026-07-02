@@ -14,14 +14,26 @@ format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
   matched sub-AST; a param in a scalar field (`dim`, `side`, …) binds to the
   matched literal.
 
-Rewriting is a SINGLE bottom-up pass over each component's expression trees
-(`_rewrite`): children are rewritten first; then a node is expanded (apply) or
-matched against the `match` rules in template DECLARATION order (first match
-wins). A replacement is NOT re-scanned, so the pass terminates in one sweep; a
-`match` rule whose `body` re-introduces its own pattern is rejected up front
-(`rewrite_rule_nonterminating`). After the pass the tree contains no
-`apply_expression_template` ops and no `expression_templates` blocks — downstream
-consumers see only normal Expression ASTs (Option A round-trip).
+Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
+(esm-spec §9.6.3, `_rewrite_to_fixpoint`). Rule application proceeds in passes;
+one pass (`_rewrite_pass`) is a single pre-order (outermost-first) walk of the
+tree. At each node the engine first tries to fire a rule AT that node before
+descending: an `apply_expression_template` op is expanded, otherwise the `match`
+rules are consulted and the winner is selected deterministically — highest
+`priority` (integer, default 0), ties broken by DECLARATION order. The winner's
+`body` replaces the node and the walk does NOT descend into that freshly-produced
+body during the current pass; if no rule fires, the walk descends into children.
+Passes repeat until a pass performs zero rewrites (the fixpoint) or until
+`MAX_REWRITE_PASSES` productive passes have run without converging, in which case
+the file is rejected with `rewrite_rule_nonterminating` (the pass bound — not a
+static check — is the authoritative termination guard, so a self-reintroducing
+rule simply fails to converge). Because selection and traversal are fully
+deterministic, all bindings produce byte-identical fixpoints. After convergence
+the tree contains no `apply_expression_template` ops and no `expression_templates`
+blocks — downstream consumers see only normal Expression ASTs (Option A
+round-trip). Any rewrite-target op (e.g. a spatial `D`) that survives the
+fixpoint into an evaluation position is caught later by the `unlowered_operator`
+gate, not here.
 
 Operates on the raw JSON view (JSON3.Object/Array or Dict/Vector) and
 returns a `Dict{String,Any}` view ready for `coerce_esm_file`.
@@ -206,21 +218,14 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
         # declared params are wildcards; it MUST NOT contain nested
-        # apply_expression_template ops. Rewriting is single-pass with no
-        # re-scan, so a rule whose `body` re-introduces its own pattern would
-        # loop under any future multi-pass evaluator and is rejected here
-        # (esm-spec §9.6.3 rule 2, diagnostic `rewrite_rule_nonterminating`).
+        # apply_expression_template ops. Nontermination is NOT checked
+        # statically any more — the bounded fixpoint (`MAX_REWRITE_PASSES`,
+        # esm-spec §9.6.3) is the authoritative guard, so a self-reintroducing
+        # rule is rejected at load time (`rewrite_rule_nonterminating`) only when
+        # it actually fails to converge within the pass bound.
         match = get(decl, "match", get(decl, :match, nothing))
         if match !== nothing
             _assert_no_nested_apply(match, name, "/match")
-            param_set = Set{String}(string(p) for p in params)
-            if _body_reintroduces_pattern(match, param_set, body)
-                throw(ExpressionTemplateError(
-                    "rewrite_rule_nonterminating",
-                    "$scope.expression_templates.$name: the `match` rule's `body` " *
-                    "re-introduces its own pattern; single-pass rewriting forbids " *
-                    "self-reintroducing rules (esm-spec §9.6.3)"))
-            end
         end
     end
 end
@@ -391,91 +396,113 @@ _has_key(node, ks::AbstractString) =
     (haskey(node, ks) || haskey(node, Symbol(ks)))
 
 """
-    _pattern_occurs(pattern, params, tree) -> Bool
-
-True if `pattern` (params as wildcards) structurally matches `tree` itself or
-any sub-node of `tree`. Used by the nontermination check.
+Maximum number of productive rewrite passes before a file is rejected as
+non-converging (esm-spec §9.6.3, diagnostic `rewrite_rule_nonterminating`).
+Pinned identically across all bindings so the accept/reject decision — and the
+resulting fixpoint — is byte-identical everywhere.
 """
-function _pattern_occurs(pattern, params::Set{String}, tree)::Bool
-    if _match_pattern(pattern, tree, params, Dict{String,Any}())
-        return true
-    end
-    if _is_array(tree)
-        for c in tree
-            _pattern_occurs(pattern, params, c) && return true
-        end
-    elseif _is_object(tree)
-        for (_, v) in pairs(tree)
-            _pattern_occurs(pattern, params, v) && return true
-        end
-    end
-    return false
+const MAX_REWRITE_PASSES = 64
+
+"""
+    _rule_priority(decl) -> Int
+
+The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first, ties
+break by declaration order. Absent ⇒ `0`. The schema constrains `priority` to an
+integer; any numeric encoding is coerced defensively.
+"""
+function _rule_priority(decl)::Int
+    p = get(decl, "priority", get(decl, :priority, nothing))
+    p === nothing && return 0
+    p isa Bool && return 0
+    p isa Integer && return Int(p)
+    p isa Number && return round(Int, p)
+    return 0
 end
 
 """
-    _body_reintroduces_pattern(pattern, params, body) -> Bool
+    _rewrite_pass(node, named, sorted_rules, scope, last) -> (new_node, changed)
 
-True if instantiating `body` could re-introduce the rule's own `pattern`
-(esm-spec §9.6.3 rule 2). For an operator (object) pattern this is any
-structural occurrence of the pattern in `body`, including at its root (a `body`
-that *is* a `grad` for a `grad`-matching rule). A bare-metavariable pattern
-matches every node, so its trivial root self-match is ignored — only a deeper
-re-introduction (in a proper sub-node) is flagged.
+One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3). At
+each object node the engine first tries to fire a rule AT the node before
+descending:
+
+1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
+2. the first rule in `sorted_rules` (pre-sorted highest-`priority`-first, ties by
+   declaration order) whose `match` pattern structurally matches the node fires.
+
+A fired rule's body replaces the node and the walk does NOT descend into that
+freshly-produced body during this pass (it is revisited next pass). If nothing
+fires, the walk descends into the node's children. `changed` is `true` iff any
+rewrite occurred in this subtree; `last` (a `Ref{String}`) records the op of the
+most recent rewrite, for the non-convergence diagnostic.
 """
-function _body_reintroduces_pattern(pattern, params::Set{String}, body)::Bool
-    if _is_object(pattern)
-        return _pattern_occurs(pattern, params, body)
-    end
-    if _is_array(body)
-        return any(_pattern_occurs(pattern, params, c) for c in body)
-    elseif _is_object(body)
-        return any(_pattern_occurs(pattern, params, v) for (_, v) in pairs(body))
-    end
-    return false
-end
-
-"""
-    _rewrite(node, named, match_rules, scope) -> rewritten node
-
-The single load-time rewrite pass (esm-spec §9.6.3): one bottom-up traversal of
-the expression tree. Children are rewritten first; then this node is, in order,
-(1) expanded if it is an `apply_expression_template` op, otherwise (2) matched
-against the `match_rules` in declaration order, the FIRST matching rule firing.
-Either replacement is returned WITHOUT re-scanning it (no re-match of a produced
-body), so the pass terminates in a single sweep.
-
-- `named`       : name → template declaration, for `apply_expression_template`.
-- `match_rules` : ordered `(name, pattern, params::Set, body)` auto-rules.
-"""
-function _rewrite(node, named::Dict{String,Any}, match_rules::Vector{Any}, scope::String)
+function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
+                       scope::String, last::Ref{String})
     if _is_array(node)
-        return Any[_rewrite(c, named, match_rules, scope) for c in node]
+        changed = false
+        out = Vector{Any}(undef, length(node))
+        for (i, c) in enumerate(node)
+            nc, ch = _rewrite_pass(c, named, sorted_rules, scope, last)
+            out[i] = nc
+            changed |= ch
+        end
+        return (out, changed)
     end
     if !_is_object(node)
-        return node
+        return (node, false)
     end
-    # Bottom-up: rewrite every child before considering this node.
-    rewritten = Dict{String,Any}()
-    for (k, v) in pairs(node)
-        rewritten[string(k)] = _rewrite(v, named, match_rules, scope)
-    end
-    op = get(rewritten, "op", nothing)
+    op = get(node, "op", get(node, :op, nothing))
     op_str = op === nothing ? "" : string(op)
+    # (1) Outermost-first: fire a rule AT this node before descending.
     if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-        # Named-template expansion; bindings are already rewritten. The
-        # substituted body is the canonical expanded form and is not re-scanned.
-        return _expand_apply(rewritten, named, scope)
+        # Named-template expansion. The substituted body is spliced in with its
+        # bindings' sub-ASTs intact; those are rewritten in subsequent passes.
+        last[] = APPLY_EXPRESSION_TEMPLATE_OP
+        return (_expand_apply(node, named, scope), true)
     end
-    # Auto-applied `match` rules, in template declaration order. First match
-    # wins; the instantiated body is returned as-is (no re-scan).
-    for rule in match_rules
-        (_name, pattern, rparams, body) = rule
+    for rule in sorted_rules
+        (_name, pattern, rparams, body, _prio, _idx) = rule
         bindings = Dict{String,Any}()
-        if _match_pattern(pattern, rewritten, rparams, bindings)
-            return _substitute(body, bindings)
+        if _match_pattern(pattern, node, rparams, bindings)
+            last[] = op_str
+            return (_substitute(body, bindings), true)
         end
     end
-    return rewritten
+    # (2) No rule fired here — descend into children.
+    changed = false
+    out = Dict{String,Any}()
+    for (k, v) in pairs(node)
+        nv, ch = _rewrite_pass(v, named, sorted_rules, scope, last)
+        out[string(k)] = nv
+        changed |= ch
+    end
+    return (out, changed)
+end
+
+"""
+    _rewrite_to_fixpoint(node, named, sorted_rules, scope) -> rewritten node
+
+Drive `_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat pre-order passes
+until a pass performs zero rewrites, or reject the file with
+`rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES` productive passes have
+run without converging. This bound — not a static check — is the authoritative
+termination guard, so a self-reintroducing rule fails to converge rather than
+being flagged up front.
+"""
+function _rewrite_to_fixpoint(node, named::Dict{String,Any},
+                              sorted_rules::Vector{Any}, scope::String)
+    last = Ref{String}("")
+    current = node
+    for _pass in 1:MAX_REWRITE_PASSES
+        current, changed = _rewrite_pass(current, named, sorted_rules, scope, last)
+        changed || return current   # fixpoint reached
+    end
+    throw(ExpressionTemplateError(
+        "rewrite_rule_nonterminating",
+        "$scope: expression-template rewriting did not converge within " *
+        "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rewritten op " *
+        "'$(last[])'). A `match` rule likely re-introduces its own pattern " *
+        "(esm-spec §9.6.3)."))
 end
 
 # ---------------------------------------------------------------------------
@@ -645,22 +672,30 @@ function lower_expression_templates(raw_data)
                     templates[string(tname)] = tdecl
                 end
                 _validate_templates(templates, "$compkind.$(string(cname))")
+                decl_index = 0
                 for tname in _ordered_template_names(raw_data, compkind, string(cname), templates)
+                    decl_index += 1
                     decl = templates[tname]
                     named[tname] = decl
                     m = get(decl, "match", get(decl, :match, nothing))
                     if m !== nothing
                         params = Set{String}(string(p) for p in get(decl, "params", String[]))
                         body = get(decl, "body", nothing)
-                        push!(match_rules, (tname, m, params, body))
+                        push!(match_rules,
+                              (tname, m, params, body, _rule_priority(decl), decl_index))
                     end
                 end
+                # Deterministic selection order (esm-spec §9.6.3): highest
+                # `priority` first, ties broken by declaration order (earliest
+                # wins). `_rewrite_pass` then takes the FIRST matching rule.
+                sort!(match_rules, by = r -> (-r[5], r[6]))
             end
-            # One bottom-up rewrite sweep per non-template field (esm-spec §9.6.3):
-            # expands `apply_expression_template` ops AND fires auto `match` rules.
+            # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+            # non-template field (esm-spec §9.6.3): expands
+            # `apply_expression_template` ops AND fires auto `match` rules.
             for k in collect(keys(comp))
                 k == "expression_templates" && continue
-                comp[k] = _rewrite(comp[k], named, match_rules,
+                comp[k] = _rewrite_to_fixpoint(comp[k], named, match_rules,
                                    "$compkind.$(string(cname)).$k")
             end
             delete!(comp, "expression_templates")
