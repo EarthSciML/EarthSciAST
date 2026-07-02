@@ -263,12 +263,45 @@ All four settled with the author (2026-07-02); folded into the changes above:
 
 ## 11. Status
 
-- **Schema (Change A/B): DONE** — `esm-schema.json` edited and propagated byte-identical to
-  all 5 copies; well-formed under draft 2020-12; all sampled valid fixtures still validate;
-  no invalid fixture regressed (none relied on the op enum).
-- **Spec (Change C/D/E): DONE** — §4.2 two-tier note + generalized `D` + sugar demotion;
-  §9.6.3 constraint 2 rewritten (outermost-first + priority + bounded fixpoint) + new
-  constraint 6 (post-fixpoint gate); §9.6.6 gains `rewrite_rule_nonterminating` +
-  `unlowered_operator`; §9.6.8 recast (external std-lib, `D`-based example, grad-sugar
-  example); stale "built-in default rules" claims struck.
-- **Fixtures + 5 bindings: PENDING** — the large lift; see §8–9.
+**Phase 1 — contract: DONE** (commit `825ccee9` on `fixes`).
+- Schema (Change A/B): `esm-schema.json` + 4 byte-identical copies; well-formed draft
+  2020-12; all sampled valid fixtures validate; no invalid fixture regressed except the
+  quarantined one below.
+- Spec (Change C/D/E): §4.2 two-tier + generalized `D` + sugar demotion; §9.6.3 constraint 2
+  (outermost-first + priority + bounded fixpoint) + constraint 6 (post-fixpoint gate); §9.6.6
+  `rewrite_rule_nonterminating` + `unlowered_operator`; §9.6.8 recast; "built-in default
+  rules" claims struck.
+- Python schema-test repairs (opened namespace) green.
+
+**Phase 2 — bindings + fixtures + log-check: PENDING** (the large lift).
+
+## 12. Phase-2 execution plan (Julia reference first, then delegate)
+
+Per the author's decision, implement the **Julia** reference binding + the 4 fixtures with
+hand-derived golden FIRST (proving the exact fixpoint semantics), then fan out the other four
+bindings as parallel agents that must match Julia + the fixtures.
+
+**Per-binding checklist** (Julia → then Rust, Go, TS, Python):
+1. **Rewrite engine** → outermost-first (pre-order) walk; at each node fire the matching rule
+   of highest `priority` (ties by declaration order); do not descend into a freshly-produced
+   body within a pass; repeat passes to a fixpoint or `MAX_REWRITE_PASSES = 64` →
+   `rewrite_rule_nonterminating`. (Replaces the old bottom-up single-pass in flatten.jl /
+   flatten.rs / flatten.py / Go / TS.)
+2. **Post-fixpoint gate** → walk final tree; any op not in the evaluable-core registry (incl.
+   a `D` in an RHS/eval position) → `unlowered_operator`. Replaces the per-language
+   `E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` /
+   `UnsupportedDimensionalityError`.
+3. **Generalized `D.wrt`** → accept spatial axes; spatial `D` is a rewrite-target.
+4. **`attrs` matching** → bind `attrs.<key>` params in a rule `match` to matched literals.
+5. **Log-arg dimensionality unit-check** → transcendentals (`exp`,`log`,`log10`, trig, etc.)
+   require dimensionless arguments; then flip `tests/invalid/units_invalid_logarithm.esm`
+   from `ln` → `log` and remove the Python quarantine (`test_validate_structural.py`
+   `pending_binding_phase`). All bindings' invalid-suites must then reject it via this check.
+
+**Fixtures** (author golden as hand-derived post-fixpoint ASTs — deterministic, no run
+needed), under `tests/conformance/expression_templates/`:
+`godunov_beats_inner_deriv/`, `fixpoint_nested_deriv/`, `nonterminating_rewrite/`,
+`unlowered_operator/` (see §8). Wire into the conformance harness only after ≥1 binding passes.
+
+**Acceptance:** all five binding suites green; the 4 fixtures byte-identical across bindings;
+`./scripts/test-conformance.sh` green end-to-end.
