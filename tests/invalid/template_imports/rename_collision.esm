@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "rename_collision", "description": "Two exported template names (area, perim) both renamed to 'geom' at one edge: a rename-target collision within the template namespace (template_import_rename_collision, esm-spec 9.7.7)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_rename_lib.esm", "rename": { "area": "geom", "perim": "geom" } } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

@@ -127,7 +127,7 @@ int/float narrowing cannot skew the comparison.
 
 ### `import_smoke/` (expanded.esm)
 
-The normative §9.7.7 four-file layering, from RFC §6: `grid_latlon.esm`
+The normative §9.7.8 four-file layering, from RFC §6: `grid_latlon.esm`
 (metaparameters NLON/NLAT, `lon`/`lat` index sets, zero-parameter `dlon_deg`) ←
 `central_D_lon_interior.esm` (match-less interior stencil; body references
 `dlon_deg`) ← `central_D_lon_zero_grad_bc.esm` (the complete `match` rule on
@@ -162,3 +162,38 @@ NOT fold (`half`), and in an `aggregate` dense range bound that MUST fold
 (`ramp`). `wrapper_n4.esm` / `wrapper_n8.esm` instantiate it at `N = 4` / `8`
 through §4.7 subsystem-ref `bindings` (§9.7.6 binding site 3). Goldens are the
 full typed round-trip (`load → serialize`), wrapper subsystem inlined.
+
+### `import_rename_two_instances/` (expanded.esm)
+
+The normative §9.7.7 two-instance example (RFC
+`docs/content/rfcs/template-import-renaming.md` §5): `grid_uniform_1d.esm` is
+a generic grid family (metaparameter `N`, index set `x`, zero-parameter `dx`,
+a centered-difference rule matching `D(f, wrt: "x")`), imported twice by
+`fixture.esm` under `prefix: "fine"` (`N = 16`) and `prefix: "coarse"`
+(`N = 8`). The golden shows the transitive rename: index sets `fine.x` (16) /
+`coarse.x` (8), each rule instance fired only on its own axis (`wrt` in the
+match followed the index-set rename), ranges folded per instance ([2, 15] vs
+[2, 7]), and `dx` instantiated per edge (`1 / 16` vs `1 / 8`, both staying AST
+divisions).
+
+### `import_rebind_keyed_factors/` (expanded.esm)
+
+Free-name rebinding (§9.7.7) in the MPAS keyed-factor style:
+`ragged_rowsum.esm` declares a ragged index set (`offsets: "row_count"`,
+`values: "row_cols"`) and a `weighted_rowsum` rule over it with a free weight
+factor `row_w`. `fixture.esm` imports it with
+`rebind: {row_count → meshA_count, row_cols → meshA_cols, row_w → meshA_w}`.
+The golden shows the rebound names in the merged registry (offsets/values)
+AND throughout the rule body (aggregate `args`, `index` gathers); the
+consumer's own unrelated `row_count` parameter coexists — rebinding
+un-reserves the library's factor names.
+
+### `import_rename_diamond/` (expanded.esm)
+
+Rename-aware dedup (§9.7.4 + §9.7.7): `cellgrid.esm` imported three times —
+twice identically (`prefix: "a"`, `NC = 6`; dedupes at first occurrence) and
+once as a distinct instance (`prefix: "b"`, `NC = 9`; no deep-equal dedup
+across renames). Both renamed instances of the axis-less `scale_by_cells`
+rule register; the §9.6.3 equal-priority tie breaks by the §9.7.4 effective
+order (DFS post-order over the edges), so the first instance wins:
+`y = 6 * x`, and the registry carries `a.cells` (6) and `b.cells` (9).

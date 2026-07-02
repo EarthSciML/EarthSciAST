@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "rename_invalid_identifier", "description": "The import edge's prefix '9 bad' is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots): template_import_rename_invalid, esm-spec 9.7.7. Schema-valid (prefix is any non-empty string there); the grammar is resolver-enforced so the diagnostic is cross-binding uniform" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm", "prefix": "9 bad" } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

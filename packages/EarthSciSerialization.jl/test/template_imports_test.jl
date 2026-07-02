@@ -40,7 +40,7 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
         e isa ExpressionTemplateError ? e.code : rethrow(e)
     end
 
-    @testset "import_smoke: the §9.7.7 four-file layering" begin
+    @testset "import_smoke: the §9.7.8 four-file layering" begin
         # Raw pipeline matches the golden byte-for-byte structurally.
         @test _expand_raw(conf("import_smoke", "fixture.esm")) ==
               _golden(conf("import_smoke", "expanded.esm"))
@@ -119,6 +119,62 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
         end
     end
 
+    @testset "import_rename_two_instances: one library, two prefixed instances (§9.7.7)" begin
+        @test _expand_raw(conf("import_rename_two_instances", "fixture.esm")) ==
+              _golden(conf("import_rename_two_instances", "expanded.esm"))
+        f = EarthSciSerialization.load(conf("import_rename_two_instances", "fixture.esm"))
+        # Transitive rename: the index set arrives per instance and the sizes
+        # come from each edge's own bindings.
+        @test f.index_sets["fine.x"].size == 16
+        @test f.index_sets["coarse.x"].size == 8
+        # Each renamed rule instance fired only on its own axis (`wrt` in the
+        # match pattern followed the index-set rename).
+        eqf = f.models["TwoGrids"].equations[1]
+        @test eqf.rhs.op == "aggregate"
+        @test eqf.rhs.ranges["i"] == [2, 15]      # N=16 instance
+        eqc = f.models["TwoGrids"].equations[2]
+        @test eqc.rhs.op == "aggregate"
+        @test eqc.rhs.ranges["i"] == [2, 7]       # N=8 instance
+    end
+
+    @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
+        @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
+              _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
+        f = EarthSciSerialization.load(conf("import_rebind_keyed_factors", "fixture.esm"))
+        # The ragged set's keyed factors were rebound in the merged registry...
+        @test f.index_sets["nz_of_row"].offsets == "meshA_count"
+        @test f.index_sets["nz_of_row"].values == "meshA_cols"
+        # ...and in the rule body (args and index gathers alike).
+        total = f.models["Sparse"].variables["total"].expression
+        @test total.op == "aggregate"
+        argnames = String[a.name for a in total.args]   # typed VarExpr leaves
+        @test "meshA_cols" in argnames && "meshA_w" in argnames
+        @test !("row_cols" in argnames)
+        # Rebinding un-reserves the factor names: the consumer's own unrelated
+        # `row_count` parameter coexists.
+        @test f.models["Sparse"].variables["row_count"].default == 7.5
+    end
+
+    @testset "import_rename_diamond: distinct instances vs dedupe (§9.7.4 + §9.7.7)" begin
+        @test _expand_raw(conf("import_rename_diamond", "fixture.esm")) ==
+              _golden(conf("import_rename_diamond", "expanded.esm"))
+        # Effective order = DFS post-order over the edges; the identical
+        # (prefix a, NC 6) edges deduped at first occurrence, the (prefix b,
+        # NC 9) edge registered as a DISTINCT instance.
+        raw = JSON3.read(read(conf("import_rename_diamond", "fixture.esm"), String))
+        res = resolve_template_machinery(raw, conf("import_rename_diamond"))
+        @test collect(keys(res["models"]["Diamond"]["expression_templates"])) ==
+              ["a.n_cells", "a.scale_by_cells", "b.n_cells", "b.scale_by_cells"]
+        # Both renamed rule instances match the axis-less scale_by_cells node;
+        # the §9.6.3 equal-priority tie breaks by that order, so instance a
+        # (NC = 6) wins: y = 6 * x, not 9 * x.
+        d = _expand_raw(conf("import_rename_diamond", "fixture.esm"))
+        @test d["models"]["Diamond"]["variables"]["y"]["expression"]["args"][1] == 6
+        f = EarthSciSerialization.load(conf("import_rename_diamond", "fixture.esm"))
+        @test f.index_sets["a.cells"].size == 6
+        @test f.index_sets["b.cells"].size == 9
+    end
+
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciSerialization.load(problem)
@@ -174,7 +230,11 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
                      "template_import_index_set_conflict",
                      "apply_expression_template_recursive_body",
                      "template_body_expansion_too_deep", "metaparameter_unbound",
-                     "metaparameter_type_error", "metaparameter_name_conflict"]
+                     "metaparameter_type_error", "metaparameter_name_conflict",
+                     "template_import_rename_unknown_name",
+                     "template_import_rebind_unknown_name",
+                     "template_import_rename_collision",
+                     "template_import_rename_invalid"]
             @test code in seen_codes
         end
     end
@@ -299,6 +359,146 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
             raw = JSON3.read(read(p, String))
             @test _err_code(() -> resolve_template_machinery(raw, dir)) ==
                   "metaparameter_type_error"
+        end
+    end
+
+    @testset "renaming/rebinding unit behavior (§9.7.7)" begin
+        _grid_lib = """
+        {"esm": "0.8.0", "metadata": {"name": "grid"},
+         "metaparameters": {"N": {"type": "integer"}},
+         "index_sets": {"x": {"kind": "interval", "size": "N"}},
+         "expression_templates": {"dx": {"params": [], "body": {"op": "/", "args": [1, "N"]}}}}
+        """
+
+        @testset "re-export renaming composes through chains; dotted binding keys" begin
+            mktempdir() do dir
+                write(joinpath(dir, "grid.esm"), _grid_lib)
+                # Mid-layer library mounts the grid under prefix g, leaves g.N
+                # open (re-exported), and composes g.dx into its own template.
+                write(joinpath(dir, "layer.esm"), """
+                {"esm": "0.8.0", "metadata": {"name": "layer"},
+                 "expression_template_imports": [{"ref": "./grid.esm", "prefix": "g"}],
+                 "expression_templates": {"two_dx": {"params": [], "body": {"op": "*", "args": [2,
+                    {"op": "apply_expression_template", "args": [], "name": "g.dx", "bindings": {}}]}}}}
+                """)
+                p = joinpath(dir, "m.esm")
+                write(p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l", "bindings": {"g.N": 5}}],"""))
+                # The consumer edge binds the RE-EXPORTED (already-renamed)
+                # name g.N, then mounts everything under l.*: prefixes nest.
+                f = EarthSciSerialization.load(p)
+                @test f.index_sets["l.g.x"].size == 5
+                raw = JSON3.read(read(p, String))
+                res = resolve_template_machinery(raw, dir)
+                @test collect(keys(res["models"]["M"]["expression_templates"])) ==
+                      ["l.g.dx", "l.two_dx"]
+                # Loader-API binding site also speaks the renamed name: leave
+                # g.N open through both edges and close it at the root.
+                write(p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l"}],"""))
+                f7 = EarthSciSerialization.load(p; metaparameters=Dict("l.g.N" => 7))
+                @test f7.index_sets["l.g.x"].size == 7
+            end
+        end
+
+        @testset "identity rename is a no-op; renaming a bound metaparameter is unknown" begin
+            mktempdir() do dir
+                write(joinpath(dir, "grid.esm"), _grid_lib)
+                p = joinpath(dir, "m.esm")
+                write(p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./grid.esm",
+                       "bindings": {"N": 4}, "rename": {"dx": "dx"}}],"""))
+                f = EarthSciSerialization.load(p)
+                @test f.index_sets["x"].size == 4
+                # A metaparameter closed by this edge's `bindings` is no longer
+                # exported, so renaming it is a loud unknown-name error.
+                write(p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./grid.esm",
+                       "bindings": {"N": 4}, "rename": {"N": "M"}}],"""))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rename_unknown_name"
+                # `rename` keys live in the post-`only` surviving export set.
+                write(joinpath(dir, "two.esm"), """
+                {"esm": "0.8.0", "metadata": {"name": "two"},
+                 "expression_templates": {"keep": {"params": [], "body": 1},
+                                          "drop": {"params": [], "body": 2}}}
+                """)
+                write(p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./two.esm",
+                       "only": ["keep"], "rename": {"drop": "d2"}}],"""))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rename_unknown_name"
+            end
+        end
+
+        @testset "rebind guards: declared names, bound indices, target capture" begin
+            mktempdir() do dir
+                write(joinpath(dir, "ragged.esm"), """
+                {"esm": "0.8.0", "metadata": {"name": "ragged"},
+                 "metaparameters": {"NR": {"type": "integer", "default": 2}},
+                 "index_sets": {"rows": {"kind": "interval", "size": "NR"},
+                                "nz": {"kind": "ragged", "of": ["rows"],
+                                       "offsets": "cnt", "values": "cols"}},
+                 "expression_templates": {"rsum": {"params": ["F"],
+                   "match": {"op": "rsum", "args": ["F"]},
+                   "body": {"op": "aggregate", "args": ["F", "cols", "wgt"],
+                     "output_idx": ["i"], "semiring": "sum_product",
+                     "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
+                     "expr": {"op": "*", "args": [
+                       {"op": "index", "args": ["wgt", "i", "k"]},
+                       {"op": "index", "args": ["F", {"op": "index", "args": ["cols", "i", "k"]}]}]}}}}}
+                """)
+                p = joinpath(dir, "m.esm")
+                imp(extra) = _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./ragged.esm", $extra}],""")
+                # Rebinding a DECLARED name (metaparameter) is not a rebind.
+                write(p, imp("\"rebind\": {\"NR\": \"n\"}"))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rebind_unknown_name"
+                # Rebinding a bound index symbol is invalid outright.
+                write(p, imp("\"rebind\": {\"k\": \"kk\"}"))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rename_invalid"
+                # A rebind target must be fresh: colliding with a remaining
+                # free name would silently merge two factors.
+                write(p, imp("\"rebind\": {\"cnt\": \"wgt\"}"))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rename_collision"
+                # ...as must two rebind entries mapping onto one target.
+                write(p, imp("\"rebind\": {\"cnt\": \"z\", \"wgt\": \"z\"}"))
+                @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                      "template_import_rename_collision"
+                # Dot-scoped rebind targets (the MPAS mounted-subsystem shape)
+                # are legal identifiers and land in registry + body alike.
+                write(p, imp("\"rebind\": {\"cnt\": \"meshA.cnt\", \"cols\": \"meshA.cols\", \"wgt\": \"meshA.wgt\"}"))
+                raw = JSON3.read(read(p, String))
+                res = resolve_template_machinery(raw, dir)
+                @test _normj(res["index_sets"]["nz"])["offsets"] == "meshA.cnt"
+                body = _normj(res["models"]["M"]["expression_templates"]["rsum"]["body"])
+                @test body["args"] == Any["F", "meshA.cols", "meshA.wgt"]
+            end
+        end
+
+        @testset "prefix grammar and rename-map shape" begin
+            mktempdir() do dir
+                write(joinpath(dir, "grid.esm"), _grid_lib)
+                p = joinpath(dir, "m.esm")
+                for bad in ["\"prefix\": \"a..b\"", "\"prefix\": \".a\"",
+                            "\"rename\": {\"dx\": \"has space\"}",
+                            "\"rebind\": {\"q\": \"9bad\"}"]
+                    write(p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./grid.esm", $bad}],"""))
+                    @test _err_code(() -> EarthSciSerialization.load(p)) ==
+                          "template_import_rename_invalid"
+                end
+            end
         end
     end
 

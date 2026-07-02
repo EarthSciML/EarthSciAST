@@ -11,6 +11,9 @@
 #   tests/conformance/expression_templates/import_order_determinism/expanded_priority_override.esm
 #   tests/conformance/expression_templates/metaparameter_resolutions/expanded_n4.esm
 #   tests/conformance/expression_templates/metaparameter_resolutions/expanded_n8.esm
+#   tests/conformance/expression_templates/import_rename_two_instances/expanded.esm
+#   tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm
+#   tests/conformance/expression_templates/import_rename_diamond/expanded.esm
 #   tests/invalid/template_imports/body_chain_too_deep.esm   (33-template chain, generated)
 #
 # The import fixtures are expanded through the raw §9.7 pipeline
@@ -84,6 +87,9 @@ for (dir, fixture, golden) in [
     ("import_order_determinism", "fixture_import_order.esm", "expanded_import_order.esm"),
     ("import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"),
     ("scalar_field_param", "fixture.esm", "expanded.esm"),
+    ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
+    ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
+    ("import_rename_diamond", "fixture.esm", "expanded.esm"),
 ]
     _write_golden(joinpath(CONF, dir, golden),
                   _expand_raw(joinpath(CONF, dir, fixture)))

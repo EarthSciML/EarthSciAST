@@ -1,0 +1,17 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "template_import_rename_lib",
+    "description": "Two-template library backing the esm-spec 9.7.7 rename/rebind invalid fixtures: two zero-parameter templates (area, perim) so a per-edge rename can collide, a metaparameter-sized index set, and a free weight name w in area so a rebind has a free name to address. Also a valid standalone document (the valid suite tolerates a model-less library file)."
+  },
+  "metaparameters": {
+    "M": { "type": "integer", "default": 3, "description": "edge count" }
+  },
+  "index_sets": {
+    "edges": { "kind": "interval", "size": "M" }
+  },
+  "expression_templates": {
+    "area": { "params": [], "body": { "op": "*", "args": ["w", "M"] } },
+    "perim": { "params": [], "body": { "op": "*", "args": [2, "M"] } }
+  }
+}
