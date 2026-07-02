@@ -673,6 +673,58 @@ canonical-JSON discipline the round-trip idempotence contract relies on
 byte-for-byte identical serialized index sets and identical dense-ID arrays
 (after rule-3 base normalization).
 
+##### 5.5.3.1 Canonical number formatting (normative)
+
+Every canonical byte form in this spec — the compact index-set form above and
+the sorted-keys / 2-space-indent golden-writer form used by the conformance
+goldens (`scripts/generate-template-import-goldens.jl`; reimplemented
+byte-for-byte by the EarthSciDiscretizations runner emitters) — renders JSON
+numbers by one shared scheme, pinned to what the Julia reference's
+`JSON3.read` → `JSON3.write` round-trip produces:
+
+1. **Integral-float normalization.** A JSON number whose mathematical value is
+   integral and representable in `Int64` serializes as an **integer literal**,
+   regardless of how the source document spelled it (`0.0` → `0`, `2.5e1` →
+   `25`). This mirrors JSON3's numeric narrowing on parse (an integral float
+   token parses as `Int64`). Because the narrowing forgets the author's
+   spelling, fixtures MUST avoid integral-valued float literals wherever the
+   float-ness is semantic — write `1.5`, not `1.0` (see
+   `tests/conformance/expression_templates/README.md`).
+
+2. **Shortest-roundtrip float formatting.** A non-integral finite float
+   serializes with the **shortest** digit string that round-trips to the same
+   IEEE-754 double (the Ryu-shortest digits every binding's default `repr`
+   produces), laid out Julia-style. With `e10` the decimal exponent of the
+   value's first significant digit (`value = ±d.dd… × 10^e10`, so
+   `e10(999999.5) = 5`, `e10(0.000123456) = −4`):
+
+   - **Positional** iff `−4 ≤ e10 ≤ 5`: for `e10 < 0` emit
+     `0.` + (`−e10 − 1` zeros) + digits (`0.000123456`); otherwise place the
+     point after digit position `e10 + 1` (`999999.5`), appending `.0` if no
+     digits remain to its right (unreachable for a non-integral value; pinned
+     for writer totality).
+   - **Scientific** otherwise (`e10 < −4` or `e10 ≥ 6`, i.e. the switch sits
+     between `1e-5`-scale and `1e6`-scale magnitudes): `d.f…e<exp>` where the
+     mantissa **always carries at least one fraction digit** (`1.0e-9`, never
+     `1e-9`), the exponent is unpadded decimal with `-` but never `+`
+     (`1.0e-9`, `1.0000005e6`), and the `e` is lowercase.
+   - Non-finite values (`NaN`, `±Inf`) are not valid JSON; the canonical
+     writer MUST reject them.
+
+   Reference probe table, validated byte-for-byte against Julia `JSON3.write`
+   (and reproduced by all four non-Julia emitter reimplementations):
+
+   | value | canonical bytes |
+   |---|---|
+   | `1.0e-9` | `1.0e-9` |
+   | `1.5e-5` | `1.5e-5` |
+   | `0.000123456` | `0.000123456` |
+   | `2.5` | `2.5` |
+   | `999999.5` | `999999.5` |
+   | `1000000.5` | `1.0000005e6` |
+   | `123456789.25` | `1.2345678925e8` |
+   | `0.0` | `0` (rule 1) |
+
 #### 5.5.4 Conformance requirement and the adversarial harness
 
 The suite MUST feed **identical** mesh / table inputs to every producing binding
