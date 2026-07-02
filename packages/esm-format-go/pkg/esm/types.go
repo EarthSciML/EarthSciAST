@@ -42,6 +42,14 @@ type ExprNode struct {
 	// leading data dimension) or a string (an entry of the table's Outputs
 	// list). Single-output tables MAY omit this (defaults to 0).
 	Output interface{} `json:"output,omitempty"`
+	// Attrs carries optional named scalar attributes for an OPEN rewrite-target
+	// op (esm-spec §4.2). Mirrors the fixed `dim`/`side`/`wrt` slots the core ops
+	// use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its
+	// scheme parameters here. Modeled so a rewrite-target op that survives
+	// lowering (loading is permissive) round-trips. Evaluable-core ops MUST NOT
+	// use `attrs`. Structural `match` rules bind `attrs.<key>` params to matched
+	// literals via generic object matching (esm-spec §9.6.1).
+	Attrs map[string]interface{} `json:"attrs,omitempty"`
 }
 
 // Expression represents the union type: number | string | ExprNode

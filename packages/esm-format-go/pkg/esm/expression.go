@@ -6,6 +6,21 @@ import (
 	"strconv"
 )
 
+// EvaluationError is raised by the scalar evaluator when an expression cannot be
+// evaluated. The Code field carries a stable diagnostic code — in particular
+// `unlowered_operator` when a rewrite-target op (a spatial/RHS `D`, or
+// grad/div/laplacian/integral sugar) reaches evaluation without having been
+// lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). The gate fires
+// before evaluation, not at load: loading such a file stays permissive.
+type EvaluationError struct {
+	Code    string
+	Message string
+}
+
+func (e *EvaluationError) Error() string {
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
 // FreeVariables returns the set of all variable names that appear in an expression
 func FreeVariables(expr Expression) map[string]bool {
 	variables := make(map[string]bool)
@@ -366,6 +381,37 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		return 0, fmt.Errorf("enum op encountered at evaluation time — should have been lowered at load (esm-spec §9.3)")
 	case "fn":
 		return evaluateFnNode(node, bindings)
+	case "D":
+		// esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
+		// evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
+		// reaching the evaluator — a spatial `D`, or any `D` in an RHS / observed
+		// / rate position — is an unlowered rewrite-target: a discretization rule
+		// must lower it to a stencil before evaluation. The gate fires here,
+		// before evaluation, with the uniform `unlowered_operator` code.
+		wrtDesc := ""
+		if node.Wrt != nil {
+			wrtDesc = fmt.Sprintf(" (wrt=%s)", *node.Wrt)
+		}
+		return 0, &EvaluationError{
+			Code: "unlowered_operator",
+			Message: fmt.Sprintf("unlowered derivative operator 'D'%s reached evaluation: a spatial or "+
+				"right-hand-side `D` must be lowered to a stencil by a rewrite rule before evaluation "+
+				"(esm-spec §4.2 / §9.6.8).", wrtDesc),
+		}
+	case "grad", "div", "laplacian":
+		// esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change D):
+		// grad/div/laplacian are NOT evaluable-core ops — they are optional
+		// rewrite-target sugar over `D` that a discretization rule must lower to a
+		// stencil before evaluation. One reaching the evaluator means no rule
+		// lowered it. This format ships no discretization rules; the std-lib lives
+		// in EarthSciDiscretizations. Uniform `unlowered_operator` code (mirrors
+		// the Julia reference `_compile` grad/div/laplacian arm).
+		return 0, &EvaluationError{
+			Code: "unlowered_operator",
+			Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: no rewrite rule "+
+				"lowered it to a stencil (esm-spec §4.2 / §9.6.8). Discretization rules live in "+
+				"EarthSciDiscretizations, not this format.", node.Op),
+		}
 	}
 	// Evaluate all arguments first
 	args := make([]float64, len(node.Args))

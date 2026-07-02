@@ -171,6 +171,9 @@ func normalizeExpression(expr Expression) Expression {
 		for k, v := range e.TableAxes {
 			e.TableAxes[k] = normalizeExpression(v)
 		}
+		for k, v := range e.Attrs {
+			e.Attrs[k] = normalizeExpression(v)
+		}
 		if n, ok := e.Output.(json.Number); ok {
 			e.Output = normalizeJSONNumber(n)
 		}
@@ -181,6 +184,9 @@ func normalizeExpression(expr Expression) Expression {
 		}
 		for k, v := range e.TableAxes {
 			e.TableAxes[k] = normalizeExpression(v)
+		}
+		for k, v := range e.Attrs {
+			e.Attrs[k] = normalizeExpression(v)
 		}
 		if n, ok := e.Output.(json.Number); ok {
 			e.Output = normalizeJSONNumber(n)
