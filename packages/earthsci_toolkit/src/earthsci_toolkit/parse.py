@@ -1255,6 +1255,97 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
             return f.read()
 
 
+def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, int]:
+    """Extract the optional metaparameter ``bindings`` of a §4.7 subsystem
+    ref (esm-spec §9.7.6 binding site 3), validating integer values."""
+    from .lower_expression_templates import ExpressionTemplateError
+
+    bindings: Dict[str, int] = {}
+    raw = sub_value.get("bindings")
+    if isinstance(raw, dict):
+        for bk, bv in raw.items():
+            if not isinstance(bv, int) or isinstance(bv, bool):
+                raise ExpressionTemplateError(
+                    "metaparameter_type_error",
+                    f"{where}: binding '{bk}' is not an integer "
+                    "(esm-spec §9.7.6)",
+                )
+            bindings[str(bk)] = bv
+    return bindings
+
+
+def _load_ref_data(
+    ref_str: str,
+    base_path: str,
+    bindings: Dict[str, int],
+    kind: str,
+) -> tuple:
+    """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
+    referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
+
+    Returns ``(ref_data, new_base)`` where ``ref_data`` is the resolved,
+    lowered raw dict (ready for ``_parse_esm_data``) and ``new_base`` the
+    directory anchoring the referenced file's own nested refs. A ref that
+    targets a template-library file is rejected with the stable
+    ``subsystem_ref_is_template_library`` diagnostic (esm-spec §9.7.1): the
+    two reference mechanisms are disjoint.
+    """
+    from .lower_expression_templates import (
+        ExpressionTemplateError,
+        lower_expression_templates,
+        reject_expression_templates_pre_v04,
+    )
+    from .template_imports import (
+        _is_template_library_doc,
+        reject_template_imports_pre_v08,
+        resolve_template_machinery,
+    )
+
+    content = _fetch_ref_content(ref_str, base_path)
+    ref_data = json.loads(content)
+
+    # Determine the new base_path for nested refs (and template imports).
+    if ref_str.startswith("http://") or ref_str.startswith("https://"):
+        new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
+    else:
+        resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
+        new_base = os.path.dirname(resolved_path)
+
+    reject_expression_templates_pre_v04(ref_data)
+    reject_template_imports_pre_v08(ref_data)
+
+    # A §4.7 subsystem ref MUST NOT target a template-library file — the two
+    # reference mechanisms are disjoint (esm-spec §9.7.1).
+    if _is_template_library_doc(ref_data):
+        raise ExpressionTemplateError(
+            "subsystem_ref_is_template_library",
+            f"Subsystem ref '{ref_str}' targets a template-library file; "
+            "libraries are imported via expression_template_imports "
+            "(esm-spec §9.7.1)",
+        )
+
+    # Validate the referenced file against the schema.
+    schema = _get_schema()
+    try:
+        validate(ref_data, schema)
+    except jsonschema.ValidationError as e:
+        raise SubsystemRefError(
+            f"Schema validation failed for {kind} ref '{ref_str}': {e.message}"
+        )
+
+    # Resolve the referenced document's §9.7 machinery with this edge's
+    # metaparameter bindings (esm-spec §9.7.6 binding site 3), then run the
+    # §9.6.3 rewrite fixpoint so the inlined component carries only normal
+    # Expression ASTs (Option A round-trip).
+    resolved = resolve_template_machinery(
+        ref_data, new_base, metaparameters=bindings)
+    if resolved is not None:
+        ref_data = resolved
+    ref_data = lower_expression_templates(ref_data)
+
+    return ref_data, new_base
+
+
 def _resolve_model_subsystems(
     model: Model,
     base_path: str,
@@ -1287,25 +1378,11 @@ def _resolve_model_subsystems(
                 )
             new_seen = seen_refs | {canonical}
 
-            content = _fetch_ref_content(ref_str, base_path)
-            ref_data = json.loads(content)
-
-            # Determine the new base_path for nested refs
-            if ref_str.startswith("http://") or ref_str.startswith("https://"):
-                # For URLs, use the URL directory as base
-                new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
-            else:
-                resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
-                new_base = os.path.dirname(resolved_path)
-
-            # Validate and parse the referenced file
-            schema = _get_schema()
-            try:
-                validate(ref_data, schema)
-            except jsonschema.ValidationError as e:
-                raise SubsystemRefError(
-                    f"Schema validation failed for subsystem ref '{ref_str}': {e.message}"
-                )
+            # Optional `bindings` close the referenced document's open
+            # metaparameters at this edge (esm-spec §9.7.6 binding site 3).
+            bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
+            ref_data, new_base = _load_ref_data(
+                ref_str, base_path, bindings, "subsystem")
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1367,22 +1444,9 @@ def _resolve_reaction_system_subsystems(
                 )
             new_seen = seen_refs | {canonical}
 
-            content = _fetch_ref_content(ref_str, base_path)
-            ref_data = json.loads(content)
-
-            if ref_str.startswith("http://") or ref_str.startswith("https://"):
-                new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
-            else:
-                resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
-                new_base = os.path.dirname(resolved_path)
-
-            schema = _get_schema()
-            try:
-                validate(ref_data, schema)
-            except jsonschema.ValidationError as e:
-                raise SubsystemRefError(
-                    f"Schema validation failed for subsystem ref '{ref_str}': {e.message}"
-                )
+            bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
+            ref_data, new_base = _load_ref_data(
+                ref_str, base_path, bindings, "subsystem")
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1485,24 +1549,8 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
             if not ref_str.startswith("http") else ref_str
         seen = {canonical}
 
-        content = _fetch_ref_content(ref_str, base_path)
-        ref_data = json.loads(content)
-
-        # Determine the base_path for nested refs inside the referenced file.
-        if ref_str.startswith("http://") or ref_str.startswith("https://"):
-            new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
-        else:
-            resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
-            new_base = os.path.dirname(resolved_path)
-
-        # Validate and parse the referenced file.
-        schema = _get_schema()
-        try:
-            validate(ref_data, schema)
-        except jsonschema.ValidationError as e:
-            raise SubsystemRefError(
-                f"Schema validation failed for model ref '{ref_str}': {e.message}"
-            )
+        bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
+        ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "model")
 
         parsed = _parse_esm_data(ref_data)
 
@@ -2700,12 +2748,26 @@ def _validate_structural(data: Dict[str, Any], file_path=None) -> None:
 
 
 @track_performance("parse", track_file_size=True)
-def load(path_or_string: Union[str, Path, dict]) -> EsmFile:
+def load(
+    path_or_string: Union[str, Path, dict],
+    *,
+    metaparameters: Optional[Dict[str, int]] = None,
+    base_path: Optional[str] = None,
+) -> EsmFile:
     """
     Load an ESM file from a file path, JSON string, or dict.
 
     Args:
         path_or_string: File path to JSON file, JSON string, or parsed dict
+        metaparameters: Optional name → integer bindings closing the ROOT
+            document's open metaparameters at the loader API (esm-spec §9.7.6
+            binding site 4): already-closed edge bindings win, API bindings
+            beat ``default``\\ s. Binding a name the document does not declare
+            raises ``template_import_unknown_name``.
+        base_path: Optional directory anchoring relative
+            ``expression_template_imports`` refs (esm-spec §9.7.2) for JSON
+            string / dict input. Defaults to the file's directory for path
+            input, the current working directory otherwise.
 
     Returns:
         EsmFile object with parsed data
@@ -2716,19 +2778,21 @@ def load(path_or_string: Union[str, Path, dict]) -> EsmFile:
         FileNotFoundError: If the file path doesn't exist
     """
     # Handle dict input directly
-    base_path = os.getcwd()
+    resolved_base = base_path if base_path is not None else os.getcwd()
     file_path = None
     if isinstance(path_or_string, dict):
         data = path_or_string
     elif isinstance(path_or_string, Path) or (isinstance(path_or_string, str) and os.path.exists(path_or_string)):
         # It's a file path
         file_path = Path(path_or_string)
-        base_path = str(file_path.parent.resolve())
+        if base_path is None:
+            resolved_base = str(file_path.parent.resolve())
         with open(path_or_string, 'r') as f:
             data = json.load(f)
     else:
         # It's a JSON string
         data = json.loads(path_or_string)
+    base_path = resolved_base
 
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
     top_continuous_events = data.pop("continuous_events", None) if isinstance(data, dict) else None
@@ -2742,7 +2806,16 @@ def load(path_or_string: Union[str, Path, dict]) -> EsmFile:
         reject_expression_templates_pre_v04,
         lower_expression_templates,
     )
+    from .template_imports import (
+        reject_template_imports_pre_v08,
+        resolve_template_machinery,
+    )
     reject_expression_templates_pre_v04(data)
+
+    # v0.8.0 §9.7 constructs (expression_template_imports, top-level
+    # expression_templates, metaparameters) are rejected when the file
+    # declares esm < 0.8.0 (esm-spec §9.6.5).
+    reject_template_imports_pre_v08(data)
 
     # Load and validate against schema
     schema = _get_schema()
@@ -2754,7 +2827,17 @@ def load(path_or_string: Union[str, Path, dict]) -> EsmFile:
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))
 
-    # Structural validation
+    # Resolve esm-spec §9.7 machinery — template-library imports (depth-first
+    # post-order, per-edge metaparameter instantiation), index_sets merge,
+    # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
+    # §9.7: "All resolution happens at load, before validation and before the
+    # §9.6.3 fixpoint"). Returns None for documents without §9.7 machinery.
+    resolved = resolve_template_machinery(
+        data, base_path, metaparameters=metaparameters)
+    if resolved is not None:
+        data = resolved
+
+    # Structural validation (runs on the resolved, folded form — §9.6.4)
     _validate_structural(data, file_path=file_path)
 
     # Expand `apply_expression_template` ops at load time (esm-spec §9.6 /

@@ -57,7 +57,18 @@ class ExpressionTemplateError(Exception):
     ``apply_expression_template_recursive_body``,
     ``apply_expression_template_invalid_declaration``,
     ``apply_expression_template_version_too_old``,
-    ``rewrite_rule_nonterminating``.
+    ``rewrite_rule_nonterminating``,
+
+    or one of the esm-spec §9.7 template-library / metaparameter codes
+    (§9.6.6, raised from :mod:`earthsci_toolkit.template_imports` and
+    :mod:`earthsci_toolkit.parse`):
+
+    ``template_import_version_too_old``, ``template_import_unresolved``,
+    ``template_import_not_library``, ``subsystem_ref_is_template_library``,
+    ``template_import_cycle``, ``template_import_name_conflict``,
+    ``template_import_unknown_name``, ``template_import_index_set_conflict``,
+    ``template_body_expansion_too_deep``, ``metaparameter_unbound``,
+    ``metaparameter_type_error``, ``metaparameter_name_conflict``.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -74,6 +85,8 @@ def _is_array(v: Any) -> bool:
 
 
 def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
+    """Reject ``apply_expression_template`` nodes inside a ``match`` pattern
+    (esm-spec §9.7.3: match patterns MUST NOT reference templates)."""
     if _is_array(body):
         for i, child in enumerate(body):
             _assert_no_nested_apply(child, template_name, f"{path}/{i}")
@@ -81,10 +94,10 @@ def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
     if _is_object(body):
         if body.get("op") == APPLY_OP:
             raise ExpressionTemplateError(
-                "apply_expression_template_recursive_body",
-                f"expression_templates.{template_name}: body contains nested "
-                f"'apply_expression_template' at {path}; templates MUST NOT call "
-                "other templates",
+                "apply_expression_template_invalid_declaration",
+                f"expression_templates.{template_name}: `match` contains an "
+                f"'apply_expression_template' node at {path}; match patterns "
+                "MUST NOT reference templates (esm-spec §9.7.3)",
             )
         for k, v in body.items():
             _assert_no_nested_apply(v, template_name, f"{path}/{k}")
@@ -98,12 +111,14 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 f"{scope}.expression_templates.{name}: entry must be an object "
                 "with params + body",
             )
+        # ``params`` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
+        # template is a named constant fragment (common in library files).
         params = decl.get("params")
-        if not isinstance(params, list) or len(params) == 0:
+        if not isinstance(params, list):
             raise ExpressionTemplateError(
                 "apply_expression_template_invalid_declaration",
-                f"{scope}.expression_templates.{name}: 'params' must be a "
-                "non-empty array of strings",
+                f"{scope}.expression_templates.{name}: 'params' must be an "
+                "array of strings",
             )
         seen: set[str] = set()
         for p in params:
@@ -125,7 +140,11 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 "apply_expression_template_invalid_declaration",
                 f"{scope}.expression_templates.{name}: 'body' is required",
             )
-        _assert_no_nested_apply(decl["body"], name, "/body")
+        # A body MAY reference other match-less in-scope templates via
+        # apply_expression_template nodes (esm-spec §9.7.3); those are checked
+        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and inlined at
+        # registration by ``_compose_template_bodies`` — the old any-nesting
+        # rejection is now cycle-only (`apply_expression_template_recursive_body`).
         # ``match`` (optional) turns the entry into an auto-applied rewrite rule.
         # It must be a pattern Expression (a bare-metavar string or an op node).
         # Nontermination is NOT checked statically any more — the bounded
@@ -505,6 +524,13 @@ def lower_expression_templates(file: dict) -> dict:
                 for tname, tdecl in tplraw.items():
                     templates[tname] = tdecl
                 _validate_templates(templates, f"{compkind}.{cname}")
+                # Registration-time body composition (esm-spec §9.7.3): inline
+                # body references to match-less in-scope templates as a
+                # statically-checked acyclic DAG, so every rule body the
+                # fixpoint sees is a closed AST. Lazy import: template_imports
+                # imports from this module at module level.
+                from .template_imports import _compose_template_bodies
+                _compose_template_bodies(templates, f"{compkind}.{cname}")
                 match_rules = _build_match_rules(templates, f"{compkind}.{cname}")
             for k in list(comp.keys()):
                 if k == "expression_templates":

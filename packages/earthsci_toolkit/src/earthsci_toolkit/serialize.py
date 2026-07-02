@@ -377,7 +377,32 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     if model.system_kind is not None:
         result["system_kind"] = model.system_kind
 
+    # Subsystems (esm-spec §4.7). A resolved subsystem round-trips as the
+    # instantiated inline component; an unresolved `{ref, bindings?}` dict
+    # round-trips verbatim — metaparameter bindings at the subsystem edge
+    # (esm-spec §9.7.6 site 3) survive only while the ref is unresolved.
+    if model.subsystems:
+        result["subsystems"] = {
+            name: _serialize_subsystem(sub)
+            for name, sub in model.subsystems.items()
+        }
+
     return result
+
+
+def _serialize_subsystem(sub: Any) -> Dict[str, Any]:
+    """Serialize one entry of a ``subsystems`` map: an inline Model /
+    ReactionSystem / DataLoader, or an unresolved ``{ref, bindings?}`` dict
+    carried verbatim (deep-copied)."""
+    if isinstance(sub, dict):
+        return json.loads(json.dumps(sub))
+    if isinstance(sub, Model):
+        return _serialize_model(sub)
+    if isinstance(sub, ReactionSystem):
+        return _serialize_reaction_system(sub)
+    if isinstance(sub, DataLoader):
+        return _serialize_data_loader(sub)
+    raise ValueError(f"Invalid subsystem type: {type(sub)}")
 
 
 def _serialize_species(species: Species) -> Dict[str, Any]:
@@ -483,6 +508,13 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
         result["tests"] = [_serialize_test(t) for t in rs.tests]
     if rs.examples:
         result["examples"] = [_serialize_example(e) for e in rs.examples]
+
+    # Subsystems (esm-spec §4.7) — see _serialize_subsystem.
+    if rs.subsystems:
+        result["subsystems"] = {
+            name: _serialize_subsystem(sub)
+            for name, sub in rs.subsystems.items()
+        }
 
     return result
 

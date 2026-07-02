@@ -50,6 +50,20 @@ from .parse import (
 )
 from .serialize import save
 
+# Expression-template expansion (esm-spec §9.6) and template-library imports
+# + load-time metaparameters (esm-spec §9.7 /
+# docs/content/rfcs/template-library-imports.md).
+from .lower_expression_templates import (
+    ExpressionTemplateError,
+    lower_expression_templates,
+    reject_expression_templates_pre_v04,
+)
+from .template_imports import (
+    MAX_TEMPLATE_EXPANSION_DEPTH,
+    reject_template_imports_pre_v08,
+    resolve_template_machinery,
+)
+
 # Coupled system flattening (spec §4.7.5 + §4.7.6)
 from .flatten import (
     flatten,
@@ -362,6 +376,15 @@ __all__ = [
     "save",
     "resolve_subsystem_refs",
     "resolve_model_refs",
+
+    # Expression templates (esm-spec §9.6) + template-library imports and
+    # load-time metaparameters (esm-spec §9.7)
+    "ExpressionTemplateError",
+    "lower_expression_templates",
+    "reject_expression_templates_pre_v04",
+    "MAX_TEMPLATE_EXPANSION_DEPTH",
+    "reject_template_imports_pre_v08",
+    "resolve_template_machinery",
 
     # Validation
     "validate",
