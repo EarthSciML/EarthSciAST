@@ -28,6 +28,7 @@ include("shape_promotion.jl")
 include("mock_systems.jl")
 include("registered_functions.jl")
 include("lower_expression_templates.jl")
+include("template_imports.jl")
 include("parse.jl")
 include("serialize.jl")
 include("expression.jl")
@@ -150,6 +151,9 @@ export
     lower_enums!,
     # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,
-    ExpressionTemplateError
+    ExpressionTemplateError,
+    # Template-library imports + load-time metaparameters (esm-spec §9.7 /
+    # docs/content/rfcs/template-library-imports.md)
+    resolve_template_machinery, reject_template_imports_pre_v08
 
 end # module EarthSciSerialization

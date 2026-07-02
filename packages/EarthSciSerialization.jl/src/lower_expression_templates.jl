@@ -116,6 +116,22 @@ stable `code` matching one of:
 - `apply_expression_template_invalid_declaration`
 - `apply_expression_template_version_too_old`
 - `rewrite_rule_nonterminating`
+
+or one of the esm-spec §9.7 template-library / metaparameter codes
+(§9.6.6, raised from `template_imports.jl` and `parse.jl`):
+
+- `template_import_version_too_old`
+- `template_import_unresolved`
+- `template_import_not_library`
+- `subsystem_ref_is_template_library`
+- `template_import_cycle`
+- `template_import_name_conflict`
+- `template_import_unknown_name`
+- `template_import_index_set_conflict`
+- `template_body_expansion_too_deep`
+- `metaparameter_unbound`
+- `metaparameter_type_error`
+- `metaparameter_name_conflict`
 """
 struct ExpressionTemplateError <: Exception
     code::String
@@ -170,8 +186,8 @@ function _assert_no_nested_apply(body, template_name::String, path::String)
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
             throw(ExpressionTemplateError(
-                "apply_expression_template_recursive_body",
-                "expression_templates.$(template_name): body contains nested 'apply_expression_template' at $path; templates MUST NOT call other templates"))
+                "apply_expression_template_invalid_declaration",
+                "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"))
         end
         for (k, v) in pairs(body)
             _assert_no_nested_apply(v, template_name, "$path/$(string(k))")
@@ -186,11 +202,13 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
                 "apply_expression_template_invalid_declaration",
                 "$scope.expression_templates.$name: entry must be an object with params + body"))
         end
+        # `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
+        # template is a named constant fragment (common in library files).
         params = get(decl, "params", get(decl, :params, nothing))
-        if params === nothing || !_is_array(params) || length(params) == 0
+        if params === nothing || !_is_array(params)
             throw(ExpressionTemplateError(
                 "apply_expression_template_invalid_declaration",
-                "$scope.expression_templates.$name: 'params' must be a non-empty array of strings"))
+                "$scope.expression_templates.$name: 'params' must be an array of strings"))
         end
         seen = Set{String}()
         for p in params
@@ -213,7 +231,11 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
                 "apply_expression_template_invalid_declaration",
                 "$scope.expression_templates.$name: 'body' is required"))
         end
-        _assert_no_nested_apply(body, name, "/body")
+        # A body MAY reference other match-less in-scope templates via
+        # apply_expression_template nodes (esm-spec §9.7.3); those are checked
+        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and inlined at
+        # registration by `_compose_template_bodies!` — the old any-nesting
+        # rejection is now cycle-only (`apply_expression_template_recursive_body`).
 
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
@@ -255,7 +277,7 @@ function _substitute(body, bindings::Dict{String,Any})
     return body
 end
 
-function _expand_apply(node, templates::Dict{String,Any}, scope::String)
+function _expand_apply(node, templates::AbstractDict, scope::String)
     name_raw = get(node, "name", get(node, :name, nothing))
     if name_raw === nothing
         throw(ExpressionTemplateError(
@@ -672,6 +694,11 @@ function lower_expression_templates(raw_data)
                     templates[string(tname)] = tdecl
                 end
                 _validate_templates(templates, "$compkind.$(string(cname))")
+                # Registration-time body composition (esm-spec §9.7.3): inline
+                # body references to match-less in-scope templates as a
+                # statically-checked acyclic DAG, so every rule body the
+                # fixpoint sees is a closed AST.
+                _compose_template_bodies!(templates, "$compkind.$(string(cname))")
                 decl_index = 0
                 for tname in _ordered_template_names(raw_data, compkind, string(cname), templates)
                     decl_index += 1

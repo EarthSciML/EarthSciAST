@@ -612,16 +612,23 @@ end
 
 """
     SubsystemRef(ref::String)
+    SubsystemRef(ref::String, bindings::Dict{String,Int})
 
 Unresolved reference to an external ESM file used as a subsystem (esm-spec §4.7).
 Produced by `coerce_model` for a `{"ref": "..."}` subsystem entry and replaced
 in place by `resolve_subsystem_refs!` with the loaded `Model` or `DataLoader`.
 A `SubsystemRef` only survives parsing when references are not resolved (e.g.
 `load(::IO)` without a base path); `load(::String)` always resolves them.
+`bindings` closes the referenced document's open metaparameters at this edge
+(esm-spec §9.7.6 binding site 3 — e.g. a convergence wrapper instantiating a
+problem file at a given size).
 """
 struct SubsystemRef
     ref::String
+    bindings::Dict{String,Int}
 end
+
+SubsystemRef(ref::String) = SubsystemRef(ref, Dict{String,Int}())
 
 """
     Model

@@ -367,7 +367,13 @@ function _serialize_subsystem(v)::Dict{String,Any}
     if v isa DataLoader
         return serialize_data_loader(v)
     elseif v isa SubsystemRef
-        return Dict{String,Any}("ref" => v.ref)
+        out = Dict{String,Any}("ref" => v.ref)
+        # Metaparameter bindings at the subsystem edge (esm-spec §9.7.6 site 3)
+        # survive only while the ref is unresolved; a resolved subsystem
+        # round-trips as the instantiated inline component.
+        isempty(v.bindings) || (out["bindings"] = Dict{String,Any}(
+            k => b for (k, b) in v.bindings))
+        return out
     else
         return serialize_model(v)
     end

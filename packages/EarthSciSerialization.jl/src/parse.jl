@@ -768,7 +768,18 @@ function coerce_model(data::Any)::Model
     if haskey(data, :subsystems) && data.subsystems !== nothing
         for (k, v) in pairs(data.subsystems)
             subsystems[string(k)] = if haskey(v, :ref) && v.ref !== nothing
-                SubsystemRef(string(v.ref))
+                # Optional `bindings` closes the referenced document's open
+                # metaparameters at this edge (esm-spec §9.7.6 binding site 3).
+                bindings = Dict{String,Int}()
+                if haskey(v, :bindings) && v.bindings !== nothing
+                    for (bk, bv) in pairs(v.bindings)
+                        (bv isa Integer && !(bv isa Bool)) || throw(ExpressionTemplateError(
+                            "metaparameter_type_error",
+                            "subsystems.$(string(k)): binding '$(string(bk))' is not an integer (esm-spec §9.7.6)"))
+                        bindings[string(bk)] = Int(bv)
+                    end
+                end
+                SubsystemRef(string(v.ref), bindings)
             elseif haskey(v, :kind) && haskey(v, :source)
                 # Loader-required fields (kind + source) discriminate an inline
                 # data loader from a Model, which carries equations instead.
@@ -1523,13 +1534,16 @@ function _reject_ic_in_reaction_system(raw_data)
 end
 
 """
-    load(path::String) -> EsmFile
+    load(path::String; metaparameters=Dict{String,Int}()) -> EsmFile
 
 Load and parse an ESM file from a file path.
 Automatically resolves any subsystem references (local or remote) relative
-to the directory containing the file.
+to the directory containing the file. `metaparameters` binds the ROOT
+document's open metaparameters at the loader API (esm-spec §9.7.6 binding
+site 4): already-closed edge bindings win, API bindings beat `default`s.
 """
-function load(path::String)::EsmFile
+function load(path::String;
+              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     base_path = dirname(abspath(path))
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
@@ -1537,19 +1551,24 @@ function load(path::String)::EsmFile
     # by-name model resolver expects — loads here too. Returns `nothing` when the
     # file has no such stubs (the common case), preserving the original path.
     inlined = _inline_toplevel_model_refs(JSON3.read(read(path, String)), base_path)
-    file = inlined === nothing ? open(load, path) :
-                                 load(IOBuffer(JSON3.write(inlined)))
+    file = inlined === nothing ?
+        open(io -> load(io; base_path=base_path, metaparameters=metaparameters), path) :
+        load(IOBuffer(JSON3.write(inlined));
+             base_path=base_path, metaparameters=metaparameters)
     # Resolve nested subsystem references relative to the file's directory.
     resolve_subsystem_refs!(file, base_path)
     return file
 end
 
 """
-    load(io::IO) -> EsmFile
+    load(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
 
-Load and parse an ESM file from an IO stream.
+Load and parse an ESM file from an IO stream. `base_path` anchors relative
+`expression_template_imports` refs (esm-spec §9.7.2); `metaparameters` binds
+the document's open metaparameters at the loader API (esm-spec §9.7.6).
 """
-function load(io::IO)::EsmFile
+function load(io::IO; base_path::AbstractString=pwd(),
+              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     try
         # Read JSON content
         json_string = read(io, String)
@@ -1560,6 +1579,11 @@ function load(io::IO)::EsmFile
         # gate). Surfaced before schema validation so the user sees the
         # version hint instead of a generic "extra property" error.
         reject_expression_templates_pre_v04(raw_data)
+
+        # v0.8.0 §9.7 constructs (expression_template_imports, top-level
+        # expression_templates, metaparameters) are rejected when the file
+        # declares esm < 0.8.0 (esm-spec §9.6.5).
+        reject_template_imports_pre_v08(raw_data)
 
         # Validate schema
         schema_errors = validate_schema(raw_data)
@@ -1585,12 +1609,24 @@ function load(io::IO)::EsmFile
         # gt-2fvs mayor decision). A follow-up bead flips this to a hard error.
         _warn_deprecated_domain_bc(raw_data)
 
-        # Expand `apply_expression_template` ops at load time (esm-spec
-        # §9.6 / docs/rfcs/ast-expression-templates.md). After this pass,
-        # the typed tree carries no apply_expression_template nodes and no
-        # `expression_templates` blocks — downstream consumers see only
+        # Resolve esm-spec §9.7 machinery first — template-library imports
+        # (depth-first post-order, per-edge metaparameter instantiation),
+        # index_sets merge, metaparameter close+fold — then expand
+        # `apply_expression_template` ops / fire `match` rules to the §9.6.3
+        # fixpoint. After both passes the typed tree carries no
+        # apply_expression_template nodes, no `expression_templates` blocks,
+        # no imports, and no metaparameters — downstream consumers see only
         # normal Expression ASTs (Option A round-trip).
-        expanded = lower_expression_templates(raw_data)
+        resolved = resolve_template_machinery(raw_data, String(base_path);
+                                              metaparameters=metaparameters)
+        expanded = lower_expression_templates(resolved === nothing ? raw_data : resolved)
+        if resolved !== nothing && !(expanded isa JSONLikeDict)
+            # The lowering pass fast-paths files without component templates
+            # (e.g. a directly-loaded library file, or a metaparameters-only
+            # problem file); wrap the native tree so `coerce_esm_file` sees
+            # the JSON3-compatible property surface.
+            expanded = JSONLikeDict(_to_dict(expanded))
+        end
 
         # Coerce types and return
         return coerce_esm_file(expanded)
@@ -1828,7 +1864,7 @@ function _resolve_model_refs!(models_dict, name::String,
             # Replace the reference in place with the loaded component. The
             # loaded file's own refs are already resolved by `_load_ref`.
             model.subsystems[sub_name] =
-                _resolve_subsystem_ref(sub_value.ref, base_path, visited)
+                _resolve_subsystem_ref(sub_value, base_path, visited)
         else
             # Inline Model (recurse into its subsystems) or DataLoader (leaf).
             _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path, visited)
@@ -1842,19 +1878,25 @@ end
 Load the ESM file at `ref` and return its single top-level model or data loader
 (esm-spec §4.7). A single-loader file (RFC pure-io-data-loaders §4.4) resolves to
 that loader. Errors unless the file contains exactly one model or data loader.
+A `SubsystemRef`'s `bindings` close the referenced document's open
+metaparameters (esm-spec §9.7.6 binding site 3); a `ref` targeting a
+template-library file is rejected with `subsystem_ref_is_template_library`.
 """
-function _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String})
-    loaded = _load_ref(ref, base_path, visited)
+function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String})
+    loaded = _load_ref(ref.ref, base_path, visited; metaparameters=ref.bindings)
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
     n_loaders = loaded.data_loaders === nothing ? 0 : length(loaded.data_loaders)
     total = n_models + n_loaders
     if total != 1
         throw(SubsystemRefError(
-            "Subsystem ref '$(ref)' must resolve to exactly one top-level model " *
+            "Subsystem ref '$(ref.ref)' must resolve to exactly one top-level model " *
             "or data loader, found $(total)"))
     end
     return n_models == 1 ? first(values(loaded.models)) : first(values(loaded.data_loaders))
 end
+
+_resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String}) =
+    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited)
 
 """
     _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)
@@ -1879,7 +1921,8 @@ Load a referenced ESM file from a local path or URL, with circular reference det
 - `base_path::String`: directory for resolving relative paths
 - `visited::Set{String}`: set of already-visited references for cycle detection
 """
-function _load_ref(ref::String, base_path::String, visited::Set{String})::EsmFile
+function _load_ref(ref::String, base_path::String, visited::Set{String};
+                   metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Normalize the reference for cycle detection
     canonical = _canonical_ref(ref, base_path)
 
@@ -1890,12 +1933,15 @@ function _load_ref(ref::String, base_path::String, visited::Set{String})::EsmFil
 
     try
         if startswith(ref, "http://") || startswith(ref, "https://")
-            return _load_remote_ref(ref)
+            return _load_remote_ref(ref; metaparameters=metaparameters)
         else
-            return _load_local_ref(ref, base_path, visited)
+            return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters)
         end
     catch e
-        if e isa SubsystemRefError
+        if e isa SubsystemRefError || e isa ExpressionTemplateError
+            # ExpressionTemplateError carries the stable §9.6.6 diagnostic
+            # codes (e.g. `subsystem_ref_is_template_library`,
+            # `metaparameter_unbound`) — surfaced as-is for machine checking.
             rethrow(e)
         else
             throw(SubsystemRefError("Failed to resolve subsystem ref '$(ref)': $(e)"))
@@ -1922,20 +1968,31 @@ end
 
 Load a locally referenced ESM file.
 """
-function _load_local_ref(ref::String, base_path::String, visited::Set{String})::EsmFile
+function _load_local_ref(ref::String, base_path::String, visited::Set{String};
+                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
 
     if !isfile(resolved_path)
         throw(SubsystemRefError("Referenced file not found: $(resolved_path) (from ref '$(ref)')"))
     end
 
-    # Parse the referenced file using the IO-based load (no ref resolution on its own)
-    file = open(resolved_path, "r") do io
-        load(io)
+    # A §4.7 subsystem ref MUST NOT target a template-library file — the two
+    # reference mechanisms are disjoint (esm-spec §9.7.1).
+    content = read(resolved_path, String)
+    if _is_template_library_doc(JSON3.read(content))
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_template_library",
+            "Subsystem ref '$(ref)' targets a template-library file " *
+            "($(resolved_path)); libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
     end
 
-    # Recursively resolve refs in the loaded file, relative to its own directory
+    # Parse the referenced file using the IO-based load (no ref resolution on
+    # its own); the ref's directory anchors its template imports, and the
+    # edge's `bindings` close its metaparameters (esm-spec §9.7.6 site 3).
     ref_base = dirname(resolved_path)
+    file = load(IOBuffer(content); base_path=ref_base, metaparameters=metaparameters)
+
+    # Recursively resolve refs in the loaded file, relative to its own directory
     _resolve_refs_in_file!(file, ref_base, visited)
 
     return file
@@ -1947,7 +2004,8 @@ end
 Load a remotely referenced ESM file from a URL.
 Uses the Downloads stdlib to fetch the content.
 """
-function _load_remote_ref(ref::String)::EsmFile
+function _load_remote_ref(ref::String;
+                          metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     local content::String
     try
         # Use Downloads.download from the Julia stdlib
@@ -1961,12 +2019,25 @@ function _load_remote_ref(ref::String)::EsmFile
     raw_data = JSON3.read(content)
 
     reject_expression_templates_pre_v04(raw_data)
+    reject_template_imports_pre_v08(raw_data)
+
+    # A §4.7 subsystem ref MUST NOT target a template-library file (esm-spec §9.7.1).
+    if _is_template_library_doc(raw_data)
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_template_library",
+            "Subsystem ref '$(ref)' targets a template-library file; " *
+            "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
+    end
 
     schema_errors = validate_schema(raw_data)
     if !isempty(schema_errors)
         throw(SubsystemRefError("Schema validation failed for remote ref '$(ref)'"))
     end
 
-    expanded = lower_expression_templates(raw_data)
+    resolved = resolve_template_machinery(raw_data, pwd(); metaparameters=metaparameters)
+    expanded = lower_expression_templates(resolved === nothing ? raw_data : resolved)
+    if resolved !== nothing && !(expanded isa JSONLikeDict)
+        expanded = JSONLikeDict(_to_dict(expanded))
+    end
     return coerce_esm_file(expanded)
 end
