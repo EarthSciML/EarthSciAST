@@ -62,6 +62,7 @@ pub mod relational;
 pub mod serialize;
 pub mod structural;
 pub mod substitute;
+pub mod template_imports;
 pub mod types;
 pub mod units;
 pub mod validate;
@@ -118,7 +119,13 @@ pub use graph::{
     DependencyRelationship, ExpressionGraph, ExpressionGraphInput, VariableKind, VariableNode,
     component_exists, component_graph, expression_graph, get_component_type,
 };
-pub use parse::{ParseError, SchemaValidationError, load, load_path};
+pub use parse::{
+    LoadOptions, ParseError, SchemaValidationError, load, load_path, load_path_with_options,
+    load_with_options,
+};
+pub use template_imports::{
+    is_template_library_doc, reject_template_imports_pre_v08, resolve_template_machinery,
+};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };

@@ -94,14 +94,40 @@ fn get_schema() -> &'static JSONSchema {
 /// assert_eq!(esm_file.esm, "0.1.0");
 /// ```
 pub fn load(json_str: &str) -> Result<EsmFile, EsmError> {
+    load_with_options(json_str, &LoadOptions::default())
+}
+
+/// Options controlling how [`load_with_options`] /
+/// [`load_path_with_options`] parse an ESM file (esm-spec §9.7).
+#[derive(Debug, Clone, Default)]
+pub struct LoadOptions {
+    /// Directory anchoring relative subsystem refs and
+    /// `expression_template_imports` refs (esm-spec §9.7.2). Defaults to the
+    /// current working directory for string input; `load_path` uses the
+    /// file's own directory.
+    pub base_path: Option<std::path::PathBuf>,
+
+    /// Loader-API metaparameter bindings for the ROOT document (esm-spec
+    /// §9.7.6 binding site 4): name → integer. Already-closed edge bindings
+    /// win; API bindings beat `default`s. Binding a name the document does
+    /// not declare raises `template_import_unknown_name`.
+    pub metaparameters: std::collections::BTreeMap<String, i64>,
+}
+
+/// Load and parse an ESM file from a JSON string with explicit
+/// [`LoadOptions`] (base path for relative refs, loader-API metaparameter
+/// bindings; esm-spec §9.7.6).
+pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFile, EsmError> {
     // First, parse the JSON
     let mut json_value: Value = serde_json::from_str(json_str).map_err(EsmError::JsonParse)?;
 
-    // Resolve any subsystem refs against the current working directory before
-    // schema validation, per spec section 2.1b. Callers that load from a known
-    // file path should use `load_path` instead, which uses the file's own
-    // directory as the base.
-    let base = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let base = options.base_path.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+
+    // Resolve any subsystem refs before schema validation, per spec section
+    // 2.1b. Callers that load from a known file path should use `load_path`,
+    // which uses the file's own directory as the base.
     crate::ref_loading::resolve_subsystem_refs(&mut json_value, &base)
         .map_err(EsmError::SchemaValidation)?;
 
@@ -110,8 +136,29 @@ pub fn load(json_str: &str) -> Result<EsmFile, EsmError> {
     crate::lower_expression_templates::reject_expression_templates_pre_v04(&json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
+    // v0.8.0 §9.7 constructs (expression_template_imports, top-level
+    // expression_templates, metaparameters) are rejected when the file
+    // declares esm < 0.8.0 (esm-spec §9.6.5).
+    crate::template_imports::reject_template_imports_pre_v08(&json_value)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
     // Validate against schema
     validate_schema(&json_value)?;
+
+    // Resolve esm-spec §9.7 machinery — template-library imports
+    // (depth-first post-order, per-edge metaparameter instantiation),
+    // index_sets merge, metaparameter close+fold — before structural
+    // validation and the §9.6.3 fixpoint, so validators run on the folded,
+    // expanded form (esm-spec §9.6.4 / §9.7.6).
+    if let Some(resolved) = crate::template_imports::resolve_template_machinery(
+        &json_value,
+        &base,
+        &options.metaparameters,
+    )
+    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?
+    {
+        json_value = resolved;
+    }
 
     // Post-schema structural + semantic checks (version compatibility,
     // cross-field format rules, reference integrity, cyclic coupling) — the
@@ -168,35 +215,30 @@ fn warn_deprecated_domain_bc(json_value: &Value) {
 /// directory, validates against the schema, and deserializes into an
 /// [`EsmFile`].
 pub fn load_path<P: AsRef<std::path::Path>>(path: P) -> Result<EsmFile, EsmError> {
+    load_path_with_options(path, &std::collections::BTreeMap::new())
+}
+
+/// Load an ESM file from a filesystem path, binding the root document's open
+/// metaparameters at the loader API (esm-spec §9.7.6 binding site 4). The
+/// file's own directory anchors relative subsystem and template-import refs.
+pub fn load_path_with_options<P: AsRef<std::path::Path>>(
+    path: P,
+    metaparameters: &std::collections::BTreeMap<String, i64>,
+) -> Result<EsmFile, EsmError> {
     let path = path.as_ref();
     let json_str = std::fs::read_to_string(path).map_err(|e| {
         EsmError::SchemaValidation(format!("failed to read {}: {e}", path.display()))
     })?;
 
-    let mut json_value: Value = serde_json::from_str(&json_str).map_err(EsmError::JsonParse)?;
-
     let base = path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    crate::ref_loading::resolve_subsystem_refs(&mut json_value, &base)
-        .map_err(EsmError::SchemaValidation)?;
-
-    crate::lower_expression_templates::reject_expression_templates_pre_v04(&json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
-
-    validate_schema(&json_value)?;
-    validate_structural_json(&json_value)?;
-
-    crate::lower_expression_templates::lower_expression_templates(&mut json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
-
-    crate::lower_enums::lower_enums(&mut json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
-
-    let esm_file: EsmFile = serde_json::from_value(json_value).map_err(EsmError::JsonParse)?;
-
-    Ok(esm_file)
+    let options = LoadOptions {
+        base_path: Some(base),
+        metaparameters: metaparameters.clone(),
+    };
+    load_with_options(&json_str, &options)
 }
 
 /// Validate a JSON value against the ESM schema

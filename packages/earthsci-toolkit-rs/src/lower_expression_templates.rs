@@ -56,6 +56,8 @@ fn err(code: &'static str, message: impl Into<String>) -> ExpressionTemplateErro
     }
 }
 
+/// Reject `apply_expression_template` nodes inside a `match` pattern
+/// (esm-spec §9.7.3: match patterns MUST NOT reference templates).
 fn assert_no_nested_apply(
     body: &Value,
     template_name: &str,
@@ -70,11 +72,11 @@ fn assert_no_nested_apply(
         Value::Object(obj) => {
             if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
                 return Err(err(
-                    "apply_expression_template_recursive_body",
+                    "apply_expression_template_invalid_declaration",
                     format!(
-                        "expression_templates.{template_name}: body contains nested \
-                         'apply_expression_template' at {path}; templates MUST NOT call \
-                         other templates"
+                        "expression_templates.{template_name}: `match` contains an \
+                         'apply_expression_template' node at {path}; match patterns MUST NOT \
+                         reference templates (esm-spec §9.7.3)"
                     ),
                 ));
             }
@@ -87,7 +89,7 @@ fn assert_no_nested_apply(
     Ok(())
 }
 
-fn validate_templates(
+pub(crate) fn validate_templates(
     templates: &Map<String, Value>,
     scope: &str,
 ) -> Result<(), ExpressionTemplateError> {
@@ -101,23 +103,17 @@ fn validate_templates(
                 ),
             )
         })?;
+        // `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
+        // template is a named constant fragment (common in library files).
         let params = decl_obj
             .get("params")
             .and_then(|p| p.as_array())
             .ok_or_else(|| {
                 err(
                     "apply_expression_template_invalid_declaration",
-                    format!(
-                        "{scope}.expression_templates.{name}: 'params' must be a non-empty array"
-                    ),
+                    format!("{scope}.expression_templates.{name}: 'params' must be an array"),
                 )
             })?;
-        if params.is_empty() {
-            return Err(err(
-                "apply_expression_template_invalid_declaration",
-                format!("{scope}.expression_templates.{name}: 'params' must be a non-empty array"),
-            ));
-        }
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for p in params {
             let p_str = p.as_str().ok_or_else(|| {
@@ -139,19 +135,227 @@ fn validate_templates(
                 ));
             }
         }
-        let body = decl_obj.get("body").ok_or_else(|| {
+        let _body = decl_obj.get("body").ok_or_else(|| {
             err(
                 "apply_expression_template_invalid_declaration",
                 format!("{scope}.expression_templates.{name}: 'body' is required"),
             )
         })?;
-        assert_no_nested_apply(body, name, "/body")?;
+        // A body MAY reference other match-less in-scope templates via
+        // apply_expression_template nodes (esm-spec §9.7.3); those are
+        // checked (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and
+        // inlined at registration by `compose_template_bodies` — the old
+        // any-nesting rejection is now cycle-only
+        // (`apply_expression_template_recursive_body`).
 
         // An optional `match` pattern turns the entry into an auto-applied
-        // rewrite rule (esm-spec §9.6); like the body it MUST NOT contain nested
-        // `apply_expression_template` ops.
+        // rewrite rule (esm-spec §9.6); it MUST NOT contain nested
+        // `apply_expression_template` ops (esm-spec §9.7.3).
         if let Some(pattern) = decl_obj.get("match") {
             assert_no_nested_apply(pattern, name, "/match")?;
+        }
+    }
+    Ok(())
+}
+
+/// Maximum template-body reference-chain depth (counted in TEMPLATES along
+/// the longest chain, so a 33-template chain is rejected while a 32-template
+/// chain is accepted) before a file is rejected with
+/// `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
+/// across all bindings.
+pub const MAX_TEMPLATE_EXPANSION_DEPTH: usize = 32;
+
+/// Collect the `name`s of every `apply_expression_template` node in a tree.
+fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
+    match x {
+        Value::Array(arr) => {
+            for c in arr {
+                collect_apply_names(c, out);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP)
+                && let Some(name) = obj.get("name").and_then(|v| v.as_str())
+            {
+                out.push(name.to_string());
+            }
+            for (_, v) in obj {
+                collect_apply_names(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Inline every `apply_expression_template` node in `node` against
+/// `templates`, post-order (so the bindings' own sub-ASTs are inlined
+/// first). Referenced bodies are already closed when this runs in
+/// topological order, so a single `expand_apply` produces an apply-free
+/// subtree.
+fn inline_applies(
+    node: &Value,
+    templates: &Map<String, Value>,
+    scope: &str,
+) -> Result<Value, ExpressionTemplateError> {
+    match node {
+        Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for c in arr {
+                out.push(inline_applies(c, templates, scope)?);
+            }
+            Ok(Value::Array(out))
+        }
+        Value::Object(obj) => {
+            let mut out = Map::new();
+            for (k, v) in obj {
+                out.insert(k.clone(), inline_applies(v, templates, scope)?);
+            }
+            if out.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
+                return expand_apply(&out, templates, scope);
+            }
+            Ok(Value::Object(out))
+        }
+        _ => Ok(node.clone()),
+    }
+}
+
+/// Registration-time body composition (esm-spec §9.7.3): template bodies MAY
+/// reference other in-scope MATCH-LESS templates via
+/// `apply_expression_template` nodes. Builds the body-reference graph,
+/// rejects cycles (`apply_expression_template_recursive_body`) and chains
+/// deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
+/// (`template_body_expansion_too_deep`), then inlines dependencies-first by
+/// pure substitution — confluent, so topological order cannot affect the
+/// result. Afterwards every `body` is a closed Expression AST with zero
+/// `apply_expression_template` nodes; runs BEFORE the §9.6.3 fixpoint ever
+/// consults a `match` rule. Mutates the decl objects in `templates` in
+/// place.
+pub(crate) fn compose_template_bodies(
+    templates: &mut Map<String, Value>,
+    scope: &str,
+) -> Result<(), ExpressionTemplateError> {
+    if templates.is_empty() {
+        return Ok(());
+    }
+    let mut refs: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut any_refs = false;
+    for (name, decl) in templates.iter() {
+        let mut names = Vec::new();
+        if let Some(body) = decl.get("body") {
+            collect_apply_names(body, &mut names);
+        }
+        any_refs = any_refs || !names.is_empty();
+        refs.insert(name.clone(), names);
+    }
+    if !any_refs {
+        return Ok(());
+    }
+
+    for (name, rs) in &refs {
+        for r in rs {
+            let Some(tdecl) = templates.get(r) else {
+                return Err(err(
+                    "apply_expression_template_unknown_template",
+                    format!(
+                        "{scope}.expression_templates.{name}: body references undeclared \
+                         template '{r}' (esm-spec §9.7.3)"
+                    ),
+                ));
+            };
+            if tdecl.get("match").is_some() {
+                return Err(err(
+                    "apply_expression_template_unknown_template",
+                    format!(
+                        "{scope}.expression_templates.{name}: body references '{r}', a `match` \
+                         rewrite rule — only match-less templates are invocable by name \
+                         (esm-spec §9.7.3)"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // DFS over the reference graph: cycle detection, chain-depth bound, and
+    // a dependencies-first (post-) order for inlining.
+    #[allow(clippy::too_many_arguments)]
+    fn visit(
+        name: &str,
+        refs: &std::collections::BTreeMap<String, Vec<String>>,
+        state: &mut std::collections::HashMap<String, u8>, // 1 = on stack, 2 = done
+        depth: &mut std::collections::HashMap<String, usize>,
+        order: &mut Vec<String>,
+        chain: &mut Vec<String>,
+        scope: &str,
+    ) -> Result<usize, ExpressionTemplateError> {
+        match state.get(name).copied().unwrap_or(0) {
+            1 => {
+                let start = chain.iter().position(|c| c == name).unwrap_or(0);
+                let mut cyc: Vec<String> = chain[start..].to_vec();
+                cyc.push(name.to_string());
+                Err(err(
+                    "apply_expression_template_recursive_body",
+                    format!(
+                        "{scope}.expression_templates: template-body reference cycle {} \
+                         (esm-spec §9.7.3)",
+                        cyc.join(" -> ")
+                    ),
+                ))
+            }
+            2 => Ok(depth[name]),
+            _ => {
+                state.insert(name.to_string(), 1);
+                chain.push(name.to_string());
+                let mut d = 1usize;
+                if let Some(rs) = refs.get(name) {
+                    for r in rs.clone() {
+                        d = d.max(1 + visit(&r, refs, state, depth, order, chain, scope)?);
+                    }
+                }
+                chain.pop();
+                state.insert(name.to_string(), 2);
+                depth.insert(name.to_string(), d);
+                if d > MAX_TEMPLATE_EXPANSION_DEPTH {
+                    return Err(err(
+                        "template_body_expansion_too_deep",
+                        format!(
+                            "{scope}.expression_templates.{name}: body-reference chain of {d} \
+                             templates exceeds \
+                             MAX_TEMPLATE_EXPANSION_DEPTH={MAX_TEMPLATE_EXPANSION_DEPTH} \
+                             (esm-spec §9.7.3)"
+                        ),
+                    ));
+                }
+                order.push(name.to_string());
+                Ok(d)
+            }
+        }
+    }
+
+    let mut state = std::collections::HashMap::new();
+    let mut depth = std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut chain: Vec<String> = Vec::new();
+    for name in refs.keys() {
+        visit(name, &refs, &mut state, &mut depth, &mut order, &mut chain, scope)?;
+    }
+
+    for name in order {
+        let Some(rs) = refs.get(&name) else { continue };
+        if rs.is_empty() {
+            continue;
+        }
+        let body = templates
+            .get(&name)
+            .and_then(|d| d.get("body"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let inlined = inline_applies(
+            &body,
+            templates,
+            &format!("{scope}.expression_templates.{name}"),
+        )?;
+        if let Some(Value::Object(decl)) = templates.get_mut(&name) {
+            decl.insert("body".to_string(), inlined);
         }
     }
     Ok(())
@@ -312,7 +516,7 @@ fn try_match(
 
 fn expand_apply(
     node: &Map<String, Value>,
-    ctx: &RewriteCtx,
+    templates: &Map<String, Value>,
     scope: &str,
 ) -> Result<Value, ExpressionTemplateError> {
     let name = node.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
@@ -327,7 +531,7 @@ fn expand_apply(
             format!("{scope}: apply_expression_template 'name' must be non-empty"),
         ));
     }
-    let decl = ctx.templates.get(name).ok_or_else(|| {
+    let decl = templates.get(name).ok_or_else(|| {
         err(
             "apply_expression_template_unknown_template",
             format!("{scope}: apply_expression_template references undeclared template '{name}'"),
@@ -425,7 +629,7 @@ fn rewrite_pass(
             // (1) Outermost-first: fire a rule AT this node before descending.
             if op == Some(APPLY_OP) {
                 *last = APPLY_OP.to_string();
-                return Ok((expand_apply(obj, ctx, scope)?, true));
+                return Ok((expand_apply(obj, ctx.templates, scope)?, true));
             }
             for rule in ctx.rules {
                 let param_set: std::collections::HashSet<&str> =
@@ -579,7 +783,7 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             };
             let scope_base = format!("{compkind}.{cname}");
             // Take the templates block (if any) so we can borrow comp mutably.
-            let templates: Map<String, Value> = match comp.remove("expression_templates") {
+            let mut templates: Map<String, Value> = match comp.remove("expression_templates") {
                 Some(Value::Object(t)) => t,
                 _ => Map::new(),
             };
@@ -590,6 +794,11 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                 continue;
             }
             validate_templates(&templates, &scope_base)?;
+            // Registration-time body composition (esm-spec §9.7.3): inline
+            // body references to match-less in-scope templates as a
+            // statically-checked acyclic DAG, so every rule body the
+            // fixpoint sees is a closed AST.
+            compose_template_bodies(&mut templates, &scope_base)?;
             let rules = collect_match_rules(&templates);
             let ctx = RewriteCtx {
                 templates: &templates,

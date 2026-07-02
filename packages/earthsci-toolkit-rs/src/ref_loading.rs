@@ -92,9 +92,48 @@ fn walk_subsystems(
     Ok(())
 }
 
+/// Read the optional metaparameter `bindings` off a `{ ref, bindings }`
+/// subsystem entry (esm-spec §9.7.6 binding site 3). Values MUST be
+/// integers (`metaparameter_type_error` otherwise).
+fn read_edge_bindings(
+    obj: &serde_json::Map<String, Value>,
+) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(bindings) = obj.get("bindings") else {
+        return Ok(out);
+    };
+    let Some(bindings_obj) = bindings.as_object() else {
+        return Err(
+            "[metaparameter_type_error] subsystem ref `bindings` must be an object of \
+             integers (esm-spec 9.7.6)"
+                .to_string(),
+        );
+    };
+    for (k, v) in bindings_obj {
+        let Some(i) = v.as_i64() else {
+            return Err(format!(
+                "[metaparameter_type_error] subsystem ref binding '{k}' is not an integer \
+                 (esm-spec 9.7.6)"
+            ));
+        };
+        out.insert(k.clone(), i);
+    }
+    Ok(out)
+}
+
 /// If `value` is a `{ "ref": "..." }` object, load the referenced file and
 /// inline the single top-level system from it. Otherwise recurse into the
 /// value's own `subsystems` map.
+///
+/// esm-spec §9.7: a subsystem ref MUST NOT target a template-library file
+/// (`subsystem_ref_is_template_library` — the two reference mechanisms are
+/// disjoint, §9.7.1), and the referenced document's own §9.7 machinery
+/// (template imports + metaparameters) is resolved in the referenced file's
+/// directory, closed with this edge's `bindings` (§9.7.6 binding site 3) and
+/// lowered to the §9.6.3 fixpoint, before the single component is extracted.
+/// Template-import diagnostics are embedded in the error string as
+/// `[<stable code>] ...`, matching how `load()` surfaces
+/// [`crate::lower_expression_templates::ExpressionTemplateError`].
 fn resolve_value(
     value: Value,
     base_path: &Path,
@@ -132,9 +171,49 @@ fn resolve_value(
         let mut parsed: Value = serde_json::from_str(&content)
             .map_err(|e| format!("failed to parse ref {}: {}", canonical.display(), e))?;
 
+        // A §4.7 subsystem ref MUST NOT target a template-library file — the
+        // two reference mechanisms are disjoint (esm-spec §9.7.1).
+        if crate::template_imports::is_template_library_doc(&parsed) {
+            visited.remove(&canonical);
+            return Err(format!(
+                "[subsystem_ref_is_template_library] Subsystem ref '{ref_str}' targets a \
+                 template-library file ({}); libraries are imported via \
+                 expression_template_imports (esm-spec 9.7.1)",
+                canonical.display()
+            ));
+        }
+
+        // Resolve the referenced document's §9.7 machinery in its own
+        // directory, closing its metaparameters with this edge's `bindings`
+        // (esm-spec §9.7.6 binding site 3), then run the §9.6.3 fixpoint so
+        // the inlined component carries only concrete Expression ASTs.
+        let parent_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
+        let edge_result: Result<(), String> = (|| {
+            crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)
+                .map_err(|e| e.to_string())?;
+            crate::template_imports::reject_template_imports_pre_v08(&parsed)
+                .map_err(|e| e.to_string())?;
+            let bindings = read_edge_bindings(obj)?;
+            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
+                &parsed,
+                &parent_dir,
+                &bindings,
+            )
+            .map_err(|e| e.to_string())?
+            {
+                crate::lower_expression_templates::lower_expression_templates(&mut resolved)
+                    .map_err(|e| e.to_string())?;
+                parsed = resolved;
+            }
+            Ok(())
+        })();
+        if let Err(e) = edge_result {
+            visited.remove(&canonical);
+            return Err(e);
+        }
+
         // Recursively resolve any refs inside the loaded file before we
         // pluck out the single top-level system to inline.
-        let parent_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
         walk_top_level(&mut parsed, &parent_dir, visited)?;
 
         visited.remove(&canonical);
