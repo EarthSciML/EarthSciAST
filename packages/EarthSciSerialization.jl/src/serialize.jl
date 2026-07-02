@@ -316,6 +316,9 @@ function serialize_model_variable(var::ModelVariable)::Dict{String,Any}
     if var.default !== nothing
         result["default"] = var.default
     end
+    if var.units !== nothing
+        result["units"] = var.units
+    end
     if var.default_units !== nothing
         result["default_units"] = var.default_units
     end

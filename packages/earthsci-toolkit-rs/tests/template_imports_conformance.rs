@@ -58,40 +58,6 @@ fn golden(path: &Path) -> Value {
     serde_json::from_str(&src).expect("parse golden")
 }
 
-/// Remove `units` from every variable declaration, recursively. The
-/// metaparameter_resolutions goldens are the Julia TYPED round-trip
-/// (`load → serialize`), and the Julia serializer does not carry
-/// `ModelVariable.units` — a pre-existing cross-binding serializer
-/// convention, orthogonal to §9.7. Applied to the Rust output only; the
-/// goldens are untouched.
-fn strip_variable_units(v: &mut Value) {
-    match v {
-        Value::Array(arr) => {
-            for c in arr {
-                strip_variable_units(c);
-            }
-        }
-        Value::Object(obj) => {
-            let keys: Vec<String> = obj.keys().cloned().collect();
-            for k in keys {
-                if k == "variables"
-                    && let Some(Value::Object(vars)) = obj.get_mut(&k)
-                {
-                    for (_, vd) in vars.iter_mut() {
-                        if let Some(vd_obj) = vd.as_object_mut() {
-                            vd_obj.remove("units");
-                        }
-                        strip_variable_units(vd);
-                    }
-                } else if let Some(child) = obj.get_mut(&k) {
-                    strip_variable_units(child);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Conformance fixture groups vs the Julia goldens
 // ---------------------------------------------------------------------------
@@ -183,7 +149,6 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let mut v: Value = serde_json::from_str(&src).expect("parse wrapper");
         earthsci_toolkit::resolve_subsystem_refs(&mut v, wrapper_path.parent().unwrap())
             .expect("resolve subsystem refs");
-        strip_variable_units(&mut v);
         assert_eq!(v, golden(&conf(&["metaparameter_resolutions", golden_name])));
 
         // Typed anchors through the full load.

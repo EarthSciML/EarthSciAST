@@ -56,19 +56,6 @@ def _err_code(fn) -> str | None:
         return e.code
 
 
-def _strip_var_units(x):
-    """Drop ``units`` keys for the metaparameter_resolutions golden
-    comparison: those goldens are the Julia reference's TYPED round-trip, and
-    the Julia serializer does not emit ModelVariable ``units``
-    (serialize_model_variable omits the field), so the goldens carry none.
-    Everything else must match structurally."""
-    if isinstance(x, dict):
-        return {k: _strip_var_units(v) for k, v in x.items() if k != "units"}
-    if isinstance(x, list):
-        return [_strip_var_units(v) for v in x]
-    return x
-
-
 # ---------------------------------------------------------------------------
 # Conformance fixture groups vs the committed Julia goldens
 # ---------------------------------------------------------------------------
@@ -168,9 +155,8 @@ def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
     ramp = sub.variables["ramp"].expression
     assert ramp.op == "aggregate"
     assert ramp.ranges == {"i": [1, n // 2]}
-    # Typed round-trip matches the golden (modulo the Julia serializer's
-    # ModelVariable-units omission — see _strip_var_units).
-    got = _strip_var_units(_serialize_esm_file(f))
+    # Typed round-trip matches the golden, fully structurally.
+    got = _serialize_esm_file(f)
     want = _read_json(os.path.join(CONF, "metaparameter_resolutions", golden))
     assert got == want
 

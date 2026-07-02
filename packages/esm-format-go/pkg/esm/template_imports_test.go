@@ -99,32 +99,6 @@ func tiErrCode(t *testing.T, err error) string {
 	return fmt.Sprintf("<%T: %v>", err, err)
 }
 
-// stripVarUnits drops `units` keys for the metaparameter_resolutions golden
-// comparison: those goldens are the Julia reference's TYPED round-trip, and
-// the Julia serializer does not emit ModelVariable `units`
-// (serialize_model_variable omits the field), so the goldens carry none.
-// Everything else must match structurally.
-func stripVarUnits(x interface{}) interface{} {
-	switch v := x.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(v))
-		for k, c := range v {
-			if k == "units" {
-				continue
-			}
-			out[k] = stripVarUnits(c)
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, len(v))
-		for i, c := range v {
-			out[i] = stripVarUnits(c)
-		}
-		return out
-	}
-	return x
-}
-
 // ---------------------------------------------------------------------------
 // Conformance fixture groups vs the committed Julia goldens
 // ---------------------------------------------------------------------------
@@ -294,9 +268,7 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if rangesJSON != wantRanges {
 				t.Errorf("ramp ranges = %s; want %s", rangesJSON, wantRanges)
 			}
-			// The models subtree matches the golden structurally (modulo the
-			// Julia serializer's ModelVariable-units omission — see
-			// stripVarUnits).
+			// The models subtree matches the golden, fully structurally.
 			b, err := json.Marshal(f.Models)
 			if err != nil {
 				t.Fatalf("marshal models: %v", err)
@@ -314,7 +286,7 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if err := json.Unmarshal(goldenBytes, &golden); err != nil {
 				t.Fatalf("decode golden: %v", err)
 			}
-			got := tiCanonJSON(t, stripVarUnits(gotModels))
+			got := tiCanonJSON(t, gotModels)
 			want := tiCanonJSON(t, golden["models"])
 			if got != want {
 				t.Errorf("models subtree diverges from %s:\n got=%s\nwant=%s", tc.golden, got, want)

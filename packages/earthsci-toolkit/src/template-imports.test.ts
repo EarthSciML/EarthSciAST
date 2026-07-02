@@ -65,39 +65,6 @@ function loadPath(p: string, metaparameters?: Record<string, number>) {
   return load(fs.readFileSync(p, 'utf8'), { basePath: path.dirname(p), metaparameters })
 }
 
-/**
- * Remove `units` from every variable declaration, recursively. The
- * metaparameter_resolutions goldens are the Julia TYPED round-trip
- * (`load → serialize`), and the Julia serializer does not carry
- * `ModelVariable.units` — a pre-existing cross-binding serializer
- * convention, orthogonal to §9.7. Applied to the TS output only; the
- * goldens are untouched.
- */
-function stripVariableUnits(x: unknown): unknown {
-  if (Array.isArray(x)) return x.map(stripVariableUnits)
-  if (x && typeof x === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
-      if (k === 'variables' && v && typeof v === 'object' && !Array.isArray(v)) {
-        const vars: Record<string, unknown> = {}
-        for (const [vn, vd] of Object.entries(v as Record<string, unknown>)) {
-          if (vd && typeof vd === 'object' && !Array.isArray(vd)) {
-            const { units: _units, ...rest } = vd as Record<string, unknown>
-            vars[vn] = stripVariableUnits(rest)
-          } else {
-            vars[vn] = stripVariableUnits(vd)
-          }
-        }
-        out[k] = vars
-      } else {
-        out[k] = stripVariableUnits(v)
-      }
-    }
-    return out
-  }
-  return x
-}
-
 describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   it('import_smoke: the §9.7.7 four-file layering matches the golden', () => {
     expect(expandRaw(conf('import_smoke', 'fixture.esm'))).toEqual(
@@ -172,12 +139,9 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       // Structural site: the aggregate dense range folded exactly.
       expect(sub.variables.ramp.expression.op).toBe('aggregate')
       expect(sub.variables.ramp.expression.ranges.i).toEqual([1, n / 2])
-      // Typed round-trip matches the golden. The goldens come from the
-      // Julia typed serializer, which does not carry ModelVariable.units —
-      // strip `units` from the TS output before the structural comparison
-      // (the goldens themselves are untouched).
+      // Typed round-trip matches the golden, fully structurally.
       const emitted = JSON.parse(save(f))
-      expect(stripVariableUnits(emitted)).toEqual(
+      expect(emitted).toEqual(
         golden(conf('metaparameter_resolutions', goldenName)),
       )
     }

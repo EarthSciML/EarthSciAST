@@ -36,11 +36,13 @@
                 ],
                 "op": "/"
               },
-              "type": "observed"
+              "type": "observed",
+              "units": "1"
             },
             "npts": {
               "expression": 4,
-              "type": "observed"
+              "type": "observed",
+              "units": "1"
             },
             "ramp": {
               "expression": {
@@ -65,11 +67,13 @@
                   ]
                 }
               },
-              "type": "observed"
+              "type": "observed",
+              "units": "1"
             },
             "u": {
               "default": 1.0,
-              "type": "state"
+              "type": "state",
+              "units": "1"
             }
           }
         }
