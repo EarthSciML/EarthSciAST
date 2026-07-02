@@ -56,6 +56,7 @@ using JSON3
     include("geometry_polygon_intersection_area_test.jl")
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
+    include("treewalk_binning_alias_test.jl")
     include("geometry_ranged_clip_test.jl")
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")

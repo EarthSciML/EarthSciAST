@@ -701,14 +701,22 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     # A `const`-op operand (an in-file `src_poly` / `tgt_poly` ring stack the fused
     # leaf gathers per cell) is NOT pulled in here: it is build-time literal data
     # seeded into the setup env directly (and registered as a const_array for the
-    # ODE), so it needs no `_materialize_geom_array` pass.
+    # ODE), so it needs no `_materialize_geom_array` pass. A BARE-ALIAS observed
+    # (`src_poly := mesh.src_poly`, a `VarExpr` def — the MPAS keyed-factor
+    # re-exposure, esm-spec §4.6) is likewise NOT pulled in: it resolves to
+    # build-time literal data under a second name, is registered as a const array by
+    # the bare-alias pass, and is seeded into the setup env directly. Pulling it in
+    # would hand `_materialize_geom_array` a bare `VarExpr` (no `output_idx` field)
+    # and crash — a setup var reads the alias's value from `env`, it is not itself a
+    # materialised aggregate.
     changed = true
     while changed
         changed = false
         for n in collect(setup)
             for r in intersect(_referenced_var_names(defs[n]), mvars)
                 (is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
-                 !(r in tainted) && haskey(defs, r) && !_is_const_op(defs[r])) || continue
+                 !(r in tainted) && haskey(defs, r) && !_is_const_op(defs[r]) &&
+                 !(defs[r] isa VarExpr)) || continue
                 rrefs = intersect(_referenced_var_names(defs[r]), mvars)
                 any(f -> f in state_var_names, rrefs) && continue
                 push!(setup, r); changed = true
@@ -758,7 +766,8 @@ end
 function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
                                      index_sets, derived_extents;
                                      vi_maps=Dict{String,Any}(),
-                                     param_overrides=Dict{String,Float64}())
+                                     param_overrides=Dict{String,Float64}(),
+                                     const_obs_arrays=Dict{String,Array{Float64}}())
     out = Dict{String,AbstractArray{Float64}}()
     isempty(setup) && return out
     env = Dict{String,Any}()
@@ -773,6 +782,15 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
         (v.type == ObservedVariable && _is_array_shape(v.shape) && _is_const_op(v.expression)) || continue
         haskey(env, n) && continue
         env[n] = _const_op_to_array((v.expression::OpExpr).value)
+    end
+    # Resolved BARE-ALIAS const arrays (`src_poly := mesh.src_poly`) and other
+    # already-materialized const-op array observeds: a setup var (an MPAS
+    # `polygon_intersection_area` over aliased mesh rings) reads the alias's value
+    # from `env`, since the alias is registered as a const array, not materialized
+    # as an aggregate. A `const`-op / kwarg entry already present wins.
+    for (n, v) in const_obs_arrays
+        haskey(env, n) && continue
+        env[n] = v
     end
     for (n, v) in model.variables
         v.type == ParameterVariable && !_is_array_shape(v.shape) && v.default !== nothing &&
@@ -811,15 +829,23 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
 end
 
 # ---- Build-time binning-COORDINATE derivation (RFC §8.6.1 broad phase) ----
-# A broad-phase binning coordinate may be declared INLINE as a `reduce` aggregate
-# over the in-file `const` cell geometry — e.g. a bbox-min corner
-# `src_lon[i] = min_v src_poly[i, v, 1]` — instead of being supplied as a `const`
-# vector. Such an observed reads only build-time literal geometry (no state, no live
-# field), so its value is a build-time constant: it is evaluated ONCE here and fed
-# into the value-invention `const_arrays` so `skolem("bin", floor(index(src_lon,i)/dx),
-# …)` resolves at setup, and to the typed build as a derived const array (excluded
-# from the ODE like any `const`-op array observed). This keeps the fixture PURE — the
-# coordinate is derived from geometry, not hand-supplied.
+# A broad-phase binning coordinate may be declared INLINE as an aggregate over the
+# in-file cell geometry — a `reduce` projection (a bbox-min corner
+# `src_lon[i] = min_v src_poly[i, v, 1]`) OR a plain affine MAP over a grid spec
+# (the cartesian `lon[c] = x0 + ((c-1) mod GX)*dx + dx/2`) — instead of being
+# supplied as a `const` vector. Such an observed reads only build-time data (scalar
+# parameters and other build-time-constant arrays; never a state variable or a live
+# loader field), so its value is a build-time constant: it is evaluated ONCE here
+# and fed into the value-invention `const_arrays` so `skolem("bin",
+# floor(index(src_lon,i)/dx), …)` resolves at setup, and to the typed build as a
+# derived const array (excluded from the ODE like any `const`-op array observed).
+# This keeps the fixture PURE — the coordinate is derived from geometry, not
+# hand-supplied — and admits a TEMPLATE-CONSTRUCTED coordinate whose inputs (the
+# cell rings) are themselves an aggregate over a grid spec. Determinism is
+# preserved: the STATE-DEPENDENCE guard (`state_names`) and the requirement that
+# every referenced factor fold to a build-time constant (a scalar param, a const
+# array, or another statically-determinable aggregate) still REJECT a genuinely
+# runtime coordinate — only §9.6.3-static build-time data becomes an index target.
 
 # A reduce-aggregate whose body reads only const-array factors already in `env`
 # (never a state / live field), contracting at least one non-output index — i.e. a
@@ -848,11 +874,45 @@ function _is_reduce_projection_agg(e, env, state_names)
     return true
 end
 
-# Evaluate every inline binning-coordinate observed (a `_is_reduce_projection_agg`
-# over the in-file `const`-op geometry) into a dense `Vector{Float64}`, reusing the
-# reduce-aware setup-time array materializer (`_materialize_geom_array`). Returns
-# name → values; empty (byte-identical) for a model without such an observed.
-function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overrides)
+# The loop-bound symbols of an aggregate (its `ranges` keys + `output_idx`) — index
+# names, not data references.
+function _agg_bound_syms(e::OpExpr)
+    bound = Set{String}()
+    e.ranges !== nothing && for k in keys(e.ranges); push!(bound, String(k)); end
+    e.output_idx !== nothing && for k in e.output_idx; push!(bound, String(k)); end
+    return bound
+end
+
+# Materializable NON-const-op aggregate array observeds: name → expression. A
+# build-time coordinate derivation can fold only these (an aggregate/arrayop over
+# build-time data); a `const`-op / kwarg-supplied array observed is already seeded
+# into `env` and is not a materialization candidate.
+function _agg_array_obs_defs(model, env)
+    d = Dict{String,OpExpr}()
+    for (n, v) in model.variables
+        (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+        haskey(env, n) && continue
+        e = v.expression
+        (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+        d[n] = e
+    end
+    return d
+end
+
+# Evaluate the inline binning-COORDINATE observeds into dense `Vector{Float64}`s,
+# reusing the reduce-aware setup-time array materializer (`_materialize_geom_array`).
+# The COORDINATE SEEDS are the 1-D array observeds that are a `reduce`-projection
+# (the original const-geometry derivation) OR a value-invention skolem INDEX TARGET
+# (`vi_index_targets` — this admits a TEMPLATE-CONSTRUCTED, aggregate-valued
+# coordinate like the cartesian cell-centre map, or a reduce over constructed rings,
+# as a skolem-bin index target). ONLY the seeds and their build-time-constant array
+# dependencies are materialised — a model without a broad-phase coordinate is
+# untouched (byte-identical), and no unrelated array observed is force-evaluated.
+# Determinism is preserved: a coordinate whose closure reaches a live STATE variable
+# (or any name absent from the build-time env) is NOT build-time-constant, so it is
+# never materialised and never becomes an index target. Returns name → values.
+function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overrides,
+                                vi_index_targets=Set{String}())
     out = Dict{String,Vector{Float64}}()
     env = Dict{String,Any}()
     # In-file `const`-op array observeds (the `src_poly` / `tgt_poly` ring stacks) are
@@ -877,12 +937,61 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
         v.shape === nothing && continue
         var_shapes[n] = String[String(s) for s in v.shape if s isa AbstractString]
     end
+
+    cand = _agg_array_obs_defs(model, env)   # materializable aggregate array observeds
+    # Coordinate SEEDS: 1-D materializable coordinate buffers to derive.
+    seeds = String[]
+    for (n, e) in cand
+        length(get(var_shapes, n, String[])) == 1 || continue
+        (n in vi_index_targets ||
+         (e.reduce !== nothing && e.reduce in _REDUCE_PROJECTION_KINDS)) || continue
+        push!(seeds, n)
+    end
+    isempty(seeds) && return out             # byte-identical for a coordinate-free model
+
+    # Transitive array-observed dependency closure of the seeds (reachability over
+    # `cand`; a `const`-op / kwarg dep is already in `env`).
+    want = Set{String}()
+    stack = copy(seeds)
+    while !isempty(stack)
+        n = pop!(stack)
+        (haskey(cand, n) && !(n in want)) || continue
+        push!(want, n)
+        for r in _referenced_var_names(cand[n])
+            (haskey(cand, r) && !(r in want)) && push!(stack, r)
+        end
+    end
+
+    # Materialise the reachable build-time-constant closure in dependency order. A
+    # member referencing a live STATE variable — or any name absent from the
+    # build-time env / not yet accepted — is skipped; its dependents then fail to
+    # materialise and are simply not returned (the coordinate falls back to the
+    # existing error). The fixpoint yields a valid topological order.
     derived_extents = Dict{String,Int}()
-    for (n, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
-        _is_reduce_projection_agg(v.expression, env, state_names) || continue
-        arr = _materialize_geom_array(v.expression, env, index_sets, derived_extents, var_shapes)
-        out[n] = vec(Array{Float64}(arr))
+    accepted = Set{String}()
+    changed = true
+    while changed
+        changed = false
+        for n in want
+            n in accepted && continue
+            e = cand[n]; bound = _agg_bound_syms(e); ok = true
+            for r in _referenced_var_names(e)
+                r in bound && continue
+                r in state_names && (ok = false; break)      # never a live state
+                (haskey(env, r) || r in accepted) && continue
+                ok = false; break                            # unresolved dep — retry / drop
+            end
+            ok || continue
+            env[n] = _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
+            push!(accepted, n); changed = true
+        end
+    end
+
+    # Return the 1-D coordinate seeds that materialised to a build-time constant.
+    for n in seeds
+        haskey(env, n) || continue
+        (env[n] isa AbstractArray && ndims(env[n]) == 1) || continue
+        out[n] = vec(Array{Float64}(env[n]))
     end
     return out
 end
@@ -1417,7 +1526,8 @@ function _build_evaluator_impl(model::Model;
     if !isempty(_geom_setup_vars)
         _geom_setup_arrays = _materialize_geometry_setup(_geom_setup_vars, _geom_defs,
             model, const_arrays, index_sets, _derived_extents;
-            vi_maps=_vi_maps.maps, param_overrides=parameter_overrides)
+            vi_maps=_vi_maps.maps, param_overrides=parameter_overrides,
+            const_obs_arrays=_const_obs_arrays)
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
     # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
@@ -2182,8 +2292,13 @@ function build_evaluator(esm::AbstractDict;
     _params = get(kwd, :parameter_overrides, Dict{String,Float64}())
     _ca = Dict{String,Any}(String(k) => v for (k, v) in get(kwd, :const_arrays, Dict{String,Any}()))
     if model_json !== nothing
+        # The coordinate buffers a value-invention skolem GATHERS from (`src_lon`,
+        # `tgt_lon`): a build-time-constant one is derived here so a
+        # TEMPLATE-CONSTRUCTED (aggregate-valued) coordinate is admissible as a
+        # skolem-bin index target (not only a const-supplied / reduce-over-const one).
+        _vi_targets = _vi_skolem_index_targets(model_json)
         _derived = _derive_binning_coords(_select_model(file, model_name),
-                                          file.index_sets, _ca, _params)
+                                          file.index_sets, _ca, _params, _vi_targets)
         if !isempty(_derived)
             merge!(_ca, _derived)
             kwd[:const_arrays] = _ca

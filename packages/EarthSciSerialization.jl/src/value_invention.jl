@@ -126,6 +126,29 @@ function _vi_index_targets!(refs, node)
     return refs
 end
 
+# The set of `index(NAME, …)` target names read by any value-invention aggregate
+# (a skolem/arg-witness `:map`, a `:producer`, or a downstream grouped/derived
+# `chain` buffer). These are the buffers a value-invention key GATHERS from at
+# build time — the coordinate buffers a bin-Skolem broad phase bins on
+# (`src_lon`/`tgt_lon`). Used by the build-time binning-coordinate derivation to
+# decide which build-time-constant coordinate observeds to materialise into the
+# value-invention `const_arrays` so `index(src_lon,i)` resolves (RFC §8.6.1).
+# Empty (byte-identical) for a model without value invention.
+function _vi_skolem_index_targets(model_json)
+    det = _vi_detect(model_json)
+    refs = Set{String}()
+    for (_, node) in det.maps
+        _vi_index_targets!(refs, node)
+    end
+    for (_, node) in det.producers
+        _vi_index_targets!(refs, node)
+    end
+    for (_, node, _) in det.chain
+        _vi_index_targets!(refs, node)
+    end
+    return refs
+end
+
 # The group KEY of a GROUPED reduction, or `nothing`. The SCVT group-by signature
 # is precise: a single-output-index `aggregate` whose `join.on` pairs the OUTPUT
 # index symbol with an already-known value-invention buffer (`num[g] = … join on
