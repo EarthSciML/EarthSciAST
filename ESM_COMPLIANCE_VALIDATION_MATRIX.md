@@ -124,6 +124,8 @@ Where:
 | BEHAV-04-D-002 | A non-deep-equal collision between a mounted file's index-set declaration and the importing document's registry MUST be rejected at load with `subsystem_index_set_conflict` (the subsystem-edge mirror of `template_import_index_set_conflict`, §9.7.5) | esm-spec.md §4.7, §9.6.6 | Yes | validation |
 
 > **Binding status (2026-07-02)**: Julia implemented (`_merge_subsystem_index_sets!` in `parse.jl`, called from `_resolve_subsystem_ref` for every §4.7 subsystem edge, local and remote; fixtures `tests/valid/subsystem_mesh_lib.esm` + `tests/valid/subsystem_index_set_merge.esm`, `tests/invalid/template_imports/subsystem_index_set_conflict.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) at every subsystem-ref resolution, merge the loaded file's top-level `index_sets` (post-metaparameter-fold) into the importing document's registry; (2) treat deep-equal redeclaration as idempotent (structural equality over kind/size/members/of/offsets/values/from_faq); (3) reject non-equal collisions with the stable `subsystem_index_set_conflict` diagnostic; (4) drive the shared fixtures (schema-only bindings assert schema acceptance per `resolver_only`). Note: the Julia raw-level top-level-model `{ref}` inline path (`_inline_toplevel_model_refs!`) is a distinct mechanism and does not yet merge `index_sets`; it merges only `function_tables`/`data_loaders`/`enums`.
+>
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/parse.py` `_merge_subsystem_index_sets` + `_index_set_deep_equal`, threaded through model subsystem resolution via `EsmFile.index_sets`; reaction-system subsystems do not merge, matching the Julia reference). Fixtures: `subsystem_index_set_merge.esm` brings `vertices` in and keeps deep-equal `cells`; `subsystem_index_set_conflict.esm` raises `subsystem_index_set_conflict`.
 
 ### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -132,6 +134,8 @@ Where:
 | BEHAV-04-C-002 | A `makearray` region bound pair with `stop < start − 1` on the expanded, metaparameter-folded form MUST be rejected at load with `makearray_region_inverted` (e.g. `[2, N−1]` folded at `N = 1`) | esm-spec.md §4.3.2, §9.6.6, §9.6.4 | Yes | validation |
 
 > **Binding status (2026-07-02)**: Julia implemented (`_validate_makearray_regions`, both §9.6.4 validator sites in `lower_expression_templates.jl`; fixtures `tests/valid/makearray_empty_region_min_extent.esm`, `tests/invalid/template_imports/makearray_region_inverted.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) walk the expanded, folded tree's `makearray.regions`, skipping `expression_templates` blocks and non-integer (unfolded) bound entries; (2) accept `stop == start − 1` as empty; (3) reject `stop < start − 1` with the stable `makearray_region_inverted` diagnostic; (4) drive the two shared fixtures (schema-only bindings TS/Go assert schema acceptance per the `resolver_only` flag in `expected_errors.json`).
+>
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/lower_expression_templates.py` `_validate_makearray_regions`, run at both §9.6.4 validator sites — fast path and full path — skipping `expression_templates` and non-integer bounds). Fixtures: `makearray_empty_region_min_extent.esm` loads at `N=2` (folds `[2,1]`) and rejects at `N=1` (folds `[2,0]`); `makearray_region_inverted.esm` raises `makearray_region_inverted`.
 
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -141,6 +145,8 @@ Where:
 | BEHAV-08-A-003 | A ring with fewer than 3 DISTINCT vertices after deduplication is a degenerate operand and MUST be rejected (the ≥3-distinct-vertices operand error) | esm-spec.md §8.6.1 | Yes | validation |
 
 > **Binding status (2026-07-02)**: Julia implemented (`_as_ring` in `geometry.jl` now runs `_dedup_consecutive` on every operand before the planar/GeometryOps clip; empirically the planar and GeometryOps paths already tolerated padding with exactly-equal areas, but the spherical clip's OUTPUT retained the duplicates — dedup-at-coercion restores the distinct-vertex output contract; fixture `tests/valid/geometry/polygon_intersection_area_padded_ring.esm`, unit tests in `geometry_polygon_intersection_area_test.jl` incl. pentagon padded to 6/7 slots, planar + spherical). **Pending port** — **Python** (`geometry.py::_as_ring`): apply `_dedup_consecutive` (already defined for clip output) to operands before the clip — empirically REQUIRED for the spherely/S2 path, which rejects degenerate edges. **Rust** (`geometry.rs::intersect_polygon`): dedupe operands (allclose tolerance, wrap pair included) before `SphericalPolygon::from_lon_lat` — empirically the S2 path FAILS today on padded rings ("Edge N is degenerate (duplicate vertex)"), and the planar path passes padding through to its output ring; also dedupe the planar output. **TypeScript / Go**: schema-only, no geometry kernel — no action.
+>
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/geometry.py` `_as_ring` now runs `_dedup_consecutive` — interior consecutive duplicates + closing wrap pair — on every operand before the clip; `<3` distinct vertices rejected). Verified on the PLANAR path: `polygon_intersection_area_padded_ring.esm` (5-/6-vertex padded squares) deduplicates to 4-vertex squares, overlap area = 1.0; unit tests cover dedup + degenerate reject. The SPHERICAL/S2 (`spherely`) path is spherely-gated in this venv (no cp314 macOS-arm wheel) and could not be exercised; the dedup runs identically before either backend.
 
 ### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -391,6 +397,13 @@ Where:
 
 > **Binding status**: Julia (reference) = implemented; Python / Rust / TypeScript / Go =
 > pending port (wave 2 of RFC `docs/content/rfcs/template-import-renaming.md` §10).
+>
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/template_imports.py`
+> `_apply_edge_renames`, called per import edge after `bindings`/`only`, before merge).
+> Goldens byte-identical: `import_rename_two_instances`, `import_rebind_keyed_factors`,
+> `import_rename_diamond`. Invalid fixtures raise the mapped diagnostics
+> (`rename_unknown_name`, `rebind_unknown_free_name`, `rename_collision`,
+> `rename_invalid_identifier`).
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -407,6 +420,14 @@ Where:
 
 > Binding status: Julia reference implementation landed (2026-07); Python / Rust /
 > TypeScript / Go ports pending (wave 2 — RFC §10 porting checklist).
+>
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/lower_expression_templates.py`
+> `_component_shape_env` / `_where_satisfied` / `_registered_where`; constraint filtering
+> in `_rewrite_pass` before priority selection; `where` added to `_META_SUBST_SKIP_KEYS`).
+> Goldens match (models/index_sets): `constrained_match_scope`,
+> `per_variable_scheme_literal_args`, `two_div_two_meshes`. Error fixture
+> `constraint_unknown_index_set` raises `template_constraint_unknown_index_set`;
+> filter-before-priority and compound-arg-conservative pins covered as unit tests.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
