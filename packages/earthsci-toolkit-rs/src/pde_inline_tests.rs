@@ -28,9 +28,9 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::simulate::{SimulateOptions, Solution, simulate};
-use crate::simulate_array::{Value, eval_buildtime_field};
-use crate::types::{AssertionReference, EsmFile, Expr, IndexSet, Model, Tolerance};
+use crate::simulate::{SimulateOptions, Solution, simulate_with_inspection};
+use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
+use crate::types::{AssertionReference, EsmFile, Expr, IndexSet, Model, Tolerance, VariableType};
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
 /// assertion, its test, nor the model declares one (same constant as the
@@ -284,6 +284,87 @@ fn time_index(times: &[f64], t: f64) -> Result<usize, String> {
     }
 }
 
+/// A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output
+/// surfaced "for direct assertion", like the MPAS `div_flux`) rather than a
+/// state: an observed carries no ODE slot, so its field is read from the
+/// [`BuildInspection`]'s `setup_arrays` — the STATE-FREE observed arrays the
+/// run materialized through the official observed machinery. State-free
+/// observeds only: a state- or time-dependent observed is absent from
+/// `setup_arrays` by construction, so this returns `None` and the caller
+/// errors like before (mirroring the Julia `_observed_field`, whose
+/// `evaluate_cellwise` leaves a state reference unbound). Cells are enumerated
+/// from the declared shape's interval index sets, in sorted (lexicographic)
+/// order. Returns `(field, cells)` or `None` when the variable is not such an
+/// observed.
+fn observed_field(
+    file: &EsmFile,
+    model_name: &str,
+    variable: &str,
+    insp: &BuildInspection,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Option<(Vec<f64>, Vec<Vec<i64>>)> {
+    let v = file
+        .models
+        .as_ref()?
+        .get(model_name)?
+        .variables
+        .get(variable)?;
+    if v.var_type != VariableType::Observed {
+        return None;
+    }
+    let shape = v.shape.as_ref()?;
+    if shape.is_empty() {
+        return None;
+    }
+    let mut exts: Vec<usize> = Vec::with_capacity(shape.len());
+    for s in shape {
+        let iset = index_sets.get(s)?;
+        if iset.kind != "interval" {
+            return None;
+        }
+        exts.push(usize::try_from(iset.size?).ok()?);
+    }
+    // Flattening prefixes observed names with the owning model; the
+    // single-model path keeps the bare name.
+    let qualified = format!("{model_name}.{variable}");
+    let arr = insp
+        .setup_arrays
+        .get(&qualified)
+        .or_else(|| insp.setup_arrays.get(variable))?;
+    if arr.ndim() != exts.len()
+        || arr
+            .shape()
+            .iter()
+            .zip(&exts)
+            .any(|(have, want)| have < want)
+    {
+        return None;
+    }
+    // Lexicographically ordered 1-based cell tuples (row-major enumeration is
+    // lexicographic), matching the Julia reference's sorted CartesianIndices.
+    let total: usize = exts.iter().product();
+    let mut cells: Vec<Vec<i64>> = Vec::with_capacity(total);
+    let mut cur = vec![1i64; exts.len()];
+    for _ in 0..total {
+        cells.push(cur.clone());
+        for d in (0..exts.len()).rev() {
+            if (cur[d] as usize) < exts[d] {
+                cur[d] += 1;
+                break;
+            }
+            cur[d] = 1;
+        }
+    }
+    let field: Vec<f64> = cells
+        .iter()
+        .map(|c| {
+            let idx: Vec<usize> = c.iter().map(|&i| (i - 1) as usize).collect();
+            arr[ndarray::IxDyn(&idx)]
+        })
+        .collect();
+    Some((field, cells))
+}
+
 /// Evaluate one assertion against a solved trajectory; `Err` carries the
 /// reason text (recorded verbatim into the result's `message`).
 fn eval_assertion(
@@ -291,6 +372,8 @@ fn eval_assertion(
     assertion: &crate::types::ModelTestAssertion,
     model_name: &str,
     index_sets: &HashMap<String, IndexSet>,
+    file: &EsmFile,
+    insp: &BuildInspection,
 ) -> Result<f64, String> {
     let ti = time_index(&sol.time, assertion.time)?;
     if assertion.coords.is_some() {
@@ -302,17 +385,26 @@ fn eval_assertion(
         return Ok(sol.state[slot][ti]);
     };
     let cells = state_cells(&sol.state_variable_names, &assertion.variable, model_name);
-    if cells.is_empty() {
-        return Err(format!(
-            "array state '{}' has no cells in var_map",
-            assertion.variable
-        ));
-    }
-    let field: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
+    let (field, cell_tuples): (Vec<f64>, Vec<Vec<i64>>) = if !cells.is_empty() {
+        (
+            cells.iter().map(|(_, row)| sol.state[*row][ti]).collect(),
+            cells.iter().map(|(c, _)| c.clone()).collect(),
+        )
+    } else {
+        // No ODE slots: try a state-free ARRAY OBSERVED (a rule output
+        // asserted directly, §6.6.5).
+        observed_field(file, model_name, &assertion.variable, insp, index_sets).ok_or_else(
+            || {
+                format!(
+                    "array state '{}' has no cells in var_map",
+                    assertion.variable
+                )
+            },
+        )?
+    };
     let reference = match &assertion.reference {
         None => None,
         Some(AssertionReference::Expression(expr)) => {
-            let cell_tuples: Vec<Vec<i64>> = cells.iter().map(|(c, _)| c.clone()).collect();
             Some(evaluate_cellwise(expr, &cell_tuples, index_sets)?)
         }
         Some(AssertionReference::FromFile(_)) => {
@@ -345,12 +437,17 @@ fn run_model_tests(
         run_opts.output_times = Some(times);
         let params = t.parameter_overrides.clone().unwrap_or_default();
         let ics = t.initial_conditions.clone().unwrap_or_default();
-        let sim = simulate(
+        // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
+        // slot) read their state-free materialized field from here
+        // (`observed_field`).
+        let mut insp = BuildInspection::default();
+        let sim = simulate_with_inspection(
             file,
             (t.time_span.start, t.time_span.end),
             &params,
             &ics,
             &run_opts,
+            &mut insp,
         )
         .map_err(|e| format!("simulate failed: {e}"));
         for (i, a) in t.assertions.iter().enumerate() {
@@ -361,7 +458,7 @@ fn run_model_tests(
             );
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
-                Ok(sol) => eval_assertion(sol, a, model_name, index_sets)
+                Ok(sol) => eval_assertion(sol, a, model_name, index_sets, file, &insp)
                     .map_err(|msg| format!("assertion evaluation failed: {msg}")),
             };
             let (actual, passed, message) = match outcome {
@@ -724,8 +821,9 @@ mod tests {
         let file = load(&decay_doc().to_string()).expect("decay doc loads");
         let mut opts = tight_opts();
         opts.output_times = Some(vec![0.0]);
-        let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-            .expect("simulates");
+        let sol =
+            crate::simulate::simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+                .expect("simulates");
         let cells = state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), N as usize);
         for (cell, row) in &cells {
@@ -733,5 +831,73 @@ mod tests {
             let got = sol.state[*row][0];
             assert!((got - want).abs() < 1e-15, "cell {cell:?}: {got} vs {want}");
         }
+    }
+
+    /// §6.6.5 assertions may target a state-free ARRAY OBSERVED directly (a
+    /// rule output surfaced "for direct assertion", like the MPAS `div_flux`
+    /// max/min): the field is read from the BuildInspection's materialized
+    /// state-free setup arrays. A STATE-DEPENDENT observed must keep erroring
+    /// exactly like before (its build-time snapshot would be stale).
+    fn observed_assert_doc() -> serde_json::Value {
+        let g = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+                       "ranges": {"i": {"from": "x"}},
+                       "expr": {"op": "*", "args": ["i", "i"]}});
+        let h = json!({"op": "aggregate", "args": ["u"], "output_idx": ["i"],
+                       "ranges": {"i": {"from": "x"}},
+                       "expr": {"op": "+",
+                                "args": [{"op": "index", "args": ["u", "i"]}, 1]}});
+        json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "observed_assertions"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "state", "units": "1", "shape": ["x"]},
+                    "g": {"type": "observed", "units": "1", "shape": ["x"],
+                          "expression": g},
+                    "h": {"type": "observed", "units": "1", "shape": ["x"],
+                          "expression": h},
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0},
+                ],
+                "tests": [{
+                    "id": "obs",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        {"variable": "g", "time": 1.0, "expected": 9.0,
+                         "tolerance": {"abs": 1e-12}, "reduce": "max"},
+                        {"variable": "g", "time": 1.0, "expected": 1.0,
+                         "tolerance": {"abs": 1e-12}, "reduce": "min"},
+                        {"variable": "h", "time": 1.0, "expected": 1.0,
+                         "tolerance": {"abs": 1e-12}, "reduce": "max"},
+                    ],
+                }],
+            }},
+        })
+    }
+
+    #[test]
+    fn state_free_array_observed_assertions_evaluate_directly() {
+        let file = load(&observed_assert_doc().to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 3);
+        // g = [1, 4, 9] (index arithmetic, exact): max and min pass with the
+        // exact reductions recorded.
+        assert!(results[0].passed, "g max: {}", results[0].message);
+        assert_eq!(results[0].actual, Some(9.0));
+        assert!(results[1].passed, "g min: {}", results[1].message);
+        assert_eq!(results[1].actual, Some(1.0));
+        // h reads the state u, so it is NOT state-free: the assertion errors
+        // with the pre-existing no-cells message rather than consuming a
+        // stale build-time snapshot.
+        assert!(!results[2].passed);
+        assert!(
+            results[2].message.contains("has no cells in var_map"),
+            "unexpected message: {}",
+            results[2].message
+        );
+        assert_eq!(results[2].actual, None);
     }
 }

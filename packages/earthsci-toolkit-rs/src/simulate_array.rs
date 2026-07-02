@@ -238,6 +238,41 @@ enum AlgebraicRule {
     },
 }
 
+/// Build/run observability record — the Rust mirror of the Julia binding's
+/// `BuildInspection` (`build_evaluator(…; inspect=BuildInspection())`). Pass
+/// one to [`crate::simulate::simulate_with_inspection`] (or
+/// [`ArrayCompiled::simulate_inspect`]) and the run fills it with named
+/// build-time products that are otherwise internal to the runtime:
+///
+/// * `setup_arrays` — the STATE-FREE observed arrays, materialized once at the
+///   initial state through the official observed machinery
+///   ([`materialize_observeds`]): the per-pair regrid geometry (`A_ij`, its
+///   row-sums `A_j`, the normalized weights `W_ij` — RFC §8.1 / esm-spec
+///   §8.6.1), const-op mesh factors and their bare-name aliases, and every
+///   other build-once array observed whose transitive references reach no
+///   state, no `t`, and no external forcing channel. This is the official
+///   inspection surface for conformance runners that gate per-pair regridding
+///   values (CONFORMANCE_SPEC §5.8) and for §6.6.5 assertions that target a
+///   state-free array observed directly (the MPAS `div_flux` max/min). A
+///   state- or time-dependent observed is deliberately ABSENT (its build-time
+///   snapshot would be wrong at any later time), so a reader errors rather
+///   than consuming a stale field.
+/// * `observed_exprs` — every observed rule's resolved body expression (post
+///   subsystem mounting, range resolution, and keyed-factor scoping), exactly
+///   as the runtime evaluates it.
+///
+/// Filling the record never changes the run: the returned
+/// [`crate::simulate::Solution`] is identical with or without a sink (the
+/// capture is one extra read-only [`materialize_observeds`] pass at `t0`).
+#[derive(Debug, Clone, Default)]
+pub struct BuildInspection {
+    /// State-free observed arrays materialized at the initial state, keyed by
+    /// (possibly flattening-namespaced) observed name.
+    pub setup_arrays: HashMap<String, ArrayD<f64>>,
+    /// Resolved observed body expressions, keyed like `setup_arrays`.
+    pub observed_exprs: HashMap<String, Expr>,
+}
+
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
     var_shapes: IndexMap<String, VarShape>,
@@ -620,6 +655,212 @@ fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 }
 
 // ============================================================================
+// Subsystem mounting (esm-spec §4.6 dot notation).
+// ============================================================================
+
+/// Coerce one resolved `subsystems` entry into a typed [`Model`] plus the
+/// document `index_sets` registry it ships (empty for a bare model fragment).
+/// The loader ([`crate::ref_loading::resolve_subsystem_refs`]) inlines each
+/// `{ "ref": … }` as the referenced file's full JSON, so the common shape is a
+/// whole ESM document carrying exactly one model (the MPAS mesh contract:
+/// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
+/// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
+/// programmatically without the loader — is a hard error, never a silent drop.
+fn parse_subsystem_model(
+    sub_name: &str,
+    value: &serde_json::Value,
+) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| CompileError::InterpreterBuildError {
+            details: format!("subsystem '{sub_name}' is not a JSON object"),
+        })?;
+    if obj.contains_key("models") {
+        let file: EsmFile = serde_json::from_value(value.clone()).map_err(|e| {
+            CompileError::InterpreterBuildError {
+                details: format!("subsystem '{sub_name}' does not parse as an ESM file: {e}"),
+            }
+        })?;
+        let models = file.models.unwrap_or_default();
+        if models.len() != 1 {
+            return Err(CompileError::InterpreterBuildError {
+                details: format!(
+                    "subsystem '{sub_name}' resolves to a file with {} models; exactly one is \
+                     required to mount it",
+                    models.len()
+                ),
+            });
+        }
+        let model = models.into_values().next().expect("len checked above");
+        Ok((model, file.index_sets.unwrap_or_default()))
+    } else if obj.contains_key("variables") || obj.contains_key("equations") {
+        let model: Model = serde_json::from_value(value.clone()).map_err(|e| {
+            CompileError::InterpreterBuildError {
+                details: format!("subsystem '{sub_name}' does not parse as a model: {e}"),
+            }
+        })?;
+        Ok((model, HashMap::new()))
+    } else if obj.contains_key("ref") {
+        Err(CompileError::InterpreterBuildError {
+            details: format!(
+                "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
+                 through the official loader (crate::parse::load_path) so \
+                 resolve_subsystem_refs inlines it first"
+            ),
+        })
+    } else {
+        Err(CompileError::InterpreterBuildError {
+            details: format!(
+                "subsystem '{sub_name}' has neither 'models' nor 'variables'/'equations'"
+            ),
+        })
+    }
+}
+
+/// Mount every subsystem of `model` into the model's own registries under
+/// dot-prefixed names (esm-spec §4.6): each subsystem variable `x` becomes
+/// `"<sub>.x"` (with sibling references inside its expression renamed to the
+/// mounted names), each subsystem equation is appended with its references
+/// renamed the same way, and the subsystem file's `index_sets` merge into the
+/// document registry (the parent's declaration wins on a name collision).
+/// Recursive, so a nested subsystem mounts as `"<sub>.<subsub>.x"`. This is the
+/// array-runtime analogue of the Julia flatten's subsystem namespacing — it is
+/// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
+/// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
+/// resolvable. A model without subsystems is untouched (byte-identical build).
+fn mount_subsystems(
+    model: &mut Model,
+    index_sets: &mut HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    let Some(subs) = model.subsystems.take() else {
+        return Ok(());
+    };
+    let mut names: Vec<String> = subs.keys().cloned().collect();
+    names.sort();
+    for sub_name in names {
+        let (mut sub_model, mut sub_sets) = parse_subsystem_model(&sub_name, &subs[&sub_name])?;
+        // Grandchildren first, so their variables are already dot-prefixed
+        // within `sub_model` when this level's prefix is applied.
+        mount_subsystems(&mut sub_model, &mut sub_sets)?;
+        for (k, v) in sub_sets {
+            index_sets.entry(k).or_insert(v);
+        }
+        let siblings: Vec<String> = {
+            let mut s: Vec<String> = sub_model.variables.keys().cloned().collect();
+            s.sort();
+            s
+        };
+        let rename_all = |expr: &Expr| -> Expr {
+            let mut out = expr.clone();
+            for s in &siblings {
+                out = rename_free_symbol(&out, s, &format!("{sub_name}.{s}"));
+            }
+            out
+        };
+        for (vname, var) in &sub_model.variables {
+            let mounted = format!("{sub_name}.{vname}");
+            if model.variables.contains_key(&mounted) {
+                return Err(CompileError::InterpreterBuildError {
+                    details: format!(
+                        "mounting subsystem '{sub_name}' would overwrite existing variable \
+                         '{mounted}'"
+                    ),
+                });
+            }
+            let mut var = var.clone();
+            if let Some(expr) = &var.expression {
+                var.expression = Some(rename_all(expr));
+            }
+            model.variables.insert(mounted, var);
+        }
+        for eq in &sub_model.equations {
+            model.equations.push(crate::types::Equation {
+                lhs: rename_all(&eq.lhs),
+                rhs: rename_all(&eq.rhs),
+            });
+        }
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Ragged keyed-factor scope resolution (esm-spec §4.3.1 / RFC §5.4).
+// ============================================================================
+
+/// Resolve each ragged index set's `offsets`/`values` keyed factors against the
+/// model scope, rewriting the registry copy in place. A keyed factor binds by
+/// BARE name (the document-scoped registry keeps the authored name), but
+/// flattening/mounting prefixes every variable with its owning component path
+/// (`nEdgesOnCell` → `Divergence.nEdgesOnCell` alias and
+/// `Divergence.mesh.nEdgesOnCell` const). Resolution rule (mirror of the Julia
+/// tree_walk `_factor_scope`): an exact-name variable wins; otherwise the
+/// dot-suffix match at the SHALLOWEST namespace depth (the model's own
+/// re-exposed alias, not the mounted subsystem's original). Multiple matches at
+/// that depth are a hard error — never a silent empty contraction. A factor
+/// with no in-scope match is left bare (it may be supplied by the caller's
+/// runtime channels), preserving existing behavior. No-op (byte-identical) for
+/// documents without ragged index sets.
+fn apply_ragged_factor_scope(
+    index_sets: &mut HashMap<String, IndexSet>,
+    variables: &HashMap<String, ModelVariable>,
+) -> Result<(), CompileError> {
+    let scope_one = |fname: &str, set_name: &str| -> Result<Option<String>, CompileError> {
+        if variables.contains_key(fname) {
+            return Ok(None); // exact name is in scope; keep as authored
+        }
+        let suffix = format!(".{fname}");
+        let cands: Vec<&String> = variables.keys().filter(|n| n.ends_with(&suffix)).collect();
+        if cands.is_empty() {
+            return Ok(None); // leave bare; a genuinely unbound read surfaces later
+        }
+        let mindepth = cands
+            .iter()
+            .map(|c| c.matches('.').count())
+            .min()
+            .expect("non-empty");
+        let best: Vec<&&String> = cands
+            .iter()
+            .filter(|c| c.matches('.').count() == mindepth)
+            .collect();
+        if best.len() > 1 {
+            let mut names: Vec<String> = best.iter().map(|s| (**s).clone()).collect();
+            names.sort();
+            return Err(CompileError::InterpreterBuildError {
+                details: format!(
+                    "ragged index set '{set_name}': keyed factor '{fname}' is ambiguous in the \
+                     model scope — {} candidates at namespace depth {mindepth}: {}",
+                    names.len(),
+                    names.join(", ")
+                ),
+            });
+        }
+        Ok(Some((*best[0]).clone()))
+    };
+    let set_names: Vec<String> = index_sets
+        .iter()
+        .filter(|(_, s)| s.kind == "ragged")
+        .map(|(n, _)| n.clone())
+        .collect();
+    for name in set_names {
+        let (off, vals) = {
+            let s = &index_sets[&name];
+            (s.offsets.clone(), s.values.clone())
+        };
+        if let Some(f) = off
+            && let Some(scoped) = scope_one(&f, &name)?
+        {
+            index_sets.get_mut(&name).expect("present").offsets = Some(scoped);
+        }
+        if let Some(f) = vals
+            && let Some(scoped) = scope_one(&f, &name)?
+        {
+            index_sets.get_mut(&name).expect("present").values = Some(scoped);
+        }
+    }
+    Ok(())
+}
+
+// ============================================================================
 // Compile path: model → ArrayCompiled.
 // ============================================================================
 
@@ -766,6 +1007,15 @@ impl ArrayCompiled {
         // clone so the caller's model — and its serialized form — is untouched;
         // every downstream consumer then sees only dense interval ranges.
         let mut model_owned = model.clone();
+        // Mount subsystems under dot-prefixed names (esm-spec §4.6) and resolve
+        // each ragged index set's keyed factors against the resulting model
+        // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
+        // and the registry copy is byte-identical — for models without
+        // subsystems / ragged sets.
+        let mut index_sets_owned = index_sets.clone();
+        mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
+        let index_sets = &index_sets_owned;
         // Drop value-invention (relational) scaffolding — skolem-id bin maps and
         // membership sets over `kind: "derived"` index sets — plus the broad-phase
         // `join.on` gates keyed on them, BEFORE join/range resolution. The dense
@@ -1406,6 +1656,23 @@ impl ArrayCompiled {
         initial_conditions: &HashMap<String, f64>,
         opts: &SimulateOptions,
     ) -> Result<Solution, SimulateError> {
+        self.simulate_inspect(tspan, params, initial_conditions, opts, None)
+    }
+
+    /// [`Self::simulate`] with an optional build-observability sink (see
+    /// [`BuildInspection`]). When `inspect` is `Some`, the sink is filled —
+    /// after the initial state vector is assembled and before the solver runs —
+    /// with the state-free observed arrays materialized at `u0`/`t0` and every
+    /// observed rule's resolved body expression. The integration itself is
+    /// byte-identical with or without a sink.
+    pub fn simulate_inspect(
+        &self,
+        tspan: (f64, f64),
+        params: &HashMap<String, f64>,
+        initial_conditions: &HashMap<String, f64>,
+        opts: &SimulateOptions,
+        inspect: Option<&mut BuildInspection>,
+    ) -> Result<Solution, SimulateError> {
         let (t0, t_end) = tspan;
         let n_states = self.n_states;
         let n_params = self.param_names.len();
@@ -1449,6 +1716,13 @@ impl ArrayCompiled {
             } else {
                 return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
             }
+        }
+
+        // Build observability (see `BuildInspection`): one extra read-only
+        // observed materialization at the initial state. Nothing downstream
+        // consults the sink, so the integration is unchanged.
+        if let Some(insp) = inspect {
+            self.fill_inspection(insp, &ic_vec, &param_vec, t0);
         }
 
         let rhs_rules = self.rhs_rules.clone();
@@ -1682,6 +1956,59 @@ impl ArrayCompiled {
                 ..Default::default()
             },
         })
+    }
+
+    /// Fill a [`BuildInspection`] sink: materialize the (dependency-ordered)
+    /// observed rules once at the initial state through the official
+    /// [`materialize_observeds`] machinery, record every rule's resolved body
+    /// expression, and record the arrays of the STATE-FREE subset — rules whose
+    /// transitive references reach no state variable, no `t`, and no external
+    /// forcing entry (each reference must be a parameter, a loop index, or an
+    /// already-state-free observed). Read-only with respect to the run.
+    fn fill_inspection(
+        &self,
+        insp: &mut BuildInspection,
+        ic_vec: &[f64],
+        param_vec: &[f64],
+        t0: f64,
+    ) {
+        let sa = build_state_arrays(&self.var_shapes, ic_vec);
+        let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+        let obs = materialize_observeds(
+            &self.observed_rules,
+            &sa,
+            param_vec,
+            &self.param_names,
+            t0,
+            &dr,
+            &self.forcing,
+        );
+        let observed_names: HashSet<&String> =
+            self.observed_rules.iter().map(observed_rule_var).collect();
+        let forcing_names: HashSet<String> = self.forcing.borrow().keys().cloned().collect();
+        let mut state_free: HashSet<String> = HashSet::new();
+        // `observed_rules` is dependency-ordered (Kahn sweep at build), so each
+        // rule's observed references are classified before the rule itself; a
+        // cycle survivor's unplaced reference correctly disqualifies it.
+        for rule in &self.observed_rules {
+            let name = observed_rule_var(rule);
+            let body = observed_rule_body(rule);
+            insp.observed_exprs.insert(name.clone(), body.clone());
+            let mut refs = HashSet::new();
+            collect_expr_var_refs(body, &mut refs);
+            let ok = refs.iter().all(|r| {
+                r != "t"
+                    && !self.var_shapes.contains_key(r)
+                    && !forcing_names.contains(r)
+                    && (!observed_names.contains(r) || state_free.contains(r))
+            });
+            if ok {
+                state_free.insert(name.clone());
+                if let Some(a) = obs.get(name) {
+                    insp.setup_arrays.insert(name.clone(), a.clone());
+                }
+            }
+        }
     }
 }
 
@@ -6036,5 +6363,345 @@ mod forcing_channel_tests {
             vec![6.0, 10.0],
             "an unrelated forcing entry must not perturb the parameter path"
         );
+    }
+}
+
+#[cfg(test)]
+mod subsystem_ragged_and_inspection_tests {
+    //! Subsystem mounting (esm-spec §4.6), ragged keyed-factor scope
+    //! resolution (RFC §5.4; the Julia tree_walk `_factor_scope` mirror), and
+    //! the [`BuildInspection`] observability surface — the Rust twins of the
+    //! Julia `build_inspection_test.jl` cases (exact-rational overlap weights
+    //! through the inspection surface; a 2-cell ragged CSR miniature end to
+    //! end; build byte-identical with/without a sink).
+    use super::*;
+    use crate::simulate::{SolverChoice, simulate, simulate_with_inspection};
+    use serde_json::json;
+
+    /// Typed load for inline test documents. The esm-schema pins `subsystems`
+    /// entries to `{ "ref": … }` on disk (the official loader inlines the
+    /// referenced file AFTER validation), so an inline-subsystem test document
+    /// deserializes through serde directly — exactly the post-resolution shape
+    /// the loader hands the simulator.
+    fn typed(doc: serde_json::Value) -> EsmFile {
+        serde_json::from_value(doc).expect("test document deserializes")
+    }
+
+    fn erk_opts() -> SimulateOptions {
+        SimulateOptions {
+            solver: SolverChoice::Erk,
+            reltol: 1e-10,
+            abstol: 1e-12,
+            output_times: Some(vec![1.0]),
+            ..Default::default()
+        }
+    }
+
+    /// A 2-cell ragged CSR miniature: a `mesh` subsystem ships the const
+    /// factors (per-cell edge counts, the padded edge-membership table, and
+    /// per-edge weights), the parent re-exposes the offsets/values factors as
+    /// bare-name aliases (the MPAS keyed-factor wiring contract), and an
+    /// observed contracts over the ragged `edges_of_cell` set. Expected
+    /// per-cell sums are exact small integers, NONZERO — so an empty ragged
+    /// contraction (a silently unresolved offsets factor) cannot pass.
+    fn ragged_miniature_doc() -> serde_json::Value {
+        json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "ragged_subsystem_miniature"},
+            "index_sets": {
+                "cells": {"kind": "interval", "size": 2},
+                "edges": {"kind": "interval", "size": 3},
+                "maxEdges": {"kind": "interval", "size": 3},
+                "edges_of_cell": {"kind": "ragged", "of": ["cells"],
+                                   "offsets": "nEdgesOnCell",
+                                   "values": "edgesOnCell"}
+            },
+            "models": {"M": {
+                "subsystems": {"mesh": {
+                    "esm": "0.8.0",
+                    "metadata": {"name": "mini_mesh"},
+                    "models": {"MiniMesh": {
+                        "variables": {
+                            "nEdgesOnCell": {"type": "observed", "shape": ["cells"],
+                                "expression": {"op": "const", "value": [2, 3], "args": []}},
+                            "edgesOnCell": {"type": "observed", "shape": ["cells", "maxEdges"],
+                                "expression": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
+                            "w": {"type": "observed", "shape": ["edges"],
+                                "expression": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}}
+                        },
+                        "equations": []
+                    }}
+                }},
+                "variables": {
+                    "u": {"type": "state", "units": "1", "shape": ["cells"]},
+                    "nEdgesOnCell": {"type": "observed", "shape": ["cells"],
+                        "expression": "mesh.nEdgesOnCell"},
+                    "edgesOnCell": {"type": "observed", "shape": ["cells", "maxEdges"],
+                        "expression": "mesh.edgesOnCell"},
+                    "s": {"type": "observed", "shape": ["cells"], "expression": {
+                        "op": "aggregate", "args": ["edgesOnCell", "mesh.w"],
+                        "output_idx": ["i"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "cells"},
+                                    "k": {"from": "edges_of_cell", "of": ["i"]}},
+                        "expr": {"op": "index", "args": ["mesh.w",
+                                 {"op": "index", "args": ["edgesOnCell", "i", "k"]}]}
+                    }}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "s"}
+                ]
+            }}
+        })
+    }
+
+    /// End to end: subsystem consts mount under `mesh.*`, the bare-alias
+    /// observeds materialize from them, the ragged offsets factor resolves in
+    /// the model scope, and the CSR contraction yields the exact nonzero
+    /// per-cell sums s = [10+20, 10+20+30] — both in the integrated state
+    /// (u(1) = s from a zero ic) and, exactly, in the inspection's
+    /// materialized setup arrays.
+    #[test]
+    fn ragged_csr_miniature_through_subsystem_and_aliases() {
+        let file = typed(ragged_miniature_doc());
+        let mut insp = BuildInspection::default();
+        let sol = simulate_with_inspection(
+            &file,
+            (0.0, 1.0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &erk_opts(),
+            &mut insp,
+        )
+        .expect("simulates");
+        let ti = sol.time.len() - 1;
+        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
+        assert_eq!(cells.len(), 2);
+        let u1: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
+        assert!((u1[0] - 30.0).abs() < 1e-8, "u[1](1) = {} != 30", u1[0]);
+        assert!((u1[1] - 60.0).abs() < 1e-8, "u[2](1) = {} != 60", u1[1]);
+        // The state-free rule output is captured EXACTLY at build.
+        let s = insp.setup_arrays.get("s").expect("s captured");
+        assert_eq!(s.shape(), [2]);
+        assert_eq!(s[IxDyn(&[0])], 30.0);
+        assert_eq!(s[IxDyn(&[1])], 60.0);
+        // Mounted const factors and their aliases are captured too.
+        for name in [
+            "mesh.nEdgesOnCell",
+            "mesh.edgesOnCell",
+            "mesh.w",
+            "nEdgesOnCell",
+            "edgesOnCell",
+        ] {
+            assert!(insp.setup_arrays.contains_key(name), "missing '{name}'");
+        }
+        assert_eq!(
+            insp.setup_arrays["nEdgesOnCell"],
+            insp.setup_arrays["mesh.nEdgesOnCell"]
+        );
+        assert!(insp.observed_exprs.contains_key("s"));
+    }
+
+    /// Filling the inspection never changes the run: the trajectory is
+    /// bit-identical with and without a sink.
+    #[test]
+    fn inspection_does_not_change_the_run() {
+        let file = typed(ragged_miniature_doc());
+        let plain = simulate(
+            &file,
+            (0.0, 1.0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &erk_opts(),
+        )
+        .expect("simulates");
+        let mut insp = BuildInspection::default();
+        let inspected = simulate_with_inspection(
+            &file,
+            (0.0, 1.0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &erk_opts(),
+            &mut insp,
+        )
+        .expect("simulates");
+        assert_eq!(plain.time, inspected.time);
+        assert_eq!(plain.state, inspected.state);
+        assert_eq!(plain.state_variable_names, inspected.state_variable_names);
+        assert!(!insp.setup_arrays.is_empty());
+    }
+
+    fn ragged_registry(offsets: &str, values: &str) -> HashMap<String, IndexSet> {
+        HashMap::from([(
+            "edges_of_cell".to_string(),
+            IndexSet {
+                kind: "ragged".to_string(),
+                size: None,
+                members: None,
+                from_faq: None,
+                of: Some(vec!["cells".to_string()]),
+                offsets: Some(offsets.to_string()),
+                values: Some(values.to_string()),
+            },
+        )])
+    }
+
+    fn obs_var() -> ModelVariable {
+        serde_json::from_value(json!({"type": "observed"})).expect("variable parses")
+    }
+
+    /// `_factor_scope` semantics: an exact-name variable wins (registry
+    /// untouched); with no exact name, the unique dot-suffix match at the
+    /// SHALLOWEST namespace depth is substituted — for BOTH the offsets and
+    /// values factors.
+    #[test]
+    fn factor_scope_exact_name_wins_and_shallowest_suffix_resolves() {
+        // Exact name in scope: keep as authored.
+        let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
+        let vars: HashMap<String, ModelVariable> = [
+            ("nEdgesOnCell", obs_var()),
+            ("mesh.nEdgesOnCell", obs_var()),
+            ("edgesOnCell", obs_var()),
+            ("mesh.edgesOnCell", obs_var()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        apply_ragged_factor_scope(&mut reg, &vars).expect("resolves");
+        assert_eq!(
+            reg["edges_of_cell"].offsets.as_deref(),
+            Some("nEdgesOnCell")
+        );
+        assert_eq!(reg["edges_of_cell"].values.as_deref(), Some("edgesOnCell"));
+
+        // No exact name: the depth-1 alias beats the depth-2 mounted const.
+        let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
+        let vars: HashMap<String, ModelVariable> = [
+            ("Div.nEdgesOnCell", obs_var()),
+            ("Div.mesh.nEdgesOnCell", obs_var()),
+            ("Div.edgesOnCell", obs_var()),
+            ("Div.mesh.edgesOnCell", obs_var()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        apply_ragged_factor_scope(&mut reg, &vars).expect("resolves");
+        assert_eq!(
+            reg["edges_of_cell"].offsets.as_deref(),
+            Some("Div.nEdgesOnCell")
+        );
+        assert_eq!(
+            reg["edges_of_cell"].values.as_deref(),
+            Some("Div.edgesOnCell")
+        );
+
+        // No candidate at all: left bare (the existing unbound-name behavior
+        // surfaces downstream).
+        let mut reg = ragged_registry("nowhere", "edgesOnCell");
+        let vars: HashMap<String, ModelVariable> = [("Div.edgesOnCell", obs_var())]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        apply_ragged_factor_scope(&mut reg, &vars).expect("resolves");
+        assert_eq!(reg["edges_of_cell"].offsets.as_deref(), Some("nowhere"));
+    }
+
+    /// Two dot-suffix candidates at the same (shallowest) depth are a HARD
+    /// ERROR — never a silent pick or an empty contraction.
+    #[test]
+    fn factor_scope_ambiguity_is_a_hard_error() {
+        let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
+        let vars: HashMap<String, ModelVariable> = [
+            ("A.nEdgesOnCell", obs_var()),
+            ("B.nEdgesOnCell", obs_var()),
+            ("A.edgesOnCell", obs_var()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let err = apply_ragged_factor_scope(&mut reg, &vars).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous"), "unexpected error: {msg}");
+        assert!(msg.contains("A.nEdgesOnCell") && msg.contains("B.nEdgesOnCell"));
+    }
+
+    /// The conservative-overlap exact rationals through the inspection
+    /// surface: two unit source squares tiling one 2x1 target rectangle. The
+    /// per-pair overlap areas, the filtered row-sum, and the normalized
+    /// weights are the library-shaped aggregates of the ESD fixture (narrow
+    /// phase `polygon_intersection_area`, sliver filter `> atol`), and every
+    /// captured value is BIT-EXACT: A_ij = [1, 1], A_j = [2], W = [1/2, 1/2].
+    #[test]
+    fn exact_rational_overlap_weights_through_inspection() {
+        let doc = json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "inspect_overlap"},
+            "index_sets": {
+                "src_cells": {"kind": "interval", "size": 2},
+                "tgt_cells": {"kind": "interval", "size": 1}
+            },
+            "models": {"R": {
+                "variables": {
+                    "q": {"type": "state", "units": "1", "shape": ["tgt_cells"],
+                          "default": 0.0},
+                    "atol": {"type": "parameter", "units": "1", "default": 1e-12},
+                    "src_poly": {"type": "observed",
+                        "expression": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
+                    "tgt_poly": {"type": "observed",
+                        "expression": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
+                    "A_ij": {"type": "observed", "expression": {
+                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
+                        "output_idx": ["i", "j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
+                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
+                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
+                    "A_j": {"type": "observed", "expression": {
+                        "op": "aggregate", "args": ["A_ij"],
+                        "output_idx": ["j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "filter": {"op": ">", "args": [
+                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
+                        "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
+                    "W_ij": {"type": "observed", "expression": {
+                        "op": "aggregate", "args": ["A_ij", "A_j"],
+                        "output_idx": ["i", "j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "filter": {"op": ">", "args": [
+                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
+                        "expr": {"op": "/", "args": [
+                            {"op": "index", "args": ["A_ij", "i", "j"]},
+                            {"op": "index", "args": ["A_j", "j"]}]}}}
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["q"], "wrt": "t"}, "rhs": 0.0}
+                ]
+            }}
+        });
+        let file = typed(doc);
+        let mut insp = BuildInspection::default();
+        simulate_with_inspection(
+            &file,
+            (0.0, 1.0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &erk_opts(),
+            &mut insp,
+        )
+        .expect("simulates");
+        let a_ij = insp.setup_arrays.get("A_ij").expect("A_ij captured");
+        assert_eq!(a_ij.shape(), [2, 1]);
+        assert_eq!(a_ij[IxDyn(&[0, 0])], 1.0);
+        assert_eq!(a_ij[IxDyn(&[1, 0])], 1.0);
+        let a_j = insp.setup_arrays.get("A_j").expect("A_j captured");
+        assert_eq!(a_j.shape(), [1]);
+        assert_eq!(a_j[IxDyn(&[0])], 2.0);
+        let w_ij = insp.setup_arrays.get("W_ij").expect("W_ij captured");
+        assert_eq!(w_ij.shape(), [2, 1]);
+        assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
+        assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
     }
 }

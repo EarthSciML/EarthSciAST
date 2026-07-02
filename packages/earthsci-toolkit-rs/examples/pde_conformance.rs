@@ -10,6 +10,8 @@
 //!     --abstol 1e-12 --norms L2_error,Linf_error \
 //!     --resolutions '[{"n":16,"bindings":{"N":16}},…]'
 //! cargo run --example pde_conformance -- reproject <library.esm> <points.json>
+//! cargo run --example pde_conformance -- regrid <fixture.esm> \
+//!     --model <name> --solver Erk --reltol 1e-10 --abstol 1e-12
 //! ```
 //!
 //! Every number comes from official `earthsci_toolkit` entry points over the
@@ -26,6 +28,12 @@
 //!   composition inlines the template bodies, then
 //!   [`earthsci_toolkit::evaluate`] per golden point (mirrors the Julia /
 //!   Python runners' wrapper-doc scheme).
+//! - `regrid`      the fixture's exact-invariant inline tests via
+//!   `run_pde_tests`, the recorded regridded/invariant state fields at t=1
+//!   via `simulate_with_inspection` + `state_cells`, and the per-pair
+//!   `A_ij`/`A_j`/`W_ij` setup arrays read from the official
+//!   [`earthsci_toolkit::simulate_array::BuildInspection`] surface
+//!   (CONFORMANCE_SPEC §5.8; mirrors run-julia.jl's `run_regridding`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -36,7 +44,10 @@ use earthsci_toolkit::parse::{LoadOptions, load_path, load_path_with_options, lo
 use earthsci_toolkit::pde_inline_tests::{
     evaluate_cellwise, field_reduce, run_pde_tests, state_cells,
 };
-use earthsci_toolkit::simulate::{SimulateOptions, SolverChoice, simulate};
+use earthsci_toolkit::simulate::{
+    SimulateOptions, SolverChoice, simulate, simulate_with_inspection,
+};
+use earthsci_toolkit::simulate_array::BuildInspection;
 use earthsci_toolkit::types::{AssertionReference, EsmFile, Expr};
 use serde_json::{Value, json};
 
@@ -103,6 +114,114 @@ fn cmd_pde_tests(positional: &[String], flags: &HashMap<String, String>) -> Resu
     Ok(json!({
         "assertions": results,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// regrid — the fixture's exact-invariant inline tests, the regridded field,
+// and the per-pair build-time setup arrays (A_ij / A_j / W_ij) read from the
+// official BuildInspection surface — the §5.8 per-pair gates. Mirrors
+// run-julia.jl's `run_regridding` record field-for-field.
+// ---------------------------------------------------------------------------
+
+/// Fetch one named setup array from the build inspection. Flattening prefixes
+/// each observed with its owning model (`"Regrid.A_ij"`), so try the qualified
+/// name, then the bare name, then a unique `".<name>"` suffix match (the same
+/// lookup ladder as run-julia.jl's `_setup_array`).
+fn setup_array<'a>(
+    insp: &'a BuildInspection,
+    model: &str,
+    name: &str,
+) -> Result<&'a ndarray::ArrayD<f64>, String> {
+    let qualified = format!("{model}.{name}");
+    if let Some(a) = insp
+        .setup_arrays
+        .get(&qualified)
+        .or_else(|| insp.setup_arrays.get(name))
+    {
+        return Ok(a);
+    }
+    let suffix = format!(".{name}");
+    let hits: Vec<&String> = insp
+        .setup_arrays
+        .keys()
+        .filter(|k| k.ends_with(&suffix))
+        .collect();
+    if hits.len() == 1 {
+        return Ok(&insp.setup_arrays[hits[0]]);
+    }
+    let mut have: Vec<&String> = insp.setup_arrays.keys().collect();
+    have.sort();
+    Err(format!(
+        "setup array '{name}' not exposed by the build (have: {have:?})"
+    ))
+}
+
+/// Row-major nested lists for JSON emission (`[i][j]` like the manifest
+/// triples); requires a rank-2 array.
+fn rows(arr: &ndarray::ArrayD<f64>, name: &str) -> Result<Vec<Vec<f64>>, String> {
+    if arr.ndim() != 2 {
+        return Err(format!("setup array '{name}' has rank {}", arr.ndim()));
+    }
+    let (n, m) = (arr.shape()[0], arr.shape()[1]);
+    Ok((0..n)
+        .map(|i| (0..m).map(|j| arr[ndarray::IxDyn(&[i, j])]).collect())
+        .collect())
+}
+
+fn cmd_regrid(positional: &[String], flags: &HashMap<String, String>) -> Result<Value, String> {
+    let [fixture] = positional else {
+        return Err(
+            "usage: regrid <fixture.esm> --model … --solver … --reltol … --abstol …".to_string(),
+        );
+    };
+    let file = load_path(fixture).map_err(|e| format!("{fixture}: {e}"))?;
+    let model = flag(flags, "model")?;
+    let opts = sim_options(flags)?;
+    let results = run_pde_tests(&file, Some(model), &opts);
+    let passed = !results.is_empty() && results.iter().all(|r| r.passed);
+    // regrid_state integrates the constant regridded field from 0 over [0,1],
+    // so state(1) IS the regridded field F_tgt.
+    let mut insp = BuildInspection::default();
+    let mut run_opts = opts.clone();
+    run_opts.output_times = Some(vec![1.0]);
+    let sol = simulate_with_inspection(
+        &file,
+        (0.0, 1.0),
+        &HashMap::new(),
+        &HashMap::new(),
+        &run_opts,
+        &mut insp,
+    )
+    .map_err(|e| format!("simulate: {e}"))?;
+    let ti = sol.time.len() - 1;
+    let mut out = serde_json::Map::new();
+    out.insert("assertions".to_string(), json!(results));
+    out.insert("passed".to_string(), json!(passed));
+    for var in ["regrid_state", "pou_state", "cons_state"] {
+        let cells = state_cells(&sol.state_variable_names, var, model);
+        if cells.is_empty() {
+            return Err(format!("state '{var}' has no cells in the solution"));
+        }
+        let field: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
+        out.insert(format!("{var}_at_1"), json!(field));
+    }
+    // Per-pair setup arrays (manifest §5.8 gates): the raw overlap-area
+    // matrix, its filtered row-sums, and the normalized weights — the
+    // build-once geometry the runtime materializes at setup, emitted verbatim
+    // (row-major [i][j], 1-based like the manifest triples).
+    let a_ij = setup_array(&insp, model, "A_ij")?;
+    out.insert("A_ij".to_string(), json!(rows(a_ij, "A_ij")?));
+    let a_j = setup_array(&insp, model, "A_j")?;
+    if a_j.ndim() != 1 {
+        return Err(format!("setup array 'A_j' has rank {}", a_j.ndim()));
+    }
+    out.insert(
+        "A_j".to_string(),
+        json!(a_j.iter().copied().collect::<Vec<f64>>()),
+    );
+    let w_ij = setup_array(&insp, model, "W_ij")?;
+    out.insert("W_ij".to_string(), json!(rows(w_ij, "W_ij")?));
+    Ok(Value::Object(out))
 }
 
 // ---------------------------------------------------------------------------
@@ -371,13 +490,16 @@ fn cmd_reproject(positional: &[String]) -> Result<Value, String> {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((mode, rest)) = args.split_first() else {
-        return Err("usage: pde_conformance <pde-tests|convergence|reproject> …".to_string());
+        return Err(
+            "usage: pde_conformance <pde-tests|convergence|reproject|regrid> …".to_string(),
+        );
     };
     let (positional, flags) = split_args(rest)?;
     let out = match mode.as_str() {
         "pde-tests" => cmd_pde_tests(&positional, &flags)?,
         "convergence" => cmd_convergence(&positional, &flags)?,
         "reproject" => cmd_reproject(&positional)?,
+        "regrid" => cmd_regrid(&positional, &flags)?,
         other => return Err(format!("unknown mode '{other}'")),
     };
     println!(

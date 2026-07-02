@@ -940,6 +940,41 @@ pub fn simulate(
     compiled.simulate(tspan, params, initial_conditions, opts)
 }
 
+/// [`simulate`] with a build-observability sink (the Rust mirror of the Julia
+/// `simulate(…; inspect=BuildInspection())` keyword): identical routing and an
+/// identical [`Solution`], plus `inspect` is filled with the array runtime's
+/// named build-time products — the state-free observed arrays materialized at
+/// the initial state (per-pair regrid geometry `A_ij`/`A_j`/`W_ij`, const mesh
+/// factors and their aliases, rule outputs like the MPAS `div_flux`) and the
+/// resolved observed expression map. See
+/// [`crate::simulate_array::BuildInspection`]. A pure-scalar file runs through
+/// the scalar interpreter unchanged and leaves the sink empty (it has no array
+/// build products). Native-only, like the array runtime it observes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn simulate_with_inspection(
+    file: &EsmFile,
+    tspan: (f64, f64),
+    params: &HashMap<String, f64>,
+    initial_conditions: &HashMap<String, f64>,
+    opts: &SimulateOptions,
+    inspect: &mut crate::simulate_array::BuildInspection,
+) -> Result<Solution, SimulateError> {
+    if crate::simulate_array::file_has_array_ops(file)
+        || crate::simulate_array::file_has_spatial_model(file)
+    {
+        let model_count = file.models.as_ref().map_or(0, |m| m.len());
+        let compiled = if model_count > 1 {
+            let flat = flatten(file).map_err(CompileError::from)?;
+            crate::simulate_array::ArrayCompiled::from_flattened(&flat)?
+        } else {
+            crate::simulate_array::ArrayCompiled::from_file(file)?
+        };
+        return compiled.simulate_inspect(tspan, params, initial_conditions, opts, Some(inspect));
+    }
+    let compiled = Compiled::from_file(file)?;
+    compiled.simulate(tspan, params, initial_conditions, opts)
+}
+
 // ============================================================================
 // Resolved expression: precomputed indices for the hot interpreter loop
 // ============================================================================
