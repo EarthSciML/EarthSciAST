@@ -112,7 +112,23 @@ ExprNode := { "op": string, "args": [Expr, ...], ...optional_fields }
 - **Strings** are variable/parameter references: `"O3"`, `"k1"`
 - **ExprNodes** are operations
 
-### 4.2 Built-in Operators
+### 4.2 Operators
+
+Every `op` string belongs to one of **two tiers**:
+
+- **Evaluable core (closed).** The operators listed in this section — arithmetic,
+  comparisons/booleans, elementary functions, `ifelse`, the calculus form-ops `D`/`ic`, and
+  the array/query ops (§4.3) — are implemented directly by every binding's evaluator. This
+  set is closed: adding one is a spec change, and each binding pins it as its evaluator's op
+  registry.
+- **Rewrite-target (open).** Any other `op` identifier — a spatial `D` on a right-hand
+  side, the sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as
+  `godunov_hamiltonian`. A rewrite-target op has **no** evaluator; it MUST be eliminated by
+  a rewrite rule (§9.6) before evaluation, and one that survives the load-time lowering
+  fixpoint is rejected with `unlowered_operator` (§9.6.6). The `op` schema `pattern` only
+  rejects malformed strings — the open tier is otherwise unconstrained, so a custom op
+  carries its scheme parameters in the `attrs` object rather than in dedicated schema
+  fields.
 
 #### Arithmetic
 
@@ -128,14 +144,17 @@ ExprNode := { "op": string, "args": [Expr, ...], ...optional_fields }
 
 | Op | Additional fields | Meaning |
 |---|---|---|
-| `D` | `"wrt": "t"` | Time derivative: ∂/∂t |
+| `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`). `wrt:"t"` is the **structural** time derivative (equation LHS, consumed by system assembly). A spatial `wrt` — or *any* `D` in a right-hand-side expression — is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly. |
 | `ic` | — | Initial-condition declaration, used as an equation LHS: `ic(u) ~ <initial field>` (§11.4). `args[0]` is the state variable. |
-| `grad` | `"dim": "x"` | Spatial gradient: ∂/∂x |
-| `div` | | Divergence: ∇· |
-| `laplacian` | | Laplacian: ∇² |
-| `integral` | `"var": "x"`, `"lower": <expr>`, `"upper": <expr>` | Spatial partial integral: ∫ₗᵒʷᵉʳᵘᵖᵖᵉʳ args[0] d(var) |
 
 Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
+
+`grad`, `div`, `laplacian`, and `integral` are **not** built-in operators — they are optional
+**rewrite-target sugar** (open tier, §4.2). `grad(f, dim:x)` is just `D(f, wrt:x)`;
+`div`/`laplacian` are sums/compositions of `D` (`div(F)=ΣᵢD(Fᵢ,xᵢ)`,
+`laplacian(u)=ΣᵢD(D(u,xᵢ),xᵢ)`); `integral` is a PIDE term. This format ships **no** rewrite
+rules for them — the discretization std-lib lives in
+[EarthSciDiscretizations](../earthscidiscretizations). See §9.6.8.
 
 The `integral` op encodes a spatial partial integral for use in partial integro-differential equations (PIDEs).
 `args[0]` is the integrand expression; `var` names the spatial dimension variable being integrated over;
@@ -2258,7 +2277,7 @@ An `expression_templates` entry is a **rewrite rule**: a set of metavariable `pa
 | **Named template expansion** | *absent* | an explicit `apply_expression_template` node |
 | **Operator lowering** (e.g. `grad`, `div`, `laplacian`) | an operator pattern like `{op:"grad", args:["f"], dim:"d"}` | auto-applied wherever the pattern matches |
 
-The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a high-level op (`grad`/`div`/`laplacian`) into an `aggregate` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
+The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-operator discretization — including its boundary conditions — is not special schema machinery; it is an ordinary rewrite rule** that lowers a rewrite-target op (a spatial `D` on a right-hand side, or the `grad`/`div`/`laplacian` sugar, §4.2) into an `aggregate` + `makearray` stencil with the boundary treatment baked into the `makearray` (§9.6.8). There is no separate boundary-condition declaration anywhere in the format. See `docs/content/rfcs/ast-expression-templates.md` for motivation; this section pins the normative load-time behavior.
 
 #### 9.6.1 The `expression_templates` block
 
@@ -2311,10 +2330,11 @@ Required fields:
 #### 9.6.3 Constraints (normative)
 
 1. **AST → AST only.** Rules take Expression args and produce an Expression. No string interpolation, no schema-level substitution, no metaprogramming.
-2. **Single-pass, no recursion.** Rewriting is one bottom-up load-time pass over each expression tree, applying `match` rules in template **declaration order**; a replacement `body` is **not** re-scanned for further matches. A `match` rule whose `body` re-introduces its own pattern is rejected with diagnostic `rewrite_rule_nonterminating`. A `body` MUST NOT contain `apply_expression_template` nodes (`apply_expression_template_recursive_body`). (Bounded multi-pass fixpoint rewriting is deferred to a follow-up.)
+2. **Outermost-first, priority-ordered, bounded fixpoint.** Rule application is a sequence of **passes**; one pass is a single **pre-order (outermost-first)** walk of the expression tree. At each node visited, the engine considers every `match` rule whose pattern structurally matches that node and selects the winner **deterministically**: highest `priority` (integer, default `0`); ties broken by **declaration order** (earliest wins). The winner's `body` (instantiated by pure substitution, constraint 5) replaces the node, and the engine does **not** descend into the freshly-produced body during the current pass; if no rule matches a node, the walk descends into its children. Passes repeat until a pass performs **zero** rewrites (the fixpoint) or until `MAX_REWRITE_PASSES = 64` passes have run without converging, in which case the file is rejected with diagnostic `rewrite_rule_nonterminating` (naming the last-rewritten node). The pass bound is the authoritative termination guard — a self-reintroducing rule simply fails to converge. A `body` MUST NOT contain `apply_expression_template` nodes (`apply_expression_template_recursive_body`). Because selection and traversal are fully deterministic, all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection). **Compound precedence:** a rule matching a *compound* term (e.g. a Godunov Hamiltonian `sqrt(add(pow(D(u,x),2), pow(D(u,y),2)))`) declares a higher `priority` than the plain per-derivative rule, so under outermost-first selection it fires on the whole compound **before** the inner `D(u,x)` is lowered. The engine never *infers* specificity; precedence is the author's explicit, portable choice.
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
 4. **Component-local scope.** Templates declared inside one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` is replaced by the bound argument's AST in source order. Expansion MUST NOT depend on argument evaluation.
+6. **Post-fixpoint operator gate.** After the fixpoint converges, the loader walks the final tree; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, or any `D` in a right-hand-side / evaluation position — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation.
 
 #### 9.6.4 Round-trip — Option A (always-expanded)
 
@@ -2340,6 +2360,8 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_bindings_mismatch` | `bindings` does not exactly match the template's `params` (missing or extra keys). |
 | `apply_expression_template_recursive_body` | A template `body` contains an `apply_expression_template` node (template-calls-template forbidden). |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, or other structural defects. |
+| `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
+| `unlowered_operator` | A rewrite-target op (§4.2) survived the lowering fixpoint into an evaluation position — no rule eliminated it. One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 
 #### 9.6.7 Conformance fixtures
 
@@ -2348,16 +2370,18 @@ Conformance fixtures live under `tests/conformance/expression_templates/`. The v
 - `arrhenius_smoke/fixture.esm` — a 2-parameter `arrhenius` template applied across three reactions with different scalar bindings.
 - `arrhenius_smoke/expanded.esm` — the canonical post-expansion form. All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array on load.
 
-#### 9.6.8 PDE-operator lowering — discretization with boundary conditions baked in
+#### 9.6.8 Discretizing spatial derivatives (rewrite rules over `D`)
 
-The high-level spatial operators `grad`, `div`, `laplacian` are **sugar**: each lowers to an `aggregate` + `makearray` expression via a `match` rewrite rule (§9.6) at load time — exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `aggregate` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
+A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to an `aggregate` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `aggregate` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
 
-A discretization rule therefore names its BC in its identity. `central_grad_lon_zero_grad_bc` matches `grad(f, dim: "lon")` and builds a `makearray` from the interior central-difference `aggregate` plus two one-sided boundary faces for the zero-gradient condition (here over the §13.1 grid, `lon` size 144, `lat` size 91):
+**This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](../earthscidiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by composing with rules that library provides.
+
+A discretization rule names its scheme and BC in its identity. `central_D_lon_zero_grad_bc` matches `D(f, wrt: "lon")` and builds a `makearray` from the interior central-difference `aggregate` plus two one-sided boundary faces for the zero-gradient condition (here over a grid with `lon` size 144, `lat` size 91):
 
 ```json
-"central_grad_lon_zero_grad_bc": {
+"central_D_lon_zero_grad_bc": {
   "params": ["f"],
-  "match": { "op": "grad", "args": ["f"], "dim": "lon" },
+  "match": { "op": "D", "args": ["f"], "wrt": "lon" },
   "body": {
     "op": "makearray",
     "regions": [ [[2, 143], [1, 91]], [[1, 1], [1, 91]], [[144, 144], [1, 91]] ],
@@ -2384,11 +2408,23 @@ A discretization rule therefore names its BC in its identity. `central_grad_lon_
 }
 ```
 
-The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized gradient is fully defined with its BC and there is nowhere else a boundary condition could live.
+The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live.
 
-**Choosing a scheme = choosing a rule.** A periodic-BC gradient is a *different* rule (`central_grad_lon_periodic`) whose single interior `aggregate` gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; and a rule for a seam shared with another variable overwrites the face with an `index` into that variable. Bindings ship **default built-in** rules for the common (operator × standard-BC) combinations, so a file MAY use `grad`/`div`/`laplacian` with no in-file rules, relying on those built-in defaults. An author overrides by declaring an earlier `match` rule (upwind, WENO, a custom spacing, or a different BC; declaration order wins, §9.6.3).
+**Choosing a scheme = choosing a rule** (central, upwind, WENO, a specific BC). A periodic-BC rule gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; a rule for a seam shared with another variable overwrites the face with an `index` into that variable. A **compound** scheme (Godunov / WENO / flux-limited) out-ranks the plain per-derivative rule via `priority` (§9.6.3), so it fires on the whole compound before the inner `D`s are lowered.
 
-**Determinism.** Lowering is the single-pass rewrite of §9.6.3 (rules applied in declaration order, replacements not re-scanned). Two bindings expanding the same file MUST produce structurally identical post-lowering ASTs.
+**`grad`/`div`/`laplacian` are not privileged** — they are not evaluable-core ops and this format ships no rules for them. They exist only as *optional author sugar*, definable by a one-line rewrite rule, e.g.:
+
+```json
+"grad_is_Dx": {
+  "params": ["f"],
+  "match": { "op": "grad", "args": ["f"], "dim": "x" },
+  "body":  { "op": "D",    "args": ["f"], "wrt": "x" }
+}
+```
+
+after which the ordinary `D`-discretization rules apply. `div`/`laplacian` are sugar for sums/compositions of `D`; the bounded fixpoint (§9.6.3) lowers the resulting nested `D`s on subsequent passes. A rule author MAY instead match `laplacian` directly and emit a one-shot 5-point stencil — the open namespace (§4.2) permits either.
+
+**Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs (or the same non-convergence / `unlowered_operator` rejection).
 
 ---
 

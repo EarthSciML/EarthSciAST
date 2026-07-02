@@ -345,28 +345,35 @@ class TestEnumValidation:
         with pytest.raises(ValidationError, match="'invalid_type' is not one of"):
             jsonschema.validate(invalid_data, schema)
 
-    def test_invalid_expression_operator_enum(self):
-        """Test validation of invalid expression operator values."""
+    def test_malformed_expression_operator_pattern(self):
+        """Schema rejects a MALFORMED op string via the `op` pattern.
+
+        As of esm 0.8.0 the `op` field is an open two-tier namespace (esm-spec §4.2): the
+        schema no longer enumerates operators. An unknown-but-well-formed op is a valid
+        open-tier rewrite-target — accepted here and rejected later with `unlowered_operator`
+        at lowering (§9.6.6) if no rule eliminates it. Only a *malformed* op string (one that
+        violates the identifier/operator-symbol pattern) is a schema-level error.
+        """
         schema = _get_schema()
 
-        invalid_data = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": {
-                            "op": "invalid_operator",
-                            "args": [1, 2]
-                        }
-                    }]
+        def _doc(op):
+            return {
+                "esm": "0.1.0",
+                "metadata": {"name": "Test"},
+                "models": {
+                    "test_model": {
+                        "variables": {"x": {"type": "state"}},
+                        "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1, 2]}}]
+                    }
                 }
             }
-        }
-        with pytest.raises(ValidationError, match="'invalid_operator' is not one of"):
-            jsonschema.validate(invalid_data, schema)
+
+        # Malformed (embedded space) → rejected by the `op` pattern.
+        with pytest.raises(ValidationError, match="does not match"):
+            jsonschema.validate(_doc("bad op"), schema)
+
+        # Unknown but well-formed → NOT a schema error (open-tier rewrite-target).
+        jsonschema.validate(_doc("godunov_hamiltonian"), schema)
 
     def test_invalid_coupling_type_enum(self):
         """Test validation of invalid coupling type values."""
@@ -744,7 +751,7 @@ class TestComplexValidationScenarios:
                             "op": "+",
                             "args": [
                                 {
-                                    "op": "invalid_nested_op",  # Invalid operator in nested expression
+                                    "op": "invalid nested op",  # Malformed (embedded space) — rejected by the op pattern
                                     "args": ["y"]
                                 },
                                 1
@@ -754,7 +761,7 @@ class TestComplexValidationScenarios:
                 }
             }
         }
-        with pytest.raises(ValidationError, match="'invalid_nested_op' is not one of"):
+        with pytest.raises(ValidationError, match="does not match"):
             jsonschema.validate(invalid_data, schema)
 
     def test_coupling_validation_with_multiple_errors(self):

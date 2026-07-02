@@ -348,7 +348,7 @@ class TestErrorCodeSpecificity:
                     "equations": [{
                         "lhs": "x",
                         "rhs": {
-                            "op": "unknown_op",  # Invalid operator
+                            "op": "unknown op",  # Malformed operator (embedded space) — rejected by the op pattern
                             "args": ["x", "y"]
                         }
                     }]
@@ -382,8 +382,19 @@ class TestValidationWithFixtures:
         invalid_files = list(invalid_dir.glob("*.esm"))
         assert len(invalid_files) > 0, "No invalid fixture files found"
 
+        # Quarantine: fixtures whose only effective defect was an unknown op. As of esm 0.8.0
+        # the `op` namespace is open (esm-spec §4.2), so an unknown op is no longer a
+        # load/validate error — it is a lowering-time `unlowered_operator` error (§9.6.6).
+        # `units_invalid_logarithm.esm` used `ln` (never a real op), so the removed op enum was
+        # masking a mis-authored fixture; it is re-enabled once the log-argument dimensionality
+        # unit-check lands across bindings and the fixture is fixed to `log`
+        # (see docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md, binding phase).
+        pending_binding_phase = {"units_invalid_logarithm.esm"}
+
         failed_files = []
         for invalid_file in invalid_files:
+            if invalid_file.name in pending_binding_phase:
+                continue
             with open(invalid_file) as f:
                 content = f.read()
             # A fixture is "invalid" if either load() rejects it OR validate()

@@ -415,26 +415,31 @@ class TestSection04ExpressionAST:
         jsonschema.validate(valid_data, schema)
 
     def test_invalid_operators(self):
-        """Test that invalid operators are rejected."""
+        """As of esm 0.8.0 the `op` namespace is open (esm-spec §4.2): the schema rejects only
+        MALFORMED op strings via the `op` pattern. Unknown-but-well-formed ops are valid
+        open-tier rewrite-targets (rejected later with `unlowered_operator` if never lowered)."""
         schema = _get_schema()
 
-        invalid_operators = [
-            "invalid_op", "custom_func", "undefined", "@@", "++", "--"
-        ]
-
-        for invalid_op in invalid_operators:
-            invalid_data = {
+        def _doc(op):
+            return {
                 "esm": "0.1.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
                         "variables": {"x": {"type": "state"}},
-                        "equations": [{"lhs": "x", "rhs": {"op": invalid_op, "args": ["x"]}}]
+                        "equations": [{"lhs": "x", "rhs": {"op": op, "args": ["x"]}}]
                     }
                 }
             }
+
+        # Malformed op strings → rejected by the `op` pattern.
+        for bad in ["@@", "bad op", "1abc", "a-b", ""]:
             with pytest.raises(ValidationError):
-                jsonschema.validate(invalid_data, schema)
+                jsonschema.validate(_doc(bad), schema)
+
+        # Unknown but well-formed ops → accepted (open-tier rewrite-targets).
+        for ok in ["invalid_op", "custom_func", "godunov_hamiltonian"]:
+            jsonschema.validate(_doc(ok), schema)
 
 
 class TestSection05Events:
@@ -1793,7 +1798,8 @@ class TestNegativeValidationCases:
                 "models": {"test": {"variables": {}, "equations": []}}
             }, schema)
 
-        # Section 4: Invalid expression operator
+        # Section 4: Malformed expression operator (open namespace — the pattern rejects only
+        # malformed op strings; "invalid op" has an embedded space).
         with pytest.raises(ValidationError):
             jsonschema.validate({
                 "esm": "0.1.0",
@@ -1801,7 +1807,7 @@ class TestNegativeValidationCases:
                 "models": {
                     "test": {
                         "variables": {"x": {"type": "state"}},
-                        "equations": [{"lhs": "x", "rhs": {"op": "invalid_op", "args": ["x"]}}]
+                        "equations": [{"lhs": "x", "rhs": {"op": "invalid op", "args": ["x"]}}]
                     }
                 }
             }, schema)
