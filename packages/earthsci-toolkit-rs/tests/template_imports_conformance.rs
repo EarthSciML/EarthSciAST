@@ -133,6 +133,142 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     assert_eq!(d2["models"]["M"]["variables"]["y"]["expression"]["args"][0], json!(5));
 }
 
+// ---------------------------------------------------------------------------
+// Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+// ---------------------------------------------------------------------------
+
+/// import_rename_two_instances: the same grid library imported twice with
+/// DIFFERENT `rename`/`prefix`, giving two distinct registrations that no longer
+/// collide, expands to the committed golden.
+#[test]
+fn import_rename_two_instances_matches_golden() {
+    assert_eq!(
+        expand_raw(&conf(&["import_rename_two_instances", "fixture.esm"])),
+        golden(&conf(&["import_rename_two_instances", "expanded.esm"]))
+    );
+}
+
+/// import_rebind_keyed_factors: `rebind` rewrites a free keyed-factor name in an
+/// imported template body/registry, transitively through every occurrence.
+#[test]
+fn import_rebind_keyed_factors_matches_golden() {
+    assert_eq!(
+        expand_raw(&conf(&["import_rebind_keyed_factors", "fixture.esm"])),
+        golden(&conf(&["import_rebind_keyed_factors", "expanded.esm"]))
+    );
+}
+
+/// import_rename_diamond: a diamond import where each edge renames the shared
+/// library differently, so the two arrive as distinct (non-deduped) names.
+#[test]
+fn import_rename_diamond_matches_golden() {
+    assert_eq!(
+        expand_raw(&conf(&["import_rename_diamond", "fixture.esm"])),
+        golden(&conf(&["import_rename_diamond", "expanded.esm"]))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Spec pins: §4.7 subsystem index_sets merge, §4.3.2 makearray region bounds
+// ---------------------------------------------------------------------------
+
+/// §4.7 subsystem index-set merge: mounting `subsystem_mesh_lib.esm` merges its
+/// top-level `index_sets` into the importing document's registry — the
+/// deep-equal `cells` (size 5) is idempotent and the undeclared `vertices`
+/// (size 4) is brought in.
+#[test]
+fn subsystem_index_sets_merge_into_document() {
+    let valid = repo_root().join("tests/valid");
+    let f = load_path(valid.join("subsystem_index_set_merge.esm")).expect("merge load");
+    let isets = f.index_sets.as_ref().expect("index_sets");
+    assert_eq!(isets["cells"].size, Some(5));
+    assert_eq!(isets["vertices"].size, Some(4));
+
+    // The mesh file also loads standalone as an ordinary single-model document.
+    let mesh = load_path(valid.join("subsystem_mesh_lib.esm")).expect("mesh standalone load");
+    let mesh_isets = mesh.index_sets.as_ref().expect("index_sets");
+    assert_eq!(mesh_isets["cells"].size, Some(5));
+    assert_eq!(mesh_isets["vertices"].size, Some(4));
+}
+
+/// §4.3.2 makearray region bounds: the empty bound `[start, start-1]` (here
+/// `[2, N-1]` folding to `[2, 1]` at the default N = 2) loads clean; rebinding
+/// N = 1 folds it to `[2, 0]`, INVERTED, rejected with `makearray_region_inverted`.
+#[test]
+fn makearray_empty_region_min_extent_and_inverted() {
+    let path = repo_root().join("tests/valid/makearray_empty_region_min_extent.esm");
+    // Default N = 2 → interior region [2, 1] (empty, legal): loads clean.
+    load_path(&path).expect("empty min-extent region loads clean");
+
+    // Loader-API N = 1 → interior region [2, 0] (inverted): rejected.
+    let mut api = BTreeMap::new();
+    api.insert("N".to_string(), 1i64);
+    let e = load_path_with_options(&path, &api).expect_err("inverted region must be rejected");
+    assert!(
+        e.to_string().contains("[makearray_region_inverted]"),
+        "got: {e}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// JSON float round-trip exactness (serde_json `float_roundtrip`)
+// ---------------------------------------------------------------------------
+
+/// A 16-17-significant-digit JSON float literal MUST parse to the SAME f64 bits
+/// as `str::parse::<f64>` (the correctly-rounded nearest f64 Julia/Python
+/// produce) and re-emit byte-identically. The default serde_json fast path is
+/// 1 ulp off on these two literals — the `float_roundtrip` feature fixes it,
+/// restoring AST byte identity on parse→emit for full-precision coordinates.
+#[test]
+fn json_float_literals_round_trip_bit_exact() {
+    for lit in ["-104.52369275835723", "42.059133583516356"] {
+        let v: Value = serde_json::from_str(lit).expect("parse float literal");
+        let parsed = v.as_f64().expect("f64");
+        let truth: f64 = lit.parse().expect("std parse");
+        assert_eq!(
+            parsed.to_bits(),
+            truth.to_bits(),
+            "{lit}: serde_json parsed {parsed:?} (bits {:016x}), std parses {truth:?} (bits {:016x})",
+            parsed.to_bits(),
+            truth.to_bits()
+        );
+        assert_eq!(
+            serde_json::to_string(&v).expect("re-emit"),
+            lit,
+            "{lit} must re-emit byte-identically"
+        );
+    }
+
+    // End-to-end through the crate load→emit: a const carrying the full-precision
+    // coordinates survives parse→emit verbatim (AST byte identity).
+    let doc = format!(
+        r#"{{
+      "esm": "0.8.0",
+      "metadata": {{"name": "ulp"}},
+      "models": {{"M": {{
+        "variables": {{
+          "x": {{"type": "state", "units": "1", "default": 0.5}},
+          "pt": {{"type": "observed", "units": "1",
+                  "expression": {{"op": "const", "args": [],
+                                 "value": [-104.52369275835723, 42.059133583516356]}}}}
+        }},
+        "equations": [{{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}},
+                       "rhs": {{"op": "-", "args": ["x"]}}}}]
+      }}}}
+    }}"#
+    );
+    let f = earthsci_toolkit::load(&doc).expect("load ulp doc");
+    let text = earthsci_toolkit::save(&f).expect("save ulp doc");
+    assert!(
+        text.contains("-104.52369275835723"),
+        "longitude literal must survive verbatim: {text}"
+    );
+    assert!(
+        text.contains("42.059133583516356"),
+        "latitude literal must survive verbatim: {text}"
+    );
+}
+
 /// metaparameter_resolutions: one problem file instantiated at N = 4 / 8 via
 /// §4.7 subsystem-ref `bindings` (§9.7.6 binding site 3), compared against
 /// the typed round-trip goldens.
