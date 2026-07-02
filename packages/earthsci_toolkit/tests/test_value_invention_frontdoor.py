@@ -464,3 +464,38 @@ def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
     }
     with pytest.raises(ValueInventionError):
         materialize_value_invention(model, {"gx": np.array([0.0]), "px": np.array([0.0, 1.0])}, {})
+
+
+# ---------------------------------------------------------------------------
+# Join-key setup pre-pass: only the bins' dependency closure is materialized
+# (a join-free reduction over a join-CARRYING observed must not crash setup)
+# ---------------------------------------------------------------------------
+
+
+def test_join_key_prepass_skips_reductions_over_join_carrying_observeds() -> None:
+    """``_materialize_join_key_buffers`` materializes ONLY the join-free
+    observeds the broad-phase bins transitively read, not every join-free
+    observed. A join-free observed that itself reads a join-CARRYING observed
+    (the natural spelling of a reduction like ``total = sum(rg_A)``) is
+    unresolvable at bin-setup time — the join-carrying observed is not available
+    there. Before the fix the pre-pass evaluated every join-free observed and
+    raised ``NumpyInterpreterError`` on such a reduction, forcing the state-RHS
+    workaround; now the reduction is skipped here and resolves later in the RHS
+    path where the join buffers exist, while the bin buffers are unchanged."""
+    from earthsci_toolkit.esm_types import ExprNode
+    from earthsci_toolkit.simulation import _materialize_join_key_buffers
+
+    coord = ExprNode(op="const", args=[], value=5.0)              # join-free bin input
+    rg_A = ExprNode(op="const", args=[], value=[1.0],            # join-CARRYING observed
+                    join=[{"on": [["src_bin", "tgt_bin"]]}])
+    total = ExprNode(op="+", args=["rg_A", 1.0])                 # join-free reduction over rg_A
+    ordered = [("coord", coord), ("rg_A", rg_A), ("total", total)]
+    bin_specs = [("src_bin", ExprNode(op="+", args=["coord", 1.0]), None)]
+
+    buffers, _idx = _materialize_join_key_buffers(
+        ordered, bin_specs, {}, {}, {}, {}, 0)
+
+    # The bin (which reads `coord`) is materialized correctly; the reduction over
+    # the join-carrying observed is NOT evaluated at setup (no crash).
+    assert list(buffers["src_bin"]) == [6.0]
+    assert "total" not in buffers
