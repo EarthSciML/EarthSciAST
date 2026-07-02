@@ -101,23 +101,31 @@ class NumpyInterpreterError(Exception):
 
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
-    """Raised when a spatial differential operator (`grad`, `div`,
-    `laplacian`) reaches the simulator's RHS evaluator.
+    """Raised when an unlowered rewrite-target operator reaches the simulator's
+    RHS evaluator — a spatial/right-hand-side ``D`` or a ``grad``/``div``/
+    ``laplacian`` sugar op (esm-spec §4.2 / §9.6.8).
 
-    Per the canonical pipeline contract, ESD discretization rules MUST
-    rewrite these into ``arrayop`` AST before any binding's simulator
-    evaluates the equations. Encountering one here means ``discretize``
-    was skipped or did not rewrite the node — silently substituting zero
-    (the previous behaviour) would mask the broken pipeline. (esm-i7b)
+    These ops carry NO evaluator: a discretization rule MUST rewrite them into an
+    ``aggregate``/``makearray`` stencil before evaluation. Encountering one here
+    means no rule lowered it — silently substituting zero (the previous
+    behaviour) would mask the broken pipeline. The gate fires before evaluation
+    with the uniform, cross-binding ``code = "unlowered_operator"`` diagnostic
+    (RFC open-op-namespace-fixpoint-rewrite Change B/C, superseding the old
+    per-binding UnreachableSpatialOperator / UnsupportedDimensionality codes).
     """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6). Every surfaced
+    #: unlowered-operator error carries this, regardless of the exception class.
+    code = "unlowered_operator"
 
     def __init__(self, op: str) -> None:
         self.op = op
         super().__init__(
-            f"UnreachableSpatialOperatorError: encountered '{op}' node in "
-            f"simulation evaluation. Spatial operators must be rewritten by "
-            f"ESD discretization rules before reaching the simulator. "
-            f"Pipeline contract violated."
+            f"unlowered_operator: rewrite-target op '{op}' reached simulation "
+            f"evaluation with no rule to lower it to a stencil. Such ops "
+            f"(a spatial/right-hand-side `D`, or `grad`/`div`/`laplacian` sugar) "
+            f"must be rewritten by a discretization rule before evaluation "
+            f"(esm-spec §4.2 / §9.6.8). Pipeline contract violated."
         )
 
 
@@ -529,18 +537,22 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
         }
         return ops[op](a, b).astype(float)
     if op == "D":
-        # D() should have been routed out at the equation level. If we see it
-        # here (e.g. inside an expression), treat it as evaluating the inner
-        # expression — this is only reachable when the LHS contains D(...) and
-        # simulation extracts what it's differentiating.
-        if expr.args:
-            return eval_expr(expr.args[0], ctx)
-        return 0.0
+        # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
+        # evaluable-core op only in its STRUCTURAL equation-LHS role (consumed by
+        # simulation to identify the differentiated state). A `D` reaching the RHS
+        # evaluator — a spatial `D`, or any `D` in an RHS / observed / rate
+        # position — is an unlowered rewrite-target: a discretization rule must
+        # lower it to a stencil before evaluation. The gate fires here, before
+        # evaluation, with the uniform `unlowered_operator` code (never the old
+        # silently-evaluate-inner behaviour).
+        raise UnreachableSpatialOperatorError("D")
     if op in ("grad", "div", "laplacian"):
-        # Spatial differential operators must be rewritten by ESD
-        # discretization rules into `arrayop` AST before reaching the
-        # simulator. Encountering one here means the canonical pipeline
-        # broke; silently substituting zero would mask that. (esm-i7b)
+        # grad/div/laplacian are NOT evaluable-core ops — they are optional
+        # rewrite-target sugar over `D` that a discretization rule must lower to
+        # an `aggregate`/`makearray` stencil before evaluation. One reaching the
+        # evaluator means no rule lowered it. This format ships no discretization
+        # rules (they live in EarthSciDiscretizations). Surface the violation
+        # rather than substituting zero. Uniform `unlowered_operator` code.
         raise UnreachableSpatialOperatorError(op)
 
     # --- array ops ---

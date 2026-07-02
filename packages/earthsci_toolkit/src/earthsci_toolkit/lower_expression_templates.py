@@ -1,14 +1,40 @@
-"""Load-time expansion pass for `apply_expression_template` AST ops.
+"""Load-time rewrite pass for ``expression_templates`` (esm-spec §9.6).
 
-esm-spec §9.6, docs/rfcs/ast-expression-templates.md, esm-giy.
+docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md, esm-giy.
 
-Walks each ``models.<m>`` and ``reaction_systems.<rs>`` block; if an
-``expression_templates`` entry is present, every
-``apply_expression_template`` node anywhere in that component's
-expressions is replaced by the substituted template body. After the
-pass, the file's expression trees contain no ``apply_expression_template``
-nodes and no ``expression_templates`` blocks — downstream consumers see
-only normal Expression ASTs (Option A round-trip).
+``expression_templates`` is the single structural-substitution mechanism in the
+format. Each entry is a rewrite rule with ``params`` (metavariables) and a
+``body`` (the replacement Expression), applied in one of two ways:
+
+- WITHOUT a ``match`` field — invoked explicitly by an
+  ``apply_expression_template`` node whose ``bindings`` supply each param's AST
+  (named-template expansion).
+- WITH a ``match`` field — an auto-applied rewrite rule: ``match`` is a pattern
+  Expression whose param occurrences are wildcards, fired wherever it
+  structurally matches a node. A param in an operand/``args`` position binds to
+  the matched sub-AST; a param in a scalar field (``dim``, ``side``, an
+  ``attrs.<key>``, …) binds to the matched literal.
+
+Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
+(esm-spec §9.6.3, :func:`_rewrite_to_fixpoint`). Rule application proceeds in
+passes; one pass (:func:`_rewrite_pass`) is a single pre-order (outermost-first)
+walk of the tree. At each node the engine first tries to fire a rule AT that
+node before descending: an ``apply_expression_template`` op is expanded,
+otherwise the ``match`` rules are consulted and the winner is selected
+deterministically — highest ``priority`` (integer, default 0), ties broken by
+DECLARATION order. The winner's ``body`` replaces the node and the walk does NOT
+descend into that freshly-produced body during the current pass; if no rule
+fires, the walk descends into children. Passes repeat until a pass performs zero
+rewrites (the fixpoint) or until ``MAX_REWRITE_PASSES`` productive passes have
+run without converging, in which case the file is rejected with
+``rewrite_rule_nonterminating`` (the pass bound — not a static check — is the
+authoritative termination guard, so a self-reintroducing rule simply fails to
+converge). Because selection and traversal are fully deterministic, all bindings
+produce byte-identical fixpoints. After convergence the tree contains no
+``apply_expression_template`` ops and no ``expression_templates`` blocks —
+downstream consumers see only normal Expression ASTs (Option A round-trip). Any
+rewrite-target op (e.g. a spatial ``D``) that survives the fixpoint into an
+evaluation position is caught later by the ``unlowered_operator`` gate, not here.
 
 Operates on the pre-coercion JSON dict view, so it must run after
 schema validation but before ``_parse_esm_data``.
@@ -30,7 +56,8 @@ class ExpressionTemplateError(Exception):
     ``apply_expression_template_bindings_mismatch``,
     ``apply_expression_template_recursive_body``,
     ``apply_expression_template_invalid_declaration``,
-    ``apply_expression_template_version_too_old``.
+    ``apply_expression_template_version_too_old``,
+    ``rewrite_rule_nonterminating``.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -100,9 +127,11 @@ def _validate_templates(templates: dict, scope: str) -> None:
             )
         _assert_no_nested_apply(decl["body"], name, "/body")
         # ``match`` (optional) turns the entry into an auto-applied rewrite rule.
-        # It must be a pattern Expression (a bare-metavar string or an op node);
-        # a body re-introducing this pattern is rejected later as
-        # ``rewrite_rule_nonterminating`` (see _build_match_rules).
+        # It must be a pattern Expression (a bare-metavar string or an op node).
+        # Nontermination is NOT checked statically any more — the bounded
+        # fixpoint (``MAX_REWRITE_PASSES``, esm-spec §9.6.3) is the sole guard, so
+        # a self-reintroducing rule is rejected with ``rewrite_rule_nonterminating``
+        # only when it actually fails to converge within the pass bound.
         if "match" in decl:
             match = decl["match"]
             if not (isinstance(match, str) or _is_object(match)):
@@ -138,17 +167,23 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
 #
 # A MatchRule pairs a pattern Expression with a replacement body. ``params`` are
 # the metavariables: a param appearing in an operand/``args`` position binds to
-# the matched sub-AST; a param in a scalar field (``dim``, ``side``, ...) binds
-# to the matched literal. The same ``_match`` recursion handles both positions.
+# the matched sub-AST; a param in a scalar field (``dim``, ``side``, an
+# ``attrs.<key>``, ...) binds to the matched literal. The same ``_match``
+# recursion handles both positions. ``priority`` (integer, default 0) is the
+# selection precedence when several rules match one node; ``decl_index`` is the
+# 0-based declaration order used to break priority ties (earliest wins).
 
 class MatchRule:
-    __slots__ = ("name", "pattern", "params", "body")
+    __slots__ = ("name", "pattern", "params", "body", "priority", "decl_index")
 
-    def __init__(self, name: str, pattern: Any, params: set, body: Any) -> None:
+    def __init__(self, name: str, pattern: Any, params: set, body: Any,
+                 priority: int, decl_index: int) -> None:
         self.name = name
         self.pattern = pattern
         self.params = params
         self.body = body
+        self.priority = priority
+        self.decl_index = decl_index
 
 
 def _merge_bindings(acc: dict, new: dict) -> bool:
@@ -203,42 +238,41 @@ def _match(pattern: Any, node: Any, params: set):
     return {} if node == pattern else None
 
 
-def _pattern_occurs(tree: Any, pattern: Any, params: set) -> bool:
-    """True if ``pattern`` structurally matches any node within ``tree`` (the
-    node itself or any descendant) — the non-termination test for a rule whose
-    ``body`` re-introduces its own ``match`` pattern."""
-    if _match(pattern, tree, params) is not None:
-        return True
-    if _is_array(tree):
-        return any(_pattern_occurs(c, pattern, params) for c in tree)
-    if _is_object(tree):
-        return any(_pattern_occurs(v, pattern, params) for v in tree.values())
-    return False
+def _rule_priority(decl: dict) -> int:
+    """The ``priority`` of a ``match`` rule (esm-spec §9.6.3): higher fires
+    first, ties break by declaration order. Absent ⇒ ``0``. The schema constrains
+    ``priority`` to an integer; any numeric encoding is coerced defensively (a
+    bool never counts as a priority)."""
+    p = decl.get("priority")
+    if p is None or isinstance(p, bool):
+        return 0
+    if isinstance(p, int):
+        return p
+    if isinstance(p, float):
+        return int(round(p))
+    return 0
 
 
 def _build_match_rules(templates: dict, scope: str) -> list:
     """Collect the ``match``-carrying templates as auto-applied rewrite rules,
-    in declaration order. Rejects a rule whose ``body`` re-introduces its own
-    pattern with ``rewrite_rule_nonterminating`` (esm-spec §9.6.3)."""
+    pre-sorted for deterministic selection (esm-spec §9.6.3): highest
+    ``priority`` first, ties broken by DECLARATION order (earliest wins). The
+    ``_rewrite_pass`` walk then fires the FIRST rule in this order that matches a
+    node. Nontermination is NOT checked here any more — the bounded fixpoint
+    (``MAX_REWRITE_PASSES``) is the sole termination guard."""
     rules: list = []
-    for name, decl in templates.items():
+    for decl_index, (name, decl) in enumerate(templates.items()):
         if "match" not in decl:
             continue
-        pattern = decl["match"]
-        params = set(decl["params"])
-        body = decl["body"]
-        if _pattern_occurs(body, pattern, params):
-            raise ExpressionTemplateError(
-                "rewrite_rule_nonterminating",
-                f"{scope}.expression_templates.{name}: the rewrite rule's body "
-                "re-introduces its own match pattern; single-pass rewriting "
-                "(no re-scan) would not terminate",
-            )
-        rules.append(MatchRule(name, pattern, params, body))
+        rules.append(MatchRule(
+            name, decl["match"], set(decl["params"]), decl["body"],
+            _rule_priority(decl), decl_index,
+        ))
+    rules.sort(key=lambda r: (-r.priority, r.decl_index))
     return rules
 
 
-def _expand_apply(node: dict, templates: dict, match_rules: list, scope: str) -> Any:
+def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     name = node.get("name")
     if not isinstance(name, str) or not name:
         raise ExpressionTemplateError(
@@ -275,39 +309,91 @@ def _expand_apply(node: dict, templates: dict, match_rules: list, scope: str) ->
                 f"{scope}: apply_expression_template '{name}' supplies unknown "
                 f"param '{p}'",
             )
-    # Bottom-up: rewrite each binding (which may itself contain apply nodes or
-    # match-triggering ops) before substituting into the body. The substituted
-    # body is NOT re-scanned (single-pass, §9.6.3).
-    resolved = {
-        k: _rewrite_node(v, templates, match_rules, scope)
-        for k, v in bindings.items()
-    }
+    # Outermost-first (esm-spec §9.6.3): the template ``body`` is instantiated by
+    # pure structural substitution with the bindings' sub-ASTs spliced in as-is.
+    # It is NOT re-scanned within this pass; any apply / match ops it introduces
+    # (including inside the substituted bindings) are rewritten in subsequent
+    # passes, up to the bounded fixpoint.
+    resolved = {k: v for k, v in bindings.items()}
     return _substitute(decl["body"], resolved)
 
 
-def _rewrite_node(node: Any, templates: dict, match_rules: list, scope: str) -> Any:
-    """The single bottom-up rewrite pass (esm-spec §9.6).
+# Maximum number of productive rewrite passes before a file is rejected as
+# non-converging (esm-spec §9.6.3, diagnostic ``rewrite_rule_nonterminating``).
+# Pinned identically across all bindings so the accept/reject decision — and the
+# resulting fixpoint — is byte-identical everywhere.
+MAX_REWRITE_PASSES = 64
 
-    Children are rewritten first; then, at the current node, explicit
-    ``apply_expression_template`` ops are expanded and auto-applied ``match``
-    rules are tried in declaration order — the first rule that matches fires and
-    its instantiated body replaces the node WITHOUT being re-scanned.
+
+def _rewrite_pass(node: Any, templates: dict, sorted_rules: list, scope: str,
+                  last: list) -> tuple:
+    """One pre-order (outermost-first) rewrite pass over ``node`` (esm-spec
+    §9.6.3). At each object node the engine first tries to fire a rule AT the
+    node before descending:
+
+    1. an ``apply_expression_template`` op is expanded (:func:`_expand_apply`), OR
+    2. the first rule in ``sorted_rules`` (pre-sorted highest-``priority``-first,
+       ties by declaration order) whose ``match`` pattern structurally matches
+       the node fires.
+
+    A fired rule's body replaces the node and the walk does NOT descend into that
+    freshly-produced body during this pass (it is revisited next pass). If nothing
+    fires, the walk descends into the node's children. Returns
+    ``(new_node, changed)`` where ``changed`` is True iff any rewrite occurred in
+    this subtree; ``last`` (a one-element list) records the op of the most recent
+    rewrite for the non-convergence diagnostic.
     """
     if _is_array(node):
-        return [_rewrite_node(c, templates, match_rules, scope) for c in node]
-    if _is_object(node):
-        if node.get("op") == APPLY_OP:
-            return _expand_apply(node, templates, match_rules, scope)
-        rewritten = {
-            k: _rewrite_node(v, templates, match_rules, scope)
-            for k, v in node.items()
-        }
-        for rule in match_rules:
-            binds = _match(rule.pattern, rewritten, rule.params)
-            if binds is not None:
-                return _substitute(rule.body, binds)
-        return rewritten
-    return node
+        changed = False
+        out = []
+        for c in node:
+            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last)
+            out.append(nc)
+            changed = changed or ch
+        return out, changed
+    if not _is_object(node):
+        return node, False
+    # (1) Outermost-first: fire a rule AT this node before descending.
+    if node.get("op") == APPLY_OP:
+        last[0] = APPLY_OP
+        return _expand_apply(node, templates, scope), True
+    for rule in sorted_rules:
+        binds = _match(rule.pattern, node, rule.params)
+        if binds is not None:
+            op = node.get("op")
+            last[0] = op if isinstance(op, str) else ""
+            return _substitute(rule.body, binds), True
+    # (2) No rule fired here — descend into children.
+    changed = False
+    out = {}
+    for k, v in node.items():
+        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last)
+        out[k] = nv
+        changed = changed or ch
+    return out, changed
+
+
+def _rewrite_to_fixpoint(node: Any, templates: dict, sorted_rules: list,
+                         scope: str) -> Any:
+    """Drive :func:`_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat
+    pre-order passes until a pass performs zero rewrites, or reject the file with
+    ``rewrite_rule_nonterminating`` once ``MAX_REWRITE_PASSES`` productive passes
+    have run without converging. This bound — not a static check — is the
+    authoritative termination guard, so a self-reintroducing rule fails to
+    converge rather than being flagged up front."""
+    last = [""]
+    current = node
+    for _pass in range(MAX_REWRITE_PASSES):
+        current, changed = _rewrite_pass(current, templates, sorted_rules, scope, last)
+        if not changed:
+            return current  # fixpoint reached
+    raise ExpressionTemplateError(
+        "rewrite_rule_nonterminating",
+        f"{scope}: expression-template rewriting did not converge within "
+        f"MAX_REWRITE_PASSES={MAX_REWRITE_PASSES} passes (last rewritten op "
+        f"'{last[0]}'). A `match` rule likely re-introduces its own pattern "
+        "(esm-spec §9.6.3).",
+    )
 
 
 def _find_apply_paths(view: Any, path: str = "") -> list[str]:
@@ -382,13 +468,15 @@ def _has_match_rules(file: dict) -> bool:
 
 
 def lower_expression_templates(file: dict) -> dict:
-    """Run the single load-time rewrite pass (esm-spec §9.6) over `file`.
+    """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`.
 
-    One bottom-up pass per component expands explicit
-    ``apply_expression_template`` ops and auto-applies the component's
-    ``match`` rewrite rules in template declaration order (replacements are not
-    re-scanned); the ``expression_templates`` blocks are then stripped. Returns
-    a new dict (does not mutate input).
+    Per component, an outermost-first / priority-ordered / bounded-fixpoint
+    rewrite (:func:`_rewrite_to_fixpoint`) expands explicit
+    ``apply_expression_template`` ops AND fires the component's ``match`` rewrite
+    rules until no rule applies; the ``expression_templates`` blocks are then
+    stripped. Returns a new dict (does not mutate input). Rejects a file whose
+    rewriting does not converge within ``MAX_REWRITE_PASSES`` passes with
+    ``rewrite_rule_nonterminating``.
 
     Pre-condition: the input has been schema-validated.
     """
@@ -421,7 +509,7 @@ def lower_expression_templates(file: dict) -> dict:
             for k in list(comp.keys()):
                 if k == "expression_templates":
                     continue
-                comp[k] = _rewrite_node(
+                comp[k] = _rewrite_to_fixpoint(
                     comp[k], templates, match_rules, f"{compkind}.{cname}.{k}"
                 )
             comp.pop("expression_templates", None)

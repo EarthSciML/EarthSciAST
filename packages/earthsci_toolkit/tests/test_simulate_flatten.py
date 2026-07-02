@@ -106,7 +106,9 @@ def test_simulate_flatten_round_trip_matches_esm_file_path():
 
 
 def test_simulate_rejects_pde_systems():
-    """A model with grad operators should raise UnsupportedDimensionalityError."""
+    """A model with an unlowered spatial operator should raise
+    UnsupportedDimensionalityError carrying the uniform `unlowered_operator`
+    code (esm-spec §4.2 / §9.6.8), superseding the old per-binding code."""
     var_u = ModelVariable(type="state", default=0.0)
     eq = Equation(
         lhs=ExprNode(op="D", args=["u"], wrt="t"),
@@ -119,8 +121,9 @@ def test_simulate_rejects_pde_systems():
         simulate(file, tspan=(0.0, 1.0))
 
     msg = str(excinfo.value)
+    assert excinfo.value.code == "unlowered_operator"
+    assert "unlowered_operator" in msg
     assert "spatial" in msg.lower()
-    assert "PDE" in msg or "PDE-capable" in msg
 
 
 # ----------------------------------------------------------------------------

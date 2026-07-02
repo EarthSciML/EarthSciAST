@@ -93,9 +93,16 @@ class UnsupportedDimensionalityError(FlattenError):
     """The flattened system has a dimensionality the simulator cannot handle.
 
     Raised by simulate() (and any ODE-only backend) when the flattened system
-    contains spatial independent variables — see spec §5.4.6, where this error
-    name first enters the spec via the Rust simulator.
+    contains spatial independent variables. Such a system carries unlowered
+    spatial operators (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar)
+    that no discretization rule reduced to a stencil, so it surfaces the uniform
+    cross-binding ``code = "unlowered_operator"`` diagnostic (esm-spec §4.2 /
+    §9.6.8, RFC open-op-namespace-fixpoint-rewrite Change B/C) — superseding the
+    old per-binding UnsupportedDimensionality / UnreachableSpatialOperator codes.
     """
+
+    #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
+    code = "unlowered_operator"
 
 
 # ============================================================================

@@ -189,12 +189,15 @@ def _expr_to_sympy(
                 symbol_map[expr] = sp.Symbol(expr)
                 return symbol_map[expr]
     elif isinstance(expr, ExprNode):
-        # Spatial differential operators must be rewritten by ESD
-        # discretization rules into `arrayop` AST before reaching the
-        # SymPy/lambdify simulator path. Encountering one here means the
-        # canonical pipeline broke; surface it instead of letting SymPy
-        # invent a symbolic placeholder. (esm-i7b)
-        if expr.op in ('grad', 'div', 'laplacian'):
+        # Unlowered rewrite-target operators (esm-spec §4.2 / §9.6.8) must be
+        # rewritten to a stencil by a discretization rule before reaching the
+        # SymPy/lambdify path: a spatial/right-hand-side `D`, or the
+        # `grad`/`div`/`laplacian` sugar ops. `D` in an equation LHS is consumed
+        # structurally by `_flat_to_sympy_rhs` (never routed here), so any `D`
+        # this recursion sees is an unlowered RHS derivative. Surface the uniform
+        # `unlowered_operator` diagnostic instead of letting SymPy invent a
+        # symbolic placeholder.
+        if expr.op in ('grad', 'div', 'laplacian', 'D'):
             raise UnreachableSpatialOperatorError(expr.op)
 
         # Closed-function registry (esm-spec §9.2 / §9.3) and inline const

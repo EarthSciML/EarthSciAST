@@ -521,14 +521,17 @@ def simulate(
     else:
         flat = flatten(file_or_flat)
 
-    # Spec §4.7.6.12: ODE backends MUST reject systems with spatial dims.
+    # Spec §4.7.6.12: ODE backends MUST reject systems with spatial dims. A
+    # spatial independent variable means an unlowered spatial operator survived
+    # into evaluation, so this surfaces the uniform `unlowered_operator` code.
     if len(flat.independent_variables) > 1:
         spatial = [v for v in flat.independent_variables if v != "t"]
         raise UnsupportedDimensionalityError(
-            f"Python's simulate() backend handles ODE-only systems "
-            f"(independent variables: ['t']), but the flattened system has "
-            f"spatial independent variables {spatial}. Use a PDE-capable "
-            f"backend such as Julia EarthSciSerialization."
+            f"unlowered_operator: Python's simulate() backend handles ODE-only "
+            f"systems (independent variables: ['t']), but the flattened system "
+            f"has spatial independent variables {spatial} — an unlowered spatial "
+            f"operator. Use a PDE-capable backend such as Julia "
+            f"EarthSciSerialization."
         )
 
     parameters = parameters or {}
@@ -1879,8 +1882,9 @@ def evaluate_rhs(
     flat = file_or_flat if isinstance(file_or_flat, FlattenedSystem) else flatten(file_or_flat)
     if len(flat.independent_variables) > 1:
         raise UnsupportedDimensionalityError(
-            "evaluate_rhs supports only time-dependent (pre-discretized) systems; "
-            f"got independent variables {sorted(flat.independent_variables)}"
+            "unlowered_operator: evaluate_rhs supports only time-dependent "
+            "(pre-discretized) systems; got independent variables "
+            f"{sorted(flat.independent_variables)} — an unlowered spatial operator"
         )
     build = _build_numpy_rhs(flat, dict(parameters or {}), dict(state))
     dy = build.rhs_function(float(t), build.y0)

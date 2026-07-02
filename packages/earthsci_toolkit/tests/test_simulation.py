@@ -86,21 +86,21 @@ class TestExpressionConversion:
         expected = sp.log(symbol_map["x"])
         assert result.equals(expected)
 
-    @pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian"])
+    @pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian", "D"])
     def test_spatial_operator_rejected(self, spatial_op):
-        """esm-i7b: feeding a non-discretized AST containing a spatial
-        differential operator (`grad`/`div`/`laplacian`) to the
-        SymPy/lambdify simulator path must raise the canonical
-        pipeline-violation error rather than silently producing a
-        symbolic placeholder."""
+        """Feeding a non-lowered rewrite-target op — a spatial/RHS `D` or a
+        `grad`/`div`/`laplacian` sugar op — to the SymPy/lambdify simulator path
+        must raise the uniform `unlowered_operator` diagnostic (esm-spec §4.2 /
+        §9.6.8) rather than silently producing a symbolic placeholder."""
         symbol_map = {"u": sp.Symbol("u")}
-        expr = ExprNode(op=spatial_op, args=["u"])
+        kw = {"wrt": "x"} if spatial_op == "D" else {"dim": "x"}
+        expr = ExprNode(op=spatial_op, args=["u"], **kw)
         with pytest.raises(UnreachableSpatialOperatorError) as excinfo:
             _expr_to_sympy(expr, symbol_map)
         msg = str(excinfo.value)
-        assert "UnreachableSpatialOperatorError" in msg
+        assert "unlowered_operator" in msg
         assert spatial_op in msg
-        assert "Pipeline contract violated" in msg
+        assert excinfo.value.code == "unlowered_operator"
         assert excinfo.value.op == spatial_op
 
 

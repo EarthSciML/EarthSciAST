@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 
+import numpy as np
 import pytest
 
+from earthsci_toolkit.esm_types import ExprNode
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.lower_expression_templates import (
     ExpressionTemplateError,
@@ -256,3 +259,138 @@ def test_load_end_to_end_produces_inline_rate_in_typed_object():
                 assert_no_apply(a)
 
     assert_no_apply(rate)
+
+
+# ===========================================================================
+# 0.8.0 rewrite engine — outermost-first + priority + bounded fixpoint
+# (docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8). Mirrors the
+# Julia reference testset in EarthSciSerialization.jl/test/expression_templates_test.jl
+# ("0.8.0 outermost-first + fixpoint") and test/tree_walk_test.jl.
+# ===========================================================================
+
+
+def _conf_dir(fix: str) -> str:
+    # tests/test_expression_templates.py → packages/earthsci_toolkit/tests →
+    # packages/earthsci_toolkit → packages → repo root.
+    here = os.path.dirname(__file__)
+    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    return os.path.join(root, "tests", "conformance", "expression_templates", fix)
+
+
+def _conf_fixture(fix: str, name: str = "fixture.esm") -> dict:
+    with open(os.path.join(_conf_dir(fix), name)) as fp:
+        return json.load(fp)
+
+
+def test_godunov_compound_rule_beats_inner_derivative():
+    """Anti-regression for the old bottom-up single pass: the ``priority:100``
+    compound rule must fire on the WHOLE ``sqrt(D(u,x)^2 + D(u,y)^2)`` before the
+    ``priority:0`` central-difference ``D`` rule can lower either inner ``D``. The
+    expanded form is ``godunov_coef * u`` — crucially with NO ``inv_dx`` (which
+    only the per-derivative rule emits)."""
+    out = lower_expression_templates(_conf_fixture("godunov_beats_inner_deriv"))
+    got = out["models"]["m"]["variables"]
+    exp = _conf_fixture("godunov_beats_inner_deriv", "expanded.esm")["models"]["m"]["variables"]
+    assert got == exp
+    assert got["grad_mag"]["expression"] == {"op": "*", "args": ["godunov_coef", "u"]}
+    expr_json = json.dumps(got["grad_mag"]["expression"])
+    assert "inv_dx" not in expr_json
+    assert "godunov_coef" in expr_json
+
+
+def test_nested_derivative_fixpoint_converges_across_passes():
+    """laplacian → D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D → stencil
+    (pass 2). Exercises the bounded fixpoint: a produced body is re-scanned only in
+    a SUBSEQUENT pass."""
+    out = lower_expression_templates(_conf_fixture("fixpoint_nested_deriv"))
+    got = out["models"]["m"]["variables"]
+    exp = _conf_fixture("fixpoint_nested_deriv", "expanded.esm")["models"]["m"]["variables"]
+    assert got == exp
+    assert got["lap"]["expression"] == {
+        "op": "+",
+        "args": [
+            {"op": "*", "args": ["inv_dx2", "u"]},
+            {"op": "*", "args": ["inv_dy2", "u"]},
+        ],
+    }
+    expr_json = json.dumps(got["lap"]["expression"])
+    assert "laplacian" not in expr_json
+    assert '"D"' not in expr_json
+
+
+def test_self_reintroducing_rule_rejected_by_pass_bound():
+    """A rule whose body re-introduces its own pattern never reaches a fixpoint;
+    the engine rejects the file with ``rewrite_rule_nonterminating`` once
+    MAX_REWRITE_PASSES productive passes have run (the pass bound — not a static
+    pre-check — is the sole guard)."""
+    with pytest.raises(ExpressionTemplateError) as excinfo:
+        lower_expression_templates(_conf_fixture("nonterminating_rewrite"))
+    assert excinfo.value.code == "rewrite_rule_nonterminating"
+
+
+def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
+    """The op namespace is open (esm-spec §4.2): a spatial ``D`` with no rule is
+    tolerated at LOAD. It is rejected with the uniform ``unlowered_operator`` code
+    only when it reaches evaluation/compilation (the gate fires before evaluation,
+    not at load — RFC decision 5)."""
+    from earthsci_toolkit.numpy_interpreter import (
+        EvalContext,
+        UnreachableSpatialOperatorError,
+        eval_expr,
+    )
+    from earthsci_toolkit.simulation import simulate
+
+    # (a) Loads clean.
+    f = load(os.path.join(_conf_dir("unlowered_operator"), "fixture.esm"))
+    assert "m" in f.models
+
+    # (b) Reaching evaluation surfaces `unlowered_operator` (the fixture's RHS is a
+    # spatial D(u, wrt=x)); mirrors Julia tree_walk_test.jl.
+    ctx = EvalContext(
+        state_layout={"u": slice(0, 1)}, state_shapes={"u": ()},
+        param_values={}, observed_values={}, y=np.array([1.0]), t=0.0,
+    )
+    with pytest.raises(UnreachableSpatialOperatorError) as excinfo:
+        eval_expr(ExprNode(op="D", args=["u"], wrt="x"), ctx)
+    assert excinfo.value.code == "unlowered_operator"
+
+    # (c) End-to-end: the loaded fixture surfaces the same token when simulated.
+    res = simulate(f, tspan=(0.0, 1.0))
+    assert res.success is False
+    assert "unlowered_operator" in (res.message or "")
+
+
+def test_attrs_match_binds_scalar_metavariable():
+    """esm-spec §4.2 open tier / RFC Change A: a custom op carries scheme params in
+    ``attrs``; a ``match`` pattern's ``attrs.<key>`` set to a bare param binds it to
+    the matched literal. This falls out of generic structural matching — no
+    special-casing in the engine. Mirrors the Julia attrs testset."""
+    src = {
+        "esm": "0.8.0",
+        "metadata": {"name": "attrs_match", "authors": ["t"]},
+        "models": {
+            "m": {
+                "variables": {
+                    "u": {"type": "state", "units": "1", "default": 0.0},
+                    "y": {
+                        "type": "observed", "units": "1",
+                        "expression": {"op": "custom_scheme", "args": ["u"],
+                                       "attrs": {"gamma": 1.4}},
+                    },
+                },
+                "equations": [],
+                "expression_templates": {
+                    "lower_custom": {
+                        "params": ["f", "g"],
+                        "match": {"op": "custom_scheme", "args": ["f"],
+                                  "attrs": {"gamma": "g"}},
+                        "body": {"op": "*", "args": ["g", "f"]},
+                    }
+                },
+            }
+        },
+    }
+    out = lower_expression_templates(src)
+    assert out["models"]["m"]["variables"]["y"]["expression"] == {
+        "op": "*", "args": [1.4, "u"],
+    }

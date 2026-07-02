@@ -191,20 +191,22 @@ def test_unsupported_op_raises() -> None:
         eval_expr(ExprNode(op="bogus_op", args=[1.0]), _ctx({}))
 
 
-@pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian"])
+@pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian", "D"])
 def test_spatial_operator_in_simulator_rejected(spatial_op: str) -> None:
-    """esm-i7b: a non-discretized AST containing `grad`/`div`/`laplacian`
-    fed to the simulator's RHS evaluator must raise the canonical
-    pipeline-violation error rather than silently returning zero (the
-    historical stub-to-zero behaviour)."""
+    """A non-lowered rewrite-target op — a spatial/RHS `D` or a
+    `grad`/`div`/`laplacian` sugar op — fed to the simulator's RHS evaluator
+    must raise the uniform `unlowered_operator` diagnostic (esm-spec §4.2 /
+    §9.6.8) rather than silently returning zero or evaluating its inner arg (the
+    historical stub behaviour). Supersedes the old per-binding code."""
     ctx = _ctx({"u": np.asarray(1.0)})
-    expr = ExprNode(op=spatial_op, args=["u"])
+    kw = {"wrt": "x"} if spatial_op == "D" else {"dim": "x"}
+    expr = ExprNode(op=spatial_op, args=["u"], **kw)
     with pytest.raises(UnreachableSpatialOperatorError) as excinfo:
         eval_expr(expr, ctx)
     msg = str(excinfo.value)
-    assert "UnreachableSpatialOperatorError" in msg
+    assert "unlowered_operator" in msg
     assert spatial_op in msg
-    assert "Pipeline contract violated" in msg
+    assert excinfo.value.code == "unlowered_operator"
     assert excinfo.value.op == spatial_op
 
 
