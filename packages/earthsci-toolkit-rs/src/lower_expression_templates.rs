@@ -154,6 +154,93 @@ pub(crate) fn validate_templates(
         if let Some(pattern) = decl_obj.get("match") {
             assert_no_nested_apply(pattern, name, "/match")?;
         }
+
+        // An optional `where` block adds static match-scoping constraints on
+        // the captured params (esm-spec §9.6.1, 0.8.0). Structural validation
+        // only, here; the unknown-index-set check runs at rule REGISTRATION in
+        // the consuming component (where the merged `index_sets` registry is in
+        // scope) — see [`registered_where`]. A JSON `null` `where` is treated as
+        // absent (matching the Julia `get(decl, "where", nothing)`).
+        if let Some(whr) = decl_obj.get("where").filter(|v| !v.is_null()) {
+            if decl_obj.get("match").is_none() {
+                return Err(err(
+                    "apply_expression_template_invalid_declaration",
+                    format!(
+                        "{scope}.expression_templates.{name}: 'where' is only admissible \
+                         alongside 'match' — constraints scope an auto-applied rewrite rule, not \
+                         a named fragment (esm-spec §9.6.1)"
+                    ),
+                ));
+            }
+            let whr_obj = whr.as_object().filter(|o| !o.is_empty()).ok_or_else(|| {
+                err(
+                    "apply_expression_template_invalid_declaration",
+                    format!(
+                        "{scope}.expression_templates.{name}: 'where' must be a non-empty object \
+                         mapping declared params to constraint objects"
+                    ),
+                )
+            })?;
+            for (p, cobj) in whr_obj {
+                if !seen.contains(p.as_str()) {
+                    return Err(err(
+                        "apply_expression_template_invalid_declaration",
+                        format!(
+                            "{scope}.expression_templates.{name}: 'where' constrains '{p}', which \
+                             is not a declared param (esm-spec §9.6.1)"
+                        ),
+                    ));
+                }
+                let cobj_obj = cobj.as_object().ok_or_else(|| {
+                    err(
+                        "apply_expression_template_invalid_declaration",
+                        format!(
+                            "{scope}.expression_templates.{name}: where.{p} must be a constraint \
+                             object (v1 admits exactly the 'shape' kind)"
+                        ),
+                    )
+                })?;
+                let is_only_shape =
+                    cobj_obj.len() == 1 && cobj_obj.contains_key("shape");
+                if !is_only_shape {
+                    let mut kinds: Vec<&str> = cobj_obj.keys().map(String::as_str).collect();
+                    kinds.sort_unstable();
+                    return Err(err(
+                        "apply_expression_template_invalid_declaration",
+                        format!(
+                            "{scope}.expression_templates.{name}: where.{p} carries constraint \
+                             kind(s) {}; the v1 constraint vocabulary is exactly {{shape}} \
+                             (esm-spec §9.6.1)",
+                            kinds.join(", ")
+                        ),
+                    ));
+                }
+                let shp = cobj_obj
+                    .get("shape")
+                    .and_then(|v| v.as_array())
+                    .filter(|a| !a.is_empty())
+                    .ok_or_else(|| {
+                        err(
+                            "apply_expression_template_invalid_declaration",
+                            format!(
+                                "{scope}.expression_templates.{name}: where.{p}.shape must be a \
+                                 non-empty array of index-set names"
+                            ),
+                        )
+                    })?;
+                for s in shp {
+                    if !s.as_str().is_some_and(|s| !s.is_empty()) {
+                        return Err(err(
+                            "apply_expression_template_invalid_declaration",
+                            format!(
+                                "{scope}.expression_templates.{name}: where.{p}.shape entries \
+                                 must be non-empty strings"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -395,6 +482,7 @@ const MAX_REWRITE_PASSES: usize = 64;
 /// a `match` pattern (esm-spec §9.6). Named templates *without* a `match` are
 /// expanded only by explicit `apply_expression_template`; those with a `match`
 /// fire wherever the pattern structurally matches a node.
+#[derive(Clone)]
 struct MatchRule {
     /// Template id (for diagnostics).
     name: String,
@@ -407,6 +495,10 @@ struct MatchRule {
     /// Selection precedence (esm-spec §9.6.3): higher fires first; ties break by
     /// declaration order. Absent ⇒ `0`.
     priority: i64,
+    /// Registered static match-scoping constraints (esm-spec §9.6.1): param →
+    /// required shape (ordered index-set names). `None` when the rule carries
+    /// no `where` block. Checked as part of match eligibility.
+    where_c: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 /// Bundles the per-component rewrite inputs threaded through each pass.
@@ -417,6 +509,11 @@ struct RewriteCtx<'a> {
     /// ties broken by declaration order (esm-spec §9.6.3). `rewrite_pass` fires
     /// the first rule in this order whose pattern matches a node.
     rules: &'a [MatchRule],
+    /// The enclosing component's static shape environment (declared variable
+    /// name → declared shape), consulted by a rule's `where` constraints
+    /// (esm-spec §9.6.1). Empty when no component context (coupling transforms
+    /// use the receiving component's environment).
+    shape_env: &'a std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first, ties
@@ -433,15 +530,127 @@ fn rule_priority(decl: &Map<String, Value>) -> i64 {
     }
 }
 
+/// The static shape environment of one component: every declared variable name
+/// mapped to its declared `shape` (ordered index-set names). This is the ONLY
+/// information a `where` constraint may consult (esm-spec §9.6.1) — declared
+/// shapes at lowering time, never runtime values — so constraint evaluation is
+/// fully static and the §9.6.3 determinism contract is untouched. Variables
+/// with no `shape` (scalars) are absent, as are species / parameters of
+/// reaction systems (which carry no `shape` field): a shape-constrained rule
+/// can only fire on a declared, shaped model variable. Mirrors the Julia
+/// reference `_component_shape_env`.
+fn component_shape_env(comp: &Map<String, Value>) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut env = std::collections::BTreeMap::new();
+    let Some(vars) = comp.get("variables").and_then(|v| v.as_object()) else {
+        return env;
+    };
+    for (vn, vd) in vars {
+        let Some(shp) = vd.get("shape").and_then(|s| s.as_array()) else {
+            continue;
+        };
+        if !shp.iter().all(|s| s.is_string()) {
+            continue;
+        }
+        let shape: Vec<String> = shp
+            .iter()
+            .map(|s| s.as_str().unwrap_or_default().to_string())
+            .collect();
+        env.insert(vn.clone(), shape);
+    }
+    env
+}
+
+/// Evaluate a registered `where` constraint map (param → required shape)
+/// against the bindings produced by a successful structural match (esm-spec
+/// §9.6.1). A constraint on param `p` holds iff `bindings[p]` is a BARE
+/// variable-reference string naming an entry of `shape_env` whose declared
+/// shape equals the required list exactly (same names, same order). Everything
+/// else — a compound sub-AST, a numeric literal, a scalar-field-bound literal,
+/// a scoped (`System.var`) reference, an undeclared name, a scalar variable, or
+/// a param that never bound — fails the constraint. Deliberately syntactic and
+/// conservative. Mirrors the Julia reference `_where_satisfied`.
+fn where_satisfied(
+    where_c: &Option<std::collections::BTreeMap<String, Vec<String>>>,
+    bindings: &Map<String, Value>,
+    shape_env: &std::collections::BTreeMap<String, Vec<String>>,
+) -> bool {
+    let Some(where_c) = where_c else {
+        return true;
+    };
+    for (p, req) in where_c {
+        let Some(Value::String(b)) = bindings.get(p) else {
+            return false;
+        };
+        let Some(shp) = shape_env.get(b) else {
+            return false;
+        };
+        if shp != req {
+            return false;
+        }
+    }
+    true
+}
+
+/// Normalize a template's `where` block into the registered constraint map
+/// (param → required shape), checking every referenced index-set name against
+/// the CONSUMING document's merged `index_sets` registry (`iset_names`). An
+/// unknown name is `template_constraint_unknown_index_set` (esm-spec
+/// §9.6.1/§9.6.6) — raised here, at rule registration in the consuming
+/// component, not when a library file is loaded standalone. Returns `None` when
+/// the decl carries no `where` block. The `where` block is already
+/// structurally validated by [`validate_templates`]. Mirrors the Julia
+/// reference `_registered_where`.
+fn registered_where(
+    decl: &Map<String, Value>,
+    iset_names: &std::collections::HashSet<String>,
+    scope: &str,
+    tname: &str,
+) -> Result<Option<std::collections::BTreeMap<String, Vec<String>>>, ExpressionTemplateError> {
+    let Some(whr) = decl.get("where").and_then(|v| v.as_object()) else {
+        return Ok(None);
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for (p, cobj) in whr {
+        let shp = cobj.get("shape").and_then(|v| v.as_array());
+        let req: Vec<String> = shp
+            .map(|a| {
+                a.iter()
+                    .map(|s| s.as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for s in &req {
+            if !iset_names.contains(s) {
+                return Err(err(
+                    "template_constraint_unknown_index_set",
+                    format!(
+                        "{scope}.expression_templates.{tname}: where.{p}.shape names index set \
+                         '{s}', which the consuming document's index_sets registry does not \
+                         declare (esm-spec §9.6.1/§9.6.6)"
+                    ),
+                ));
+            }
+        }
+        out.insert(p.clone(), req);
+    }
+    Ok(Some(out))
+}
+
 /// Collect the auto-applied `match` rules from a component's templates in
 /// declaration order (serde_json's `preserve_order` feature keeps source
 /// order), then pre-sort them by descending `priority` with ties broken by
 /// declaration order (a stable sort preserves push order for equal
-/// priorities). The old static self-reintroduction / nontermination pre-check
-/// is GONE — the bounded fixpoint (`MAX_REWRITE_PASSES`) is now the sole
-/// termination guard (esm-spec §9.6.3), so a self-reintroducing rule simply
-/// fails to converge rather than being detected up front.
-fn collect_match_rules(templates: &Map<String, Value>) -> Vec<MatchRule> {
+/// priorities). Each rule's `where` block is normalized and its referenced
+/// index sets resolved against the consuming document's registry (`iset_names`)
+/// at registration — an unknown name is `template_constraint_unknown_index_set`
+/// (esm-spec §9.6.1). The old static self-reintroduction / nontermination
+/// pre-check is GONE — the bounded fixpoint (`MAX_REWRITE_PASSES`) is now the
+/// sole termination guard (esm-spec §9.6.3).
+fn collect_match_rules(
+    templates: &Map<String, Value>,
+    iset_names: &std::collections::HashSet<String>,
+    scope: &str,
+) -> Result<Vec<MatchRule>, ExpressionTemplateError> {
     let mut rules = Vec::new();
     for (name, decl) in templates {
         let Some(obj) = decl.as_object() else {
@@ -460,19 +669,21 @@ fn collect_match_rules(templates: &Map<String, Value>) -> Vec<MatchRule> {
             })
             .unwrap_or_default();
         let body = obj.get("body").cloned().unwrap_or(Value::Null);
+        let where_c = registered_where(obj, iset_names, scope, name)?;
         rules.push(MatchRule {
             name: name.clone(),
             params,
             pattern: pattern.clone(),
             body,
             priority: rule_priority(obj),
+            where_c,
         });
     }
     // Deterministic selection order (esm-spec §9.6.3): highest `priority` first,
     // ties broken by declaration order. `sort_by_key` is stable, so equal
     // priorities retain their push (declaration) order.
     rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
-    rules
+    Ok(rules)
 }
 
 /// Structurally match `pattern` against `target`, binding metavariables (names
@@ -640,7 +851,13 @@ fn rewrite_pass(
                 let param_set: std::collections::HashSet<&str> =
                     rule.params.iter().map(String::as_str).collect();
                 let mut binds = Map::new();
-                if try_match(&rule.pattern, node, &param_set, &mut binds) {
+                // Constraint filtering is part of match ELIGIBILITY (esm-spec
+                // §9.6.3 constraint 2): a `where`-excluded rule is treated
+                // exactly like a non-matching rule at this node, so the scan
+                // proceeds to the next candidate in priority / declaration order.
+                if try_match(&rule.pattern, node, &param_set, &mut binds)
+                    && where_satisfied(&rule.where_c, &binds, ctx.shape_env)
+                {
                     let _ = &rule.name; // retained for diagnostics / future tracing
                     *last = op.unwrap_or("").to_string();
                     return Ok((substitute(&rule.body, &binds), true));
@@ -763,6 +980,17 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
     Ok(())
 }
 
+/// A per-component rewrite registry captured during model / reaction-system
+/// lowering and reused by coupling `variable_map` transforms (esm-spec §10.4):
+/// the named-template lookup table, the pre-sorted auto `match` rules (with
+/// their registered `where` constraints), and the static shape environment the
+/// constraints consult.
+struct CompRegistry {
+    templates: Map<String, Value>,
+    rules: Vec<MatchRule>,
+    shape_env: std::collections::BTreeMap<String, Vec<String>>,
+}
+
 /// Run the single load-time rewrite pass (esm-spec §9.6): expand every
 /// `apply_expression_template` op, auto-apply each component's `match` rules in
 /// declaration order, and strip the `expression_templates` blocks. Mutates
@@ -778,11 +1006,22 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
         return Ok(());
     };
 
-    // Per-component template registries (validated + body-composed), captured
-    // so coupling `variable_map` expression transforms (esm-spec §10.4) can be
-    // rewritten against the RECEIVING component's registry below. Models are
-    // registered first; a reaction system never overwrites a same-named model.
-    let mut registries: std::collections::HashMap<String, Map<String, Value>> =
+    // The consuming document's merged index_sets registry (post-§9.7.5): the
+    // namespace `where` shape constraints resolve against at registration
+    // (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
+    // declared here). Captured before the per-component mutable borrows.
+    let iset_names: std::collections::HashSet<String> = root
+        .get("index_sets")
+        .and_then(|v| v.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+
+    // Per-component rewrite registries (templates + ordered match rules + static
+    // shape environment), captured so coupling `variable_map` expression
+    // transforms (esm-spec §10.4) can be rewritten against the RECEIVING
+    // component's registry below. Models are registered first; a reaction
+    // system never overwrites a same-named model.
+    let mut registries: std::collections::HashMap<String, CompRegistry> =
         std::collections::HashMap::new();
 
     for compkind in ["models", "reaction_systems"] {
@@ -794,6 +1033,10 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                 continue;
             };
             let scope_base = format!("{compkind}.{cname}");
+            // Static shape environment for `where` constraint evaluation
+            // (esm-spec §9.6.1): declared variable shapes only. Computed before
+            // the templates block is removed (it reads only `variables`).
+            let shape_env = component_shape_env(comp);
             // Take the templates block (if any) so we can borrow comp mutably.
             let mut templates: Map<String, Value> = match comp.remove("expression_templates") {
                 Some(Value::Object(t)) => t,
@@ -811,10 +1054,11 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             // statically-checked acyclic DAG, so every rule body the
             // fixpoint sees is a closed AST.
             compose_template_bodies(&mut templates, &scope_base)?;
-            let rules = collect_match_rules(&templates);
+            let rules = collect_match_rules(&templates, &iset_names, &scope_base)?;
             let ctx = RewriteCtx {
                 templates: &templates,
                 rules: &rules,
+                shape_env: &shape_env,
             };
             // Outermost-first, priority-ordered, bounded-fixpoint rewrite per
             // non-template field (esm-spec §9.6.3): expands
@@ -828,9 +1072,11 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                     comp.insert(k, rewritten);
                 }
             }
-            registries
-                .entry(cname.clone())
-                .or_insert_with(|| templates.clone());
+            registries.entry(cname.clone()).or_insert_with(|| CompRegistry {
+                templates: templates.clone(),
+                rules: rules.clone(),
+                shape_env: shape_env.clone(),
+            });
         }
     }
 
@@ -861,13 +1107,13 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             else {
                 continue;
             };
-            let Some(templates) = registries.get(comp_name) else {
+            let Some(reg) = registries.get(comp_name) else {
                 continue;
             };
-            let rules = collect_match_rules(templates);
             let ctx = RewriteCtx {
-                templates,
-                rules: &rules,
+                templates: &reg.templates,
+                rules: &reg.rules,
+                shape_env: &reg.shape_env,
             };
             let scope = format!("coupling[{idx}].transform");
             let rewritten = rewrite_to_fixpoint(&transform, &ctx, &scope)?;
@@ -890,8 +1136,10 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
 
     // Validators run on the expanded form (esm-spec §9.6.4): reject any
     // geometry-kernel node whose (possibly just-substituted) `manifold` is
-    // outside the closed set.
+    // outside the closed set, and any makearray region whose folded bound pair
+    // is inverted (stop < start - 1; esm-spec §4.3.2).
     validate_geometry_manifolds(value, "")?;
+    validate_makearray_regions(value, "")?;
 
     Ok(())
 }
@@ -958,6 +1206,80 @@ pub fn validate_geometry_manifolds(
                     continue;
                 }
                 validate_geometry_manifolds(v, &format!("{path}/{k}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`
+/// region bound pair `[start, stop]` on the expanded, metaparameter-folded
+/// tree must satisfy `stop >= start - 1`. `stop == start - 1` is the canonical
+/// EMPTY bound — the region covers no elements and contributes nothing (the
+/// spelling an interior region like `[2, N-1]` folds to at the minimum
+/// admissible extent `N = 2`). `stop < start - 1` is INVERTED and rejected with
+/// `makearray_region_inverted`: it is almost always an authoring bug (an
+/// interior stencil instantiated below its minimum extent, e.g. `[2, N-1]` at
+/// `N = 1` folding to `[2, 0]`), and silently treating it as empty would hide
+/// the defect. Template bodies are skipped — pre-substitution bounds may
+/// legally carry metaparameter names there; only concrete integer pairs are
+/// checked (a fully-folded document tree carries nothing else in bound
+/// position). Mirrors the Julia reference `_validate_makearray_regions`.
+pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), ExpressionTemplateError> {
+    match tree {
+        Value::Array(arr) => {
+            for (i, child) in arr.iter().enumerate() {
+                validate_makearray_regions(child, &format!("{path}/{i}"))?;
+            }
+            Ok(())
+        }
+        Value::Object(obj) => {
+            if obj.get("op").and_then(|v| v.as_str()) == Some("makearray")
+                && let Some(regions) = obj.get("regions").and_then(|v| v.as_array())
+            {
+                for (ri, region) in regions.iter().enumerate() {
+                    let Some(region_arr) = region.as_array() else {
+                        continue;
+                    };
+                    for (di, bounds) in region_arr.iter().enumerate() {
+                        let Some(bounds_arr) = bounds.as_array() else {
+                            continue;
+                        };
+                        if bounds_arr.len() != 2 {
+                            continue;
+                        }
+                        // Only concrete integer pairs are checked; a fully
+                        // folded document carries nothing else here. `as_i64`
+                        // rejects booleans and floats, matching the Julia
+                        // `Integer && !Bool` gate.
+                        let (Some(lo), Some(hi)) = (bounds_arr[0].as_i64(), bounds_arr[1].as_i64())
+                        else {
+                            continue;
+                        };
+                        if hi < lo - 1 {
+                            return Err(err(
+                                "makearray_region_inverted",
+                                format!(
+                                    "{path}: makearray regions[{ri}] dimension {di} bound pair \
+                                     [{lo}, {hi}] is inverted (stop < start - 1). An empty bound \
+                                     is spelled [start, start-1] and contributes no elements \
+                                     (esm-spec §4.3.2); a further-inverted pair is an authoring \
+                                     error — e.g. an interior stencil region [2, N-1] instantiated \
+                                     at N below the scheme's minimum extent (§9.6.8)."
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            for (k, v) in obj {
+                // Template bodies/matches are pre-substitution trees; bounds may
+                // legally carry metaparameter names or fold later (§9.7.6).
+                if k == "expression_templates" {
+                    continue;
+                }
+                validate_makearray_regions(v, &format!("{path}/{k}"))?;
             }
             Ok(())
         }

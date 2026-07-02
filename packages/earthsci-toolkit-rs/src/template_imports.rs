@@ -32,11 +32,16 @@ use crate::lower_expression_templates::{
     ExpressionTemplateError, compose_template_bodies, reject_expression_templates_pre_v04,
     validate_templates,
 };
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 const COMPONENT_KINDS: [&str; 2] = ["models", "reaction_systems"];
+
+/// The `apply_expression_template` op string — the named-template invocation
+/// node whose `name` field the §9.7.7 rename walk rewrites.
+const APPLY_OP: &str = "apply_expression_template";
 
 /// A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
 const LIBRARY_FORBIDDEN_KEYS: [&str; 5] =
@@ -46,7 +51,7 @@ const LIBRARY_FORBIDDEN_KEYS: [&str; 5] =
 /// substituted as bare variable-reference strings, so structural string
 /// fields must not be rewritten. Template `params` shadowing is handled
 /// separately in [`substitute_metaparams_decl`].
-const META_SUBST_SKIP_KEYS: [&str; 11] = [
+const META_SUBST_SKIP_KEYS: [&str; 12] = [
     "metadata",
     "params",
     "type",
@@ -58,7 +63,40 @@ const META_SUBST_SKIP_KEYS: [&str; 11] = [
     "expression_template_imports",
     "metaparameters",
     "only",
+    // `where` match-scoping constraints (esm-spec §9.6.1) carry index-set NAMES,
+    // a structural namespace — never expression positions.
+    "where",
 ];
+
+/// Scalar Expression-node fields whose string value names an AXIS / index set
+/// (rewritten by the index-set rename map, param-shadowed like §9.6.1).
+const RENAME_AXIS_KEYS: [&str; 2] = ["wrt", "dim"];
+
+/// The remaining scalar structural ExpressionNode fields (beyond
+/// [`META_SUBST_SKIP_KEYS`]) whose values are never variable-reference
+/// positions for the §9.7.7 rename walk: `op`, closed-registry ids, literal
+/// enums. `from`, `wrt`/`dim`, apply-`name`, and `of` are handled positionally.
+const RENAME_EXTRA_PROTECTED_KEYS: [&str; 12] = [
+    "op",
+    "id",
+    "expect_cadence",
+    "reduce",
+    "semiring",
+    "manifold",
+    "fn",
+    "table",
+    "side",
+    "attrs",
+    "members",
+    "from_faq",
+];
+
+/// True when object key `k` is a structural scalar field the §9.7.7 rename walk
+/// must never rewrite (`_RENAME_PROTECTED_KEYS` in the Julia reference:
+/// [`META_SUBST_SKIP_KEYS`] ∪ [`RENAME_EXTRA_PROTECTED_KEYS`]).
+fn is_rename_protected(k: &str) -> bool {
+    META_SUBST_SKIP_KEYS.contains(&k) || RENAME_EXTRA_PROTECTED_KEYS.contains(&k)
+}
 
 fn err(code: &'static str, message: impl Into<String>) -> ExpressionTemplateError {
     ExpressionTemplateError {
@@ -479,6 +517,480 @@ fn fold_index_set_sizes(
 }
 
 // ---------------------------------------------------------------------------
+// Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+// ---------------------------------------------------------------------------
+
+/// True when `s` is one or more `[A-Za-z_][A-Za-z0-9_]*` segments joined by
+/// single dots — the §4.6 scoped-reference shape, the grammar for a `prefix`
+/// and for `rename`/`rebind` TARGETS (esm-spec §9.7.7). Keys are never
+/// grammar-checked. Mirrors the Julia `_is_valid_dotted_name`.
+fn is_valid_dotted_name(s: &str) -> bool {
+    !s.is_empty() && s.split('.').all(is_name_segment)
+}
+
+fn is_name_segment(seg: &str) -> bool {
+    let mut chars = seg.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Read a `rename` / `rebind` map (name → dotted-identifier target). An empty
+/// or absent map (or JSON `null`) is empty; a non-object, an empty key, or a
+/// non-dotted-identifier target is `template_import_rename_invalid`. Order is
+/// preserved (serde_json `preserve_order` source → `IndexMap`). Mirrors the
+/// Julia `_name_map`.
+fn name_map(
+    raw: Option<&Value>,
+    field: &str,
+    where_: &str,
+) -> Result<IndexMap<String, String>, ExpressionTemplateError> {
+    let mut out = IndexMap::new();
+    let Some(raw) = raw.filter(|v| !v.is_null()) else {
+        return Ok(out);
+    };
+    let Some(obj) = raw.as_object() else {
+        return Err(err(
+            "template_import_rename_invalid",
+            format!("{where_}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)"),
+        ));
+    };
+    for (k, v) in obj {
+        if k.is_empty() {
+            return Err(err(
+                "template_import_rename_invalid",
+                format!("{where_}: `{field}` has an empty key (esm-spec §9.7.7)"),
+            ));
+        }
+        let valid_target = v.as_str().is_some_and(is_valid_dotted_name);
+        if !valid_target {
+            return Err(err(
+                "template_import_rename_invalid",
+                format!(
+                    "{where_}: `{field}`.{k} target {v} is not a valid dotted identifier \
+                     (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
+                ),
+            ));
+        }
+        out.insert(k.clone(), v.as_str().unwrap().to_string());
+    }
+    Ok(out)
+}
+
+/// One transitive-substitution pass over an imported declaration (esm-spec
+/// §9.7.7): `varmap` (renamed open metaparameters + rebound free names)
+/// rewrites bare strings in variable-reference positions; `isetmap` rewrites
+/// index-set reference positions (`{"from": …}` values and the `wrt`/`dim` axis
+/// fields, in `body` and `match` alike); `tplmap` rewrites
+/// `apply_expression_template.name`. Structural scalar fields
+/// ([`is_rename_protected`]) and bound-index lists (range `of`) are never
+/// rewritten. Pure syntactic substitution. Mirrors the Julia `_rename_walk`.
+fn rename_walk(
+    x: &Value,
+    varmap: &IndexMap<String, String>,
+    isetmap: &IndexMap<String, String>,
+    tplmap: &IndexMap<String, String>,
+) -> Value {
+    match x {
+        Value::String(s) => match varmap.get(s) {
+            Some(n) => Value::String(n.clone()),
+            None => x.clone(),
+        },
+        Value::Array(arr) => {
+            Value::Array(arr.iter().map(|v| rename_walk(v, varmap, isetmap, tplmap)).collect())
+        }
+        Value::Object(obj) => {
+            let is_apply = obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP);
+            let mut out = Map::new();
+            for (k, v) in obj {
+                if k == "from" && v.is_string() {
+                    let s = v.as_str().unwrap();
+                    out.insert(
+                        k.clone(),
+                        Value::String(isetmap.get(s).cloned().unwrap_or_else(|| s.to_string())),
+                    );
+                } else if RENAME_AXIS_KEYS.contains(&k.as_str()) && v.is_string() {
+                    let s = v.as_str().unwrap();
+                    out.insert(
+                        k.clone(),
+                        Value::String(isetmap.get(s).cloned().unwrap_or_else(|| s.to_string())),
+                    );
+                } else if k == "name" && is_apply && v.is_string() {
+                    let s = v.as_str().unwrap();
+                    out.insert(
+                        k.clone(),
+                        Value::String(tplmap.get(s).cloned().unwrap_or_else(|| s.to_string())),
+                    );
+                } else if k == "of" || is_rename_protected(k) {
+                    out.insert(k.clone(), v.clone());
+                } else {
+                    out.insert(k.clone(), rename_walk(v, varmap, isetmap, tplmap));
+                }
+            }
+            Value::Object(out)
+        }
+        _ => x.clone(),
+    }
+}
+
+/// A copy of `map` with any key in `pset` dropped — the §9.6.1 shadowing rule:
+/// a template's own `params` shadow like-named `varmap` / `isetmap` entries
+/// inside its `body`/`match` (a param is the inner binder; renaming must not
+/// capture it).
+fn without_keys(
+    map: &IndexMap<String, String>,
+    pset: &std::collections::HashSet<String>,
+) -> IndexMap<String, String> {
+    map.iter()
+        .filter(|(k, _)| !pset.contains(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// [`rename_walk`] over one template declaration with the §9.6.1 shadowing
+/// rule. `tplmap` is never shadowed — params do not bind template names.
+/// Mirrors the Julia `_rename_decl`.
+fn rename_decl(
+    decl: &Value,
+    varmap: &IndexMap<String, String>,
+    isetmap: &IndexMap<String, String>,
+    tplmap: &IndexMap<String, String>,
+) -> Value {
+    let pset: std::collections::HashSet<String> = decl
+        .get("params")
+        .and_then(|p| p.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if pset.is_empty() {
+        return rename_walk(decl, varmap, isetmap, tplmap);
+    }
+    let v2 = without_keys(varmap, &pset);
+    let i2 = without_keys(isetmap, &pset);
+    rename_walk(decl, &v2, &i2, tplmap)
+}
+
+/// Bound index symbols of a declaration: aggregate `output_idx` entries and
+/// `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
+/// ranges KEYS from their `expr` occurrences, so it is rejected. Mirrors the
+/// Julia `_collect_bound_syms!`.
+fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
+    match x {
+        Value::Array(arr) => {
+            for v in arr {
+                collect_bound_syms(v, out);
+            }
+        }
+        Value::Object(obj) => {
+            if obj.get("op").and_then(|v| v.as_str()) == Some("aggregate") {
+                if let Some(oi) = obj.get("output_idx").and_then(|v| v.as_array()) {
+                    for e in oi {
+                        if let Some(s) = e.as_str() {
+                            out.insert(s.to_string());
+                        }
+                    }
+                }
+                if let Some(rg) = obj.get("ranges").and_then(|v| v.as_object()) {
+                    for k in rg.keys() {
+                        out.insert(k.clone());
+                    }
+                }
+            }
+            for v in obj.values() {
+                collect_bound_syms(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every bare string in a variable-reference position of a declaration (the
+/// positions `varmap` would rewrite), minus the per-template `params` shadow
+/// set. Used for the rebind occurs-check and the freshness (collision) guard.
+/// Mirrors the Julia `_collect_ref_names!`.
+fn collect_ref_names(
+    x: &Value,
+    shadowed: &std::collections::HashSet<String>,
+    out: &mut std::collections::HashSet<String>,
+) {
+    match x {
+        Value::String(s) => {
+            if !shadowed.contains(s) {
+                out.insert(s.clone());
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_ref_names(v, shadowed, out);
+            }
+        }
+        Value::Object(obj) => {
+            for (k, v) in obj {
+                if k == "from"
+                    || RENAME_AXIS_KEYS.contains(&k.as_str())
+                    || k == "of"
+                    || is_rename_protected(k)
+                {
+                    continue;
+                }
+                collect_ref_names(v, shadowed, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
+/// the target's SURVIVING export scope — templates after `only`, all index
+/// sets, and metaparameters still open after this edge's `bindings` —
+/// transitively through every occurrence inside the surviving declarations.
+/// Runs after `bindings` instantiation and `only` filtering, before the
+/// §9.7.4/§9.7.5 merge, so dedup and conflict detection operate on post-rename
+/// names. Pure load-time substitution. Mirrors the Julia `_apply_edge_renames!`.
+fn apply_edge_renames(
+    scope: &mut TemplateScope,
+    entry: &Map<String, Value>,
+    origin: &str,
+    ref_str: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let where_ = format!("{origin}: import of '{ref_str}'");
+    let prefix_raw = entry.get("prefix").filter(|v| !v.is_null());
+    let rename = name_map(entry.get("rename"), "rename", &where_)?;
+    let rebind = name_map(entry.get("rebind"), "rebind", &where_)?;
+    let prefix: Option<String> = match prefix_raw {
+        None => None,
+        Some(v) => {
+            if !v.as_str().is_some_and(is_valid_dotted_name) {
+                return Err(err(
+                    "template_import_rename_invalid",
+                    format!(
+                        "{where_}: `prefix` {v} is not a valid dotted identifier (segments \
+                         [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
+                    ),
+                ));
+            }
+            Some(v.as_str().unwrap().to_string())
+        }
+    };
+    if prefix.is_none() && rename.is_empty() && rebind.is_empty() {
+        return Ok(());
+    }
+
+    // --- `rename` keys must name a surviving exported name (typo protection) ---
+    let mut exported: std::collections::HashSet<String> = std::collections::HashSet::new();
+    exported.extend(scope.templates.keys().cloned());
+    exported.extend(scope.index_sets.keys().cloned());
+    exported.extend(scope.metaparams.keys().cloned());
+    for k in rename.keys() {
+        if !exported.contains(k) {
+            return Err(err(
+                "template_import_rename_unknown_name",
+                format!(
+                    "{where_}: `rename` names '{k}', which the target does not export at this \
+                     edge (the surviving exports are templates after `only`, index sets, and \
+                     metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"
+                ),
+            ));
+        }
+    }
+
+    let final_name = |n: &str| -> String {
+        if let Some(t) = rename.get(n) {
+            t.clone()
+        } else if let Some(p) = &prefix {
+            format!("{p}.{n}")
+        } else {
+            n.to_string()
+        }
+    };
+    let tplmap: IndexMap<String, String> =
+        scope.templates.keys().map(|n| (n.clone(), final_name(n))).collect();
+    let isetmap: IndexMap<String, String> =
+        scope.index_sets.keys().map(|n| (n.clone(), final_name(n))).collect();
+    let metamap: IndexMap<String, String> =
+        scope.metaparams.keys().map(|n| (n.clone(), final_name(n))).collect();
+
+    // --- per-namespace final-name uniqueness ---
+    for (what, m) in [
+        ("template", &tplmap),
+        ("index set", &isetmap),
+        ("metaparameter", &metamap),
+    ] {
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (o, n) in m {
+            if let Some(prev) = seen.get(n) {
+                return Err(err(
+                    "template_import_rename_collision",
+                    format!(
+                        "{where_}: {what} names '{prev}' and '{o}' both map to '{n}' after \
+                         renaming (esm-spec §9.7.7)"
+                    ),
+                ));
+            }
+            seen.insert(n.clone(), o.clone());
+        }
+    }
+
+    // --- free / bound name inventory over the surviving declarations ---
+    let mut free: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut params_all: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for d in scope.templates.values() {
+        collect_bound_syms(d, &mut bound);
+        let mut shadowed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Some(params) = d.get("params").and_then(|p| p.as_array()) {
+            for p in params {
+                if let Some(s) = p.as_str() {
+                    shadowed.insert(s.to_string());
+                }
+            }
+        }
+        params_all.extend(shadowed.iter().cloned());
+        collect_ref_names(d, &shadowed, &mut free);
+    }
+    for d in scope.index_sets.values() {
+        for f in ["offsets", "values"] {
+            if let Some(s) = d.get(f).and_then(|v| v.as_str()) {
+                free.insert(s.to_string());
+            }
+        }
+    }
+    for k in scope.metaparams.keys() {
+        free.remove(k); // declared names are not free
+    }
+
+    // --- `rebind` keys must denote free names (typo protection) ---
+    for k in rebind.keys() {
+        if exported.contains(k) {
+            return Err(err(
+                "template_import_rebind_unknown_name",
+                format!(
+                    "{where_}: `rebind` names '{k}', a declared name of the target (template / \
+                     index set / metaparameter) — `rebind` addresses only free names; use \
+                     `rename` for declared names (esm-spec §9.7.7)"
+                ),
+            ));
+        }
+        if bound.contains(k) {
+            return Err(err(
+                "template_import_rename_invalid",
+                format!(
+                    "{where_}: `rebind` key '{k}' is a bound index symbol (`output_idx` / \
+                     `ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
+                ),
+            ));
+        }
+        if !free.contains(k) {
+            return Err(err(
+                "template_import_rebind_unknown_name",
+                format!(
+                    "{where_}: `rebind` names '{k}', which does not occur free in the imported \
+                     declarations (esm-spec §9.7.7)"
+                ),
+            ));
+        }
+    }
+
+    // --- freshness guard: new bare names must not capture / merge ---
+    let rebind_keys: std::collections::HashSet<&str> =
+        rebind.keys().map(String::as_str).collect();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for f in &free {
+        if !rebind_keys.contains(f.as_str()) {
+            taken.insert(f.clone());
+        }
+    }
+    taken.extend(bound.iter().cloned());
+    taken.extend(params_all.iter().cloned());
+    let mut newnames: Vec<String> = Vec::new();
+    for (o, n) in &metamap {
+        if o != n {
+            newnames.push(n.clone());
+        }
+    }
+    for (o, n) in &rebind {
+        if o != n {
+            newnames.push(n.clone());
+        }
+    }
+    for t in &newnames {
+        if taken.contains(t) {
+            return Err(err(
+                "template_import_rename_collision",
+                format!(
+                    "{where_}: renamed/rebound name '{t}' collides with a name still in use \
+                     inside the imported declarations (a remaining free name, a bound index \
+                     symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"
+                ),
+            ));
+        }
+        taken.insert(t.clone());
+    }
+
+    // --- apply (identity entries dropped; one simultaneous substitution) ---
+    let mut varmap: IndexMap<String, String> = IndexMap::new();
+    for (o, n) in &metamap {
+        if o != n {
+            varmap.insert(o.clone(), n.clone());
+        }
+    }
+    for (o, n) in &rebind {
+        if o != n {
+            varmap.insert(o.clone(), n.clone());
+        }
+    }
+    let iset_changed: IndexMap<String, String> = isetmap
+        .iter()
+        .filter(|(o, n)| o != n)
+        .map(|(o, n)| (o.clone(), n.clone()))
+        .collect();
+    let tpl_changed: IndexMap<String, String> = tplmap
+        .iter()
+        .filter(|(o, n)| o != n)
+        .map(|(o, n)| (o.clone(), n.clone()))
+        .collect();
+
+    let mut newt = Map::new();
+    for (n, d) in &scope.templates {
+        let nd = rename_decl(d, &varmap, &iset_changed, &tpl_changed);
+        newt.insert(tplmap.get(n).expect("tplmap covers every template").clone(), nd);
+    }
+    scope.templates = newt;
+
+    let mut newi = Map::new();
+    for (n, d) in &scope.index_sets {
+        let mut nd = rename_walk(d, &varmap, &iset_changed, &tpl_changed);
+        if let Some(of) = nd.get("of").and_then(|v| v.as_array()).cloned() {
+            let new_of: Vec<Value> = of
+                .iter()
+                .map(|e| match e.as_str() {
+                    Some(s) => {
+                        Value::String(iset_changed.get(s).cloned().unwrap_or_else(|| s.to_string()))
+                    }
+                    None => e.clone(),
+                })
+                .collect();
+            if let Some(o) = nd.as_object_mut() {
+                o.insert("of".to_string(), Value::Array(new_of));
+            }
+        }
+        newi.insert(isetmap.get(n).expect("isetmap covers every index set").clone(), nd);
+    }
+    scope.index_sets = newi;
+
+    let mut newm = Map::new();
+    for (n, d) in &scope.metaparams {
+        newm.insert(
+            metamap.get(n).expect("metamap covers every metaparameter").clone(),
+            d.clone(),
+        );
+    }
+    scope.metaparams = newm;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Import-graph resolution (esm-spec §9.7.2 / §9.7.4 / §9.7.5)
 // ---------------------------------------------------------------------------
 
@@ -785,6 +1297,11 @@ fn resolve_import_entry(
         }
         scope.templates = filtered;
     }
+
+    // Import-edge renaming / namespacing + free-name rebinding (esm-spec
+    // §9.7.7) — after `bindings` instantiation and `only` filtering, before the
+    // §9.7.4/§9.7.5 merge, so dedup/conflict checks see post-rename names.
+    apply_edge_renames(&mut scope, entry_obj, origin, ref_str)?;
     Ok(scope)
 }
 

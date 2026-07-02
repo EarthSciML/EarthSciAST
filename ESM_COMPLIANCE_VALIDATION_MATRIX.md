@@ -127,6 +127,13 @@ Where:
 >
 > **Go port (2026-07-03)**: implemented (`mergeSubsystemIndexSets` + `indexSetDeepEqual` in `subsystem_ref.go`; the importing document's `file.IndexSets` registry is threaded through `resolveSubsystemRefs`/`resolveSubsystemMap` and each mounted file's folded top-level `index_sets` merge in, transitively through nested mounts). `subsystem_index_set_merge.esm` loads with `vertices` merged in (size 4) and `cells` deep-equal-idempotent; `subsystem_index_set_conflict.esm` is rejected with `subsystem_index_set_conflict` (`go test ./...`).
 > **TypeScript = implemented (2026-07-03)**: `mergeSubsystemIndexSets` in `packages/earthsci-toolkit/src/ref-loading.ts`, called from `resolveModelRefs` at every model subsystem-ref resolution with the importing document's `file.index_sets` threaded as the registry; deep-equal via `deepEqual` (numeric-literal-aware), non-equal collision → `subsystem_index_set_conflict`, absent name added. Matches the Julia reference (registry threaded only through the model walk, not reaction systems). The `subsystem_index_set_conflict.esm` fixture is rejected with the exact code (`src/template-imports.test.ts` invalid loop, via `resolveSubsystemRefs`).
+> **Rust (2026-07-03)**: implemented (`earthsci-toolkit-rs/src/ref_loading.rs` —
+> `merge_subsystem_index_sets` threaded through the model-subsystem walk via an
+> `Option<&mut Map>` registry seeded from the importing document's own `index_sets`,
+> written back post-merge; reaction-system subsystem refs thread `None`, matching the Julia
+> scope; deep-equal via order-independent serde_json `Map` equality). Fixtures
+> `subsystem_index_set_merge.esm` (+ `subsystem_mesh_lib.esm`) and
+> `subsystem_index_set_conflict.esm` drive it (`template_imports_conformance`).
 
 ### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -138,6 +145,12 @@ Where:
 >
 > **Go port (2026-07-03)**: implemented (`validateMakearrayRegions` + `asInt64Strict` in `lower_expression_templates.go`, run at both §9.6.4 validator sites — the no-machinery fast path and the post-fixpoint return). `makearray_empty_region_min_extent.esm` loads at default N=2 (empty bound `[2,1]`) and is rejected at N=1 (inverted `[2,0]`) with `makearray_region_inverted`; the shared invalid fixture is rejected (`go test ./...`).
 > **TypeScript = implemented (2026-07-03)**: `validateMakearrayRegions` in `packages/earthsci-toolkit/src/lower_expression_templates.ts`, run on the expanded/folded form at both `lowerExpressionTemplates` validator sites (fast path + full path), skipping `expression_templates` and non-integer bounds. `makearray_empty_region_min_extent.esm` loads clean at default `N = 2` (interior folds to `[2, 1]`); the same file rebound `N = 1` (loader API) and `makearray_region_inverted.esm` are rejected with `makearray_region_inverted`. Tests in `src/expression-templates.test.ts` + the `src/template-imports.test.ts` invalid-fixture loop.
+> **Rust (2026-07-03)**: implemented (`earthsci-toolkit-rs/src/lower_expression_templates.rs`
+> — `validate_makearray_regions`, called at the end of `lower_expression_templates` after
+> `validate_geometry_manifolds`; skips `expression_templates` and non-integer bounds, accepts
+> `stop == start − 1`, rejects `stop < start − 1` with `makearray_region_inverted`). Fixtures
+> `makearray_empty_region_min_extent.esm` (default N=2 loads; loader-API N=1 rejects) and
+> `makearray_region_inverted.esm` (`template_imports_conformance`).
 
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -147,6 +160,14 @@ Where:
 | BEHAV-08-A-003 | A ring with fewer than 3 DISTINCT vertices after deduplication is a degenerate operand and MUST be rejected (the ≥3-distinct-vertices operand error) | esm-spec.md §8.6.1 | Yes | validation |
 
 > **Binding status (2026-07-02)**: Julia implemented (`_as_ring` in `geometry.jl` now runs `_dedup_consecutive` on every operand before the planar/GeometryOps clip; empirically the planar and GeometryOps paths already tolerated padding with exactly-equal areas, but the spherical clip's OUTPUT retained the duplicates — dedup-at-coercion restores the distinct-vertex output contract; fixture `tests/valid/geometry/polygon_intersection_area_padded_ring.esm`, unit tests in `geometry_polygon_intersection_area_test.jl` incl. pentagon padded to 6/7 slots, planar + spherical). **Pending port** — **Python** (`geometry.py::_as_ring`): apply `_dedup_consecutive` (already defined for clip output) to operands before the clip — empirically REQUIRED for the spherely/S2 path, which rejects degenerate edges. **Rust** (`geometry.rs::intersect_polygon`): dedupe operands (allclose tolerance, wrap pair included) before `SphericalPolygon::from_lon_lat` — empirically the S2 path FAILS today on padded rings ("Edge N is degenerate (duplicate vertex)"), and the planar path passes padding through to its output ring; also dedupe the planar output. **TypeScript / Go**: schema-only, no geometry kernel — no action.
+>
+> **Rust (2026-07-03)**: DONE (`earthsci-toolkit-rs/src/geometry.rs` — `dedup_consecutive`
+> + `as_ring` applied to both operands at the top of `intersect_polygon`, `dedup_consecutive`
+> on the planar clip output, and dedup before `SphericalPolygon::from_lon_lat` in
+> `spherical_area`; `<3` distinct after dedup rejects). Confirmed: the padded MPAS-style ring
+> now clips in S2 (unit test `spherical_clip_accepts_padded_rings` — previously failed with
+> the degenerate-edge error). Fixture `polygon_intersection_area_padded_ring.esm` simulates to
+> area 1.0 via the `pde_conformance` example.
 
 ### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -413,6 +434,15 @@ Where:
 > `import_rename_diamond`; the four invalid fixtures raise the exact codes
 > (`rename_unknown_name`, `rebind_unknown_free_name`, `rename_collision`,
 > `rename_invalid_identifier`). Tests in `src/template-imports.test.ts`.
+> **Rust (2026-07-03)**: implemented (`earthsci-toolkit-rs/src/template_imports.rs` —
+> `apply_edge_renames` + `name_map`/`rename_walk`/`rename_decl`/`collect_bound_syms`/
+> `collect_ref_names`, `is_valid_dotted_name`, `RENAME_AXIS_KEYS`/`RENAME_EXTRA_PROTECTED_KEYS`,
+> `where` added to `META_SUBST_SKIP_KEYS`; called from `resolve_import_entry` after
+> `only` filtering). Byte-identical goldens for `import_rename_two_instances`,
+> `import_rebind_keyed_factors`, `import_rename_diamond` (EXPR-09-F-008), verified via
+> the `canonical_expand` example and the `template_imports_conformance` suite. AST byte
+> identity for full-precision float literals also required the serde_json `float_roundtrip`
+> feature (default fast path was 1 ulp off on some 16-17-digit literals).
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -447,6 +477,13 @@ Where:
 > `template_constraint_unknown_index_set`. The two non-fixture pins
 > (filter-before-priority, compound-arg-conservative) are unit-tested. Tests in
 > `src/expression-templates.test.ts`.
+> **Rust (2026-07-03)**: implemented (`earthsci-toolkit-rs/src/lower_expression_templates.rs`
+> — `where` structural validation in `validate_templates`, `component_shape_env`,
+> `registered_where` (`template_constraint_unknown_index_set` against the document
+> `index_sets` registry), `where_satisfied` checked as match eligibility in `rewrite_pass`,
+> `MatchRule.where_c`). Goldens `constrained_match_scope`, `two_div_two_meshes`,
+> `per_variable_scheme_literal_args` match and `constraint_unknown_index_set` rejects at load
+> (EXPR-09-G-009), via the `expression_templates_conformance` suite.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

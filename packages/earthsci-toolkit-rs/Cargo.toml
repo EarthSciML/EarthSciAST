@@ -27,7 +27,13 @@ serde = { version = "1.0", features = ["derive"] }
 # load-time rewrite pass applies `expression_templates` `match` rules in
 # template *declaration order* (esm-spec §9.6.3), matching the JS / Python
 # bindings whose native maps preserve order.
-serde_json = { version = "1.0", features = ["preserve_order"] }
+#
+# `float_roundtrip` makes float parsing correctly-rounded (nearest f64), so a
+# 16-17-significant-digit JSON literal parses to the SAME bits Julia/Python
+# `float(...)` (and Rust `str::parse::<f64>`) produce — the default serde_json
+# fast path is 1 ulp off on some such literals (e.g. -104.52369275835723,
+# 42.059133583516356), which broke AST byte identity on parse→emit round-trips.
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 jsonschema = { version = "0.19", default-features = false }
 thiserror = "2.0"
 indexmap = { version = "2", features = ["serde"] }

@@ -17,7 +17,7 @@
 //! JSON layer means refs are inlined into the parsed value, and the typed
 //! model only ever sees fully resolved input.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,14 @@ use std::path::{Path, PathBuf};
 /// the referenced content. Resolution is recursive (referenced files may
 /// contain their own refs) and circular references are detected.
 ///
+/// A referenced subsystem file's top-level `index_sets` merge into the
+/// importing document's registry (esm-spec §4.7, mirroring the §9.7.5
+/// template-import merge): deep-equal redeclaration is idempotent, an absent
+/// name is added, and a non-deep-equal collision is `subsystem_index_set_conflict`.
+/// The merge is scoped to MODEL subsystems, matching the Julia resolver (a
+/// mounted mesh file whose axis size disagrees with the importer must fail at
+/// load rather than the importer silently winning).
+///
 /// # Arguments
 ///
 /// * `value` - the parsed ESM JSON to resolve (modified in place)
@@ -35,6 +43,34 @@ use std::path::{Path, PathBuf};
 pub fn resolve_subsystem_refs(value: &mut Value, base_path: &Path) -> Result<(), String> {
     let mut visited = HashSet::new();
     walk_top_level(value, base_path, &mut visited)
+}
+
+/// Merge a referenced subsystem file's top-level `index_sets` into the
+/// importing document's `registry` (esm-spec §4.7). Deep-equal redeclaration is
+/// idempotent; a non-deep-equal collision is `subsystem_index_set_conflict`.
+/// (`serde_json` `Map` equality is order-independent structural equality, the
+/// JSON-level analogue of the Julia typed field-wise deep-equal.)
+fn merge_subsystem_index_sets(
+    registry: &mut Map<String, Value>,
+    loaded: &Map<String, Value>,
+    ref_str: &str,
+) -> Result<(), String> {
+    for (n, decl) in loaded {
+        if let Some(existing) = registry.get(n) {
+            if existing != decl {
+                return Err(format!(
+                    "[subsystem_index_set_conflict] index set '{n}' from subsystem ref \
+                     '{ref_str}' collides with a non-deep-equal declaration in the importing \
+                     document. A referenced subsystem file's top-level index_sets merge into the \
+                     importing document's registry; deep-equal redeclaration is idempotent, a \
+                     size/kind disagreement is a load-time error (esm-spec §4.7)."
+                ));
+            }
+        } else {
+            registry.insert(n.clone(), decl.clone());
+        }
+    }
+    Ok(())
 }
 
 fn walk_top_level(
@@ -47,25 +83,44 @@ fn walk_top_level(
         None => return Ok(()),
     };
 
-    for section in ["models", "reaction_systems"] {
-        if let Some(section_val) = obj.get_mut(section)
-            && let Some(map) = section_val.as_object_mut()
-        {
-            for (_name, system) in map.iter_mut() {
-                walk_subsystems(system, base_path, visited)?;
-            }
+    // The importing document's index-set registry starts from its own
+    // top-level `index_sets`; model subsystem refs merge theirs into it
+    // (esm-spec §4.7). Reaction-system subsystem refs do NOT merge (Julia
+    // resolver scope), so they thread `None`.
+    let mut registry: Map<String, Value> = obj
+        .get("index_sets")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    if let Some(map) = obj.get_mut("models").and_then(|v| v.as_object_mut()) {
+        for (_name, system) in map.iter_mut() {
+            walk_subsystems(system, base_path, visited, Some(&mut registry))?;
+        }
+    }
+    if let Some(map) = obj.get_mut("reaction_systems").and_then(|v| v.as_object_mut()) {
+        for (_name, system) in map.iter_mut() {
+            walk_subsystems(system, base_path, visited, None)?;
         }
     }
 
+    // Write the merged registry back so the merged axes are visible post-load
+    // (and, for a file loaded as a subsystem ref, so the importer can read this
+    // file's complete index_sets to merge in turn).
+    if !registry.is_empty() {
+        obj.insert("index_sets".to_string(), Value::Object(registry));
+    }
     Ok(())
 }
 
 /// Walk a model or reaction system value and resolve any refs in its
-/// `subsystems` map.
+/// `subsystems` map. `registry`, when `Some`, accumulates referenced files'
+/// top-level `index_sets` (esm-spec §4.7 model-subsystem merge).
 fn walk_subsystems(
     value: &mut Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
+    mut registry: Option<&mut Map<String, Value>>,
 ) -> Result<(), String> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -85,7 +140,7 @@ fn walk_subsystems(
     let names: Vec<String> = subs.keys().cloned().collect();
     for name in names {
         let entry = subs.remove(&name).unwrap_or(Value::Null);
-        let resolved = resolve_value(entry, base_path, visited)?;
+        let resolved = resolve_value(entry, base_path, visited, registry.as_deref_mut())?;
         subs.insert(name, resolved);
     }
 
@@ -138,6 +193,7 @@ fn resolve_value(
     value: Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
+    registry: Option<&mut Map<String, Value>>,
 ) -> Result<Value, String> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -213,8 +269,20 @@ fn resolve_value(
         }
 
         // Recursively resolve any refs inside the loaded file before we
-        // pluck out the single top-level system to inline.
+        // pluck out the single top-level system to inline. This also merges the
+        // loaded file's OWN nested subsystem index_sets into its top-level
+        // `index_sets` (written back), so the merge into the parent below sees
+        // the complete registry (esm-spec §4.7, bottom-up).
         walk_top_level(&mut parsed, &parent_dir, visited)?;
+
+        // Merge the referenced file's top-level `index_sets` into the importing
+        // document's registry (esm-spec §4.7). Scoped to model subsystems:
+        // `registry` is `None` for reaction-system subsystem refs.
+        if let Some(reg) = registry
+            && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
+        {
+            merge_subsystem_index_sets(reg, &loaded.clone(), ref_str)?;
+        }
 
         visited.remove(&canonical);
 
@@ -222,7 +290,7 @@ fn resolve_value(
     }
 
     let mut value = value;
-    walk_subsystems(&mut value, base_path, visited)?;
+    walk_subsystems(&mut value, base_path, visited, registry)?;
     Ok(value)
 }
 

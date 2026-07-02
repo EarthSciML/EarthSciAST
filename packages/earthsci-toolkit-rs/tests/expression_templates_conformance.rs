@@ -168,3 +168,53 @@ fn scalar_field_param_conformance_fixture_matches_expanded() {
     assert_eq!(vars["area_planar"]["expression"]["manifold"], "planar");
     assert_eq!(vars["area_spherical"]["expression"]["manifold"], "spherical");
 }
+
+// ---------------------------------------------------------------------------
+// Static match-scoping constraints (`where`, esm-spec §9.6.1/§9.6.2/§9.6.3;
+// docs/content/rfcs/match-pattern-scoping-constraints.md)
+// ---------------------------------------------------------------------------
+
+/// constrained_match_scope: one shape-constrained `div` rule
+/// (`where: {F: {shape: [edges]}}`) in a document with two shaped variables.
+/// The rule fires on `div(F_edge)` (shape [edges]) and is constraint-excluded
+/// on `div(F_cell)` (shape [cells]) — which survives lowering intact. Both cases
+/// in one byte-identical expanded golden.
+#[test]
+fn constrained_match_scope_matches_golden() {
+    let out = lower_fixture("constrained_match_scope").expect("lowering must converge");
+    assert_eq!(
+        out["models"]["m"]["variables"],
+        expanded_vars("constrained_match_scope")
+    );
+}
+
+/// per_variable_scheme_literal_args: `where` constraints select which scheme
+/// rewrites which variable when several rules share a pattern head.
+#[test]
+fn per_variable_scheme_literal_args_matches_golden() {
+    let out = lower_fixture("per_variable_scheme_literal_args").expect("lowering must converge");
+    assert_eq!(
+        out["models"]["m"]["variables"],
+        expanded_vars("per_variable_scheme_literal_args")
+    );
+}
+
+/// two_div_two_meshes: two shape-constrained rules over two meshes, each firing
+/// only on its own mesh's field.
+#[test]
+fn two_div_two_meshes_matches_golden() {
+    let out = lower_fixture("two_div_two_meshes").expect("lowering must converge");
+    assert_eq!(
+        out["models"]["m"]["variables"],
+        expanded_vars("two_div_two_meshes")
+    );
+}
+
+/// constraint_unknown_index_set: a `where.F.shape` naming an index set the
+/// consuming document does not declare is rejected at rule registration with
+/// the stable `template_constraint_unknown_index_set` code (esm-spec §9.6.6).
+#[test]
+fn constraint_unknown_index_set_rejected() {
+    let err = lower_fixture("constraint_unknown_index_set").expect_err("must reject at registration");
+    assert_eq!(err.code, "template_constraint_unknown_index_set", "got: {err}");
+}
