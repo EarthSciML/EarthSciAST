@@ -12,7 +12,15 @@ format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
   Expression whose param occurrences are wildcards, fired wherever it
   structurally matches a node. A param in an operand/`args` position binds to the
   matched sub-AST; a param in a scalar field (`dim`, `side`, …) binds to the
-  matched literal.
+  matched literal. An optional `where` block (esm-spec §9.6.1,
+  docs/rfcs/match-pattern-scoping-constraints.md) adds STATIC scoping
+  constraints on the captured params: `{"F": {"shape": ["edges"]}}` makes the
+  rule eligible only where `F` bound to a bare variable reference whose
+  declaration in the enclosing component carries exactly that `shape` (ordered
+  index-set names). Constraint evaluation consults declared shapes only —
+  never runtime values — and is part of match ELIGIBILITY: a
+  constraint-excluded rule is a non-matching rule at that node, filtered
+  before the priority / declaration-order selection.
 
 Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
 (esm-spec §9.6.3, `_rewrite_to_fixpoint`). Rule application proceeds in passes;
@@ -116,6 +124,7 @@ stable `code` matching one of:
 - `apply_expression_template_invalid_declaration`
 - `apply_expression_template_version_too_old`
 - `rewrite_rule_nonterminating`
+- `template_constraint_unknown_index_set`
 
 or one of the esm-spec §9.7 template-library / metaparameter codes
 (§9.6.6, raised from `template_imports.jl` and `parse.jl`):
@@ -248,6 +257,54 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
         match = get(decl, "match", get(decl, :match, nothing))
         if match !== nothing
             _assert_no_nested_apply(match, name, "/match")
+        end
+
+        # esm-spec §9.6.1 (0.8.0): an optional `where` block adds static
+        # match-scoping constraints on the captured params. Structural
+        # validation only, here; the unknown-index-set check runs at rule
+        # REGISTRATION in the consuming component (where the merged
+        # `index_sets` registry is in scope) — see `_registered_where`.
+        whr = get(decl, "where", get(decl, :where, nothing))
+        if whr !== nothing
+            match === nothing && throw(ExpressionTemplateError(
+                "apply_expression_template_invalid_declaration",
+                "$scope.expression_templates.$name: 'where' is only admissible " *
+                "alongside 'match' — constraints scope an auto-applied rewrite " *
+                "rule, not a named fragment (esm-spec §9.6.1)"))
+            (_is_object(whr) && !isempty(collect(pairs(whr)))) ||
+                throw(ExpressionTemplateError(
+                    "apply_expression_template_invalid_declaration",
+                    "$scope.expression_templates.$name: 'where' must be a " *
+                    "non-empty object mapping declared params to constraint objects"))
+            for (p, cobj) in pairs(whr)
+                ps = string(p)
+                ps in seen || throw(ExpressionTemplateError(
+                    "apply_expression_template_invalid_declaration",
+                    "$scope.expression_templates.$name: 'where' constrains '$ps', " *
+                    "which is not a declared param (esm-spec §9.6.1)"))
+                _is_object(cobj) || throw(ExpressionTemplateError(
+                    "apply_expression_template_invalid_declaration",
+                    "$scope.expression_templates.$name: where.$ps must be a " *
+                    "constraint object (v1 admits exactly the 'shape' kind)"))
+                ckeys = Set{String}(string(k) for (k, _) in pairs(cobj))
+                ckeys == Set(["shape"]) || throw(ExpressionTemplateError(
+                    "apply_expression_template_invalid_declaration",
+                    "$scope.expression_templates.$name: where.$ps carries " *
+                    "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
+                    "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"))
+                shp = get(cobj, "shape", get(cobj, :shape, nothing))
+                (_is_array(shp) && !isempty(shp)) || throw(ExpressionTemplateError(
+                    "apply_expression_template_invalid_declaration",
+                    "$scope.expression_templates.$name: where.$ps.shape must be a " *
+                    "non-empty array of index-set names"))
+                for s in shp
+                    (s isa AbstractString && !isempty(string(s))) ||
+                        throw(ExpressionTemplateError(
+                            "apply_expression_template_invalid_declaration",
+                            "$scope.expression_templates.$name: where.$ps.shape " *
+                            "entries must be non-empty strings"))
+                end
+            end
         end
     end
 end
@@ -417,6 +474,98 @@ end
 _has_key(node, ks::AbstractString) =
     (haskey(node, ks) || haskey(node, Symbol(ks)))
 
+# ---------------------------------------------------------------------------
+# Static match-scoping constraints (`where`, esm-spec §9.6.1;
+# docs/rfcs/match-pattern-scoping-constraints.md)
+# ---------------------------------------------------------------------------
+
+"""
+    _component_shape_env(comp) -> Dict{String,Vector{String}}
+
+The static shape environment of one component: every declared variable name
+mapped to its declared `shape` (ordered index-set names). This is the ONLY
+information a `where` constraint may consult (esm-spec §9.6.1) — declared
+shapes at lowering time, never runtime values — so constraint evaluation is
+fully static and the §9.6.3 determinism contract is untouched. Variables with
+no `shape` (scalars) are absent from the environment, as are species /
+parameters of reaction systems (which carry no `shape` field): a
+shape-constrained rule can only fire on a declared, shaped model variable.
+"""
+function _component_shape_env(comp)::Dict{String,Vector{String}}
+    env = Dict{String,Vector{String}}()
+    vars = get(comp, "variables", get(comp, :variables, nothing))
+    (vars !== nothing && _is_object(vars)) || return env
+    for (vn, vd) in pairs(vars)
+        _is_object(vd) || continue
+        shp = get(vd, "shape", get(vd, :shape, nothing))
+        (shp !== nothing && _is_array(shp)) || continue
+        all(s -> s isa AbstractString, shp) || continue
+        env[string(vn)] = String[string(s) for s in shp]
+    end
+    return env
+end
+
+const _EMPTY_SHAPE_ENV = Dict{String,Vector{String}}()
+
+"""
+    _where_satisfied(where_c, bindings, shape_env) -> Bool
+
+Evaluate a registered `where` constraint map (param → required shape) against
+the bindings produced by a successful structural match (esm-spec §9.6.1). A
+constraint on param `p` holds iff `bindings[p]` is a BARE variable-reference
+string naming an entry of `shape_env` whose declared shape equals the required
+list exactly (same names, same order). Everything else — a compound sub-AST, a
+numeric literal, a scalar-field-bound literal, a scoped (`System.var`)
+reference, an undeclared name, a scalar variable, or a param that never bound
+— fails the constraint. The judgment is deliberately syntactic and
+conservative: no shape inference over compound expressions, so eligibility
+depends only on declarations and is byte-identical across bindings.
+"""
+function _where_satisfied(where_c, bindings::Dict{String,Any},
+                          shape_env::Dict{String,Vector{String}})::Bool
+    where_c === nothing && return true
+    for (p, req) in where_c
+        b = get(bindings, p, nothing)
+        b isa AbstractString || return false
+        shp = get(shape_env, string(b), nothing)
+        shp === nothing && return false
+        shp == req || return false
+    end
+    return true
+end
+
+"""
+    _registered_where(decl, iset_names, scope, tname) -> Union{Nothing,Dict}
+
+Normalize a template's `where` block into the registered constraint map
+(param → `Vector{String}` required shape), checking every referenced
+index-set name against the CONSUMING document's merged `index_sets` registry
+(`iset_names`). An unknown name is `template_constraint_unknown_index_set`
+(esm-spec §9.6.6) — raised here, at rule registration in the consuming
+component, not when a library file is loaded standalone: constraints name
+index sets as spelled in the consuming document's registry (post-§9.7.5
+merge, composing with import-edge index-set renaming).
+"""
+function _registered_where(decl, iset_names::Set{String}, scope::String,
+                           tname::String)
+    whr = get(decl, "where", get(decl, :where, nothing))
+    whr === nothing && return nothing
+    out = Dict{String,Vector{String}}()
+    for (p, cobj) in pairs(whr)
+        shp = get(cobj, "shape", get(cobj, :shape, nothing))
+        req = String[string(s) for s in shp]
+        for s in req
+            s in iset_names || throw(ExpressionTemplateError(
+                "template_constraint_unknown_index_set",
+                "$scope.expression_templates.$tname: where.$(string(p)).shape " *
+                "names index set '$s', which the consuming document's " *
+                "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"))
+        end
+        out[string(p)] = req
+    end
+    return out
+end
+
 """
 Maximum number of productive rewrite passes before a file is rejected as
 non-converging (esm-spec §9.6.3, diagnostic `rewrite_rule_nonterminating`).
@@ -442,7 +591,7 @@ function _rule_priority(decl)::Int
 end
 
 """
-    _rewrite_pass(node, named, sorted_rules, scope, last) -> (new_node, changed)
+    _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
 
 One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3). At
 each object node the engine first tries to fire a rule AT the node before
@@ -450,21 +599,28 @@ descending:
 
 1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
 2. the first rule in `sorted_rules` (pre-sorted highest-`priority`-first, ties by
-   declaration order) whose `match` pattern structurally matches the node fires.
+   declaration order) whose `match` pattern structurally matches the node AND
+   whose `where` constraints (if any) are satisfied by the resulting bindings
+   fires. Constraint filtering is part of match ELIGIBILITY (esm-spec §9.6.3
+   constraint 2): a constraint-excluded rule is treated exactly like a
+   non-matching rule at this node, so the scan proceeds to the next candidate
+   in priority / declaration order.
 
 A fired rule's body replaces the node and the walk does NOT descend into that
 freshly-produced body during this pass (it is revisited next pass). If nothing
 fires, the walk descends into the node's children. `changed` is `true` iff any
 rewrite occurred in this subtree; `last` (a `Ref{String}`) records the op of the
-most recent rewrite, for the non-convergence diagnostic.
+most recent rewrite, for the non-convergence diagnostic. `shape_env` is the
+enclosing component's static shape environment (`_component_shape_env`).
 """
 function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
-                       scope::String, last::Ref{String})
+                       scope::String, last::Ref{String},
+                       shape_env::Dict{String,Vector{String}})
     if _is_array(node)
         changed = false
         out = Vector{Any}(undef, length(node))
         for (i, c) in enumerate(node)
-            nc, ch = _rewrite_pass(c, named, sorted_rules, scope, last)
+            nc, ch = _rewrite_pass(c, named, sorted_rules, scope, last, shape_env)
             out[i] = nc
             changed |= ch
         end
@@ -483,9 +639,10 @@ function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
         return (_expand_apply(node, named, scope), true)
     end
     for rule in sorted_rules
-        (_name, pattern, rparams, body, _prio, _idx) = rule
+        (_name, pattern, rparams, body, _prio, _idx, where_c) = rule
         bindings = Dict{String,Any}()
-        if _match_pattern(pattern, node, rparams, bindings)
+        if _match_pattern(pattern, node, rparams, bindings) &&
+           _where_satisfied(where_c, bindings, shape_env)
             last[] = op_str
             return (_substitute(body, bindings), true)
         end
@@ -494,7 +651,7 @@ function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
     changed = false
     out = Dict{String,Any}()
     for (k, v) in pairs(node)
-        nv, ch = _rewrite_pass(v, named, sorted_rules, scope, last)
+        nv, ch = _rewrite_pass(v, named, sorted_rules, scope, last, shape_env)
         out[string(k)] = nv
         changed |= ch
     end
@@ -512,11 +669,13 @@ termination guard, so a self-reintroducing rule fails to converge rather than
 being flagged up front.
 """
 function _rewrite_to_fixpoint(node, named::Dict{String,Any},
-                              sorted_rules::Vector{Any}, scope::String)
+                              sorted_rules::Vector{Any}, scope::String,
+                              shape_env::Dict{String,Vector{String}}=_EMPTY_SHAPE_ENV)
     last = Ref{String}("")
     current = node
     for _pass in 1:MAX_REWRITE_PASSES
-        current, changed = _rewrite_pass(current, named, sorted_rules, scope, last)
+        current, changed = _rewrite_pass(current, named, sorted_rules, scope, last,
+                                         shape_env)
         changed || return current   # fixpoint reached
     end
     throw(ExpressionTemplateError(
@@ -740,11 +899,24 @@ function lower_expression_templates(raw_data)
 
     root = _to_dict(raw_data)::Dict{String,Any}
 
-    # Per-component rewrite registries (named templates + ordered match rules),
-    # captured so coupling `variable_map` expression transforms (esm-spec §10.4)
-    # can be rewritten against the RECEIVING component's registry below. Models
-    # are registered first; a reaction system never overwrites a same-named model.
-    registries = Dict{String,Tuple{Dict{String,Any},Vector{Any}}}()
+    # The consuming document's merged index_sets registry (post-§9.7.5): the
+    # namespace `where` shape constraints resolve against at registration
+    # (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name
+    # not declared here).
+    iset_names = Set{String}()
+    isets_raw = get(root, "index_sets", nothing)
+    if isets_raw !== nothing && _is_object(isets_raw)
+        for (k, _) in pairs(isets_raw)
+            push!(iset_names, string(k))
+        end
+    end
+
+    # Per-component rewrite registries (named templates + ordered match rules +
+    # static shape environment), captured so coupling `variable_map` expression
+    # transforms (esm-spec §10.4) can be rewritten against the RECEIVING
+    # component's registry below. Models are registered first; a reaction
+    # system never overwrites a same-named model.
+    registries = Dict{String,Tuple{Dict{String,Any},Vector{Any},Dict{String,Vector{String}}}}()
 
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
@@ -753,6 +925,9 @@ function lower_expression_templates(raw_data)
         for (cname, compraw) in pairs(comps)
             _is_object(compraw) || continue
             comp = compraw::Dict{String,Any}
+            # Static shape environment for `where` constraint evaluation
+            # (esm-spec §9.6.1): declared variable shapes only.
+            shape_env = _component_shape_env(comp)
             tplraw = get(comp, "expression_templates", nothing)
             # `named`       — every template keyed by name, consulted by
             #                 `apply_expression_template` (order-independent).
@@ -780,8 +955,15 @@ function lower_expression_templates(raw_data)
                     if m !== nothing
                         params = Set{String}(string(p) for p in get(decl, "params", String[]))
                         body = get(decl, "body", nothing)
+                        # `where` registration: normalize constraints and
+                        # resolve every referenced index-set name against the
+                        # consuming document's registry (esm-spec §9.6.1;
+                        # `template_constraint_unknown_index_set`).
+                        where_c = _registered_where(decl, iset_names,
+                                                    "$compkind.$(string(cname))", tname)
                         push!(match_rules,
-                              (tname, m, params, body, _rule_priority(decl), decl_index))
+                              (tname, m, params, body, _rule_priority(decl),
+                               decl_index, where_c))
                     end
                 end
                 # Deterministic selection order (esm-spec §9.6.3): highest
@@ -795,11 +977,11 @@ function lower_expression_templates(raw_data)
             for k in collect(keys(comp))
                 k == "expression_templates" && continue
                 comp[k] = _rewrite_to_fixpoint(comp[k], named, match_rules,
-                                   "$compkind.$(string(cname)).$k")
+                                   "$compkind.$(string(cname)).$k", shape_env)
             end
             delete!(comp, "expression_templates")
             haskey(registries, string(cname)) ||
-                (registries[string(cname)] = (named, match_rules))
+                (registries[string(cname)] = (named, match_rules, shape_env))
         end
     end
 
@@ -822,7 +1004,7 @@ function lower_expression_templates(raw_data)
             reg = get(registries, comp_name, nothing)
             reg === nothing && continue
             entry["transform"] = _rewrite_to_fixpoint(tr, reg[1], reg[2],
-                                     "coupling[$(i)].transform")
+                                     "coupling[$(i)].transform", reg[3])
         end
     end
 

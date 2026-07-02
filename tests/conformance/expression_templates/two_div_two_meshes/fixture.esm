@@ -1,0 +1,45 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "two_div_two_meshes",
+    "description": "The two-mesh two-div case from the ESD production-readiness audit (docs/content/rfcs/match-pattern-scoping-constraints.md §1): two finite-volume div rules whose patterns are structurally IDENTICAL ({op: div, args: [F]}) at equal priority, each `where`-scoped to its own mesh's edge set. div(F_a) lowers by fv_div_mesh_a only, div(F_b) by fv_div_mesh_b only. WITHOUT the constraints the §9.6.3 declaration-order tie-break would send BOTH nodes to the first-declared rule — the inexpressibility this mechanism closes. Constraints filter before the priority/declaration-order selection: at div(F_b), rule a is constraint-excluded, so the tie-break never sees it.",
+    "authors": ["match-pattern-scoping-constraints conformance"]
+  },
+  "index_sets": {
+    "cells_a": { "kind": "interval", "size": 5 },
+    "edges_a": { "kind": "interval", "size": 9 },
+    "cells_b": { "kind": "interval", "size": 6 },
+    "edges_b": { "kind": "interval", "size": 11 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F_a": { "type": "state", "units": "1", "default": 1.5, "shape": ["edges_a"], "description": "Edge flux on mesh a" },
+        "F_b": { "type": "state", "units": "1", "default": 2.5, "shape": ["edges_b"], "description": "Edge flux on mesh b" },
+        "inv_area_a": { "type": "parameter", "units": "1", "default": 0.5, "description": "Mesh-a stencil coefficient" },
+        "inv_area_b": { "type": "parameter", "units": "1", "default": 0.25, "description": "Mesh-b stencil coefficient" },
+        "div_a": { "type": "observed", "units": "1", "shape": ["cells_a"], "description": "Lowered by mesh a's rule",
+          "expression": { "op": "div", "args": ["F_a"] }
+        },
+        "div_b": { "type": "observed", "units": "1", "shape": ["cells_b"], "description": "Lowered by mesh b's rule",
+          "expression": { "op": "div", "args": ["F_b"] }
+        }
+      },
+      "equations": [],
+      "expression_templates": {
+        "fv_div_mesh_a": {
+          "params": ["F"],
+          "match": { "op": "div", "args": ["F"] },
+          "where": { "F": { "shape": ["edges_a"] } },
+          "body": { "op": "*", "args": ["inv_area_a", "F"] }
+        },
+        "fv_div_mesh_b": {
+          "params": ["F"],
+          "match": { "op": "div", "args": ["F"] },
+          "where": { "F": { "shape": ["edges_b"] } },
+          "body": { "op": "*", "args": ["inv_area_b", "F"] }
+        }
+      }
+    }
+  }
+}
