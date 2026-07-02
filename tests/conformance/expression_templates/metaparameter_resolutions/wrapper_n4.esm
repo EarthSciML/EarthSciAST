@@ -1,0 +1,13 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "wrapper_n4", "description": "Convergence wrapper instantiating problem.esm at N = 4 via a 4.7 subsystem-ref binding (esm-spec 9.7.6 binding site 3)" },
+  "models": {
+    "Sweep": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Problem": { "ref": "./problem.esm", "bindings": { "N": 4 } }
+      }
+    }
+  }
+}

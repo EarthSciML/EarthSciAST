@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_not_library", "description": "The import target is a component (model) file, not a pure template-library file (template_import_not_library, esm-spec 9.7.1)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/model_only.esm" } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

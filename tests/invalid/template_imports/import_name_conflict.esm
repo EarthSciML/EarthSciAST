@@ -1,0 +1,12 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_name_conflict", "description": "A local template redeclares the imported n_cells with a non-deep-equal body: import/local same-name collision (template_import_name_conflict, esm-spec 9.7.4)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm" } ],
+      "expression_templates": { "n_cells": { "params": [], "body": 2 } },
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

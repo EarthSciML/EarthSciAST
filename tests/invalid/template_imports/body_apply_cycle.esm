@@ -1,0 +1,14 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "body_apply_cycle", "description": "Two match-less templates whose bodies reference each other: a cycle in the 9.7.3 registration-time body-composition DAG (apply_expression_template_recursive_body)" },
+  "models": {
+    "M": {
+      "expression_templates": {
+        "t_a": { "params": [], "body": { "op": "apply_expression_template", "args": [], "name": "t_b", "bindings": {} } },
+        "t_b": { "params": [], "body": { "op": "apply_expression_template", "args": [], "name": "t_a", "bindings": {} } }
+      },
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

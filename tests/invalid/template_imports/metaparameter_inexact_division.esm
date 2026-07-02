@@ -1,0 +1,12 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "metaparameter_inexact_division", "description": "index_sets.half.size folds NX / 2 with NX = 5: / MUST divide exactly in a structural integer site (metaparameter_type_error, esm-spec 9.7.6)" },
+  "metaparameters": { "NX": { "type": "integer", "default": 5 } },
+  "index_sets": { "half": { "kind": "interval", "size": { "op": "/", "args": ["NX", 2] } } },
+  "models": {
+    "M": {
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

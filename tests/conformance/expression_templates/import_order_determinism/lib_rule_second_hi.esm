@@ -1,0 +1,12 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "lib_rule_second_hi", "description": "Same pattern as lib_rule_first but with explicit priority 10 - out-ranks the effective-order tie-break (esm-spec 9.6.3/9.7.4)" },
+  "expression_templates": {
+    "lower_op_second_hi": {
+      "params": ["f"],
+      "priority": 10,
+      "match": { "op": "lowerme", "args": ["f"] },
+      "body": { "op": "*", "args": [5, "f"] }
+    }
+  }
+}

@@ -1,0 +1,329 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "description": "GENERATED (scripts/generate-template-import-goldens.jl): a 33-template body-reference chain c_01 -> ... -> c_33; the longest chain exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 32 templates (template_body_expansion_too_deep, esm-spec 9.7.3).",
+    "name": "body_chain_too_deep"
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "x"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "x"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "expression_templates": {
+        "c_01": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_02",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_02": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_03",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_03": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_04",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_04": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_05",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_05": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_06",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_06": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_07",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_07": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_08",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_08": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_09",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_09": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_10",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_10": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_11",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_11": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_12",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_12": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_13",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_13": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_14",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_14": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_15",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_15": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_16",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_16": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_17",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_17": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_18",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_18": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_19",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_19": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_20",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_20": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_21",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_21": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_22",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_22": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_23",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_23": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_24",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_24": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_25",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_25": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_26",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_26": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_27",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_27": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_28",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_28": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_29",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_29": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_30",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_30": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_31",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_31": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_32",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_32": {
+          "body": {
+            "args": [],
+            "bindings": {},
+            "name": "c_33",
+            "op": "apply_expression_template"
+          },
+          "params": []
+        },
+        "c_33": {
+          "body": 1,
+          "params": []
+        }
+      },
+      "variables": {
+        "x": {
+          "default": 0.0,
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

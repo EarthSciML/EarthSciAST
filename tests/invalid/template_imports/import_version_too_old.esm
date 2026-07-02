@@ -1,0 +1,11 @@
+{
+  "esm": "0.7.0",
+  "metadata": { "name": "import_version_too_old", "description": "expression_template_imports arrives at esm 0.8.0; this file declares 0.7.0 (template_import_version_too_old, esm-spec 9.6.5)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm" } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

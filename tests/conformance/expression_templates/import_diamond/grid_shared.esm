@@ -1,0 +1,13 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "grid_shared", "description": "Shared grid file at the bottom of the diamond: NC cells" },
+  "metaparameters": {
+    "NC": { "type": "integer", "default": 10 }
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": "NC" }
+  },
+  "expression_templates": {
+    "cell_count": { "params": [], "body": "NC" }
+  }
+}

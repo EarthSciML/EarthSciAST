@@ -1,0 +1,6 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_cycle_a", "description": "Library A imports library B, which imports A: import-graph cycle over canonical paths (template_import_cycle, esm-spec 9.7.2)" },
+  "expression_templates": { "t_a": { "params": [], "body": 1 } },
+  "expression_template_imports": [ { "ref": "./import_cycle_b.esm" } ]
+}

@@ -1,0 +1,24 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "decay_problem", "description": "Problem file sized by metaparameter N (default 2): N appears in an expression position (npts), in an aggregate dense range bound (ramp, folded at load), and in an AST division that must NOT fold (half)" },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 2 }
+  },
+  "models": {
+    "Problem": {
+      "variables": {
+        "u": { "type": "state", "units": "1", "default": 1.0 },
+        "npts": { "type": "observed", "units": "1", "expression": "N" },
+        "half": { "type": "observed", "units": "1", "expression": { "op": "/", "args": ["N", 2] } },
+        "ramp": { "type": "observed", "units": "1",
+          "expression": { "op": "aggregate", "output_idx": ["i"], "args": ["u"],
+            "ranges": { "i": [1, { "op": "/", "args": ["N", 2] }] },
+            "expr": { "op": "*", "args": ["u", "i"] } } }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "u"] } }
+      ]
+    }
+  }
+}

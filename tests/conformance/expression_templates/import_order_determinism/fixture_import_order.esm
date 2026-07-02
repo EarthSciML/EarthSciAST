@@ -1,0 +1,19 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_order_determinism", "description": "Two libraries declare equal-priority rules matching the same node; the winner is pinned by the effective declaration order = import array order (esm-spec 9.7.4): lib_rule_first wins, y = 2*x" },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        { "ref": "./lib_rule_first.esm" },
+        { "ref": "./lib_rule_second.esm" }
+      ],
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.5 },
+        "y": { "type": "observed", "units": "1", "expression": { "op": "lowerme", "args": ["x"] } }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

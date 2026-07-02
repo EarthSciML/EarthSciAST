@@ -1,0 +1,12 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "lib_flux_b", "description": "Right diamond path: imports grid_shared unbound, lowers diffuse_b" },
+  "expression_template_imports": [ { "ref": "./grid_shared.esm" } ],
+  "expression_templates": {
+    "diffuse_b": {
+      "params": ["f"],
+      "match": { "op": "diffuse_b", "args": ["f"] },
+      "body": { "op": "+", "args": ["f", { "op": "apply_expression_template", "args": [], "name": "cell_count", "bindings": {} }] }
+    }
+  }
+}
