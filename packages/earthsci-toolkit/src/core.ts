@@ -75,5 +75,21 @@ export {
   RefLoadError,
 } from './ref-loading.js'
 
+// Load-time expression-template expansion (esm-spec §9.6) and
+// template-library imports + metaparameters (esm-spec §9.7).
+export {
+  lowerExpressionTemplates,
+  rejectExpressionTemplatesPreV04,
+  ExpressionTemplateError,
+  MAX_TEMPLATE_EXPANSION_DEPTH,
+} from './lower_expression_templates.js'
+export {
+  resolveTemplateMachinery,
+  rejectTemplateImportsPreV08,
+  isTemplateLibraryDoc,
+} from './template_imports.js'
+export type { TemplateResolveOptions, TemplateSchemaError } from './template_imports.js'
+export type { LoadOptions } from './parse.js'
+
 export const VERSION = '0.1.0'
 export const SCHEMA_VERSION = '0.1.0'
