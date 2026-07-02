@@ -101,7 +101,14 @@ export class ExpressionTemplateError extends Error {
 }
 
 type Json = unknown
-type TemplateDecl = { params: string[]; body: Json; match?: Json; priority?: unknown }
+type TemplateDecl = {
+  params: string[]
+  body: Json
+  match?: Json
+  priority?: unknown
+  /** Static match-scoping constraints (esm-spec §9.6.1 `where`). */
+  where?: unknown
+}
 /** Named templates invoked explicitly via `apply_expression_template` (no `match`). */
 type Templates = Record<string, TemplateDecl>
 
@@ -115,7 +122,17 @@ interface MatchRule {
   priority: number
   /** Declaration order (0-based) — the tie-breaker under equal priority. */
   declIndex: number
+  /**
+   * Registered `where` constraints (param → required ordered shape) or `null`
+   * when the rule carries no `where` block (esm-spec §9.6.1). Index-set names
+   * are already checked against the consuming registry at registration.
+   */
+  whereConstraint: Record<string, string[]> | null
 }
+
+/** The static shape environment of one component (variable name → declared shape). */
+type ShapeEnv = Record<string, string[]>
+const EMPTY_SHAPE_ENV: ShapeEnv = {}
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -223,6 +240,99 @@ function matchPattern(
   }
   // null / boolean.
   return deepEqual(pattern, node)
+}
+
+// ---------------------------------------------------------------------------
+// Static match-scoping constraints (`where`, esm-spec §9.6.1;
+// docs/rfcs/match-pattern-scoping-constraints.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * The static shape environment of one component: every declared variable name
+ * mapped to its declared `shape` (ordered index-set names). This is the ONLY
+ * information a `where` constraint may consult (esm-spec §9.6.1) — declared
+ * shapes at lowering time, never runtime values — so constraint evaluation is
+ * fully static and the §9.6.3 determinism contract is untouched. Variables with
+ * no `shape` (scalars) are absent, as are reaction-system species / parameters
+ * (which carry no `shape` field): a shape-constrained rule can only fire on a
+ * declared, shaped model variable.
+ */
+function componentShapeEnv(comp: Record<string, unknown>): ShapeEnv {
+  const env: ShapeEnv = {}
+  const vars = comp.variables
+  if (!isObject(vars)) return env
+  for (const [vn, vd] of Object.entries(vars)) {
+    if (!isObject(vd)) continue
+    const shp = vd.shape
+    if (!Array.isArray(shp)) continue
+    if (!shp.every((s) => typeof s === 'string')) continue
+    env[vn] = shp.map((s) => String(s))
+  }
+  return env
+}
+
+/**
+ * Evaluate a registered `where` constraint map (param → required shape) against
+ * the bindings produced by a successful structural match (esm-spec §9.6.1). A
+ * constraint on param `p` holds iff `bindings[p]` is a BARE variable-reference
+ * string naming an entry of `shapeEnv` whose declared shape equals the required
+ * list exactly (same names, same order). Everything else — a compound sub-AST, a
+ * numeric literal, a scalar-field-bound literal, a scoped reference, an
+ * undeclared name, a scalar variable, or a param that never bound — fails. The
+ * judgment is deliberately syntactic and conservative: no shape inference over
+ * compound expressions, so eligibility is byte-identical across bindings.
+ */
+function whereSatisfied(
+  whereC: Record<string, string[]> | null,
+  bindings: Record<string, Json>,
+  shapeEnv: ShapeEnv,
+): boolean {
+  if (whereC === null) return true
+  for (const [p, req] of Object.entries(whereC)) {
+    const b = Object.prototype.hasOwnProperty.call(bindings, p) ? bindings[p] : undefined
+    if (typeof b !== 'string') return false
+    if (!Object.prototype.hasOwnProperty.call(shapeEnv, b)) return false
+    const shp = shapeEnv[b]!
+    if (shp.length !== req.length) return false
+    for (let i = 0; i < req.length; i++) {
+      if (shp[i] !== req[i]) return false
+    }
+  }
+  return true
+}
+
+/**
+ * Normalize a template's `where` block into the registered constraint map
+ * (param → required shape), checking every referenced index-set name against
+ * the CONSUMING document's merged `index_sets` registry (`isetNames`). An
+ * unknown name is `template_constraint_unknown_index_set` (esm-spec §9.6.6) —
+ * raised here, at rule registration in the consuming component, not when a
+ * library file is loaded standalone. Assumes structural validity
+ * (`validateTemplates` already ran). Returns `null` when there is no `where`.
+ */
+function registeredWhere(
+  decl: TemplateDecl,
+  isetNames: Set<string>,
+  scope: string,
+  tname: string,
+): Record<string, string[]> | null {
+  const whr = (decl as { where?: unknown }).where
+  if (whr === undefined || whr === null) return null
+  const out: Record<string, string[]> = {}
+  for (const [p, cobj] of Object.entries(whr as Record<string, unknown>)) {
+    const shp = (cobj as { shape?: unknown }).shape as unknown[]
+    const req = shp.map((s) => String(s))
+    for (const s of req) {
+      if (!isetNames.has(s)) {
+        throw new ExpressionTemplateError(
+          'template_constraint_unknown_index_set',
+          `${scope}.expression_templates.${tname}: where.${p}.shape names index set '${s}', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)`,
+        )
+      }
+    }
+    out[p] = req
+  }
+  return out
 }
 
 function deepClone<T>(v: T): T {
@@ -335,6 +445,63 @@ export function validateTemplates(templates: Templates, scope: string): void {
     const match = (decl as { match?: Json }).match
     if (match !== undefined) {
       assertNoNestedApply(match, name, '/match')
+    }
+
+    // esm-spec §9.6.1 (0.8.0): an optional `where` block adds static
+    // match-scoping constraints on the captured params. Structural validation
+    // only, here; the unknown-index-set check runs at rule REGISTRATION in the
+    // consuming component (where the merged `index_sets` registry is in scope)
+    // — see `registeredWhere`.
+    const whr = (decl as { where?: unknown }).where
+    if (whr !== undefined && whr !== null) {
+      if (match === undefined) {
+        throw new ExpressionTemplateError(
+          'apply_expression_template_invalid_declaration',
+          `${scope}.expression_templates.${name}: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)`,
+        )
+      }
+      if (!isObject(whr) || Object.keys(whr).length === 0) {
+        throw new ExpressionTemplateError(
+          'apply_expression_template_invalid_declaration',
+          `${scope}.expression_templates.${name}: 'where' must be a non-empty object mapping declared params to constraint objects`,
+        )
+      }
+      for (const [p, cobj] of Object.entries(whr)) {
+        if (!seen.has(p)) {
+          throw new ExpressionTemplateError(
+            'apply_expression_template_invalid_declaration',
+            `${scope}.expression_templates.${name}: 'where' constrains '${p}', which is not a declared param (esm-spec §9.6.1)`,
+          )
+        }
+        if (!isObject(cobj)) {
+          throw new ExpressionTemplateError(
+            'apply_expression_template_invalid_declaration',
+            `${scope}.expression_templates.${name}: where.${p} must be a constraint object (v1 admits exactly the 'shape' kind)`,
+          )
+        }
+        const ckeys = Object.keys(cobj)
+        if (!(ckeys.length === 1 && ckeys[0] === 'shape')) {
+          throw new ExpressionTemplateError(
+            'apply_expression_template_invalid_declaration',
+            `${scope}.expression_templates.${name}: where.${p} carries constraint kind(s) ${[...ckeys].sort().join(', ')}; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)`,
+          )
+        }
+        const shp = (cobj as { shape?: unknown }).shape
+        if (!Array.isArray(shp) || shp.length === 0) {
+          throw new ExpressionTemplateError(
+            'apply_expression_template_invalid_declaration',
+            `${scope}.expression_templates.${name}: where.${p}.shape must be a non-empty array of index-set names`,
+          )
+        }
+        for (const s of shp) {
+          if (typeof s !== 'string' || s.length === 0) {
+            throw new ExpressionTemplateError(
+              'apply_expression_template_invalid_declaration',
+              `${scope}.expression_templates.${name}: where.${p}.shape entries must be non-empty strings`,
+            )
+          }
+        }
+      }
     }
   }
 }
@@ -552,11 +719,12 @@ function onePass(
   sortedRules: MatchRule[],
   scope: string,
   last: { op: string },
+  shapeEnv: ShapeEnv,
 ): PassResult {
   if (Array.isArray(node)) {
     let changed = false
     const out = node.map((c) => {
-      const r = onePass(c, templates, sortedRules, scope, last)
+      const r = onePass(c, templates, sortedRules, scope, last, shapeEnv)
       changed = changed || r.changed
       return r.node
     })
@@ -572,7 +740,14 @@ function onePass(
   }
   for (const rule of sortedRules) {
     const bindings: Record<string, Json> = {}
-    if (matchPattern(rule.match, node, rule.params, bindings)) {
+    // Constraint filtering is part of match ELIGIBILITY (esm-spec §9.6.3
+    // constraint 2): a `where`-excluded rule is treated exactly like a
+    // non-matching rule at this node, so a high-priority excluded rule never
+    // shadows a lower-priority rule that does fire.
+    if (
+      matchPattern(rule.match, node, rule.params, bindings) &&
+      whereSatisfied(rule.whereConstraint, bindings, shapeEnv)
+    ) {
       last.op = typeof node.op === 'string' ? node.op : ''
       return { node: substitute(rule.body, bindings), changed: true }
     }
@@ -581,7 +756,7 @@ function onePass(
   let changed = false
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(node)) {
-    const r = onePass(node[k], templates, sortedRules, scope, last)
+    const r = onePass(node[k], templates, sortedRules, scope, last, shapeEnv)
     out[k] = r.node
     changed = changed || r.changed
   }
@@ -601,11 +776,12 @@ function rewriteToFixpoint(
   templates: Templates,
   sortedRules: MatchRule[],
   scope: string,
+  shapeEnv: ShapeEnv = EMPTY_SHAPE_ENV,
 ): Json {
   const last = { op: '' }
   let current = node
   for (let pass = 0; pass < MAX_REWRITE_PASSES; pass++) {
-    const { node: next, changed } = onePass(current, templates, sortedRules, scope, last)
+    const { node: next, changed } = onePass(current, templates, sortedRules, scope, last, shapeEnv)
     current = next
     if (!changed) return current // fixpoint reached
   }
@@ -689,14 +865,24 @@ interface Component {
 interface RewriteContext {
   templates: Templates
   matchRules: MatchRule[]
+  /** The enclosing component's static shape environment for `where` (esm-spec §9.6.1). */
+  shapeEnv: ShapeEnv
 }
 
 /**
  * Build the rewrite context from a component's raw `expression_templates`
  * block: validate declarations, compose body references (esm-spec §9.7.3),
- * and register `match` rules in deterministic selection order (§9.6.3).
+ * and register `match` rules in deterministic selection order (§9.6.3). Each
+ * rule's `where` constraints are normalized and checked against the consuming
+ * document's merged `index_sets` registry (`isetNames`,
+ * `template_constraint_unknown_index_set`).
  */
-function buildRewriteContext(tplRaw: Record<string, unknown>, scope: string): RewriteContext {
+function buildRewriteContext(
+  tplRaw: Record<string, unknown>,
+  isetNames: Set<string>,
+  shapeEnv: ShapeEnv,
+  scope: string,
+): RewriteContext {
   const templates: Templates = {}
   const matchRules: MatchRule[] = []
   const all: Templates = {}
@@ -721,6 +907,10 @@ function buildRewriteContext(tplRaw: Record<string, unknown>, scope: string): Re
         body: decl.body,
         priority: rulePriority(decl),
         declIndex,
+        // `where` registration: normalize constraints and resolve every
+        // referenced index-set name against the consuming registry (esm-spec
+        // §9.6.1; `template_constraint_unknown_index_set`).
+        whereConstraint: registeredWhere(decl, isetNames, scope, tname),
       })
     }
     declIndex++
@@ -728,7 +918,7 @@ function buildRewriteContext(tplRaw: Record<string, unknown>, scope: string): Re
   // Deterministic selection order (esm-spec §9.6.3): highest `priority`
   // first, ties broken by declaration order (earliest wins).
   matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
-  return { templates, matchRules }
+  return { templates, matchRules, shapeEnv }
 }
 
 /** True if any model / reaction_system declares an expression_templates block. */
@@ -788,6 +978,70 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
   }
 }
 
+/**
+ * Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray`
+ * region bound pair `[start, stop]` on the expanded, metaparameter-folded tree
+ * must satisfy `stop >= start - 1`. `stop == start - 1` is the canonical EMPTY
+ * bound — the region covers no elements (the spelling an interior region like
+ * `[2, N-1]` folds to at the minimum admissible extent `N = 2`).
+ * `stop < start - 1` is INVERTED and rejected with `makearray_region_inverted`:
+ * it is almost always an authoring bug (an interior stencil instantiated below
+ * its minimum extent, e.g. `[2, N-1]` at `N = 1` folding to `[2, 0]`), and
+ * silently treating it as empty would hide the defect. Template bodies are
+ * skipped — pre-substitution bounds may legally carry metaparameter names
+ * there; only concrete integer pairs are checked (a fully-folded document tree
+ * carries nothing else in bound position). Throws `ExpressionTemplateError`
+ * with code `makearray_region_inverted`.
+ */
+export function validateMakearrayRegions(tree: unknown, path = ''): void {
+  if (Array.isArray(tree)) {
+    for (let i = 0; i < tree.length; i++) validateMakearrayRegions(tree[i], `${path}/${i}`)
+    return
+  }
+  if (!isObject(tree)) return
+  const node = tree as Record<string, unknown>
+  if (node.op === 'makearray') {
+    const regions = node.regions
+    if (Array.isArray(regions)) {
+      for (let ri = 0; ri < regions.length; ri++) {
+        const region = regions[ri]
+        if (!Array.isArray(region)) continue
+        for (let di = 0; di < region.length; di++) {
+          const bounds = region[di]
+          if (!Array.isArray(bounds) || bounds.length !== 2) continue
+          const lo = intBound(bounds[0])
+          const hi = intBound(bounds[1])
+          if (lo === undefined || hi === undefined) continue
+          if (hi < lo - 1) {
+            throw new ExpressionTemplateError(
+              'makearray_region_inverted',
+              `${path}: makearray regions[${ri}] dimension ${di} bound pair [${lo}, ${hi}] is inverted (stop < start - 1). An empty bound is spelled [start, start-1] and contributes no elements (esm-spec §4.3.2); a further-inverted pair is an authoring error — e.g. an interior stencil region [2, N-1] instantiated at N below the scheme's minimum extent (§9.6.8).`,
+            )
+          }
+        }
+      }
+    }
+  }
+  for (const k of Object.keys(node)) {
+    // Template bodies/matches are pre-substitution trees; bounds may legally
+    // carry metaparameter names or fold later (esm-spec §9.7.6).
+    if (k === 'expression_templates') continue
+    validateMakearrayRegions(node[k], `${path}/${k}`)
+  }
+}
+
+/**
+ * A makearray region bound entry read as a concrete integer (plain JSON
+ * integer or an int-tagged `NumericLiteral`), or `undefined` for anything else
+ * (a still-symbolic bound, a float, a boolean). Only integer pairs are checked.
+ */
+function intBound(v: unknown): number | undefined {
+  if (typeof v === 'boolean') return undefined
+  if (typeof v === 'number') return Number.isInteger(v) ? v : undefined
+  if (isNumericLiteral(v)) return v.kind === 'int' ? v.value : undefined
+  return undefined
+}
+
 export function lowerExpressionTemplates<T extends object>(file: T): T {
   rejectExpressionTemplatesPreV04(file)
 
@@ -803,7 +1057,17 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
     // validators still run — the raw tree IS the expanded form. Then strip
     // empty expression_templates blocks for canonical-form invariance.
     validateGeometryManifolds(root)
+    validateMakearrayRegions(root)
     return stripExpressionTemplates(file)
+  }
+
+  // The consuming document's merged index_sets registry (post-§9.7.5): the
+  // namespace `where` shape constraints resolve against at registration
+  // (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
+  // declared here).
+  const isetNames = new Set<string>()
+  if (isObject(root.index_sets)) {
+    for (const k of Object.keys(root.index_sets)) isetNames.add(k)
   }
 
   // Walk both component families. Contexts of components that DECLARE an
@@ -822,6 +1086,9 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       if (!isObject(compRaw)) continue
       const comp = compRaw as Component
       const tplRaw = comp.expression_templates
+      // Static shape environment for `where` constraint evaluation
+      // (esm-spec §9.6.1): declared variable shapes only.
+      const shapeEnv = componentShapeEnv(comp)
       // `templates`  — every template keyed by name, consulted by
       //                `apply_expression_template` (order-independent).
       // `matchRules` — the auto-applied `match` rules, pre-sorted by
@@ -830,7 +1097,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       let templates: Templates = {}
       let matchRules: MatchRule[] = []
       if (isObject(tplRaw)) {
-        const ctx = buildRewriteContext(tplRaw, `${compKind}.${compName}`)
+        const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, `${compKind}.${compName}`)
         templates = ctx.templates
         matchRules = ctx.matchRules
         contextsByKind[compKind].set(compName, ctx)
@@ -839,7 +1106,13 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       // inside template bodies — those are validated above) to a fixpoint.
       for (const k of Object.keys(comp)) {
         if (k === 'expression_templates') continue
-        comp[k] = rewriteToFixpoint(comp[k], templates, matchRules, `${compKind}.${compName}.${k}`)
+        comp[k] = rewriteToFixpoint(
+          comp[k],
+          templates,
+          matchRules,
+          `${compKind}.${compName}.${k}`,
+          shapeEnv,
+        )
       }
       delete comp.expression_templates
     }
@@ -869,6 +1142,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
         ctx.templates,
         ctx.matchRules,
         `coupling[${i}].transform`,
+        ctx.shapeEnv,
       )
     }
   }
@@ -885,8 +1159,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
 
   // Validators run on the expanded form (esm-spec §9.6.4): reject any
   // geometry-kernel node whose (possibly just-substituted) `manifold` is
-  // outside the closed set.
+  // outside the closed set, and any makearray region whose folded bound pair
+  // is inverted (stop < start - 1; esm-spec §4.3.2).
   validateGeometryManifolds(out)
+  validateMakearrayRegions(out)
 
   return out as T
 }
