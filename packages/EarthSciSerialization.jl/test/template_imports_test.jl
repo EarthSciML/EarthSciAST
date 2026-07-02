@@ -40,7 +40,7 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
         e isa ExpressionTemplateError ? e.code : rethrow(e)
     end
 
-    @testset "import_smoke: the §9.7.7 four-file layering" begin
+    @testset "import_smoke: the §9.7.8 four-file layering" begin
         # Raw pipeline matches the golden byte-for-byte structurally.
         @test _expand_raw(conf("import_smoke", "fixture.esm")) ==
               _golden(conf("import_smoke", "expanded.esm"))
