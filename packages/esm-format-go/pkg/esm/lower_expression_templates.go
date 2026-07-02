@@ -65,6 +65,22 @@ const MaxRewritePasses = 64
 //   - apply_expression_template_invalid_declaration
 //   - apply_expression_template_version_too_old
 //   - rewrite_rule_nonterminating
+//
+// or one of the esm-spec §9.7 template-library / metaparameter codes
+// (§9.6.6, raised from template_imports.go and subsystem_ref.go):
+//
+//   - template_import_version_too_old
+//   - template_import_unresolved
+//   - template_import_not_library
+//   - subsystem_ref_is_template_library
+//   - template_import_cycle
+//   - template_import_name_conflict
+//   - template_import_unknown_name
+//   - template_import_index_set_conflict
+//   - template_body_expansion_too_deep
+//   - metaparameter_unbound
+//   - metaparameter_type_error
+//   - metaparameter_name_conflict
 type ExpressionTemplateError struct {
 	Code    string
 	Message string
@@ -78,6 +94,9 @@ func newETErr(code, msg string) *ExpressionTemplateError {
 	return &ExpressionTemplateError{Code: code, Message: msg}
 }
 
+// assertNoNestedApply rejects `apply_expression_template` nodes inside a
+// `match` pattern (esm-spec §9.7.3: match patterns MUST NOT reference
+// templates).
 func assertNoNestedApply(body interface{}, templateName, path string) error {
 	switch b := body.(type) {
 	case []interface{}:
@@ -89,8 +108,8 @@ func assertNoNestedApply(body interface{}, templateName, path string) error {
 	case map[string]interface{}:
 		if op, ok := b["op"].(string); ok && op == applyExpressionTemplateOp {
 			return newETErr(
-				"apply_expression_template_recursive_body",
-				fmt.Sprintf("expression_templates.%s: body contains nested 'apply_expression_template' at %s; templates MUST NOT call other templates", templateName, path),
+				"apply_expression_template_invalid_declaration",
+				fmt.Sprintf("expression_templates.%s: `match` contains an 'apply_expression_template' node at %s; match patterns MUST NOT reference templates (esm-spec §9.7.3)", templateName, path),
 			)
 		}
 		// Iterate in deterministic order for cross-language reproducibility
@@ -115,11 +134,13 @@ func validateTemplates(templates map[string]interface{}, scope string) error {
 				fmt.Sprintf("%s.expression_templates.%s: entry must be an object with params + body", scope, name),
 			)
 		}
+		// `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
+		// template is a named constant fragment (common in library files).
 		paramsRaw, ok := declObj["params"].([]interface{})
-		if !ok || len(paramsRaw) == 0 {
+		if !ok {
 			return newETErr(
 				"apply_expression_template_invalid_declaration",
-				fmt.Sprintf("%s.expression_templates.%s: 'params' must be a non-empty array of strings", scope, name),
+				fmt.Sprintf("%s.expression_templates.%s: 'params' must be an array of strings", scope, name),
 			)
 		}
 		seen := make(map[string]struct{})
@@ -139,16 +160,17 @@ func validateTemplates(templates map[string]interface{}, scope string) error {
 			}
 			seen[ps] = struct{}{}
 		}
-		body, ok := declObj["body"]
-		if !ok {
+		if _, ok := declObj["body"]; !ok {
 			return newETErr(
 				"apply_expression_template_invalid_declaration",
 				fmt.Sprintf("%s.expression_templates.%s: 'body' is required", scope, name),
 			)
 		}
-		if err := assertNoNestedApply(body, name, "/body"); err != nil {
-			return err
-		}
+		// A body MAY reference other match-less in-scope templates via
+		// apply_expression_template nodes (esm-spec §9.7.3); those are checked
+		// (acyclic, depth <= MaxTemplateExpansionDepth) and inlined at
+		// registration by composeTemplateBodies — the old any-nesting
+		// rejection is now cycle-only (`apply_expression_template_recursive_body`).
 		// esm-spec §9.6: an optional `match` pattern turns the entry into an
 		// auto-applied rewrite rule. The pattern is an Expression whose declared
 		// params are wildcards; it MUST NOT contain nested
@@ -742,6 +764,13 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 				if err := validateTemplates(tplMap, fmt.Sprintf("%s.%s", kind, cname)); err != nil {
 					return err
 				}
+				// Registration-time body composition (esm-spec §9.7.3):
+				// inline body references to match-less in-scope templates as
+				// a statically-checked acyclic DAG, so every rule body the
+				// fixpoint sees is a closed AST.
+				if err := composeTemplateBodies(tplMap, fmt.Sprintf("%s.%s", kind, cname)); err != nil {
+					return err
+				}
 			}
 			// `named`  — every template keyed by name, consulted by
 			//            `apply_expression_template` (order-independent).
@@ -841,6 +870,37 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 	out, err := json.Marshal(view)
 	if err != nil {
 		return "", fmt.Errorf("apply_expression_template pass: re-marshal: %w", err)
+	}
+	return string(out), nil
+}
+
+// resolveAndLowerJSON is applyExpressionTemplatesToJSON preceded by the
+// esm-spec §9.7 load-time resolution (template_imports.go): template-library
+// imports resolve depth-first post-order against `basePath` with per-edge
+// metaparameter instantiation, imported index_sets merge, and the document's
+// metaparameters close (edge bindings > loader-API `metaparameters` > their
+// `default`s) and fold — then the §9.6.3 rewrite fixpoint runs on the
+// resolved view. The resolver publishes each component's §9.7.4 effective
+// template sequence into the declaration-order map, so `match`-rule
+// tie-breaking honours imports-then-locals order. Returns the rewritten JSON;
+// the input is not modified.
+func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
+	var view map[string]interface{}
+	dec := json.NewDecoder(strings.NewReader(jsonStr))
+	dec.UseNumber()
+	if err := dec.Decode(&view); err != nil {
+		return "", fmt.Errorf("template resolution pass: %w", err)
+	}
+	orders := extractTemplateOrders(jsonStr)
+	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
+		return "", err
+	}
+	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(view)
+	if err != nil {
+		return "", fmt.Errorf("template resolution pass: re-marshal: %w", err)
 	}
 	return string(out), nil
 }

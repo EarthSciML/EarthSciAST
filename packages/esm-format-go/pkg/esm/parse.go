@@ -25,22 +25,54 @@ var DeprecationWarningLogger = func(code DeprecationWarningCode, message string)
 //go:embed esm-schema.json
 var embeddedSchema []byte
 
+// LoadOption configures a Load / LoadString call.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct {
+	basePath       string
+	metaparameters map[string]int64
+}
+
+// WithMetaparameters binds the ROOT document's open metaparameters at the
+// loader API (esm-spec §9.7.6 binding site 4): already-closed edge bindings
+// win, API bindings beat `default`s. Binding a name the document does not
+// declare fails with `template_import_unknown_name`.
+func WithMetaparameters(m map[string]int64) LoadOption {
+	return func(o *loadOptions) { o.metaparameters = m }
+}
+
+// WithBasePath anchors relative `expression_template_imports` refs (esm-spec
+// §9.7.2) for LoadString input. Load derives it from the file's directory
+// automatically; an explicit WithBasePath overrides that.
+func WithBasePath(dir string) LoadOption {
+	return func(o *loadOptions) { o.basePath = dir }
+}
+
+func applyLoadOptions(opts []LoadOption) loadOptions {
+	o := loadOptions{basePath: "."}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Load loads an ESM file from the specified path and validates it against the JSON schema.
 // After parsing, it resolves any subsystem references relative to the file's directory.
-func Load(path string) (*EsmFile, error) {
+func Load(path string, opts ...LoadOption) (*EsmFile, error) {
 	// Read the file
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 	}
 
-	esmFile, err := LoadString(string(data))
+	basePath := filepath.Dir(path)
+	esmFile, err := LoadString(string(data),
+		append([]LoadOption{WithBasePath(basePath)}, opts...)...)
 	if err != nil {
 		return nil, err
 	}
 
 	// Resolve subsystem references relative to the file's directory
-	basePath := filepath.Dir(path)
 	if err := ResolveSubsystemRefs(esmFile, basePath); err != nil {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
@@ -49,18 +81,26 @@ func Load(path string) (*EsmFile, error) {
 }
 
 // LoadString parses an ESM file from JSON string and validates it against the JSON schema
-func LoadString(jsonStr string) (*EsmFile, error) {
+func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
+	o := applyLoadOptions(opts)
+
 	// v0.4.0 expression_templates / apply_expression_template are rejected
-	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
-	// Surfaced before schema validation so the user sees the version hint
-	// instead of a generic "extra property" schema error. Operates on a
-	// generic map view of the JSON (UseNumber to preserve int/float).
+	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
+	// the v0.8.0 §9.7 constructs (expression_template_imports, top-level
+	// expression_templates, metaparameters) when the file declares
+	// esm < 0.8.0 (esm-spec §9.6.5). Surfaced before schema validation so
+	// the user sees the version hint instead of a generic "extra property"
+	// schema error. Operates on a generic map view of the JSON (UseNumber to
+	// preserve int/float).
 	{
 		var preCheck map[string]interface{}
 		predec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 		predec.UseNumber()
 		if err := predec.Decode(&preCheck); err == nil {
 			if err := RejectExpressionTemplatesPreV04(preCheck); err != nil {
+				return nil, err
+			}
+			if err := RejectTemplateImportsPreV08(preCheck); err != nil {
 				return nil, err
 			}
 		}
@@ -80,11 +120,15 @@ func LoadString(jsonStr string) (*EsmFile, error) {
 		return nil, fmt.Errorf("JSON schema validation failed: %v", errorStrs)
 	}
 
-	// Expand `apply_expression_template` ops at load time (esm-spec §9.6 /
-	// docs/rfcs/ast-expression-templates.md). After this rewrite, the JSON
-	// has no apply_expression_template nodes and no expression_templates
-	// blocks — the typed struct sees only normal Expression ASTs.
-	expanded, err := applyExpressionTemplatesToJSON(jsonStr)
+	// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
+	// post-order, per-edge metaparameter instantiation), index_sets merge,
+	// metaparameter close+fold — then expand `apply_expression_template` ops
+	// / fire `match` rules to the §9.6.3 fixpoint (esm-spec §9.6 /
+	// docs/rfcs/ast-expression-templates.md). After both passes the JSON has
+	// no apply_expression_template nodes, no expression_templates blocks, no
+	// imports, and no metaparameters — the typed struct sees only normal
+	// Expression ASTs (Option A round-trip).
+	expanded, err := resolveAndLowerJSON(jsonStr, o.basePath, o.metaparameters)
 	if err != nil {
 		return nil, err
 	}
