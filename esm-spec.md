@@ -2407,6 +2407,7 @@ Conformance fixtures live under `tests/conformance/expression_templates/`. The v
 
 - `arrhenius_smoke/fixture.esm` — a 2-parameter `arrhenius` template applied across three reactions with different scalar bindings.
 - `arrhenius_smoke/expanded.esm` — the canonical post-expansion form. All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array on load.
+- `scalar_field_param/` — the §9.6.1 scalar-field substitution site: one template parameterized on the `manifold` scalar field of a `polygon_intersection_area` node, instantiated twice (`planar` / `spherical`), plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal post-substitution nodes; an inadmissible bound value is rejected on the expanded form (§9.6.4).
 
 The template-library RFC adds (see `docs/content/rfcs/template-library-imports.md` §11):
 

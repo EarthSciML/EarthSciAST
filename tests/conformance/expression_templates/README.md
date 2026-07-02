@@ -40,6 +40,23 @@ round_trip manifest; the flatten/evaluation contract (target parameter
 becomes an observed defined by the transform; `u(1) = 9.5`) is exercised by
 the executing bindings' unit suites.
 
+### `scalar_field_param/` (expanded.esm)
+
+Scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3
+constraint 5): one `overlap_area` template whose `body` carries a parameter
+name (`K_manifold`) as the string VALUE of the scalar `manifold` field of a
+`polygon_intersection_area` node — a substitution site, the exact mirror of
+the match-side scalar-field binding rule — instantiated twice with different
+manifold literals (`planar`, `spherical`). All five bindings MUST expand both
+observeds to the same post-substitution nodes (`expanded.esm`, Julia-generated
+via `scripts/generate-template-import-goldens.jl`). The value bound to a
+scalar-field parameter must be a literal admissible for the field, enforced on
+the EXPANDED form per §9.6.4 (`geometry_manifold_invalid` for an out-of-set
+manifold; the inadmissible-binding and params-shadow-literals cases are
+exercised 1:1 by the per-binding unit suites). This is the rule that lets the
+EarthSciDiscretizations conservative-regrid library serve every manifold from
+one file instead of pinning `manifold: "planar"` per file.
+
 ## Rewrite-engine fixtures (0.8.0: outermost-first + priority + bounded fixpoint)
 
 These exercise the auto-applied `match` rewrite engine (esm-spec §9.6.3) and the
