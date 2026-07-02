@@ -1377,10 +1377,71 @@ def _load_ref_data(
     return ref_data, new_base
 
 
+# Index-set declaration fields compared by the §4.7 / §9.7.5 deep-equal test
+# (the semantic shape of an axis; description / metadata are ignored, mirroring
+# the Julia reference's field-wise `_index_set_deep_equal`).
+_ISET_SEMANTIC_KEYS = (
+    "kind", "size", "members", "of", "offsets", "values", "from_faq",
+)
+
+
+def _index_set_deep_equal(a: Any, b: Any) -> bool:
+    """Structural equality of two index-set declarations (esm-spec §4.7 /
+    §9.7.5): equal ``kind`` / ``size`` / ``members`` / ``of`` / ``offsets`` /
+    ``values`` / ``from_faq``. Non-semantic fields (``description``) do not
+    affect the judgment, matching the Julia reference."""
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return a == b
+    return all(a.get(k) == b.get(k) for k in _ISET_SEMANTIC_KEYS)
+
+
+def _index_set_show(s: Any) -> str:
+    if not isinstance(s, dict):
+        return repr(s)
+    parts = []
+    for k in ("kind", "size", "members", "of", "from_faq"):
+        if s.get(k) is not None:
+            parts.append(f"{k}={s[k]}")
+    return ", ".join(parts)
+
+
+def _merge_subsystem_index_sets(
+    registry: Dict[str, Any], loaded_index_sets: Dict[str, Any], ref: str,
+) -> None:
+    """Merge a referenced subsystem file's top-level ``index_sets`` into the
+    importing document's registry (esm-spec §4.7, mirroring the §9.7.5
+    template-import merge). Deep-equal redeclaration is idempotent; a non-equal
+    collision raises ``subsystem_index_set_conflict`` (§9.6.6) — the mounted-mesh
+    failure mode this makes loud: a mesh file whose axis size disagrees with the
+    importer's declaration must fail at load, not silently resolve against the
+    importer."""
+    if not isinstance(loaded_index_sets, dict):
+        return
+    from .lower_expression_templates import ExpressionTemplateError
+
+    for n, decl in loaded_index_sets.items():
+        if n in registry:
+            if not _index_set_deep_equal(registry[n], decl):
+                raise ExpressionTemplateError(
+                    "subsystem_index_set_conflict",
+                    f"index set '{n}' from subsystem ref '{ref}' "
+                    f"({_index_set_show(decl)}) collides with a non-deep-equal "
+                    "declaration in the importing document "
+                    f"({_index_set_show(registry[n])}). A referenced subsystem "
+                    "file's top-level index_sets merge into the importing "
+                    "document's registry; deep-equal redeclaration is "
+                    "idempotent, a size/kind disagreement is a load-time error "
+                    "(esm-spec §4.7).",
+                )
+        else:
+            registry[n] = decl
+
+
 def _resolve_model_subsystems(
     model: Model,
     base_path: str,
     seen_refs: set,
+    registry: Dict[str, Any],
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -1388,6 +1449,10 @@ def _resolve_model_subsystems(
         model: The model whose subsystems should be resolved
         base_path: The base directory for resolving relative paths
         seen_refs: Set of already-seen ref strings for circular detection
+        registry: The importing document's index-set registry
+            (``EsmFile.index_sets``); every referenced subsystem file's
+            top-level ``index_sets`` merge into it at resolution time
+            (esm-spec §4.7).
     """
     if not model.subsystems:
         return
@@ -1417,6 +1482,12 @@ def _resolve_model_subsystems(
 
             parsed = _parse_esm_data(ref_data)
 
+            # esm-spec §4.7: the mounted file's document-scoped index sets
+            # (already metaparameter-folded) join the importing document's
+            # registry, so the importer's variables may be shaped over the mesh
+            # file's axes and a disagreement fails loudly (deep-equal-or-error).
+            _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
+
             # Extract the single top-level model or data loader. A referenced
             # file with exactly one top-level data loader (RFC pure-io-data-loaders
             # §4.4) resolves to that loader, named by the parent subsystem key.
@@ -1424,8 +1495,9 @@ def _resolve_model_subsystems(
                 # Take the first (and expected-only) model
                 sub_model = next(iter(parsed.models.values()))
                 sub_model.name = sub_name
-                # Recursively resolve nested subsystem refs
-                _resolve_model_subsystems(sub_model, new_base, new_seen)
+                # Recursively resolve nested subsystem refs; nested subsystem
+                # index sets merge into the SAME (top document) registry.
+                _resolve_model_subsystems(sub_model, new_base, new_seen, registry)
                 resolved_subsystems[sub_name] = sub_model
             elif parsed.data_loaders:
                 # Single-loader file: a data loader has no subsystems, so there
@@ -1440,7 +1512,8 @@ def _resolve_model_subsystems(
         else:
             # Already a Model object, just recurse into it
             if isinstance(sub_value, Model):
-                _resolve_model_subsystems(sub_value, base_path, seen_refs)
+                _resolve_model_subsystems(sub_value, base_path, seen_refs,
+                                          registry)
             resolved_subsystems[sub_name] = sub_value
 
     model.subsystems = resolved_subsystems
@@ -1524,8 +1597,17 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
     """
     seen: set = set()
 
+    # The importing document's index-set registry (esm-spec §4.7): threaded
+    # down the model subsystem walk so every referenced subsystem file's
+    # top-level index_sets merge into it (deep-equal-or-error). Reaction-system
+    # subsystems do not merge (matching the Julia reference).
+    registry = esm_file.index_sets
+    if not isinstance(registry, dict):
+        registry = {}
+        esm_file.index_sets = registry
+
     for model in esm_file.models.values():
-        _resolve_model_subsystems(model, base_path, seen)
+        _resolve_model_subsystems(model, base_path, seen, registry)
 
     for rs in esm_file.reaction_systems.values():
         _resolve_reaction_system_subsystems(rs, base_path, seen)
@@ -1565,6 +1647,10 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
         SubsystemRefError: If a reference cannot be resolved or does not
             contain a top-level model
     """
+    registry = esm_file.index_sets
+    if not isinstance(registry, dict):
+        registry = {}
+        esm_file.index_sets = registry
     resolved_models: Dict[str, Any] = {}
     for model_name, model_value in esm_file.models.items():
         # An already-parsed Model (inline definition) passes through unchanged.
@@ -1596,8 +1682,9 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
         sub_model = next(iter(parsed.models.values()))
         sub_model.name = model_name
         # Recursively resolve the spliced model's own subsystem refs, relative
-        # to the referenced file's directory.
-        _resolve_model_subsystems(sub_model, new_base, seen)
+        # to the referenced file's directory; nested subsystem index sets merge
+        # into the importing document's registry (esm-spec §4.7).
+        _resolve_model_subsystems(sub_model, new_base, seen, registry)
         resolved_models[model_name] = sub_model
 
     esm_file.models = resolved_models

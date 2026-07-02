@@ -1745,13 +1745,34 @@ def _materialize_join_key_buffers(
         factor_scope=dict(factor_scope or {}),
     )
     # Join-carrying observeds (rg_A / rg_At / rg_W / surface_heat_flux) gate on
-    # the bins themselves, so they are NOT materialized here — only the bins'
-    # own (join-free) inputs are.
+    # the bins themselves, so they are NOT materialized here. Nor is every
+    # join-free observed: a join-free observed may itself READ a join-carrying
+    # observed (e.g. a reduction `total = sum(rg_A)`), which is unresolvable at
+    # bin-setup time. Materialize ONLY the join-free observeds the bins
+    # transitively depend on — the binning coordinates and their own inputs.
     join_free = [
         (name, rhs) for name, rhs in ordered_observed
         if not (isinstance(rhs, ExprNode) and getattr(rhs, "join", None))
     ]
-    _materialize_observeds(join_free, ctx)
+    join_free_names = {name for name, _ in join_free}
+    rhs_by_name = dict(ordered_observed)
+    # Dependency closure of the bin specs over the join-free observeds.
+    needed: Set[str] = set()
+    frontier: List[str] = []
+    for _bn, node, _idx in bin_specs:
+        for r in _expr_referenced_names(node) & join_free_names:
+            if r not in needed:
+                needed.add(r)
+                frontier.append(r)
+    while frontier:
+        cur = frontier.pop()
+        for r in _expr_referenced_names(rhs_by_name[cur]) & join_free_names:
+            if r not in needed:
+                needed.add(r)
+                frontier.append(r)
+    # Preserve the dependency-sorted order of `ordered_observed`.
+    _materialize_observeds(
+        [(name, rhs) for name, rhs in join_free if name in needed], ctx)
     for name, node, idx_set in bin_specs:
         buffers[name] = np.asarray(eval_expr(node, ctx), dtype=float).reshape(-1)
         if idx_set is not None:

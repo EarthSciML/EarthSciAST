@@ -17,6 +17,7 @@ from earthsci_toolkit.lower_expression_templates import (
     lower_expression_templates,
     reject_expression_templates_pre_v04,
 )
+from earthsci_toolkit.template_imports import resolve_template_machinery
 
 
 ARRHENIUS_FIXTURE: dict = {
@@ -561,3 +562,151 @@ def test_scalar_field_param_conformance_fixture_matches_expanded():
     variables = out["models"]["Overlap"]["variables"]
     assert variables["area_planar"]["expression"]["manifold"] == "planar"
     assert variables["area_spherical"]["expression"]["manifold"] == "spherical"
+
+
+# ---------------------------------------------------------------------------
+# Static match-scoping constraints (`where`, esm-spec §9.6.1;
+# docs/content/rfcs/match-pattern-scoping-constraints.md)
+# ---------------------------------------------------------------------------
+
+
+def _expand_conf(fix: str) -> dict:
+    """Raw §9.7 pipeline (resolve → lower) over a conformance fixture."""
+    raw = _conf_fixture(fix)
+    resolved = resolve_template_machinery(raw, _conf_dir(fix))
+    return lower_expression_templates(resolved if resolved is not None else raw)
+
+
+@pytest.mark.parametrize(
+    "fix", ["constrained_match_scope", "per_variable_scheme_literal_args",
+            "two_div_two_meshes"],
+)
+def test_where_constraint_conformance_matches_golden(fix):
+    """The three §9.6.1 `where` goldens: substantive tree (models / index_sets /
+    reaction_systems) byte-identical to the Julia-generated expanded.esm. The
+    illustrative `metadata` block is authored differently in the golden and is
+    not part of the cross-binding contract (mirrors arrhenius_smoke / coupling)."""
+    got = _expand_conf(fix)
+    want = _conf_fixture(fix, "expanded.esm")
+    for key in ("models", "index_sets", "reaction_systems"):
+        assert got.get(key) == want.get(key), f"{fix}: {key} differs"
+
+
+def test_where_constraint_scopes_positive_and_negative_case():
+    """constrained_match_scope: one shape-constrained div rule, two shaped
+    variables. div(F_edge) (shape [edges]) is rewritten; div(F_cell) (shape
+    [cells]) is constraint-excluded and survives lowering intact."""
+    out = _expand_conf("constrained_match_scope")
+    vars_ = out["models"]["m"]["variables"]
+    # F_edge matched the shape [edges] constraint → rewritten to inv_area * F.
+    assert vars_["div_edge"]["expression"]["op"] == "*"
+    # F_cell failed the constraint → the div node stays un-lowered.
+    assert vars_["div_cell"]["expression"]["op"] == "div"
+
+
+def test_where_unknown_index_set_rejected_at_registration():
+    """constraint_unknown_index_set: a `where` shape naming an index set the
+    consuming registry does not declare fails at rule registration with
+    template_constraint_unknown_index_set (esm-spec §9.6.1/§9.6.6)."""
+    raw = _conf_fixture("constraint_unknown_index_set")
+    want = _conf_fixture("constraint_unknown_index_set", "error.json")["code"]
+    with pytest.raises(ExpressionTemplateError) as exc:
+        resolved = resolve_template_machinery(
+            raw, _conf_dir("constraint_unknown_index_set"))
+        lower_expression_templates(resolved if resolved is not None else raw)
+    assert exc.value.code == want == "template_constraint_unknown_index_set"
+
+
+def _where_pin_doc(templates: dict) -> dict:
+    return {
+        "esm": "0.8.0",
+        "metadata": {"name": "where_pin"},
+        "index_sets": {"edges": {"kind": "interval", "size": 4}},
+        "models": {
+            "m": {
+                "variables": {
+                    "Fe": {"type": "state", "units": "1", "default": 1.0,
+                           "shape": ["edges"]},
+                    "k": {"type": "parameter", "units": "1", "default": 2.0},
+                    "d": {"type": "observed", "units": "1", "shape": ["edges"],
+                          "expression": {"op": "div", "args": ["Fe"]}},
+                },
+                "equations": [],
+                "expression_templates": templates,
+            }
+        },
+    }
+
+
+def test_where_constraint_filters_before_priority():
+    """§9.6.3 non-fixture pin: constraint filtering is part of match
+    ELIGIBILITY, applied BEFORE priority/declaration-order selection. A
+    high-priority rule whose `where` excludes the node does NOT shadow a
+    lower-priority rule that legitimately fires — the scan proceeds past the
+    excluded candidate."""
+    doc = _where_pin_doc({
+        # Higher priority but constrained to a shape 'Fe' does NOT have.
+        "hi": {"params": ["X"], "priority": 10,
+               "match": {"op": "div", "args": ["X"]},
+               "where": {"X": {"shape": ["cells_nope_unused"]}},
+               "body": {"op": "*", "args": [999, "X"]}},
+        # Lower priority, constrained to the actual shape → this one fires.
+        "lo": {"params": ["X"], "priority": 0,
+               "match": {"op": "div", "args": ["X"]},
+               "where": {"X": {"shape": ["edges"]}},
+               "body": {"op": "*", "args": ["k", "X"]}},
+    })
+    # 'cells_nope_unused' must exist in the registry so registration passes;
+    # it simply never matches a variable's declared shape.
+    doc["index_sets"]["cells_nope_unused"] = {"kind": "interval", "size": 1}
+    out = lower_expression_templates(doc)
+    expr = out["models"]["m"]["variables"]["d"]["expression"]
+    assert expr["op"] == "*"
+    assert expr["args"][0] == "k"  # the low-priority (satisfied) rule fired
+
+
+def test_where_constraint_compound_argument_fails_conservatively():
+    """§9.6.1 non-fixture pin: the judgment is bare-variable-only. A `div` of a
+    COMPOUND expression (not a bare declared variable) fails the constraint —
+    no error, no rewrite (conservative)."""
+    doc = _where_pin_doc({
+        "r": {"params": ["X"],
+              "match": {"op": "div", "args": ["X"]},
+              "where": {"X": {"shape": ["edges"]}},
+              "body": {"op": "*", "args": ["k", "X"]}},
+    })
+    # div of a compound (Fe + Fe), not a bare variable reference.
+    doc["models"]["m"]["variables"]["d"]["expression"] = {
+        "op": "div", "args": [{"op": "+", "args": ["Fe", "Fe"]}]}
+    out = lower_expression_templates(doc)
+    expr = out["models"]["m"]["variables"]["d"]["expression"]
+    assert expr["op"] == "div"  # unchanged: constraint not satisfied
+
+
+@pytest.mark.parametrize("bad,code", [
+    # `where` without `match`
+    ({"t": {"params": ["X"], "where": {"X": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": ["k", "X"]}}},
+     "apply_expression_template_invalid_declaration"),
+    # `where` constrains a non-declared param
+    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
+            "where": {"Y": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": ["k", "X"]}}},
+     "apply_expression_template_invalid_declaration"),
+    # constraint kind other than `shape`
+    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
+            "where": {"X": {"rank": 1}},
+            "body": {"op": "*", "args": ["k", "X"]}}},
+     "apply_expression_template_invalid_declaration"),
+    # empty shape list
+    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
+            "where": {"X": {"shape": []}},
+            "body": {"op": "*", "args": ["k", "X"]}}},
+     "apply_expression_template_invalid_declaration"),
+])
+def test_where_structural_validation(bad, code):
+    """§9.6.1 structural validation of the `where` block at registration."""
+    doc = _where_pin_doc(bad)
+    with pytest.raises(ExpressionTemplateError) as exc:
+        lower_expression_templates(doc)
+    assert exc.value.code == code

@@ -174,6 +174,9 @@ def _collect_metaparam_decls(raw: Any, origin: str) -> Dict[str, Any]:
 _META_SUBST_SKIP_KEYS = frozenset({
     "metadata", "params", "type", "units", "kind", "description", "name",
     "wrt", "expression_template_imports", "metaparameters", "only",
+    # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
+    # NAMES, a structural namespace — never expression positions.
+    "where",
 })
 
 
@@ -565,6 +568,323 @@ def _instantiate_scope(scope: _TemplateScope, values: Dict[str, int],
     scope.index_sets = newis
 
 
+# ---------------------------------------------------------------------------
+# Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+# ---------------------------------------------------------------------------
+
+_NAME_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _is_valid_dotted_name(s: str) -> bool:
+    """Grammar for a ``prefix`` and for ``rename``/``rebind`` TARGETS (esm-spec
+    §9.7.7): one or more ``[A-Za-z_][A-Za-z0-9_]*`` segments joined by single
+    dots — the §4.6 scoped-reference shape. Keys are never grammar-checked: they
+    must match whatever the target actually exports (or whatever occurs free)."""
+    return bool(s) and all(_NAME_SEGMENT_RE.match(seg) for seg in s.split("."))
+
+
+def _name_map(raw: Any, field: str, where: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if raw is None:
+        return out
+    if not _is_object(raw):
+        raise ExpressionTemplateError(
+            "template_import_rename_invalid",
+            f"{where}: `{field}` must be an object mapping names to names "
+            "(esm-spec §9.7.7)",
+        )
+    for k, v in raw.items():
+        ks = str(k)
+        if ks == "":
+            raise ExpressionTemplateError(
+                "template_import_rename_invalid",
+                f"{where}: `{field}` has an empty key (esm-spec §9.7.7)",
+            )
+        if not (isinstance(v, str) and _is_valid_dotted_name(v)):
+            raise ExpressionTemplateError(
+                "template_import_rename_invalid",
+                f"{where}: `{field}`.{ks} target {v!r} is not a valid dotted "
+                "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single "
+                "dots; esm-spec §9.7.7)",
+            )
+        out[ks] = str(v)
+    return out
+
+
+#: Scalar Expression-node fields whose string value names an AXIS / index set
+#: (rewritten by the index-set rename map, param-shadowed like §9.6.1).
+_RENAME_AXIS_KEYS = ("wrt", "dim")
+
+#: Object keys whose values are never variable-reference positions for the
+#: rename walk: the metaparameter skip set plus the remaining scalar structural
+#: ExpressionNode fields. ``from``, ``wrt``/``dim``, apply-``name``, and ``of``
+#: are handled positionally in the walk.
+_RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | frozenset({
+    "op", "id", "expect_cadence", "reduce", "semiring", "manifold", "fn",
+    "table", "side", "attrs", "members", "from_faq",
+})
+
+
+def _rename_walk(x: Any, varmap: Dict[str, str], isetmap: Dict[str, str],
+                 tplmap: Dict[str, str]) -> Any:
+    """One transitive-substitution pass over an imported declaration (esm-spec
+    §9.7.7): ``varmap`` (renamed open metaparameters + rebound free names)
+    rewrites bare strings in variable-reference positions; ``isetmap`` rewrites
+    index-set reference positions (``{"from": …}`` values and the ``wrt``/``dim``
+    axis fields, in ``body`` and ``match`` alike); ``tplmap`` rewrites
+    ``apply_expression_template.name``. Structural scalar fields
+    (:data:`_RENAME_PROTECTED_KEYS`) and bound-index lists (range ``of``) are
+    never rewritten. Pure syntactic substitution — no evaluation."""
+    if isinstance(x, str):
+        return varmap.get(x, x)
+    if _is_array(x):
+        return [_rename_walk(v, varmap, isetmap, tplmap) for v in x]
+    if _is_object(x):
+        op = x.get("op")
+        is_apply = op is not None and str(op) == APPLY_OP
+        out: Dict[str, Any] = {}
+        for k, v in x.items():
+            ks = str(k)
+            if ks == "from" and isinstance(v, str):
+                out[ks] = isetmap.get(v, v)
+            elif ks in _RENAME_AXIS_KEYS and isinstance(v, str):
+                out[ks] = isetmap.get(v, v)
+            elif ks == "name" and is_apply and isinstance(v, str):
+                out[ks] = tplmap.get(v, v)
+            elif ks == "of" or ks in _RENAME_PROTECTED_KEYS:
+                out[ks] = copy.deepcopy(v)
+            else:
+                out[ks] = _rename_walk(v, varmap, isetmap, tplmap)
+        return out
+    return x
+
+
+def _rename_decl(decl: Any, varmap: Dict[str, str], isetmap: Dict[str, str],
+                 tplmap: Dict[str, str]) -> Any:
+    """:func:`_rename_walk` over one template declaration with the §9.6.1
+    shadowing rule: the template's own ``params`` shadow like-named entries of
+    ``varmap`` and ``isetmap`` inside its ``body``/``match``. ``tplmap`` is never
+    shadowed — params do not bind template names."""
+    params = decl.get("params") if _is_object(decl) else None
+    v2, i2 = varmap, isetmap
+    if _is_array(params) and params:
+        pset = {str(p) for p in params if isinstance(p, str)}
+        if any(p in varmap for p in pset):
+            v2 = {k: val for k, val in varmap.items() if k not in pset}
+        if any(p in isetmap for p in pset):
+            i2 = {k: val for k, val in isetmap.items() if k not in pset}
+    return _rename_walk(decl, v2, i2, tplmap)
+
+
+def _collect_bound_syms(out: set, x: Any) -> set:
+    """Bound index symbols of a declaration: aggregate ``output_idx`` entries and
+    ``ranges`` keys (at any nesting depth). Rebinding one would desynchronize the
+    ranges KEYS from their ``expr`` occurrences, so it is rejected outright."""
+    if _is_array(x):
+        for v in x:
+            _collect_bound_syms(out, v)
+        return out
+    if not _is_object(x):
+        return out
+    op = x.get("op")
+    if op is not None and str(op) == "aggregate":
+        oi = x.get("output_idx")
+        if _is_array(oi):
+            for e in oi:
+                if isinstance(e, str):
+                    out.add(str(e))
+        rg = x.get("ranges")
+        if _is_object(rg):
+            for k in rg.keys():
+                out.add(str(k))
+    for v in x.values():
+        _collect_bound_syms(out, v)
+    return out
+
+
+def _collect_ref_names(out: set, x: Any, shadowed: set) -> set:
+    """Every bare string in a variable-reference position of a declaration (the
+    positions ``varmap`` would rewrite), minus the per-template ``params`` shadow
+    set. Used for the rebind occurs-check and the freshness (collision) guard."""
+    if isinstance(x, str):
+        if x not in shadowed:
+            out.add(x)
+        return out
+    if _is_array(x):
+        for v in x:
+            _collect_ref_names(out, v, shadowed)
+        return out
+    if _is_object(x):
+        for k, v in x.items():
+            ks = str(k)
+            if (ks == "from" or ks in _RENAME_AXIS_KEYS or ks == "of"
+                    or ks in _RENAME_PROTECTED_KEYS):
+                continue
+            _collect_ref_names(out, v, shadowed)
+        return out
+    return out
+
+
+def _apply_edge_renames(scope: "_TemplateScope", entry: Any, origin: str,
+                        ref: str) -> "_TemplateScope":
+    """Apply one import edge's ``prefix`` / ``rename`` / ``rebind`` (esm-spec
+    §9.7.7) to the target's SURVIVING export scope — templates after ``only``,
+    all index sets, and metaparameters still open after this edge's ``bindings``
+    — transitively through every occurrence inside the surviving declarations.
+    Runs after ``bindings`` instantiation and ``only`` filtering, before the
+    §9.7.4/§9.7.5 merge, so dedup and conflict detection operate on post-rename
+    names. Pure load-time substitution."""
+    where = f"{origin}: import of '{ref}'"
+    prefix_raw = entry.get("prefix")
+    rename = _name_map(entry.get("rename"), "rename", where)
+    rebind = _name_map(entry.get("rebind"), "rebind", where)
+    if prefix_raw is not None and not (
+            isinstance(prefix_raw, str) and _is_valid_dotted_name(prefix_raw)):
+        raise ExpressionTemplateError(
+            "template_import_rename_invalid",
+            f"{where}: `prefix` {prefix_raw!r} is not a valid dotted identifier "
+            "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; "
+            "esm-spec §9.7.7)",
+        )
+    prefix = None if prefix_raw is None else str(prefix_raw)
+    if prefix is None and not rename and not rebind:
+        return scope
+
+    # --- `rename` keys must name a surviving exported name (typo protection) ---
+    exported: set = set()
+    exported.update(scope.templates.keys())
+    exported.update(scope.index_sets.keys())
+    exported.update(scope.metaparams.keys())
+    for k in rename:
+        if k not in exported:
+            raise ExpressionTemplateError(
+                "template_import_rename_unknown_name",
+                f"{where}: `rename` names '{k}', which the target does not "
+                "export at this edge (the surviving exports are templates after "
+                "`only`, index sets, and metaparameters left open by this "
+                "edge's `bindings`; esm-spec §9.7.7)",
+            )
+
+    def _final(n: str) -> str:
+        if n in rename:
+            return rename[n]
+        return n if prefix is None else f"{prefix}.{n}"
+
+    tplmap = {n: _final(n) for n in scope.templates}
+    isetmap = {n: _final(n) for n in scope.index_sets}
+    metamap = {n: _final(n) for n in scope.metaparams}
+
+    # --- per-namespace final-name uniqueness ---
+    for what, m in (("template", tplmap), ("index set", isetmap),
+                    ("metaparameter", metamap)):
+        seen: Dict[str, str] = {}
+        for o, n in m.items():
+            if n in seen:
+                raise ExpressionTemplateError(
+                    "template_import_rename_collision",
+                    f"{where}: {what} names '{seen[n]}' and '{o}' both map to "
+                    f"'{n}' after renaming (esm-spec §9.7.7)",
+                )
+            seen[n] = o
+
+    # --- free / bound name inventory over the surviving declarations ---
+    free: set = set()
+    bound: set = set()
+    params_all: set = set()
+    for d in scope.templates.values():
+        _collect_bound_syms(bound, d)
+        shadowed: set = set()
+        params = d.get("params") if _is_object(d) else None
+        if _is_array(params):
+            for p in params:
+                if isinstance(p, str):
+                    shadowed.add(str(p))
+        params_all.update(shadowed)
+        _collect_ref_names(free, d, shadowed)
+    for d in scope.index_sets.values():
+        for f in ("offsets", "values"):
+            v = d.get(f) if _is_object(d) else None
+            if isinstance(v, str):
+                free.add(str(v))
+    free -= set(scope.metaparams.keys())   # declared names are not free
+
+    # --- `rebind` keys must denote free names (typo protection) ---
+    for k in rebind:
+        if k in exported:
+            raise ExpressionTemplateError(
+                "template_import_rebind_unknown_name",
+                f"{where}: `rebind` names '{k}', a declared name of the target "
+                "(template / index set / metaparameter) — `rebind` addresses "
+                "only free names; use `rename` for declared names "
+                "(esm-spec §9.7.7)",
+            )
+        if k in bound:
+            raise ExpressionTemplateError(
+                "template_import_rename_invalid",
+                f"{where}: `rebind` key '{k}' is a bound index symbol "
+                "(`output_idx` / `ranges`) of an imported template, not a free "
+                "name (esm-spec §9.7.7)",
+            )
+        if k not in free:
+            raise ExpressionTemplateError(
+                "template_import_rebind_unknown_name",
+                f"{where}: `rebind` names '{k}', which does not occur free in "
+                "the imported declarations (esm-spec §9.7.7)",
+            )
+
+    # --- freshness guard: new bare names must not capture / merge ---
+    taken: set = set(free - set(rebind.keys())) | bound | params_all
+    newnames: List[str] = []
+    for o, n in metamap.items():
+        if o != n:
+            newnames.append(n)
+    for o, n in rebind.items():
+        if o != n:
+            newnames.append(n)
+    for t in newnames:
+        if t in taken:
+            raise ExpressionTemplateError(
+                "template_import_rename_collision",
+                f"{where}: renamed/rebound name '{t}' collides with a name "
+                "still in use inside the imported declarations (a remaining "
+                "free name, a bound index symbol, a template param, or another "
+                "rename/rebind target; esm-spec §9.7.7)",
+            )
+        taken.add(t)
+
+    # --- apply (identity entries dropped; one simultaneous substitution) ---
+    varmap: Dict[str, str] = {}
+    for o, n in metamap.items():
+        if o != n:
+            varmap[o] = n
+    for o, n in rebind.items():
+        if o != n:
+            varmap[o] = n
+    iset_changed = {o: n for o, n in isetmap.items() if o != n}
+    tpl_changed = {o: n for o, n in tplmap.items() if o != n}
+
+    newt: Dict[str, Any] = {}
+    for n, d in scope.templates.items():
+        newt[tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
+    scope.templates = newt
+
+    newi: Dict[str, Any] = {}
+    for n, d in scope.index_sets.items():
+        nd = _rename_walk(d, varmap, iset_changed, tpl_changed)
+        of = nd.get("of") if _is_object(nd) else None
+        if _is_array(of):
+            nd["of"] = [iset_changed.get(e, e) if isinstance(e, str) else e
+                        for e in of]
+        newi[isetmap[n]] = nd
+    scope.index_sets = newi
+
+    newm: Dict[str, Any] = {}
+    for n, d in scope.metaparams.items():
+        newm[metamap[n]] = d
+    scope.metaparams = newm
+    return scope
+
+
 def _load_import_raw(ref: str, base_dir: str, origin: str):
     if ref.startswith("http://") or ref.startswith("https://"):
         import urllib.error
@@ -725,6 +1045,12 @@ def _resolve_import_entry(entry: Any, base_dir: str, stack: List[str],
         keepset = set(keep)
         scope.templates = {n: d for n, d in scope.templates.items()
                            if n in keepset}
+
+    # Import-edge renaming / namespacing / free-name rebinding (esm-spec
+    # §9.7.7): after `bindings` instantiation and `only` filtering, before the
+    # §9.7.4/§9.7.5 merge, so dedup and conflict detection operate on
+    # post-rename names.
+    _apply_edge_renames(scope, entry, origin, ref)
     return scope
 
 

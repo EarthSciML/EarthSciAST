@@ -134,6 +134,7 @@ Where:
 > scope; deep-equal via order-independent serde_json `Map` equality). Fixtures
 > `subsystem_index_set_merge.esm` (+ `subsystem_mesh_lib.esm`) and
 > `subsystem_index_set_conflict.esm` drive it (`template_imports_conformance`).
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/parse.py` `_merge_subsystem_index_sets` + `_index_set_deep_equal`, threaded through model subsystem resolution via `EsmFile.index_sets`; reaction-system subsystems do not merge, matching the Julia reference). Fixtures: `subsystem_index_set_merge.esm` brings `vertices` in and keeps deep-equal `cells`; `subsystem_index_set_conflict.esm` raises `subsystem_index_set_conflict`.
 
 ### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -151,6 +152,7 @@ Where:
 > `stop == start − 1`, rejects `stop < start − 1` with `makearray_region_inverted`). Fixtures
 > `makearray_empty_region_min_extent.esm` (default N=2 loads; loader-API N=1 rejects) and
 > `makearray_region_inverted.esm` (`template_imports_conformance`).
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/lower_expression_templates.py` `_validate_makearray_regions`, run at both §9.6.4 validator sites — fast path and full path — skipping `expression_templates` and non-integer bounds). Fixtures: `makearray_empty_region_min_extent.esm` loads at `N=2` (folds `[2,1]`) and rejects at `N=1` (folds `[2,0]`); `makearray_region_inverted.esm` raises `makearray_region_inverted`.
 
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -168,6 +170,7 @@ Where:
 > now clips in S2 (unit test `spherical_clip_accepts_padded_rings` — previously failed with
 > the degenerate-edge error). Fixture `polygon_intersection_area_padded_ring.esm` simulates to
 > area 1.0 via the `pde_conformance` example.
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/geometry.py` `_as_ring` now runs `_dedup_consecutive` — interior consecutive duplicates + closing wrap pair — on every operand before the clip; `<3` distinct vertices rejected). Verified on the PLANAR path: `polygon_intersection_area_padded_ring.esm` (5-/6-vertex padded squares) deduplicates to 4-vertex squares, overlap area = 1.0; unit tests cover dedup + degenerate reject. The SPHERICAL/S2 (`spherely`) path is spherely-gated in this venv (no cp314 macOS-arm wheel) and could not be exercised; the dedup runs identically before either backend.
 
 ### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -443,6 +446,11 @@ Where:
 > the `canonical_expand` example and the `template_imports_conformance` suite. AST byte
 > identity for full-precision float literals also required the serde_json `float_roundtrip`
 > feature (default fast path was 1 ulp off on some 16-17-digit literals).
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/template_imports.py`
+> `_apply_edge_renames`, called per import edge after `bindings`/`only`, before merge).
+> Goldens byte-identical: `import_rename_two_instances`, `import_rebind_keyed_factors`,
+> `import_rename_diamond`. Invalid fixtures raise the mapped diagnostics
+> `rename_invalid_identifier`).
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -484,6 +492,13 @@ Where:
 > `MatchRule.where_c`). Goldens `constrained_match_scope`, `two_div_two_meshes`,
 > `per_variable_scheme_literal_args` match and `constraint_unknown_index_set` rejects at load
 > (EXPR-09-G-009), via the `expression_templates_conformance` suite.
+> **Python (2026-07-03)**: implemented (`earthsci_toolkit/lower_expression_templates.py`
+> `_component_shape_env` / `_where_satisfied` / `_registered_where`; constraint filtering
+> in `_rewrite_pass` before priority selection; `where` added to `_META_SUBST_SKIP_KEYS`).
+> Goldens match (models/index_sets): `constrained_match_scope`,
+> `per_variable_scheme_literal_args`, `two_div_two_meshes`. Error fixture
+> `constraint_unknown_index_set` raises `template_constraint_unknown_index_set`;
+> filter-before-priority and compound-arg-conservative pins covered as unit tests.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
