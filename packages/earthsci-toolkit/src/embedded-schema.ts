@@ -434,11 +434,18 @@ export const schema: AnySchemaObject = {
         },
         "manifold": {
           "type": "string",
-          "description": "For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. \"planar\": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. \"spherical\": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. \"geodesic\": ellipsoidal-geodesic edges. Great-circle-edge assumption: under \"spherical\"/\"geodesic\" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op.",
-          "enum": [
-            "planar",
-            "spherical",
-            "geodesic"
+          "description": "For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. \"planar\": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. \"spherical\": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. \"geodesic\": ellipsoidal-geodesic edges. Great-circle-edge assumption: under \"spherical\"/\"geodesic\" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op. TEMPLATE PARAMETERIZATION (esm-spec §9.6.1 / §9.6.3 constraint 5): inside an `expression_templates` entry's `body`, this field MAY carry a declared template-parameter name — a bare string outside the closed set — as a scalar-field substitution site, so the schema admits any string here. The closed set {planar, spherical, geodesic} is enforced on the EXPANDED form per §9.6.4: bindings MUST reject, at post-expansion validation, any `intersect_polygon` / `polygon_intersection_area` node whose `manifold` is not a member of the closed set.",
+          "anyOf": [
+            {
+              "enum": [
+                "planar",
+                "spherical",
+                "geodesic"
+              ]
+            },
+            {
+              "type": "string"
+            }
           ]
         },
         "regions": {
