@@ -377,6 +377,23 @@ Where:
 | EXPR-09-F-007 | Same file under different renames = distinct registrations (no deep-equal dedup across renames); identical `ref` + instantiation + renames = dedupe at first occurrence; renamed `match`-rule instances register at their edges' §9.7.4 positions and identical patterns tie-break by that order | esm-spec.md §9.7.4, §9.7.7 | Yes | expression |
 | EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_rebind_*` | expression |
 
+### EXPR-09-G: Match-Pattern Scoping Constraints (`where`, esm-spec §9.6.1; RFC match-pattern-scoping-constraints)
+
+> Binding status: Julia reference implementation landed (2026-07); Python / Rust /
+> TypeScript / Go ports pending (wave 2 — RFC §10 porting checklist).
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| EXPR-09-G-001 | A `match` rule MAY declare `where` constraints on captured params; `where` without `match`, a non-param key, an unknown constraint kind (v1: exactly `shape`), or an empty/non-string `shape` list is `apply_expression_template_invalid_declaration` | esm-spec.md §9.6.1, §9.6.6 | Yes | validation |
+| EXPR-09-G-002 | A `shape` constraint is satisfied iff the bound sub-AST is a bare variable reference declared in the enclosing component with exactly that `shape` (same index-set names, same order); compound sub-ASTs, literals, scoped references, undeclared names, and scalars fail | esm-spec.md §9.6.1 | Yes | expression |
+| EXPR-09-G-003 | Constraint evaluation MUST be fully static (declared shapes at lowering time, never runtime values); fixpoints remain byte-identical across bindings | esm-spec.md §9.6.1, §9.6.3 | Yes | expression |
+| EXPR-09-G-004 | Constraints filter as part of match ELIGIBILITY, before the priority/declaration-order selection: a constraint-excluded rule never shadows a lower-priority rule that fires | esm-spec.md §9.6.3 | Yes | expression |
+| EXPR-09-G-005 | Constraint index-set names MUST resolve against the consuming document's merged `index_sets` registry at rule registration; unknown names are `template_constraint_unknown_index_set` | esm-spec.md §9.6.1, §9.6.6 | Yes | validation |
+| EXPR-09-G-006 | A constrained rule that never fires is NOT an error; a rewrite-target left un-lowered by constraint exclusion is caught by the ordinary `unlowered_operator` gate | esm-spec.md §9.6.1, §9.6.8 | Yes | expression |
+| EXPR-09-G-007 | A non-parameter string in a `match` `args` position is a literal matching only that exact bare variable reference (the sanctioned per-variable selector) | esm-spec.md §9.6.1, §9.6.8 | Yes | expression |
+| EXPR-09-G-008 | Metaparameter substitution MUST NOT rewrite `where` contents (structural field) | esm-spec.md §9.6.1, §9.7.6 | Yes | expression |
+| EXPR-09-G-009 | Bindings MUST agree on the goldens for `constrained_match_scope`, `two_div_two_meshes`, `per_variable_scheme_literal_args` and reject `constraint_unknown_index_set` at load | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/constrained_match_scope/` etc. | expression |
+
 ---
 
 ## 9. ROUND-TRIP AND SERIALIZATION

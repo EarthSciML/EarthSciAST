@@ -110,6 +110,47 @@ is rejected with `unlowered_operator` when the model reaches evaluation/compilat
 The uniform diagnostic supersedes the old per-binding UnreachableSpatialOperator /
 UnsupportedDimensionality codes.
 
+## Match-scoping fixtures (esm-spec §9.6.1 `where` + ground patterns, 0.8.0)
+
+These exercise the static match-scoping constraints of
+`docs/content/rfcs/match-pattern-scoping-constraints.md`: the `where` field on
+a `match` rule (index-set/shape scoping of captured params) and the sanctioned
+ground-pattern per-variable selector. Constraint evaluation reads declared
+variable shapes only — fully static — and filters BEFORE the §9.6.3
+priority/declaration-order selection.
+
+### `constrained_match_scope/` (expanded.esm)
+
+One shape-constrained div rule (`where: {F: {shape: ["edges"]}}`), two shaped
+variables. `div(F_edge)` (over `["edges"]`) is rewritten; `div(F_cell)` (over
+`["cells"]`) is constraint-excluded and survives lowering intact — positive
+and negative case in one golden. The surviving `div` would be rejected by
+`unlowered_operator` only at evaluation (loading is permissive).
+
+### `two_div_two_meshes/` (expanded.esm)
+
+Two structurally IDENTICAL equal-priority `{op: "div", args: ["F"]}` rules,
+each `where`-scoped to its own mesh's edge set (`edges_a` / `edges_b`). Each
+`div` lowers by its own mesh's rule. Without the constraints, the §9.6.3
+declaration-order tie-break would send both nodes to the first-declared rule —
+the two-grids-two-schemes inexpressibility this mechanism closes.
+
+### `per_variable_scheme_literal_args/` (expanded.esm)
+
+The per-variable half of match scoping, which needs NO new construct: a
+non-parameter string in an `args` position is a literal matching only that
+exact bare variable reference. A `params: []` ground rule
+`{op: "D", args: ["u"], wrt: "x"}` at `priority: 10` takes `u` (upwind);
+the generic wildcard rule at `priority: 0` takes everything else (central).
+Mixed schemes on one axis, ranked by explicit priority.
+
+### `constraint_unknown_index_set/` (error.json, `template_constraint_unknown_index_set`, load)
+
+A `where` shape constraint naming an index set the consuming document's merged
+registry does not declare. Rejected at rule registration — a constraint typo
+fails loudly (mirroring `template_import_unknown_name`); a constrained rule
+that merely never fires is NOT an error.
+
 ## Template-library import fixtures (esm-spec §9.7, 0.8.0)
 
 These exercise `expression_template_imports`, template-library files, and

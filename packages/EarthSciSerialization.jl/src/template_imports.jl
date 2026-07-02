@@ -160,6 +160,9 @@ end
 const _META_SUBST_SKIP_KEYS = Set{String}([
     "metadata", "params", "type", "units", "kind", "description", "name",
     "wrt", "expression_template_imports", "metaparameters", "only",
+    # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
+    # NAMES, a structural namespace — never expression positions.
+    "where",
 ])
 
 """

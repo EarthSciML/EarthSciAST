@@ -1,0 +1,30 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "two_div_two_meshes",
+    "description": "Expected post-lowering form of two_div_two_meshes/fixture.esm: each div lowered by its own mesh's shape-constrained rule."
+  },
+  "index_sets": {
+    "cells_a": { "kind": "interval", "size": 5 },
+    "edges_a": { "kind": "interval", "size": 9 },
+    "cells_b": { "kind": "interval", "size": 6 },
+    "edges_b": { "kind": "interval", "size": 11 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F_a": { "type": "state", "units": "1", "default": 1.5, "shape": ["edges_a"], "description": "Edge flux on mesh a" },
+        "F_b": { "type": "state", "units": "1", "default": 2.5, "shape": ["edges_b"], "description": "Edge flux on mesh b" },
+        "inv_area_a": { "type": "parameter", "units": "1", "default": 0.5, "description": "Mesh-a stencil coefficient" },
+        "inv_area_b": { "type": "parameter", "units": "1", "default": 0.25, "description": "Mesh-b stencil coefficient" },
+        "div_a": { "type": "observed", "units": "1", "shape": ["cells_a"], "description": "Lowered by mesh a's rule",
+          "expression": { "op": "*", "args": ["inv_area_a", "F_a"] }
+        },
+        "div_b": { "type": "observed", "units": "1", "shape": ["cells_b"], "description": "Lowered by mesh b's rule",
+          "expression": { "op": "*", "args": ["inv_area_b", "F_b"] }
+        }
+      },
+      "equations": []
+    }
+  }
+}

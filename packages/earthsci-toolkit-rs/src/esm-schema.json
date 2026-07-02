@@ -1664,7 +1664,7 @@
     },
     "ExpressionTemplate": {
       "type": "object",
-      "description": "A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes.",
+      "description": "A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).",
       "required": [
         "params",
         "body"
@@ -1682,7 +1682,29 @@
         },
         "match": {
           "$ref": "#/$defs/Expression",
-          "description": "Optional pattern Expression that turns this template into an auto-applied rewrite rule. Parameter names appearing as bare strings in `match` are wildcards bound by structural matching. Absent ⇒ the template is applied only via explicit `apply_expression_template` invocation."
+          "description": "Optional pattern Expression that turns this template into an auto-applied rewrite rule. Parameter names appearing as bare strings in `match` are wildcards bound by structural matching. A NON-parameter string in an operand/`args` position is a literal: it matches only that exact bare variable reference — the sanctioned per-variable selector (esm-spec §9.6.1/§9.6.8), e.g. {op:'D', args:['u'], wrt:'x'} with `u` not in `params` fires only on the derivative of `u`. Absent ⇒ the template is applied only via explicit `apply_expression_template` invocation."
+        },
+        "where": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "shape"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "shape": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "description": "Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'template_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'apply_expression_template_invalid_declaration')."
         },
         "priority": {
           "type": "integer",

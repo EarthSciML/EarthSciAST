@@ -549,3 +549,248 @@ end
     @test vars["area_planar"]["expression"]["manifold"] == "planar"
     @test vars["area_spherical"]["expression"]["manifold"] == "spherical"
 end
+
+@testset "match-pattern scoping constraints (where, esm-spec §9.6.1)" begin
+    # docs/content/rfcs/match-pattern-scoping-constraints.md: static
+    # index-set/shape scoping of `match` rules. Constraint evaluation reads
+    # declared variable shapes only and filters BEFORE the §9.6.3
+    # priority/declaration-order selection.
+    _repo_root2() = abspath(joinpath(@__DIR__, "..", "..", ".."))
+    _conf2(fix) = joinpath(_repo_root2(), "tests", "conformance",
+                           "expression_templates", fix)
+    _nw(x) =
+        (x isa AbstractDict || x isa JSON3.Object) ?
+            Dict{String,Any}(string(k) => _nw(v) for (k, v) in pairs(x)) :
+        (x isa AbstractVector || x isa JSON3.Array) ?
+            Any[_nw(v) for v in x] : x
+    function _lower2(fix)
+        raw = JSON3.read(read(joinpath(_conf2(fix), "fixture.esm"), String))
+        return lower_expression_templates(raw)
+    end
+    _golden_vars(fix) = _nw(JSON3.read(read(joinpath(_conf2(fix), "expanded.esm"),
+                                            String)).models.m.variables)
+
+    @testset "constrained_match_scope: positive + negative in one document" begin
+        out = _lower2("constrained_match_scope")
+        got = _nw(out.data["models"]["m"]["variables"])
+        @test got == _golden_vars("constrained_match_scope")
+        # div(F_edge) rewritten; div(F_cell) constraint-excluded, survives.
+        @test got["div_edge"]["expression"]["op"] == "*"
+        @test got["div_cell"]["expression"]["op"] == "div"
+    end
+
+    @testset "two_div_two_meshes: identical patterns, disjoint shape scopes" begin
+        out = _lower2("two_div_two_meshes")
+        got = _nw(out.data["models"]["m"]["variables"])
+        @test got == _golden_vars("two_div_two_meshes")
+        # Each div lowered by ITS mesh's rule — not both by the
+        # first-declared rule (the pre-`where` declaration-order behavior).
+        @test got["div_a"]["expression"]["args"][1] == "inv_area_a"
+        @test got["div_b"]["expression"]["args"][1] == "inv_area_b"
+    end
+
+    @testset "per-variable selectivity via ground args (sanctioned mechanism)" begin
+        out = _lower2("per_variable_scheme_literal_args")
+        got = _nw(out.data["models"]["m"]["variables"])
+        @test got == _golden_vars("per_variable_scheme_literal_args")
+        @test got["du"]["expression"]["args"][1] == "upwind_coef"
+        @test got["dv"]["expression"]["args"][1] == "central_coef"
+    end
+
+    @testset "unknown index set in a constraint rejected at registration" begin
+        err = try
+            _lower2("constraint_unknown_index_set")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == "template_constraint_unknown_index_set"
+        @test occursin("edges", err.message)
+    end
+
+    _scoped_doc(templates_json) = """
+    {
+      "esm": "0.8.0",
+      "metadata": {"name": "where_unit"},
+      "index_sets": {
+        "cells": {"kind": "interval", "size": 4},
+        "edges": {"kind": "interval", "size": 6}
+      },
+      "models": {
+        "m": {
+          "variables": {
+            "F_edge": {"type": "state", "units": "1", "default": 1.5, "shape": ["edges"]},
+            "F_cell": {"type": "state", "units": "1", "default": 2.5, "shape": ["cells"]},
+            "s": {"type": "parameter", "units": "1", "default": 0.5},
+            "d": {"type": "observed", "units": "1",
+                  "expression": {"op": "div", "args": ["F_cell"]}}
+          },
+          "equations": [],
+          "expression_templates": $templates_json
+        }
+      }
+    }
+    """
+
+    @testset "constraints filter BEFORE priority selection" begin
+        # A priority-10 constraint-excluded rule must NOT shadow the
+        # priority-0 unconstrained rule (esm-spec §9.6.3 constraint 2).
+        src = _scoped_doc("""
+        {
+          "fancy_edges_only": {
+            "params": ["F"], "priority": 10,
+            "match": {"op": "div", "args": ["F"]},
+            "where": {"F": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": [1.5, "F"]}
+          },
+          "plain_any": {
+            "params": ["F"], "priority": 0,
+            "match": {"op": "div", "args": ["F"]},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """)
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        @test expr["op"] == "*"
+        @test expr["args"][1] == "s"   # plain rule fired, not the fancy one
+    end
+
+    @testset "compound argument fails a shape constraint (conservative judgment)" begin
+        # div(2.5 * F_edge): the bound sub-AST is not a bare variable
+        # reference, so the constraint fails and the node survives.
+        src = replace(_scoped_doc("""
+        {
+          "edges_only": {
+            "params": ["F"],
+            "match": {"op": "div", "args": ["F"]},
+            "where": {"F": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
+              "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}")
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        @test expr["op"] == "div"   # never rewritten; not an error
+    end
+
+    @testset "where without match is an invalid declaration" begin
+        src = _scoped_doc("""
+        {
+          "broken": {
+            "params": ["F"],
+            "where": {"F": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """)
+        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        @test err isa ExpressionTemplateError
+        @test err.code == "apply_expression_template_invalid_declaration"
+    end
+
+    @testset "where key must be a declared param" begin
+        src = _scoped_doc("""
+        {
+          "broken": {
+            "params": ["F"],
+            "match": {"op": "div", "args": ["F"]},
+            "where": {"G": {"shape": ["edges"]}},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """)
+        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        @test err isa ExpressionTemplateError
+        @test err.code == "apply_expression_template_invalid_declaration"
+    end
+
+    @testset "unknown constraint kind rejected (v1 vocabulary is exactly shape)" begin
+        src = _scoped_doc("""
+        {
+          "broken": {
+            "params": ["F"],
+            "match": {"op": "div", "args": ["F"]},
+            "where": {"F": {"units": "m"}},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """)
+        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        @test err isa ExpressionTemplateError
+        @test err.code == "apply_expression_template_invalid_declaration"
+    end
+
+    @testset "shape must match exactly (names AND order)" begin
+        # F_cell is over [cells]; a constraint over [cells, edges] fails.
+        src = _scoped_doc("""
+        {
+          "two_axes_only": {
+            "params": ["F"],
+            "match": {"op": "div", "args": ["F"]},
+            "where": {"F": {"shape": ["cells", "edges"]}},
+            "body": {"op": "*", "args": ["s", "F"]}
+          }
+        }
+        """)
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _nw(out.data["models"]["m"]["variables"]["d"]["expression"])
+        @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
+    end
+end
+
+@testset "where constraints on rules arriving via §9.7 library import" begin
+    # A shape-constrained rule declared in a template-library file: the
+    # library's index_sets merge into the consuming document's registry
+    # (§9.7.5) BEFORE rule registration, so the constraint's names resolve
+    # there (esm-spec §9.6.1) — and the constraint scopes the imported rule
+    # inside the consuming component.
+    mktempdir() do dir
+        write(joinpath(dir, "meshlib.esm"), """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "meshlib"},
+          "index_sets": {
+            "cells": {"kind": "interval", "size": 4},
+            "edges": {"kind": "interval", "size": 6}
+          },
+          "expression_templates": {
+            "fv_div_edges": {
+              "params": ["F"],
+              "match": {"op": "div", "args": ["F"]},
+              "where": {"F": {"shape": ["edges"]}},
+              "body": {"op": "*", "args": [0.5, "F"]}
+            }
+          }
+        }
+        """)
+        model_path = joinpath(dir, "consumer.esm")
+        write(model_path, """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "consumer"},
+          "models": {
+            "m": {
+              "expression_template_imports": [{"ref": "meshlib.esm"}],
+              "variables": {
+                "F_edge": {"type": "state", "units": "1", "default": 1.5, "shape": ["edges"]},
+                "F_cell": {"type": "state", "units": "1", "default": 2.5, "shape": ["cells"]},
+                "d_edge": {"type": "observed", "units": "1",
+                           "expression": {"op": "div", "args": ["F_edge"]}},
+                "d_cell": {"type": "observed", "units": "1",
+                           "expression": {"op": "div", "args": ["F_cell"]}}
+              },
+              "equations": []
+            }
+          }
+        }
+        """)
+        f = EarthSciSerialization.load(model_path)
+        vars = f.models["m"].variables
+        @test (vars["d_edge"].expression::OpExpr).op == "*"     # constrained rule fired
+        @test (vars["d_cell"].expression::OpExpr).op == "div"   # excluded, survives load
+        @test f.index_sets["edges"].size == 6                   # merged registry
+    end
+end

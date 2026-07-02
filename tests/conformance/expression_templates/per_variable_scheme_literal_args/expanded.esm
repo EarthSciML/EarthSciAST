@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "per_variable_scheme_literal_args",
+    "description": "Expected post-lowering form of per_variable_scheme_literal_args/fixture.esm: D(u,x) lowered by the ground-pattern upwind rule, D(v,x) by the generic central rule."
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": 16 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": { "type": "state", "units": "1", "default": 1.5, "shape": ["x"], "description": "Advected tracer: upwind scheme" },
+        "v": { "type": "state", "units": "1", "default": 2.5, "shape": ["x"], "description": "Diffused tracer: central scheme" },
+        "upwind_coef": { "type": "parameter", "units": "1", "default": 0.5, "description": "Stand-in upwind stencil coefficient" },
+        "central_coef": { "type": "parameter", "units": "1", "default": 0.25, "description": "Stand-in central stencil coefficient" },
+        "du": { "type": "observed", "units": "1", "shape": ["x"], "description": "D(u, x): the ground-pattern upwind rule fires",
+          "expression": { "op": "*", "args": ["upwind_coef", "u"] }
+        },
+        "dv": { "type": "observed", "units": "1", "shape": ["x"], "description": "D(v, x): falls through to the generic central rule",
+          "expression": { "op": "*", "args": ["central_coef", "v"] }
+        }
+      },
+      "equations": []
+    }
+  }
+}
