@@ -1465,6 +1465,7 @@ def _resolve_field_ic(
     rhs: Expr,
     cell: Tuple[int, ...],
     loader_arrays: Dict[str, "np.ndarray"],
+    index_sets: Optional[Dict[str, Any]] = None,
 ) -> float:
     """Resolve one grid cell's initial value for a scoped-reference / array ``ic``
     equation (esm-spec §11.4.1). ``cell`` is the 1-based integer index tuple.
@@ -1475,6 +1476,13 @@ def _resolve_field_ic(
        the initial field over the lifted grid. The cell is read directly when the
        field's rank matches the target grid; a single-element field is broadcast.
     2. A BROADCAST CONSTANT — a numeric RHS applied to every cell.
+    3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
+       ``aggregate``/``makearray`` nodes (e.g. ``cos(pi * x_coord)`` where
+       ``x_coord`` is a grid-geometry aggregate expanded from a §9.7 template
+       import). The expression is evaluated through the official NumPy
+       interpreter (:func:`earthsci_toolkit.numpy_interpreter.eval_expr`) in a
+       state-free context and indexed at this cell; a scalar result (an RHS
+       that const-folds) is broadcast.
 
     Anything else is a hard error, so a scoped-reference ic that cannot be
     resolved is never silently dropped. Mirrors tree_walk.jl ``_resolve_field_ic``.
@@ -1491,12 +1499,53 @@ def _resolve_field_ic(
         )
     if isinstance(rhs, (int, float)) and not isinstance(rhs, bool):
         return float(rhs)
+    if isinstance(rhs, ExprNode):
+        try:
+            value = _eval_buildtime_field(rhs, index_sets=index_sets)
+        except Exception:
+            value = None
+        if value is not None:
+            if np.ndim(value) == 0:
+                return float(value)  # const-folded scalar, broadcast
+            arr = np.asarray(value, dtype=float)
+            if arr.ndim == len(cell):
+                return float(arr[tuple(c - 1 for c in cell)])
+            raise SimulationError(
+                f"ic({target}): coordinate expression evaluates to ndim="
+                f"{arr.ndim}, which does not match the {len(cell)}-D lifted "
+                f"target grid"
+            )
     detail = (f" (no loader_arrays entry named {rhs!r})"
               if isinstance(rhs, str) else "")
     raise SimulationError(
-        f"ic({target}): RHS is neither a loaded field nor a constant{detail}; "
-        f"supply the initial field via the data-Provider seam or a scalar value"
+        f"ic({target}): RHS is neither a loaded const-array field, a constant, "
+        f"nor a per-cell coordinate expression{detail}; supply the initial "
+        f"field via the data-Provider seam or a grid-geometry expression"
     )
+
+
+def _eval_buildtime_field(
+    expr: Expr,
+    index_sets: Optional[Dict[str, Any]] = None,
+) -> Union[float, "np.ndarray"]:
+    """Evaluate a state-free build-time expression (grid geometry, §6.6.5
+    analytic references) through the official NumPy interpreter. Array-
+    producing ``aggregate``/``makearray`` nodes yield ndarrays; elementwise
+    ops broadcast over them. State references are not in scope — the context
+    carries no states, so any state reference raises."""
+    from .numpy_interpreter import EvalContext as _EvalCtx
+    from .numpy_interpreter import eval_expr as _eval_expr
+
+    ctx = _EvalCtx(
+        state_layout={},
+        state_shapes={},
+        param_values={},
+        observed_values={},
+        y=np.empty((0,), dtype=float),
+        t=0.0,
+        index_sets=dict(index_sets or {}),
+    )
+    return _eval_expr(expr, ctx)
 
 
 def _fold_field_ics(
@@ -1505,6 +1554,7 @@ def _fold_field_ics(
     shapes: Dict[str, Tuple[int, ...]],
     state_layout: Dict[str, slice],
     loader_arrays: Dict[str, "np.ndarray"],
+    index_sets: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Fold every scoped-reference / array ``ic`` equation into ``y0`` cell-by-cell
     (esm-spec §11.4.1). Each target must name a lifted/array state of the
@@ -1525,7 +1575,7 @@ def _fold_field_ics(
         for multi in np.ndindex(*shape):
             cell = tuple(int(i) + 1 for i in multi)
             y0[start + _linear_pos(shape, list(cell))] = _resolve_field_ic(
-                target, rhs, cell, loader_arrays
+                target, rhs, cell, loader_arrays, index_sets=index_sets
             )
 
 
@@ -1794,7 +1844,8 @@ def _build_numpy_rhs(
     # provider-seeded at build time, DESIGN §2 R2) supplying the initial field
     # over the lifted grid, or a broadcast constant. Runs before the explicit
     # per-element overrides so those still win.
-    _fold_field_ics(y0, field_ic_eqs, shapes, state_layout, loader_arrays)
+    _fold_field_ics(y0, field_ic_eqs, shapes, state_layout, loader_arrays,
+                    index_sets=flat.index_sets)
     _apply_initial_conditions(
         y0, state_layout, shapes, state_names, initial_conditions
     )

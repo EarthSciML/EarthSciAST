@@ -263,11 +263,28 @@ class TimeSpan:
 
 @dataclass
 class Assertion:
-    """A scalar (variable, time, expected) check used inside a Test."""
+    """A (variable, time, expected) check used inside a Test (esm-spec §6.6).
+
+    The default form samples a scalar state. The §6.6.5 PDE forms add:
+
+    - ``coords`` — point-sample an array state at physical coordinates.
+    - ``reduce`` — collapse the variable's spatial field to a scalar
+      (``L2_error`` / ``Linf_error`` against ``reference``, or the pure
+      collapsers ``mean`` / ``max`` / ``min``).
+    - ``reference`` — the analytic reference for the error reductions:
+      an inline Expression AST, or a ``{"type": "from_file", …}`` dict
+      carried verbatim.
+
+    Mirrors the Julia binding's ``Assertion`` (types.jl); ``coords`` and
+    ``reduce`` are mutually exclusive per the schema.
+    """
     variable: str
     time: float
     expected: float
     tolerance: Optional[Tolerance] = None
+    coords: Optional[Dict[str, float]] = None
+    reduce: Optional[str] = None
+    reference: Optional[Any] = None
 
 
 @dataclass

@@ -236,6 +236,17 @@ def _serialize_assertion(a: Assertion) -> Dict[str, Any]:
     }
     if a.tolerance is not None:
         result["tolerance"] = _serialize_tolerance(a.tolerance)
+    if a.coords is not None:
+        result["coords"] = dict(a.coords)
+    if a.reduce is not None:
+        result["reduce"] = a.reduce
+    if a.reference is not None:
+        # from_file dicts round-trip verbatim; anything else is an Expression
+        # AST (mirrors the Julia binding's serialize_assertion).
+        if isinstance(a.reference, dict):
+            result["reference"] = dict(a.reference)
+        else:
+            result["reference"] = _serialize_expression(a.reference)
     return result
 
 

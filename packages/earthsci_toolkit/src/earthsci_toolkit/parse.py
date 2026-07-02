@@ -414,11 +414,28 @@ def _parse_time_span(data: Dict[str, Any]) -> TimeSpan:
 
 def _parse_assertion(data: Dict[str, Any]) -> Assertion:
     tol = _parse_tolerance(data["tolerance"]) if "tolerance" in data else None
+    coords = None
+    if data.get("coords") is not None:
+        coords = {str(k): float(v) for k, v in data["coords"].items()}
+    reduce_val = data.get("reduce")
+    reference: Any = None
+    ref = data.get("reference")
+    if ref is not None:
+        # The from_file shape is a JSON object whose `type` is the literal
+        # string "from_file" and is carried verbatim; everything else is an
+        # Expression AST (mirrors the Julia binding's coerce_assertion).
+        if isinstance(ref, dict) and ref.get("type") == "from_file":
+            reference = dict(ref)
+        else:
+            reference = _parse_expression(ref)
     return Assertion(
         variable=data["variable"],
         time=float(data["time"]),
         expected=float(data["expected"]),
         tolerance=tol,
+        coords=coords,
+        reduce=str(reduce_val) if reduce_val is not None else None,
+        reference=reference,
     )
 
 
