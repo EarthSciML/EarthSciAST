@@ -2300,8 +2300,17 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
             "`call` op was removed in v0.3.0 — migrate to `fn` ops " *
             "or AST equations (esm-spec §9 closure, RFC closed-function-registry)"))
     elseif op_sym === :D
-        throw(TreeWalkError("E_TREEWALK_D_IN_RHS",
-                            "D(...) only allowed in equation LHS"))
+        # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
+        # evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
+        # reaching `_compile` — a spatial `D`, or any `D` in an RHS / observed /
+        # rate position — is an unlowered rewrite-target: a discretization rule
+        # must lower it to a stencil before evaluation. The gate fires here,
+        # before evaluation, with the uniform `unlowered_operator` code.
+        wrtdesc = expr.wrt === nothing ? "" : " (wrt=$(expr.wrt))"
+        throw(TreeWalkError("unlowered_operator",
+            "unlowered derivative operator 'D'$wrtdesc reached evaluation: a " *
+            "spatial or right-hand-side `D` must be lowered to a stencil by a " *
+            "rewrite rule before evaluation (esm-spec §4.2 / §9.6.8)."))
     elseif op_sym === :ic
         # `ic` (esm-spec v0.8.0) is an equation-LHS-only marker, like `D`:
         # `ic(var) = <initial field>` declares an initial condition. It must
@@ -2309,16 +2318,18 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
         throw(TreeWalkError("E_TREEWALK_IC_IN_RHS",
                             "ic(...) only allowed in equation LHS"))
     elseif op_sym === :grad || op_sym === :div || op_sym === :laplacian
-        # esm-i7b: spatial differential operators MUST be rewritten by ESD
-        # discretization rules into `arrayop` AST before reaching the
-        # simulator. Encountering one here means the canonical pipeline
-        # broke; surface the violation rather than substituting zero (the
-        # historical stub behaviour in other bindings).
-        throw(TreeWalkError("E_TREEWALK_UNREACHABLE_SPATIAL_OP",
-            "UnreachableSpatialOperatorError: encountered '$(expr.op)' node " *
-            "in simulation evaluation. Spatial operators must be rewritten " *
-            "by ESD discretization rules before reaching the simulator. " *
-            "Pipeline contract violated."))
+        # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change D):
+        # grad/div/laplacian are NOT evaluable-core ops — they are optional
+        # rewrite-target sugar over `D` that a discretization rule must lower to
+        # an `aggregate`/`makearray` stencil before evaluation. One reaching
+        # `_compile` means no rule lowered it. This format ships no
+        # discretization rules; the std-lib lives in EarthSciDiscretizations.
+        # Surface the violation rather than substituting zero (the historical
+        # stub behaviour in other bindings). Uniform `unlowered_operator` code.
+        throw(TreeWalkError("unlowered_operator",
+            "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
+            "no rewrite rule lowered it to a stencil (esm-spec §4.2 / §9.6.8). " *
+            "Discretization rules live in EarthSciDiscretizations, not this format."))
     elseif op_sym === :arrayop || op_sym === :aggregate
         # If _resolve_indices ran, scalar aggregate (empty output_idx) was
         # already expanded to a plain arithmetic tree and never reaches here.

@@ -124,8 +124,10 @@ Every `op` string belongs to one of **two tiers**:
 - **Rewrite-target (open).** Any other `op` identifier — a spatial `D` on a right-hand
   side, the sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as
   `godunov_hamiltonian`. A rewrite-target op has **no** evaluator; it MUST be eliminated by
-  a rewrite rule (§9.6) before evaluation, and one that survives the load-time lowering
-  fixpoint is rejected with `unlowered_operator` (§9.6.6). The `op` schema `pattern` only
+  a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with
+  rewrite-target ops still present (e.g. a coupling or scoping example that never simulates)
+  — but one that reaches evaluation/compilation without having been lowered is rejected with
+  `unlowered_operator` (§9.6.6). The `op` schema `pattern` only
   rejects malformed strings — the open tier is otherwise unconstrained, so a custom op
   carries its scheme parameters in the `attrs` object rather than in dedicated schema
   fields.
@@ -2334,7 +2336,7 @@ Required fields:
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
 4. **Component-local scope.** Templates declared inside one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` is replaced by the bound argument's AST in source order. Expansion MUST NOT depend on argument evaluation.
-6. **Post-fixpoint operator gate.** After the fixpoint converges, the loader walks the final tree; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, or any `D` in a right-hand-side / evaluation position — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation.
+6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, or any `D` in a right-hand-side / evaluation position — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
 
 #### 9.6.4 Round-trip — Option A (always-expanded)
 
@@ -2361,7 +2363,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_recursive_body` | A template `body` contains an `apply_expression_template` node (template-calls-template forbidden). |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, or other structural defects. |
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
-| `unlowered_operator` | A rewrite-target op (§4.2) survived the lowering fixpoint into an evaluation position — no rule eliminated it. One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
+| `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 
 #### 9.6.7 Conformance fixtures
 

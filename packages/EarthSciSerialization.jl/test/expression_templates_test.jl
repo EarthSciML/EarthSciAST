@@ -238,3 +238,106 @@ const ARRHENIUS_FIXTURE_JSON = """
         @test mul_node.op == "*"
     end
 end
+
+@testset "expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint" begin
+    _repo_root() = abspath(joinpath(@__DIR__, "..", "..", ".."))
+    _conf(fix) = joinpath(_repo_root(), "tests", "conformance",
+                          "expression_templates", fix)
+    _normj(x) =
+        (x isa AbstractDict || x isa JSON3.Object) ?
+            Dict{String,Any}(string(k) => _normj(v) for (k, v) in pairs(x)) :
+        (x isa AbstractVector || x isa JSON3.Array) ?
+            Any[_normj(v) for v in x] : x
+
+    function _lower_conf(fix)
+        raw = JSON3.read(read(joinpath(_conf(fix), "fixture.esm"), String))
+        return lower_expression_templates(raw)
+    end
+    function _expanded_vars(fix)
+        exp = JSON3.read(read(joinpath(_conf(fix), "expanded.esm"), String))
+        return _normj(exp.models.m.variables)
+    end
+
+    @testset "godunov compound rule beats inner derivative (priority + outermost-first)" begin
+        # Anti-regression for the old innermost-first/bottom-up single pass:
+        # the priority:100 compound rule must fire on the WHOLE
+        # sqrt(D(u,x)^2 + D(u,y)^2) before the priority:0 central-difference D
+        # rule can lower either inner D. The expanded form is `godunov_coef * u`
+        # — crucially with NO `inv_dx` (which only the per-derivative rule emits).
+        out = _lower_conf("godunov_beats_inner_deriv")
+        got = _normj(out.data["models"]["m"]["variables"])
+        @test got == _expanded_vars("godunov_beats_inner_deriv")
+        # Guard the rewritten EXPRESSION subtree only (the variables dict still
+        # declares an `inv_dx` parameter): the compound rule's product appears,
+        # the per-derivative rule's `inv_dx` product does not.
+        expr_json = JSON3.write(got["grad_mag"]["expression"])
+        @test !occursin("inv_dx", expr_json)
+        @test occursin("godunov_coef", expr_json)
+    end
+
+    @testset "nested-derivative fixpoint converges across passes" begin
+        # laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
+        # stencil (pass 2). Exercises the bounded fixpoint: a produced body is
+        # re-scanned only in a SUBSEQUENT pass.
+        out = _lower_conf("fixpoint_nested_deriv")
+        got = _normj(out.data["models"]["m"]["variables"])
+        @test got == _expanded_vars("fixpoint_nested_deriv")
+        expr_json = JSON3.write(got["lap"]["expression"])
+        @test !occursin("laplacian", expr_json)
+        @test !occursin("\"D\"", expr_json)
+    end
+
+    @testset "self-reintroducing rule rejected by the pass bound" begin
+        err = try
+            _lower_conf("nonterminating_rewrite")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == "rewrite_rule_nonterminating"
+    end
+
+    @testset "unlowered spatial D loads under the open namespace" begin
+        # The op namespace is open (esm-spec §4.2): a spatial D with no rule is
+        # tolerated at LOAD. It is rejected with `unlowered_operator` only when
+        # it reaches evaluation/compilation — the `_compile` gate proven in
+        # tree_walk_test.jl ("unlowered rewrite-target op surfaced before
+        # evaluation") and driven end-to-end for this fixture by the simulate
+        # conformance harness.
+        io = IOBuffer(read(joinpath(_conf("unlowered_operator"), "fixture.esm")))
+        f = EarthSciSerialization.load(io)
+        @test f isa EarthSciSerialization.EsmFile
+    end
+
+    @testset "attrs on a rewrite-target op bind as scalar metavariables" begin
+        # esm-spec §4.2 open tier / RFC Change A: a custom op carries scheme
+        # params in `attrs`; a `match` pattern's `attrs.<key>` set to a bare
+        # param binds it to the matched literal. This falls out of generic
+        # structural matching — no special-casing in the engine.
+        src = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "attrs_match", "authors": ["t"]},
+          "models": {"m": {
+            "variables": {
+              "u": {"type": "state", "units": "1", "default": 0.0},
+              "y": {"type": "observed", "units": "1",
+                "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
+            },
+            "equations": [],
+            "expression_templates": {
+              "lower_custom": {
+                "params": ["f", "g"],
+                "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},
+                "body": {"op": "*", "args": ["g", "f"]}
+              }
+            }
+          }}
+        }
+        """
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _normj(out.data["models"]["m"]["variables"]["y"]["expression"])
+        @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
+    end
+end

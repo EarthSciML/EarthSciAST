@@ -1,0 +1,21 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "godunov_beats_inner_deriv",
+    "description": "A compound Godunov-style gradient-magnitude term sqrt(D(u,x)^2 + D(u,y)^2) with a high-priority rule matching the WHOLE compound, plus a low-priority per-derivative central-difference rule on D. Under the 0.8.0 outermost-first + priority engine (esm-spec §9.6.3) the compound rule fires on the whole term BEFORE the inner D nodes are ever lowered — the anti-regression for the bottom-up-single-pass defect. See docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8.",
+    "authors": ["open-op-namespace-fixpoint-rewrite conformance"]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {"type": "state", "units": "1", "default": 0.0, "description": "Scalar field"},
+        "godunov_coef": {"type": "parameter", "units": "1", "default": 1.0, "description": "Marker coefficient produced only by the compound Godunov rule"},
+        "inv_dx": {"type": "parameter", "units": "1", "default": 1.0, "description": "Marker coefficient produced only by the per-derivative central-difference rule (must NOT appear in the expanded form)"},
+        "grad_mag": {"type": "observed", "units": "1", "description": "|grad u| via a Godunov-style compound term",
+          "expression": {"op": "*", "args": ["godunov_coef", "u"]}
+        }
+      },
+      "equations": []
+    }
+  }
+}

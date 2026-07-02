@@ -1,0 +1,21 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "unlowered_operator",
+    "description": "A spatial derivative D(u, wrt=x) sits in an equation right-hand side with NO rewrite rule to lower it to a stencil. It loads fine (the op namespace is open, esm-spec §4.2), but reaching evaluation/compilation it is rejected with `unlowered_operator` — the uniform diagnostic that supersedes the old per-binding UnreachableSpatialOperator / UnsupportedDimensionality errors. This format ships no discretization rules (they live in EarthSciDiscretizations). See docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8.",
+    "authors": ["open-op-namespace-fixpoint-rewrite conformance"]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {"type": "state", "units": "1", "default": 0.0, "description": "Scalar field"}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+          "rhs": {"op": "D", "args": ["u"], "wrt": "x"}
+        }
+      ]
+    }
+  }
+}

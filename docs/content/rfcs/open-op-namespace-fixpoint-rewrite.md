@@ -258,8 +258,20 @@ All four settled with the author (2026-07-02); folded into the changes above:
    custom scalar field.
 3. **`MAX_REWRITE_PASSES = 64`** confirmed as the pinned cross-binding constant.
 4. **Permissive `op` `pattern`** added (`^([A-Za-z_][A-Za-z0-9_.]*|[-+*/^<>=!]+)$`) — rejects
-   malformed strings without closing the namespace; the load-time gate remains the guard for
-   unknown-but-well-formed ops.
+   malformed strings without closing the namespace; the `unlowered_operator` gate remains the
+   guard for unknown-but-well-formed ops.
+5. **Gate fires *before evaluation*, not at load** (settled 2026-07-02 during Phase 2). A
+   precise scan found **23** currently-valid/loaded fixtures carrying `grad`/`div`/`laplacian`/
+   `integral` (or a spatial `D`) as placeholder PDE content, of which only **one** BYO
+   lowering rules — the other 22 (coupling, scoping, units, `model_only`, `minimal_chemistry`,
+   …) are never simulated and rely on the old defer-to-sim behaviour. A literal load-time gate
+   would reject all 22, contradicting §9's "≈ zero impact" assumption (which only weighed the
+   simulation fixtures). Resolution: **loading is permissive**; the gate fires when a
+   rewrite-target op reaches evaluation/compilation (matching the pre-existing architecture and
+   the Godunov mental model — an unlowered `grad` errs exactly like an unlowered
+   `godunov_hamiltonian`). Spec §4.2 / §9.6.3 constraint 6 / §9.6.6 reworded from "load-time"
+   to "before evaluation"; the schema `op` description likewise (all 5 copies). Parse/validate-
+   only bindings mark the `unlowered_operator/` fixture N/A.
 
 ## 11. Status
 
@@ -273,7 +285,35 @@ All four settled with the author (2026-07-02); folded into the changes above:
   rules" claims struck.
 - Python schema-test repairs (opened namespace) green.
 
-**Phase 2 — bindings + fixtures + log-check: PENDING** (the large lift).
+**Phase 2 — Julia reference binding: IN PROGRESS** (commits on `fixes`).
+- **Engine (item 1): DONE** (`db4128da`). `lower_expression_templates.jl` rewritten to
+  outermost-first + `priority` + bounded fixpoint (`_rewrite_pass` / `_rewrite_to_fixpoint`,
+  `MAX_REWRITE_PASSES=64`, `_rule_priority`); static self-reintroduction check removed. All 27
+  pre-existing template tests pass unchanged.
+- **`unlowered_operator` gate (item 2): DONE** (before-evaluation, per decision 5). `_compile`
+  (tree_walk.jl) grad/div/laplacian and RHS/spatial-`D` arms now throw `unlowered_operator`
+  (superseding `E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `E_TREEWALK_D_IN_RHS`); `tree_walk_test.jl`
+  updated to assert the new code.
+- **Generalized `D.wrt` (item 3): DONE (pre-existing).** `flatten.jl` (`has_spatial_operator`,
+  `spatial_dims_in_expr`) and `units.jl` already read a spatial `wrt`; the schema opened it in
+  Phase 1. No further Julia change needed.
+- **`attrs` matching (item 4): DONE.** Falls out of generic structural matching in
+  `_match_pattern` (an `attrs.<key>` param binds to the matched literal); proven by a new test,
+  no engine change required.
+- **Conformance fixtures: DONE + Julia-verified.** `tests/conformance/expression_templates/`
+  gains `godunov_beats_inner_deriv/`, `fixpoint_nested_deriv/` (fixture + machine-generated
+  `expanded.esm` golden), `nonterminating_rewrite/`, `unlowered_operator/` (fixture +
+  `error.json`; new error-fixture convention documented in the dir README). 5 new Julia driver
+  tests green.
+- **Log-arg dimensionality unit-check (item 5): PENDING.** `units.jl:162-175` already checks
+  transcendentals (incl. `ln`) but as a `@warn` returning `nothing`, and only walks
+  `model.equations` (misses observed-var expressions like `units_invalid_logarithm.esm`'s
+  `ln(mass)`). Making it a hard error + walking observed/rate expressions, then flipping the
+  shared fixture `ln`→`log` and removing the Python quarantine, is cross-binding and deferred
+  to the fan-out.
+
+**Phase 2 — Rust / Go / TS / Python bindings + item 5 + harness wiring: PENDING** (fan-out; the
+four fixtures + the Julia semantics are the contract they must match).
 
 ## 12. Phase-2 execution plan (Julia reference first, then delegate)
 

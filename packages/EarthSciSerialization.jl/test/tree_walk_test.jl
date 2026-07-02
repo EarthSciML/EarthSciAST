@@ -159,12 +159,13 @@ end
                                               u_vals=Dict("x" => 1.0))
     end
 
-    @testset "esm-i7b: spatial-op pipeline-violation framing" begin
-        # The simulator's tree-walk runtime must surface the canonical
-        # pipeline-violation message when a non-discretized AST containing
-        # `grad`/`div`/`laplacian` reaches it. Silently returning zero
-        # (the historical stub-to-zero pattern in other bindings) would
-        # mask a broken `discretize` step.
+    @testset "unlowered rewrite-target op surfaced before evaluation" begin
+        # grad/div/laplacian are rewrite-target sugar (esm-spec §4.2 / §9.6.8),
+        # NOT evaluable-core ops. One that reaches the compiler unlowered (no
+        # discretization rule matched) must be rejected with the uniform
+        # `unlowered_operator` code — never silently evaluated to zero (the
+        # historical stub-to-zero pattern in other bindings). The gate fires
+        # before evaluation. Supersedes the old E_TREEWALK_UNREACHABLE_SPATIAL_OP.
         for opname in ("grad", "div", "laplacian")
             err = try
                 _eval1(_op(opname, _v("x"); dim="x");
@@ -174,10 +175,9 @@ end
                 e
             end
             @test err isa ESM.TreeWalkError
-            @test err.code == "E_TREEWALK_UNREACHABLE_SPATIAL_OP"
-            @test occursin("UnreachableSpatialOperatorError", err.detail)
+            @test err.code == "unlowered_operator"
             @test occursin(opname, err.detail)
-            @test occursin("Pipeline contract violated", err.detail)
+            @test occursin("unlowered", err.detail)
         end
     end
 
