@@ -150,6 +150,7 @@ Where:
 | BEHAV-06-B-003 | `coords` may pin a strict subset of dimensions only when every remaining dimension resolves to a single sample | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
 | BEHAV-06-B-004 | `integral` reduce is the uniform-cell Riemann sum under unit total domain measure per axis (= `mean` over interval sets); the measure convention under which relative-L2 is measure-free | esm-spec.md §6.6.5 convention 2 | Yes | simulation |
 | BEHAV-06-B-005 | `from_file` reference `path` resolves relative to the `.esm` file's directory; v1 `format` is `json` — a row-major nested array shape-validated against the field | esm-spec.md §6.6.5 convention 3 | Yes | simulation |
+| BEHAV-06-B-006 | A `coords`/`reduce` assertion on a rank≥2 (multidimensional) array OBSERVED MUST materialize the field over the full Cartesian product of its interval index sets in row-major (lexicographic) cell order paired with the value layout, so all bindings agree. Julia: FIXED (`vec()` around the `CartesianIndices` cell sweep — a rank≥2 comprehension yields a Matrix that `sort!` rejected without `dims=`); Python (`np.ndindex`) and Rust (row-major `IxDyn` enumeration) were already rank-agnostic. Gate: `tests/conformance/pde_inline_observed_rank2/` (Julia/Python/Rust agree on the golden actuals) | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
 
 ---
 

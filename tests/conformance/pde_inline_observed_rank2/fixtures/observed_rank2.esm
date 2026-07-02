@@ -1,0 +1,88 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "pde_inline_observed_rank2",
+        "description": "§6.6.5 inline-test assertions on a RANK-2 (multidimensional) array observed. Guards the rank>=2 observed-materialization path (a Matrix-shaped CartesianIndices comprehension) that Julia sort! could not order without dims=."
+    },
+    "index_sets": {
+        "rows": { "kind": "interval", "size": 2 },
+        "cols": { "kind": "interval", "size": 3 }
+    },
+    "models": {
+        "M": {
+            "variables": {
+                "base": {
+                    "type": "observed",
+                    "shape": ["rows", "cols"],
+                    "expression": {
+                        "op": "const",
+                        "args": [],
+                        "value": [[0.5, 1.5, 2.5], [3.5, 4.5, 5.5]]
+                    }
+                },
+                "scaled": {
+                    "type": "observed",
+                    "shape": ["rows", "cols"],
+                    "expression": {
+                        "op": "aggregate",
+                        "semiring": "sum_product",
+                        "output_idx": ["i", "j"],
+                        "ranges": { "i": [1, 2], "j": [1, 3] },
+                        "args": ["base"],
+                        "expr": {
+                            "op": "*",
+                            "args": [1.5, { "op": "index", "args": ["base", "i", "j"] }]
+                        }
+                    }
+                },
+                "u": {
+                    "type": "state",
+                    "shape": ["rows", "cols"],
+                    "default": 0.5
+                }
+            },
+            "equations": [
+                {
+                    "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+                    "rhs": "scaled"
+                }
+            ],
+            "tests": [
+                {
+                    "id": "observed_rank2",
+                    "time_span": { "start": 0.0, "end": 1.0 },
+                    "assertions": [
+                        {
+                            "variable": "scaled",
+                            "time": 0.5,
+                            "reduce": "max",
+                            "expected": 8.25,
+                            "tolerance": { "abs": 1.0e-9 }
+                        },
+                        {
+                            "variable": "scaled",
+                            "time": 0.5,
+                            "reduce": "min",
+                            "expected": 0.75,
+                            "tolerance": { "abs": 1.0e-9 }
+                        },
+                        {
+                            "variable": "scaled",
+                            "time": 0.5,
+                            "coords": { "rows": 2, "cols": 1 },
+                            "expected": 5.25,
+                            "tolerance": { "abs": 1.0e-9 }
+                        },
+                        {
+                            "variable": "scaled",
+                            "time": 0.5,
+                            "coords": { "rows": 1, "cols": 3 },
+                            "expected": 3.75,
+                            "tolerance": { "abs": 1.0e-9 }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

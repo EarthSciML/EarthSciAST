@@ -262,6 +262,94 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
     end
 end
 
+# A COMPUTED array observed `scaled = mult * base` of arbitrary rank over a
+# const `base`, plus a trivial state `u` (D(u) = scaled) so `simulate` runs.
+# Asserting DIRECTLY on `scaled` drives `_observed_field`, whose cell sweep is
+# a `CartesianIndices` comprehension: rank≥2 yields a Matrix, and the pre-fix
+# `sort!` on it threw `UndefKeywordError: dims`. Pins the `vec()` fix and the
+# row-major (lexicographic) cell mapping that pairs with the value layout.
+function _pit_observed_doc(sizes::Vector{Int}, mult::Float64, base_nested,
+                           assertions::Vector)
+    R = length(sizes)
+    dims = ["d$(k)" for k in 1:R]
+    idxs = ["i$(k)" for k in 1:R]
+    ranges = Dict{String,Any}(idxs[k] => Any[1, sizes[k]] for k in 1:R)
+    index_base = Dict{String,Any}("op" => "index", "args" => Any["base", idxs...])
+    scaled_expr = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+        "output_idx" => Any[idxs...], "ranges" => ranges, "args" => Any["base"],
+        "expr" => Dict{String,Any}("op" => "*", "args" => Any[mult, index_base]))
+    Dict{String,Any}(
+        "esm" => "0.8.0",
+        "metadata" => Dict("name" => "pde_inline_observed_rankN"),
+        "index_sets" => Dict{String,Any}(
+            dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R),
+        "models" => Dict{String,Any}("M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "base" => Dict("type" => "observed", "shape" => Any[dims...],
+                    "expression" => Dict("op" => "const", "args" => Any[],
+                                         "value" => base_nested)),
+                "scaled" => Dict("type" => "observed", "shape" => Any[dims...],
+                    "expression" => scaled_expr),
+                "u" => Dict("type" => "state", "shape" => Any[dims...],
+                            "default" => 0.5)),
+            "equations" => Any[Dict{String,Any}(
+                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                "rhs" => "scaled")],
+            "tests" => Any[Dict{String,Any}(
+                "id" => "observed_rankN",
+                "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                "assertions" => Any[assertions...])])))
+end
+
+_pit_obs_reduce(kind, expected; var="scaled", time=0.5, abs_tol=1e-9) =
+    Dict{String,Any}("variable" => var, "time" => time, "reduce" => kind,
+                     "expected" => expected, "tolerance" => Dict("abs" => abs_tol))
+_pit_obs_coords(coords, expected; var="scaled", time=0.5, abs_tol=1e-9) =
+    Dict{String,Any}("variable" => var, "time" => time,
+                     "coords" => Dict{String,Any}(coords...),
+                     "expected" => expected, "tolerance" => Dict("abs" => abs_tol))
+
+@testset "rank-2 array observed — §6.6.5 materialization (regression: sort! dims)" begin
+    # base[i,j] row-major; scaled = 1.5 * base.
+    base = Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]]
+    doc = _pit_observed_doc([2, 3], 1.5, base, Any[
+        _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
+        _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
+        _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
+        _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
+        _pit_obs_coords(["d1" => 2, "d2" => 3], 8.25),   # top corner
+        _pit_obs_coords(["d1" => 1, "d2" => 1], 0.75),   # first cell
+    ])
+    results = _pit_run(_pit_load(doc))
+    @test length(results) == 6
+    for r in results
+        @test r.passed
+        @test r.message == ""
+    end
+    # coords row-major mapping is exact (not merely within tolerance).
+    @test results[3].actual == 5.25
+    @test results[4].actual == 3.75
+end
+
+@testset "rank-3 array observed — vec() fix is rank-agnostic" begin
+    # base[i,j,k] row-major over a 2x2x2 cube; scaled = 1.5 * base.
+    base = Any[Any[Any[0.5, 1.5], Any[2.5, 3.5]],
+               Any[Any[4.5, 5.5], Any[6.5, 7.5]]]
+    doc = _pit_observed_doc([2, 2, 2], 1.5, base, Any[
+        _pit_obs_reduce("max", 11.25),                              # 1.5 * 7.5
+        _pit_obs_reduce("min", 0.75),                               # 1.5 * 0.5
+        _pit_obs_coords(["d1" => 2, "d2" => 1, "d3" => 2], 8.25),   # base[2,1,2]=5.5
+        _pit_obs_coords(["d1" => 1, "d2" => 2, "d3" => 1], 3.75),   # base[1,2,1]=2.5
+    ])
+    results = _pit_run(_pit_load(doc))
+    @test length(results) == 4
+    for r in results
+        @test r.passed
+    end
+    @test results[3].actual == 8.25
+    @test results[4].actual == 3.75
+end
+
 @testset "shared fixture — tests/spatial/pde_inline_assertions_exec.esm" begin
     fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
                        "pde_inline_assertions_exec.esm")
