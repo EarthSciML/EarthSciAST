@@ -9,7 +9,9 @@ using JSON3
 using EarthSciSerialization
 using EarthSciSerialization: lower_expression_templates, resolve_template_machinery,
     reject_template_imports_pre_v08, ExpressionTemplateError, JSONLikeDict,
-    MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr
+    MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr,
+    _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
+    _canonical_ref, _URL_FETCHER
 
 @testset "template-library imports + metaparameters (esm-spec §9.7)" begin
     repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
@@ -453,5 +455,153 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
          "metaparameters": {"N": {"type": "integer", "default": 1}},
          "expression_templates": {"t": {"params": [], "body": 1}}}""")
         @test reject_template_imports_pre_v08(ok) === nothing
+    end
+
+    @testset "URL-base joining for remote references (§4.7 / §9.7.2)" begin
+        @testset "joining / canonicalization units" begin
+            @test _url_join("https://h/a/b", "c.esm") == "https://h/a/b/c.esm"
+            @test _url_join("https://h/a/b", "../c.esm") == "https://h/a/c.esm"
+            @test _url_join("https://h/a/b", "./c/./d.esm") == "https://h/a/b/c/d.esm"
+            # `..` never climbs above the authority root.
+            @test _url_join("https://h/a", "../../c.esm") == "https://h/c.esm"
+            @test _url_join("https://h", "x.esm") == "https://h/x.esm"
+            # A `/`-rooted ref is authority-rooted (RFC 3986 §5.2).
+            @test _url_join("https://h/a/b", "/rooted.esm") == "https://h/rooted.esm"
+            # An absolute URL ref ignores the base entirely.
+            @test _url_join("https://h/a", "https://other/x.esm") == "https://other/x.esm"
+
+            @test _url_normalize("https://h/a/../b.esm") == "https://h/b.esm"
+            @test _url_normalize("https://h/a/./b.esm?q=1") == "https://h/a/b.esm?q=1"
+            @test _remove_dot_segments("/a/b/../c/./d.esm") == "/a/c/d.esm"
+            @test _remove_dot_segments("/a/b/..") == "/a/"
+
+            @test _url_dirname("https://h/lib/a.esm") == "https://h/lib"
+            @test _url_dirname("https://h/a.esm") == "https://h"
+            @test _url_dirname("https://h") == "https://h"
+
+            # Cycle-detection keys: URL identity is canonical. A relative ref
+            # inside a URL-loaded document joins against the URL base; two
+            # spellings of the same target collapse to one key.
+            @test _canonical_ref("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
+            @test _canonical_ref("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
+            @test _canonical_ref("sub/model.esm", "/tmp/base") ==
+                  abspath(joinpath("/tmp/base", "sub/model.esm"))
+        end
+
+        # Offline integration: substitute the URL fetcher (no live network) and
+        # drive the real resolvers over a fake https host.
+        _hosted = Dict{String,String}(
+            # Template libraries: stencil.esm's OWN relative import must join
+            # against ITS URL base -> https://esm.invalid/shared/grid.esm.
+            "https://esm.invalid/shared/grid.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_grid"},
+             "metaparameters": {"N": {"type": "integer", "default": 8}},
+             "index_sets": {"cells": {"kind": "interval", "size": "N"}},
+             "expression_templates": {"n_cells": {"params": [], "body": "N"}}}""",
+            "https://esm.invalid/lib/stencil.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_stencil"},
+             "expression_template_imports": [{"ref": "../shared/grid.esm"}],
+             "expression_templates": {
+               "scale_by_n": {"params": ["f"],
+                 "match": {"op": "scale_by_n", "args": ["f"]},
+                 "body": {"op": "*", "args": ["f",
+                   {"op": "apply_expression_template", "args": [],
+                    "name": "n_cells", "bindings": {}}]}}}}""",
+            # Self-import through a dot-segment spelling: canonical URL
+            # identity must detect the cycle.
+            "https://esm.invalid/cyc/a.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_cycle"},
+             "expression_template_imports": [{"ref": "b/../a.esm"}],
+             "expression_templates": {"t": {"params": [], "body": 1}}}""",
+            # Subsystem refs: outer.esm's template import AND nested subsystem
+            # ref are both relative to ITS OWN URL directory.
+            "https://esm.invalid/models/outer.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_outer"},
+             "models": {"Outer": {
+               "expression_template_imports": [{"ref": "tpl/lib.esm"}],
+               "variables": {
+                 "u": {"type": "state", "units": "1", "default": 1.5},
+                 "w": {"type": "observed", "units": "1",
+                       "expression": {"op": "scale_by_n", "args": ["u"]}}},
+               "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                              "rhs": {"op": "-", "args": ["u"]}}],
+               "subsystems": {"Inner": {"ref": "inner.esm"}}}}}""",
+            "https://esm.invalid/models/tpl/lib.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_outer_lib"},
+             "expression_templates": {
+               "scale_by_n": {"params": ["f"],
+                 "match": {"op": "scale_by_n", "args": ["f"]},
+                 "body": {"op": "*", "args": ["f", 8]}}}}""",
+            "https://esm.invalid/models/inner.esm" => """
+            {"esm": "0.8.0", "metadata": {"name": "url_inner"},
+             "models": {"Inner": {
+               "variables": {"v": {"type": "state", "units": "1", "default": 0.5}},
+               "equations": []}}}""",
+        )
+        _fetched = String[]
+        _old_fetcher = _URL_FETCHER[]
+        _URL_FETCHER[] = url -> begin
+            push!(_fetched, String(url))
+            haskey(_hosted, url) || error("offline test host has no '$url'")
+            _hosted[url]
+        end
+        try
+            mktempdir() do dir
+                # (1) Template-library import: relative refs INSIDE the
+                # URL-loaded library resolve against the URL base.
+                consumer = joinpath(dir, "consumer.esm")
+                write(consumer, """
+                {"esm": "0.8.0", "metadata": {"name": "url_consumer"},
+                 "models": {"M": {
+                   "expression_template_imports":
+                     [{"ref": "https://esm.invalid/lib/stencil.esm"}],
+                   "variables": {
+                     "x": {"type": "state", "units": "1", "default": 1.5},
+                     "y": {"type": "observed", "units": "1",
+                           "expression": {"op": "scale_by_n", "args": ["x"]}}},
+                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                  "rhs": {"op": "-", "args": ["x"]}}]}}}""")
+                f = EarthSciSerialization.load(consumer)
+                @test f.index_sets["cells"].size == 8
+                y = f.models["M"].variables["y"].expression
+                @test y isa OpExpr && y.op == "*"
+                @test "https://esm.invalid/shared/grid.esm" in _fetched
+
+                # (2) Cycle detection over canonical URL identity: the
+                # dot-segment self-import collapses to the same key.
+                cyc = joinpath(dir, "cyc.esm")
+                write(cyc, """
+                {"esm": "0.8.0", "metadata": {"name": "url_cyc_consumer"},
+                 "models": {"M": {
+                   "expression_template_imports":
+                     [{"ref": "https://esm.invalid/cyc/a.esm"}],
+                   "variables": {"x": {"type": "state", "units": "1", "default": 1.5}},
+                   "equations": []}}}""")
+                @test _err_code(() -> EarthSciSerialization.load(cyc)) ==
+                      "template_import_cycle"
+
+                # (3) Subsystem ref to a URL: the remote document's own
+                # template import and nested subsystem ref join its URL base.
+                wrapper = joinpath(dir, "wrapper.esm")
+                write(wrapper, """
+                {"esm": "0.8.0", "metadata": {"name": "url_wrapper"},
+                 "models": {"Top": {
+                   "variables": {"z": {"type": "state", "units": "1", "default": 2.5}},
+                   "equations": [],
+                   "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}""")
+                fw = EarthSciSerialization.load(wrapper)
+                sub = fw.models["Top"].subsystems["S"]
+                @test sub isa EarthSciSerialization.Model
+                w = sub.variables["w"].expression
+                @test w isa OpExpr && w.op == "*"   # template lowered via URL base
+                inner = sub.subsystems["Inner"]
+                @test inner isa EarthSciSerialization.Model
+                @test haskey(inner.variables, "v")
+                @test "https://esm.invalid/models/tpl/lib.esm" in _fetched
+                @test "https://esm.invalid/models/inner.esm" in _fetched
+            end
+        finally
+            _URL_FETCHER[] = _old_fetcher
+        end
     end
 end

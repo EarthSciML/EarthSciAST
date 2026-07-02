@@ -570,27 +570,30 @@ function _instantiate_scope!(scope::_TemplateScope, values::Dict{String,Int64}, 
 end
 
 function _load_import_raw(ref::String, base_dir::String, origin::String)
-    if startswith(ref, "http://") || startswith(ref, "https://")
+    if _is_url(ref) || _is_url(base_dir)
+        # An absolute URL ref, or a relative ref inside a library that was
+        # itself loaded from a URL: join against the URL base (RFC 3986
+        # relative resolution over the cases §4.7 admits).
+        url = _is_url(ref) ? _url_normalize(ref) : _url_join(base_dir, ref)
         local content::String
         try
-            tmp = Base.download(ref)
-            content = read(tmp, String)
-            rm(tmp, force=true)
+            content = _fetch_url(url)
         catch e
             throw(ExpressionTemplateError(
                 "template_import_unresolved",
-                "$origin: failed to download template-library ref '$ref': $e"))
+                "$origin: failed to download template-library ref '$ref' " *
+                "(resolved to '$url'): $e"))
         end
         raw = try
             JSON3.read(content)
         catch e
             throw(ExpressionTemplateError(
                 "template_import_unresolved",
-                "$origin: template-library ref '$ref' is not valid JSON: $e"))
+                "$origin: template-library ref '$url' is not valid JSON: $e"))
         end
-        # Relative refs inside a remote library have no resolvable base; they
-        # fail as unresolved when encountered.
-        return raw, base_dir
+        # Relative refs INSIDE the URL-loaded library resolve against the
+        # library's own URL directory, mirroring the local dirname anchor.
+        return raw, _url_dirname(url)
     end
     path = abspath(joinpath(base_dir, ref))
     isfile(path) || throw(ExpressionTemplateError(

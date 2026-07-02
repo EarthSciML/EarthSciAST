@@ -1946,8 +1946,11 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
     push!(visited, canonical)
 
     try
-        if startswith(ref, "http://") || startswith(ref, "https://")
-            return _load_remote_ref(ref; metaparameters=metaparameters)
+        if _is_url(ref) || _is_url(base_path)
+            # An absolute URL ref, or a relative ref inside a document that
+            # was itself loaded from a URL: resolve against the URL base
+            # (`canonical` is exactly the joined, normalized URL).
+            return _load_remote_ref(canonical, visited; metaparameters=metaparameters)
         else
             return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters)
         end
@@ -1964,14 +1967,123 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
 end
 
 """
+    _is_url(s) -> Bool
+
+True iff `s` is an http(s) URL (the two remote-reference schemes of
+esm-spec §4.7).
+"""
+_is_url(s::AbstractString) = startswith(s, "http://") || startswith(s, "https://")
+
+"""
+    _url_split(url) -> (scheme_authority, path, suffix)
+
+Split an http(s) URL into its scheme + authority (`"https://host[:port]"`),
+its path (always at least `"/"`), and the trailing query/fragment suffix
+(possibly empty).
+"""
+function _url_split(url::AbstractString)
+    m = match(r"^(https?://[^/?#]*)([^?#]*)([\s\S]*)$", url)
+    m === nothing && throw(ArgumentError("not an http(s) URL: '$url'"))
+    scheme_authority, path, suffix = m.captures
+    return String(scheme_authority), (isempty(path) ? "/" : String(path)), String(suffix)
+end
+
+"""
+    _remove_dot_segments(path) -> String
+
+RFC 3986 §5.2.4 dot-segment removal for a URL path beginning with `/`:
+`"/a/b/../c/./d.esm"` → `"/a/c/d.esm"`. `..` never climbs above the root.
+"""
+function _remove_dot_segments(path::AbstractString)::String
+    segs = split(path, '/')
+    out = String[]
+    for seg in segs
+        if seg == "."
+            continue
+        elseif seg == ".."
+            length(out) > 1 && pop!(out)
+        else
+            push!(out, String(seg))
+        end
+    end
+    # A trailing "." / ".." leaves the result a directory: keep the slash.
+    !isempty(segs) && (segs[end] == "." || segs[end] == "..") && push!(out, "")
+    joined = join(out, "/")
+    return isempty(joined) || joined == "/" ? "/" : joined
+end
+
+"""
+    _url_normalize(url) -> String
+
+Canonical form of an http(s) URL for cycle detection: dot segments removed
+from the path, scheme/authority and any query/fragment preserved verbatim.
+"""
+function _url_normalize(url::AbstractString)::String
+    sa, path, suffix = _url_split(url)
+    return sa * _remove_dot_segments(path) * suffix
+end
+
+"""
+    _url_join(base_url::AbstractString, ref::AbstractString) -> String
+
+Resolve `ref` against `base_url`, where `base_url` names the DIRECTORY a
+URL-loaded document was fetched from (`_url_dirname`). Absolute http(s)
+refs pass through (normalized); `/`-rooted refs replace the base path;
+anything else joins onto the base directory. Dot segments are removed
+(RFC 3986 §5.2 relative resolution for the cases §4.7 admits)."""
+function _url_join(base_url::AbstractString, ref::AbstractString)::String
+    _is_url(ref) && return _url_normalize(ref)
+    sa, bpath, _ = _url_split(base_url) # base query/fragment never inherited
+    path = startswith(ref, "/") ? String(ref) :
+           (endswith(bpath, "/") ? bpath * ref : bpath * "/" * ref)
+    return sa * _remove_dot_segments(path)
+end
+
+"""
+    _url_dirname(url) -> String
+
+The URL of the directory containing `url`'s document — the base against
+which the document's own relative refs resolve (drops the last path
+segment and any query/fragment): `"https://h/lib/a.esm"` → `"https://h/lib"`.
+"""
+function _url_dirname(url::AbstractString)::String
+    sa, path, _ = _url_split(url)
+    i = findlast('/', path)
+    return (i === nothing || i <= 1) ? sa : sa * path[1:prevind(path, i)]
+end
+
+"""
+    _fetch_url(url) -> String
+
+Fetch the contents of an http(s) URL. Indirected through `_URL_FETCHER`
+so tests can substitute an offline fetcher (see `template_imports_test.jl`);
+the default downloads via `Base.download`.
+"""
+function _download_url_contents(url::AbstractString)::String
+    tmp = Base.download(url)
+    content = read(tmp, String)
+    rm(tmp, force=true)
+    return content
+end
+
+const _URL_FETCHER = Ref{Function}(_download_url_contents)
+
+_fetch_url(url::AbstractString)::String = _URL_FETCHER[](url)
+
+"""
     _canonical_ref(ref::String, base_path::String) -> String
 
 Produce a canonical key for a reference, used for cycle detection.
-URLs are returned as-is; local paths are resolved to absolute paths.
+URL identity is canonical: an absolute http(s) ref is normalized
+(dot segments removed), and a relative ref whose referencing document
+was itself loaded from a URL (`base_path` is a URL base) is joined
+against that base. Local paths are resolved to absolute paths.
 """
 function _canonical_ref(ref::String, base_path::String)::String
-    if startswith(ref, "http://") || startswith(ref, "https://")
-        return ref
+    if _is_url(ref)
+        return _url_normalize(ref)
+    elseif _is_url(base_path)
+        return _url_join(base_path, ref)
     else
         return abspath(joinpath(base_path, ref))
     end
@@ -2013,21 +2125,21 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
 end
 
 """
-    _load_remote_ref(ref::String) -> EsmFile
+    _load_remote_ref(url::String, visited::Set{String}) -> EsmFile
 
-Load a remotely referenced ESM file from a URL.
-Uses the Downloads stdlib to fetch the content.
+Load a remotely referenced ESM file from an (already joined, normalized)
+URL. The document's OWN relative references — template imports and nested
+subsystem refs — resolve against the URL's directory (`_url_dirname`),
+mirroring `_load_local_ref`'s dirname anchoring; cycle detection carries
+`visited` through with canonical URL identity.
 """
-function _load_remote_ref(ref::String;
+function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
                           metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     local content::String
     try
-        # Use Downloads.download from the Julia stdlib
-        tmp = Base.download(ref)
-        content = read(tmp, String)
-        rm(tmp, force=true)
+        content = _fetch_url(url)
     catch e
-        throw(SubsystemRefError("Failed to download subsystem ref '$(ref)': $(e)"))
+        throw(SubsystemRefError("Failed to download subsystem ref '$(url)': $(e)"))
     end
 
     raw_data = JSON3.read(content)
@@ -2039,19 +2151,30 @@ function _load_remote_ref(ref::String;
     if _is_template_library_doc(raw_data)
         throw(ExpressionTemplateError(
             "subsystem_ref_is_template_library",
-            "Subsystem ref '$(ref)' targets a template-library file; " *
+            "Subsystem ref '$(url)' targets a template-library file; " *
             "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
     end
 
     schema_errors = validate_schema(raw_data)
     if !isempty(schema_errors)
-        throw(SubsystemRefError("Schema validation failed for remote ref '$(ref)'"))
+        throw(SubsystemRefError("Schema validation failed for remote ref '$(url)'"))
     end
 
-    resolved = resolve_template_machinery(raw_data, pwd(); metaparameters=metaparameters)
+    # The URL base anchors the remote document's own template imports
+    # (esm-spec §9.7.2: relative refs resolve against the referencing
+    # file's location — for a URL-loaded file, its URL directory).
+    url_base = _url_dirname(url)
+    resolved = resolve_template_machinery(raw_data, url_base; metaparameters=metaparameters)
     expanded = lower_expression_templates(resolved === nothing ? raw_data : resolved)
     if resolved !== nothing && !(expanded isa JSONLikeDict)
         expanded = JSONLikeDict(_to_dict(expanded))
     end
-    return coerce_esm_file(expanded)
+    file = coerce_esm_file(expanded)
+
+    # Nested subsystem refs inside the remote document resolve against the
+    # same URL base (relative refs join onto the URL; absolute URLs and the
+    # shared `visited` set keep cycle detection canonical).
+    _resolve_refs_in_file!(file, url_base, visited)
+
+    return file
 end
