@@ -51,6 +51,7 @@ from .numpy_interpreter import (
     _RaggedRange,
     _resolve_range_spec,
     eval_expr,
+    ragged_factor_scope,
 )
 from .reactions import lower_reactions_to_equations
 from .sympy_bridge import (
@@ -431,6 +432,7 @@ def simulate(
     loader_provider: Optional["LoaderProvider"] = None,
     provider_factory: Optional[Callable] = None,
     providers: Optional[Dict[str, Any]] = None,
+    inspect: Optional["BuildInspection"] = None,
 ) -> SimulationResult:
     """Simulate an ESM model via the flattened representation (spec §4.7.5).
 
@@ -498,6 +500,13 @@ def simulate(
         (``t = tspan[0]``) and its array is bound under the loader-qualified name.
         The scoped-``ic`` fold reads it into u0 and the lifted consumer gather
         resolves from it. No field is injected by internal consumer name.
+    inspect:
+        Optional :class:`BuildInspection` observability sink. When supplied,
+        the NumPy array/PDE pathway fills it with the named build-time
+        products (state-free setup arrays, the const-array registry, and the
+        observed substitution map) — see :class:`BuildInspection`. Filling it
+        never changes the simulation; the scalar SymPy pathway and the
+        cadence-segmented loader pathway accept and ignore it.
 
     Raises
     ------
@@ -561,6 +570,7 @@ def simulate(
         return _simulate_with_numpy(
             flat, tspan, parameters, initial_conditions, method,
             rtol=rtol, atol=atol, loader_arrays=loaded_arrays,
+            inspect=inspect,
         )
 
     # Data-loader injection (RFC pure-io-data-loaders §4.3): if the system has
@@ -584,7 +594,7 @@ def simulate(
     if has_array:
         return _simulate_with_numpy(
             flat, tspan, parameters, initial_conditions, method,
-            rtol=rtol, atol=atol,
+            rtol=rtol, atol=atol, inspect=inspect,
         )
 
     try:
@@ -1443,6 +1453,41 @@ def _materialize_observeds(
 
 
 @dataclass
+class BuildInspection:
+    """Observability record for :func:`simulate` — the Python mirror of the
+    Julia binding's ``BuildInspection`` (``build_evaluator(...; inspect=…)``).
+
+    Pass one via the ``inspect`` keyword
+    (``simulate(file, tspan, inspect=BuildInspection())``) and the NumPy
+    array/PDE pathway fills it with named BUILD-TIME products that are
+    otherwise internal to the evaluator:
+
+    * ``setup_arrays`` — the materialized build-time geometry arrays, keyed by
+      (flattened) observed name: the per-pair overlap-area matrix ``A_ij``,
+      its row-sums ``A_j``, the normalized weights ``W_ij``, and every other
+      STATE-FREE array-valued observed (no transitive state / ``t``
+      reference), evaluated once at build. This is the official inspection
+      surface for conformance runners that gate per-pair regridding values
+      (CONFORMANCE_SPEC §5.8).
+    * ``const_arrays`` — the build-time array registry: the value-invention
+      join-key buffers (broad-phase bins) and provider-/loader-injected input
+      arrays.
+    * ``observed_exprs`` — the dependency-ordered observed substitution map
+      (flattened name → RHS expression), exactly as the RHS driver
+      materializes it each step.
+
+    Filling the record never changes the simulation: the returned
+    :class:`SimulationResult` is identical with or without ``inspect``
+    (nothing downstream consults the record). Only the NumPy array-op pathway
+    fills it; the scalar SymPy pathway accepts and ignores it.
+    """
+
+    setup_arrays: Dict[str, "np.ndarray"] = field(default_factory=dict)
+    const_arrays: Dict[str, Any] = field(default_factory=dict)
+    observed_exprs: Dict[str, Expr] = field(default_factory=dict)
+
+
+@dataclass
 class _NumpyRhsBuild:
     """Everything needed to evaluate (and integrate) a discretized array/PDE
     RHS: the ``rhs_function(t, y)`` closure plus the layout metadata its callers
@@ -1458,6 +1503,10 @@ class _NumpyRhsBuild:
     elem_names: List[str]
     join_key_buffers: Dict[str, "np.ndarray"] = field(default_factory=dict)
     join_key_index_sets: Dict[str, str] = field(default_factory=dict)
+    # Keyed-factor scope map (bare ragged offsets/values factor → in-scope
+    # variable; see numpy_interpreter.ragged_factor_scope). Threaded into every
+    # EvalContext this build spawns. Empty without ragged index sets.
+    factor_scope: Dict[str, str] = field(default_factory=dict)
 
 
 def _resolve_field_ic(
@@ -1668,6 +1717,7 @@ def _materialize_join_key_buffers(
     shapes: Dict[str, Tuple[int, ...]],
     state_layout: Dict[str, slice],
     total_size: int,
+    factor_scope: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, "np.ndarray"], Dict[str, str]]:
     """Materialize the broad-phase bin buffers ONCE at setup (RFC §5.3).
 
@@ -1692,6 +1742,7 @@ def _materialize_join_key_buffers(
         y=np.zeros(total_size, dtype=float),
         t=0.0,
         index_sets=index_sets,
+        factor_scope=dict(factor_scope or {}),
     )
     # Join-carrying observeds (rg_A / rg_At / rg_W / surface_heat_flux) gate on
     # the bins themselves, so they are NOT materialized here — only the bins'
@@ -1706,6 +1757,57 @@ def _materialize_join_key_buffers(
         if idx_set is not None:
             idx_sets[name] = idx_set
     return buffers, idx_sets
+
+
+def _fill_build_inspection(
+    sink: "BuildInspection",
+    flat: FlattenedSystem,
+    build: "_NumpyRhsBuild",
+    t0: float,
+    loader_arrays: Optional[Dict[str, "np.ndarray"]] = None,
+) -> None:
+    """Copy the named build-time products of a NumPy RHS build into the
+    caller's :class:`BuildInspection` sink (the ``inspect`` kwarg of
+    :func:`simulate`). Read-only with respect to the build — nothing
+    downstream consults the sink, so the simulation is identical with or
+    without it.
+
+    The STATE-FREE observeds (no transitive state / ``t`` reference — the
+    complement of :func:`_time_varying_observeds`, a dependency-closed set)
+    are materialized once into a fresh context; this is the very same
+    evaluation the RHS driver performs on every step, so no new failure mode
+    is introduced. Each array-valued one is recorded in ``setup_arrays``
+    under its flattened name (the per-pair regrid geometry ``A_ij`` / ``A_j``
+    / ``W_ij``, a mesh subsystem's connectivity factors, …)."""
+    for name, rhs in build.ordered_observed:
+        sink.observed_exprs[name] = rhs
+    for k, arr in build.join_key_buffers.items():
+        sink.const_arrays[k] = arr
+    for k, arr in (loader_arrays or {}).items():
+        sink.const_arrays[k] = arr
+    varying = _time_varying_observeds(build.ordered_observed,
+                                      set(build.state_names))
+    static_obs = [(n, r) for n, r in build.ordered_observed if n not in varying]
+    if not static_obs:
+        return
+    ctx = EvalContext(
+        state_layout=build.state_layout,
+        state_shapes=build.shapes,
+        param_values=build.param_values,
+        observed_values={},
+        y=np.asarray(build.y0, dtype=float),
+        t=float(t0),
+        index_sets=flat.index_sets,
+        input_arrays=dict(loader_arrays or {}),
+        join_key_buffers=build.join_key_buffers,
+        join_key_index_sets=build.join_key_index_sets,
+        factor_scope=build.factor_scope,
+    )
+    _materialize_observeds(static_obs, ctx)
+    for name, _ in static_obs:
+        val = ctx.derived_rings.get(name)
+        if val is not None:
+            sink.setup_arrays[name] = np.array(val, dtype=float)
 
 
 def _build_numpy_rhs(
@@ -1819,12 +1921,28 @@ def _build_numpy_rhs(
         param_values[pname] = val
         param_values[bare] = val  # also expose via bare name
 
+    # Keyed-factor scope (esm-spec §5.4 / RFC §5.2): a RAGGED index set's
+    # `offsets`/`values` keyed factors bind by BARE name in the model scope, but
+    # flattening prefixes every variable with its owning component path while
+    # the document-scoped registry keeps the authored bare name. Resolve each
+    # bare factor name against the flattened variable scope ONCE at build —
+    # exact name wins, else the unique dot-suffix match at the shallowest
+    # namespace depth (the model's own re-exposed alias, not the mounted
+    # subsystem's original); genuine ambiguity keeps the bare name so the
+    # existing unresolved-symbol error surfaces. Mirrors the Julia tree-walk
+    # `_factor_scope`. Empty (byte-identical) without ragged index sets.
+    factor_scope = ragged_factor_scope(
+        flat.index_sets,
+        list(flat.state_variables) + list(flat.observed_variables)
+        + list(flat.parameters),
+    )
+
     # Value-invention bin buffers (RFC §5.3): materialize the broad-phase bins
     # (``rg_src_bin`` / ``rg_tgt_bin``) once, from constant geometry + params, so
     # a downstream ``join.on [[rg_src_bin, rg_tgt_bin]]`` can gate the regrid.
     join_key_buffers, join_key_index_sets = _materialize_join_key_buffers(
         ordered_observed, bin_specs, flat.index_sets, param_values, shapes,
-        state_layout, total_size,
+        state_layout, total_size, factor_scope=factor_scope,
     )
 
     # Initial conditions.
@@ -1879,6 +1997,7 @@ def _build_numpy_rhs(
             input_arrays=loader_arrays if loader_arrays is not None else {},
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
+            factor_scope=factor_scope,
         )
         # Materialize array-valued observeds + derived rings and scalar
         # observeds into the context (dependency-ordered) so the state
@@ -1912,6 +2031,7 @@ def _build_numpy_rhs(
         elem_names=elem_names,
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
+        factor_scope=factor_scope,
     )
 
 
@@ -1951,17 +2071,25 @@ def _simulate_with_numpy(
     rtol: float = 1e-10,
     atol: float = 1e-12,
     loader_arrays: Optional[Dict[str, "np.ndarray"]] = None,
+    inspect: Optional["BuildInspection"] = None,
 ) -> SimulationResult:
     """Simulate a flattened system containing array ops via the NumPy interpreter.
 
     ``loader_arrays`` maps each declared loader field name (``<Loader>.<var>``) to
     its provider-materialized array (DESIGN pde_simulation_pipeline §2): the
     RHS resolves those names through :class:`EvalContext.input_arrays`, and any
-    scoped-reference ``ic`` folds them into u0 at build time (R2)."""
+    scoped-reference ``ic`` folds them into u0 at build time (R2).
+
+    ``inspect`` is the optional :class:`BuildInspection` observability sink,
+    filled right after the RHS build (see :func:`_fill_build_inspection`);
+    nothing downstream consults it, so results are identical either way."""
     try:
         build = _build_numpy_rhs(
             flat, parameters, initial_conditions, loader_arrays=loader_arrays
         )
+        if inspect is not None:
+            _fill_build_inspection(inspect, flat, build, float(tspan[0]),
+                                   loader_arrays=loader_arrays)
         shapes = build.shapes
         state_names = build.state_names
         state_layout = build.state_layout
@@ -2007,6 +2135,7 @@ def _simulate_with_numpy(
                         index_sets=flat.index_sets,
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
+                        factor_scope=build.factor_scope,
                     )
                     _materialize_observeds(ordered_observed, ctx)
                     scalar_obs = [
@@ -2038,6 +2167,7 @@ def _simulate_with_numpy(
                             index_sets=flat.index_sets,
                             join_key_buffers=build.join_key_buffers,
                             join_key_index_sets=build.join_key_index_sets,
+                            factor_scope=build.factor_scope,
                         )
                         _materialize_observeds(ordered_observed, ctx)
                         for name, _ in ordered_observed:

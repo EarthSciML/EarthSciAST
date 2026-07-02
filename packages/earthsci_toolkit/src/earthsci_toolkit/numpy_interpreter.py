@@ -94,6 +94,56 @@ class EvalContext:
     # skolem/floor bins run off the per-step hot path. Empty ⇒ no buffer joins.
     join_key_buffers: Dict[str, np.ndarray] = field(default_factory=dict)
     join_key_index_sets: Dict[str, str] = field(default_factory=dict)
+    # Keyed-factor scope map (esm-spec §5.4 / RFC semiring-faq-unified-ir §5.2):
+    # a RAGGED index set's `offsets` / `values` keyed factors bind by BARE name
+    # in the model scope (the grids' wiring contract), but flattening prefixes
+    # every variable with its owning component path ("nEdgesOnCell" →
+    # "Divergence.nEdgesOnCell") while the document-scoped index-set registry
+    # keeps the authored bare name. This maps each bare factor name to the
+    # in-scope (possibly namespaced) variable that backs it — built ONCE at
+    # setup by :func:`ragged_factor_scope` (exact name wins; else the unique
+    # dot-suffix match at the shallowest namespace depth; ambiguity keeps the
+    # bare name so the existing unresolved-symbol error surfaces). Empty ⇒ bare
+    # names resolve as-is (the pre-namespacing behaviour, byte-identical).
+    factor_scope: Dict[str, str] = field(default_factory=dict)
+
+
+def ragged_factor_scope(
+    index_sets: Optional[Dict[str, Any]],
+    var_names: "Sequence[str]",
+) -> Dict[str, str]:
+    """Map each ragged set's bare keyed-factor name to its in-scope variable.
+
+    Mirrors the Julia tree-walk ``_factor_scope`` (tree_walk.jl) exactly: for
+    every ``kind: "ragged"`` index set's ``offsets`` and ``values`` factors,
+    an EXACT-name variable wins (no map entry — the bare name already
+    resolves); otherwise the dot-suffix matches (``*.<factor>``) at the
+    SHALLOWEST namespace depth are considered — the model's own re-exposed
+    alias (``Divergence.nEdgesOnCell``), not the mounted subsystem's original
+    (``Divergence.mesh.nEdgesOnCell``). A unique shallowest match binds; a
+    genuine ambiguity (two candidates at the same shallowest depth) leaves the
+    name bare so the existing unresolved-symbol error surfaces rather than an
+    arbitrary pick. Empty for documents without ragged index sets.
+    """
+    scope: Dict[str, str] = {}
+    names = list(var_names)
+    for entry in (index_sets or {}).values():
+        if not (isinstance(entry, dict) and entry.get("kind") == "ragged"):
+            continue
+        for factor in (entry.get("offsets"), entry.get("values")):
+            if factor is None:
+                continue
+            fname = str(factor)
+            if fname in scope or fname in names:
+                continue
+            cands = [n for n in names if n.endswith("." + fname)]
+            if not cands:
+                continue
+            mindepth = min(n.count(".") for n in cands)
+            best = [n for n in cands if n.count(".") == mindepth]
+            if len(best) == 1:
+                scope[fname] = best[0]
+    return scope
 
 
 class NumpyInterpreterError(Exception):
@@ -342,13 +392,26 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
     )
 
 
+def _resolve_keyed_factor(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
+    """Resolve a ragged set's keyed factor (``offsets`` / ``values``, §5.4).
+
+    Keyed factors bind by BARE name in the model scope; ``ctx.factor_scope``
+    supplies the in-scope (possibly flattening-namespaced) variable backing the
+    bare name (exact name wins, else the unique shallowest dot-suffix match —
+    see :func:`ragged_factor_scope`). An unmapped name resolves as-is, so an
+    unbound factor still surfaces the standard unresolved-symbol error.
+    """
+    return _resolve_symbol(ctx.factor_scope.get(name, name), ctx)
+
+
 def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: Dict[str, int]) -> List[int]:
     """Expand a ragged inner set to ``[1 .. offsets[parent]]`` for one parent tuple.
 
     ``binding`` supplies the (1-based) parent index values named in ``rr.of``.
-    The per-parent length is read from the ``offsets`` keyed factor.
+    The per-parent length is read from the ``offsets`` keyed factor, resolved
+    through the model-scope keyed-factor map (:func:`_resolve_keyed_factor`).
     """
-    off = _resolve_symbol(rr.offsets, ctx)
+    off = _resolve_keyed_factor(rr.offsets, ctx)
     if isinstance(off, np.ndarray) and off.ndim > 0:
         try:
             parent_idx = tuple(int(binding[p]) - 1 for p in rr.of)

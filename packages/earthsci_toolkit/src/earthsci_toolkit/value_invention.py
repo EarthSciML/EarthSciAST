@@ -489,6 +489,34 @@ def _vi_order_syms(ranges: Mapping[str, Any]) -> List[str]:
     return ordered
 
 
+def _vi_keyed_factor(ctx: _ViCtx, name: str) -> np.ndarray:
+    """Resolve a ragged set's keyed factor (``offsets`` / ``values``, §5.4)
+    against the build-time const-array registry by BARE name in the model
+    scope: an exact key wins; otherwise the unique dot-suffix match at the
+    shallowest namespace depth (flattening prefixes variables with their
+    owning component path while the index-set registry keeps the authored
+    bare name — same rule as :func:`numpy_interpreter.ragged_factor_scope` /
+    the Julia tree-walk ``_factor_scope``). A genuine ambiguity (two
+    candidates at the shallowest depth) or no match is a hard error."""
+    fname = str(name)
+    if fname in ctx.const_arrays:
+        return ctx.const_arrays[fname]
+    cands = [k for k in ctx.const_arrays if k.endswith("." + fname)]
+    if cands:
+        mindepth = min(k.count(".") for k in cands)
+        best = [k for k in cands if k.count(".") == mindepth]
+        if len(best) == 1:
+            return ctx.const_arrays[best[0]]
+        raise ValueInventionError(
+            f"ragged keyed factor {fname!r} is ambiguous in the model scope: "
+            f"{sorted(best)} all match at namespace depth {mindepth}"
+        )
+    raise ValueInventionError(
+        f"ragged keyed factor {fname!r} is not bound in const_arrays "
+        f"(have: {sorted(ctx.const_arrays)})"
+    )
+
+
 def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -> List[Any]:
     """The element values a range symbol binds to. interval/categorical → 1-based
     positions; ragged → the MEMBER values gathered from the set's ``values``
@@ -512,8 +540,8 @@ def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, A
                 f"ragged value-invention range {frm!r} needs an `of` parent"
             )
         parent = int(bindings[of[0]])
-        offs = ctx.const_arrays[iset["offsets"]]
-        vals = ctx.const_arrays[iset["values"]]
+        offs = _vi_keyed_factor(ctx, iset["offsets"])
+        vals = _vi_keyed_factor(ctx, iset["values"])
         nmem = int(offs[parent - 1])
         return [_vi_key_int(vals[parent - 1, l - 1]) for l in range(1, nmem + 1)]
     raise ValueInventionError(

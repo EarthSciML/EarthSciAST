@@ -245,6 +245,7 @@ try:
         simulate,
         simulate_with_discrete_events,
         evaluate_rhs,
+        BuildInspection,
         SimulationResult,
         SimulationError,
     )
@@ -597,6 +598,7 @@ if _has_simulation:
         "simulate",
         "simulate_with_discrete_events",
         "evaluate_rhs",
+        "BuildInspection",
         "SimulationResult",
         "SimulationError",
     ])

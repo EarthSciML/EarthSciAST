@@ -36,7 +36,7 @@ import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .parse import load
-from .simulation import _eval_buildtime_field, simulate
+from .simulation import BuildInspection, _eval_buildtime_field, simulate
 
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
 # nor the model declares one (same constant as the Julia run_tests reference).
@@ -166,6 +166,34 @@ def state_cells(
     return out
 
 
+def _inspection_field(
+    insp: Optional[BuildInspection],
+    model: str,
+    variable: str,
+) -> Optional["np.ndarray"]:
+    """The state-free ARRAY OBSERVED field named by a §6.6.5 assertion, read
+    from the build inspection's setup arrays — the observed-assertion form:
+    the asserted ``variable`` is an array observed (the MPAS rule output
+    ``div_flux`` asserted max/min = 0), not a state, and being state-free it
+    is constant along the trajectory, so the build-time materialization IS
+    its value at every assertion time. Flattening prefixes each observed with
+    its owning model (``"Divergence.div_flux"``), so try the qualified name,
+    the bare name, then a unique ``.<name>`` suffix match — the same lookup
+    the Julia conformance runner applies to its ``BuildInspection``. Returns
+    ``None`` when the inspection carries no such array (the caller then
+    surfaces its standard missing-variable error)."""
+    if insp is None:
+        return None
+    for key in (f"{model}.{variable}", variable):
+        arr = insp.setup_arrays.get(key)
+        if arr is not None:
+            return np.asarray(arr, dtype=float)
+    hits = [k for k in insp.setup_arrays if k.endswith("." + variable)]
+    if len(hits) == 1:
+        return np.asarray(insp.setup_arrays[hits[0]], dtype=float)
+    return None
+
+
 def _scalar_slot(var_map: Dict[str, int], variable: str, model: str) -> Optional[int]:
     """Flat slot of a SCALAR state by bare or model-qualified name."""
     qualified = f"{model}.{variable}"
@@ -198,17 +226,24 @@ def simulate_states(
     saveat: Sequence[float],
     parameters: Optional[Dict[str, float]] = None,
     initial_conditions: Optional[Dict[str, float]] = None,
+    inspect: Optional[BuildInspection] = None,
 ) -> SimulatedStates:
     """Run the official :func:`earthsci_toolkit.simulation.simulate` pathway
     and sample the trajectory at each time of ``saveat`` (which must lie on
     the solver's output grid to within ``1e-9 · max(1, |t|)`` — trajectory
     output is dense over ``tspan``, so span endpoints always qualify).
-    Raises :class:`RuntimeError` when the solve fails."""
+    Raises :class:`RuntimeError` when the solve fails.
+
+    ``inspect`` is forwarded to :func:`simulate` — an optional
+    :class:`~earthsci_toolkit.simulation.BuildInspection` sink the NumPy
+    pathway fills with the build-time setup arrays / observed map (results
+    are identical with or without it)."""
     result = simulate(
         file, tspan,
         parameters=dict(parameters or {}),
         initial_conditions=dict(initial_conditions or {}),
         method=method, rtol=rtol, atol=atol,
+        inspect=inspect,
     )
     if not result.success:
         raise RuntimeError(f"simulate failed: {result.message}")
@@ -291,12 +326,17 @@ def run_pde_tests(
             times = sorted({float(a.time) for a in t.assertions})
             sim: Optional[SimulatedStates] = None
             sim_err = ""
+            # Build inspection sink: a §6.6.5 assertion may target a
+            # state-free ARRAY OBSERVED (the observed-assertion form); its
+            # field is read from the setup arrays the build materializes.
+            insp = BuildInspection()
             try:
                 sim = simulate_states(
                     file, (t.time_span.start, t.time_span.end),
                     method=method, rtol=rtol, atol=atol, saveat=times,
                     parameters=t.parameter_overrides,
                     initial_conditions=t.initial_conditions,
+                    inspect=insp,
                 )
             except Exception as err:  # noqa: BLE001 — recorded per assertion
                 sim_err = f"simulate failed: {err}"
@@ -325,10 +365,25 @@ def run_pde_tests(
                         actual = float(state[slot])
                     else:
                         cells = state_cells(sim.var_map, a.variable, str(mname))
-                        if not cells:
-                            raise RuntimeError(
-                                f"array state '{a.variable}' has no cells in var_map")
-                        field = [float(state[slot]) for _, slot in cells]
+                        if cells:
+                            cell_tuples = [c for c, _ in cells]
+                            field = [float(state[slot]) for _, slot in cells]
+                        else:
+                            # §6.6.5 observed-assertion form: the asserted
+                            # variable is a state-free ARRAY OBSERVED whose
+                            # field the build inspection materialized (the
+                            # MPAS rule output div_flux max/min).
+                            obs = _inspection_field(insp, str(mname), a.variable)
+                            if obs is None:
+                                raise RuntimeError(
+                                    f"array state '{a.variable}' has no cells "
+                                    f"in var_map, and no state-free array "
+                                    f"observed of that name is exposed by the "
+                                    f"build inspection")
+                            idxs = list(np.ndindex(*obs.shape))
+                            cell_tuples = [[int(i) + 1 for i in idx]
+                                           for idx in idxs]
+                            field = [float(obs[idx]) for idx in idxs]
                         ref = None
                         if a.reference is not None:
                             if not isinstance(a.reference, (ExprNode, int, float, str)):
@@ -336,7 +391,7 @@ def run_pde_tests(
                                     "only inline-expression `reference` is supported "
                                     "(from_file references are not)")
                             ref = evaluate_cellwise(a.reference,
-                                                    [c for c, _ in cells],
+                                                    cell_tuples,
                                                     index_sets=file.index_sets)
                         actual = field_reduce(a.reduce, field, reference=ref)
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
