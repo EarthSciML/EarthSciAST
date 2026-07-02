@@ -12,6 +12,7 @@
 import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
 import {
   ExpressionTemplateError,
+  deepEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
 } from './lower_expression_templates.js'
@@ -77,17 +78,66 @@ export async function resolveSubsystemRefs(
   const visited = new Set<string>()
   const resolving = new Set<string>()
 
+  // The importing document's index-set registry (esm-spec §4.7): every
+  // referenced subsystem file's top-level `index_sets` merge into it, threaded
+  // down the model walk (mirrors §9.7.5). Created lazily so a document with no
+  // index sets and no mounted axes stays without an `index_sets` block.
+  const registry: Record<string, unknown> =
+    (file.index_sets as Record<string, unknown> | undefined) ?? {}
+
   // Process all models
   if (file.models) {
     for (const [name, model] of Object.entries(file.models)) {
-      await resolveModelRefs(model, basePath, visited, resolving, [name])
+      await resolveModelRefs(model, basePath, visited, resolving, [name], registry)
     }
   }
 
-  // Process all reaction systems
+  // Attach the registry only if the merge actually contributed axes to a
+  // previously index-set-less document (no empty `index_sets: {}` otherwise).
+  if (!file.index_sets && Object.keys(registry).length > 0) {
+    ;(file as { index_sets?: unknown }).index_sets = registry
+  }
+
+  // Process all reaction systems. Per esm-spec §4.7 the index-set merge is a
+  // model-mount mechanism; reaction-system subsystem refs do not merge index
+  // sets (mirrors the Julia reference, which threads the registry only into the
+  // model walk).
   if (file.reaction_systems) {
     for (const [name, rs] of Object.entries(file.reaction_systems)) {
       await resolveReactionSystemRefs(rs, basePath, visited, resolving, [name])
+    }
+  }
+}
+
+/**
+ * Merge a referenced subsystem file's top-level `index_sets` into the importing
+ * document's registry (esm-spec §4.7, mirroring the §9.7.5 template-import
+ * merge). The referenced document's metaparameters are already closed and
+ * folded, so the merge compares concrete declarations. Deep-equal redeclaration
+ * is idempotent; a non-equal collision throws `subsystem_index_set_conflict`
+ * (§9.6.6) — the mounted-mesh failure mode this makes loud: a mesh file whose
+ * axis size disagrees with the importer's declaration must fail at load, not
+ * silently resolve against the importer.
+ */
+function mergeSubsystemIndexSets(
+  registry: Record<string, unknown>,
+  loaded: EsmFile,
+  ref: string,
+): void {
+  const loadedIsets = (loaded as { index_sets?: unknown }).index_sets
+  if (typeof loadedIsets !== 'object' || loadedIsets === null || Array.isArray(loadedIsets)) {
+    return
+  }
+  for (const [n, decl] of Object.entries(loadedIsets as Record<string, unknown>)) {
+    if (Object.prototype.hasOwnProperty.call(registry, n)) {
+      if (!deepEqual(registry[n], decl)) {
+        throw new ExpressionTemplateError(
+          'subsystem_index_set_conflict',
+          `index set '${n}' from subsystem ref '${ref}' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).`,
+        )
+      }
+    } else {
+      registry[n] = decl
     }
   }
 }
@@ -164,7 +214,8 @@ async function resolveModelRefs(
   basePath: string,
   visited: Set<string>,
   resolving: Set<string>,
-  refChain: string[]
+  refChain: string[],
+  registry: Record<string, unknown>
 ): Promise<void> {
   // A bare `{ ref }` stub (SubsystemRef) has no subsystems to walk; the
   // top-level model union admits it under v0.8.0, but only a full Model
@@ -194,6 +245,12 @@ async function resolveModelRefs(
           readEdgeBindings(sub, subName),
         )
 
+        // esm-spec §4.7: the mounted file's document-scoped index sets (already
+        // metaparameter-folded) join the importing document's registry, so the
+        // importer's variables may be shaped over the mesh file's axes and a
+        // disagreement fails loudly (`subsystem_index_set_conflict`).
+        mergeSubsystemIndexSets(registry, parsed, ref)
+
         // Extract the first model from the referenced file
         if (parsed.models) {
           const modelEntries = Object.entries(parsed.models)
@@ -210,7 +267,8 @@ async function resolveModelRefs(
               refBasePath,
               visited,
               resolving,
-              [...refChain, subName]
+              [...refChain, subName],
+              registry
             )
           }
         } else if (parsed.data_loaders) {
@@ -233,7 +291,7 @@ async function resolveModelRefs(
       visited.add(chainKey)
     } else {
       // Even if there's no ref, recurse into subsystems
-      await resolveModelRefs(sub, basePath, visited, resolving, [...refChain, subName])
+      await resolveModelRefs(sub, basePath, visited, resolving, [...refChain, subName], registry)
     }
   }
 }
