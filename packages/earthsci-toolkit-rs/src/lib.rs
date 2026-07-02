@@ -85,6 +85,12 @@ pub mod simulate;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simulate_array;
 
+// §6.6.5 inline PDE tests over the array simulation pathway (field
+// reductions, analytic references, coordinate-expression evaluation) —
+// native-only like the `simulate_array` runtime it drives.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pde_inline_tests;
+
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
 // the imperative `geometry::polygon_area`).
@@ -123,9 +129,6 @@ pub use parse::{
     LoadOptions, ParseError, SchemaValidationError, load, load_path, load_path_with_options,
     load_with_options,
 };
-pub use template_imports::{
-    is_template_library_doc, reject_template_imports_pre_v08, resolve_template_machinery,
-};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
@@ -147,13 +150,16 @@ pub use substitute::{
     substitute_in_reaction_system, substitute_in_reaction_system_with_context,
     substitute_with_context,
 };
+pub use template_imports::{
+    is_template_library_doc, reject_template_imports_pre_v08, resolve_template_machinery,
+};
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, CouplingEntry, DaeInfo, DataLoader,
-    DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource, DataLoaderTemporal,
-    DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation, EsmFile, Expr,
-    ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest, ModelTestAssertion, ModelVariable,
-    Operator, Reaction, ReactionSystem, RecordsPerFile, Species, StoichiometricEntry, TimeSpan,
-    Tolerance, UnitConversion, VariableType,
+    DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource,
+    DataLoaderTemporal, DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
+    EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,
+    ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,
+    StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, ValidationResult, validate,
@@ -175,6 +181,11 @@ pub use lower_enums::{EnumLoweringError, lower_enums};
 pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
 
 pub use compile_error::CompileError;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use pde_inline_tests::{
+    PdeAssertionResult, evaluate_cellwise, field_reduce, run_pde_tests, state_cells,
+};
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;

@@ -539,7 +539,45 @@ pub struct TimeSpan {
     pub end: f64,
 }
 
-/// A single scalar `(variable, time, expected)` check inside a [`ModelTest`].
+/// The `reference` solution of an error-norm assertion (esm-spec §6.6.5):
+/// either an inline Expression evaluated over the component's domain
+/// coordinates, or a `{type: "from_file", path, format?}` shape pointing at a
+/// precomputed snapshot (parsed and carried verbatim; not evaluated by this
+/// binding). Untagged: the `from_file` object shape is tried first — an
+/// Expression operator node always carries `op`, so the two never collide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AssertionReference {
+    /// `{type: "from_file", path, format?}` precomputed-snapshot pointer.
+    FromFile(FromFileReference),
+    /// Inline analytic Expression over the domain coordinates (boxed — an
+    /// [`Expr`] is large, and most assertions carry no reference at all).
+    Expression(Box<Expr>),
+}
+
+/// The `{type: "from_file", path, format?}` shape of a §6.6.5 assertion
+/// `reference` (schema `Assertion.reference` oneOf, second branch).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FromFileReference {
+    /// Discriminator; the schema pins it to the constant `"from_file"`.
+    #[serde(rename = "type")]
+    pub ref_type: String,
+
+    /// Path of the precomputed reference snapshot.
+    pub path: String,
+
+    /// Optional file-format hint (e.g. `"netcdf"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+/// A single scalar `(variable, time, expected)` check inside a [`ModelTest`],
+/// or one of its §6.6.5 PDE-aware variants: `coords` point-samples an array
+/// state at physical coordinates, `reduce` collapses the variable's spatial
+/// field to a scalar (`L2_error`/`Linf_error` against `reference`, or the
+/// pure collapsers `integral`/`mean`/`max`/`min`). `coords` and `reduce` are
+/// mutually exclusive per the schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelTestAssertion {
@@ -556,6 +594,23 @@ pub struct ModelTestAssertion {
     /// and model-level defaults when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
+
+    /// Spatial-point evaluation (esm-spec §6.6.5): index-set / dimension name
+    /// → numeric coordinate at which to sample the field. Mutually exclusive
+    /// with `reduce`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coords: Option<HashMap<String, f64>>,
+
+    /// Domain reduction (esm-spec §6.6.5): one of `integral`, `mean`, `max`,
+    /// `min`, `L2_error`, `Linf_error`. The error norms require `reference`.
+    /// Mutually exclusive with `coords`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce: Option<String>,
+
+    /// Reference (analytic or precomputed) solution required by the
+    /// error-norm reductions (esm-spec §6.6.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<AssertionReference>,
 }
 
 /// Inline validation test for a [`Model`] (schema gt-cc1).

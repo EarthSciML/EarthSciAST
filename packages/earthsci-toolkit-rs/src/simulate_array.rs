@@ -288,13 +288,19 @@ pub struct ArrayCompiled {
     /// by name at runtime and does not need it.
     forcing: Rc<RefCell<HashMap<String, ArrayD<f64>>>>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
-    /// carried from [`crate::flatten::FlattenedSystem::field_ics`]. Each entry is
-    /// `(target_state, rhs)`: at `u0` build time [`Self::simulate`] resolves the
-    /// target's grid cells and folds the loaded initial field — read from the
-    /// data-Provider forcing buffer keyed by the loader-qualified `rhs` name — into
-    /// the flat state vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
-    /// Empty on the raw single-model (`from_file`) path.
+    /// classified out of the equation list by [`Self::from_model`] (single-model
+    /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]
+    /// (coupled path). Each entry is `(target_state, rhs)`: at `u0` build time
+    /// [`Self::simulate`] resolves the target's grid cells and folds the initial
+    /// field — a provider-served loaded field, a broadcast constant, or a
+    /// coordinate expression over grid-geometry aggregates — into the flat state
+    /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
+    /// Document-scoped index-set registry, kept so `ic` RHS coordinate
+    /// expressions (whose `aggregate` ranges may still carry `{ "from": <set> }`
+    /// references on the flattened path) resolve at `u0` build time exactly as
+    /// equation expressions do at compile time.
+    index_sets: HashMap<String, IndexSet>,
 }
 
 // ============================================================================
@@ -437,7 +443,12 @@ fn refill_state_arrays(
 /// vs.shape[d]`, guaranteed by [`subblock_dest`]). This is the placement for an
 /// affine-shifted LHS `D(u[i+c]) = …`; the bare-index method-of-lines case is
 /// `dest_lo = 0…` with `arr` spanning the whole variable box.
-fn scatter_col_major_offset(arr: ArrayViewD<f64>, dy: &mut [f64], vs: &VarShape, dest_lo: &[usize]) {
+fn scatter_col_major_offset(
+    arr: ArrayViewD<f64>,
+    dy: &mut [f64],
+    vs: &VarShape,
+    dest_lo: &[usize],
+) {
     let n = arr.ndim();
     if n == 0 {
         dy[vs.flat_offset] = arr[IxDyn(&[])];
@@ -1024,6 +1035,19 @@ impl ArrayCompiled {
             })
             .collect();
 
+        // Classify scoped-reference / array `ic` equations (esm-spec §11.4.1)
+        // out of the rule builder into `field_ics`, mirroring the flatten-path
+        // classification — a single-model (`from_file`) build must fold
+        // coordinate-expression / broadcast-constant ics into `u0` exactly as
+        // the coupled path does. The RHS collected here has already been
+        // range-resolved against the document registry above.
+        let mut field_ics: Vec<(String, Expr)> = Vec::new();
+        for eq in &model.equations {
+            if let Some(target) = crate::flatten::extract_ic_target(&eq.lhs) {
+                field_ics.push((target, eq.rhs.clone()));
+            }
+        }
+
         for eq in &model.equations {
             if let Some((
                 var,
@@ -1110,6 +1134,44 @@ impl ArrayCompiled {
                             slot,
                             body: Box::new(eq.rhs.clone()),
                         });
+                    } else if rhs_has_array_producer(&eq.rhs) {
+                        // Whole-array `D(var) = <rhs containing a lowered stencil>`
+                        // (an array-PRODUCING `makearray`/`aggregate` in elementwise
+                        // position, the form a §9.6.3 discretization rewrite emits):
+                        // lift to the per-cell `arrayop` (ArrayLoop) form the
+                        // derivative partition consumes — output loops over the full
+                        // declared shape, each array leaf and array producer gathered
+                        // per cell via `index(node, loops…)`. This is the loop-form
+                        // analog of the Julia `_lift_wholearray_deriv_equations`
+                        // (shape_promotion.jl) and keeps the rule eligible for the
+                        // vectorized whole-array fast path (ess-bdm).
+                        let ndim = shape.shape.len();
+                        let loops: Vec<String> =
+                            (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
+                        let output_ranges: Vec<(i64, i64)> = shape
+                            .shape
+                            .iter()
+                            .zip(shape.origin.iter())
+                            .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
+                            .collect();
+                        let lhs_idx_exprs: Vec<Expr> =
+                            loops.iter().map(|l| Expr::Variable(l.clone())).collect();
+                        let body = index_array_leaves_by_loops(&eq.rhs, &array_ranks, &loops);
+                        let total = shape.shape.iter().copied().product::<usize>().max(1);
+                        for flat in 0..total {
+                            covered_slots.insert(shape.flat_offset + flat);
+                        }
+                        rhs_rules.push(RhsRule::ArrayLoop {
+                            var_name: var.clone(),
+                            output_idx_names: loops,
+                            output_ranges,
+                            lhs_idx_exprs,
+                            body: Box::new(body),
+                            contract_names: Vec::new(),
+                            contract_dims: Vec::new(),
+                            reduce: effective_reduce_kind(None, None),
+                            filter: None,
+                        });
                     } else {
                         // Whole-array `D(var) = <array-valued rhs>` over a declared
                         // array shape: enumerate cells and emit one per-cell scalar
@@ -1178,7 +1240,8 @@ impl ArrayCompiled {
             rhs_rules,
             n_states,
             forcing: Rc::new(RefCell::new(HashMap::new())),
-            field_ics: Vec::new(),
+            field_ics,
+            index_sets: index_sets.clone(),
         })
     }
 
@@ -1326,7 +1389,10 @@ impl ArrayCompiled {
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
-                out.insert(slot, resolve_field_ic_cell(target, rhs, &multi, &forcing)?);
+                out.insert(
+                    slot,
+                    resolve_field_ic_cell(target, rhs, &multi, &forcing, &self.index_sets)?,
+                );
             }
         }
         Ok(out)
@@ -1619,6 +1685,24 @@ impl ArrayCompiled {
     }
 }
 
+/// Evaluate a state-free build-time expression (grid geometry, §11.4.1
+/// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
+/// official array evaluator. Array-producing `aggregate`/`makearray` nodes
+/// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
+/// range references are resolved against `index_sets` first, so a raw
+/// (pre-compile) expression evaluates exactly as an equation expression does
+/// after [`crate::aggregate::resolve_aggregate_ranges`]. State references are
+/// not in scope — the context carries no states. Mirrors the Python
+/// `_eval_buildtime_field` / Julia `_eval_cellwise` machinery.
+pub(crate) fn eval_buildtime_field(
+    expr: &Expr,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<Value, CompileError> {
+    let mut resolved = expr.clone();
+    crate::aggregate::resolve_expr_ranges(&mut resolved, index_sets)?;
+    Ok(eval_expression(&resolved, &HashMap::new(), &[], &[], 0.0))
+}
+
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
 /// equation (esm-spec §11.4.1). `cell` is the 0-based multi-index of the element
 /// within the target's grid shape. Supported RHS forms, in order:
@@ -1627,15 +1711,22 @@ impl ArrayCompiled {
 ///    supplies the initial field over the lifted grid. The cell is read directly
 ///    when the field's rank matches the target grid; a single-element field is
 ///    broadcast.
-/// 2. A BROADCAST CONSTANT — an RHS that const-folds to a scalar.
+/// 2. A BROADCAST CONSTANT — an RHS that const-folds to a finite scalar.
+/// 3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
+///    `aggregate`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
+///    is a grid-geometry aggregate expanded from a §9.7 template import),
+///    evaluated through the official array evaluator ([`eval_buildtime_field`])
+///    in a state-free context and indexed at this cell.
 ///
 /// Anything else is a hard error, so a scoped-reference ic that cannot be resolved
-/// is never silently dropped.
+/// is never silently dropped. Mirrors tree_walk.jl `_resolve_field_ic` and the
+/// Python `_resolve_field_ic`.
 fn resolve_field_ic_cell(
     target: &str,
     rhs: &Expr,
     cell: &[usize],
     forcing: &HashMap<String, ArrayD<f64>>,
+    index_sets: &HashMap<String, IndexSet>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
@@ -1654,18 +1745,45 @@ fn resolve_field_ic_cell(
             ),
         });
     }
-    // (2) Broadcast constant.
-    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, &HashMap::new()) {
+    // (2) Broadcast constant. Finite-only: `fold_constant_expr` renders any op
+    // outside the scalar interpreter (an `aggregate` grid-geometry node) as
+    // NaN rather than erroring, and a NaN must fall through to the
+    // coordinate-expression path — never silently seed the state vector.
+    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, &HashMap::new())
+        && c.is_finite()
+    {
         return Ok(c);
     }
-    // (3) Unsupported RHS — a clear error, never a silent drop.
+    // (3) Coordinate expression over grid-geometry aggregates.
+    if let Expr::Operator(_) = rhs {
+        match eval_buildtime_field(rhs, index_sets) {
+            Ok(Value::Scalar(s)) if s.is_finite() => return Ok(s),
+            Ok(Value::Array(arr)) => {
+                if arr.ndim() != cell.len() {
+                    return Err(SimulateError::InvalidInitialCondition {
+                        name: format!(
+                            "ic({target}): coordinate expression evaluates to ndim={}, which does not match the {}-D lifted target grid",
+                            arr.ndim(),
+                            cell.len()
+                        ),
+                    });
+                }
+                let v = arr[IxDyn(cell)];
+                if v.is_finite() {
+                    return Ok(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    // (4) Unsupported RHS — a clear error, never a silent drop.
     let hint = match rhs {
         Expr::Variable(name) => format!(" (no provider field named '{name}')"),
         _ => String::new(),
     };
     Err(SimulateError::InvalidInitialCondition {
         name: format!(
-            "ic({target}): RHS is neither a provider-served loaded field nor a constant{hint}"
+            "ic({target}): RHS is neither a provider-served loaded field, a constant, nor a per-cell coordinate expression{hint}"
         ),
     })
 }
@@ -2394,7 +2512,10 @@ fn try_eval_arrayop_vectorized<'a>(
         VecValue::Scalar(s) => {
             let mut buf = pool.take_array(&shape);
             buf.fill(s);
-            VecValue::Owned { data: buf, origin: lo }
+            VecValue::Owned {
+                data: buf,
+                origin: lo,
+            }
         }
         other => other,
     };
@@ -2600,7 +2721,10 @@ fn eval_vec_op<'a>(
     match node.op.as_str() {
         "+" | "-" | "*" | "/" | "^" | "min" | "max" => {
             if node.op == "-" && node.args.len() == 1 {
-                return Some(vec_negate(eval_vec(&node.args[0], bx, ctx, pool, ops)?, pool));
+                return Some(vec_negate(
+                    eval_vec(&node.args[0], bx, ctx, pool, ops)?,
+                    pool,
+                ));
             }
             let mut acc = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
             for a in &node.args[1..] {
@@ -2609,7 +2733,10 @@ fn eval_vec_op<'a>(
             }
             Some(acc)
         }
-        "neg" => Some(vec_negate(eval_vec(&node.args[0], bx, ctx, pool, ops)?, pool)),
+        "neg" => Some(vec_negate(
+            eval_vec(&node.args[0], bx, ctx, pool, ops)?,
+            pool,
+        )),
         "index" => eval_vec_index(node, bx, ctx, pool, ops),
         "makearray" => eval_vec_makearray(node, bx, ctx, pool, ops),
         "const" => match eval_const(node) {
@@ -2679,11 +2806,7 @@ fn scalar_compare(op: &str, a: f64, b: f64) -> f64 {
         ">=" => a >= b,
         _ => return f64::NAN,
     };
-    if t {
-        1.0
-    } else {
-        0.0
-    }
+    if t { 1.0 } else { 0.0 }
 }
 
 fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
@@ -2695,7 +2818,9 @@ fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
         }
         VecValue::View { data, origin } => {
             let mut buf = pool.take_array(data.shape());
-            ndarray::Zip::from(&mut buf).and(data).for_each(|o, &x| *o = -x);
+            ndarray::Zip::from(&mut buf)
+                .and(data)
+                .for_each(|o, &x| *o = -x);
             VecValue::Owned { data: buf, origin }
         }
     }
@@ -2715,7 +2840,9 @@ fn vec_combine<'a>(
     pool: &mut Pool,
 ) -> Option<VecValue<'a>> {
     match (a, b) {
-        (VecValue::Scalar(x), VecValue::Scalar(y)) => Some(VecValue::Scalar(apply_binary(op, x, y))),
+        (VecValue::Scalar(x), VecValue::Scalar(y)) => {
+            Some(VecValue::Scalar(apply_binary(op, x, y)))
+        }
         // scalar ∘ array
         (VecValue::Scalar(x), barr) => {
             let (mut data, origin) = barr.into_owned(pool);
@@ -2807,7 +2934,12 @@ fn eval_vec_index<'a>(
         arg0.release(pool);
         return None;
     }
-    let src_origin: DimI = arg0.origin().expect("array origin").iter().copied().collect();
+    let src_origin: DimI = arg0
+        .origin()
+        .expect("array origin")
+        .iter()
+        .copied()
+        .collect();
     let src_shape: DimU = arg0.shape().expect("array").iter().copied().collect();
 
     // Per axis, classify the index expression and build its source→output copy
@@ -2946,7 +3078,9 @@ fn eval_vec_makearray<'a>(
             hi_bb[d] = hi_bb[d].max(r[1]);
         }
     }
-    let bb_shape: DimU = (0..ndim).map(|d| (hi_bb[d] - lo_bb[d] + 1) as usize).collect();
+    let bb_shape: DimU = (0..ndim)
+        .map(|d| (hi_bb[d] - lo_bb[d] + 1) as usize)
+        .collect();
     let mut result = pool.take_array(&bb_shape);
     for (region, value_expr) in regions.iter().zip(values.iter()) {
         let r_lo: DimI = region.iter().map(|r| r[0]).collect();
@@ -4073,6 +4207,35 @@ fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         let v = eval(value_expr, ctx);
         // Iterate the region's index tuples.
         let ranges: Vec<(i64, i64)> = region.iter().map(|r| (r[0], r[1])).collect();
+        // A region-aligned ARRAY value (e.g. a lowered stencil's interior
+        // aggregate) must span the region box exactly; each region cell then
+        // reads its aligned element (mirrors the vectorized
+        // `eval_vec_makearray` region-assign and the Julia/Python region
+        // semantics). A shape mismatch keeps the previous skip behaviour.
+        if let Value::Array(a) = &v
+            && a.ndim() > 0
+        {
+            let region_shape: Vec<usize> = ranges
+                .iter()
+                .map(|(lo, hi)| (hi - lo + 1) as usize)
+                .collect();
+            if a.shape() == region_shape.as_slice() {
+                for tuple in cartesian_range(&ranges) {
+                    let out_ix: Vec<usize> = tuple
+                        .iter()
+                        .enumerate()
+                        .map(|(d, x)| (x - origin[d]) as usize)
+                        .collect();
+                    let src_ix: Vec<usize> = tuple
+                        .iter()
+                        .enumerate()
+                        .map(|(d, x)| (x - ranges[d].0) as usize)
+                        .collect();
+                    arr[IxDyn(&out_ix)] = a[IxDyn(&src_ix)];
+                }
+            }
+            continue;
+        }
         for tuple in cartesian_range(&ranges) {
             let indices: Vec<usize> = tuple
                 .iter()
@@ -4177,10 +4340,7 @@ fn equation_defined_var(lhs: &Expr) -> Option<String> {
                 Some(inner) => equation_defined_var(inner),
                 None => None,
             },
-            op if is_aggregate_op(op) => node
-                .expr
-                .as_ref()
-                .and_then(|b| equation_defined_var(b)),
+            op if is_aggregate_op(op) => node.expr.as_ref().and_then(|b| equation_defined_var(b)),
             _ => None,
         },
         _ => None,
@@ -4454,6 +4614,208 @@ fn resolve_declared_shape(
         out.push(sz);
     }
     Some(out)
+}
+
+/// True iff `expr` is an array-PRODUCING node: a `makearray`, or an
+/// `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has
+/// an empty `output_idx` and produces a scalar). Mirrors the Julia
+/// `_is_array_producer` (shape_promotion.jl).
+fn is_array_producer(node: &ExpressionNode) -> bool {
+    if node.op == "makearray" {
+        return true;
+    }
+    is_aggregate_op(&node.op)
+        && node
+            .output_idx
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+}
+
+/// True iff the RHS of a whole-array `D(state)` equation contains an
+/// array-producing node in elementwise position — the signature of a
+/// discretization rule's lowered stencil (`alpha * makearray(…)`). Follows the
+/// same descent rules as the Julia `_index_array_leaves`: `index` gathers and
+/// aggregate-family nodes are already scalar/self-indexed and are not entered.
+fn rhs_has_array_producer(expr: &Expr) -> bool {
+    match expr {
+        Expr::Operator(node) => {
+            if is_array_producer(node) {
+                return true;
+            }
+            if node.op == "index" || is_aggregate_op(&node.op) {
+                return false;
+            }
+            node.args.iter().any(rhs_has_array_producer)
+        }
+        _ => false,
+    }
+}
+
+/// Capture-aware rename of a free loop symbol: every free `Variable(from)`
+/// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
+/// or `ranges` declare it) shadows the outer symbol and is left untouched.
+fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
+    match expr {
+        Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
+        Expr::Operator(node) => {
+            let binds = node
+                .output_idx
+                .as_ref()
+                .map(|ix| ix.iter().any(|s| s == from))
+                .unwrap_or(false)
+                || node
+                    .ranges
+                    .as_ref()
+                    .map(|r| r.contains_key(from))
+                    .unwrap_or(false);
+            if binds {
+                return expr.clone();
+            }
+            let mut out = node.clone();
+            out.args = node
+                .args
+                .iter()
+                .map(|a| rename_free_symbol(a, from, to))
+                .collect();
+            out.expr = node
+                .expr
+                .as_ref()
+                .map(|e| Box::new(rename_free_symbol(e, from, to)));
+            out.filter = node
+                .filter
+                .as_ref()
+                .map(|e| Box::new(rename_free_symbol(e, from, to)));
+            out.lower = node
+                .lower
+                .as_ref()
+                .map(|e| Box::new(rename_free_symbol(e, from, to)));
+            out.upper = node
+                .upper
+                .as_ref()
+                .map(|e| Box::new(rename_free_symbol(e, from, to)));
+            out.values = node
+                .values
+                .as_ref()
+                .map(|vs| vs.iter().map(|v| rename_free_symbol(v, from, to)).collect());
+            if let Some(axes) = &node.axes {
+                out.axes = Some(
+                    axes.iter()
+                        .map(|(k, v)| (k.clone(), rename_free_symbol(v, from, to)))
+                        .collect(),
+                );
+            }
+            Expr::Operator(out)
+        }
+        _ => expr.clone(),
+    }
+}
+
+/// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
+/// enclosing loop symbols: a region value that is a pointwise
+/// `aggregate`/`arrayop` whose output ranges equal the region bounds exactly
+/// (no contraction, no filter) is replaced by its body with each output
+/// symbol renamed to the enclosing loop symbol. This turns the discretized
+/// `makearray([interior], [aggregate_i(stencil)])` form a §9.6.3 rewrite rule
+/// emits into the scalar-region-value form the vectorized whole-array kernel
+/// consumes directly (the build-time `index(arrayop, …)` collapse the Julia
+/// reference performs). Values that do not match are left untouched.
+fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) -> ExpressionNode {
+    let (Some(regions), Some(values)) = (&node.regions, &node.values) else {
+        return node.clone();
+    };
+    if regions.len() != values.len() {
+        return node.clone();
+    }
+    let mut out = node.clone();
+    out.values = Some(
+        regions
+            .iter()
+            .zip(values.iter())
+            .map(|(region, value)| {
+                let Expr::Operator(v) = value else {
+                    return value.clone();
+                };
+                if !is_aggregate_op(&v.op) || v.filter.is_some() {
+                    return value.clone();
+                }
+                let (Some(idx), Some(ranges), Some(body)) = (&v.output_idx, &v.ranges, &v.expr)
+                else {
+                    return value.clone();
+                };
+                if idx.len() != region.len()
+                    || ranges.len() != idx.len()
+                    || loops.len() != idx.len()
+                {
+                    return value.clone();
+                }
+                for (d, sym) in idx.iter().enumerate() {
+                    match ranges.get(sym).and_then(|r| r.bounds()) {
+                        Some(b) if b == region[d] => {}
+                        _ => return value.clone(),
+                    }
+                }
+                let mut inlined = body.as_ref().clone();
+                for (sym, loop_name) in idx.iter().zip(loops.iter()) {
+                    if sym != loop_name {
+                        inlined = rename_free_symbol(&inlined, sym, loop_name);
+                    }
+                }
+                inlined
+            })
+            .collect(),
+    );
+    out
+}
+
+/// Rewrite a whole-array `D(state)` RHS into its per-cell body over the given
+/// LOOP SYMBOLS (the loop-name dual of [`index_array_leaves`], mirroring the
+/// Julia `_index_array_leaves` in shape_promotion.jl): each bare array-shaped
+/// `Variable` leaf and each array-PRODUCING node (a `makearray` — whose
+/// aggregate region values are first inlined via [`inline_region_aggregates`]
+/// — or an `aggregate`/`arrayop` with output axes) is wrapped in
+/// `index(node, loops…)`; `index` gathers and scalar reductions stay
+/// untouched; other operators recurse elementwise.
+fn index_array_leaves_by_loops(
+    expr: &Expr,
+    array_ranks: &HashMap<String, usize>,
+    loops: &[String],
+) -> Expr {
+    let wrap = |target: Expr| {
+        let mut args = vec![target];
+        for l in loops {
+            args.push(Expr::Variable(l.clone()));
+        }
+        Expr::Operator(ExpressionNode {
+            op: "index".to_string(),
+            args,
+            ..Default::default()
+        })
+    };
+    match expr {
+        Expr::Variable(v) if array_ranks.contains_key(v) => wrap(expr.clone()),
+        Expr::Operator(node) => {
+            if is_array_producer(node) {
+                let target = if node.op == "makearray" {
+                    Expr::Operator(inline_region_aggregates(node, loops))
+                } else {
+                    expr.clone()
+                };
+                return wrap(target);
+            }
+            if node.op == "index" || is_aggregate_op(&node.op) {
+                return expr.clone();
+            }
+            let mut out = node.clone();
+            out.args = node
+                .args
+                .iter()
+                .map(|a| index_array_leaves_by_loops(a, array_ranks, loops))
+                .collect();
+            Expr::Operator(out)
+        }
+        _ => expr.clone(),
+    }
 }
 
 /// Rewrite each bare array-shaped `Variable` leaf of a whole-array `D(state)` RHS
@@ -5342,11 +5704,7 @@ mod geometry_eval_tests {
     /// Evaluate the fused `polygon_intersection_area` leaf through the public
     /// evaluator path (`eval_expression` → [`eval_op`] → `polygon_intersection_area`
     /// arm), returning the scalar overlap area directly (no clip ring exposed).
-    fn fused_area_via_evaluator(
-        src: &[(f64, f64)],
-        tgt: &[(f64, f64)],
-        manifold: &str,
-    ) -> Value {
+    fn fused_area_via_evaluator(src: &[(f64, f64)], tgt: &[(f64, f64)], manifold: &str) -> Value {
         let mut inputs = HashMap::new();
         inputs.insert("src_poly".to_string(), ring_array(src));
         inputs.insert("tgt_poly".to_string(), ring_array(tgt));
@@ -5584,7 +5942,10 @@ mod forcing_channel_tests {
             vec![1.0, 2.0, 3.0],
             "a buffer mutation must change the RHS output"
         );
-        assert_ne!(dy1, dy2, "the refreshed forcing must produce a different RHS");
+        assert_ne!(
+            dy1, dy2,
+            "the refreshed forcing must produce a different RHS"
+        );
 
         // The per-cell oracle path (force_scalar = true) reads the same buffer —
         // the production vectorized path bails forcing reads to this oracle.

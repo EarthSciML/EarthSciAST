@@ -1063,10 +1063,7 @@ fn apply_couple(
             .cloned()
             .and_then(|v| serde_json::from_value::<Expr>(v).ok());
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            new_equations.push(Equation {
-                lhs,
-                rhs,
-            });
+            new_equations.push(Equation { lhs, rhs });
         }
     }
     if !new_equations.is_empty() {
@@ -1185,8 +1182,10 @@ fn substitute_var(expr: &Expr, target: &str, replacement: &Expr) -> Expr {
 // ============================================================================
 
 /// If `lhs` is `ic(target)` — an `ic` operator over a single variable argument —
-/// return the target state name, else `None`.
-fn extract_ic_target(lhs: &Expr) -> Option<String> {
+/// return the target state name, else `None`. `pub(crate)` so the single-model
+/// array-compile path ([`crate::simulate_array::ArrayCompiled::from_model`])
+/// classifies `ic` equations identically to this flatten pass.
+pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {
         return None;
     };
@@ -1257,7 +1256,11 @@ fn index_arg_loop(expr: &Expr) -> Option<String> {
 /// reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
 /// every position carries a loop variable (the interior stencil). Returns the
 /// loop names in index-position (dim) order, or `None`.
-fn detect_lift_loops(ma: &ExpressionNode, lifted: &HashSet<String>, rank: usize) -> Option<Vec<String>> {
+fn detect_lift_loops(
+    ma: &ExpressionNode,
+    lifted: &HashSet<String>,
+    rank: usize,
+) -> Option<Vec<String>> {
     fn walk(expr: &Expr, lifted: &HashSet<String>, rank: usize, out: &mut Option<Vec<String>>) {
         if out.is_some() {
             return;

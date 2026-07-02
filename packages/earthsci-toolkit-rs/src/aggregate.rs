@@ -211,7 +211,12 @@ pub fn resolve_aggregate_ranges(
 }
 
 /// Recursively resolve `{from}` range references on a node and all its children.
-fn resolve_expr_ranges(
+/// `pub(crate)` so standalone build-time expressions — §6.6.5 analytic
+/// `reference`s and coordinate-expression `ic` RHSs, which live outside the
+/// model equations [`resolve_aggregate_ranges`] walks — can be resolved
+/// against the document registry before evaluation
+/// (`crate::simulate_array::eval_buildtime_field`).
+pub(crate) fn resolve_expr_ranges(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
