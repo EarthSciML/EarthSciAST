@@ -132,6 +132,39 @@ function _state_cells(var_map::AbstractDict, variable::AbstractString,
     return out
 end
 
+# A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output surfaced
+# "for direct assertion", like the MPAS `div_flux`) rather than a state: an
+# observed carries no ODE slot, so its field is evaluated from the build's
+# RESOLVED observed expression (BuildInspection.observed_exprs) through the same
+# official `evaluate_cellwise` machinery as an analytic `reference`, with the
+# build's const-array registry in scope. STATE-FREE observeds only — a
+# state-dependent observed's references stay unbound and error like before.
+# Cells are enumerated from the declared shape's interval index sets. Returns
+# `(field, cells)` or `nothing` when the variable is not such an observed.
+function _observed_field(insp::BuildInspection, file::EsmFile,
+                         mname::AbstractString, variable::AbstractString)
+    model = get(file.models, String(mname), nothing)
+    model === nothing && return nothing
+    v = get(model.variables, String(variable), nothing)
+    (v !== nothing && v.type == ObservedVariable && v.shape !== nothing &&
+     !isempty(v.shape)) || return nothing
+    exts = Int[]
+    for s in v.shape
+        iset = get(file.index_sets, String(s), nothing)
+        (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
+            return nothing
+        push!(exts, Int(iset.size))
+    end
+    qualified = String(mname) * "." * String(variable)
+    expr = get(insp.observed_exprs, qualified,
+               get(insp.observed_exprs, String(variable), nothing))
+    expr === nothing && return nothing
+    cells = sort!(Vector{Int}[collect(Int, Tuple(I))
+                              for I in CartesianIndices(Tuple(exts))])
+    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays)
+    return (field, cells)
+end
+
 # Flat slot of a SCALAR state by bare or model-qualified name; 0 if absent.
 function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
                       model::AbstractString)::Int
@@ -184,6 +217,9 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
             times = sort!(unique(Float64[a.time for a in t.assertions]))
             sim = nothing
             sim_err = ""
+            # Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
+            # slot) evaluate their resolved expression from here (`_observed_field`).
+            insp = BuildInspection()
             try
                 # `simulate` flattens the file (models + coupling) into ONE
                 # runnable system named "Flattened", so no model_name is passed
@@ -192,7 +228,8 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                 sim = simulate(file, (t.time_span.start, t.time_span.stop);
                                alg=alg, reltol=reltol, abstol=abstol, saveat=times,
                                parameters=t.parameter_overrides,
-                               initial_conditions=t.initial_conditions)
+                               initial_conditions=t.initial_conditions,
+                               inspect=insp)
                 sim.success || (sim_err = "solver retcode $(sim.retcode): $(sim.message)"; sim = nothing)
             catch err
                 sim_err = "simulate failed: $(sprint(showerror, err))"
@@ -221,15 +258,25 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                         actual = state[slot]
                     else
                         cells = _state_cells(sim.var_map, a.variable, String(mname))
-                        isempty(cells) &&
-                            error("array state '$(a.variable)' has no cells in var_map")
-                        field = Float64[state[slot] for (_, slot) in cells]
+                        local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
+                        if !isempty(cells)
+                            field = Float64[state[slot] for (_, slot) in cells]
+                            cell_tuples = [c for (c, _) in cells]
+                        else
+                            # No ODE slots: try a state-free ARRAY OBSERVED (a
+                            # rule output asserted directly, §6.6.5).
+                            obs = _observed_field(insp, file, String(mname),
+                                                  String(a.variable))
+                            obs === nothing &&
+                                error("array state '$(a.variable)' has no cells in var_map")
+                            field, cell_tuples = obs
+                        end
                         ref = nothing
                         if a.reference !== nothing
                             a.reference isa Expr ||
                                 error("only inline-expression `reference` is supported " *
                                       "(from_file references are not)")
-                            ref = evaluate_cellwise(a.reference, [c for (c, _) in cells])
+                            ref = evaluate_cellwise(a.reference, cell_tuples)
                         end
                         actual = field_reduce(a.reduce, field; reference=ref)
                     end

@@ -133,7 +133,7 @@ export
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
-    build_evaluator, evaluate_expr, TreeWalkError,
+    build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
     # Discrete-cadence loader refresh (ess-14f.4, JL-J1; callback ctor in the
     # DiffEqCallbacks/SciMLBase extension). Provider + regrid protocols have
     # concrete impls in the data binding (EarthSciIO) and ESD-rule applier (JL-J2).

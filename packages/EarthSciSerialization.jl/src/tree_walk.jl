@@ -1008,6 +1008,40 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
     return out
 end
 
+"""
+    BuildInspection()
+
+Observability record for [`build_evaluator`](@ref): pass one via the `inspect`
+keyword (`build_evaluator(doc; inspect=BuildInspection())`; [`simulate`](@ref)
+forwards its own `inspect` keyword) and the build fills it with named
+BUILD-TIME products that are otherwise internal to the evaluator closure:
+
+* `setup_arrays::Dict{String,Array{Float64}}` — the materialized setup-time
+  geometry arrays (RFC §8.1 / esm-spec §8.6.1), keyed by (flattened) observed
+  name: the per-pair overlap-area matrix `A_ij`, its row-sums `A_j`, the
+  normalized weights, and every other build-once geometry-derived array
+  observed. This is the official inspection surface for conformance runners
+  that gate per-pair regridding values (CONFORMANCE_SPEC §5.8) — the arrays
+  are deliberately absent from the ODE partition, so no state/observed
+  read can reach them.
+* `const_arrays::Dict{String,Any}` — the full const-array registry as
+  registered for the build: caller-supplied arrays, `const`-op array
+  observeds, keyed-factor aliases, materialized clip rings and setup arrays.
+* `observed_exprs::Dict{String,Expr}` — the resolved observed substitution
+  map (post index-set-range resolution and observed-into-observed inlining),
+  exactly as inlined into the compiled RHS.
+
+Filling the record never changes the build: the returned
+`(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
+"""
+mutable struct BuildInspection
+    setup_arrays::Dict{String,Array{Float64}}
+    const_arrays::Dict{String,Any}
+    observed_exprs::Dict{String,Expr}
+end
+BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
+                                    Dict{String,Any}(), Dict{String,Expr}())
+
 function _build_evaluator_impl(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
                          parameter_overrides::AbstractDict=Dict{String,Float64}(),
@@ -1051,7 +1085,13 @@ function _build_evaluator_impl(model::Model;
                          # a downstream `join.on [[src_bin, tgt_bin]]` gates on, plus
                          # each buffer's 1-D shape index set. Set by the AbstractDict
                          # front-door; empty on a direct typed call (RFC §5.3 / §6.1).
-                         _vi_maps=_EMPTY_VI_MAPS)
+                         _vi_maps=_EMPTY_VI_MAPS,
+                         # Build observability sink (see BuildInspection): when
+                         # non-nothing, filled with the materialized setup-time
+                         # geometry arrays, the const-array registry, and the
+                         # resolved observed substitution map. Never changes the
+                         # build itself.
+                         inspect::Union{Nothing,BuildInspection}=nothing)
     _has_value_invention = !isempty(_vi_vars)
     # ---- Observed-from-expression synthesis (universal) ----
     # Observed variables may be defined by their `expression` field rather than
@@ -1152,6 +1192,14 @@ function _build_evaluator_impl(model::Model;
     # chain (scalar authored, array after promotion) runs with no per-cell runner
     # logic. Excludes anything the geometry path already owns. Empty (byte-identical)
     # for a system with no array observeds.
+    #
+    # The on-disk `aggregate` spelling (schema v0.8.0) and `makearray` qualify the
+    # same way when they PRODUCE an array (non-empty `output_idx` / regions): a
+    # general array-shaped observed authored as an aggregate map — an edge-indexed
+    # flux field, a ragged-contraction rule output like the MPAS `div(flux)`
+    # lowering — is exactly the promoted-arrayop case, just spelled with the
+    # public op name. A SCALAR reduction (empty `output_idx`) is not an array
+    # producer and keeps the scalar-observed path.
     _array_inline_vars = Set{String}()
     for eq in _model_equations
         eq.lhs isa VarExpr || continue
@@ -1161,7 +1209,8 @@ function _build_evaluator_impl(model::Model;
         haskey(model.variables, name) || continue
         v = model.variables[name]
         (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
-        (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "arrayop") || continue
+        (eq.rhs isa OpExpr && ((eq.rhs::OpExpr).op == "arrayop" ||
+                               _is_array_producer(eq.rhs))) || continue
         push!(_array_inline_vars, name)
     end
 
@@ -1207,23 +1256,26 @@ function _build_evaluator_impl(model::Model;
 
     # ---- const-op array observeds (in-file polygon rings / source fields) ----
     # A `const`-op observed with an ARRAY shape (`src_poly[cell,vert,coord]`, a
-    # `F_src[cell]` field) is build-time literal data, not a scalar observed and not
-    # a state. When the ranged narrow phase is in play, materialize each into
-    # `_const_arrays` (so a fused-leaf aggregate gathers `index(src_poly,i)` at setup
-    # and an ODE reads `index(F_src,i)`) and exclude it from the ODE partition —
-    # exactly like an intersect_polygon clip ring (RFC §8.1) or a fused-leaf operand.
-    # Operands already owned by the scalar-leaf `_pia` path or a setup ring are left
-    # to those. Empty (byte-identical) for files without the ranged geometry.
+    # `F_src[cell]` field, an MPAS mesh subsystem's connectivity/geometry factors)
+    # is build-time literal data, not a scalar observed and not a state.
+    # Materialize each into `_const_arrays` (so a fused-leaf aggregate gathers
+    # `index(src_poly,i)` at setup and an ODE reads `index(F_src,i)`) and exclude
+    # it from the ODE partition — exactly like an intersect_polygon clip ring
+    # (RFC §8.1) or a fused-leaf operand. Operands already owned by the scalar-leaf
+    # `_pia` path or a setup ring are left to those. This used to be gated on the
+    # setup-geometry machinery, which left the const mesh data of a geometry-free
+    # unstructured document (the MPAS keyed-factor wiring, esm-spec §4.6) rejected
+    # as E_TREEWALK_UNSUPPORTED_SHAPE; the materialization only ADDS const arrays
+    # for variables that previously hard-errored, so geometry files and files
+    # without const-op array observeds stay byte-identical.
     _const_obs_vars = Set{String}()
     _const_obs_arrays = Dict{String,Array{Float64}}()
-    if _has_setup_geometry
-        for (name, v) in model.variables
-            (v.type == ObservedVariable && _is_array_shape(v.shape) &&
-             _is_const_op(v.expression) && !(name in _pia_operand_vars) &&
-             !(name in _geom_ring_vars)) || continue
-            _const_obs_arrays[name] = _const_op_to_array((v.expression::OpExpr).value)
-            push!(_const_obs_vars, name)
-        end
+    for (name, v) in model.variables
+        (v.type == ObservedVariable && _is_array_shape(v.shape) &&
+         _is_const_op(v.expression) && !(name in _pia_operand_vars) &&
+         !(name in _geom_ring_vars)) || continue
+        _const_obs_arrays[name] = _const_op_to_array((v.expression::OpExpr).value)
+        push!(_const_obs_vars, name)
     end
     # A build-time BINNING-COORDINATE observed (an inline reduce aggregate over
     # geometry, e.g. `src_lon[i] = min_v src_poly[i,v,1]`) is derived once by the
@@ -1238,6 +1290,51 @@ function _build_evaluator_impl(model::Model;
              !(name in _pia_operand_vars) && !(name in _geom_ring_vars) &&
              !_is_const_op(v.expression)) || continue
             _const_obs_arrays[name] = Array{Float64}(const_arrays[name])
+            push!(_const_obs_vars, name)
+        end
+    end
+
+    # ---- bare-alias array observeds (keyed-factor re-exposure, esm-spec §4.6) ----
+    # An array-shaped observed defined by a BARE reference to another array
+    # variable (`nEdgesOnCell := mesh.nEdgesOnCell` — the MPAS wiring contract:
+    # a mesh subsystem's const factors re-exposed under the bare names a grid's
+    # ragged index set and rule bodies resolve) is build-time data under a second
+    # name. Follow the alias chain to its const-backed array and register the
+    # alias as a const array too (same values), excluded from the ODE partition.
+    # Only chains ending at a `const`-op observed / caller `const_arrays` entry
+    # resolve; any other alias keeps the existing unsupported-shape error. Empty
+    # (byte-identical) for documents without bare-alias array observeds.
+    let alias_defs = Dict{String,Expr}()
+        for eq in _model_equations
+            eq.lhs isa VarExpr && (alias_defs[(eq.lhs::VarExpr).name] = eq.rhs)
+        end
+        for (name, v) in model.variables
+            (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+            (name in _const_obs_vars || name in _pia_operand_vars ||
+             name in _geom_ring_vars || name in _geom_setup_vars ||
+             name in _geom_inline_vars || name in _array_inline_vars) && continue
+            get(alias_defs, name, nothing) isa VarExpr || continue
+            cur = name
+            arr = nothing
+            for _ in 1:(length(alias_defs) + 1)   # cap defends against a cycle
+                rhs = get(alias_defs, cur, nothing)
+                rhs isa VarExpr || break
+                tgt = (rhs::VarExpr).name
+                if haskey(_const_obs_arrays, tgt)
+                    arr = _const_obs_arrays[tgt]
+                elseif haskey(const_arrays, tgt)
+                    va = const_arrays[tgt]
+                    arr = ndims(va) == 1 ? Vector{Float64}(va) : Array{Float64}(va)
+                elseif haskey(model.variables, tgt) &&
+                       model.variables[tgt].type == ObservedVariable &&
+                       _is_const_op(model.variables[tgt].expression)
+                    arr = _const_op_to_array((model.variables[tgt].expression::OpExpr).value)
+                end
+                arr === nothing || break
+                cur = tgt
+            end
+            arr === nothing && continue
+            _const_obs_arrays[name] = arr
             push!(_const_obs_vars, name)
         end
     end
@@ -1356,9 +1453,36 @@ function _build_evaluator_impl(model::Model;
     # `index_sets` registry into the dense / dynamic-bound form the range
     # machinery already consumes, BEFORE any range expansion runs. No-op (and
     # therefore byte-identical) for files that use no `{from}` references.
-    equations = _resolve_index_set_ranges(equations, index_sets, _derived_extents)
+    #
+    # A RAGGED set's `offsets` keyed factor binds by BARE name in the model
+    # scope (§5.4; the grids' wiring contract), but flattening prefixes every
+    # variable with its owning component path while the document-scoped registry
+    # keeps the authored bare name. Map each bare factor name to its in-scope
+    # variable: an exact-name variable wins; otherwise the dot-suffix match at
+    # the SHALLOWEST namespace depth (the model's own re-exposed alias, not the
+    # mounted subsystem's original) — unique at that depth, else left bare so
+    # the existing unbound-name error surfaces. Empty (byte-identical) for
+    # documents without ragged index sets.
+    _factor_scope = Dict{String,String}()
+    for (_, iset) in index_sets
+        (iset isa IndexSet && iset.kind == "ragged") || continue
+        for f in (iset.offsets, iset.values)
+            f === nothing && continue
+            fname = String(f)
+            (haskey(_factor_scope, fname) || haskey(model.variables, fname)) && continue
+            cands = String[n for n in keys(model.variables)
+                           if endswith(n, "." * fname)]
+            isempty(cands) && continue
+            mindepth = minimum(count(==('.'), c) for c in cands)
+            best = String[c for c in cands if count(==('.'), c) == mindepth]
+            length(best) == 1 && (_factor_scope[fname] = best[1])
+        end
+    end
+    equations = _resolve_index_set_ranges(equations, index_sets, _derived_extents,
+                                          _factor_scope)
     init_equations = _resolve_index_set_ranges(init_equations,
-                                               index_sets, _derived_extents)
+                                               index_sets, _derived_extents,
+                                               _factor_scope)
 
     # ---- Drop value-invention equations from the ODE (RFC §6.1) ----
     # The skolem/distinct/rank LHS vars are materialized at setup, not integrated;
@@ -1653,6 +1777,21 @@ function _build_evaluator_impl(model::Model;
     # an ODE reads `index(F_src, i)` and a setup aggregate gathers `index(src_poly, i)`.
     for (k, arr) in _const_obs_arrays
         haskey(_const_arrays, k) || (_const_arrays[k] = arr)
+    end
+
+    # ---- Build observability (the `inspect` kwarg; see BuildInspection) ----
+    # Copy the named build-time products into the caller's sink. Read-only with
+    # respect to the build: nothing downstream consults `inspect`.
+    if inspect !== nothing
+        for (k, arr) in _geom_setup_arrays
+            inspect.setup_arrays[String(k)] = Array{Float64}(arr)
+        end
+        for (k, arr) in _const_arrays
+            inspect.const_arrays[String(k)] = arr
+        end
+        for (k, e) in resolved_obs
+            inspect.observed_exprs[String(k)] = e
+        end
     end
 
     # ---- Live forcing buffers (ess-14f.3, JL-J0 — the one engine touch) ----
@@ -4251,11 +4390,19 @@ end
 #                  existing `_expand_int_range_dyn` mechanism + a `values` gather
 #                  authored in the body (§5.2). offsets/values are keyed factors (§5.4).
 
+# Keyed factors (a ragged set's `offsets`/`values`, RFC §5.4) resolve by BARE
+# name in the model scope; the empty default scope keeps every bare name as-is.
+const _EMPTY_FACTOR_SCOPE = Dict{String,String}()
+
 # Resolve ONE IndexSetRef to a concrete `ranges` value. Errors clearly on an
 # undeclared name — no implicit interval is inferred, so a typo can't silently
-# become an empty set (§5.2).
+# become an empty set (§5.2). `factor_scope` maps a ragged set's bare keyed-factor
+# name to the in-scope variable that backs it (flattening prefixes variables with
+# their owning component path, e.g. "nEdgesOnCell" → "Divergence.nEdgesOnCell",
+# while the document-scoped registry keeps the bare authored name).
 function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
-                                    derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
+                                    derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+                                    factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
     haskey(index_sets, ref.from) || throw(TreeWalkError(
         "E_TREEWALK_UNDECLARED_INDEX_SET",
         "undeclared index set '$(ref.from)' referenced in ranges; declare it in " *
@@ -4278,7 +4425,10 @@ function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
         # Per-cell dynamic upper bound |set(of…)| = offsets[of…]. The member
         # gather through `values` is authored in the body (e.g.
         # index(values, of…, k)) and resolved by the existing const_array path.
-        idx_args = Expr[VarExpr(is.offsets)]
+        # The offsets factor binds by BARE name in the model scope (§5.4);
+        # `factor_scope` supplies the in-scope (possibly namespaced) variable.
+        off = String(get(factor_scope, String(is.offsets), String(is.offsets)))
+        idx_args = Expr[VarExpr(off)]
         append!(idx_args, Expr[VarExpr(p) for p in ref.of])
         return Any[1, OpExpr("index", idx_args)]
     elseif is.kind == "derived"
@@ -4323,19 +4473,20 @@ _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_
 # Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
 # form, rebuilding OpExpr nodes while preserving all fields.
 function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
-                      derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
-    new_args = Expr[_resolve_isr(a, index_sets, derived_extents) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_isr(expr.expr_body, index_sets, derived_extents)
+                      derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+                      factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
+    new_args = Expr[_resolve_isr(a, index_sets, derived_extents, factor_scope) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : _resolve_isr(expr.expr_body, index_sets, derived_extents, factor_scope)
     new_values = expr.values === nothing ? nothing :
-                 Expr[_resolve_isr(v, index_sets, derived_extents) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_isr(expr.lower, index_sets, derived_extents)
-    new_upper = expr.upper === nothing ? nothing : _resolve_isr(expr.upper, index_sets, derived_extents)
+                 Expr[_resolve_isr(v, index_sets, derived_extents, factor_scope) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : _resolve_isr(expr.lower, index_sets, derived_extents, factor_scope)
+    new_upper = expr.upper === nothing ? nothing : _resolve_isr(expr.upper, index_sets, derived_extents, factor_scope)
     new_ranges = expr.ranges
     if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
         new_ranges = Dict{String,Any}()
         for (k, v) in expr.ranges
             new_ranges[k] = v isa IndexSetRef ?
-                _resolve_one_index_set_ref(v, index_sets, derived_extents) : v
+                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
         end
     end
     return OpExpr(expr.op, new_args;
@@ -4350,20 +4501,23 @@ function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
                   join=expr.join, filter=expr.filter, join_gates=expr.join_gates,
                   id=expr.id, manifold=expr.manifold)
 end
-_resolve_isr(expr::Expr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS) = expr
+_resolve_isr(expr::Expr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+             ::AbstractDict=_EMPTY_FACTOR_SCOPE) = expr
 _resolve_isr(eq::Equation, index_sets::AbstractDict,
-             derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS) =
-    Equation(_resolve_isr(eq.lhs, index_sets, derived_extents),
-             _resolve_isr(eq.rhs, index_sets, derived_extents);
+             derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+             factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE) =
+    Equation(_resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope),
+             _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope);
              _comment=eq._comment)
 
 # Resolve all index-set references across a vector of equations. Returns the
 # input unchanged when no equation uses a `{from}` reference — preserving
 # byte-identical behaviour (and the compiled tree) for existing files (§6).
 function _resolve_index_set_ranges(eqs::Vector{Equation}, index_sets::AbstractDict,
-                                   derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
+                                   derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+                                   factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
     any(_has_index_set_ref, eqs) || return eqs
-    return Equation[_resolve_isr(eq, index_sets, derived_extents) for eq in eqs]
+    return Equation[_resolve_isr(eq, index_sets, derived_extents, factor_scope) for eq in eqs]
 end
 
 # Resolve index(arrayop(...), k1, k2, ...) in expression position by
@@ -4396,7 +4550,21 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
     # Contracted indices: all range keys NOT appearing in output_idx.
     output_idx_set = Set(output_idx_strs)
     contract_names = sort!(String[n for n in keys(ranges_dict) if !(n in output_idx_set)])
-    contract_iters = [collect(_expand_int_range(ranges_dict[n])) for n in contract_names]
+    # A contracted bound may be *expression-valued*: a RAGGED index-set range
+    # (`{from: <ragged>, of: [i]}`, esm-spec §4.3.1 / RFC §5.2) resolves to the
+    # per-cell dynamic upper bound `index(offsets, i)` whose parent index `i` is
+    # one of THIS gather's (now concrete) output indices. Evaluate such bounds
+    # under the output-index environment via the same `_expand_int_range_dyn`
+    # primitive the LHS-arrayop einsum uses (variable-valence segment reduction
+    # over the CSR offsets keyed factor — a const array; no host-side padding).
+    # Constant bounds keep the unchanged fast path.
+    _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
+                                    for d in 1:length(output_idx_strs))
+    contract_iters = [collect(_is_const_int_range(ranges_dict[n]) ?
+                              _expand_int_range(ranges_dict[n]) :
+                              _expand_int_range_dyn(ranges_dict[n], _out_idx_env,
+                                                    const_arrays))
+                      for n in contract_names]
 
     # M2 (§5.3 / §7.2): value-equality join gates + filter predicate. Resolved at
     # build time for the join (drop non-matching combinations) and compiled to a
