@@ -117,6 +117,14 @@ Where:
 | BEHAV-04-B-001 | URL/remote reference support is an OPTIONAL binding capability; a binding without it MUST reject a URL ref cleanly with the existing unresolved diagnostics (`template_import_unresolved` / subsystem-ref resolution error), never silently skip or misresolve | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
 | BEHAV-04-B-002 | A binding that supports URL refs MUST resolve a URL-loaded document's own relative refs against its URL base (RFC 3986 joining) and canonicalize URL identity for cycle detection (dot segments removed, relative spellings joined) | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
 
+### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-C-001 | A `makearray` region bound pair `[start, start − 1]` is the canonical EMPTY bound: the region contributes no elements and its `values` entry is never consulted; the document MUST load cleanly (the §9.6.8 minimum-admissible-extent case, e.g. `[2, N−1]` folded at `N = 2`) | esm-spec.md §4.3.2, §9.6.8 | Yes | validation |
+| BEHAV-04-C-002 | A `makearray` region bound pair with `stop < start − 1` on the expanded, metaparameter-folded form MUST be rejected at load with `makearray_region_inverted` (e.g. `[2, N−1]` folded at `N = 1`) | esm-spec.md §4.3.2, §9.6.6, §9.6.4 | Yes | validation |
+
+> **Binding status (2026-07-02)**: Julia implemented (`_validate_makearray_regions`, both §9.6.4 validator sites in `lower_expression_templates.jl`; fixtures `tests/valid/makearray_empty_region_min_extent.esm`, `tests/invalid/template_imports/makearray_region_inverted.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) walk the expanded, folded tree's `makearray.regions`, skipping `expression_templates` blocks and non-integer (unfolded) bound entries; (2) accept `stop == start − 1` as empty; (3) reject `stop < start − 1` with the stable `makearray_region_inverted` diagnostic; (4) drive the two shared fixtures (schema-only bindings TS/Go assert schema acceptance per the `resolver_only` flag in `expected_errors.json`).
+
 ### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

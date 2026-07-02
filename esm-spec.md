@@ -352,6 +352,8 @@ Fields:
 
 **Overlap semantics.** Regions may overlap. When they do, **later entries overwrite earlier ones**. This matches `@makearray`'s documented behavior and is useful for expressing "default fill, then override" patterns.
 
+**Empty and inverted bounds.** A region bound pair `[start, stop]` with `stop == start − 1` is the canonical **empty** bound: the region covers no elements along that dimension, so the whole region contributes nothing to the assembled array and its `values` entry is never consulted. This is a legal, load-clean spelling — it is exactly what a metaparameter-folded interior region (§9.6.8) produces at the minimum admissible extent (`[2, N−1]` at `N = 2` folds to `[2, 1]`, leaving the boundary-face regions to cover the whole axis). A pair with `stop < start − 1` is **inverted** and MUST be rejected at load time with `makearray_region_inverted` (§9.6.6): a further-inverted bound is almost always an authoring error — an interior stencil instantiated below its scheme's minimum extent (`[2, N−1]` at `N = 1` folds to `[2, 0]`) — and silently treating it as empty would hide the defect. The check runs on the expanded, metaparameter-folded form (§9.6.4); bound pairs still carrying open metaparameter expressions inside a template-library body are not checked until they fold at a binding site (§9.7.6).
+
 **Example — 3×3 block-diagonal with corner cells:**
 
 ```json
@@ -2400,6 +2402,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_unbound` | A metaparameter is still open after edge bindings, API bindings, and defaults (§9.7.6). |
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name (§9.7.6). |
+| `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. |
 | `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the **expanded** tree — the post-expansion enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names; §9.6.4). |
 
 #### 9.6.7 Conformance fixtures
@@ -2455,7 +2458,7 @@ A discretization rule names its scheme and BC in its identity. `central_D_lon_ze
 }
 ```
 
-The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live.
+The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live. At the scheme's **minimum admissible extent** the interior region folds **empty** — a metaparameterized `[2, N−1]` (§9.7.6) at `N = 2` folds to `[2, 1]`, contributing no cells while the two faces still tile the axis; this loads cleanly (§4.3.2). Binding **below** the minimum extent folds the region **inverted** (`[2, N−1]` at `N = 1` → `[2, 0]`) and is rejected at load with `makearray_region_inverted` (§4.3.2, §9.6.6) — the rule's stencil cannot exist on that grid, and failing loudly at the binding site is what surfaces the mis-sized instantiation.
 
 **Choosing a scheme = choosing a rule** (central, upwind, WENO, a specific BC). A periodic-BC rule gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; a rule for a seam shared with another variable overwrites the face with an `index` into that variable. A **compound** scheme (Godunov / WENO / flux-limited) out-ranks the plain per-derivative rule via `priority` (§9.6.3), so it fires on the whole compound before the inner `D`s are lowered.
 

@@ -174,9 +174,42 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
                      "template_import_index_set_conflict",
                      "apply_expression_template_recursive_body",
                      "template_body_expansion_too_deep", "metaparameter_unbound",
-                     "metaparameter_type_error", "metaparameter_name_conflict"]
+                     "metaparameter_type_error", "metaparameter_name_conflict",
+                     "makearray_region_inverted"]
             @test code in seen_codes
         end
+    end
+
+    @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin
+        # tests/valid/makearray_empty_region_min_extent.esm: a §9.6.8-style
+        # discretized derivative whose interior region [2, N-1] folds to the
+        # canonical EMPTY bound [2, 1] at the default N = 2 — a legal,
+        # load-clean spelling that contributes no elements.
+        fixture = joinpath(repo_root, "tests", "valid",
+                           "makearray_empty_region_min_extent.esm")
+        f = EarthSciSerialization.load(fixture)
+        @test f.index_sets["lon"].size == 2
+        ma = f.models["Advection"].equations[1].rhs
+        @test ma isa OpExpr && ma.op == "makearray"
+        @test ma.regions[1] == [[2, 1], [1, 3]]     # empty interior, folded
+        @test ma.regions[2] == [[1, 1], [1, 3]]     # west face
+        @test ma.regions[3] == [[2, 2], [1, 3]]     # east face
+        # The empty region is inert: the evaluator builds, and the two faces
+        # tile the axis — d(c)/dt is the one-sided difference everywhere. With
+        # a uniform state the differences vanish, so du == 0 exactly.
+        f!, u0, p, tspan, vmap = build_evaluator(f)
+        du = similar(u0); fill!(du, NaN)
+        f!(du, u0, p, 0.0)
+        @test all(du .== 0.0)
+
+        # The SAME file re-bound below the scheme's minimum extent at the
+        # loader API (§9.7.6 site 4) folds the interior region to [2, 0] —
+        # INVERTED (stop < start - 1) — and MUST fail loudly at load.
+        @test _err_code(() -> EarthSciSerialization.load(fixture;
+            metaparameters=Dict("N" => 1))) == "makearray_region_inverted"
+        # N = 3 has a genuine 1-cell interior [2, 2]: still legal.
+        f3 = EarthSciSerialization.load(fixture; metaparameters=Dict("N" => 3))
+        @test f3.models["Advection"].equations[1].rhs.regions[1] == [[2, 2], [1, 3]]
     end
 
     # ------------------------------------------------------------------

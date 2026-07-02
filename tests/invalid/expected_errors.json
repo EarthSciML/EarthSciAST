@@ -2101,6 +2101,15 @@
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 4) collides with the imported library's cells (interval, size N) — non-deep-equal merge (esm-spec §9.7.5)."
   },
 
+  "makearray_region_inverted.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "makearray_region_inverted",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.3.2 'Empty and inverted bounds' / \u00a79.6.4). The document is SCHEMA-VALID \u2014 metaparameter expressions are legal in makearray region bound positions \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The \u00a79.6.8-style interior region [2, N-1] is instantiated at N = 1 (the metaparameter default), folding to [2, 0] \u2014 INVERTED (stop < start - 1). The canonical EMPTY bound [start, start-1] (e.g. [2, 1] at N = 2, see tests/valid/makearray_empty_region_min_extent.esm) is legal and contributes no elements; anything further inverted is a load-time error on the expanded, metaparameter-folded form."
+  },
+
   "body_apply_cycle.esm": {
     "schema_errors": [],
     "structural_errors": [],
