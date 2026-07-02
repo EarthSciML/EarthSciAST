@@ -157,9 +157,7 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("unknown argument '{a}'")),
         }
     }
-    let input = input.ok_or(
-        "usage: canonical_expand <input.esm> [--metaparameters N=8[,M=4…]]",
-    )?;
+    let input = input.ok_or("usage: canonical_expand <input.esm> [--metaparameters N=8[,M=4…]]")?;
     let path = Path::new(&input);
     let text = std::fs::read_to_string(path).map_err(|e| format!("{input}: {e}"))?;
     let raw: Value = serde_json::from_str(&text).map_err(|e| format!("{input}: {e}"))?;
@@ -167,8 +165,7 @@ fn run() -> Result<(), String> {
     let resolved = resolve_template_machinery(&raw, base, &metaparameters)
         .map_err(|e| format!("resolve_template_machinery: {e}"))?;
     let mut doc = resolved.unwrap_or(raw);
-    lower_expression_templates(&mut doc)
-        .map_err(|e| format!("lower_expression_templates: {e}"))?;
+    lower_expression_templates(&mut doc).map_err(|e| format!("lower_expression_templates: {e}"))?;
     print!("{}", canonical_bytes(&doc)?);
     Ok(())
 }
