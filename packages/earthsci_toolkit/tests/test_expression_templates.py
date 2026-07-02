@@ -421,3 +421,143 @@ def test_attrs_match_binds_scalar_metavariable():
     assert out["models"]["m"]["variables"]["y"]["expression"] == {
         "op": "*", "args": [1.4, "u"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Scalar-field template-parameter substitution
+# (esm-spec §9.6.1 / §9.6.3 constraint 5; mirrors the Julia testset 1:1)
+# ---------------------------------------------------------------------------
+
+def _scalar_field_doc(templates: dict, bindings: dict, name: str = "overlap_area") -> dict:
+    return {
+        "esm": "0.8.0",
+        "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
+        "models": {
+            "M": {
+                "variables": {
+                    "pa": {"type": "parameter"},
+                    "pb": {"type": "parameter"},
+                    "area": {
+                        "type": "observed",
+                        "expression": {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": name,
+                            "bindings": bindings,
+                        },
+                    },
+                },
+                "equations": [],
+                "expression_templates": templates,
+            }
+        },
+    }
+
+
+def test_scalar_field_substitution_happy_path():
+    """A parameter name appearing as the string value of a scalar
+    Expression-node field in `body` is a substitution site (the mirror of the
+    match-side scalar-field binding rule, esm-spec §9.6.1)."""
+    src = _scalar_field_doc(
+        {
+            "overlap_area": {
+                "params": ["K_manifold", "a", "b"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "K_manifold", "args": ["a", "b"]},
+            }
+        },
+        {"K_manifold": "planar", "a": "pa", "b": "pb"},
+    )
+    out = lower_expression_templates(src)
+    assert out["models"]["M"]["variables"]["area"]["expression"] == {
+        "op": "polygon_intersection_area",
+        "manifold": "planar",
+        "args": ["pa", "pb"],
+    }
+
+
+def test_scalar_field_param_threads_through_body_composition():
+    """A scalar-field param passed through a §9.7.3 registration-time body
+    composition (outer body applies inner, forwarding its own param into the
+    inner manifold slot) substitutes end-to-end."""
+    src = _scalar_field_doc(
+        {
+            "inner": {
+                "params": ["m", "x", "y"],
+                "body": {"op": "polygon_intersection_area", "manifold": "m",
+                         "args": ["x", "y"]},
+            },
+            "outer": {
+                "params": ["K", "p", "q"],
+                "body": {"op": "*", "args": [
+                    {"op": "apply_expression_template", "args": [],
+                     "name": "inner",
+                     "bindings": {"m": "K", "x": "p", "y": "q"}},
+                    2.0,
+                ]},
+            },
+        },
+        {"K": "spherical", "p": "pa", "q": "pb"},
+        name="outer",
+    )
+    out = lower_expression_templates(src)
+    assert out["models"]["M"]["variables"]["area"]["expression"] == {
+        "op": "*",
+        "args": [
+            {"op": "polygon_intersection_area", "manifold": "spherical",
+             "args": ["pa", "pb"]},
+            2.0,
+        ],
+    }
+
+
+def test_invalid_substituted_manifold_rejected_post_expansion():
+    """Validators run on the expanded form (esm-spec §9.6.4): a template
+    invocation binding the manifold parameter to a non-member literal is
+    rejected with `geometry_manifold_invalid`."""
+    src = _scalar_field_doc(
+        {
+            "overlap_area": {
+                "params": ["K_manifold", "a", "b"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "K_manifold", "args": ["a", "b"]},
+            }
+        },
+        {"K_manifold": "bogus", "a": "pa", "b": "pb"},
+    )
+    with pytest.raises(ExpressionTemplateError) as exc:
+        lower_expression_templates(src)
+    assert exc.value.code == "geometry_manifold_invalid"
+
+
+def test_params_shadow_literals_in_scalar_fields():
+    """Pinned shadowing resolution (esm-spec §9.6.1): a declared param name
+    shadows a coincident field literal inside `body` — the param wins. Authors
+    must not name params after field literals; the engine substitutes anyway."""
+    src = _scalar_field_doc(
+        {
+            "shadowed": {
+                "params": ["planar", "x", "y"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "planar", "args": ["x", "y"]},
+            }
+        },
+        {"planar": "spherical", "x": "pa", "y": "pb"},
+        name="shadowed",
+    )
+    out = lower_expression_templates(src)
+    expr = out["models"]["M"]["variables"]["area"]["expression"]
+    assert expr["manifold"] == "spherical"
+
+
+def test_scalar_field_param_conformance_fixture_matches_expanded():
+    """Drives tests/conformance/expression_templates/scalar_field_param — the
+    scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
+    (planar / spherical) — against its pinned Julia-generated expanded.esm."""
+    fixture = _conf_fixture("scalar_field_param")
+    expanded = _conf_fixture("scalar_field_param", "expanded.esm")
+    out = lower_expression_templates(fixture)
+    assert out["models"] == expanded["models"]
+    variables = out["models"]["Overlap"]["variables"]
+    assert variables["area_planar"]["expression"]["manifold"] == "planar"
+    assert variables["area_spherical"]["expression"]["manifold"] == "spherical"

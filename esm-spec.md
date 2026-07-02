@@ -101,6 +101,8 @@ At least one of `models`, `reaction_systems`, `data_loaders`, or `expression_tem
 }
 ```
 
+**Extension point — `x_esd`.** The `metadata` object is closed (`additionalProperties: false` in the schema) with one reserved escape hatch: the optional `x_esd` property, a free-form JSON object set aside for **downstream-catalog machine-readable metadata** (e.g. the EarthSciDiscretizations rule-library catalog). The schema validates only that `x_esd` is an object. The core spec **never** interprets its contents: core tooling MUST NOT assign meaning to anything inside it, MUST NOT validate or transform it, and MUST preserve it across `parse → emit` like any other metadata field. Downstream catalogs define — and version — their own conventions within it.
+
 ---
 
 ## 4. Expression AST
@@ -565,6 +567,8 @@ A subsystem may be a child **model**, a child **reaction system**, or a pure-I/O
 | Relative path | `"./atmosphere.esm"` | Resolved relative to the directory of the referencing file |
 | Absolute path | `"/models/atmosphere.esm"` | Used as-is |
 | HTTP/HTTPS URL | `"https://example.com/models/atmosphere.esm"` | Fetched from the network |
+
+**URL (remote) references are an OPTIONAL binding capability.** Fetching `http(s)` refs is not required for conformance. A binding without remote support MUST reject a URL ref **cleanly** with the existing unresolved diagnostics — `template_import_unresolved` for a template import (§9.7.2), the subsystem-ref resolution error here — never by silently skipping or misresolving it. A binding that does support URLs MUST treat a URL-loaded document as the base for that document's own relative refs: they resolve by URL joining against the document's URL directory (RFC 3986 relative resolution over the forms above), and cycle detection treats URL identity **canonically** (dot segments removed, relative spellings joined against the base before comparison). Current bindings: **Julia** supports URL refs for both subsystem refs and template imports, including URL-base joining of nested relative refs and canonical-URL cycle detection; **TypeScript** fetches remote subsystem refs (with a remote base for recursive resolution) but rejects remote template-library imports with `template_import_unresolved`; **Rust** rejects remote refs in both mechanisms; **Python** and **Go** fetch both, but do not yet URL-base join relative refs inside a URL-loaded document (such refs fail as unresolved).
 
 **Referenced file requirements (model, reaction-system, or data-loader subsystems):**
 
@@ -1152,7 +1156,7 @@ Each assertion is a per-(variable, time) check against a scalar expected value:
 | `time` | ✓ | Simulation time at which to evaluate the assertion; must lie in `[time_span.start, time_span.end]`. |
 | `expected` | ✓ | Expected scalar value (compared within `tolerance`). |
 | `tolerance` | | Per-assertion tolerance override. |
-| `coords` | | PDE only: spatial-point sample. Map from domain dimension name to the numeric coordinate at which to evaluate the field. Mutually exclusive with `reduce`. |
+| `coords` | | PDE only: spatial-point sample. Map from spatial index-set (dimension) name to a **1-based, fractional index-space position** along that interval index set — not a physical coordinate (§6.6.5 convention 1). Mutually exclusive with `reduce`. |
 | `reduce` | | PDE only: collapse the spatial field to a scalar before comparison. One of `integral`, `mean`, `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`. |
 
 Assertions are stored **inline** only — there is no file-reference option. Tests should be small (a handful of assertion points), not full reference trajectories.
@@ -1183,9 +1187,15 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 - a 0-D component carrying an assertion with `coords` or `reduce` set; and
 - a PDE component carrying a pointwise assertion (no `coords`, no `reduce`).
 
-`coords` keys MUST match the spatial index-set names the field is shaped over. The runtime samples the field at the named point (interpolation vs nearest-grid is a runtime concern). `coords` may pin a strict subset of dimensions only when the remaining dimensions resolve to a single sample (e.g., a 1-D component with a single dimension); otherwise the assertion is ill-defined and validators MUST reject.
+`coords` keys MUST match the spatial index-set names the field is shaped over. Three conventions, established by the cross-binding parity implementations, are **pinned** (determinism requires one answer; conforming runtimes MUST implement exactly these):
 
-`reduce` collapses the field over the entire spatial domain at the given `time`. The pure reductions (`integral`, `mean`, `max`, `min`) compare directly against `expected`. The error-norm reductions compare against a `reference` solution:
+1. **`coords` are index-space positions.** `coords` values are positions in **index space** — 1-based, fractional allowed — along the named interval index sets, not physical coordinates. Sampling picks the **nearest grid index**, with exact half-way ties rounding **down** toward the lower index: `idx = ceil(c − 1/2)`. The resolved index MUST lie in `1..size`. `coords` may pin a strict subset of dimensions only when every remaining dimension resolves to a single sample (e.g., a 1-D component with a single dimension); otherwise the assertion is ill-defined and validators MUST reject.
+
+2. **`integral` measure.** `integral` is the uniform-cell Riemann sum under a **unit total domain measure per axis** — i.e. `Σ field / N_cells`, identical to `mean` over interval index sets. Authors asserting over non-unit physical domains scale the expected value accordingly until the format grows a measure concept. This is exactly the measure convention under which the relative-L2 reduction is measure-free: the per-cell measure cancels between numerator and denominator.
+
+3. **`from_file` resolution and format.** In a `{type: "from_file", path, format?}` reference, `path` resolves relative to the **`.esm` file's directory**. The default and only v1 `format` is `"json"`: a row-major nested JSON array exactly matching the field's shape. Implementations MUST validate the shape and reject mismatches.
+
+`reduce` collapses the field over the entire spatial domain at the given `time`. The pure reductions (`integral`, `mean`, `max`, `min`) compare directly against `expected` (`integral` under convention 2 above). The error-norm reductions compare against a `reference` solution:
 
 - `L2_error`: `expected ≈ ||u_actual − u_reference||_2 / ||u_reference||_2` (relative L2), evaluated as a domain integral.
 - `Linf_error`: `expected ≈ max_x |u_actual(x) − u_reference(x)|` (uniform norm).
@@ -1193,7 +1203,7 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 `reference` may be:
 
 - an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`; or
-- `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field.
+- `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
 Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x,0) = sin(π x)` and zero-Dirichlet BCs has analytic solution `u(x,t) = exp(−α π² t) · sin(π x)`. The corresponding L2-error assertion is:
 
@@ -2384,7 +2394,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
 | `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
-| `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2). |
+| `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2); or a metaparameter binding — at an import edge, a subsystem edge, or the loader API — names a metaparameter the target document neither declares nor re-exports (§9.7.6). |
 | `template_import_index_set_conflict` | Merged `index_sets` name collides with a non-deep-equal definition (§9.7.5). |
 | `template_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (32) (§9.7.3). |
 | `metaparameter_unbound` | A metaparameter is still open after edge bindings, API bindings, and defaults (§9.7.6). |
@@ -2475,9 +2485,9 @@ An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii
 
 | Field | Required | Meaning |
 |---|---|---|
-| `ref` | ✓ | Path or URL of a template-library file. Reference format and resolution timing are §4.7's, verbatim: relative paths resolve against the referencing file's directory; resolution happens at load, before validation; cycle detection over canonical paths (`template_import_cycle`). A `ref` that fails to load or parse is `template_import_unresolved`. |
+| `ref` | ✓ | Path or URL of a template-library file. Reference format and resolution timing are §4.7's, verbatim: relative paths resolve against the referencing file's directory — for a URL-loaded library, against its URL directory by URL joining; resolution happens at load, before validation; cycle detection over canonical paths, with URL identity canonicalized (dot segments removed, relative spellings joined) (`template_import_cycle`). A `ref` that fails to load or parse is `template_import_unresolved`. URL refs are an OPTIONAL binding capability (§4.7): a binding without remote support MUST reject them with `template_import_unresolved`. |
 | `only` | | Array of template names to import; absent = all. Naming a template the target does not declare is `template_import_unknown_name`. `only` filters visibility for the importer — the target file's own internal wiring resolves in its own scope first. |
-| `bindings` | | Object binding the target document's open metaparameters to integers (§9.7.6). |
+| `bindings` | | Object binding the target document's open metaparameters to integers (§9.7.6). Binding a name the target neither declares nor re-exports is `template_import_unknown_name` (§9.7.6). |
 
 #### 9.7.3 Registration-time body composition
 
@@ -2513,6 +2523,8 @@ A top-level `metaparameters` object declares document-scoped named integers:
 3. **Subsystem edge** — a §4.7 `{"ref": …}` reference MAY carry the same `bindings` field, closing the referenced document's metaparameters (e.g. a convergence wrapper instantiating a problem file at a given size).
 4. **Loader API** — hosts MAY bind the root document's open metaparameters at load.
 5. **Defaults, last** — after API bindings, a still-open metaparameter takes its `default`; one with no default is `metaparameter_unbound`.
+
+**Binding an unknown name is an error.** At every binding site that names metaparameters — an import edge's `bindings` (site 1), a subsystem edge's `bindings` (site 3), or the loader API (site 4) — naming a metaparameter the target document neither declares nor re-exports raises `template_import_unknown_name` (§9.6.6). Bindings never invent metaparameters; a typo fails loudly instead of silently binding nothing.
 
 Because instantiation happens per edge, a diamond whose two paths bind the same file differently produces non-deep-equal definitions and is rejected by the existing conflict diagnostics.
 

@@ -75,6 +75,17 @@ import { isNumericLiteral, numericValue } from './numeric-literal.js'
 const APPLY_OP = 'apply_expression_template'
 
 /**
+ * Geometry-kernel ops whose `manifold` scalar field is restricted to the
+ * closed manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema
+ * admits any string in the `manifold` position so a template `body` can carry
+ * a parameter name there (esm-spec §9.6.1 scalar-field substitution site); the
+ * closed set is enforced by `validateGeometryManifolds` on the EXPANDED form
+ * per esm-spec §9.6.4.
+ */
+const GEOMETRY_MANIFOLD_OPS = new Set(['intersect_polygon', 'polygon_intersection_area'])
+const GEOMETRY_MANIFOLD_VALUES = new Set(['planar', 'spherical', 'geodesic'])
+
+/**
  * Maximum number of productive rewrite passes before a file is rejected as
  * non-converging (esm-spec §9.6.3, diagnostic `rewrite_rule_nonterminating`).
  * Pinned identically across all bindings so the accept/reject decision — and
@@ -741,6 +752,42 @@ function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
  *
  * Pre-condition: the input has been schema-validated.
  */
+/**
+ * Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
+ * `polygon_intersection_area` node OUTSIDE an `expression_templates` block
+ * must carry a `manifold` drawn from the closed set {planar, spherical,
+ * geodesic}. Template bodies are skipped — a parameter name in the `manifold`
+ * position of a `body` is a legal scalar-field substitution site (esm-spec
+ * §9.6.1); by the time this validator runs on a loaded document every such
+ * site has been substituted, so an out-of-set value here is a real defect
+ * (e.g. a template invocation binding the manifold parameter to a non-member
+ * literal). Throws `ExpressionTemplateError` with code
+ * `geometry_manifold_invalid`.
+ */
+export function validateGeometryManifolds(tree: unknown, path = ''): void {
+  if (Array.isArray(tree)) {
+    for (let i = 0; i < tree.length; i++) validateGeometryManifolds(tree[i], `${path}/${i}`)
+    return
+  }
+  if (!isObject(tree)) return
+  const node = tree as Record<string, unknown>
+  if (typeof node.op === 'string' && GEOMETRY_MANIFOLD_OPS.has(node.op) && 'manifold' in node) {
+    const m = node.manifold
+    if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
+      throw new ExpressionTemplateError(
+        'geometry_manifold_invalid',
+        `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set {planar, spherical, geodesic}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
+      )
+    }
+  }
+  for (const k of Object.keys(node)) {
+    // Pre-substitution template trees; params may legally occupy the manifold
+    // position there (esm-spec §9.6.1).
+    if (k === 'expression_templates') continue
+    validateGeometryManifolds(node[k], `${path}/${k}`)
+  }
+}
+
 export function lowerExpressionTemplates<T extends object>(file: T): T {
   rejectExpressionTemplatesPreV04(file)
 
@@ -752,8 +799,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // must run even when there are no apply ops).
   const globalOps = findStrayApplyOps(file)
   if (globalOps.length === 0 && !hasExpressionTemplatesBlock(root)) {
-    // Nothing to expand and no rules to apply; strip empty
-    // expression_templates blocks for canonical-form invariance and return.
+    // Nothing to expand and no rules to apply; the §9.6.4 expanded-form
+    // validators still run — the raw tree IS the expanded form. Then strip
+    // empty expression_templates blocks for canonical-form invariance.
+    validateGeometryManifolds(root)
     return stripExpressionTemplates(file)
   }
 
@@ -833,6 +882,11 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       `apply_expression_template ops remain after expansion at: ${leftover.join(', ')} — likely referenced from a component lacking an expression_templates block`,
     )
   }
+
+  // Validators run on the expanded form (esm-spec §9.6.4): reject any
+  // geometry-kernel node whose (possibly just-substituted) `manifold` is
+  // outside the closed set.
+  validateGeometryManifolds(out)
 
   return out as T
 }

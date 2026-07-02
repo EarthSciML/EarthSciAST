@@ -725,3 +725,165 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Scalar-field template-parameter substitution
+// (esm-spec §9.6.1 / §9.6.3 constraint 5; mirrors the Julia/Python testsets 1:1)
+// ---------------------------------------------------------------------------
+
+describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 c5)', () => {
+  const scalarFieldDoc = (
+    templates: Record<string, unknown>,
+    bindings: Record<string, unknown>,
+    name = 'overlap_area',
+  ) => ({
+    esm: '0.8.0',
+    metadata: { name: 'scalar_field_param_unit', authors: ['t'] },
+    models: {
+      M: {
+        variables: {
+          pa: { type: 'parameter' },
+          pb: { type: 'parameter' },
+          area: {
+            type: 'observed',
+            expression: {
+              op: 'apply_expression_template',
+              args: [],
+              name,
+              bindings,
+            },
+          },
+        },
+        equations: [],
+        expression_templates: templates,
+      },
+    },
+  })
+
+  it('substitutes a param name in a scalar Expression-node field (happy path)', () => {
+    const src = scalarFieldDoc(
+      {
+        overlap_area: {
+          params: ['K_manifold', 'a', 'b'],
+          body: {
+            op: 'polygon_intersection_area',
+            manifold: 'K_manifold',
+            args: ['a', 'b'],
+          },
+        },
+      },
+      { K_manifold: 'planar', a: 'pa', b: 'pb' },
+    )
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.models.M.variables.area.expression).toEqual({
+      op: 'polygon_intersection_area',
+      manifold: 'planar',
+      args: ['pa', 'pb'],
+    })
+  })
+
+  it('threads a scalar-field param through §9.7.3 registration-time body composition', () => {
+    const src = scalarFieldDoc(
+      {
+        inner: {
+          params: ['m', 'x', 'y'],
+          body: {
+            op: 'polygon_intersection_area',
+            manifold: 'm',
+            args: ['x', 'y'],
+          },
+        },
+        outer: {
+          params: ['K', 'p', 'q'],
+          body: {
+            op: '*',
+            args: [
+              {
+                op: 'apply_expression_template',
+                args: [],
+                name: 'inner',
+                bindings: { m: 'K', x: 'p', y: 'q' },
+              },
+              2.0,
+            ],
+          },
+        },
+      },
+      { K: 'spherical', p: 'pa', q: 'pb' },
+      'outer',
+    )
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.models.M.variables.area.expression).toEqual({
+      op: '*',
+      args: [
+        {
+          op: 'polygon_intersection_area',
+          manifold: 'spherical',
+          args: ['pa', 'pb'],
+        },
+        2.0,
+      ],
+    })
+  })
+
+  it('rejects an invalid substituted manifold post-expansion (§9.6.4)', () => {
+    const src = scalarFieldDoc(
+      {
+        overlap_area: {
+          params: ['K_manifold', 'a', 'b'],
+          body: {
+            op: 'polygon_intersection_area',
+            manifold: 'K_manifold',
+            args: ['a', 'b'],
+          },
+        },
+      },
+      { K_manifold: 'bogus', a: 'pa', b: 'pb' },
+    )
+    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(/geometry_manifold_invalid/)
+  })
+
+  it('params shadow literals: a param named after a field literal substitutes', () => {
+    // Authoring guidance says don't do this (esm-spec §9.6.1) — but when an
+    // author does, the pinned resolution is that the param WINS: every string
+    // value equal to a declared param name is a substitution site.
+    const src = scalarFieldDoc(
+      {
+        shadowed: {
+          params: ['planar', 'x', 'y'],
+          body: {
+            op: 'polygon_intersection_area',
+            manifold: 'planar',
+            args: ['x', 'y'],
+          },
+        },
+      },
+      { planar: 'spherical', x: 'pa', y: 'pb' },
+      'shadowed',
+    )
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.models.M.variables.area.expression.manifold).toBe('spherical')
+  })
+})
+
+describe('scalar_field_param conformance fixture', () => {
+  // Drives tests/conformance/expression_templates/scalar_field_param — the
+  // scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
+  // (planar / spherical) — against its pinned Julia-generated expanded.esm.
+  const caseDir = path.resolve(
+    __dirname,
+    '../../..',
+    'tests/conformance/expression_templates/scalar_field_param',
+  )
+
+  it('matches the canonical expanded form', () => {
+    const fixture = JSON.parse(fs.readFileSync(path.join(caseDir, 'fixture.esm'), 'utf8'))
+    const expanded = JSON.parse(fs.readFileSync(path.join(caseDir, 'expanded.esm'), 'utf8'))
+    const out = lowerExpressionTemplates(fixture) as any
+    expect(out.models).toEqual(expanded.models)
+    const vars = out.models.Overlap.variables
+    expect(vars.area_planar.expression.manifold).toBe('planar')
+    expect(vars.area_spherical.expression.manifold).toBe('spherical')
+  })
+})

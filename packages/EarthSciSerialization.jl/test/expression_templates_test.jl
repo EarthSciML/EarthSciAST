@@ -373,3 +373,179 @@ end
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
     end
 end
+
+@testset "scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5)" begin
+    _n(x) =
+        (x isa AbstractDict || x isa JSON3.Object) ?
+            Dict{String,Any}(string(k) => _n(v) for (k, v) in pairs(x)) :
+        (x isa AbstractVector || x isa JSON3.Array) ?
+            Any[_n(v) for v in x] : x
+
+    # A parameter name appearing as the string value of a scalar Expression-node
+    # field in `body` is a substitution site (the mirror of the match-side
+    # scalar-field binding rule). `manifold` is the exemplar field: the document
+    # schema admits any string there; the closed set {planar, spherical,
+    # geodesic} is enforced on the EXPANDED form (§9.6.4).
+    @testset "scalar-field substitution happy path" begin
+        src = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
+          "models": {"M": {
+            "variables": {
+              "pa": {"type": "parameter"},
+              "pb": {"type": "parameter"},
+              "area": {"type": "observed",
+                "expression": {"op": "apply_expression_template", "args": [],
+                  "name": "overlap_area",
+                  "bindings": {"K_manifold": "planar", "a": "pa", "b": "pb"}}}
+            },
+            "equations": [],
+            "expression_templates": {
+              "overlap_area": {
+                "params": ["K_manifold", "a", "b"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "K_manifold", "args": ["a", "b"]}
+              }
+            }
+          }}
+        }
+        """
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _n(out.data["models"]["M"]["variables"]["area"]["expression"])
+        @test expr == Dict{String,Any}(
+            "op" => "polygon_intersection_area",
+            "manifold" => "planar",
+            "args" => Any["pa", "pb"])
+    end
+
+    @testset "scalar-field param threads through registration-time body composition (§9.7.3)" begin
+        src = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "scalar_field_param_nested", "authors": ["t"]},
+          "models": {"M": {
+            "variables": {
+              "pa": {"type": "parameter"},
+              "pb": {"type": "parameter"},
+              "scaled": {"type": "observed",
+                "expression": {"op": "apply_expression_template", "args": [],
+                  "name": "outer",
+                  "bindings": {"K": "spherical", "p": "pa", "q": "pb"}}}
+            },
+            "equations": [],
+            "expression_templates": {
+              "inner": {
+                "params": ["m", "x", "y"],
+                "body": {"op": "polygon_intersection_area", "manifold": "m",
+                         "args": ["x", "y"]}
+              },
+              "outer": {
+                "params": ["K", "p", "q"],
+                "body": {"op": "*", "args": [
+                  {"op": "apply_expression_template", "args": [], "name": "inner",
+                   "bindings": {"m": "K", "x": "p", "y": "q"}},
+                  2.0]}
+              }
+            }
+          }}
+        }
+        """
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _n(out.data["models"]["M"]["variables"]["scaled"]["expression"])
+        @test expr == Dict{String,Any}("op" => "*", "args" => Any[
+            Dict{String,Any}("op" => "polygon_intersection_area",
+                             "manifold" => "spherical",
+                             "args" => Any["pa", "pb"]),
+            2.0])
+    end
+
+    @testset "invalid substituted manifold rejected post-expansion (§9.6.4)" begin
+        src = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "scalar_field_param_bogus", "authors": ["t"]},
+          "models": {"M": {
+            "variables": {
+              "pa": {"type": "parameter"},
+              "pb": {"type": "parameter"},
+              "area": {"type": "observed",
+                "expression": {"op": "apply_expression_template", "args": [],
+                  "name": "overlap_area",
+                  "bindings": {"K_manifold": "bogus", "a": "pa", "b": "pb"}}}
+            },
+            "equations": [],
+            "expression_templates": {
+              "overlap_area": {
+                "params": ["K_manifold", "a", "b"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "K_manifold", "args": ["a", "b"]}
+              }
+            }
+          }}
+        }
+        """
+        err = try
+            lower_expression_templates(JSON3.read(src))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == "geometry_manifold_invalid"
+    end
+
+    @testset "params shadow literals: a param named after a field literal substitutes" begin
+        # Authoring guidance says don't do this (esm-spec §9.6.1) — but when an
+        # author does, the pinned resolution is that the param WINS: every
+        # string value equal to a declared param name is a substitution site.
+        src = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "scalar_field_param_shadow", "authors": ["t"]},
+          "models": {"M": {
+            "variables": {
+              "pa": {"type": "parameter"},
+              "pb": {"type": "parameter"},
+              "area": {"type": "observed",
+                "expression": {"op": "apply_expression_template", "args": [],
+                  "name": "shadowed",
+                  "bindings": {"planar": "spherical", "x": "pa", "y": "pb"}}}
+            },
+            "equations": [],
+            "expression_templates": {
+              "shadowed": {
+                "params": ["planar", "x", "y"],
+                "body": {"op": "polygon_intersection_area",
+                         "manifold": "planar", "args": ["x", "y"]}
+              }
+            }
+          }}
+        }
+        """
+        out = lower_expression_templates(JSON3.read(src))
+        expr = _n(out.data["models"]["M"]["variables"]["area"]["expression"])
+        @test expr["manifold"] == "spherical"
+    end
+end
+
+@testset "scalar_field_param conformance fixture matches the canonical expanded form" begin
+    # Drives tests/conformance/expression_templates/scalar_field_param — the
+    # scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
+    # (planar / spherical) — against its pinned Julia-generated expanded.esm.
+    repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
+    case = joinpath(repo_root, "tests", "conformance",
+        "expression_templates", "scalar_field_param")
+    _n(x) =
+        (x isa AbstractDict || x isa JSON3.Object) ?
+            Dict{String,Any}(string(k) => _n(v) for (k, v) in pairs(x)) :
+        (x isa AbstractVector || x isa JSON3.Array) ?
+            Any[_n(v) for v in x] : x
+    raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
+    out = lower_expression_templates(raw)
+    expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
+    @test _n(out.data["models"]) == _n(expanded.models)
+    vars = _n(out.data["models"]["Overlap"]["variables"])
+    @test vars["area_planar"]["expression"]["manifold"] == "planar"
+    @test vars["area_spherical"]["expression"]["manifold"] == "spherical"
+end

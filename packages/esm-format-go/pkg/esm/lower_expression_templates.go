@@ -49,6 +49,72 @@ import (
 
 const applyExpressionTemplateOp = "apply_expression_template"
 
+// Geometry-kernel ops whose `manifold` scalar field is restricted to the
+// closed manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema
+// admits any string in the `manifold` position so a template `body` can carry
+// a parameter name there (esm-spec §9.6.1 scalar-field substitution site); the
+// closed set is enforced by validateGeometryManifolds on the EXPANDED form per
+// esm-spec §9.6.4.
+var geometryManifoldOps = map[string]struct{}{
+	"intersect_polygon":         {},
+	"polygon_intersection_area": {},
+}
+
+var geometryManifoldValues = map[string]struct{}{
+	"planar":    {},
+	"spherical": {},
+	"geodesic":  {},
+}
+
+// validateGeometryManifolds is the post-expansion validator (esm-spec §9.6.4):
+// every `intersect_polygon` / `polygon_intersection_area` node OUTSIDE an
+// `expression_templates` block must carry a `manifold` drawn from the closed
+// set {planar, spherical, geodesic}. Template bodies are skipped — a parameter
+// name in the `manifold` position of a `body` is a legal scalar-field
+// substitution site (esm-spec §9.6.1); by the time this validator runs on a
+// loaded document every such site has been substituted, so an out-of-set value
+// here is a real defect (e.g. a template invocation binding the manifold
+// parameter to a non-member literal). Returns an *ExpressionTemplateError with
+// code `geometry_manifold_invalid`.
+func validateGeometryManifolds(tree interface{}, path string) error {
+	switch t := tree.(type) {
+	case []interface{}:
+		for i, child := range t {
+			if err := validateGeometryManifolds(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]interface{}:
+		if op, ok := t["op"].(string); ok {
+			if _, geomOp := geometryManifoldOps[op]; geomOp {
+				if m, present := t["manifold"]; present {
+					ms, isStr := m.(string)
+					if _, member := geometryManifoldValues[ms]; !isStr || !member {
+						return newETErr(
+							"geometry_manifold_invalid",
+							fmt.Sprintf("%s: `%s` carries manifold %#v, not a member of the closed set {planar, spherical, geodesic}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.", path, op, m),
+						)
+					}
+				}
+			}
+		}
+		for k, v := range t {
+			// Pre-substitution template trees; params may legally occupy the
+			// manifold position there (esm-spec §9.6.1).
+			if k == "expression_templates" {
+				continue
+			}
+			if err := validateGeometryManifolds(v, path+"/"+k); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 // MaxRewritePasses is the maximum number of productive rewrite passes before a
 // file is rejected as non-converging (esm-spec §9.6.3, diagnostic
 // `rewrite_rule_nonterminating`). Pinned identically across all bindings so the
@@ -804,7 +870,9 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	// `apply_expression_template` op need no rewriting (strip is a no-op).
 	if !hasTemplateMachinery(view) {
 		stripExpressionTemplates(view)
-		return nil
+		// No expansion to run, but the §9.6.4 expanded-form validators still
+		// apply — the raw tree IS the expanded form.
+		return validateGeometryManifolds(view, "")
 	}
 	// Top-level `coupling` variable_map entries with an OBJECT `transform`
 	// (widened Expression transforms) rewrite with the rewrite context of
@@ -907,7 +975,10 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 			fmt.Sprintf("apply_expression_template ops remain after expansion at: %s — likely referenced from a component lacking an expression_templates block", strings.Join(leftover, ", ")),
 		)
 	}
-	return nil
+	// Validators run on the expanded form (esm-spec §9.6.4): reject any
+	// geometry-kernel node whose (possibly just-substituted) `manifold` is
+	// outside the closed set.
+	return validateGeometryManifolds(view, "")
 }
 
 func stripExpressionTemplates(view map[string]interface{}) {

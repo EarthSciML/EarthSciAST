@@ -887,7 +887,82 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             ),
         ));
     }
+
+    // Validators run on the expanded form (esm-spec §9.6.4): reject any
+    // geometry-kernel node whose (possibly just-substituted) `manifold` is
+    // outside the closed set.
+    validate_geometry_manifolds(value, "")?;
+
     Ok(())
+}
+
+/// Geometry-kernel ops whose `manifold` scalar field is restricted to the
+/// closed manifold registry (CONFORMANCE_SPEC §5.8.4).
+const GEOMETRY_MANIFOLD_OPS: [&str; 2] = ["intersect_polygon", "polygon_intersection_area"];
+
+/// The closed manifold registry. The document schema admits any string in the
+/// `manifold` position so a template `body` can carry a parameter name there
+/// (esm-spec §9.6.1 scalar-field substitution site); the closed set is
+/// enforced by [`validate_geometry_manifolds`] on the EXPANDED form per
+/// esm-spec §9.6.4.
+const GEOMETRY_MANIFOLD_VALUES: [&str; 3] = ["planar", "spherical", "geodesic"];
+
+/// Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
+/// `polygon_intersection_area` node OUTSIDE an `expression_templates` block
+/// must carry a `manifold` drawn from the closed set {planar, spherical,
+/// geodesic}. Template bodies are skipped — a parameter name in the `manifold`
+/// position of a `body` is a legal scalar-field substitution site (esm-spec
+/// §9.6.1); by the time this validator runs on a loaded document every such
+/// site has been substituted, so an out-of-set value here is a real defect
+/// (e.g. a template invocation binding the manifold parameter to a non-member
+/// literal). Errors with code `geometry_manifold_invalid`.
+pub fn validate_geometry_manifolds(
+    tree: &Value,
+    path: &str,
+) -> Result<(), ExpressionTemplateError> {
+    match tree {
+        Value::Array(arr) => {
+            for (i, child) in arr.iter().enumerate() {
+                validate_geometry_manifolds(child, &format!("{path}/{i}"))?;
+            }
+            Ok(())
+        }
+        Value::Object(obj) => {
+            if let Some(op) = obj.get("op").and_then(|v| v.as_str()) {
+                if GEOMETRY_MANIFOLD_OPS.contains(&op) {
+                    if let Some(m) = obj.get("manifold") {
+                        let ok = m
+                            .as_str()
+                            .map(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s))
+                            .unwrap_or(false);
+                        if !ok {
+                            return Err(err(
+                                "geometry_manifold_invalid",
+                                format!(
+                                    "{path}: `{op}` carries manifold {m}, not a member of the \
+                                     closed set {{planar, spherical, geodesic}}. The manifold \
+                                     enum is enforced on the expanded form (esm-spec §9.6.4; \
+                                     CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
+                                     into this scalar field must be bound to one of the \
+                                     closed-set literals."
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            for (k, v) in obj {
+                // Pre-substitution template trees; params may legally occupy
+                // the manifold position there (esm-spec §9.6.1).
+                if k == "expression_templates" {
+                    continue;
+                }
+                validate_geometry_manifolds(v, &format!("{path}/{k}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -1289,5 +1364,117 @@ mod tests {
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         // sugar(u) -> inner(u) (pass 1) -> k * u (pass 2).
         assert_eq!(*rhs, json!({"op": "*", "args": ["k", "u"]}));
+    }
+    // -----------------------------------------------------------------------
+    // Scalar-field template-parameter substitution
+    // (esm-spec §9.6.1 / §9.6.3 constraint 5; mirrors the other bindings 1:1)
+    // -----------------------------------------------------------------------
+
+    fn scalar_field_doc(templates: Value, bindings: Value, name: &str) -> Value {
+        json!({
+          "esm": "0.8.0",
+          "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
+          "models": {"M": {
+            "variables": {
+              "pa": {"type": "parameter"},
+              "pb": {"type": "parameter"},
+              "area": {"type": "observed",
+                "expression": {"op": "apply_expression_template", "args": [],
+                  "name": name, "bindings": bindings}}
+            },
+            "equations": [],
+            "expression_templates": templates
+          }}
+        })
+    }
+
+    /// A parameter name appearing as the string value of a scalar
+    /// Expression-node field in `body` is a substitution site (the mirror of
+    /// the match-side scalar-field binding rule, esm-spec §9.6.1).
+    #[test]
+    fn scalar_field_substitution_happy_path() {
+        let mut v = scalar_field_doc(
+            json!({"overlap_area": {
+              "params": ["K_manifold", "a", "b"],
+              "body": {"op": "polygon_intersection_area",
+                       "manifold": "K_manifold", "args": ["a", "b"]}}}),
+            json!({"K_manifold": "planar", "a": "pa", "b": "pb"}),
+            "overlap_area",
+        );
+        lower_expression_templates(&mut v).expect("rewrite");
+        assert_eq!(
+            v["models"]["M"]["variables"]["area"]["expression"],
+            json!({"op": "polygon_intersection_area", "manifold": "planar",
+                   "args": ["pa", "pb"]})
+        );
+    }
+
+    /// A scalar-field param passed through a §9.7.3 registration-time body
+    /// composition (outer body applies inner, forwarding its own param into
+    /// the inner manifold slot) substitutes end-to-end.
+    #[test]
+    fn scalar_field_param_threads_through_body_composition() {
+        let mut v = scalar_field_doc(
+            json!({
+              "inner": {
+                "params": ["m", "x", "y"],
+                "body": {"op": "polygon_intersection_area", "manifold": "m",
+                         "args": ["x", "y"]}},
+              "outer": {
+                "params": ["K", "p", "q"],
+                "body": {"op": "*", "args": [
+                  {"op": "apply_expression_template", "args": [], "name": "inner",
+                   "bindings": {"m": "K", "x": "p", "y": "q"}},
+                  2.0]}}
+            }),
+            json!({"K": "spherical", "p": "pa", "q": "pb"}),
+            "outer",
+        );
+        lower_expression_templates(&mut v).expect("rewrite");
+        assert_eq!(
+            v["models"]["M"]["variables"]["area"]["expression"],
+            json!({"op": "*", "args": [
+              {"op": "polygon_intersection_area", "manifold": "spherical",
+               "args": ["pa", "pb"]},
+              2.0]})
+        );
+    }
+
+    /// Validators run on the expanded form (esm-spec §9.6.4): a template
+    /// invocation binding the manifold parameter to a non-member literal is
+    /// rejected with `geometry_manifold_invalid`.
+    #[test]
+    fn scalar_field_invalid_substituted_manifold_rejected() {
+        let mut v = scalar_field_doc(
+            json!({"overlap_area": {
+              "params": ["K_manifold", "a", "b"],
+              "body": {"op": "polygon_intersection_area",
+                       "manifold": "K_manifold", "args": ["a", "b"]}}}),
+            json!({"K_manifold": "bogus", "a": "pa", "b": "pb"}),
+            "overlap_area",
+        );
+        let err = lower_expression_templates(&mut v).expect_err("must reject");
+        assert_eq!(err.code, "geometry_manifold_invalid");
+    }
+
+    /// Pinned shadowing resolution (esm-spec §9.6.1): a declared param name
+    /// shadows a coincident field literal inside `body` — the param wins.
+    /// Authors must not name params after field literals; the engine
+    /// substitutes anyway.
+    #[test]
+    fn scalar_field_params_shadow_literals() {
+        let mut v = scalar_field_doc(
+            json!({"shadowed": {
+              "params": ["planar", "x", "y"],
+              "body": {"op": "polygon_intersection_area",
+                       "manifold": "planar", "args": ["x", "y"]}}}),
+            json!({"planar": "spherical", "x": "pa", "y": "pb"}),
+            "shadowed",
+        );
+        lower_expression_templates(&mut v).expect("rewrite");
+        assert_eq!(
+            v["models"]["M"]["variables"]["area"]["expression"]["manifold"],
+            json!("spherical")
+        );
     }
 }

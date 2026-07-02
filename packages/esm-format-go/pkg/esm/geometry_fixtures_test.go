@@ -40,12 +40,16 @@ func TestGeometryValidFixtures(t *testing.T) {
 }
 
 // TestGeometryInvalidFixtures asserts every tests/invalid/geometry/*.esm fixture
-// is handled correctly. Each is a pure schema violation isolated to the
-// intersect_polygon node — a missing `manifold` (it is required, no default), a
-// third operand (the clip is strictly binary), or a `manifold` outside the
-// closed {planar, spherical, geodesic} enum — so Load returns a non-nil error
-// at schema-validation time. A resolver_only geometry fixture (none today) would
-// be schema-valid and accepted, mirroring TestAggregateInvalidFixtures.
+// is handled correctly. Each is a defect isolated to the intersect_polygon
+// node: a missing `manifold` (it is required, no default) and a third operand
+// (the clip is strictly binary) are pure schema violations rejected at
+// schema-validation time; a `manifold` outside the closed {planar, spherical,
+// geodesic} set is rejected by the POST-EXPANSION validator
+// (`geometry_manifold_invalid`, esm-spec §9.6.4) — the schema admits any
+// string there since the §9.6.1 scalar-field substitution-site widening. In
+// both cases Load returns a non-nil error. A resolver_only geometry fixture
+// (none today) would be schema-valid and accepted, mirroring
+// TestAggregateInvalidFixtures.
 func TestGeometryInvalidFixtures(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {

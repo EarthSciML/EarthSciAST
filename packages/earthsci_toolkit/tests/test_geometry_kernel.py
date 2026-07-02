@@ -96,11 +96,15 @@ def test_valid_geometry_fixture_is_valid(fixture: Path) -> None:
 
 @pytest.mark.parametrize("fixture", _invalid_fixtures(), ids=lambda p: p.name)
 def test_invalid_geometry_fixture_is_rejected(fixture: Path) -> None:
-    """Missing manifold / wrong arity / bad manifold enum must fail schema validation."""
+    """Missing manifold / wrong arity fail schema validation; an out-of-set
+    manifold fails the post-expansion validator (`geometry_manifold_invalid`,
+    esm-spec §9.6.4 — the schema admits any string there since the §9.6.1
+    scalar-field substitution-site widening). Both surface as load-time
+    rejection through ``validate``."""
     result = validate(json.loads(fixture.read_text()))
-    assert result.schema_errors, (
-        f"{fixture.name}: expected schema rejection (missing manifold / 3 operands / "
-        f"out-of-enum manifold) but validation passed"
+    assert result.schema_errors or result.structural_errors, (
+        f"{fixture.name}: expected load-time rejection (missing manifold / 3 operands / "
+        f"out-of-set manifold) but validation passed"
     )
 
 

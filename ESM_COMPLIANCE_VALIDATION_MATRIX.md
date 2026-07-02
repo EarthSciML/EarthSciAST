@@ -111,6 +111,21 @@ Where:
 | BEHAV-06-A-001 | All models MUST be fully specified | esm-spec.md:450 | Yes | behavioral |
 | BEHAV-06-A-002 | Every equation, variable, parameter MUST be present in ESM | esm-spec.md:450 | Yes | behavioral |
 
+### BEHAV-04-B: Remote (URL) References — Optional Capability
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-B-001 | URL/remote reference support is an OPTIONAL binding capability; a binding without it MUST reject a URL ref cleanly with the existing unresolved diagnostics (`template_import_unresolved` / subsystem-ref resolution error), never silently skip or misresolve | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
+| BEHAV-04-B-002 | A binding that supports URL refs MUST resolve a URL-loaded document's own relative refs against its URL base (RFC 3986 joining) and canonicalize URL identity for cycle detection (dot segments removed, relative spellings joined) | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
+
+### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-06-B-001 | PDE assertions MUST select a scalar via `coords` or `reduce`; pointwise assertions are 0-D-only (validators reject the cross cases) | esm-spec.md §6.6.5 | Yes | simulation |
+| BEHAV-06-B-002 | `coords` values are 1-based fractional INDEX-space positions along the named interval index sets; sampling picks the nearest grid index with exact half-way ties rounding down (`idx = ceil(c − 1/2)`); resolved index in `1..size` | esm-spec.md §6.6.3, §6.6.5 convention 1 | Yes | simulation |
+| BEHAV-06-B-003 | `coords` may pin a strict subset of dimensions only when every remaining dimension resolves to a single sample | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
+| BEHAV-06-B-004 | `integral` reduce is the uniform-cell Riemann sum under unit total domain measure per axis (= `mean` over interval sets); the measure convention under which relative-L2 is measure-free | esm-spec.md §6.6.5 convention 2 | Yes | simulation |
+| BEHAV-06-B-005 | `from_file` reference `path` resolves relative to the `.esm` file's directory; v1 `format` is `json` — a row-major nested array shape-validated against the field | esm-spec.md §6.6.5 convention 3 | Yes | simulation |
+
 ---
 
 ## 4. FORMAT REQUIREMENTS

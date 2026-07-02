@@ -595,6 +595,69 @@ function _has_template_machinery(raw_data)
 end
 
 # ---------------------------------------------------------------------------
+# Post-expansion validation (esm-spec §9.6.4)
+# ---------------------------------------------------------------------------
+
+"""
+Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
+set [`GEOMETRY_MANIFOLD_VALUES`](@ref) (CONFORMANCE_SPEC §5.8.4).
+"""
+const GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
+
+"""
+The closed manifold registry. The document schema admits any string in the
+`manifold` position so a template `body` can carry a parameter name there
+(esm-spec §9.6.1 scalar-field substitution site); the closed set is enforced
+here, on the EXPANDED form, per esm-spec §9.6.4.
+"""
+const GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
+
+"""
+    _validate_geometry_manifolds(x, path="")
+
+Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
+`polygon_intersection_area` node OUTSIDE an `expression_templates` block must
+carry a `manifold` drawn from the closed set {planar, spherical, geodesic}.
+Template bodies are skipped — a parameter name in the `manifold` position of a
+`body` is a legal substitution site (esm-spec §9.6.1); by the time this
+validator runs on a loaded document, every such site has been substituted, so
+an out-of-set value here is a real defect (e.g. a template invocation binding
+the manifold parameter to a non-member literal). Throws
+[`ExpressionTemplateError`](@ref) with code `geometry_manifold_invalid`.
+"""
+function _validate_geometry_manifolds(x, path::String="")
+    if _is_array(x)
+        for (i, child) in enumerate(x)
+            _validate_geometry_manifolds(child, "$path/$(i-1)")
+        end
+        return
+    end
+    _is_object(x) || return
+    op = get(x, "op", get(x, :op, nothing))
+    op_str = op === nothing ? "" : string(op)
+    if op_str in GEOMETRY_MANIFOLD_OPS
+        m = get(x, "manifold", get(x, :manifold, nothing))
+        if m !== nothing && !(m isa AbstractString && string(m) in GEOMETRY_MANIFOLD_VALUES)
+            throw(ExpressionTemplateError(
+                "geometry_manifold_invalid",
+                "$path: `$op_str` carries manifold $(repr(m)), not a member of the " *
+                "closed set {planar, spherical, geodesic}. The manifold enum is " *
+                "enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC " *
+                "§5.8.4) — a template parameter substituted into this scalar field " *
+                "must be bound to one of the closed-set literals."))
+        end
+    end
+    for (k, v) in pairs(x)
+        ks = string(k)
+        # Template bodies/matches are pre-substitution trees; params may
+        # legally occupy the manifold position there (esm-spec §9.6.1).
+        ks == "expression_templates" && continue
+        _validate_geometry_manifolds(v, "$path/$ks")
+    end
+    return
+end
+
+# ---------------------------------------------------------------------------
 # Pre-version-0.4.0 rejection
 # ---------------------------------------------------------------------------
 
@@ -669,6 +732,9 @@ function lower_expression_templates(raw_data)
     # that exercise downstream coercers (`coerce_function_tables`,
     # `coerce_grids`, etc.) whose type-gates predate JSONLikeDict.
     if !_has_template_machinery(raw_data)
+        # No expansion to run, but the §9.6.4 expanded-form validators still
+        # apply — the raw tree IS the expanded form.
+        _validate_geometry_manifolds(raw_data)
         return raw_data
     end
 
@@ -767,6 +833,11 @@ function lower_expression_templates(raw_data)
             "apply_expression_template_unknown_template",
             "apply_expression_template ops remain after expansion at: $(join(leftover, ", ")) — likely referenced from a component lacking an expression_templates block"))
     end
+
+    # Validators run on the expanded form (esm-spec §9.6.4): reject any
+    # geometry-kernel node whose (possibly just-substituted) `manifold` is
+    # outside the closed set.
+    _validate_geometry_manifolds(root)
 
     return JSONLikeDict(root)
 end

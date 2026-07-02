@@ -47,6 +47,15 @@ from typing import Any, Iterable
 
 APPLY_OP = "apply_expression_template"
 
+# Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
+# manifold registry (CONFORMANCE_SPEC §5.8.4). The document schema admits any
+# string in the `manifold` position so a template `body` can carry a parameter
+# name there (esm-spec §9.6.1 scalar-field substitution site); the closed set
+# is enforced by :func:`_validate_geometry_manifolds` on the EXPANDED form per
+# esm-spec §9.6.4.
+_GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
+_GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
+
 
 class ExpressionTemplateError(Exception):
     """Raised when expression-template expansion fails.
@@ -550,6 +559,46 @@ def _rewrite_coupling_transforms(
         )
 
 
+def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
+    """Post-expansion validator (esm-spec §9.6.4): every ``intersect_polygon``
+    / ``polygon_intersection_area`` node OUTSIDE an ``expression_templates``
+    block must carry a ``manifold`` drawn from the closed set
+    {planar, spherical, geodesic}.
+
+    Template bodies are skipped — a parameter name in the ``manifold`` position
+    of a ``body`` is a legal scalar-field substitution site (esm-spec §9.6.1);
+    by the time this validator runs on a loaded document every such site has
+    been substituted, so an out-of-set value here is a real defect (e.g. a
+    template invocation binding the manifold parameter to a non-member
+    literal). Raises :class:`ExpressionTemplateError` with code
+    ``geometry_manifold_invalid``.
+    """
+    if _is_array(tree):
+        for i, child in enumerate(tree):
+            _validate_geometry_manifolds(child, f"{path}/{i}")
+        return
+    if not _is_object(tree):
+        return
+    if tree.get("op") in _GEOMETRY_MANIFOLD_OPS and "manifold" in tree:
+        m = tree["manifold"]
+        if not (isinstance(m, str) and m in _GEOMETRY_MANIFOLD_VALUES):
+            raise ExpressionTemplateError(
+                "geometry_manifold_invalid",
+                f"{path}: `{tree.get('op')}` carries manifold {m!r}, not a "
+                "member of the closed set {planar, spherical, geodesic}. The "
+                "manifold enum is enforced on the expanded form (esm-spec "
+                "§9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter "
+                "substituted into this scalar field must be bound to one of "
+                "the closed-set literals.",
+            )
+    for k, v in tree.items():
+        if k == "expression_templates":
+            # Pre-substitution template trees; params may legally occupy the
+            # manifold position there (esm-spec §9.6.1).
+            continue
+        _validate_geometry_manifolds(v, f"{path}/{k}")
+
+
 def lower_expression_templates(file: dict) -> dict:
     """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`.
 
@@ -572,6 +621,9 @@ def lower_expression_templates(file: dict) -> dict:
     # Nothing to do unless something triggers the engine: an explicit apply op
     # somewhere, or a component declaring a ``match`` rewrite rule.
     if not _find_apply_paths(out) and not _has_match_rules(out):
+        # No expansion to run, but the §9.6.4 expanded-form validators still
+        # apply — the raw tree IS the expanded form.
+        _validate_geometry_manifolds(out)
         return _strip_expression_templates(out)
 
     # Per-component rewrite registries (named templates + sorted match rules),
@@ -609,6 +661,10 @@ def lower_expression_templates(file: dict) -> dict:
             f"{', '.join(leftover)} — likely referenced from a component lacking "
             "an expression_templates block",
         )
+    # Validators run on the expanded form (esm-spec §9.6.4): reject any
+    # geometry-kernel node whose (possibly just-substituted) `manifold` is
+    # outside the closed set.
+    _validate_geometry_manifolds(out)
     return out
 
 

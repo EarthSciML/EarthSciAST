@@ -214,6 +214,10 @@ export const schema: AnySchemaObject = {
               "description": "The metadata.name of the source document."
             }
           }
+        },
+        "x_esd": {
+          "type": "object",
+          "description": "Reserved extension point for downstream-catalog machine-readable metadata (e.g. the EarthSciDiscretizations rule-library catalog). Free-form JSON: the schema validates only that this is an object. The core spec NEVER interprets, validates, or transforms its contents — core tooling MUST NOT assign meaning to them and MUST preserve them across parse → emit like any other metadata field. Downstream catalogs define and version their own conventions inside it (esm-spec §3)."
         }
       }
     },
