@@ -1,0 +1,23 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_where_rename_two_instances", "description": "Composition regression guard for §9.7.7 import renaming and §9.6.1 `where` match-scoping constraints: ONE grid-family library carrying a where-constrained div rule (fv_div_x, scoped to shape [x]) is instantiated TWICE in one model under prefix (meshA, N=16 and meshB, N=8) with distinct metaparameter bindings. The import-edge rename must rewrite the rule's `where.F.shape` from x to meshA.x / meshB.x in lockstep with the index-set declaration and the body — otherwise registration fails with template_constraint_unknown_index_set (the rule body/registry would use meshA.x while `where` still said x). With the rewrite, each renamed rule instance fires ONLY on its own instance's field: div(F_A) over meshA.x lowers by meshA's rule to (1/16)*F_A, div(F_B) over meshB.x by meshB's rule to (1/8)*F_B; neither rule matches the other mesh's field because their where shapes are disjoint after rename." },
+  "models": {
+    "TwoGrids": {
+      "expression_template_imports": [
+        { "ref": "./fv_div_grid.esm", "prefix": "meshA", "bindings": { "N": 16 } },
+        { "ref": "./fv_div_grid.esm", "prefix": "meshB", "bindings": { "N": 8 } }
+      ],
+      "variables": {
+        "F_A": { "type": "state", "units": "1", "default": 1.5, "shape": ["meshA.x"], "description": "flux on the meshA instance" },
+        "F_B": { "type": "state", "units": "1", "default": 2.5, "shape": ["meshB.x"], "description": "flux on the meshB instance" },
+        "div_A": { "type": "observed", "units": "1", "shape": ["meshA.x"], "description": "div of the meshA field: meshA's rule fires",
+          "expression": { "op": "div", "args": ["F_A"] }
+        },
+        "div_B": { "type": "observed", "units": "1", "shape": ["meshB.x"], "description": "div of the meshB field: meshB's rule fires",
+          "expression": { "op": "div", "args": ["F_B"] }
+        }
+      },
+      "equations": []
+    }
+  }
+}

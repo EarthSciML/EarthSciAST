@@ -137,6 +137,32 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
         @test eqc.rhs.ranges["i"] == [2, 7]       # N=8 instance
     end
 
+    @testset "import_where_rename_two_instances: §9.7.7 rename carries where.shape" begin
+        @test _expand_raw(conf("import_where_rename_two_instances", "fixture.esm")) ==
+              _golden(conf("import_where_rename_two_instances", "expanded.esm"))
+        f = EarthSciSerialization.load(conf("import_where_rename_two_instances", "fixture.esm"))
+        # The where-constrained div rule registered under each prefix (its
+        # `where.F.shape` rewritten x -> meshA.x / meshB.x in lockstep with the
+        # index set) and fired ONLY on its own instance's field.
+        @test f.index_sets["meshA.x"].size == 16
+        @test f.index_sets["meshB.x"].size == 8
+        va = f.models["TwoGrids"].variables["div_A"].expression
+        vb = f.models["TwoGrids"].variables["div_B"].expression
+        @test va.op == "*" && vb.op == "*"     # both div nodes lowered
+        @test va.args[1].op == "/" && va.args[1].args[2].value == 16   # (1/16)*F_A
+        @test vb.args[1].op == "/" && vb.args[1].args[2].value == 8    # (1/8)*F_B
+        @test va.args[2].name == "F_A" && vb.args[2].name == "F_B"
+    end
+
+    @testset "import_where_rename_unknown_index_set: bad where set after rename" begin
+        # A `where` shape naming a set the library never declares stays as
+        # spelled through the rename (the unmapped-name rule) and is rejected at
+        # rule registration — the fix does not paper over genuine typos.
+        code = _err_code(() ->
+            EarthSciSerialization.load(conf("import_where_rename_unknown_index_set", "fixture.esm")))
+        @test code == "template_constraint_unknown_index_set"
+    end
+
     @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
               _golden(conf("import_rebind_keyed_factors", "expanded.esm"))

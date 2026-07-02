@@ -88,6 +88,7 @@ for (dir, fixture, golden) in [
     ("import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"),
     ("scalar_field_param", "fixture.esm", "expanded.esm"),
     ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
+    ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
     ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
     ("import_rename_diamond", "fixture.esm", "expanded.esm"),
 ]

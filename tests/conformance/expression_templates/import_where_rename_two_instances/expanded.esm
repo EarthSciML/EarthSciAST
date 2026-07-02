@@ -1,0 +1,84 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "meshA.x": {
+      "kind": "interval",
+      "size": 16
+    },
+    "meshB.x": {
+      "kind": "interval",
+      "size": 8
+    }
+  },
+  "metadata": {
+    "description": "Composition regression guard for §9.7.7 import renaming and §9.6.1 `where` match-scoping constraints: ONE grid-family library carrying a where-constrained div rule (fv_div_x, scoped to shape [x]) is instantiated TWICE in one model under prefix (meshA, N=16 and meshB, N=8) with distinct metaparameter bindings. The import-edge rename must rewrite the rule's `where.F.shape` from x to meshA.x / meshB.x in lockstep with the index-set declaration and the body — otherwise registration fails with template_constraint_unknown_index_set (the rule body/registry would use meshA.x while `where` still said x). With the rewrite, each renamed rule instance fires ONLY on its own instance's field: div(F_A) over meshA.x lowers by meshA's rule to (1/16)*F_A, div(F_B) over meshB.x by meshB's rule to (1/8)*F_B; neither rule matches the other mesh's field because their where shapes are disjoint after rename.",
+    "name": "import_where_rename_two_instances"
+  },
+  "models": {
+    "TwoGrids": {
+      "equations": [],
+      "variables": {
+        "F_A": {
+          "default": 1.5,
+          "description": "flux on the meshA instance",
+          "shape": [
+            "meshA.x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "F_B": {
+          "default": 2.5,
+          "description": "flux on the meshB instance",
+          "shape": [
+            "meshB.x"
+          ],
+          "type": "state",
+          "units": "1"
+        },
+        "div_A": {
+          "description": "div of the meshA field: meshA's rule fires",
+          "expression": {
+            "args": [
+              {
+                "args": [
+                  1,
+                  16
+                ],
+                "op": "/"
+              },
+              "F_A"
+            ],
+            "op": "*"
+          },
+          "shape": [
+            "meshA.x"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "div_B": {
+          "description": "div of the meshB field: meshB's rule fires",
+          "expression": {
+            "args": [
+              {
+                "args": [
+                  1,
+                  8
+                ],
+                "op": "/"
+              },
+              "F_B"
+            ],
+            "op": "*"
+          },
+          "shape": [
+            "meshB.x"
+          ],
+          "type": "observed",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

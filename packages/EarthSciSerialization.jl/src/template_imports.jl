@@ -558,10 +558,22 @@ const _RENAME_PROTECTED_KEYS = union(_META_SUBST_SKIP_KEYS,
 One transitive-substitution pass over an imported declaration (esm-spec
 §9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
 bare strings in variable-reference positions; `isetmap` rewrites index-set
-reference positions (`{"from": …}` values and the `wrt`/`dim` axis fields, in
-`body` and `match` alike); `tplmap` rewrites `apply_expression_template.name`.
-Structural scalar fields (`_RENAME_PROTECTED_KEYS`) and bound-index lists
-(range `of`) are never rewritten. Pure syntactic substitution — no evaluation.
+reference positions (`{"from": …}` values, the `wrt`/`dim` axis fields, and the
+`where.*.shape` match-scoping index-set names, in `body` and `match` alike);
+`tplmap` rewrites `apply_expression_template.name`. Structural scalar fields
+(`_RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
+rewritten. Pure syntactic substitution — no evaluation.
+
+`where` is handled positionally (never by the protected-key copy that
+metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
+{paramName: {shape: [indexSetName, …]}}. Import-edge rename renames templates,
+index sets, and metaparameters — NOT template-internal param names — so the
+constraint KEYS (param names) are copied verbatim while each constraint's
+`shape` list entries are mapped through `isetmap` exactly like a `wrt`/`from`
+index-set reference (a name absent from the map stays as spelled, matching the
+body-reference rule). Without this the rule body/registry would use the renamed
+`meshA.x` while `where` still said `x`, and registration would fail with
+`template_constraint_unknown_index_set`.
 """
 function _rename_walk(x, varmap::AbstractDict{String,String},
                       isetmap::AbstractDict{String,String},
@@ -583,6 +595,8 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
                 out[ks] = get(isetmap, string(v), string(v))
             elseif ks == "name" && is_apply && v isa AbstractString
                 out[ks] = get(tplmap, string(v), string(v))
+            elseif ks == "where" && _is_object(v)
+                out[ks] = _rename_where(v, isetmap)
             elseif ks == "of" || ks in _RENAME_PROTECTED_KEYS
                 out[ks] = _to_ordered(v)
             else
@@ -592,6 +606,32 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
         return out
     end
     return x
+end
+
+# Rewrite a `where` match-scoping block (esm-spec §9.6.1) under an import-edge
+# index-set rename (esm-spec §9.7.7). Constraint KEYS (param names) are copied
+# verbatim — rename never touches template-internal param names — and each
+# constraint's `shape` list entries (index-set names) are mapped through
+# `isetmap`, with any unmapped name left as spelled (the body-reference rule).
+function _rename_where(whr, isetmap::AbstractDict{String,String})
+    out = OrderedDict{String,Any}()
+    for (p, cobj) in pairs(whr)
+        if _is_object(cobj)
+            cout = OrderedDict{String,Any}()
+            for (ck, cv) in pairs(cobj)
+                if string(ck) == "shape" && _is_array(cv)
+                    cout[string(ck)] = Any[e isa AbstractString ?
+                        get(isetmap, string(e), string(e)) : _to_ordered(e) for e in cv]
+                else
+                    cout[string(ck)] = _to_ordered(cv)
+                end
+            end
+            out[string(p)] = cout
+        else
+            out[string(p)] = _to_ordered(cobj)
+        end
+    end
+    return out
 end
 
 """

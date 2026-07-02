@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_where_rename_unknown_index_set", "description": "INVALID: a model imports fv_div_grid_badwhere under prefix meshA (esm-spec 9.7.7). The edge rename rewrites the rule's declared index set x -> meshA.x and follows it through the body, but the rule's `where.F.shape` names 'y', an index set the library never declares — so it is not in the rename map and stays 'y' after rename (the same rule as an unmapped body reference). The consuming document's merged index_sets registry declares only meshA.x, so at rule registration the constraint fails with template_constraint_unknown_index_set (esm-spec 9.6.1/9.6.6). Guards that the §9.7.7 where-shape rewrite does not paper over genuinely-unknown constraint sets." },
+  "models": {
+    "OneGrid": {
+      "expression_template_imports": [
+        { "ref": "./fv_div_grid_badwhere.esm", "prefix": "meshA", "bindings": { "N": 8 } }
+      ],
+      "variables": {
+        "F_A": { "type": "state", "units": "1", "default": 1.5, "shape": ["meshA.x"], "description": "flux on the meshA instance" },
+        "div_A": { "type": "observed", "units": "1", "shape": ["meshA.x"], "description": "div target: the rule's where names an unknown set",
+          "expression": { "op": "div", "args": ["F_A"] }
+        }
+      },
+      "equations": []
+    }
+  }
+}

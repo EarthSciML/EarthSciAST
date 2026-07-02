@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "fv_div_grid_badwhere", "description": "INVALID-support library: a grid family whose divergence rule constrains `where.F.shape` on an index set 'y' the library never declares (it declares only x). Loads standalone (constraint registration is a consuming-document check, esm-spec 9.6.1). Under an import-edge prefix the rename maps x -> <prefix>.x but leaves the undeclared 'y' as spelled (the body-reference rule for unmapped names), so a consumer importing this hits template_constraint_unknown_index_set." },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 4, "description": "cell count" }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "fv_div_x": {
+      "params": ["F"],
+      "match": { "op": "div", "args": ["F"] },
+      "where": { "F": { "shape": ["y"] } },
+      "body": { "op": "*", "args": [{ "op": "/", "args": [1, "N"] }, "F"] }
+    }
+  }
+}
