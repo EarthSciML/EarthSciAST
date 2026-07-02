@@ -93,6 +93,29 @@ Before validation or any other processing, `load()` must resolve all subsystem r
 
 After resolution completes, the in-memory representation is indistinguishable from a file with all subsystems defined inline. All subsequent validation, editing, and conversion operates on the resolved representation.
 
+### 2.1c Template Import Resolution (esm-spec §9.7)
+
+Template imports resolve in the same load phase as subsystem references, with the same reference formats and the same visited-set cycle detection, but target **template-library files** (top-level `expression_templates`; esm-spec §9.7.1) instead of single-component files.
+
+**Resolution algorithm:**
+
+1. Collect `expression_template_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
+2. For each entry, in array order:
+   a. Load `ref` exactly as in §2.1b step 2a-b (URL vs relative path; shared visited set for cycle detection → `template_import_cycle`).
+   b. Verify the target is a pure template-library file — top-level `expression_templates` present; no `models` / `reaction_systems` / `data_loaders` / `coupling` / `domain` (`template_import_not_library`).
+   c. Recurse into the target's own `expression_template_imports` (depth-first).
+   d. Instantiate the target with the edge's metaparameter `bindings` (esm-spec §9.7.6): close the named metaparameters, re-export the rest into the importer's metaparameter scope, fold structural integer sites, substitute expression-position occurrences.
+   e. Apply `only` filtering (`template_import_unknown_name` for unknown names).
+   f. Merge the target's `index_sets` into the importing document's registry (deep-equal idempotent; `template_import_index_set_conflict` otherwise).
+   g. Append the target's effective template sequence to the importer's (esm-spec §9.7.4); dedup deep-equal duplicates; `template_import_name_conflict` for non-equal same-name collisions.
+3. After all imports resolve: close and fold the root document's metaparameters (loader-API bindings, then defaults; `metaparameter_unbound` if still open), inline template-body references in topological order (esm-spec §9.7.3), then run the §9.6.3 rewrite fixpoint.
+
+`load()` implementations MUST accept an optional metaparameter-bindings argument (name → integer) applied to the root document (esm-spec §9.7.6 binding site 4).
+
+**Error handling:** as the §2.1b table, plus the `template_import_*` / `metaparameter_*` diagnostics of esm-spec §9.6.6.
+
+After resolution, neither `expression_template_imports` nor `metaparameters` nor top-level `expression_templates` is visible downstream; round-trip emits the expanded, folded form (esm-spec §9.7.6).
+
 ### 2.2 Data Model
 
 Every library must define typed representations for:

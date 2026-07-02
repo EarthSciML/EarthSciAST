@@ -300,15 +300,15 @@ Where:
 ### EXPR-09-A: `expression_templates` Block (v0.4.0, esm-spec §9.6)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| EXPR-09-A-001 | `expression_templates` MUST be declared inside a single model or reaction_system | esm-spec.md §9.6.1 | Yes | expression |
-| EXPR-09-A-002 | Each entry MUST declare non-empty `params` array (no duplicates) | esm-spec.md §9.6.1 | Yes | expression |
+| EXPR-09-A-001 | `expression_templates` MUST be declared inside a single model or reaction_system, or at top level of a template-library file (§9.7.1) | esm-spec.md §9.6.1, §9.7.1 | Yes | expression |
+| EXPR-09-A-002 | Each entry MUST declare a `params` array (possibly empty; no duplicates; entries non-empty strings) | esm-spec.md §9.6.1 | Yes | expression |
 | EXPR-09-A-003 | Each entry MUST declare a fixed Expression AST `body` | esm-spec.md §9.6.1 | Yes | expression |
-| EXPR-09-A-004 | Template `body` MUST NOT contain `apply_expression_template` nodes (no template-calls-template) | esm-spec.md §9.6.3 | Yes | expression |
+| EXPR-09-A-004 | Template-body `apply_expression_template` references MUST form an acyclic DAG over match-less in-scope templates, inlined at registration time (depth ≤ 32) | esm-spec.md §9.6.3, §9.7.3 | Yes | expression |
 
 ### EXPR-09-B: `apply_expression_template` Op
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| EXPR-09-B-001 | `apply_expression_template` `name` MUST reference a template in the same component | esm-spec.md §9.6.2 | Yes | expression |
+| EXPR-09-B-001 | `apply_expression_template` `name` MUST reference a match-less template declared in or imported into the same component | esm-spec.md §9.6.2, §9.7.2 | Yes | expression |
 | EXPR-09-B-002 | `bindings` MUST exactly match the template's `params` (no missing or extra keys) | esm-spec.md §9.6.2 | Yes | expression |
 | EXPR-09-B-003 | Loaders MUST expand `apply_expression_template` to a fully-substituted AST at load time | esm-spec.md §9.6.4 | Yes | expression |
 | EXPR-09-B-004 | After expansion the AST MUST be structurally identical to inline-authored equivalent | esm-spec.md §9.6.4 | Yes | expression |
@@ -320,7 +320,7 @@ Where:
 | EXPR-09-C-001 | `apply_expression_template_version_too_old` when `esm` < 0.4.0 uses either construct | esm-spec.md §9.6.5 | Yes | validation |
 | EXPR-09-C-002 | `apply_expression_template_unknown_template` for unresolved `name` | esm-spec.md §9.6.6 | Yes | validation |
 | EXPR-09-C-003 | `apply_expression_template_bindings_mismatch` for missing/extra binding keys | esm-spec.md §9.6.6 | Yes | validation |
-| EXPR-09-C-004 | `apply_expression_template_recursive_body` when body contains `apply_expression_template` | esm-spec.md §9.6.6 | Yes | validation |
+| EXPR-09-C-004 | `apply_expression_template_recursive_body` on a cyclic (self or mutual) template-body reference | esm-spec.md §9.6.6, §9.7.3 | Yes | validation |
 | EXPR-09-C-005 | `apply_expression_template_invalid_declaration` for malformed `params`/`body` | esm-spec.md §9.6.6 | Yes | validation |
 
 ### EXPR-09-D: Conformance Fixtures
@@ -328,6 +328,23 @@ Where:
 |---|---|---|---|---|
 | EXPR-09-D-001 | Load + re-serialize of arrhenius template yields canonical expanded AST | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/fixture.esm` → `expanded.esm` | expression |
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
+
+### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
+| EXPR-09-E-002 | `expression_template_imports` MUST resolve at load, before validation, with §4.7 reference formats and canonical-path cycle detection (`template_import_cycle`) | esm-spec.md §9.7.2 | Yes | validation |
+| EXPR-09-E-003 | Importing a non-library file is `template_import_not_library`; a subsystem `ref` targeting a library file is `subsystem_ref_is_template_library` | esm-spec.md §9.7.1 | Yes | validation |
+| EXPR-09-E-004 | Effective declaration order MUST be depth-first post-order over the import DAG; deep-equal diamond duplicates dedup; non-equal same-name collisions are `template_import_name_conflict` | esm-spec.md §9.7.4 | Yes | expression |
+| EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
+| EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
+| EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
+| EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
+| EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
+| EXPR-09-E-012 | Round-trip MUST emit the expanded, folded form; no §9.7 construct survives `parse → emit` | esm-spec.md §9.7.6 | Yes | serialization |
+| EXPR-09-E-013 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_smoke`, `import_diamond`, `import_order_determinism`, `metaparameter_resolutions` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_*` | expression |
 
 ---
 

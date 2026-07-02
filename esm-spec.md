@@ -26,7 +26,7 @@ The full authoring stance, normatively:
 >
 > 1. *AST first.* The closed AST op set in §4 is the primary authoring surface. New mathematics SHOULD be expressible as a finite tree of existing ops.
 > 2. *Registry second.* Operations that genuinely cannot be written as AST trees (tabulated lookups, iterative solves, platform adapters) use the closed `fn`-op registry per §9.1; addition is normative spec work, not authoring.
-> 3. *Factoring third.* Within a single component, an author MAY name a fixed Expression AST tree as an `expression_templates` entry (§9.6) and reference it elsewhere by name with parameter substitution. Factoring is **not** programming: bodies are fixed AST trees, parameters are pure-syntactic substitution slots, no recursion, no cross-template calls, no metaprogramming.
+> 3. *Factoring third.* An author MAY name a fixed Expression AST tree as an `expression_templates` entry (§9.6) — declared within a component, or shared from a template-library file and imported (§9.7) — and reference it elsewhere by name with parameter substitution. A template body MAY reference other match-less templates as a statically-checked acyclic DAG that is inlined at load (§9.7.3). Factoring is **not** programming: bodies are fixed AST trees, parameters are pure-syntactic substitution slots, no recursion, no metaprogramming.
 >
 > Mechanisms that require any capability beyond fixed-tree parameter substitution (conditional includes, generated definitions, computed bindings) are out of scope and require a separate RFC that revisits §1.1.
 
@@ -49,7 +49,10 @@ The full authoring stance, normatively:
   "function_tables": { ... },
   "coupling": [ ... ],
   "domain": { ... },
-  "index_sets": { ... }
+  "index_sets": { ... },
+  "expression_templates": { ... },
+  "expression_template_imports": [ ... ],
+  "metaparameters": { ... }
 }
 ```
 
@@ -65,10 +68,13 @@ The full authoring stance, normatively:
 | `coupling` | | Composition and coupling rules |
 | `domain` | | The single temporal domain shared by all components (see Section 11) |
 | `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `aggregate` ranges (RFC semiring-faq-unified-ir §5.2) |
+| `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
+| `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries |
+| `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded from a `data_loaders` primitive or declared as variables/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
-At least one of `models`, `reaction_systems`, or `data_loaders` must be present. A document whose sole top-level component is `data_loaders` is a valid loader-only file — referenceable as a loader subsystem (§4.7).
+At least one of `models`, `reaction_systems`, `data_loaders`, or `expression_templates` must be present. A document whose sole top-level component is `data_loaders` is a valid loader-only file — referenceable as a loader subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](../earthscidiscretizations) standard library.
 
 ---
 
@@ -533,7 +539,7 @@ The **last** segment is always the variable (or species/parameter) name. All pre
 
 ### 4.7 Subsystem Inclusion by Reference
 
-Subsystems can be defined inline (as described in Sections 6 and 7) or included by reference from an external ESM file. A reference is an object with a single `ref` field containing a local file path or URL:
+Subsystems can be defined inline (as described in Sections 6 and 7) or included by reference from an external ESM file. A reference is an object with a `ref` field containing a local file path or URL, and optionally a `bindings` field closing the referenced document's metaparameters (§9.7.6):
 
 ```json
 {
@@ -570,6 +576,8 @@ A subsystem may be a child **model**, a child **reaction system**, or a pure-I/O
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
 **Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.
+
+**Relation to template imports (§9.7):** `expression_template_imports` reuses this section's reference formats and resolution-timing rule but is a distinct mechanism with a distinct target kind. A subsystem `ref` MUST NOT target a template-library file (`subsystem_ref_is_template_library`), and a template import MUST NOT target a subsystem/component file (`template_import_not_library`).
 
 ## 5. Events
 
@@ -2283,7 +2291,7 @@ The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-
 
 #### 9.6.1 The `expression_templates` block
 
-`expression_templates` is declared **inside a single `model` or `reaction_system`** (top-level templates and cross-component sharing are deferred to a follow-up RFC). It is a JSON object whose keys are template names and whose values are rewrite-rule definitions:
+`expression_templates` is declared **inside a single `model` or `reaction_system`**, or at the top level of a **template-library file** shared across components and files via `expression_template_imports` (§9.7). It is a JSON object whose keys are template names and whose values are rewrite-rule definitions:
 
 ```json
 "expression_templates": {
@@ -2303,8 +2311,8 @@ The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-
 
 Required fields:
 
-- `params`: ordered array of unique non-empty parameter (metavariable) names (strings).
-- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position.
+- `params`: ordered array of unique non-empty parameter (metavariable) names (strings). MAY be empty — a zero-parameter template is a named constant fragment (common in library files, e.g. a grid-spacing expression).
+- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position. A body MAY reference other **match-less** in-scope templates via `apply_expression_template` nodes; these are resolved at registration time as a statically-checked acyclic DAG (§9.7.3).
 
 Optional field:
 
@@ -2325,16 +2333,16 @@ Reactions and any other expression positions within the same component reference
 
 Required fields:
 
-- `name`: id of an `expression_templates` entry declared in the same component.
+- `name`: id of an `expression_templates` entry declared in the same component or imported into it via `expression_template_imports` (§9.7.2). Only match-less entries are invocable by name; a `match` rule is a rewrite step, not a named fragment.
 - `bindings`: object mapping each parameter in the referenced template's `params` to a value. Values MAY be numeric literals, variable name references, or arbitrary Expression ASTs (full subtrees).
 - `args`: MUST be an empty array.
 
 #### 9.6.3 Constraints (normative)
 
 1. **AST → AST only.** Rules take Expression args and produce an Expression. No string interpolation, no schema-level substitution, no metaprogramming.
-2. **Outermost-first, priority-ordered, bounded fixpoint.** Rule application is a sequence of **passes**; one pass is a single **pre-order (outermost-first)** walk of the expression tree. At each node visited, the engine considers every `match` rule whose pattern structurally matches that node and selects the winner **deterministically**: highest `priority` (integer, default `0`); ties broken by **declaration order** (earliest wins). The winner's `body` (instantiated by pure substitution, constraint 5) replaces the node, and the engine does **not** descend into the freshly-produced body during the current pass; if no rule matches a node, the walk descends into its children. Passes repeat until a pass performs **zero** rewrites (the fixpoint) or until `MAX_REWRITE_PASSES = 64` passes have run without converging, in which case the file is rejected with diagnostic `rewrite_rule_nonterminating` (naming the last-rewritten node). The pass bound is the authoritative termination guard — a self-reintroducing rule simply fails to converge. A `body` MUST NOT contain `apply_expression_template` nodes (`apply_expression_template_recursive_body`). Because selection and traversal are fully deterministic, all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection). **Compound precedence:** a rule matching a *compound* term (e.g. a Godunov Hamiltonian `sqrt(add(pow(D(u,x),2), pow(D(u,y),2)))`) declares a higher `priority` than the plain per-derivative rule, so under outermost-first selection it fires on the whole compound **before** the inner `D(u,x)` is lowered. The engine never *infers* specificity; precedence is the author's explicit, portable choice.
+2. **Outermost-first, priority-ordered, bounded fixpoint.** Rule application is a sequence of **passes**; one pass is a single **pre-order (outermost-first)** walk of the expression tree. At each node visited, the engine considers every `match` rule whose pattern structurally matches that node and selects the winner **deterministically**: highest `priority` (integer, default `0`); ties broken by **declaration order** (earliest wins). The winner's `body` (instantiated by pure substitution, constraint 5) replaces the node, and the engine does **not** descend into the freshly-produced body during the current pass; if no rule matches a node, the walk descends into its children. Passes repeat until a pass performs **zero** rewrites (the fixpoint) or until `MAX_REWRITE_PASSES = 64` passes have run without converging, in which case the file is rejected with diagnostic `rewrite_rule_nonterminating` (naming the last-rewritten node). The pass bound is the authoritative termination guard — a self-reintroducing rule simply fails to converge. "Declaration order" is the **effective sequence** of §9.7.4 (imports depth-first post-order, then local declarations); without imports it degenerates to file order as before. A `body`'s `apply_expression_template` references are resolved at registration time (§9.7.3) into a statically-checked acyclic DAG — cyclic reference is `apply_expression_template_recursive_body` — so by the time the engine runs, every rule body is a closed AST; `match` patterns MUST NOT contain `apply_expression_template` nodes. Because selection and traversal are fully deterministic, all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection). **Compound precedence:** a rule matching a *compound* term (e.g. a Godunov Hamiltonian `sqrt(add(pow(D(u,x),2), pow(D(u,y),2)))`) declares a higher `priority` than the plain per-derivative rule, so under outermost-first selection it fires on the whole compound **before** the inner `D(u,x)` is lowered. The engine never *infers* specificity; precedence is the author's explicit, portable choice.
 3. **Typed signatures (positional-by-name).** Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.
-4. **Component-local scope.** Templates declared inside one `model` / `reaction_system` are visible only within that component's expression positions.
+4. **Component-local scope.** Templates declared inside — or imported into (§9.7.2) — one `model` / `reaction_system` are visible only within that component's expression positions.
 5. **Pure syntactic substitution.** Every parameter occurrence in `body` is replaced by the bound argument's AST in source order. Expansion MUST NOT depend on argument evaluation.
 6. **Rewrite-target operator gate (before evaluation).** Loading is permissive: a file MAY load with rewrite-target ops still present, so fixtures that merely carry `grad`/`div`/`laplacian`/spatial-`D` as content (coupling, scoping, units examples that never simulate) are unaffected. But before a component is EVALUATED or COMPILED for simulation, its expression trees are walked; any node whose `op` is not in the evaluable-core set (§4.2) — including a spatial `D`, or any `D` in a right-hand-side / evaluation position — is rejected with diagnostic `unlowered_operator` (naming the op and node path). This is the sole guarantee that a rewrite-target op cannot reach evaluation. Parse/validate-only tooling that never builds an evaluator need not run the gate.
 
@@ -2351,6 +2359,8 @@ The v1 round-trip model is **Option A: parse-time expansion**. There is no Optio
 
 `expression_templates` and `apply_expression_template` arrive at `esm: 0.4.0`. Files declaring `esm: 0.3.x` or earlier MUST be rejected by all five bindings if they carry either construct, with diagnostic `apply_expression_template_version_too_old`.
 
+`expression_template_imports`, top-level `expression_templates` (template-library files), and `metaparameters` arrive at `esm: 0.8.0`. Files declaring an earlier version MUST be rejected by all five bindings if they carry any of these constructs, with diagnostic `template_import_version_too_old`.
+
 #### 9.6.6 Diagnostics
 
 Bindings MUST emit the following stable diagnostic codes (cross-language uniform; see RFC §1).
@@ -2360,10 +2370,22 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_version_too_old` | File declares `esm` < 0.4.0 but uses `expression_templates` or `apply_expression_template`. |
 | `apply_expression_template_unknown_template` | `apply_expression_template.name` references a template not declared in the enclosing component. |
 | `apply_expression_template_bindings_mismatch` | `bindings` does not exactly match the template's `params` (missing or extra keys). |
-| `apply_expression_template_recursive_body` | A template `body` contains an `apply_expression_template` node (template-calls-template forbidden). |
+| `apply_expression_template_recursive_body` | A template-body reference cycle (self or mutual) in the §9.7.3 registration-time DAG. (Redefined by the template-library RFC: acyclic body references are now legal and inlined at load.) |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, or other structural defects. |
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
+| `template_import_version_too_old` | File declares `esm` < 0.8.0 but carries `expression_template_imports`, top-level `expression_templates`, or `metaparameters` (§9.6.5). |
+| `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
+| `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
+| `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
+| `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
+| `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
+| `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2). |
+| `template_import_index_set_conflict` | Merged `index_sets` name collides with a non-deep-equal definition (§9.7.5). |
+| `template_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (32) (§9.7.3). |
+| `metaparameter_unbound` | A metaparameter is still open after edge bindings, API bindings, and defaults (§9.7.6). |
+| `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
+| `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name (§9.7.6). |
 
 #### 9.6.7 Conformance fixtures
 
@@ -2372,11 +2394,18 @@ Conformance fixtures live under `tests/conformance/expression_templates/`. The v
 - `arrhenius_smoke/fixture.esm` — a 2-parameter `arrhenius` template applied across three reactions with different scalar bindings.
 - `arrhenius_smoke/expanded.esm` — the canonical post-expansion form. All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array on load.
 
+The template-library RFC adds (see `docs/content/rfcs/template-library-imports.md` §11):
+
+- `import_smoke/` — the §9.7 four-file layering (grid → interior stencil → BC rule → consuming model) plus `expanded.esm`.
+- `import_diamond/` — diamond import with deep-equal dedup.
+- `import_order_determinism/` — equal-priority rules from two libraries: winner pinned by import order, then flipped by explicit `priority`.
+- `metaparameter_resolutions/` — one problem file instantiated at two sizes via subsystem-ref `bindings` → two goldens.
+
 #### 9.6.8 Discretizing spatial derivatives (rewrite rules over `D`)
 
 A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to an `aggregate` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `aggregate` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
 
-**This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](../earthscidiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by composing with rules that library provides.
+**This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](../earthscidiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by importing a rule from that library via `expression_template_imports` (§9.7). The library is layered — a grid file (index sets + geometry metaparameters), an interior-stencil file importing it, and a BC file importing *that* and wrapping the stencil into the complete `match` rule — so one rule file serves every resolution through metaparameter bindings (§9.7.6).
 
 A discretization rule names its scheme and BC in its identity. `central_D_lon_zero_grad_bc` matches `D(f, wrt: "lon")` and builds a `makearray` from the interior central-difference `aggregate` plus two one-sided boundary faces for the zero-gradient condition (here over a grid with `lon` size 144, `lat` size 91):
 
@@ -2427,6 +2456,71 @@ The first region fills the interior columns (`i ∈ [2,143]`) with the centered 
 after which the ordinary `D`-discretization rules apply. `div`/`laplacian` are sugar for sums/compositions of `D`; the bounded fixpoint (§9.6.3) lowers the resulting nested `D`s on subsequent passes. A rule author MAY instead match `laplacian` directly and emit a one-shot 5-point stencil — the open namespace (§4.2) permits either.
 
 **Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs (or the same non-convergence / `unlowered_operator` rejection).
+
+### 9.7 Template libraries, cross-file imports, and metaparameters
+
+This section makes `expression_templates` shareable across files and components, and makes structurally integer sites (index-set sizes, dense ranges, region bounds) parameterizable at load. All resolution happens at load, before validation and before the §9.6.3 fixpoint — the engine, its determinism contract, and the `unlowered_operator` gate are untouched. Motivation and design history: `docs/content/rfcs/template-library-imports.md`.
+
+#### 9.7.1 Template-library files
+
+A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_loaders`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`).
+
+#### 9.7.2 The `expression_template_imports` field
+
+An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii) at the top level of a library file. Each entry:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `ref` | ✓ | Path or URL of a template-library file. Reference format and resolution timing are §4.7's, verbatim: relative paths resolve against the referencing file's directory; resolution happens at load, before validation; cycle detection over canonical paths (`template_import_cycle`). A `ref` that fails to load or parse is `template_import_unresolved`. |
+| `only` | | Array of template names to import; absent = all. Naming a template the target does not declare is `template_import_unknown_name`. `only` filters visibility for the importer — the target file's own internal wiring resolves in its own scope first. |
+| `bindings` | | Object binding the target document's open metaparameters to integers (§9.7.6). |
+
+#### 9.7.3 Registration-time body composition
+
+A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`) and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`), and inlines in topological order by pure substitution (§9.6.3 constraint 5). Substitution is confluent, so topological order cannot affect the result. By the time any `match` rule is considered, every rule body is a closed Expression AST containing zero `apply_expression_template` nodes. `match` patterns MUST NOT contain `apply_expression_template` nodes.
+
+#### 9.7.4 Effective declaration order
+
+The §9.6.3 tie-break order with imports is the **depth-first post-order over the import DAG**: the effective sequence of a component (or library file) is, for each entry of its `expression_template_imports` in array order, the imported file's effective sequence; then its own declarations in declaration order. Deep-equal duplicates arriving via diamond imports deduplicate at first occurrence; a same-name collision with non-deep-equal definitions — import/import or import/local — is `template_import_name_conflict`. The engine never infers precedence across libraries: inter-library precedence is stated with explicit `priority`; the effective sequence only breaks exact ties.
+
+#### 9.7.5 `index_sets` merge
+
+An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them.
+
+#### 9.7.6 Load-time metaparameters
+
+A top-level `metaparameters` object declares document-scoped named integers:
+
+```json
+"metaparameters": {
+  "NLON": { "type": "integer", "default": 144, "description": "zonal cell count" },
+  "NLAT": { "type": "integer", "default": 91 }
+}
+```
+
+`type` is required and MUST be `"integer"` (the only kind). A metaparameter name MUST NOT collide with any variable, parameter, species, or index-set name visible in the document (`metaparameter_name_conflict`); there is no shadowing.
+
+**Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs. These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
+
+**Binding sites and value flow.** Bindings flow down the reference DAG; open metaparameters flow up:
+
+1. **Import edge** — `expression_template_imports[k].bindings` closes the named metaparameters of the imported document; the imported subtree is instantiated with those values before its templates and index sets enter the importer's scope.
+2. **Re-export** — metaparameters left unbound at an edge are inherited into the importing document's own metaparameter scope (deep-equal declarations dedupe; conflicts are `template_import_name_conflict`), so binding once at the top of a chain reaches the grid file at the bottom.
+3. **Subsystem edge** — a §4.7 `{"ref": …}` reference MAY carry the same `bindings` field, closing the referenced document's metaparameters (e.g. a convergence wrapper instantiating a problem file at a given size).
+4. **Loader API** — hosts MAY bind the root document's open metaparameters at load.
+5. **Defaults, last** — after API bindings, a still-open metaparameter takes its `default`; one with no default is `metaparameter_unbound`.
+
+Because instantiation happens per edge, a diamond whose two paths bind the same file differently produces non-deep-equal definitions and is rejected by the existing conflict diagnostics.
+
+**Ordering within load.** Per document, innermost-first: resolve imports (recursively, instantiating at each edge) → merge index sets → close and fold this document's metaparameters → §9.7.3 body composition → the §9.6.3 fixpoint on fully-concrete trees. Validators run on the folded, expanded form (§9.6.4). Round-trip emits the expanded, folded form; `expression_template_imports`, `metaparameters`, and top-level `expression_templates` do not survive `parse → emit`; source files remain the source of truth.
+
+#### 9.7.7 Worked example
+
+The conformance fixture `tests/conformance/expression_templates/import_smoke/` is the normative four-file layering — `grid_latlon.esm` (metaparameters NLON/NLAT, index sets, a zero-parameter `dlon_deg` template), `central_D_lon_interior.esm` (interior stencil importing the grid), `central_D_lon_zero_grad_bc.esm` (the complete `match` rule on `D(f, wrt: lon)`: a `makearray` whose interior region invokes the imported stencil and whose two face regions encode the zero-gradient condition), and a consuming model binding `{"NLON": 288, "NLAT": 181}` at its import edge. The full listing appears in `docs/content/rfcs/template-library-imports.md` §6. The same four files serve a convergence sweep by re-binding at the edge — no generated fixtures.
+
+#### 9.7.8 Diagnostics
+
+The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*`, `template_body_expansion_too_deep`, `metaparameter_*`, `subsystem_ref_is_template_library`).
 
 ---
 
