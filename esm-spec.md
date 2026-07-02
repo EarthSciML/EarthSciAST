@@ -579,6 +579,8 @@ A subsystem may be a child **model**, a child **reaction system**, or a pure-I/O
 - A file whose sole top-level component is `data_loaders` (with exactly one entry) is itself a valid ESM document and is referenceable as a loader subsystem; this is the structural reason a co-located `model + loader` is split into separate files when the loader must be shared by reference.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
+**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
+
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
 **Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.
@@ -2394,6 +2396,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
+| `subsystem_index_set_conflict` | A §4.7 subsystem ref's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry (§4.7 "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
 | `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
 | `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2); or a metaparameter binding — at an import edge, a subsystem edge, or the loader API — names a metaparameter the target document neither declares nor re-exports (§9.7.6). |
@@ -2504,7 +2507,7 @@ The §9.6.3 tie-break order with imports is the **depth-first post-order over th
 
 #### 9.7.5 `index_sets` merge
 
-An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them.
+An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them. A §4.7 subsystem reference edge merges the referenced file's top-level `index_sets` the same way, with its own diagnostic (`subsystem_index_set_conflict`, §4.7).
 
 #### 9.7.6 Load-time metaparameters
 

@@ -124,6 +124,7 @@ or one of the esm-spec §9.7 template-library / metaparameter codes
 - `template_import_unresolved`
 - `template_import_not_library`
 - `subsystem_ref_is_template_library`
+- `subsystem_index_set_conflict`
 - `template_import_cycle`
 - `template_import_name_conflict`
 - `template_import_unknown_name`

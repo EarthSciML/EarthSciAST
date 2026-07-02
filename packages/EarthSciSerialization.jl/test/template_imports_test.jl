@@ -175,9 +175,27 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
                      "apply_expression_template_recursive_body",
                      "template_body_expansion_too_deep", "metaparameter_unbound",
                      "metaparameter_type_error", "metaparameter_name_conflict",
-                     "makearray_region_inverted"]
+                     "makearray_region_inverted", "subsystem_index_set_conflict"]
             @test code in seen_codes
         end
+    end
+
+    @testset "subsystem-mounted index_sets merge into the importer (§4.7)" begin
+        # tests/valid/subsystem_index_set_merge.esm mounts subsystem_mesh_lib.esm:
+        # the mesh file's top-level index_sets join the importing document's
+        # registry (deep-equal `cells` idempotent; `vertices` added).
+        f = EarthSciSerialization.load(joinpath(repo_root, "tests", "valid",
+                                                "subsystem_index_set_merge.esm"))
+        @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
+        @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
+        sub = f.models["Host"].subsystems["M"]
+        @test sub isa EarthSciSerialization.Model
+        @test haskey(sub.variables, "q")
+        # The mounted mesh file loads standalone too (it is an ordinary
+        # single-model document owning its axes).
+        mesh = EarthSciSerialization.load(joinpath(repo_root, "tests", "valid",
+                                                   "subsystem_mesh_lib.esm"))
+        @test mesh.index_sets["cells"].size == 5
     end
 
     @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin

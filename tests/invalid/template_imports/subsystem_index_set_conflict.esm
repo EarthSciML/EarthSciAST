@@ -1,0 +1,24 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "subsystem_index_set_conflict",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'Index-set merge'). The document declares cells (interval, size 7) and mounts ../../valid/subsystem_mesh_lib.esm as a subsystem, whose top-level index_sets declare cells (interval, size 5). A referenced subsystem file's index_sets merge into the importing document's registry with the deep-equal-or-error rule mirroring §9.7.5; this size disagreement MUST fail at load with subsystem_index_set_conflict (§9.6.6). Pre-pin this loaded silently with the importer's 7 winning — the mounted mesh's own axis size was discarded, the exact mounted-mesh failure mode the pin makes loud."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 7 }
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.5, "description": "host scalar state" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] } }
+      ],
+      "subsystems": {
+        "M": { "ref": "../../valid/subsystem_mesh_lib.esm" }
+      }
+    }
+  }
+}
