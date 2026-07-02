@@ -1336,10 +1336,24 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
 
     from = String(data["from"])
     to = String(data["to"])
-    transform = String(data["transform"])
+    # `transform` is either one of the named transform strings or an Expression
+    # operator node (esm-spec §10.4: the expression-transform widening; the
+    # degenerate bare-string/number Expression spellings are not admissible in
+    # this slot, so a string here is always a named transform).
+    raw_transform = data["transform"]
+    transform = if raw_transform isa AbstractString
+        String(raw_transform)
+    elseif raw_transform isa AbstractDict
+        parse_expression(raw_transform)
+    else
+        throw(ParseError("variable_map 'transform' must be a named transform string or an expression operator node"))
+    end
     factor = get(data, "factor", nothing)
     if factor !== nothing
         factor = Float64(factor)
+    end
+    if transform isa EarthSciSerialization.Expr && factor !== nothing
+        throw(ParseError("variable_map: an expression 'transform' takes no 'factor' (fold the scaling into the expression)"))
     end
     description = get(data, "description", nothing)
     lifting = get(data, "lifting", nothing)

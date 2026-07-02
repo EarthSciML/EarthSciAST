@@ -2733,19 +2733,26 @@ export const schema: AnySchemaObject = {
           "description": "Target parameter (scoped reference, e.g., \"SuperFast.T\")."
         },
         "transform": {
-          "type": "string",
-          "enum": [
-            "param_to_var",
-            "identity",
-            "additive",
-            "multiplicative",
-            "conversion_factor"
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "param_to_var",
+                "identity",
+                "additive",
+                "multiplicative",
+                "conversion_factor"
+              ]
+            },
+            {
+              "$ref": "#/$defs/ExpressionNode"
+            }
           ],
-          "description": "How the mapping is applied."
+          "description": "How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and expand at load per §9.6.4). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them)."
         },
         "factor": {
           "type": "number",
-          "description": "Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var or identity, which replace/assign without scaling."
+          "description": "Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var, identity, or an Expression transform, which replace/assign/compute without a separate scaling slot."
         },
         "lifting": {
           "type": "string",
@@ -2763,7 +2770,7 @@ export const schema: AnySchemaObject = {
       },
       "allOf": [
         {
-          "$comment": "`factor` scales the coupling, so it is only valid with a scaling transform (additive, multiplicative, conversion_factor). A bare replace (param_to_var) or assign (identity) has nothing to scale, so a `factor` alongside it is a modeling error and is rejected rather than silently ignored.",
+          "$comment": "`factor` scales the coupling, so it is only valid with a scaling transform (additive, multiplicative, conversion_factor). A bare replace (param_to_var) or assign (identity) has nothing to scale, and an Expression transform spells its own arithmetic (fold scaling into the expression), so a `factor` alongside any of those is a modeling error and is rejected rather than silently ignored. The enum constraint below enforces this: a non-enum (Expression) transform fails it whenever `factor` is present.",
           "if": {
             "required": [
               "factor"

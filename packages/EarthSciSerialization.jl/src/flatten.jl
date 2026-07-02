@@ -1090,6 +1090,10 @@ Apply a `CouplingVariableMap` entry: substitute the `to` parameter/variable
 with the `from` variable in every flattened equation. For `param_to_var` and
 `conversion_factor`, also promote `to` out of the parameters map.
 
+When `transform` is an `Expr` (esm-spec §10.4 expression transform), the target
+parameter instead becomes an observed defined by the transform expression —
+see the expression arm below.
+
 `loader_names` is the set of top-level `data_loaders` keys. When a
 `param_to_var` binds a **loaded** field (`from`'s owning system is a data
 loader) onto a GRID-SHAPED consumer parameter (`to` carries a non-scalar
@@ -1101,13 +1105,68 @@ loader variable — e.g. `-Meteorology.u_wind * grad(...)` would not be lifted t
 `-index(Meteorology.u_wind, i, j) * …`. (esm-spec §11.5 "BCs from data" +
 §10.4 `param_to_var`.)
 """
+# Does `expr` reference the variable `name` anywhere — including inside
+# aggregate bodies, filter predicates, integral bounds, makearray values, and
+# table-lookup axis inputs? (The traversal mirrors `substitute`'s field set;
+# `Base.contains`-style helpers in expression.jl only walk `args`/`wrt`.)
+_expr_references_variable(expr::NumExpr, name::String)::Bool = false
+_expr_references_variable(expr::IntExpr, name::String)::Bool = false
+_expr_references_variable(expr::VarExpr, name::String)::Bool = expr.name == name
+function _expr_references_variable(expr::OpExpr, name::String)::Bool
+    any(_expr_references_variable(a, name) for a in expr.args) && return true
+    for sub in (expr.lower, expr.upper, expr.expr_body, expr.filter)
+        sub !== nothing && _expr_references_variable(sub, name) && return true
+    end
+    if expr.values !== nothing
+        any(_expr_references_variable(v, name) for v in expr.values) && return true
+    end
+    if expr.table_axes !== nothing
+        any(_expr_references_variable(v, name) for (_, v) in expr.table_axes) && return true
+    end
+    return false
+end
+
 function _apply_variable_map!(equations::Vector{Equation},
                               params::OrderedDict{String, ModelVariable},
                               entry::CouplingVariableMap,
-                              loader_names::Set{String}=Set{String}())
+                              loader_names::Set{String}=Set{String}(),
+                              observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing)
     from = entry.from
     to = entry.to
     transform = entry.transform
+
+    # Expression transform (esm-spec §10.4): the entry binds the target to a
+    # DERIVED value. Remove the `to` parameter and introduce in its place an
+    # observed variable — same name, units, shape, description — whose defining
+    # expression is the transform, evaluated in the flattened coupled system's
+    # scope. References to `to` in the equations are left intact: they now
+    # resolve to the observed, exactly as if the author had declared it. Every
+    # variable reference inside the transform is (by contract) a fully-scoped
+    # reference, so no namespacing is applied; the expression MUST reference
+    # the entry's `from` variable — it is the data-flow edge the entry declares.
+    if transform isa EarthSciSerialization.Expr
+        if !_expr_references_variable(transform, from)
+            throw(ArgumentError(
+                "variable_map($(from) -> $(to)): expression transform does not " *
+                "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"))
+        end
+        to_var = get(params, to, nothing)
+        if to_var !== nothing
+            delete!(params, to)
+        end
+        if observeds !== nothing
+            observeds[to] = ModelVariable(ObservedVariable;
+                units=to_var === nothing ? nothing : to_var.units,
+                description=to_var === nothing ? nothing : to_var.description,
+                expression=transform,
+                shape=to_var === nothing ? nothing : to_var.shape)
+        end
+        # Synthesize the observed's defining equation (`to ~ transform`) so the
+        # flattened system stays well-determined — mirroring _collect_model!'s
+        # observed-equation synthesis for authored observeds.
+        push!(equations, Equation(VarExpr(to), transform))
+        return
+    end
 
     # Build replacement Expr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
@@ -1473,7 +1532,7 @@ function flatten(file::EsmFile)::FlattenedSystem
         elseif entry isa CouplingCouple
             _apply_couple!(equations, entry, file)
         elseif entry isa CouplingVariableMap
-            _apply_variable_map!(equations, params, entry, loader_names)
+            _apply_variable_map!(equations, params, entry, loader_names, observeds)
         elseif entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")
         elseif entry isa CouplingCallback
@@ -1649,7 +1708,9 @@ function describe_coupling_entry(entry::CouplingEntry)::String
         end
         return desc
     elseif entry isa CouplingVariableMap
-        desc = "variable_map($(entry.from) -> $(entry.to), transform=$(entry.transform))"
+        transform_str = entry.transform isa EarthSciSerialization.Expr ?
+            "expression" : entry.transform
+        desc = "variable_map($(entry.from) -> $(entry.to), transform=$(transform_str))"
         if entry.factor !== nothing
             desc *= " [factor=$(entry.factor)]"
         end

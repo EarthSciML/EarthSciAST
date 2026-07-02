@@ -366,6 +366,23 @@ describe('edit', () => {
         transform: 'param_to_var'
       })
     })
+
+    it('should create a variable mapping with an expression transform', () => {
+      const transform = {
+        op: '+',
+        args: [{ op: '*', args: [2.0, 'TestModel.x'] }, 'TestSystem.A']
+      }
+      const result = mapVariable(esmFile, 'TestModel.x', 'TestSystem.A', transform)
+
+      expect(result).not.toBe(esmFile)
+      expect(result.coupling).toHaveLength(1)
+      expect(result.coupling![0]).toEqual({
+        type: 'variable_map',
+        from: 'TestModel.x',
+        to: 'TestSystem.A',
+        transform
+      })
+    })
   })
 
   describe('File-level Operations', () => {

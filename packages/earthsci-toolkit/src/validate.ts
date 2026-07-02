@@ -26,6 +26,7 @@ import type {
     CouplingOperatorCompose,
     CouplingCouple,
     CouplingOperatorApply,
+    CouplingVariableMap,
     DiscreteEvent,
     ContinuousEvent,
     AffectEquation,
@@ -1132,7 +1133,20 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
             }
         } else if (coupling.type === 'variable_map') {
             // Check from/to system references exist
-            const vmEntry = coupling as any;
+            const vmEntry = coupling as CouplingVariableMap;
+            // `factor` is a scaling slot for the scaling string transforms
+            // only; an Expression transform spells its own arithmetic, so a
+            // `factor` alongside it is a modeling error (the schema rejects
+            // this combination too — this mirrors it structurally).
+            if (vmEntry.factor !== undefined
+                && typeof vmEntry.transform === 'object' && vmEntry.transform !== null) {
+                errors.push({
+                    path: `${couplingPath}/factor`,
+                    code: 'factor_with_expression_transform',
+                    message: `variable_map with an Expression transform must not carry 'factor'; fold the scaling into the expression`,
+                    details: { factor: vmEntry.factor }
+                });
+            }
             for (const field of ['from', 'to'] as const) {
                 const ref = vmEntry[field];
                 if (typeof ref === 'string' && ref.includes('.')) {

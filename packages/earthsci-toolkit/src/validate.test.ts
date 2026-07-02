@@ -349,3 +349,62 @@ describe('Structural validation', () => {
     expect(err!.details.canonical_units).toBe('J/(mol*K)');
   });
 });
+describe('variable_map expression transforms (schema widening)', () => {
+  const exprTransformFile = () => ({
+    esm: "0.8.0",
+    metadata: { name: "vm_expr_transform" },
+    models: {
+      Src: {
+        variables: { F: { type: "state", default: 1.0 } },
+        equations: [
+          { lhs: { op: "D", args: ["F"], wrt: "t" }, rhs: 0 }
+        ]
+      },
+      Sink: {
+        variables: { offset: { type: "parameter", default: 0.5 } },
+        equations: []
+      }
+    },
+    coupling: [
+      {
+        type: "variable_map",
+        from: "Src.F",
+        to: "Sink.offset",
+        transform: {
+          op: "+",
+          args: [{ op: "*", args: [2.0, "Src.F"] }, "Sink.offset"]
+        }
+      }
+    ]
+  });
+
+  it('accepts an object (Expression) transform', () => {
+    const result = validate(exprTransformFile());
+
+    expect(result.schema_errors).toEqual([]);
+    expect(result.structural_errors).toEqual([]);
+    expect(result.is_valid).toBe(true);
+  });
+
+  it('rejects a non-enum bare string transform', () => {
+    const data = exprTransformFile();
+    (data.coupling[0] as any).transform = 'bogus_name';
+
+    const result = validate(data);
+
+    expect(result.is_valid).toBe(false);
+    expect(result.schema_errors.length).toBeGreaterThan(0);
+    expect(result.schema_errors.some(e => e.path.includes('/coupling/0'))).toBe(true);
+  });
+
+  it('rejects factor alongside an Expression transform', () => {
+    const data = exprTransformFile();
+    (data.coupling[0] as any).factor = 2.0;
+
+    const result = validate(data);
+
+    expect(result.is_valid).toBe(false);
+    expect(result.schema_errors.length).toBeGreaterThan(0);
+    expect(result.schema_errors.some(e => e.path.includes('/coupling/0'))).toBe(true);
+  });
+});

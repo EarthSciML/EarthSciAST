@@ -159,7 +159,7 @@ pub use types::{
     DataLoaderTemporal, DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,
-    StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableType,
+    StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, ValidationResult, validate,
@@ -271,7 +271,10 @@ mod coupling_field_tests {
             } => {
                 assert_eq!(from, "source.var");
                 assert_eq!(to, "target.param");
-                assert_eq!(transform, "identity");
+                assert_eq!(
+                    transform,
+                    types::VariableMapTransform::Named("identity".to_string())
+                );
             }
             _ => panic!("Expected VariableMap variant"),
         }

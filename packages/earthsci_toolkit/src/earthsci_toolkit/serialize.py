@@ -759,8 +759,13 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
             result["from"] = coupling.from_var
         if coupling.to_var:
             result["to"] = coupling.to_var
-        if coupling.transform:
-            result["transform"] = coupling.transform
+        if coupling.transform is not None:
+            # Expression transform (in-progress-0.8.0 widening): re-emit the
+            # ExpressionNode losslessly; legacy enum strings pass through.
+            if isinstance(coupling.transform, ExprNode):
+                result["transform"] = _serialize_expression(coupling.transform)
+            elif coupling.transform:
+                result["transform"] = coupling.transform
         if coupling.factor is not None:
             result["factor"] = coupling.factor
 

@@ -573,7 +573,13 @@ class VariableMapCoupling(BaseCouplingEntry):
     coupling_type: CouplingType = field(default=CouplingType.VARIABLE_MAP, init=False)
     from_var: Optional[str] = None
     to_var: Optional[str] = None
-    transform: Optional[str] = None
+    # EITHER one of the legacy enum strings ("param_to_var", "identity",
+    # "additive", "multiplicative", "conversion_factor") OR an ExpressionNode
+    # (in-progress-0.8.0 widening; operator-node object only on the wire).
+    # An expression transform must reference the entry's `from` variable and
+    # takes no `factor`; every variable reference inside it is already a
+    # fully-scoped reference into the flattened coupled system.
+    transform: Optional[Union[str, Expr]] = None
     factor: Optional[float] = None
 
 

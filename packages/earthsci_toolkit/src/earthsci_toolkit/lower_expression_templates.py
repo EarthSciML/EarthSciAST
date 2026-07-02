@@ -486,6 +486,70 @@ def _has_match_rules(file: dict) -> bool:
     return False
 
 
+def _component_registry(comp: dict, scope: str) -> tuple[dict, list]:
+    """Build one component's rewrite registry from its ``expression_templates``
+    block: the validated + body-composed named-template dict and the pre-sorted
+    ``match``-rule list. A component without a block yields ``({}, [])``."""
+    tplraw = comp.get("expression_templates")
+    templates: dict[str, Any] = {}
+    match_rules: list = []
+    if _is_object(tplraw):
+        for tname, tdecl in tplraw.items():
+            templates[tname] = tdecl
+        _validate_templates(templates, scope)
+        # Registration-time body composition (esm-spec §9.7.3): inline
+        # body references to match-less in-scope templates as a
+        # statically-checked acyclic DAG, so every rule body the
+        # fixpoint sees is a closed AST. Lazy import: template_imports
+        # imports from this module at module level.
+        from .template_imports import _compose_template_bodies
+        _compose_template_bodies(templates, scope)
+        match_rules = _build_match_rules(templates, scope)
+    return templates, match_rules
+
+
+def _rewrite_coupling_transforms(
+    out: dict, registries: dict[str, dict[str, tuple[dict, list]]],
+) -> None:
+    """Rewrite dict-valued ``variable_map`` coupling transforms to fixpoint.
+
+    An expression transform on a top-level ``coupling`` entry (in-progress-0.8.0
+    widening) is rewritten with the SAME context (named templates + match rules)
+    as a field of the RECEIVING component — the component named by the first
+    dot-segment of the entry's ``to`` reference, looked up in ``models`` then
+    ``reaction_systems``. If that component does not exist or declares no
+    templates the transform is left unrewritten; a leftover
+    ``apply_expression_template`` op is then caught by the document-wide
+    leftover-apply diagnostic in :func:`lower_expression_templates`.
+    """
+    coupling = out.get("coupling")
+    if not _is_array(coupling):
+        return
+    for idx, entry in enumerate(coupling):
+        if not _is_object(entry) or entry.get("type") != "variable_map":
+            continue
+        transform = entry.get("transform")
+        if not _is_object(transform):
+            continue
+        to_ref = entry.get("to")
+        if not isinstance(to_ref, str) or not to_ref:
+            continue
+        cname = to_ref.split(".", 1)[0]
+        reg = None
+        for compkind in ("models", "reaction_systems"):
+            if cname in registries[compkind]:
+                reg = registries[compkind][cname]
+                break
+        if reg is None:
+            continue
+        templates, match_rules = reg
+        if not templates:
+            continue
+        entry["transform"] = _rewrite_to_fixpoint(
+            transform, templates, match_rules, f"coupling[{idx}].transform"
+        )
+
+
 def lower_expression_templates(file: dict) -> dict:
     """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`.
 
@@ -510,6 +574,14 @@ def lower_expression_templates(file: dict) -> dict:
     if not _find_apply_paths(out) and not _has_match_rules(out):
         return _strip_expression_templates(out)
 
+    # Per-component rewrite registries (named templates + sorted match rules),
+    # kept so top-level coupling transforms can be rewritten in the RECEIVING
+    # component's context after the per-component loop (see below). Keyed
+    # compkind -> component name; lookup order is "models" then
+    # "reaction_systems".
+    registries: dict[str, dict[str, tuple[dict, list]]] = {
+        "models": {}, "reaction_systems": {},
+    }
     for compkind in ("models", "reaction_systems"):
         comps = out.get(compkind)
         if not _is_object(comps):
@@ -517,21 +589,8 @@ def lower_expression_templates(file: dict) -> dict:
         for cname, comp in comps.items():
             if not _is_object(comp):
                 continue
-            tplraw = comp.get("expression_templates")
-            templates: dict[str, Any] = {}
-            match_rules: list = []
-            if _is_object(tplraw):
-                for tname, tdecl in tplraw.items():
-                    templates[tname] = tdecl
-                _validate_templates(templates, f"{compkind}.{cname}")
-                # Registration-time body composition (esm-spec §9.7.3): inline
-                # body references to match-less in-scope templates as a
-                # statically-checked acyclic DAG, so every rule body the
-                # fixpoint sees is a closed AST. Lazy import: template_imports
-                # imports from this module at module level.
-                from .template_imports import _compose_template_bodies
-                _compose_template_bodies(templates, f"{compkind}.{cname}")
-                match_rules = _build_match_rules(templates, f"{compkind}.{cname}")
+            templates, match_rules = _component_registry(comp, f"{compkind}.{cname}")
+            registries[compkind][cname] = (templates, match_rules)
             for k in list(comp.keys()):
                 if k == "expression_templates":
                     continue
@@ -539,6 +598,8 @@ def lower_expression_templates(file: dict) -> dict:
                     comp[k], templates, match_rules, f"{compkind}.{cname}.{k}"
                 )
             comp.pop("expression_templates", None)
+
+    _rewrite_coupling_transforms(out, registries)
 
     leftover = _find_apply_paths(out)
     if leftover:

@@ -20,7 +20,13 @@ pub(crate) fn validate_coupling(
         let coupling_path = format!("/coupling/{idx}");
 
         match entry {
-            crate::CouplingEntry::VariableMap { from, to, .. } => {
+            crate::CouplingEntry::VariableMap {
+                from,
+                to,
+                transform,
+                factor,
+                ..
+            } => {
                 validate_scoped_reference(
                     from,
                     system_refs,
@@ -29,6 +35,26 @@ pub(crate) fn validate_coupling(
                     errors,
                 );
                 validate_scoped_reference(to, system_refs, &coupling_path, "variable_map", errors);
+                // An expression transform spells its own arithmetic, so a
+                // separate `factor` slot is a modeling error (esm-spec §10.4)
+                // — rejected rather than silently ignored, mirroring the
+                // schema's `allOf` guard and the Julia / Python
+                // construction-time rejection.
+                if factor.is_some() && transform.is_expression() {
+                    errors.push(StructuralError {
+                        path: coupling_path.clone(),
+                        code: StructuralErrorCode::FactorWithExpressionTransform,
+                        message: format!(
+                            "variable_map({from} -> {to}): an expression `transform` takes no `factor` (fold the scaling into the expression)"
+                        ),
+                        details: serde_json::json!({
+                            "coupling_type": "variable_map",
+                            "from": from,
+                            "to": to,
+                            "factor": factor,
+                        }),
+                    });
+                }
             }
             crate::CouplingEntry::OperatorApply { operator, .. } => {
                 if let Some(ref operators) = esm_file.operators {

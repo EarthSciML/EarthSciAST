@@ -1054,7 +1054,7 @@ mod tests {
         let coupling2 = CouplingEntry::VariableMap {
             from: "model1.x".to_string(),
             to: "model2.y".to_string(),
-            transform: "identity".to_string(),
+            transform: crate::types::VariableMapTransform::Named("identity".to_string()),
             factor: None,
             description: Some("Variable mapping".to_string()),
         };
@@ -1086,7 +1086,7 @@ mod tests {
             CouplingEntry::VariableMap {
                 from: "model1.x".to_string(),
                 to: "model2.y".to_string(),
-                transform: "identity".to_string(),
+                transform: crate::types::VariableMapTransform::Named("identity".to_string()),
                 factor: None,
                 description: Some("Second coupling".to_string()),
             },
@@ -1157,7 +1157,7 @@ mod tests {
         let new_coupling = CouplingEntry::VariableMap {
             from: "new_source.var".to_string(),
             to: "new_target.param".to_string(),
-            transform: "linear".to_string(),
+            transform: crate::types::VariableMapTransform::Named("linear".to_string()),
             factor: Some(2.0),
             description: Some("New coupling".to_string()),
         };
@@ -1181,7 +1181,10 @@ mod tests {
             } => {
                 assert_eq!(from, "new_source.var");
                 assert_eq!(to, "new_target.param");
-                assert_eq!(transform, "linear");
+                assert_eq!(
+                    transform,
+                    &crate::types::VariableMapTransform::Named("linear".to_string())
+                );
                 assert_eq!(factor, &Some(2.0));
                 assert_eq!(description, &Some("New coupling".to_string()));
             }

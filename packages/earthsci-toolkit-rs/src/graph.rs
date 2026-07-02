@@ -1295,7 +1295,7 @@ mod tests {
         let coupling_entries = vec![crate::CouplingEntry::VariableMap {
             from: "source.var".to_string(),
             to: "target.param".to_string(),
-            transform: "identity".to_string(),
+            transform: crate::types::VariableMapTransform::Named("identity".to_string()),
             factor: None,
             description: None,
         }];

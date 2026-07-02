@@ -674,7 +674,14 @@ func applyVariableMap(flat *FlattenedSystem, c VariableMapCoupling) error {
 		flat.Equations[i].RHS = strings.ReplaceAll(eq.RHS, c.From, replacement)
 	}
 
-	desc := fmt.Sprintf("variable_map(%s -> %s, transform=%s)", c.From, c.To, c.Transform)
+	// Transform is a union: a legacy string kind, or a widened Expression AST
+	// (rendered as the fixed token "expression" — this Go port rewrites and
+	// serializes but never evaluates transforms).
+	transform := c.TransformKind()
+	if c.TransformIsExpression() {
+		transform = "expression"
+	}
+	desc := fmt.Sprintf("variable_map(%s -> %s, transform=%s)", c.From, c.To, transform)
 	if c.Factor != nil {
 		desc += fmt.Sprintf(", factor=%g", *c.Factor)
 	}

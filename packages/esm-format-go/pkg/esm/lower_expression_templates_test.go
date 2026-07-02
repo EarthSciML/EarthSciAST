@@ -217,6 +217,38 @@ func TestExpressionTemplates_ConformanceFixture(t *testing.T) {
 	}
 }
 
+func TestExpressionTemplates_CouplingTransformConformanceFixture(t *testing.T) {
+	// The v0.8.0 variable_map expression-transform widening (esm-spec
+	// §10.4/§10.5): a coupling `transform` invoking a template declared by the
+	// RECEIVING component expands at load against that component's registry
+	// (§9.6.4). Cross-binding golden: expanded.esm.
+	const fixtureRel = "../../../../tests/conformance/expression_templates/coupling_transform_expression/fixture.esm"
+	const expandedRel = "../../../../tests/conformance/expression_templates/coupling_transform_expression/expanded.esm"
+	srcBytes, err := readFileBytes(t, fixtureRel)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	expandedBytes, err := readFileBytes(t, expandedRel)
+	if err != nil {
+		t.Fatalf("read expanded: %v", err)
+	}
+	v := decodeFixture(t, string(srcBytes))
+	if err := LowerExpressionTemplates(v); err != nil {
+		t.Fatalf("expansion failed: %v", err)
+	}
+	expanded := decodeFixture(t, string(expandedBytes))
+	gotCoupling := mustJSON(t, v["coupling"])
+	wantCoupling := mustJSON(t, expanded["coupling"])
+	if gotCoupling != wantCoupling {
+		t.Errorf("coupling diverges from expanded.esm:\n got=%s\nwant=%s", gotCoupling, wantCoupling)
+	}
+	gotModels := mustJSON(t, v["models"])
+	wantModels := mustJSON(t, expanded["models"])
+	if gotModels != wantModels {
+		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", gotModels, wantModels)
+	}
+}
+
 func readFileBytes(t *testing.T, relPath string) ([]byte, error) {
 	t.Helper()
 	return readFileFromTestDir(relPath)

@@ -674,6 +674,12 @@ function lower_expression_templates(raw_data)
 
     root = _to_dict(raw_data)::Dict{String,Any}
 
+    # Per-component rewrite registries (named templates + ordered match rules),
+    # captured so coupling `variable_map` expression transforms (esm-spec §10.4)
+    # can be rewritten against the RECEIVING component's registry below. Models
+    # are registered first; a reaction system never overwrites a same-named model.
+    registries = Dict{String,Tuple{Dict{String,Any},Vector{Any}}}()
+
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
         comps === nothing && continue
@@ -726,6 +732,31 @@ function lower_expression_templates(raw_data)
                                    "$compkind.$(string(cname)).$k")
             end
             delete!(comp, "expression_templates")
+            haskey(registries, string(cname)) ||
+                (registries[string(cname)] = (named, match_rules))
+        end
+    end
+
+    # Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):
+    # template invocations in a transform expand at load against the template
+    # registry of the component that owns the entry's `to` target — the
+    # receiving component, where a regridding library import (§9.7) lives.
+    # The transform is rewritten to fixpoint exactly as a field of that
+    # component would be (named templates + auto `match` rules, §9.6.3).
+    coupling = get(root, "coupling", nothing)
+    if coupling isa AbstractVector
+        for (i, entry) in enumerate(coupling)
+            _is_object(entry) || continue
+            get(entry, "type", nothing) == "variable_map" || continue
+            tr = get(entry, "transform", nothing)
+            _is_object(tr) || continue
+            target = get(entry, "to", nothing)
+            target isa AbstractString || continue
+            comp_name = String(first(split(target, "."; limit=2)))
+            reg = get(registries, comp_name, nothing)
+            reg === nothing && continue
+            entry["transform"] = _rewrite_to_fixpoint(tr, reg[1], reg[2],
+                                     "coupling[$(i)].transform")
         end
     end
 

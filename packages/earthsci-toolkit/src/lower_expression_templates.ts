@@ -670,6 +670,56 @@ interface Component {
   [k: string]: unknown
 }
 
+/**
+ * The rewrite context of one component: its named templates (consulted by
+ * `apply_expression_template`) plus its auto-applied `match` rules pre-sorted
+ * by (−priority, declarationIndex) — exactly what `rewriteToFixpoint` needs.
+ */
+interface RewriteContext {
+  templates: Templates
+  matchRules: MatchRule[]
+}
+
+/**
+ * Build the rewrite context from a component's raw `expression_templates`
+ * block: validate declarations, compose body references (esm-spec §9.7.3),
+ * and register `match` rules in deterministic selection order (§9.6.3).
+ */
+function buildRewriteContext(tplRaw: Record<string, unknown>, scope: string): RewriteContext {
+  const templates: Templates = {}
+  const matchRules: MatchRule[] = []
+  const all: Templates = {}
+  for (const [tname, tdecl] of Object.entries(tplRaw)) {
+    all[tname] = tdecl as TemplateDecl
+  }
+  validateTemplates(all, scope)
+  // Registration-time body composition (esm-spec §9.7.3): inline body
+  // references to match-less in-scope templates as a statically-checked
+  // acyclic DAG, so every rule body the fixpoint sees is a closed AST.
+  composeTemplateBodies(all, scope)
+  // Object key order in JS preserves declaration order, so the
+  // enumeration index IS the authored declaration order.
+  let declIndex = 0
+  for (const [tname, decl] of Object.entries(all)) {
+    templates[tname] = decl
+    if (decl.match !== undefined) {
+      matchRules.push({
+        name: tname,
+        params: new Set(decl.params),
+        match: decl.match,
+        body: decl.body,
+        priority: rulePriority(decl),
+        declIndex,
+      })
+    }
+    declIndex++
+  }
+  // Deterministic selection order (esm-spec §9.6.3): highest `priority`
+  // first, ties broken by declaration order (earliest wins).
+  matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
+  return { templates, matchRules }
+}
+
 /** True if any model / reaction_system declares an expression_templates block. */
 function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
   for (const compKind of ['models', 'reaction_systems'] as const) {
@@ -707,8 +757,15 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
     return stripExpressionTemplates(file)
   }
 
-  // Walk both component families.
+  // Walk both component families. Contexts of components that DECLARE an
+  // expression_templates block are retained per family so the top-level
+  // coupling walk below can rewrite variable_map expression transforms in
+  // the receiving component's scope (esm-spec §9.6.4).
   const out = deepClone(root)
+  const contextsByKind = {
+    models: new Map<string, RewriteContext>(),
+    reaction_systems: new Map<string, RewriteContext>(),
+  }
   for (const compKind of ['models', 'reaction_systems'] as const) {
     const comps = out[compKind]
     if (!isObject(comps)) continue
@@ -721,38 +778,13 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       // `matchRules` — the auto-applied `match` rules, pre-sorted by
       //                (−priority, declarationIndex) so `onePass` takes the
       //                FIRST matching rule (esm-spec §9.6.3).
-      const templates: Templates = {}
-      const matchRules: MatchRule[] = []
+      let templates: Templates = {}
+      let matchRules: MatchRule[] = []
       if (isObject(tplRaw)) {
-        const all: Templates = {}
-        for (const [tname, tdecl] of Object.entries(tplRaw)) {
-          all[tname] = tdecl as TemplateDecl
-        }
-        validateTemplates(all, `${compKind}.${compName}`)
-        // Registration-time body composition (esm-spec §9.7.3): inline body
-        // references to match-less in-scope templates as a statically-checked
-        // acyclic DAG, so every rule body the fixpoint sees is a closed AST.
-        composeTemplateBodies(all, `${compKind}.${compName}`)
-        // Object key order in JS preserves declaration order, so the
-        // enumeration index IS the authored declaration order.
-        let declIndex = 0
-        for (const [tname, decl] of Object.entries(all)) {
-          templates[tname] = decl
-          if (decl.match !== undefined) {
-            matchRules.push({
-              name: tname,
-              params: new Set(decl.params),
-              match: decl.match,
-              body: decl.body,
-              priority: rulePriority(decl),
-              declIndex,
-            })
-          }
-          declIndex++
-        }
-        // Deterministic selection order (esm-spec §9.6.3): highest `priority`
-        // first, ties broken by declaration order (earliest wins).
-        matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
+        const ctx = buildRewriteContext(tplRaw, `${compKind}.${compName}`)
+        templates = ctx.templates
+        matchRules = ctx.matchRules
+        contextsByKind[compKind].set(compName, ctx)
       }
       // Rewrite every property except expression_templates (we don't expand
       // inside template bodies — those are validated above) to a fixpoint.
@@ -761,6 +793,34 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
         comp[k] = rewriteToFixpoint(comp[k], templates, matchRules, `${compKind}.${compName}.${k}`)
       }
       delete comp.expression_templates
+    }
+  }
+
+  // Top-level coupling: a `variable_map` entry may carry an object-valued
+  // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint in
+  // the SAME rewrite context (named templates + match rules) as a field of
+  // the RECEIVING component — the first dot-segment of the entry's `to`,
+  // looked up under models then reaction_systems. A receiving component
+  // that is absent or declares no templates leaves the transform
+  // unrewritten (a stray apply op is then caught by the leftover check).
+  const coupling = out.coupling
+  if (Array.isArray(coupling)) {
+    for (let i = 0; i < coupling.length; i++) {
+      const entry = coupling[i]
+      if (!isObject(entry) || entry.type !== 'variable_map') continue
+      if (!isObject(entry.transform)) continue
+      const to = entry.to
+      if (typeof to !== 'string') continue
+      const receiver = to.split('.')[0] ?? ''
+      const ctx =
+        contextsByKind.models.get(receiver) ?? contextsByKind.reaction_systems.get(receiver)
+      if (!ctx) continue
+      entry.transform = rewriteToFixpoint(
+        entry.transform,
+        ctx.templates,
+        ctx.matchRules,
+        `coupling[${i}].transform`,
+      )
     }
   }
 

@@ -822,18 +822,28 @@ end
 """
     CouplingVariableMap <: CouplingEntry
 
-Replace a parameter in one system with a variable from another.
+Replace a parameter in one system with a variable from another, or — when
+`transform` is an `Expr` operator node rather than one of the named transform
+strings — with a derived value computed from it (esm-spec §10.4: the target
+parameter becomes an observed whose defining expression is the transform,
+evaluated in the flattened coupled system's scope; §8.6/§10.5 regridding form).
+An `Expr` transform takes no `factor` (fold scaling into the expression).
 """
 struct CouplingVariableMap <: CouplingEntry
     from::String
     to::String
-    transform::String
+    transform::Union{String,Expr}
     factor::Union{Float64,Nothing}
     description::Union{String,Nothing}
     lifting::Union{String,Nothing}
 
-    CouplingVariableMap(from::String, to::String, transform::String; factor=nothing, description=nothing, lifting=nothing) =
+    function CouplingVariableMap(from::String, to::String, transform::Union{String,Expr};
+                                 factor=nothing, description=nothing, lifting=nothing)
+        if transform isa Expr && factor !== nothing
+            throw(ArgumentError("variable_map: an expression `transform` takes no `factor` (fold the scaling into the expression)"))
+        end
         new(from, to, transform, factor, description, lifting)
+    end
 end
 
 """

@@ -294,6 +294,75 @@ end
         @test _uses_var(eq.rhs, "Source.value")
     end
 
+    @testset "7b. variable_map expression transform makes target an observed (esm-spec §10.4)" begin
+        # Sink: parameter F_in (target), parameter offset, state u with du/dt = F_in.
+        sink_vars = Dict{String, ModelVariable}(
+            "u" => ModelVariable(StateVariable, default=0.0),
+            "offset" => ModelVariable(ParameterVariable, default=1.5, units="1"),
+            "F_in" => ModelVariable(ParameterVariable, units="1",
+                                    description="receiving target"),
+        )
+        sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
+        # Src: observed F = 4.0.
+        src_vars = Dict{String, ModelVariable}(
+            "F" => ModelVariable(ObservedVariable, units="1",
+                                 expression=_N(4.0)),
+        )
+        src = Model(src_vars, Equation[])
+        # transform = 2*Src.F + Sink.offset — fully-scoped refs per §10.4.
+        transform = _op("+", _op("*", _N(2.0), _V("Src.F")), _V("Sink.offset"))
+        coupling = CouplingEntry[
+            CouplingVariableMap("Src.F", "Sink.F_in", transform),
+        ]
+        file = EarthSciSerialization.EsmFile("0.8.0",
+            EarthSciSerialization.Metadata("t7b"),
+            models=Dict("Sink" => sink, "Src" => src),
+            coupling=coupling)
+        flat = flatten(file)
+
+        # The target parameter is promoted out of the parameters map...
+        @test !haskey(flat.parameters, "Sink.F_in")
+        # ...and becomes an observed whose defining expression IS the transform.
+        @test haskey(flat.observed_variables, "Sink.F_in")
+        obs = flat.observed_variables["Sink.F_in"]
+        @test obs.type == ObservedVariable
+        @test obs.units == "1"
+        @test obs.expression == transform
+        # A defining equation Sink.F_in ~ transform is synthesized.
+        defeq = _find_eq(flat, "Sink.F_in")
+        @test defeq !== nothing
+        @test defeq.rhs == transform
+        # The consuming ODE still references the target by name (no inlining).
+        ueq = _find_eq(flat, "Sink.u")
+        @test ueq !== nothing
+        @test _uses_var(ueq.rhs, "Sink.F_in")
+    end
+
+    @testset "7c. variable_map expression transform must reference `from`" begin
+        sink_vars = Dict{String, ModelVariable}(
+            "u" => ModelVariable(StateVariable, default=0.0),
+            "F_in" => ModelVariable(ParameterVariable, units="1"),
+        )
+        sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
+        src_vars = Dict{String, ModelVariable}(
+            "F" => ModelVariable(ObservedVariable, units="1", expression=_N(4.0)),
+        )
+        src = Model(src_vars, Equation[])
+        # Bogus transform: never references Src.F.
+        transform = _op("*", _N(2.0), _V("Sink.u"))
+        file = EarthSciSerialization.EsmFile("0.8.0",
+            EarthSciSerialization.Metadata("t7c"),
+            models=Dict("Sink" => sink, "Src" => src),
+            coupling=CouplingEntry[CouplingVariableMap("Src.F", "Sink.F_in", transform)])
+        @test_throws ArgumentError flatten(file)
+    end
+
+    @testset "7d. expression transform takes no factor" begin
+        transform = _op("*", _N(2.0), _V("Src.F"))
+        @test_throws ArgumentError CouplingVariableMap(
+            "Src.F", "Sink.F_in", transform; factor=3.0)
+    end
+
     @testset "8. couple with connector equations" begin
         v1 = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
         m1 = Model(v1, Equation[Equation(_deriv("x"), _V("x"))])

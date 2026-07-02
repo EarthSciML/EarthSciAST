@@ -84,6 +84,40 @@ describe('flatten', () => {
     expect(flat.variables['B.y']).toBe('A.x')
   })
 
+  it('handles an expression (object) transform in variable_map', () => {
+    const file = {
+      esm: '0.1.0',
+      metadata: { name: 'test' },
+      models: {
+        Src: { variables: { F: { type: 'state' } }, equations: [] },
+        Sink: {
+          variables: {
+            offset: { type: 'parameter' },
+            y: { type: 'parameter' },
+          },
+          equations: [],
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Src.F',
+          to: 'Sink.y',
+          transform: {
+            op: '+',
+            args: [{ op: '*', args: [2.0, 'Src.F'] }, 'Sink.offset'],
+          },
+        },
+      ],
+    } as unknown as EsmFile
+
+    const flat = flatten(file)
+    expect(flat.metadata.couplingRules).toEqual([
+      'variable_map(Src.F -> Sink.y, expression)',
+    ])
+    expect(flat.variables['Sink.y']).toBe('((2 * Src.F) + Sink.offset)')
+  })
+
   it('produces nested dot-namespacing for subsystems', () => {
     const file = {
       esm: '0.1.0',

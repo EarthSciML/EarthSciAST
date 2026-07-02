@@ -448,13 +448,15 @@ function compose(file::EsmFile, system_a::String, system_b::String)::EsmFile
 end
 
 """
-    map_variable(file::EsmFile, from::String, to::String; transform::String="identity") -> EsmFile
+    map_variable(file::EsmFile, from::String, to::String; transform="identity") -> EsmFile
 
 Convenience function to create a variable_map coupling entry that forwards a
 variable reference `from` into `to`. `transform` names the transform function
-(e.g. `"identity"`, `"affine"`).
+(e.g. `"identity"`, `"affine"`) or is an `Expr` operator node evaluated on the
+source value (esm-spec §10.4 expression transform).
 """
-function map_variable(file::EsmFile, from::String, to::String; transform::String="identity")::EsmFile
+function map_variable(file::EsmFile, from::String, to::String;
+                      transform::Union{String,EarthSciSerialization.Expr}="identity")::EsmFile
     coupling_entry = CouplingVariableMap(from, to, transform)
     return add_coupling(file, coupling_entry)
 end

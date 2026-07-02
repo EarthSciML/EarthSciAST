@@ -17,7 +17,7 @@
 
 use crate::types::{
     ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
-    IndexSet, Model, ModelVariable, RangeSpec, ReactionSystem, VariableType,
+    IndexSet, Model, ModelVariable, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,23 @@ pub enum FlattenError {
     /// because no promotion graph is built.
     #[error("Cyclic promotion detected involving variables {variables:?}")]
     CyclicPromotion { variables: Vec<String> },
+
+    /// A `variable_map` expression transform carries a `factor` — the
+    /// expression spells its own arithmetic, so a separate scaling slot is a
+    /// modeling error (esm-spec §10.4). Mirrors the Julia / Python
+    /// construction-time rejection.
+    #[error(
+        "variable_map({from} -> {to}): an expression `transform` takes no `factor` (fold the scaling into the expression)"
+    )]
+    VariableMapFactorWithExpression { from: String, to: String },
+
+    /// A `variable_map` expression transform does not reference the entry's
+    /// `from` variable — the data-flow edge the entry declares (esm-spec
+    /// §10.4).
+    #[error(
+        "variable_map({from} -> {to}): expression transform does not reference the entry's 'from' variable '{from}' (esm-spec §10.4)"
+    )]
+    VariableMapExpressionMissingFrom { from: String, to: String },
 
     /// Wrapped reaction-lowering failure.
     #[error("Reaction lowering failed: {0}")]
@@ -393,27 +410,62 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let mut loaded_producers: HashMap<String, usize> = HashMap::new();
     if let Some(entries) = &file.coupling {
         for entry in entries {
-            if let CouplingEntry::VariableMap {
+            let CouplingEntry::VariableMap {
                 from,
                 to,
                 transform,
                 ..
             } = entry
-                && matches!(transform.as_str(), "param_to_var" | "conversion_factor")
-            {
-                let consumer_shape_rank = parameters
-                    .get(to)
-                    .and_then(|v| v.shape.as_ref())
-                    .map(|s| s.len())
-                    .filter(|r| *r > 0);
-                parameters.shift_remove(to);
-                let from_owner = from.split('.').next().unwrap_or("");
-                if let Some(rank) = consumer_shape_rank
-                    && loader_names.contains(from_owner)
-                    && !parameters.contains_key(from)
+            else {
+                continue;
+            };
+            match transform {
+                VariableMapTransform::Named(name)
+                    if matches!(name.as_str(), "param_to_var" | "conversion_factor") =>
                 {
-                    loaded_producers.insert(from.clone(), rank);
+                    let consumer_shape_rank = parameters
+                        .get(to)
+                        .and_then(|v| v.shape.as_ref())
+                        .map(|s| s.len())
+                        .filter(|r| *r > 0);
+                    parameters.shift_remove(to);
+                    let from_owner = from.split('.').next().unwrap_or("");
+                    if let Some(rank) = consumer_shape_rank
+                        && loader_names.contains(from_owner)
+                        && !parameters.contains_key(from)
+                    {
+                        loaded_producers.insert(from.clone(), rank);
+                    }
                 }
+                // Expression transform (esm-spec §10.4): the entry binds the
+                // target to a DERIVED value. Remove the `to` parameter and
+                // introduce in its place an observed variable — same name,
+                // units, shape, description — whose defining expression is the
+                // transform VERBATIM (its references are, by contract, already
+                // fully scoped, so no namespacing is applied). References to
+                // `to` in the equations are left intact: they now resolve to
+                // the observed, exactly as if the author had declared it.
+                VariableMapTransform::Expression(node) => {
+                    let removed = parameters.shift_remove(to);
+                    let (units, shape, description) = removed
+                        .map(|p| (p.units, p.shape, p.description))
+                        .unwrap_or((None, None, None));
+                    observed_variables.insert(
+                        to.clone(),
+                        ModelVariable {
+                            var_type: VariableType::Observed,
+                            units,
+                            default: None,
+                            description,
+                            expression: Some(Expr::Operator(node.clone())),
+                            shape,
+                            location: None,
+                            noise_kind: None,
+                            correlation_group: None,
+                        },
+                    );
+                }
+                VariableMapTransform::Named(_) => {}
             }
         }
     }
@@ -925,7 +977,32 @@ fn apply_coupling_entry(
             factor,
             description,
         } => {
-            apply_variable_map(from, to, transform, *factor, per_system);
+            match transform {
+                VariableMapTransform::Named(_) => {
+                    apply_variable_map(from, to, *factor, per_system);
+                }
+                // Expression transform (esm-spec §10.4): no substitution —
+                // references to `to` stay intact and resolve to the observed
+                // introduced in the collection phase. Validated here so a bad
+                // entry fails before any rewriting: an expression transform
+                // spells its own arithmetic (no `factor` slot) and MUST
+                // reference the entry's `from` variable — the data-flow edge
+                // the entry declares.
+                VariableMapTransform::Expression(node) => {
+                    if factor.is_some() {
+                        return Err(FlattenError::VariableMapFactorWithExpression {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                    if !node_references_variable(node, from) {
+                        return Err(FlattenError::VariableMapExpressionMissingFrom {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                }
+            }
             coupling_rules_applied.push(description.clone().unwrap_or_else(|| {
                 let factor_str = factor.map(|f| format!(" [factor={f}]")).unwrap_or_default();
                 format!("variable_map({from} -> {to}, {transform}){factor_str}")
@@ -1080,17 +1157,14 @@ fn apply_couple(
     }
 }
 
-/// Apply a `variable_map` rule by substituting `from` for `to` in every
-/// equation's expression tree (and scaling by `factor` where applicable).
-/// Parameter removal for `param_to_var`/`conversion_factor` happens in the
-/// collection phase to keep this function purely expression-rewriting.
-fn apply_variable_map(
-    from: &str,
-    to: &str,
-    _transform: &str,
-    factor: Option<f64>,
-    per_system: &mut [SystemBlock],
-) {
+/// Apply a NAMED-transform `variable_map` rule by substituting `from` for
+/// `to` in every equation's expression tree (and scaling by `factor` where
+/// applicable). Parameter removal for `param_to_var`/`conversion_factor`
+/// happens in the collection phase to keep this function purely
+/// expression-rewriting. Expression transforms (esm-spec §10.4) never reach
+/// here — they perform no substitution at all (the target becomes an
+/// observed in the collection phase).
+fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mut [SystemBlock]) {
     // `factor` is a scaling coefficient; the schema restricts it to the scaling
     // transforms (additive / multiplicative / conversion_factor), so apply it
     // uniformly whenever present. This matches Python and Julia — Rust previously
@@ -1175,6 +1249,46 @@ fn substitute_var(expr: &Expr, target: &str, replacement: &Expr) -> Expr {
             Expr::Operator(out)
         }
     }
+}
+
+/// Does `expr` reference the variable `name` anywhere — including inside
+/// aggregate/arrayop bodies (`expr`), `filter` predicates, integral bounds
+/// (`lower`/`upper`), and makearray `values`? The traversal mirrors the
+/// expression-bearing field set walked by [`substitute_var`]. Used to enforce
+/// the esm-spec §10.4 contract that a `variable_map` expression transform
+/// references its `from` variable.
+fn expr_references_variable(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) => false,
+        Expr::Variable(v) => v == name,
+        Expr::Operator(node) => node_references_variable(node, name),
+    }
+}
+
+/// [`expr_references_variable`] over an operator node's expression-bearing
+/// fields (`args`, `expr`, `filter`, `lower`, `upper`, `values`).
+fn node_references_variable(node: &ExpressionNode, name: &str) -> bool {
+    node.args.iter().any(|a| expr_references_variable(a, name))
+        || node
+            .expr
+            .as_deref()
+            .is_some_and(|e| expr_references_variable(e, name))
+        || node
+            .filter
+            .as_deref()
+            .is_some_and(|e| expr_references_variable(e, name))
+        || node
+            .lower
+            .as_deref()
+            .is_some_and(|e| expr_references_variable(e, name))
+        || node
+            .upper
+            .as_deref()
+            .is_some_and(|e| expr_references_variable(e, name))
+        || node
+            .values
+            .as_ref()
+            .is_some_and(|vs| vs.iter().any(|v| expr_references_variable(v, name)))
 }
 
 // ============================================================================

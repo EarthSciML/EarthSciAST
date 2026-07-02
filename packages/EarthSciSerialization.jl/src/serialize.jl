@@ -850,11 +850,14 @@ end
 Serialize variable_map coupling entry.
 """
 function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
+    # `transform` is a named transform string or an Expression operator node
+    # (esm-spec §10.4); expressions round-trip through the standard serializer.
     result = Dict{String,Any}(
         "type" => "variable_map",
         "from" => entry.from,
         "to" => entry.to,
-        "transform" => entry.transform
+        "transform" => entry.transform isa EarthSciSerialization.Expr ?
+            serialize_expression(entry.transform) : entry.transform
     )
 
     if entry.factor !== nothing

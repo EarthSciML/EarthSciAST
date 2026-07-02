@@ -1,0 +1,52 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "expression_templates_coupling_transform_expression",
+    "description": "A coupling variable_map whose `transform` is an Expression invoking a template declared by the RECEIVING component (esm-spec §10.4/§10.5: template invocations in a transform expand at load, §9.6.4, against the registry of the component that owns the `to` target). Sink declares `double_plus`; the coupling entry maps Src.F onto Sink.F_in through it. After load-time expansion the transform MUST be the inline AST 2*Src.F + Sink.offset — see expanded.esm — byte-for-byte across all five bindings after canonical serialization, like arrhenius_smoke.",
+    "authors": ["esm coupling-transform-widening conformance"]
+  },
+  "models": {
+    "Src": {
+      "variables": {
+        "F": {"type": "observed", "units": "1", "expression": 4.0, "description": "Source field: the constant 4."}
+      },
+      "equations": []
+    },
+    "Sink": {
+      "expression_templates": {
+        "double_plus": {
+          "params": ["x", "off"],
+          "body": {
+            "op": "+",
+            "args": [
+              {"op": "*", "args": [2, "x"]},
+              "off"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "u": {"type": "state", "units": "1", "default": 0.0},
+        "offset": {"type": "parameter", "units": "1", "default": 1.5},
+        "F_in": {"type": "parameter", "units": "1", "description": "Receiving target: bound to 2*Src.F + Sink.offset by the coupling entry's expression transform (a derived value; u(1) = 9.5 from a zero IC)."}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "F_in"}
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Src.F",
+      "to": "Sink.F_in",
+      "transform": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "double_plus",
+        "bindings": {"x": "Src.F", "off": "Sink.offset"}
+      },
+      "description": "Expression transform invoking the receiving component's template (expands at load per §9.6.4)."
+    }
+  ]
+}

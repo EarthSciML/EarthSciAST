@@ -464,11 +464,11 @@ export type CouplingVariableMap = CouplingVariableMap1 & {
    */
   to: string;
   /**
-   * How the mapping is applied.
+   * How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and expand at load per §9.6.4). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them).
    */
-  transform: "param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor";
+  transform: ("param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor") | ExpressionNode1;
   /**
-   * Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var or identity, which replace/assign without scaling.
+   * Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var, identity, or an Expression transform, which replace/assign/compute without a separate scaling slot.
    */
   factor?: number;
   /**

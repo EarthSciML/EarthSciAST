@@ -1736,7 +1736,11 @@ weights. The kernels map cleanly:
 
 None of this needs schema support beyond `aggregate` and the geometry leaves
 (`intersect_polygon`, `polygon_intersection_area`): a regridding rule is a normal
-coupling expression, authored inline or referenced as an ESD subsystem.
+coupling expression, authored inline or referenced as an ESD subsystem. The
+carrier is the `variable_map` entry's `transform` field, which admits a full
+Expression alongside the legacy named transforms (§10.4 defines the evaluation
+contract; §10.5 shows the spelling — typically an `apply_expression_template`
+invocation of an imported overlap-weight library, expanded at load per §9.6.4).
 
 #### 8.6.1 Evaluating the overlap weights: the `polygon_intersection_area` leaf
 
@@ -2599,7 +2603,7 @@ Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier 
 |---|---|---|
 | `operator_compose` | `operator_compose(a, b)` | Match LHS time derivatives and add RHS terms together |
 | `couple` | `couple(a, b, connector)` | Bi-directional coupling via explicit `ConnectorSystem` equations. The `connector` field specifies the equations that link the two systems. |
-| `variable_map` | `param_to_var` + connection | Replace a parameter in one system with a variable from another |
+| `variable_map` | `param_to_var` + connection | Replace a parameter in one system with a variable from another, or with an expression computed from it (§10.4) |
 | `callback` | `init_callback` | Register a callback for simulation events |
 | `event` | Cross-system event | Continuous or discrete event involving multiple coupled systems (see Section 5.6) |
 
@@ -2633,7 +2637,7 @@ For `couple`, `connector` defines the `ConnectorSystem` — the set of equations
 
 ### 10.4 The `variable_map` Transforms
 
-For `variable_map` coupling entries, `transform` specifies how the source variable maps to the target:
+For `variable_map` coupling entries, `transform` specifies how the source variable maps to the target. It is **either** one of the named transform strings below **or** an Expression AST (§4) evaluated on the source value(s):
 
 | Transform | Description |
 |---|---|
@@ -2642,8 +2646,11 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 | `additive` | Scaled replacement: `target := factor · source`. (To *add* a source/sink term to an existing tendency, use a `couple` `additive` equation — §10.3.) |
 | `multiplicative` | Scaled replacement: `target := factor · source`. (To *scale* an existing tendency by a source, use a `couple` `multiplicative` equation — §10.3.) |
 | `conversion_factor` | Scaled replacement applying a unit conversion: `target := factor · source`. |
+| *Expression* (object) | Computed replacement: `target := transform-expression`, an ordinary Expression AST evaluated in the flattened coupled system's scope. This is the regridding form of §8.6/§10.5, and the general spelling any of the string transforms desugar to. Takes no `factor` — fold scaling into the expression. |
 
-Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
+Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — or alongside an Expression transform — which spells its own arithmetic — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
+
+**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they expand at load (§9.6.4), before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. As with all of §9.6.4, round-trip emits the expanded form.
 
 ### 10.5 Coupling across grids and dimensionality
 
@@ -2651,15 +2658,20 @@ Coupled components may live on different index sets (resolutions), or differ in 
 
 #### Regridding
 
-When a variable is mapped between two components on different index sets — or from a data loader's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `aggregate` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `aggregate` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration.
+When a variable is mapped between two components on different index sets — or from a data loader's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `aggregate` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `aggregate` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
 
 ```json
 {
   "type": "variable_map",
   "from": "GEOSFP.u",
   "to": "Advection.u_wind",
-  "transform": { "op": "aggregate", "comment": "regrid the loader's native lon/lat onto the model's lon/lat index sets" },
-  "description": "Eastward wind regridded onto the model grid"
+  "transform": {
+    "op": "apply_expression_template",
+    "name": "conservative_overlap_apply",
+    "args": [],
+    "bindings": { "A_ij": "Advection.A_ij", "A_j": "Advection.A_j", "F_src": "GEOSFP.u", "atol": "Advection.atol" }
+  },
+  "description": "Eastward wind conservatively regridded onto the model grid via the imported overlap-weight templates"
 }
 ```
 

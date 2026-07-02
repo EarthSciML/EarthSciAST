@@ -489,18 +489,42 @@ type CouplingCouple struct {
 
 func (c CouplingCouple) GetType() string { return c.Type }
 
-// VariableMapCoupling represents variable mapping
+// VariableMapCoupling represents variable mapping.
+// Transform is a union (mirrors DataLoaderVariable.UnitConversion): either one
+// of the legacy string kinds ("param_to_var", "identity", "additive",
+// "multiplicative", "conversion_factor") held as a string, or a widened
+// Expression transform held as an ExprNode (esm-spec §8.6/§10.4/§10.5 — the
+// regridding form). Expression transforms are always operator-node OBJECTS on
+// the wire; bare string/number Expression spellings are not admissible (the
+// string space is reserved for the legacy kinds).
 type VariableMapCoupling struct {
-	Type        string   `json:"type"` // "variable_map"
-	From        string   `json:"from"`
-	To          string   `json:"to"`
-	Transform   string   `json:"transform"`
-	Factor      *float64 `json:"factor,omitempty"`
-	Lifting     *string  `json:"lifting,omitempty"`
-	Description *string  `json:"description,omitempty"`
+	Type        string     `json:"type"` // "variable_map"
+	From        string     `json:"from"`
+	To          string     `json:"to"`
+	Transform   Expression `json:"transform"` // string kind | ExprNode
+	Factor      *float64   `json:"factor,omitempty"`
+	Lifting     *string    `json:"lifting,omitempty"`
+	Description *string    `json:"description,omitempty"`
 }
 
 func (v VariableMapCoupling) GetType() string { return v.Type }
+
+// TransformKind returns the legacy string transform kind, or "" when the
+// transform is an Expression AST (or absent).
+func (v VariableMapCoupling) TransformKind() string {
+	s, _ := v.Transform.(string)
+	return s
+}
+
+// TransformIsExpression reports whether the transform is the widened
+// Expression form (an operator node) rather than a legacy string kind.
+func (v VariableMapCoupling) TransformIsExpression() bool {
+	switch v.Transform.(type) {
+	case ExprNode, *ExprNode:
+		return true
+	}
+	return false
+}
 
 // OperatorApplyCoupling represents operator application
 type OperatorApplyCoupling struct {
@@ -963,6 +987,61 @@ func (v *DataLoaderVariable) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("failed to unmarshal unit_conversion: %w", err)
 		}
 		v.UnitConversion = expr
+	}
+	return nil
+}
+
+// Custom JSON unmarshaling for VariableMapCoupling (handles the transform
+// union: legacy string kind | ExpressionNode object). A string transform is
+// stored as a string; an object transform is decoded via UnmarshalExpression
+// into an ExprNode. Any other JSON shape (number, array, boolean) is rejected:
+// an Expression transform is always an operator-node OBJECT (the degenerate
+// bare-reference / literal spellings are reserved for the string kinds).
+func (v *VariableMapCoupling) UnmarshalJSON(data []byte) error {
+	type TempVariableMapCoupling struct {
+		Type        string          `json:"type"`
+		From        string          `json:"from"`
+		To          string          `json:"to"`
+		Transform   json.RawMessage `json:"transform"`
+		Factor      *float64        `json:"factor,omitempty"`
+		Lifting     *string         `json:"lifting,omitempty"`
+		Description *string         `json:"description,omitempty"`
+	}
+	var temp TempVariableMapCoupling
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+	v.Type = temp.Type
+	v.From = temp.From
+	v.To = temp.To
+	v.Factor = temp.Factor
+	v.Lifting = temp.Lifting
+	v.Description = temp.Description
+	v.Transform = nil
+	if len(temp.Transform) > 0 && string(temp.Transform) != "null" {
+		raw := bytes.TrimSpace(temp.Transform)
+		switch {
+		case len(raw) > 0 && raw[0] == '"':
+			var kind string
+			if err := json.Unmarshal(raw, &kind); err != nil {
+				return fmt.Errorf("failed to unmarshal variable_map transform: %w", err)
+			}
+			v.Transform = kind
+		case len(raw) > 0 && raw[0] == '{':
+			expr, err := UnmarshalExpression(raw)
+			if err != nil {
+				return fmt.Errorf("failed to unmarshal variable_map transform expression: %w", err)
+			}
+			v.Transform = expr
+		default:
+			return fmt.Errorf("variable_map 'transform' must be a legacy string kind or an Expression operator-node object, got: %s", string(raw))
+		}
+	}
+	// `factor` is a scaling slot for the scaling STRING transforms only; an
+	// Expression transform computes its own value and admits no separate
+	// scaling coefficient (esm-schema CouplingVariableMap.factor).
+	if v.Factor != nil && v.TransformIsExpression() {
+		return fmt.Errorf("variable_map: 'factor' is not permitted with an Expression 'transform' (factor only applies to the scaling string transforms)")
 	}
 	return nil
 }

@@ -690,7 +690,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     let coupling = vec![CouplingEntry::VariableMap {
         from: "S.T_out".to_string(),
         to: "M.T".to_string(),
-        transform: "param_to_var".to_string(),
+        transform: earthsci_toolkit::types::VariableMapTransform::Named("param_to_var".to_string()),
         factor: None,
         description: None,
     }];

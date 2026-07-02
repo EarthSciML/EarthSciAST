@@ -1287,6 +1287,65 @@ pub struct Operator {
     pub description: Option<String>,
 }
 
+/// A `variable_map` coupling `transform` (esm-spec §10.4): either one of the
+/// legacy NAMED transform strings (`"param_to_var"`, `"identity"`,
+/// `"additive"`, `"multiplicative"`, `"conversion_factor"`) or an Expression
+/// evaluated on the source value(s) in the flattened coupled system's scope
+/// (the v0.8.0 additive widening — the regridding form).
+///
+/// On the wire an Expression transform is always an operator-node OBJECT: the
+/// degenerate bare-reference and literal Expression spellings are not
+/// admissible (the named string transforms already cover bare replacement,
+/// and the string space is reserved for them), so a JSON string deserializes
+/// to [`VariableMapTransform::Named`], an object to
+/// [`VariableMapTransform::Expression`], and a bare number is rejected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+pub enum VariableMapTransform {
+    /// Legacy named transform string.
+    Named(String),
+    /// Expression transform: an operator node whose variable references are
+    /// fully scoped and which MUST reference the entry's `from` variable
+    /// (esm-spec §10.4). Template invocations inside it are expanded at load.
+    Expression(ExpressionNode),
+}
+
+impl VariableMapTransform {
+    /// The named transform string, if this is the legacy string form.
+    pub fn as_named(&self) -> Option<&str> {
+        match self {
+            VariableMapTransform::Named(s) => Some(s.as_str()),
+            VariableMapTransform::Expression(_) => None,
+        }
+    }
+
+    /// The Expression operator node, if this is the expression form.
+    pub fn as_expression(&self) -> Option<&ExpressionNode> {
+        match self {
+            VariableMapTransform::Named(_) => None,
+            VariableMapTransform::Expression(node) => Some(node),
+        }
+    }
+
+    /// Whether this is the expression form.
+    pub fn is_expression(&self) -> bool {
+        matches!(self, VariableMapTransform::Expression(_))
+    }
+}
+
+impl std::fmt::Display for VariableMapTransform {
+    /// Named transforms display as their string; expression transforms as the
+    /// fixed token `expression` (matching the Julia / Python provenance
+    /// descriptions in `coupling_rules_applied`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VariableMapTransform::Named(s) => write!(f, "{s}"),
+            VariableMapTransform::Expression(_) => write!(f, "expression"),
+        }
+    }
+}
+
 /// Coupling entry with discriminated union based on type field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1325,9 +1384,11 @@ pub enum CouplingEntry {
         from: String,
         /// Target parameter (scoped reference)
         to: String,
-        /// How the mapping is applied
-        transform: String,
-        /// Conversion factor (for conversion_factor transform)
+        /// How the mapping is applied: a named transform string or an
+        /// Expression operator node (esm-spec §10.4).
+        transform: VariableMapTransform,
+        /// Conversion factor (for the scaling transforms only — not
+        /// permitted with an Expression transform)
         #[serde(skip_serializing_if = "Option::is_none")]
         factor: Option<f64>,
         /// Optional description

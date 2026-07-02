@@ -103,6 +103,9 @@ pub enum StructuralErrorCode {
     UnitInconsistency,
     /// An `ic`-op equation placed inside a reaction system's `constraint_equations`
     IcInReactionSystem,
+    /// A `variable_map` expression transform carries a `factor` (esm-spec
+    /// §10.4: the expression spells its own arithmetic — fold scaling into it)
+    FactorWithExpressionTransform,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -124,6 +127,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::CircularDependency => "circular_dependency",
             Self::UnitInconsistency => "unit_inconsistency",
             Self::IcInReactionSystem => "ic_in_reaction_system",
+            Self::FactorWithExpressionTransform => "factor_with_expression_transform",
         };
         write!(f, "{s}")
     }

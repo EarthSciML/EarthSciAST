@@ -244,6 +244,33 @@ def test_conformance_fixture_matches_expanded_form():
     )
 
 
+def test_coupling_transform_expression_conformance_fixture_matches_expanded_form():
+    """The v0.8.0 variable_map expression-transform widening (esm-spec
+    §10.4/§10.5): a coupling `transform` invoking a template declared by the
+    RECEIVING component expands at load against that component's registry
+    (§9.6.4). Cross-binding golden:
+    tests/conformance/expression_templates/coupling_transform_expression/expanded.esm.
+    """
+    import os
+
+    here = os.path.dirname(__file__)
+    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    case = os.path.join(
+        root,
+        "tests",
+        "conformance",
+        "expression_templates",
+        "coupling_transform_expression",
+    )
+    with open(os.path.join(case, "fixture.esm")) as fp:
+        fixture_src = fp.read()
+    with open(os.path.join(case, "expanded.esm")) as fp:
+        expanded_dict = json.load(fp)
+    expanded_via_pass = lower_expression_templates(json.loads(fixture_src))
+    assert expanded_via_pass["coupling"] == expanded_dict["coupling"]
+    assert expanded_via_pass["models"] == expanded_dict["models"]
+
+
 def test_load_end_to_end_produces_inline_rate_in_typed_object():
     """The full ``load`` path should expand templates and surface inline ASTs."""
     file = load(json.dumps(ARRHENIUS_FIXTURE))

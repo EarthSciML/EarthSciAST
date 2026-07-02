@@ -270,4 +270,63 @@ using JSON3
         @test esm.esm == "0.5.0"
     end
 
+    @testset "v0.8.0 variable_map expression transform (esm-spec §10.4)" begin
+        esm_json = """
+        {
+          "esm": "0.8.0",
+          "metadata": { "name": "vm_expr_transform_test" },
+          "models": {
+            "Src": {
+              "variables": {
+                "F": { "type": "observed", "units": "1", "expression": 4.0 }
+              },
+              "equations": []
+            },
+            "Sink": {
+              "variables": {
+                "u": { "type": "state", "default": 0.0 },
+                "offset": { "type": "parameter", "default": 1.5, "units": "1" },
+                "F_in": { "type": "parameter", "units": "1" }
+              },
+              "equations": [
+                { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "F_in" }
+              ]
+            }
+          },
+          "coupling": [
+            {
+              "type": "variable_map",
+              "from": "Src.F",
+              "to": "Sink.F_in",
+              "transform": { "op": "+", "args": [ { "op": "*", "args": [2.0, "Src.F"] }, "Sink.offset" ] }
+            }
+          ]
+        }
+        """
+        # Schema validation must accept the object-form transform (0.8.0 widening).
+        esm = load(IOBuffer(esm_json))
+        @test esm isa EarthSciSerialization.EsmFile
+        entry = esm.coupling[1]
+        @test entry isa CouplingVariableMap
+        @test entry.transform isa EarthSciSerialization.Expr
+        tr = entry.transform::EarthSciSerialization.OpExpr
+        @test tr.op == "+"
+
+        # Round-trip: the expression transform re-serializes losslessly.
+        buf = IOBuffer()
+        save(esm, buf)
+        reparsed = JSON3.read(String(take!(buf)))
+        rt = reparsed.coupling[1].transform
+        @test rt.op == "+"
+        @test rt.args[1].op == "*"
+        @test rt.args[1].args[2] == "Src.F"
+        @test rt.args[2] == "Sink.offset"
+
+        # factor + expression transform is rejected.
+        bad = replace(esm_json,
+            "\"transform\": { \"op\": \"+\"" =>
+            "\"factor\": 2.0, \"transform\": { \"op\": \"+\"")
+        @test_throws Exception load(IOBuffer(bad))
+    end
+
 end

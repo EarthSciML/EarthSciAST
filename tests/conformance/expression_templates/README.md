@@ -25,6 +25,21 @@ i.e. what `load(fixture.esm)` then re-serialize MUST emit
 is the expanded form, never the source). Conformance harnesses load the
 template fixture, re-serialize, and assert structural equality with this file.
 
+### `coupling_transform_expression/` (expanded.esm)
+
+The v0.8.0 `variable_map.transform` expression widening (esm-spec §10.4/§10.5):
+a coupling entry whose `transform` is an Expression invoking a template
+declared by the RECEIVING component (`Sink.double_plus`). Template invocations
+in a coupling transform expand at load (§9.6.4) against the registry of the
+component that owns the entry's `to` target, so after load the transform is
+the inline AST `2*Src.F + Sink.offset` (all references fully scoped —
+`expanded.esm` pins the form, structurally identical across all five
+bindings). The post-expansion twin lives in
+`tests/valid/coupling_transform_expression.esm` and is registered in the
+round_trip manifest; the flatten/evaluation contract (target parameter
+becomes an observed defined by the transform; `u(1) = 9.5`) is exercised by
+the executing bindings' unit suites.
+
 ## Rewrite-engine fixtures (0.8.0: outermost-first + priority + bounded fixpoint)
 
 These exercise the auto-applied `match` rewrite engine (esm-spec §9.6.3) and the

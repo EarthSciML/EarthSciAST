@@ -938,11 +938,25 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
         )
 
     elif coupling_type == CouplingType.VARIABLE_MAP:
+        # `transform` is EITHER one of the legacy enum strings OR an
+        # ExpressionNode object (in-progress-0.8.0 widening). The expression
+        # form computes the mapped value itself, so it admits no separate
+        # `factor` scaling slot.
+        transform_data = coupling_data.get("transform")
+        if isinstance(transform_data, dict):
+            if "factor" in coupling_data:
+                raise ValueError(
+                    "variable_map coupling: an expression 'transform' takes no "
+                    "'factor' (the expression computes the mapped value itself)"
+                )
+            transform = _parse_expression(transform_data)
+        else:
+            transform = transform_data
         return VariableMapCoupling(
             description=description,
             from_var=coupling_data.get("from"),
             to_var=coupling_data.get("to"),
-            transform=coupling_data.get("transform"),
+            transform=transform,
             factor=coupling_data.get("factor")
         )
 

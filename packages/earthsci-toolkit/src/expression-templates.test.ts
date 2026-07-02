@@ -195,6 +195,25 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     )
   })
 
+  it('coupling_transform_expression conformance fixture matches expanded form (esm-spec §10.4)', () => {
+    // The v0.8.0 variable_map expression-transform widening: a coupling
+    // `transform` invoking a template declared by the RECEIVING component
+    // expands at load against that component's registry (§9.6.4).
+    const root = path.resolve(__dirname, '../../..')
+    const casedir = path.join(
+      root,
+      'tests/conformance/expression_templates/coupling_transform_expression',
+    )
+    const file = load(
+      fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
+    ) as unknown as Record<string, unknown>
+    const expanded = JSON.parse(
+      fs.readFileSync(path.join(casedir, 'expanded.esm'), 'utf8'),
+    )
+    expect(file.coupling).toEqual(expanded.coupling)
+    expect(file.models).toEqual(expanded.models)
+  })
+
   it('ExpressionTemplateError is thrown with stable diagnostic codes', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.name = 'missing'
@@ -548,5 +567,161 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     expect(out.models.m.variables.y.expression).toEqual({ op: '*', args: [1.4, 'u'] })
     expect('expression_templates' in out.models.m).toBe(false)
+  })
+})
+
+describe('coupling variable_map expression transforms (receiving-component rewrite scope)', () => {
+  // Model "Sink" (the RECEIVER — first dot-segment of the entry's `to`)
+  // declares the template; the coupling transform invokes it.
+  const couplingFixture = () => ({
+    esm: '0.8.0',
+    metadata: { name: 'coupling_transform_expansion' },
+    models: {
+      Src: {
+        variables: { F: { type: 'state', default: 1.0 } },
+        equations: [{ lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0 }],
+      },
+      Sink: {
+        variables: { offset: { type: 'parameter', default: 0.5 } },
+        equations: [],
+        expression_templates: {
+          double_plus: {
+            params: ['x', 'off'],
+            body: { op: '+', args: [{ op: '*', args: [2.0, 'x'] }, 'off'] },
+          },
+        },
+      },
+    },
+    coupling: [
+      {
+        type: 'variable_map',
+        from: 'Src.F',
+        to: 'Sink.offset',
+        transform: {
+          op: 'apply_expression_template',
+          name: 'double_plus',
+          args: [],
+          bindings: { x: 'Src.F', off: 'Sink.offset' },
+        },
+      },
+    ],
+  })
+
+  const expandedTransform = {
+    op: '+',
+    args: [{ op: '*', args: [2.0, 'Src.F'] }, 'Sink.offset'],
+  }
+
+  it('expands apply_expression_template in a coupling transform at load time', () => {
+    const file = load(couplingFixture()) as any
+    expect(file.coupling[0].transform).toEqual(expandedTransform)
+    expect('expression_templates' in file.models.Sink).toBe(false)
+  })
+
+  it('expands the transform in the receiving component scope (lowering pass)', () => {
+    const out = lowerExpressionTemplates(couplingFixture()) as any
+    expect(out.coupling[0].transform).toEqual(expandedTransform)
+    // Everything else on the entry is untouched.
+    expect(out.coupling[0].from).toBe('Src.F')
+    expect(out.coupling[0].to).toBe('Sink.offset')
+  })
+
+  it('auto-applies the receiving component match rules to the transform (fixpoint)', () => {
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'coupling_match_rule' },
+      models: {
+        Sink: {
+          variables: { p: { type: 'parameter', default: 0.0 } },
+          equations: [],
+          expression_templates: {
+            dbl: {
+              params: ['x'],
+              match: { op: 'dbl', args: ['x'] },
+              body: { op: '*', args: [2.0, 'x'] },
+            },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Src.F',
+          to: 'Sink.p',
+          // Nested occurrences require the bounded fixpoint, not one pass.
+          transform: { op: 'dbl', args: [{ op: 'dbl', args: ['Src.F'] }] },
+        },
+      ],
+    }
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.coupling[0].transform).toEqual({
+      op: '*',
+      args: [2.0, { op: '*', args: [2.0, 'Src.F'] }],
+    })
+  })
+
+  it('resolves a reaction_systems receiver when no model shares the name', () => {
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'coupling_rs_receiver' },
+      reaction_systems: {
+        Chem: {
+          species: { A: { default: 1.0 } },
+          parameters: { k: { default: 0.0 } },
+          reactions: [],
+          expression_templates: {
+            triple: {
+              params: ['x'],
+              body: { op: '*', args: [3.0, 'x'] },
+            },
+          },
+        },
+      },
+      coupling: [
+        {
+          type: 'variable_map',
+          from: 'Src.F',
+          to: 'Chem.k',
+          transform: {
+            op: 'apply_expression_template',
+            name: 'triple',
+            args: [],
+            bindings: { x: 'Src.F' },
+          },
+        },
+      ],
+    }
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.coupling[0].transform).toEqual({ op: '*', args: [3.0, 'Src.F'] })
+  })
+
+  it('leaves the transform unrewritten when the receiver lacks templates (stray apply rejected)', () => {
+    const src = couplingFixture() as any
+    // Move the template block from the receiver (Sink) to the sender (Src):
+    // coupling transforms expand in the RECEIVING component's scope only, so
+    // the apply op survives lowering and trips the leftover gate.
+    src.models.Src.expression_templates = src.models.Sink.expression_templates
+    delete src.models.Sink.expression_templates
+    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(/remain after expansion at: \/coupling\/0\/transform/)
+  })
+
+  it('reports the coupling[<idx>].transform scope for an unknown template name', () => {
+    const src = couplingFixture() as any
+    src.coupling[0].transform.name = 'nope'
+    expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
+    expect(() => lowerExpressionTemplates(src)).toThrow(/coupling\[0\]\.transform/)
+  })
+
+  it('keeps named string transforms untouched', () => {
+    const src = couplingFixture() as any
+    src.coupling[0].transform = 'param_to_var'
+    const out = lowerExpressionTemplates(src) as any
+    expect(out.coupling[0]).toEqual({
+      type: 'variable_map',
+      from: 'Src.F',
+      to: 'Sink.offset',
+      transform: 'param_to_var',
+    })
   })
 })

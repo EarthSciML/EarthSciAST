@@ -16,6 +16,7 @@ import type {
   ContinuousEvent,
   DiscreteEvent,
   CouplingEntry,
+  CouplingVariableMap,
   Expr
 } from './types.js'
 import { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
@@ -522,14 +523,16 @@ export function compose(
  * @param file ESM file
  * @param from Source variable reference
  * @param to Target variable reference
- * @param transform Optional transformation type
+ * @param transform Optional transformation: one of the named transform strings,
+ *   or an Expression operator node evaluated in the flattened coupled system's
+ *   scope (esm-spec §8.6 — the regridding form)
  * @returns New ESM file with variable mapping coupling added
  */
 export function mapVariable(
   file: EsmFile,
   from: string,
   to: string,
-  transform: 'param_to_var' | 'identity' | 'additive' | 'multiplicative' | 'conversion_factor' = 'param_to_var'
+  transform: CouplingVariableMap['transform'] = 'param_to_var'
 ): EsmFile {
   const coupling: CouplingEntry = {
     type: 'variable_map',

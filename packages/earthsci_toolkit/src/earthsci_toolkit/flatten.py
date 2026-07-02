@@ -914,6 +914,9 @@ def _apply_variable_map(
     """
     if not entry.from_var or not entry.to_var:
         return
+    if isinstance(entry.transform, ExprNode):
+        _apply_variable_map_expression(components, entry)
+        return
     loader_names = loader_names or set()
     factor = entry.factor or 1.0
     src: Expr = entry.from_var
@@ -931,7 +934,10 @@ def _apply_variable_map(
             ))
         comp.equations = new_eqs
 
-    transform = (entry.transform or "").lower()
+    # Guard the string comparison: an ExprNode transform never reaches here
+    # (handled by _apply_variable_map_expression above), but keep the promotion
+    # logic crash-safe against non-string transforms regardless.
+    transform = entry.transform.lower() if isinstance(entry.transform, str) else ""
     promoted = transform in ("param_to_var", "conversion_factor", "")
     if promoted:
         for comp in components.values():
@@ -954,6 +960,90 @@ def _apply_variable_map(
                     source_system=from_owner,
                     shape=list(to_var.shape),
                 )
+
+
+def _expr_references_var(expr: Expr, name: str) -> bool:
+    """True iff ``name`` occurs as a string leaf in any variable-reference
+    position of ``expr``.
+
+    Recursively walks every Expression-valued slot of the AST — ``args``,
+    integral bounds (``lower``/``upper``), aggregate body/``filter``/``key``,
+    ``makearray`` values, and ``table_lookup`` per-axis inputs. ``ranges``
+    (integer index-range / index-set specs) are NOT variable references and are
+    excluded, as are scalar metadata fields (``wrt``, ``dim``, ``fn``, …).
+    """
+    if isinstance(expr, str):
+        return expr == name
+    if isinstance(expr, ExprNode):
+        children: List[Expr] = list(expr.args or [])
+        for child in (expr.lower, expr.upper, expr.expr, expr.filter, expr.key):
+            if child is not None:
+                children.append(child)
+        if expr.values:
+            children.extend(expr.values)
+        if expr.table_axes:
+            children.extend(expr.table_axes.values())
+        return any(_expr_references_var(c, name) for c in children)
+    return False
+
+
+def _apply_variable_map_expression(
+    components: "OrderedDict[str, _ComponentSystem]",
+    entry: VariableMapCoupling,
+) -> None:
+    """Resolve a ``variable_map`` whose ``transform`` is an Expression
+    (in-progress-0.8.0 widening, esm-spec §10.4/§10.5).
+
+    The expression transform behaves like ``param_to_var`` for promotion — the
+    target parameter ``to_var`` is removed from the flattened parameters — but
+    references to ``to_var`` in consumer equations are NOT substituted. Instead
+    the target becomes an OBSERVED variable named exactly ``to_var`` whose
+    defining equation is the transform expression VERBATIM: by contract every
+    variable reference inside an expression transform is already a fully-scoped
+    reference, so no namespacing is applied. The net effect is structurally
+    identical to the author declaring the target as an observed with that
+    expression. ``factor`` never combines with an expression transform (parse
+    rejects the pairing).
+    """
+    if not _expr_references_var(entry.transform, entry.from_var):
+        raise FlattenError(
+            f"variable_map expression transform mapping '{entry.from_var}' -> "
+            f"'{entry.to_var}' does not reference its source variable "
+            f"'{entry.from_var}'"
+        )
+
+    # Same removal/promotion mechanics as param_to_var: pop the target
+    # parameter wherever it is declared; the (first) owning component receives
+    # the observed. If no component declared it (variable_map may introduce a
+    # new target var), fall back to the receiving component named by the
+    # target's scope prefix.
+    target_comp: Optional[_ComponentSystem] = None
+    removed: Optional[FlattenedVariable] = None
+    for comp in components.values():
+        popped = comp.parameters.pop(entry.to_var, None)
+        if popped is not None and removed is None:
+            removed = popped
+            target_comp = comp
+    if target_comp is None:
+        target_comp = components.get(entry.to_var.split(".", 1)[0])
+    if target_comp is None:
+        return
+
+    # Carry the removed parameter's units/shape/description metadata onto the
+    # observed; its value is computed, so no default is carried.
+    target_comp.observed[entry.to_var] = FlattenedVariable(
+        name=entry.to_var,
+        type="observed",
+        units=removed.units if removed else None,
+        description=removed.description if removed else None,
+        source_system=removed.source_system if removed else target_comp.name,
+        shape=list(removed.shape) if removed and removed.shape else None,
+    )
+    target_comp.equations.append(FlattenedEquation(
+        lhs=entry.to_var,
+        rhs=entry.transform,
+        source_system=target_comp.name,
+    ))
 
 
 # ============================================================================

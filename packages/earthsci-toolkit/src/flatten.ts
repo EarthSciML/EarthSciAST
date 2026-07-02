@@ -312,6 +312,14 @@ function processCouplingEntry(
     }
 
     case 'variable_map': {
+      if (typeof entry.transform === 'object' && entry.transform !== null) {
+        // Expression transform (esm-spec §8.6): the mapped value IS the
+        // expression, whose references are already fully scoped — render it
+        // with the shared coupling-scope printer (no namespacing).
+        variables[entry.to] = expressionToString(entry.transform as Expression)
+        couplingRules.push(`variable_map(${entry.from} -> ${entry.to}, expression)`)
+        break
+      }
       const ruleDesc = `variable_map(${entry.from} -> ${entry.to}, ${entry.transform})`
       if (entry.transform === 'conversion_factor' && entry.factor !== undefined) {
         variables[entry.to] = `${entry.factor} * ${entry.from}`

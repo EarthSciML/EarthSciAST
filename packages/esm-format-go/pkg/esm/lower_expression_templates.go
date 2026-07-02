@@ -573,6 +573,63 @@ func orderedTemplateNames(tpl map[string]interface{}, order []string) []string {
 	return append(names, rest...)
 }
 
+// couplingTransformSite is one top-level `coupling` variable_map entry whose
+// `transform` is an OBJECT (a widened Expression transform, esm-spec
+// §8.6/§10.4/§10.5); idx is its position in the coupling array, used for the
+// `coupling[<idx>].transform` diagnostic scope.
+type couplingTransformSite struct {
+	idx   int
+	entry map[string]interface{}
+}
+
+// collectCouplingTransformSites assigns each top-level `coupling` entry with
+// "type" == "variable_map" and an OBJECT "transform" to its RECEIVING
+// component — the first dot-segment of "to", looked up under models first,
+// then reaction_systems. The expression transform is rewritten with that
+// component's rewrite context (named templates + match rules) exactly like a
+// field of the component. Entries whose receiver is not declared are omitted
+// and stay unrewritten (a leftover apply_expression_template there is caught
+// by the final gate).
+func collectCouplingTransformSites(view map[string]interface{}) map[[2]string][]couplingTransformSite {
+	sites := map[[2]string][]couplingTransformSite{}
+	coupling, ok := view["coupling"].([]interface{})
+	if !ok {
+		return sites
+	}
+	for idx, entryRaw := range coupling {
+		entry, ok := entryRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := entry["type"].(string); t != "variable_map" {
+			continue
+		}
+		if _, isObj := entry["transform"].(map[string]interface{}); !isObj {
+			continue
+		}
+		to, _ := entry["to"].(string)
+		recv := to
+		if i := strings.Index(to, "."); i >= 0 {
+			recv = to[:i]
+		}
+		if recv == "" {
+			continue
+		}
+		for _, kind := range templateComponentKinds {
+			comps, ok := view[kind].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if _, has := comps[recv]; has {
+				key := [2]string{kind, recv}
+				sites[key] = append(sites[key], couplingTransformSite{idx: idx, entry: entry})
+				break
+			}
+		}
+	}
+	return sites
+}
+
 // hasTemplateMachinery reports whether `view` declares any non-empty
 // `expression_templates` block under models/reaction_systems, or contains any
 // `apply_expression_template` op anywhere. Files with neither need no rewriting.
@@ -749,6 +806,11 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 		stripExpressionTemplates(view)
 		return nil
 	}
+	// Top-level `coupling` variable_map entries with an OBJECT `transform`
+	// (widened Expression transforms) rewrite with the rewrite context of
+	// their RECEIVING component; assign each site up front, the rewrite runs
+	// inside the per-component loop below where that context is in scope.
+	couplingSites := collectCouplingTransformSites(view)
 	for _, kind := range []string{"models", "reaction_systems"} {
 		comps, ok := view[kind].(map[string]interface{})
 		if !ok {
@@ -820,6 +882,20 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 					return err
 				}
 				compObj[k] = rewritten
+			}
+			// Expression transforms of variable_map coupling entries whose
+			// receiving component is this one rewrite to fixpoint with the
+			// same context, as if they were a field of the component. A
+			// template-less receiver leaves the transform unrewritten.
+			if len(named) > 0 || len(rules) > 0 {
+				for _, site := range couplingSites[[2]string{kind, cname}] {
+					scope := fmt.Sprintf("coupling[%d].transform", site.idx)
+					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope)
+					if err != nil {
+						return err
+					}
+					site.entry["transform"] = rewritten
+				}
 			}
 		}
 	}

@@ -215,6 +215,38 @@ const ARRHENIUS_FIXTURE_JSON = """
         @test got == want
     end
 
+    @testset "coupling_transform_expression conformance fixture matches expanded form" begin
+        # The v0.8.0 variable_map expression-transform widening (esm-spec
+        # §10.4/§10.5): a coupling `transform` invoking a template declared by
+        # the RECEIVING component expands at load against that component's
+        # registry (§9.6.4).
+        repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
+        case = joinpath(repo_root, "tests", "conformance",
+            "expression_templates", "coupling_transform_expression")
+        raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
+        expanded_via_pass = lower_expression_templates(raw)
+        expanded_dict = JSON3.read(read(joinpath(case, "expanded.esm"), String))
+        function _norm2(x)
+            if x isa AbstractDict || x isa JSON3.Object
+                return Dict{String,Any}(string(k) => _norm2(v) for (k, v) in pairs(x))
+            elseif x isa AbstractVector || x isa JSON3.Array
+                return Any[_norm2(v) for v in x]
+            else
+                return x
+            end
+        end
+        @test _norm2(expanded_via_pass.data["coupling"]) ==
+              _norm2(expanded_dict.coupling)
+        @test _norm2(expanded_via_pass.data["models"]) ==
+              _norm2(expanded_dict.models)
+        # Typed load: the expanded transform arrives as an Expr operator node.
+        f = EarthSciSerialization.load(joinpath(case, "fixture.esm"))
+        entry = f.coupling[1]
+        @test entry isa CouplingVariableMap
+        @test entry.transform isa OpExpr
+        @test (entry.transform::OpExpr).op == "+"
+    end
+
     @testset "AST-valued bindings are accepted and substituted" begin
         # Bind `Ea` to an expression `(3 * T)` rather than a scalar.
         ast_bound = replace(ARRHENIUS_FIXTURE_JSON,

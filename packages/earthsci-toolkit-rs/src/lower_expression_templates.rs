@@ -237,7 +237,8 @@ pub(crate) fn compose_template_bodies(
     if templates.is_empty() {
         return Ok(());
     }
-    let mut refs: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut refs: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     let mut any_refs = false;
     for (name, decl) in templates.iter() {
         let mut names = Vec::new();
@@ -336,7 +337,9 @@ pub(crate) fn compose_template_bodies(
     let mut order: Vec<String> = Vec::new();
     let mut chain: Vec<String> = Vec::new();
     for name in refs.keys() {
-        visit(name, &refs, &mut state, &mut depth, &mut order, &mut chain, scope)?;
+        visit(
+            name, &refs, &mut state, &mut depth, &mut order, &mut chain, scope,
+        )?;
     }
 
     for name in order {
@@ -441,7 +444,9 @@ fn rule_priority(decl: &Map<String, Value>) -> i64 {
 fn collect_match_rules(templates: &Map<String, Value>) -> Vec<MatchRule> {
     let mut rules = Vec::new();
     for (name, decl) in templates {
-        let Some(obj) = decl.as_object() else { continue };
+        let Some(obj) = decl.as_object() else {
+            continue;
+        };
         let Some(pattern) = obj.get("match") else {
             continue;
         };
@@ -773,6 +778,13 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
         return Ok(());
     };
 
+    // Per-component template registries (validated + body-composed), captured
+    // so coupling `variable_map` expression transforms (esm-spec §10.4) can be
+    // rewritten against the RECEIVING component's registry below. Models are
+    // registered first; a reaction system never overwrites a same-named model.
+    let mut registries: std::collections::HashMap<String, Map<String, Value>> =
+        std::collections::HashMap::new();
+
     for compkind in ["models", "reaction_systems"] {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
             continue;
@@ -816,6 +828,50 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                     comp.insert(k, rewritten);
                 }
             }
+            registries
+                .entry(cname.clone())
+                .or_insert_with(|| templates.clone());
+        }
+    }
+
+    // Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):
+    // template invocations in a transform expand at load against the template
+    // registry of the component that owns the entry's `to` target — the
+    // RECEIVING component, where a regridding library import (§9.7) lives. The
+    // transform is rewritten to fixpoint exactly as a field of that component
+    // would be (named templates + auto `match` rules, §9.6.3). A transform
+    // whose receiving component is absent or template-less is left
+    // unrewritten; any `apply_expression_template` nodes remaining in it are
+    // caught by the leftover scan below.
+    if let Some(Value::Array(entries)) = root.get_mut("coupling") {
+        for (idx, entry) in entries.iter_mut().enumerate() {
+            let Some(obj) = entry.as_object_mut() else {
+                continue;
+            };
+            if obj.get("type").and_then(|v| v.as_str()) != Some("variable_map") {
+                continue;
+            }
+            let Some(transform) = obj.get("transform").filter(|t| t.is_object()).cloned() else {
+                continue;
+            };
+            let Some(comp_name) = obj
+                .get("to")
+                .and_then(|v| v.as_str())
+                .map(|t| t.split('.').next().unwrap_or(""))
+            else {
+                continue;
+            };
+            let Some(templates) = registries.get(comp_name) else {
+                continue;
+            };
+            let rules = collect_match_rules(templates);
+            let ctx = RewriteCtx {
+                templates,
+                rules: &rules,
+            };
+            let scope = format!("coupling[{idx}].transform");
+            let rewritten = rewrite_to_fixpoint(&transform, &ctx, &scope)?;
+            obj.insert("transform".to_string(), rewritten);
         }
     }
 
@@ -973,6 +1029,30 @@ mod tests {
         let got_reactions = &got["reaction_systems"]["chem"]["reactions"];
         let want_reactions = &want["reaction_systems"]["chem"]["reactions"];
         assert_eq!(got_reactions, want_reactions);
+    }
+
+    /// The v0.8.0 variable_map expression-transform widening (esm-spec
+    /// §10.4/§10.5): a coupling `transform` invoking a template declared by the
+    /// RECEIVING component expands at load against that component's registry
+    /// (§9.6.4). Cross-binding golden: expanded.esm.
+    #[test]
+    fn coupling_transform_expression_conformance_fixture_matches_expanded_form() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo_root from CARGO_MANIFEST_DIR")
+            .to_path_buf();
+        let case =
+            repo_root.join("tests/conformance/expression_templates/coupling_transform_expression");
+        let src = std::fs::read_to_string(case.join("fixture.esm")).expect("read fixture.esm");
+        let mut got: Value = serde_json::from_str(&src).expect("parse fixture");
+        lower_expression_templates(&mut got).expect("expansion");
+        let expanded_src =
+            std::fs::read_to_string(case.join("expanded.esm")).expect("read expanded.esm");
+        let want: Value = serde_json::from_str(&expanded_src).expect("parse expanded");
+        assert_eq!(&got["coupling"], &want["coupling"]);
+        assert_eq!(&got["models"], &want["models"]);
     }
 
     #[test]
