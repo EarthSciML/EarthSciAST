@@ -68,6 +68,7 @@ class ExpressionTemplateError(Exception):
     ``apply_expression_template_version_too_old``,
     ``rewrite_rule_nonterminating``,
     ``template_constraint_unknown_index_set`` (§9.6.1 `where` scoping),
+    ``makearray_region_inverted`` (§4.3.2 empty/inverted bounds),
 
     or one of the esm-spec §9.7 template-library / metaparameter codes
     (§9.6.6, raised from :mod:`earthsci_toolkit.template_imports` and
@@ -801,6 +802,57 @@ def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
         _validate_geometry_manifolds(v, f"{path}/{k}")
 
 
+def _validate_makearray_regions(x: Any, path: str = "") -> None:
+    """Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every ``makearray``
+    region bound pair ``[start, stop]`` on the expanded, metaparameter-folded
+    tree must satisfy ``stop >= start - 1``. ``stop == start - 1`` is the
+    canonical EMPTY bound — the region covers no elements (the spelling an
+    interior region like ``[2, N-1]`` folds to at the minimum admissible extent
+    ``N = 2``). ``stop < start - 1`` is INVERTED and rejected with
+    ``makearray_region_inverted``: almost always an authoring bug (an interior
+    stencil instantiated below its minimum extent, e.g. ``[2, N-1]`` at ``N = 1``
+    folding to ``[2, 0]``), and silently treating it as empty would hide the
+    defect. Template bodies are skipped — pre-substitution bounds may legally
+    carry metaparameter names; only concrete integer pairs are checked."""
+    if _is_array(x):
+        for i, child in enumerate(x):
+            _validate_makearray_regions(child, f"{path}/{i}")
+        return
+    if not _is_object(x):
+        return
+    if x.get("op") == "makearray":
+        regions = x.get("regions")
+        if _is_array(regions):
+            for ri, region in enumerate(regions):
+                if not _is_array(region):
+                    continue
+                for di, bounds in enumerate(region):
+                    if not (_is_array(bounds) and len(bounds) == 2):
+                        continue
+                    lo, hi = bounds[0], bounds[1]
+                    if not (isinstance(lo, int) and not isinstance(lo, bool)
+                            and isinstance(hi, int) and not isinstance(hi, bool)):
+                        continue
+                    if hi < lo - 1:
+                        raise ExpressionTemplateError(
+                            "makearray_region_inverted",
+                            f"{path}: makearray regions[{ri}] dimension {di} "
+                            f"bound pair [{lo}, {hi}] is inverted (stop < "
+                            "start - 1). An empty bound is spelled "
+                            "[start, start-1] and contributes no elements "
+                            "(esm-spec §4.3.2); a further-inverted pair is an "
+                            "authoring error — e.g. an interior stencil region "
+                            "[2, N-1] instantiated at N below the scheme's "
+                            "minimum extent (§9.6.8).",
+                        )
+    for k, v in x.items():
+        if k == "expression_templates":
+            # Pre-substitution trees; bounds may carry metaparameter names or
+            # fold later (esm-spec §9.7.6).
+            continue
+        _validate_makearray_regions(v, f"{path}/{k}")
+
+
 def lower_expression_templates(file: dict) -> dict:
     """Run the load-time rewrite fixpoint (esm-spec §9.6.3) over `file`.
 
@@ -828,6 +880,7 @@ def lower_expression_templates(file: dict) -> dict:
         # No expansion to run, but the §9.6.4 expanded-form validators still
         # apply — the raw tree IS the expanded form.
         _validate_geometry_manifolds(out)
+        _validate_makearray_regions(out)
         return _strip_expression_templates(out)
 
     # The consuming document's merged index_sets registry (post-§9.7.5): the
@@ -878,8 +931,10 @@ def lower_expression_templates(file: dict) -> dict:
         )
     # Validators run on the expanded form (esm-spec §9.6.4): reject any
     # geometry-kernel node whose (possibly just-substituted) `manifold` is
-    # outside the closed set.
+    # outside the closed set, and any makearray region whose folded bound pair
+    # is inverted (stop < start - 1; esm-spec §4.3.2).
     _validate_geometry_manifolds(out)
+    _validate_makearray_regions(out)
     return out
 
 

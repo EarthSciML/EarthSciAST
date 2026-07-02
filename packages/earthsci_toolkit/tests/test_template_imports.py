@@ -583,3 +583,29 @@ def test_zero_parameter_templates_are_legal():
     }
     out = lower_expression_templates(doc)
     assert out["models"]["M"]["variables"]["y"]["expression"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Spec pins: §4.3.2 makearray empty/inverted regions, §4.7 subsystem
+# index-set merge (mirrors the Julia reference)
+# ---------------------------------------------------------------------------
+
+
+def test_makearray_empty_region_min_extent_loads_and_rebind_rejects():
+    """§4.3.2: an interior region [2, N-1] at the minimum admissible extent
+    N = 2 folds to the canonical EMPTY bound [2, 1] and loads clean; re-binding
+    N = 1 at the loader API folds it to [2, 0] — INVERTED — and is rejected."""
+    path = os.path.join(VALID_DIR, "makearray_empty_region_min_extent.esm")
+    load(path)  # N = 2 (default) → empty bound, loads clean
+    with pytest.raises(ExpressionTemplateError) as exc:
+        load(path, metaparameters={"N": 1})
+    assert exc.value.code == "makearray_region_inverted"
+
+
+def test_subsystem_index_set_merge_brings_axes_into_registry():
+    """§4.7: a mounted subsystem file's top-level index_sets merge into the
+    importing document's registry. The host redeclares cells deep-equal
+    (idempotent) and gains vertices from the mesh file."""
+    f = load(os.path.join(VALID_DIR, "subsystem_index_set_merge.esm"))
+    assert f.index_sets["cells"]["size"] == 5
+    assert f.index_sets["vertices"]["size"] == 4
