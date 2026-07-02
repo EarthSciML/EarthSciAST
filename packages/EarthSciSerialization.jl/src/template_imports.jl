@@ -498,6 +498,344 @@ function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::S
 end
 
 # ---------------------------------------------------------------------------
+# Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+# ---------------------------------------------------------------------------
+
+const _NAME_SEGMENT_RE = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+"""
+    _is_valid_dotted_name(s) -> Bool
+
+Grammar for a `prefix` and for `rename`/`rebind` TARGETS (esm-spec §9.7.7):
+one or more `[A-Za-z_][A-Za-z0-9_]*` segments joined by single dots — the
+§4.6 scoped-reference shape. Keys are never grammar-checked: they must match
+whatever the target actually exports (or whatever occurs free).
+"""
+_is_valid_dotted_name(s::AbstractString) =
+    !isempty(s) && all(seg -> occursin(_NAME_SEGMENT_RE, seg), split(s, '.'))
+
+function _name_map(raw, field::String, where::String)::OrderedDict{String,String}
+    out = OrderedDict{String,String}()
+    raw === nothing && return out
+    _is_object(raw) || throw(ExpressionTemplateError(
+        "template_import_rename_invalid",
+        "$where: `$field` must be an object mapping names to names (esm-spec §9.7.7)"))
+    for (k, v) in pairs(raw)
+        ks = string(k)
+        isempty(ks) && throw(ExpressionTemplateError(
+            "template_import_rename_invalid",
+            "$where: `$field` has an empty key (esm-spec §9.7.7)"))
+        (v isa AbstractString && _is_valid_dotted_name(string(v))) ||
+            throw(ExpressionTemplateError(
+                "template_import_rename_invalid",
+                "$where: `$field`.$ks target $(repr(v)) is not a valid dotted " *
+                "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; " *
+                "esm-spec §9.7.7)"))
+        out[ks] = string(v)
+    end
+    return out
+end
+
+# Scalar Expression-node fields whose string value names an AXIS / index set
+# (rewritten by the index-set rename map, param-shadowed like §9.6.1).
+const _RENAME_AXIS_KEYS = ("wrt", "dim")
+
+# Object keys whose values are never variable-reference positions for the
+# rename walk: the metaparameter skip set plus the remaining scalar structural
+# ExpressionNode fields (`op`, closed-registry ids, literal enums). `from`,
+# `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
+const _RENAME_PROTECTED_KEYS = union(_META_SUBST_SKIP_KEYS,
+    Set{String}(["op", "id", "expect_cadence", "reduce", "semiring",
+                 "manifold", "fn", "table", "side", "attrs",
+                 "members", "from_faq"]))
+
+"""
+    _rename_walk(x, varmap, isetmap, tplmap)
+
+One transitive-substitution pass over an imported declaration (esm-spec
+§9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
+bare strings in variable-reference positions; `isetmap` rewrites index-set
+reference positions (`{"from": …}` values and the `wrt`/`dim` axis fields, in
+`body` and `match` alike); `tplmap` rewrites `apply_expression_template.name`.
+Structural scalar fields (`_RENAME_PROTECTED_KEYS`) and bound-index lists
+(range `of`) are never rewritten. Pure syntactic substitution — no evaluation.
+"""
+function _rename_walk(x, varmap::AbstractDict{String,String},
+                      isetmap::AbstractDict{String,String},
+                      tplmap::AbstractDict{String,String})
+    if x isa AbstractString
+        s = string(x)
+        return haskey(varmap, s) ? varmap[s] : x
+    elseif _is_array(x)
+        return Any[_rename_walk(v, varmap, isetmap, tplmap) for v in x]
+    elseif _is_object(x)
+        op = _raw_get(x, "op")
+        is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
+        out = OrderedDict{String,Any}()
+        for (k, v) in pairs(x)
+            ks = string(k)
+            if ks == "from" && v isa AbstractString
+                out[ks] = get(isetmap, string(v), string(v))
+            elseif ks in _RENAME_AXIS_KEYS && v isa AbstractString
+                out[ks] = get(isetmap, string(v), string(v))
+            elseif ks == "name" && is_apply && v isa AbstractString
+                out[ks] = get(tplmap, string(v), string(v))
+            elseif ks == "of" || ks in _RENAME_PROTECTED_KEYS
+                out[ks] = _to_ordered(v)
+            else
+                out[ks] = _rename_walk(v, varmap, isetmap, tplmap)
+            end
+        end
+        return out
+    end
+    return x
+end
+
+"""
+    _rename_decl(decl, varmap, isetmap, tplmap)
+
+[`_rename_walk`](@ref) over one template declaration with the §9.6.1 shadowing
+rule: the template's own `params` shadow like-named entries of `varmap` and
+`isetmap` inside its `body`/`match` (a param is the inner binder; renaming
+must not capture it). `tplmap` is never shadowed — params do not bind template
+names.
+"""
+function _rename_decl(decl, varmap::AbstractDict{String,String},
+                      isetmap::AbstractDict{String,String},
+                      tplmap::AbstractDict{String,String})
+    params = _raw_get(decl, "params")
+    v2, i2 = varmap, isetmap
+    if params !== nothing && _is_array(params) && !isempty(params)
+        pset = Set{String}(string(p) for p in params if p isa AbstractString)
+        if any(p -> haskey(varmap, p), pset)
+            v2 = OrderedDict{String,String}(k => v for (k, v) in varmap if !(k in pset))
+        end
+        if any(p -> haskey(isetmap, p), pset)
+            i2 = OrderedDict{String,String}(k => v for (k, v) in isetmap if !(k in pset))
+        end
+    end
+    return _rename_walk(decl, v2, i2, tplmap)
+end
+
+# Bound index symbols of a declaration: aggregate `output_idx` entries and
+# `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
+# ranges KEYS (object keys, unreachable by value substitution) from their
+# `expr` occurrences, so it is rejected outright.
+function _collect_bound_syms!(out::Set{String}, x)
+    if _is_array(x)
+        for v in x
+            _collect_bound_syms!(out, v)
+        end
+        return out
+    end
+    _is_object(x) || return out
+    op = _raw_get(x, "op")
+    if op !== nothing && string(op) == "aggregate"
+        oi = _raw_get(x, "output_idx")
+        if oi !== nothing && _is_array(oi)
+            for e in oi
+                e isa AbstractString && push!(out, string(e))
+            end
+        end
+        rg = _raw_get(x, "ranges")
+        if rg !== nothing && _is_object(rg)
+            for (k, _) in pairs(rg)
+                push!(out, string(k))
+            end
+        end
+    end
+    for (_, v) in pairs(x)
+        _collect_bound_syms!(out, v)
+    end
+    return out
+end
+
+# Every bare string in a variable-reference position of a declaration (the
+# positions `varmap` would rewrite), minus the per-template `params` shadow
+# set. Used for the rebind occurs-check and the freshness (collision) guard.
+function _collect_ref_names!(out::Set{String}, x, shadowed::Set{String})
+    if x isa AbstractString
+        s = string(x)
+        s in shadowed || push!(out, s)
+        return out
+    elseif _is_array(x)
+        for v in x
+            _collect_ref_names!(out, v, shadowed)
+        end
+        return out
+    elseif _is_object(x)
+        for (k, v) in pairs(x)
+            ks = string(k)
+            (ks == "from" || ks in _RENAME_AXIS_KEYS || ks == "of" ||
+             ks in _RENAME_PROTECTED_KEYS) && continue
+            _collect_ref_names!(out, v, shadowed)
+        end
+        return out
+    end
+    return out
+end
+
+"""
+    _apply_edge_renames!(scope, entry, origin, ref) -> scope
+
+Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
+the target's SURVIVING export scope — templates after `only`, all index sets,
+and metaparameters still open after this edge's `bindings` — transitively
+through every occurrence inside the surviving declarations (index-set
+references in `from`/`wrt`/`dim` and registry `of` lists, open-metaparameter
+names in expression positions and structural integer sites, keyed-factor and
+other free names in variable-reference positions and registry
+`offsets`/`values`, `apply_expression_template.name` references). Runs after
+`bindings` instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge,
+so dedup and conflict detection operate on post-rename names. Pure load-time
+substitution: determinism, §9.6.3 ordering, and the expansion-depth bound are
+untouched.
+"""
+# (`scope` is a `_TemplateScope`; the struct is declared in the import-graph
+# section below, so the argument is left unannotated.)
+function _apply_edge_renames!(scope, entry, origin::String, ref::String)
+    where = "$origin: import of '$ref'"
+    prefix_raw = _raw_get(entry, "prefix")
+    rename = _name_map(_raw_get(entry, "rename"), "rename", where)
+    rebind = _name_map(_raw_get(entry, "rebind"), "rebind", where)
+    if prefix_raw !== nothing &&
+       !(prefix_raw isa AbstractString && _is_valid_dotted_name(string(prefix_raw)))
+        throw(ExpressionTemplateError(
+            "template_import_rename_invalid",
+            "$where: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
+            "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"))
+    end
+    prefix = prefix_raw === nothing ? nothing : string(prefix_raw)
+    (prefix === nothing && isempty(rename) && isempty(rebind)) && return scope
+
+    # --- `rename` keys must name a surviving exported name (typo protection) ---
+    exported = Set{String}()
+    union!(exported, keys(scope.templates))
+    union!(exported, keys(scope.index_sets))
+    union!(exported, keys(scope.metaparams))
+    for k in keys(rename)
+        k in exported || throw(ExpressionTemplateError(
+            "template_import_rename_unknown_name",
+            "$where: `rename` names '$k', which the target does not export at this " *
+            "edge (the surviving exports are templates after `only`, index sets, and " *
+            "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"))
+    end
+
+    _final(n) = haskey(rename, n) ? rename[n] : (prefix === nothing ? n : "$(prefix).$(n)")
+    tplmap  = OrderedDict{String,String}(n => _final(n) for n in keys(scope.templates))
+    isetmap = OrderedDict{String,String}(n => _final(n) for n in keys(scope.index_sets))
+    metamap = OrderedDict{String,String}(n => _final(n) for n in keys(scope.metaparams))
+
+    # --- per-namespace final-name uniqueness ---
+    for (what, m) in (("template", tplmap), ("index set", isetmap),
+                      ("metaparameter", metamap))
+        seen = Dict{String,String}()
+        for (o, n) in m
+            haskey(seen, n) && throw(ExpressionTemplateError(
+                "template_import_rename_collision",
+                "$where: $what names '$(seen[n])' and '$o' both map to '$n' after " *
+                "renaming (esm-spec §9.7.7)"))
+            seen[n] = o
+        end
+    end
+
+    # --- free / bound name inventory over the surviving declarations ---
+    free = Set{String}()
+    bound = Set{String}()
+    params_all = Set{String}()
+    for (_, d) in scope.templates
+        _collect_bound_syms!(bound, d)
+        shadowed = Set{String}()
+        params = _raw_get(d, "params")
+        if params !== nothing && _is_array(params)
+            for p in params
+                p isa AbstractString && push!(shadowed, string(p))
+            end
+        end
+        union!(params_all, shadowed)
+        _collect_ref_names!(free, d, shadowed)
+    end
+    for (_, d) in scope.index_sets
+        for f in ("offsets", "values")
+            v = _raw_get(d, f)
+            v isa AbstractString && push!(free, string(v))
+        end
+    end
+    setdiff!(free, keys(scope.metaparams))   # declared names are not free
+
+    # --- `rebind` keys must denote free names (typo protection) ---
+    for k in keys(rebind)
+        k in exported && throw(ExpressionTemplateError(
+            "template_import_rebind_unknown_name",
+            "$where: `rebind` names '$k', a declared name of the target (template / " *
+            "index set / metaparameter) — `rebind` addresses only free names; use " *
+            "`rename` for declared names (esm-spec §9.7.7)"))
+        k in bound && throw(ExpressionTemplateError(
+            "template_import_rename_invalid",
+            "$where: `rebind` key '$k' is a bound index symbol (`output_idx` / " *
+            "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"))
+        k in free || throw(ExpressionTemplateError(
+            "template_import_rebind_unknown_name",
+            "$where: `rebind` names '$k', which does not occur free in the imported " *
+            "declarations (esm-spec §9.7.7)"))
+    end
+
+    # --- freshness guard: new bare names must not capture / merge ---
+    taken = union(Set{String}(setdiff(free, keys(rebind))), bound, params_all)
+    newnames = String[]
+    for (o, n) in metamap
+        o != n && push!(newnames, n)
+    end
+    for (o, n) in rebind
+        o != n && push!(newnames, n)
+    end
+    for t in newnames
+        t in taken && throw(ExpressionTemplateError(
+            "template_import_rename_collision",
+            "$where: renamed/rebound name '$t' collides with a name still in use " *
+            "inside the imported declarations (a remaining free name, a bound index " *
+            "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"))
+        push!(taken, t)
+    end
+
+    # --- apply (identity entries dropped; one simultaneous substitution) ---
+    varmap = OrderedDict{String,String}()
+    for (o, n) in metamap
+        o != n && (varmap[o] = n)
+    end
+    for (o, n) in rebind
+        o != n && (varmap[o] = n)
+    end
+    iset_changed = OrderedDict{String,String}(o => n for (o, n) in isetmap if o != n)
+    tpl_changed  = OrderedDict{String,String}(o => n for (o, n) in tplmap if o != n)
+
+    newt = OrderedDict{String,Any}()
+    for (n, d) in scope.templates
+        newt[tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
+    end
+    scope.templates = newt
+
+    newi = OrderedDict{String,Any}()
+    for (n, d) in scope.index_sets
+        nd = _rename_walk(d, varmap, iset_changed, tpl_changed)
+        of = _raw_get(nd, "of")
+        if of !== nothing && _is_array(of)
+            nd["of"] = Any[e isa AbstractString ? get(iset_changed, string(e), string(e)) : e
+                           for e in of]
+        end
+        newi[isetmap[n]] = nd
+    end
+    scope.index_sets = newi
+
+    newm = OrderedDict{String,Any}()
+    for (n, d) in scope.metaparams
+        newm[metamap[n]] = d
+    end
+    scope.metaparams = newm
+    return scope
+end
+
+# ---------------------------------------------------------------------------
 # Import-graph resolution (esm-spec §9.7.2 / §9.7.4 / §9.7.5)
 # ---------------------------------------------------------------------------
 
@@ -615,7 +953,8 @@ end
 Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load the
 target (path-scoped cycle detection over canonical refs, as §4.7), verify
 library purity, resolve the target recursively in its own scope, instantiate
-at this edge's `bindings`, then apply `only` visibility filtering.
+at this edge's `bindings`, apply `only` visibility filtering, then apply the
+edge's `prefix`/`rename`/`rebind` (esm-spec §9.7.7).
 """
 function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
                                origin::String)::_TemplateScope
@@ -701,7 +1040,11 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
         end
         scope.templates = filtered
     end
-    return scope
+
+    # Import-edge renaming / namespacing + free-name rebinding (esm-spec
+    # §9.7.7) — after `bindings` instantiation and `only` filtering, before
+    # the §9.7.4/§9.7.5 merge, so dedup/conflict checks see post-rename names.
+    return _apply_edge_renames!(scope, entry, origin, ref)
 end
 
 """
