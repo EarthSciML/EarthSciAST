@@ -205,21 +205,21 @@ describe('Schema Edge Cases', () => {
       expect(errors).toEqual([])
     })
 
-    it('should fail with invalid operator in nested expression', () => {
-      const invalidOperatorExpression = {
-        op: "invalid_operator", // Not in allowed enum
-        args: ["x", "y"]
-      }
-
-      const invalidNested = {
+    it('accepts an unknown-but-well-formed operator (open op namespace, esm-spec §4.2)', () => {
+      // 0.8.0 opened the `op` namespace (open-op-namespace-fixpoint-rewrite RFC):
+      // the enum is gone; the schema keeps only a permissive minLength+pattern.
+      // An unknown identifier op is a legal rewrite-target string at schema time
+      // — the typo-catch moved to the `unlowered_operator` evaluation gate.
+      const openOp = {
         esm: "0.1.0",
-        metadata: { name: "invalid_op_test" },
+        metadata: { name: "open_op_test" },
         models: {
-          "invalid_model": {
+          "m": {
             variables: {
-              "invalid_observed": {
+              "obs": {
                 type: "observed",
-                expression: invalidOperatorExpression
+                units: "1",
+                expression: { op: "godunov_hamiltonian", args: ["x", "y"] }
               }
             },
             equations: []
@@ -227,14 +227,17 @@ describe('Schema Edge Cases', () => {
         }
       }
 
-      const errors = validateSchema(invalidNested)
-      expect(errors.length).toBeGreaterThan(0)
+      const errors = validateSchema(openOp)
+      // No enum keyword any more, and the well-formed op passes validation.
+      expect(errors.find(error => error.keyword === 'enum')).toBeUndefined()
+      expect(errors).toEqual([])
+      // Loading is permissive — the open-tier op survives to (deferred) evaluation.
+      expect(() => load(openOp)).not.toThrow()
 
-      // Should find the enum validation error
-      const enumError = errors.find(error => error.keyword === 'enum')
-      expect(enumError).toBeDefined()
-
-      expect(() => load(invalidNested)).toThrow(SchemaValidationError)
+      // A MALFORMED op string (violates the op `pattern`) is still rejected.
+      const malformed = JSON.parse(JSON.stringify(openOp))
+      malformed.models.m.variables.obs.expression.op = "9 bad op!"
+      expect(validateSchema(malformed).length).toBeGreaterThan(0)
     })
   })
 

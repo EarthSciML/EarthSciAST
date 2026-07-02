@@ -1,30 +1,46 @@
 /**
  * Load-time rewrite pass for `expression_templates` (esm-spec §9.6 /
- * docs/rfcs/ast-expression-templates.md).
+ * docs/rfcs/ast-expression-templates.md, docs/rfcs/open-op-namespace-fixpoint-rewrite.md).
  *
  * An `expression_templates` entry is a **rewrite rule** with `params`
- * (metavariables), a `body` (the replacement Expression), and an optional
- * `match` pattern. This single engine covers both application modes:
+ * (metavariables), a `body` (the replacement Expression), an optional
+ * integer `priority`, and an optional `match` pattern. This single engine
+ * covers both application modes:
  *
  *   - **No `match`** — the entry is applied only by an explicit
  *     `apply_expression_template` node that names it and supplies
- *     per-parameter `bindings` (the original template-expansion path).
+ *     per-parameter `bindings` (named-template expansion).
  *   - **With `match`** — the entry is an *auto-applied* rewrite rule.
  *     `match` is a pattern Expression in which the params are wildcards:
  *     a param in an operand/`args` position binds to the matched sub-AST;
- *     a param in a scalar field (e.g. `dim`, `side`) binds to the matched
- *     literal. The rule fires wherever the pattern structurally matches.
+ *     a param in a scalar field (e.g. `dim`, `side`, or a custom `attrs.<key>`)
+ *     binds to the matched literal. The rule fires wherever the pattern
+ *     structurally matches a node.
  *
- * Rewriting is a **single bottom-up pass** per expression tree, applying
- * `match` rules in template **declaration order**; a replacement `body` is
- * **not** re-scanned for further matches. A `match` rule whose `body`
- * re-introduces its own pattern is rejected with diagnostic
- * `rewrite_rule_nonterminating`.
+ * Rewriting is an **outermost-first, priority-ordered, bounded-fixpoint**
+ * process (esm-spec §9.6.3; mirrors the Julia reference `_rewrite_pass` /
+ * `_rewrite_to_fixpoint`). Rule application proceeds in **passes**; one pass
+ * (`onePass`) is a single **pre-order (outermost-first)** walk of the tree. At
+ * each node visited the engine first tries to fire a rule AT that node before
+ * descending: an `apply_expression_template` op is expanded (counts as a
+ * rewrite), otherwise the structurally-matching `match` rule of highest
+ * `priority` (integer, default 0; ties broken by DECLARATION order) fires. A
+ * fired rule's `body` replaces the node and the walk does **not** descend into
+ * that freshly-produced body during the current pass (it is revisited next
+ * pass). If nothing fires, the walk descends into children. Passes repeat until
+ * a pass performs **zero** rewrites (the fixpoint) or until
+ * `MAX_REWRITE_PASSES = 64` productive passes have run without converging, in
+ * which case the file is rejected with `rewrite_rule_nonterminating`. The pass
+ * bound — NOT a static check — is the authoritative termination guard, so a
+ * self-reintroducing rule simply fails to converge. Because selection and
+ * traversal are fully deterministic, all bindings produce byte-identical
+ * fixpoints.
  *
- * Walks each `models.<m>` and `reaction_systems.<rs>` block, rewriting
- * every expression position in the component. After the pass the component
- * carries no `expression_templates` block and no `apply_expression_template`
- * ops — downstream consumers see only normal Expression ASTs.
+ * After convergence the component carries no `expression_templates` block and
+ * no `apply_expression_template` ops — downstream consumers see only normal
+ * Expression ASTs (Option A round-trip). Any rewrite-target op (e.g. a spatial
+ * `D`) that survives the fixpoint into an evaluation position is caught later by
+ * the `unlowered_operator` gate (`evaluateExpression`), not here.
  *
  * Operates on the pre-coercion JSON view (plain objects) — runs in
  * `load()` after schema validation but before typed coercion.
@@ -42,6 +58,14 @@ import { isNumericLiteral, numericValue } from './numeric-literal.js'
 
 const APPLY_OP = 'apply_expression_template'
 
+/**
+ * Maximum number of productive rewrite passes before a file is rejected as
+ * non-converging (esm-spec §9.6.3, diagnostic `rewrite_rule_nonterminating`).
+ * Pinned identically across all bindings so the accept/reject decision — and
+ * the resulting fixpoint — is byte-identical everywhere.
+ */
+const MAX_REWRITE_PASSES = 64
+
 export class ExpressionTemplateError extends Error {
   constructor(public code: string, message: string) {
     super(`[${code}] ${message}`)
@@ -50,7 +74,7 @@ export class ExpressionTemplateError extends Error {
 }
 
 type Json = unknown
-type TemplateDecl = { params: string[]; body: Json; match?: Json }
+type TemplateDecl = { params: string[]; body: Json; match?: Json; priority?: unknown }
 /** Named templates invoked explicitly via `apply_expression_template` (no `match`). */
 type Templates = Record<string, TemplateDecl>
 
@@ -60,12 +84,31 @@ interface MatchRule {
   params: Set<string>
   match: Json
   body: Json
+  /** Selection precedence (esm-spec §9.6.3): higher fires first, ties by declIndex. */
+  priority: number
+  /** Declaration order (0-based) — the tie-breaker under equal priority. */
+  declIndex: number
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return (
     typeof v === 'object' && v !== null && !Array.isArray(v) && !isNumericLiteral(v)
   )
+}
+
+/**
+ * The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first,
+ * ties break by declaration order. Absent ⇒ 0. The schema constrains
+ * `priority` to an integer; any numeric encoding is coerced defensively.
+ */
+function rulePriority(decl: TemplateDecl): number {
+  const p: unknown = decl.priority
+  if (p === undefined || p === null) return 0
+  if (typeof p === 'boolean') return 0
+  const n = numericValue(p)
+  if (n !== undefined) return Math.round(n)
+  if (typeof p === 'number' && Number.isFinite(p)) return Math.round(p)
+  return 0
 }
 
 /**
@@ -100,8 +143,9 @@ function deepEqual(a: Json, b: Json): boolean {
  * Attempt to structurally match `pattern` against `node`, treating any
  * bare string in `params` as a wildcard metavariable. On success the
  * `bindings` map is populated (param → bound sub-AST for operand/`args`
- * positions, param → matched literal for scalar fields) and `true` is
- * returned. Repeated occurrences of a metavariable must bind consistently.
+ * positions, param → matched literal for scalar fields — including a custom
+ * `attrs.<key>` slot) and `true` is returned. Repeated occurrences of a
+ * metavariable must bind consistently.
  *
  * Pattern object fields are matched by key; node keys absent from the
  * pattern are ignored (so a partial operator pattern listing only
@@ -114,7 +158,7 @@ function matchPattern(
   bindings: Record<string, Json>,
 ): boolean {
   // Metavariable: binds to whatever node occupies this position (sub-AST
-  // in an operand/`args` slot, literal in a scalar field).
+  // in an operand/`args` slot, literal in a scalar field / `attrs.<key>`).
   if (typeof pattern === 'string' && params.has(pattern)) {
     if (Object.prototype.hasOwnProperty.call(bindings, pattern)) {
       return deepEqual(bindings[pattern], node)
@@ -138,8 +182,9 @@ function matchPattern(
     }
     return true
   }
-  // Object (an operator node): node must be an object that carries every
-  // key the pattern specifies (extra node keys are allowed).
+  // Object (an operator node, or a nested `attrs` object): node must be an
+  // object that carries every key the pattern specifies (extra node keys are
+  // allowed). Generic recursion is what makes `attrs.<key>` metavariables work.
   if (isObject(pattern)) {
     if (!isObject(node)) return false
     for (const k of Object.keys(pattern)) {
@@ -150,23 +195,6 @@ function matchPattern(
   }
   // null / boolean.
   return deepEqual(pattern, node)
-}
-
-/**
- * Try each auto-applied `match` rule (in declaration order) against
- * `node`. The first rule whose pattern matches fires: its `body` is
- * instantiated by substituting the bound metavariables and returned.
- * Returns `undefined` when no rule matches. The instantiated body is NOT
- * re-scanned by the caller (single-pass, no recursion — esm-spec §9.6.3).
- */
-function applyMatchRules(node: Json, matchRules: MatchRule[]): Json | undefined {
-  for (const rule of matchRules) {
-    const bindings: Record<string, Json> = {}
-    if (matchPattern(rule.match, node, rule.params, bindings)) {
-      return substitute(rule.body, bindings)
-    }
-  }
-  return undefined
 }
 
 function deepClone<T>(v: T): T {
@@ -223,36 +251,6 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   }
 }
 
-/**
- * Reject a `match` rule whose `body` re-introduces its own pattern.
- * Because replacements are not re-scanned this never loops at runtime,
- * but the spec (§9.6.3) rejects such rules statically so authors do not
- * silently rely on multi-pass fixpoint rewriting. Only operator (object)
- * patterns are scanned — a bare-metavariable pattern matches everything
- * and has no structural form to re-introduce.
- */
-function assertTerminating(
-  match: Json,
-  body: Json,
-  params: Set<string>,
-  name: string,
-  scope: string,
-): void {
-  if (!isObject(match)) return
-  const reintroduces = (subtree: Json): boolean => {
-    if (matchPattern(match, subtree, params, {})) return true
-    if (Array.isArray(subtree)) return subtree.some(reintroduces)
-    if (isObject(subtree)) return Object.keys(subtree).some((k) => reintroduces(subtree[k]))
-    return false
-  }
-  if (reintroduces(body)) {
-    throw new ExpressionTemplateError(
-      'rewrite_rule_nonterminating',
-      `${scope}.expression_templates.${name}: match rule 'body' re-introduces its own 'match' pattern; single-pass rewriting forbids this (esm-spec §9.6.3)`,
-    )
-  }
-}
-
 function validateTemplates(templates: Templates, scope: string): void {
   for (const [name, decl] of Object.entries(templates)) {
     if (!decl || typeof decl !== 'object') {
@@ -292,17 +290,29 @@ function validateTemplates(templates: Templates, scope: string): void {
     }
     const body = (decl as { body: Json }).body
     assertNoNestedApply(body, name, '/body')
+    // esm-spec §9.6.3: nontermination is NOT checked statically any more — the
+    // bounded fixpoint (`MAX_REWRITE_PASSES`) is the authoritative guard, so a
+    // self-reintroducing rule is rejected (`rewrite_rule_nonterminating`) only
+    // when it actually fails to converge. A `match` pattern still MUST NOT
+    // contain nested apply_expression_template ops.
     const match = (decl as { match?: Json }).match
     if (match !== undefined) {
-      assertTerminating(match, body, seen, name, scope)
+      assertNoNestedApply(match, name, '/match')
     }
   }
 }
 
+/**
+ * Expand a single `apply_expression_template` node against `templates`.
+ * The template `body` is instantiated by pure structural substitution of the
+ * supplied `bindings`; the bindings are spliced in AS-IS (not pre-scanned) —
+ * any `apply_expression_template` or match-able node inside a binding is
+ * rewritten in a SUBSEQUENT pass of the outermost-first fixpoint, never within
+ * the current pass (esm-spec §9.6.3).
+ */
 function expandApply(
   node: Record<string, unknown>,
   templates: Templates,
-  matchRules: MatchRule[],
   scope: string,
 ): Json {
   const name = node.name
@@ -344,47 +354,104 @@ function expandApply(
       )
     }
   }
-  // Recursively expand any apply_expression_template nodes inside the
-  // bindings (templates can take other-template results as args even if
-  // they cannot themselves call templates internally). Auto-applied
-  // `match` rules also fire inside binding arguments.
   const resolvedBindings: Record<string, Json> = {}
   for (const [k, v] of Object.entries(bindings)) {
-    resolvedBindings[k] = walk(v, templates, matchRules, scope)
+    resolvedBindings[k] = v
   }
   return substitute(decl.body, resolvedBindings)
 }
 
+interface PassResult {
+  node: Json
+  changed: boolean
+}
+
 /**
- * Single bottom-up rewrite pass: expand `apply_expression_template` nodes
- * and auto-apply `match` rules. Children are rewritten first; the node
- * itself is then offered to the `match` rules (declaration order, first
- * match wins). A rule's instantiated body is returned as-is — it is never
- * re-scanned (esm-spec §9.6.3).
+ * One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3).
+ * At each object node the engine first tries to fire a rule AT the node before
+ * descending:
+ *
+ *   1. an `apply_expression_template` op is expanded (`expandApply`), OR
+ *   2. the first rule in `sortedRules` (pre-sorted highest-`priority`-first,
+ *      ties by declaration order) whose `match` pattern structurally matches
+ *      the node fires.
+ *
+ * A fired rule's body replaces the node and the walk does NOT descend into that
+ * freshly-produced body during this pass (it is revisited next pass). If nothing
+ * fires, the walk descends into the node's children. `changed` is `true` iff any
+ * rewrite occurred in this subtree; `last.op` records the op of the most recent
+ * rewrite, for the non-convergence diagnostic.
  */
-function walk(node: Json, templates: Templates, matchRules: MatchRule[], scope: string): Json {
+function onePass(
+  node: Json,
+  templates: Templates,
+  sortedRules: MatchRule[],
+  scope: string,
+  last: { op: string },
+): PassResult {
   if (Array.isArray(node)) {
-    return node.map((c) => walk(c, templates, matchRules, scope))
+    let changed = false
+    const out = node.map((c) => {
+      const r = onePass(c, templates, sortedRules, scope, last)
+      changed = changed || r.changed
+      return r.node
+    })
+    return { node: out, changed }
   }
-  if (isObject(node)) {
-    // Explicit template invocation is expanded in place; its substituted
-    // body is not re-walked (the bindings were already walked).
-    if (node.op === APPLY_OP) {
-      return expandApply(node, templates, matchRules, scope)
-    }
-    // Bottom-up: rewrite the children first.
-    const out: Record<string, unknown> = {}
-    for (const k of Object.keys(node)) {
-      out[k] = walk(node[k], templates, matchRules, scope)
-    }
-    // Then offer this (rewritten) node to the auto-applied match rules.
-    if (matchRules.length > 0) {
-      const rewritten = applyMatchRules(out, matchRules)
-      if (rewritten !== undefined) return rewritten
-    }
-    return out
+  if (!isObject(node)) {
+    return { node, changed: false }
   }
-  return node
+  // (1) Outermost-first: fire a rule AT this node before descending.
+  if (node.op === APPLY_OP) {
+    last.op = APPLY_OP
+    return { node: expandApply(node, templates, scope), changed: true }
+  }
+  for (const rule of sortedRules) {
+    const bindings: Record<string, Json> = {}
+    if (matchPattern(rule.match, node, rule.params, bindings)) {
+      last.op = typeof node.op === 'string' ? node.op : ''
+      return { node: substitute(rule.body, bindings), changed: true }
+    }
+  }
+  // (2) No rule fired here — descend into children.
+  let changed = false
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(node)) {
+    const r = onePass(node[k], templates, sortedRules, scope, last)
+    out[k] = r.node
+    changed = changed || r.changed
+  }
+  return { node: out, changed }
+}
+
+/**
+ * Drive `onePass` to a fixpoint (esm-spec §9.6.3): repeat pre-order passes
+ * until a pass performs zero rewrites, or reject the file with
+ * `rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES` productive passes have
+ * run without converging. This bound — not a static check — is the authoritative
+ * termination guard, so a self-reintroducing rule fails to converge rather than
+ * being flagged up front.
+ */
+function rewriteToFixpoint(
+  node: Json,
+  templates: Templates,
+  sortedRules: MatchRule[],
+  scope: string,
+): Json {
+  const last = { op: '' }
+  let current = node
+  for (let pass = 0; pass < MAX_REWRITE_PASSES; pass++) {
+    const { node: next, changed } = onePass(current, templates, sortedRules, scope, last)
+    current = next
+    if (!changed) return current // fixpoint reached
+  }
+  throw new ExpressionTemplateError(
+    'rewrite_rule_nonterminating',
+    `${scope}: expression-template rewriting did not converge within ` +
+      `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} passes (last rewritten op ` +
+      `'${last.op}'). A \`match\` rule likely re-introduces its own pattern ` +
+      `(esm-spec §9.6.3).`,
+  )
 }
 
 /** Walk the file looking for apply_expression_template ops anywhere. */
@@ -464,10 +531,10 @@ function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
 
 /**
  * Rewrite all `expression_templates` in the given file: expand explicit
- * `apply_expression_template` nodes AND auto-apply `match` rules in a
- * single bottom-up pass per component (in place is OK — we mutate a
- * clone). Returns a new file object with templates applied and
- * `expression_templates` blocks removed.
+ * `apply_expression_template` nodes AND auto-apply `match` rules to a fixpoint
+ * per component (outermost-first, priority-ordered, bounded — esm-spec §9.6.3).
+ * Returns a new file object with templates applied and `expression_templates`
+ * blocks removed.
  *
  * Pre-condition: the input has been schema-validated.
  */
@@ -487,7 +554,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
     return stripExpressionTemplates(file)
   }
 
-  // Walk both components families.
+  // Walk both component families.
   const out = deepClone(root)
   for (const compKind of ['models', 'reaction_systems'] as const) {
     const comps = out[compKind]
@@ -496,9 +563,11 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
       if (!isObject(compRaw)) continue
       const comp = compRaw as Component
       const tplRaw = comp.expression_templates
-      // Templates without `match` are invoked explicitly via
-      // apply_expression_template; templates with `match` are auto-applied
-      // rewrite rules collected in declaration order.
+      // `templates`  — every template keyed by name, consulted by
+      //                `apply_expression_template` (order-independent).
+      // `matchRules` — the auto-applied `match` rules, pre-sorted by
+      //                (−priority, declarationIndex) so `onePass` takes the
+      //                FIRST matching rule (esm-spec §9.6.3).
       const templates: Templates = {}
       const matchRules: MatchRule[] = []
       if (isObject(tplRaw)) {
@@ -507,24 +576,32 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
           all[tname] = tdecl as TemplateDecl
         }
         validateTemplates(all, `${compKind}.${compName}`)
+        // Object key order in JS preserves declaration order, so the
+        // enumeration index IS the authored declaration order.
+        let declIndex = 0
         for (const [tname, decl] of Object.entries(all)) {
+          templates[tname] = decl
           if (decl.match !== undefined) {
             matchRules.push({
               name: tname,
               params: new Set(decl.params),
               match: decl.match,
               body: decl.body,
+              priority: rulePriority(decl),
+              declIndex,
             })
-          } else {
-            templates[tname] = decl
           }
+          declIndex++
         }
+        // Deterministic selection order (esm-spec §9.6.3): highest `priority`
+        // first, ties broken by declaration order (earliest wins).
+        matchRules.sort((a, b) => b.priority - a.priority || a.declIndex - b.declIndex)
       }
-      // Walk every property except expression_templates (we don't
-      // expand inside template bodies — those are validated above).
+      // Rewrite every property except expression_templates (we don't expand
+      // inside template bodies — those are validated above) to a fixpoint.
       for (const k of Object.keys(comp)) {
         if (k === 'expression_templates') continue
-        comp[k] = walk(comp[k], templates, matchRules, `${compKind}.${compName}.${k}`)
+        comp[k] = rewriteToFixpoint(comp[k], templates, matchRules, `${compKind}.${compName}.${k}`)
       }
       delete comp.expression_templates
     }

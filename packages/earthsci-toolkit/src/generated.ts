@@ -77,73 +77,9 @@ export type ModelVariable1 = {
  */
 export type ExpressionNode = ExpressionNode1 & {
   /**
-   * Operator name.
+   * Operator name. TWO TIERS (esm-spec §4.2). (1) The CLOSED evaluable-core set — every binding's evaluator implements each one directly: `+ - * / ^`, the comparisons/booleans (`> < >= <= == != and or not`), the elementary functions (`exp log log10 sqrt abs sign sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh min max floor ceil`), `ifelse`, the calculus form-ops `D` and `ic` (structural / equation-LHS use only), `Pre`, `true`, and the array/query ops (`aggregate makearray index broadcast reshape transpose concat skolem rank argmin argmax intersect_polygon polygon_intersection_area fn enum const table_lookup apply_expression_template`). (2) The OPEN rewrite-target tier — ANY other identifier: a spatial `D` on a right-hand side, the optional sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as `godunov_hamiltonian`. A rewrite-target op carries NO evaluator implementation and MUST be eliminated by a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with rewrite-target ops still present (e.g. a coupling/scoping example that never simulates) — but one reaching evaluation/compilation without being lowered is rejected with `unlowered_operator`. The `pattern` only rejects malformed strings — it does NOT enforce membership in the core set, so the open tier stays expressible. The evaluable-core set is the ONLY set the format privileges.
    */
-  op:
-    | "+"
-    | "-"
-    | "*"
-    | "/"
-    | "^"
-    | "D"
-    | "ic"
-    | "grad"
-    | "div"
-    | "laplacian"
-    | "integral"
-    | "exp"
-    | "log"
-    | "log10"
-    | "sqrt"
-    | "abs"
-    | "sin"
-    | "cos"
-    | "tan"
-    | "asin"
-    | "acos"
-    | "atan"
-    | "atan2"
-    | "sinh"
-    | "cosh"
-    | "tanh"
-    | "asinh"
-    | "acosh"
-    | "atanh"
-    | "min"
-    | "max"
-    | "floor"
-    | "ceil"
-    | "ifelse"
-    | ">"
-    | "<"
-    | ">="
-    | "<="
-    | "=="
-    | "!="
-    | "and"
-    | "or"
-    | "not"
-    | "Pre"
-    | "sign"
-    | "aggregate"
-    | "skolem"
-    | "rank"
-    | "argmin"
-    | "argmax"
-    | "intersect_polygon"
-    | "polygon_intersection_area"
-    | "true"
-    | "makearray"
-    | "index"
-    | "broadcast"
-    | "reshape"
-    | "transpose"
-    | "concat"
-    | "fn"
-    | "enum"
-    | "const"
-    | "table_lookup"
-    | "apply_expression_template";
+  op: string;
   /**
    * Stable node identity (RFC semiring-faq-unified-ir §6.1): an optional, author-assigned identifier that makes this expression node addressable as a vertex in the inter-node dependency DAG the partition pass walks. Its primary use is to be the referent of a derived index set: an `index_sets` entry of kind "derived" names, via `from_faq`, the index-set-producing `aggregate` node that materializes it — and it names it by this id. When present it MUST be unique among the expression nodes of its model; the build-time reference-resolution pass errors on a duplicate id and on a `from_faq` that names no node. Absent ⇒ the node is addressed only by its structural path and cannot be the target of a `from_faq`. Purely additive: a file using no `id` validates and resolves exactly as before.
    */
@@ -159,13 +95,19 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   args: Expression[];
   /**
-   * Differentiation variable for D operator (e.g., "t").
+   * Differentiation variable for the `D` op: the time variable `t` (structural, equation-LHS use) OR a spatial axis (e.g. "x", "lon"). A `D` with a spatial `wrt`, or any `D` appearing in a right-hand-side expression position, is a rewrite-target (esm-spec §9.6.8): it MUST be lowered to a stencil by a discretization rule before evaluation, else `unlowered_operator`.
    */
   wrt?: string;
   /**
-   * Spatial dimension for grad operator (e.g., "x", "y", "z").
+   * Legacy alias field naming a spatial axis (e.g. "x", "y", "z"), used only by the optional `grad` sugar op. PREFER `D` with `wrt` set to the axis. Custom rewrite-target ops SHOULD carry scheme parameters in `attrs` instead.
    */
   dim?: string;
+  /**
+   * Optional named scalar attributes for an OPEN rewrite-target op (esm-spec §4.2). Mirrors the role of the fixed `dim`/`side`/`wrt`/`var` slots that core ops use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its scheme parameters here. In a rewrite rule's `match`, an `attrs.<key>` whose value is a bare param name binds that param to the matched literal (esm-spec §9.6.1). Evaluable-core ops MUST NOT use `attrs`.
+   */
+  attrs?: {
+    [k: string]: unknown;
+  };
   /**
    * Integration variable for the integral operator: the name of the spatial dimension being integrated over (e.g., "x").
    */
@@ -492,6 +434,36 @@ export type TranslateTarget =
       var: string;
       factor?: number;
     };
+/**
+ * Replace a parameter in one system with a variable from another.
+ */
+export type CouplingVariableMap = CouplingVariableMap1 & {
+  type: "variable_map";
+  /**
+   * Source variable (scoped reference, e.g., "GEOSFP.T").
+   */
+  from: string;
+  /**
+   * Target parameter (scoped reference, e.g., "SuperFast.T").
+   */
+  to: string;
+  /**
+   * How the mapping is applied.
+   */
+  transform: "param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor";
+  /**
+   * Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var or identity, which replace/assign without scaling.
+   */
+  factor?: number;
+  /**
+   * Strategy for mapping between 0D and spatial systems.
+   */
+  lifting?: "pointwise" | "broadcast" | "mean" | "integral";
+  description?: string;
+};
+export type CouplingVariableMap1 = {
+  [k: string]: unknown;
+};
 /**
  * Cross-system event involving variables from multiple coupled systems.
  */
@@ -1127,7 +1099,7 @@ export interface PlotSeries {
   variable: string;
 }
 /**
- * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and PDE-operator lowering (an operator `match` like `{op:'grad', args:['f'], dim:'d'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is a single bottom-up load-time pass in template declaration order; a replacement is NOT re-scanned, so a `match` rule whose `body` re-introduces its own pattern is rejected with diagnostic 'rewrite_rule_nonterminating'. Bodies MUST NOT contain `apply_expression_template` nodes (no template-calls-template); bindings reject this with 'apply_expression_template_recursive_body'.
+ * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. Bodies MUST NOT contain `apply_expression_template` nodes (no template-calls-template); bindings reject this with 'apply_expression_template_recursive_body'.
  */
 export interface ExpressionTemplate {
   /**
@@ -1140,6 +1112,10 @@ export interface ExpressionTemplate {
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
   match?: number | string | ExpressionNode1;
+  /**
+   * Selection precedence for an auto-applied (`match`) rule (esm-spec §9.6.3). When more than one rule matches a node, the highest `priority` wins; ties break by declaration order. This lets a compound-term rule (Godunov / WENO / flux-limited) out-rank the plain per-derivative rule so it fires on the whole compound before the inner derivatives are lowered. Ignored when `match` is absent. Absent ⇒ 0.
+   */
+  priority?: number;
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
@@ -1344,33 +1320,6 @@ export interface ConnectorEquation {
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
   expression?: number | string | ExpressionNode1;
-}
-/**
- * Replace a parameter in one system with a variable from another.
- */
-export interface CouplingVariableMap {
-  type: "variable_map";
-  /**
-   * Source variable (scoped reference, e.g., "GEOSFP.T").
-   */
-  from: string;
-  /**
-   * Target parameter (scoped reference, e.g., "SuperFast.T").
-   */
-  to: string;
-  /**
-   * How the mapping is applied.
-   */
-  transform: "param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor";
-  /**
-   * Conversion factor (for conversion_factor transform).
-   */
-  factor?: number;
-  /**
-   * Strategy for mapping between 0D and spatial systems.
-   */
-  lifting?: "pointwise" | "broadcast" | "mean" | "integral";
-  description?: string;
 }
 /**
  * Register a callback for simulation events.

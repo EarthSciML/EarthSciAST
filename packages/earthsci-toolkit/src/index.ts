@@ -59,7 +59,7 @@ export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
 // Export code generation utilities and the official TypeScript runner
 // (AST → JS lowering / scalar evaluator) per AGENTS.md.
-export { toJuliaCode, toPythonCode, compileExpression, evaluateExpression } from './codegen.js'
+export { toJuliaCode, toPythonCode, compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
 export type { CompiledExpression } from './codegen.js'
 
 // Export migration functionality

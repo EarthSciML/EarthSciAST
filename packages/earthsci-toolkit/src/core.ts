@@ -54,7 +54,7 @@ export {
 export { parseUnit, checkDimensions, validateUnits } from './units.js'
 export type { UnitResult, UnitWarning } from './units.js'
 
-export { toJuliaCode, toPythonCode, compileExpression, evaluateExpression } from './codegen.js'
+export { toJuliaCode, toPythonCode, compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
 export type { CompiledExpression } from './codegen.js'
 
 export {

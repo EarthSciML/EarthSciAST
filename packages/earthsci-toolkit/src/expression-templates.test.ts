@@ -10,6 +10,7 @@ import {
   lowerExpressionTemplates,
   ExpressionTemplateError,
 } from './lower_expression_templates.js'
+import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
@@ -296,7 +297,10 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     expect(out.models.M.equations[0].rhs).toEqual({ op: 'sin', args: ['c'] })
   })
 
-  it('does not re-scan a replacement body (single pass, no recursion)', () => {
+  it('re-scans a produced body in a SUBSEQUENT pass (bounded fixpoint)', () => {
+    // 0.8.0 outermost-first + fixpoint (esm-spec §9.6.3): a freshly-produced
+    // body is NOT re-matched within the pass that produced it, but IS re-scanned
+    // in the NEXT pass. So grad → div (pass 1) then div → abs (pass 2).
     const file = gradModel(
       {
         g2d: { params: ['f'], match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'div', args: ['f'], dim: 'x' } },
@@ -305,11 +309,28 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
-    // grad → div fires; the freshly produced div is NOT re-scanned, so d2z never runs.
-    expect(out.models.M.equations[0].rhs).toEqual({ op: 'div', args: ['c'], dim: 'x' })
+    expect(out.models.M.equations[0].rhs).toEqual({ op: 'abs', args: ['c'] })
   })
 
-  it('rejects a match rule whose body re-introduces its own pattern (rewrite_rule_nonterminating)', () => {
+  it('selects the highest-priority matching rule; ties break by declaration order', () => {
+    // esm-spec §9.6.3: when several rules match a node, the highest `priority`
+    // wins (default 0). Here `lo` is declared first but `hi` (priority 5)
+    // out-ranks it and fires.
+    const file = gradModel(
+      {
+        lo: { params: ['f'], match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'sin', args: ['f'] } },
+        hi: { params: ['f'], priority: 5, match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'cos', args: ['f'] } },
+      },
+      { op: 'grad', args: ['c'], dim: 'x' },
+    )
+    const out = lowerExpressionTemplates(file) as any
+    expect(out.models.M.equations[0].rhs).toEqual({ op: 'cos', args: ['c'] })
+  })
+
+  it('rejects a self-reintroducing rule via the pass bound (rewrite_rule_nonterminating)', () => {
+    // 0.8.0: nontermination is caught by the MAX_REWRITE_PASSES=64 bound at
+    // load time, NOT by a static pre-check. A rule whose body wraps its own
+    // pattern grows the tree every pass and never converges.
     const file = gradModel(
       {
         bad: {
@@ -322,16 +343,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     )
     expect(() => lowerExpressionTemplates(file)).toThrow(/rewrite_rule_nonterminating/)
     try {
-      lowerExpressionTemplates(gradModel(
-        {
-          bad: {
-            params: ['f'],
-            match: { op: 'grad', args: ['f'], dim: 'x' },
-            body: { op: 'grad', args: ['f'], dim: 'x' },
-          },
-        },
-        'c',
-      ))
+      lowerExpressionTemplates(file)
       throw new Error('expected error')
     } catch (e) {
       expect((e as ExpressionTemplateError).code).toBe('rewrite_rule_nonterminating')
@@ -399,5 +411,142 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     expect('expression_templates' in (file.reaction_systems!.chem as Record<string, unknown>)).toBe(
       false,
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 0.8.0 outermost-first + priority + bounded-fixpoint engine, and the
+// `unlowered_operator` evaluation gate. Mirrors the Julia reference testset
+// ("expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint")
+// and drives the cross-binding conformance fixtures under
+// tests/conformance/expression_templates/
+// (docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8).
+// ---------------------------------------------------------------------------
+
+describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)', () => {
+  const confDir = path.resolve(__dirname, '../../..', 'tests/conformance/expression_templates')
+  const fixtureText = (name: string) =>
+    fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8')
+  // Mirror the Julia driver `_lower_conf`: parse the fixture and run the
+  // load-time lowering directly.
+  const lowerFixture = (name: string) =>
+    lowerExpressionTemplates(JSON.parse(fixtureText(name))) as any
+  const expandedVars = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8')).models.m.variables
+  const goldenError = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(confDir, name, 'error.json'), 'utf8'))
+
+  it('godunov compound rule beats inner derivative (priority + outermost-first)', () => {
+    // The priority:100 compound rule fires on the WHOLE sqrt(D(u,x)^2 + D(u,y)^2)
+    // before the priority:0 central-difference D rule can lower either inner D.
+    const out = lowerFixture('godunov_beats_inner_deriv')
+    expect(out.models.m.variables).toEqual(expandedVars('godunov_beats_inner_deriv'))
+    expect(out.models.m.variables.grad_mag.expression).toEqual({
+      op: '*',
+      args: ['godunov_coef', 'u'],
+    })
+    // The per-derivative rule (which alone emits `inv_dx`) never touched the
+    // inner D nodes; the marker parameter still appears in the vars dict but not
+    // in the rewritten expression.
+    const exprJson = JSON.stringify(out.models.m.variables.grad_mag.expression)
+    expect(exprJson).not.toContain('inv_dx')
+    expect(exprJson).toContain('godunov_coef')
+  })
+
+  it('nested-derivative fixpoint converges across passes', () => {
+    // laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
+    // stencil (pass 2). A produced body is re-scanned only in a subsequent pass.
+    const out = lowerFixture('fixpoint_nested_deriv')
+    expect(out.models.m.variables).toEqual(expandedVars('fixpoint_nested_deriv'))
+    expect(out.models.m.variables.lap.expression).toEqual({
+      op: '+',
+      args: [
+        { op: '*', args: ['inv_dx2', 'u'] },
+        { op: '*', args: ['inv_dy2', 'u'] },
+      ],
+    })
+    const exprJson = JSON.stringify(out.models.m.variables.lap.expression)
+    expect(exprJson).not.toContain('laplacian')
+    expect(exprJson).not.toContain('"op":"D"')
+  })
+
+  it('self-reintroducing rule rejected by the pass bound (rewrite_rule_nonterminating)', () => {
+    let err: unknown
+    try {
+      lowerFixture('nonterminating_rewrite')
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(ExpressionTemplateError)
+    expect((err as ExpressionTemplateError).code).toBe('rewrite_rule_nonterminating')
+    // Also fires through the full load() pipeline (stage: "load").
+    expect(() => load(fixtureText('nonterminating_rewrite'))).toThrow(/rewrite_rule_nonterminating/)
+    expect((err as ExpressionTemplateError).code).toBe(goldenError('nonterminating_rewrite').code)
+  })
+
+  it('unlowered spatial D loads clean, then errors `unlowered_operator` at evaluation', () => {
+    // Open namespace (esm-spec §4.2): the file LOADS fine — the gate is deferred
+    // to evaluation, mirroring the Julia `_compile` gate (stage: "evaluate").
+    const file = load(fixtureText('unlowered_operator')) as any
+    const rhs = file.models.m.equations[0].rhs
+    expect(rhs).toEqual({ op: 'D', args: ['u'], wrt: 'x' })
+    // Reaching evaluation yields the uniform `unlowered_operator` diagnostic.
+    let err: unknown
+    try {
+      evaluateExpression(rhs, new Map<string, number>([['u', 1.0]]))
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(UnloweredOperatorError)
+    expect((err as UnloweredOperatorError).code).toBe('unlowered_operator')
+    expect(String(err)).toMatch(/unlowered_operator/)
+    expect((err as UnloweredOperatorError).code).toBe(goldenError('unlowered_operator').code)
+  })
+
+  it('grad/div/laplacian also gate as `unlowered_operator` at evaluation', () => {
+    for (const op of ['grad', 'div', 'laplacian']) {
+      let err: unknown
+      try {
+        evaluateExpression({ op, args: ['x'], dim: 'x' } as any, new Map([['x', 1.0]]))
+      } catch (e) {
+        err = e
+      }
+      expect((err as UnloweredOperatorError).code).toBe('unlowered_operator')
+      expect(String(err)).toContain(op)
+    }
+  })
+
+  it('attrs on a rewrite-target op bind as scalar metavariables', () => {
+    // esm-spec §4.2 open tier: a custom op carries scheme params in `attrs`;
+    // a `match` pattern's `attrs.<key>` set to a bare param binds it to the
+    // matched literal. Falls out of generic structural matching — no engine
+    // special-casing.
+    const src = {
+      esm: '0.8.0',
+      metadata: { name: 'attrs_match', authors: ['t'] },
+      models: {
+        m: {
+          variables: {
+            u: { type: 'state', units: '1', default: 0.0 },
+            y: {
+              type: 'observed',
+              units: '1',
+              expression: { op: 'custom_scheme', args: ['u'], attrs: { gamma: 1.4 } },
+            },
+          },
+          equations: [],
+          expression_templates: {
+            lower_custom: {
+              params: ['f', 'g'],
+              match: { op: 'custom_scheme', args: ['f'], attrs: { gamma: 'g' } },
+              body: { op: '*', args: ['g', 'f'] },
+            },
+          },
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
+    expect(out.models.m.variables.y.expression).toEqual({ op: '*', args: [1.4, 'u'] })
+    expect('expression_templates' in out.models.m).toBe(false)
   })
 })
