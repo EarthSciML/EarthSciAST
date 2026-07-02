@@ -113,10 +113,59 @@ pub fn intersect_polygon(
     b: &[(f64, f64)],
     manifold: Manifold,
 ) -> Result<Vec<(f64, f64)>, GeometryError> {
+    // Coerce both operands to their distinct-vertex rings BEFORE the backend
+    // clip (esm-spec §8.6.1): a padded ring — e.g. an MPAS pentagon stored in a
+    // hexagon-shaped `[cells, NVERT, 2]` slot with its final vertex repeated to
+    // fill the rectangle — MUST be accepted and evaluated as the deduplicated
+    // ring. Dedup happens here because backend tolerance differs (the planar
+    // clip tolerates zero-length edges; S2 rejects them as "degenerate
+    // (duplicate vertex)"), and the op's cross-binding contract cannot depend
+    // on that. Mirrors the Julia `_as_ring` at the top of `intersect_polygon`.
+    let a = as_ring(a, "poly_a")?;
+    let b = as_ring(b, "poly_b")?;
     match manifold {
-        Manifold::Spherical | Manifold::Geodesic => intersect_spherical(a, b),
-        Manifold::Planar => Ok(intersect_planar_convex(a, b)),
+        Manifold::Spherical | Manifold::Geodesic => intersect_spherical(&a, &b),
+        Manifold::Planar => Ok(intersect_planar_convex(&a, &b)),
     }
+}
+
+/// Drop consecutive duplicate vertices — INCLUDING the wrap pair (a closing
+/// `ring[last] ≈ ring[0]` duplicate) — from a ring, leaving its `n` distinct
+/// vertices with implicit closure. `allclose`-based (atol 1e-8, rtol 1e-5) so
+/// the drop decisions match the Julia/Python siblings exactly. Mirrors the
+/// Julia `_dedup_consecutive`.
+fn dedup_consecutive(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let n = ring.len();
+    if n <= 1 {
+        return ring.to_vec();
+    }
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(n);
+    out.push(ring[0]);
+    for &pt in &ring[1..] {
+        let last = *out.last().unwrap();
+        if !allclose_pt(pt, last) {
+            out.push(pt);
+        }
+    }
+    if out.len() >= 2 && allclose_pt(out[0], *out.last().unwrap()) {
+        out.pop();
+    }
+    out
+}
+
+/// Coerce a clip operand to its `n` *distinct* lon/lat vertices: drop
+/// consecutive duplicates and a closing wrap pair ([`dedup_consecutive`]), then
+/// require ≥3 distinct vertices — fewer is a degenerate ring, rejected. Mirrors
+/// the Julia `_as_ring` (esm-spec §8.6.1).
+fn as_ring(poly: &[(f64, f64)], who: &str) -> Result<Vec<(f64, f64)>, GeometryError> {
+    let arr = dedup_consecutive(poly);
+    if arr.len() < 3 {
+        return Err(GeometryError::new(format!(
+            "intersect_polygon {who} needs >=3 distinct vertices, got {}",
+            arr.len()
+        )));
+    }
+    Ok(arr)
 }
 
 /// Spherical / geodesic clip via Google's `s2geometry` (the `s2bindings` crate).
@@ -193,7 +242,10 @@ fn intersect_planar_convex(subject: &[(f64, f64)], clip: &[(f64, f64)]) -> Vec<(
             }
         }
     }
-    output
+    // Drop consecutive / wrap duplicate vertices the clip can emit (esm-spec
+    // §8.6.1), so the returned overlap is `n` distinct vertices — matching the
+    // Julia `_planar_clip`, which ends with `_dedup_consecutive`.
+    dedup_consecutive(&output)
 }
 
 /// Signed area of a planar ring (positive ⇒ counter-clockwise), via the
@@ -224,10 +276,14 @@ pub fn shoelace_area(ring: &[(f64, f64)]) -> f64 {
 /// the §5.8.2 tolerance anchor. Multiply by `R²` for a physical area.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
+    // Dedup consecutive / wrap duplicate vertices before the S2 constructor —
+    // S2 rejects zero-length edges as degenerate (esm-spec §8.6.1). A ring with
+    // fewer than 3 distinct vertices is a degenerate / empty clip: area 0.
+    let ring = dedup_consecutive(ring);
     if ring.len() < 3 {
         return Ok(0.0);
     }
-    let p = SphericalPolygon::from_lon_lat(ring).map_err(|e| GeometryError::new(e.to_string()))?;
+    let p = SphericalPolygon::from_lon_lat(&ring).map_err(|e| GeometryError::new(e.to_string()))?;
     Ok(p.area())
 }
 
@@ -488,6 +544,66 @@ mod tests {
         assert!(
             (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
             "spherical overlap area was {area}, expected π/4"
+        );
+    }
+
+    // ----- §8.6.1 padded / degenerate operand rings -----
+
+    #[test]
+    fn planar_clip_accepts_padded_rings() {
+        // Two squares each padded with repeated trailing vertices (the
+        // rectangular-storage padding a mixed-valence mesh needs). The clip MUST
+        // equal the deduplicated-ring clip: the [1.5,2.5]x[1.5,2.5] box, area 1.
+        let a = [
+            (0.5, 0.5),
+            (2.5, 0.5),
+            (2.5, 2.5),
+            (0.5, 2.5),
+            (0.5, 2.5), // padding: final vertex repeated once
+        ];
+        let b = [
+            (1.5, 1.5),
+            (3.5, 1.5),
+            (3.5, 3.5),
+            (1.5, 3.5),
+            (1.5, 3.5), // padding: final vertex repeated twice
+            (1.5, 3.5),
+        ];
+        let ring = intersect_polygon(&a, &b, Manifold::Planar).expect("padded planar clip");
+        assert!((shoelace_area(&ring) - 1.0).abs() < TOL, "area {}", shoelace_area(&ring));
+    }
+
+    #[test]
+    fn as_ring_rejects_sub_three_distinct() {
+        // A ring collapsing to < 3 distinct vertices after dedup is degenerate.
+        let degenerate = [(0.0, 0.0), (1.0, 1.0), (1.0, 1.0), (0.0, 0.0)];
+        assert!(intersect_polygon(&degenerate, &degenerate, Manifold::Planar).is_err());
+    }
+
+    /// The pin-3 unblock: an MPAS-style padded ring (trailing duplicate
+    /// vertices) MUST now clip in S2. Before the dedup coercion, S2 rejected the
+    /// zero-length edge with "Edge N is degenerate (duplicate vertex)".
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn spherical_clip_accepts_padded_rings() {
+        // The s2bindings octant example, each operand padded with a repeated
+        // trailing vertex — the exact degenerate-edge input that failed before.
+        let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0), (0.0, 90.0)];
+        let b = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0), (45.0, 90.0), (45.0, 90.0)];
+        let ring = intersect_polygon(&a, &b, Manifold::Spherical)
+            .expect("padded spherical clip must succeed (S2 no longer sees the degenerate edge)");
+        assert!(ring.len() >= 3, "expected a non-empty spherical overlap ring");
+        let area = spherical_area(&ring).expect("spherical area");
+        assert!(
+            (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
+            "padded spherical overlap area was {area}, expected π/4"
+        );
+        // Identical to the unpadded rings' clip area.
+        let a_u = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
+        let b_u = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
+        let ring_u = intersect_polygon(&a_u, &b_u, Manifold::Spherical).expect("unpadded");
+        assert!(
+            (spherical_area(&ring).unwrap() - spherical_area(&ring_u).unwrap()).abs() < 1e-12
         );
     }
 
