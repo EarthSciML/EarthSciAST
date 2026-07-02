@@ -182,9 +182,9 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   arg?: string;
   /**
-   * For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. "planar": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. "spherical": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. "geodesic": ellipsoidal-geodesic edges. Great-circle-edge assumption: under "spherical"/"geodesic" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op.
+   * For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. "planar": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. "spherical": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. "geodesic": ellipsoidal-geodesic edges. Great-circle-edge assumption: under "spherical"/"geodesic" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op. TEMPLATE PARAMETERIZATION (esm-spec §9.6.1 / §9.6.3 constraint 5): inside an `expression_templates` entry's `body`, this field MAY carry a declared template-parameter name — a bare string outside the closed set — as a scalar-field substitution site, so the schema admits any string here. The closed set {planar, spherical, geodesic} is enforced on the EXPANDED form per §9.6.4: bindings MUST reject, at post-expansion validation, any `intersect_polygon` / `polygon_intersection_area` node whose `manifold` is not a member of the closed set.
    */
-  manifold?: "planar" | "spherical" | "geodesic";
+  manifold?: (("planar" | "spherical" | "geodesic") | string) & string;
   /**
    * For makearray: list of sub-region boxes of the output array. Each region is an array of [start, stop] pairs, one per output dimension. The nth region is filled with the nth entry of values. Overlapping regions are permitted; later regions overwrite earlier ones. Bound pairs MAY be metaparameter expressions folded to concrete integers at load (esm-spec §9.7.6). Mirrors SymbolicUtils.ArrayMaker.regions.
    */
@@ -698,6 +698,12 @@ export interface Metadata {
     name?: string;
     [k: string]: unknown;
   };
+  /**
+   * Reserved extension point for downstream-catalog machine-readable metadata (e.g. the EarthSciDiscretizations rule-library catalog). Free-form JSON: the schema validates only that this is an object. The core spec NEVER interprets, validates, or transforms its contents — core tooling MUST NOT assign meaning to them and MUST preserve them across parse → emit like any other metadata field. Downstream catalogs define and version their own conventions inside it (esm-spec §3).
+   */
+  x_esd?: {
+    [k: string]: unknown;
+  };
 }
 /**
  * Academic citation or data source reference.
@@ -1145,7 +1151,7 @@ export interface PlotSeries {
   variable: string;
 }
 /**
- * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes.
+ * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).
  */
 export interface ExpressionTemplate {
   /**
@@ -1159,6 +1165,17 @@ export interface ExpressionTemplate {
    */
   match?: number | string | ExpressionNode1;
   /**
+   * Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'template_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'apply_expression_template_invalid_declaration').
+   */
+  where?: {
+    [k: string]: {
+      /**
+       * @minItems 1
+       */
+      shape: [string, ...string[]];
+    };
+  };
+  /**
    * Selection precedence for an auto-applied (`match`) rule (esm-spec §9.6.3). When more than one rule matches a node, the highest `priority` wins; ties break by declaration order. This lets a compound-term rule (Godunov / WENO / flux-limited) out-rank the plain per-derivative rule so it fires on the whole compound before the inner derivatives are lowered. Ignored when `match` is absent. Absent ⇒ 0.
    */
   priority?: number;
@@ -1169,7 +1186,7 @@ export interface ExpressionTemplate {
   description?: string;
 }
 /**
- * One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope.
+ * One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).
  */
 export interface TemplateImport {
   /**
@@ -1187,6 +1204,22 @@ export interface TemplateImport {
    */
   bindings?: {
     [k: string]: number;
+  };
+  /**
+   * Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*.
+   */
+  prefix?: string;
+  /**
+   * Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7).
+   */
+  rename?: {
+    [k: string]: string;
+  };
+  /**
+   * Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7).
+   */
+  rebind?: {
+    [k: string]: string;
   };
 }
 /**
