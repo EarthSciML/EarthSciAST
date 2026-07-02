@@ -129,6 +129,27 @@ func stripVarUnits(x interface{}) interface{} {
 // Conformance fixture groups vs the committed Julia goldens
 // ---------------------------------------------------------------------------
 
+// The exported raw-pipeline surface (ResolveAndLower) is resolveAndLowerJSON
+// verbatim — external conformance runners depend on the two never diverging.
+func TestResolveAndLower_ExportMatchesInternal(t *testing.T) {
+	path := tiConfDir(t, "import_smoke", "fixture.esm")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	exported, err := ResolveAndLower(string(data), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("ResolveAndLower: %v", err)
+	}
+	internal, err := resolveAndLowerJSON(string(data), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("resolveAndLowerJSON: %v", err)
+	}
+	if exported != internal {
+		t.Errorf("ResolveAndLower diverges from resolveAndLowerJSON")
+	}
+}
+
 func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 	cases := []struct{ group, fixture, golden string }{
 		{"import_smoke", "fixture.esm", "expanded.esm"},

@@ -904,3 +904,14 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 	}
 	return string(out), nil
 }
+
+// ResolveAndLower is the exported raw §9.7 pipeline — resolveAndLowerJSON
+// verbatim: load-time template-import/metaparameter resolution against
+// basePath, then the §9.6.3 rewrite fixpoint, returning the post-lowering
+// document as JSON (numeric tokens preserved via json.Number). This is the
+// entry point external conformance runners drive to reproduce the Julia
+// reference's expansion goldens (CONFORMANCE_SPEC.md §5.9) without going
+// through the typed Load round-trip, whose serializer normalizes fields.
+func ResolveAndLower(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
+	return resolveAndLowerJSON(jsonStr, basePath, metaparameters)
+}
