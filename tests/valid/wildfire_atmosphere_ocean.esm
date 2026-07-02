@@ -1234,9 +1234,9 @@
       "type": "variable_map",
       "from": "WildfirePropagation.heat_release",
       "to": "AtmosphericDynamics.q_heat",
-      "transform": "param_to_var",
+      "transform": "conversion_factor",
       "factor": 2.4e-07,
-      "description": "Wildfire heat injection into lowest atmospheric layer (W/m^2 -> K/s)"
+      "description": "Wildfire heat injection into lowest atmospheric layer (W/m^2 -> K/s). conversion_factor applies the factor as q_heat := 2.4e-7 * heat_release (param_to_var would ignore the factor)."
     },
     {
       "type": "variable_map",

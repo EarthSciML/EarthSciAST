@@ -2631,7 +2631,7 @@
         },
         "factor": {
           "type": "number",
-          "description": "Conversion factor (for conversion_factor transform)."
+          "description": "Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var or identity, which replace/assign without scaling."
         },
         "lifting": {
           "type": "string",
@@ -2646,7 +2646,28 @@
         "description": {
           "type": "string"
         }
-      }
+      },
+      "allOf": [
+        {
+          "$comment": "`factor` scales the coupling, so it is only valid with a scaling transform (additive, multiplicative, conversion_factor). A bare replace (param_to_var) or assign (identity) has nothing to scale, so a `factor` alongside it is a modeling error and is rejected rather than silently ignored.",
+          "if": {
+            "required": [
+              "factor"
+            ]
+          },
+          "then": {
+            "properties": {
+              "transform": {
+                "enum": [
+                  "additive",
+                  "multiplicative",
+                  "conversion_factor"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "CouplingCallback": {
       "type": "object",
