@@ -77,7 +77,14 @@ class ExpressionTemplateError(Exception):
     ``template_import_cycle``, ``template_import_name_conflict``,
     ``template_import_unknown_name``, ``template_import_index_set_conflict``,
     ``template_body_expansion_too_deep``, ``metaparameter_unbound``,
-    ``metaparameter_type_error``, ``metaparameter_name_conflict``.
+    ``metaparameter_type_error``, ``metaparameter_name_conflict``,
+
+    or one of the esm-spec §9.7.7 import-renaming codes (raised from
+    :mod:`earthsci_toolkit.template_imports`):
+
+    ``template_import_rename_unknown_name``,
+    ``template_import_rebind_unknown_name``,
+    ``template_import_rename_collision``, ``template_import_rename_invalid``.
     """
 
     def __init__(self, code: str, message: str) -> None:

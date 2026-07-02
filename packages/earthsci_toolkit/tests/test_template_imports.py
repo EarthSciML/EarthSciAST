@@ -70,6 +70,10 @@ def _err_code(fn) -> str | None:
          "expanded_import_order.esm"),
         ("import_order_determinism", "fixture_priority_override.esm",
          "expanded_priority_override.esm"),
+        # §9.7.7 import renaming / namespacing / free-name rebinding
+        ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
+        ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
+        ("import_rename_diamond", "fixture.esm", "expanded.esm"),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -223,6 +227,11 @@ def test_invalid_fixture_set_covers_all_12_codes():
         "apply_expression_template_recursive_body",
         "template_body_expansion_too_deep", "metaparameter_unbound",
         "metaparameter_type_error", "metaparameter_name_conflict",
+        # §9.7.7 import renaming / namespacing / free-name rebinding
+        "template_import_rename_unknown_name",
+        "template_import_rebind_unknown_name",
+        "template_import_rename_collision",
+        "template_import_rename_invalid",
     ]:
         assert code in seen
 
