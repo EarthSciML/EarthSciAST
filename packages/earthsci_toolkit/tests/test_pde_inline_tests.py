@@ -152,7 +152,20 @@ def test_field_reduce_semantics():
     with pytest.raises(ValueError):
         field_reduce("L2_error", actual, reference=[0.0, 0.0, 0.0])  # zero norm
     with pytest.raises(ValueError):
-        field_reduce("integral", actual)
+        field_reduce("wat", actual)  # unknown kind
+
+
+def test_field_reduce_integral_is_unit_measure_mean():
+    """Pinned cross-binding convention: `integral` is the uniform-cell
+    Riemann sum under a UNIT total domain measure per axis — Σ field /
+    N_cells, exactly `mean` (NOT the bare sum)."""
+    f = [1.0, 2.0, 3.0]
+    assert field_reduce("integral", f) == 2.0
+    assert field_reduce("integral", f) == field_reduce("mean", f)
+    g = [(i - 0.5) / 8 for i in range(1, 9)]
+    assert field_reduce("integral", g) == 0.5
+    with pytest.raises(ValueError):
+        field_reduce("integral", [])
 
 
 def test_state_cells_matching_and_order():
@@ -229,3 +242,244 @@ def test_coordinate_expression_ic_seeds_grid(tmp_path):
     got = [sim.states[0][slot] for _, slot in cells]
     want = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
     assert got == pytest.approx(want, abs=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# §6.6.5 coords point-sampling (pinned convention: 1-based INDEX space,
+# nearest grid index, exact half-way ties round DOWN)
+# ---------------------------------------------------------------------------
+
+
+def _coords_assert(coords, *, time=0.0, expected=0.0, abs_tol=1e-9, var="u"):
+    return {"variable": var, "time": time, "expected": expected,
+            "tolerance": {"abs": abs_tol}, "coords": dict(coords)}
+
+
+def _run(doc_or_file, **kwargs):
+    f = load(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) \
+        else doc_or_file
+    return run_pde_tests(f, model_name="M", method="LSODA",
+                         rtol=1e-12, atol=1e-14, **kwargs)
+
+
+def test_run_pde_tests_coords_sampling_nearest_ties_down():
+    u3 = math.cos(math.pi * 2.5 / N)
+    u6 = math.cos(math.pi * 5.5 / N)
+    u8 = math.cos(math.pi * 7.5 / N)
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _coords_assert({"x": 3}, expected=u3),
+        _coords_assert({"x": 3.5}, expected=u3),   # tie → lower index 3
+        _coords_assert({"x": 2.5}, expected=math.cos(math.pi * 1.5 / N)),  # tie → 2
+        _coords_assert({"x": 5.6}, expected=u6),   # nearest → 6
+        _coords_assert({"x": 8.5}, expected=u8),   # tie at top edge → 8
+        _coords_assert({"x": 3}, time=1.0, expected=math.exp(-1.0) * u3,
+                       abs_tol=1e-8),
+    ]
+    results = _run(doc)
+    assert len(results) == 6
+    assert all(r.passed for r in results), \
+        [(r.assertion_idx, r.message) for r in results]
+    assert all(r.reduce is None for r in results)
+    assert results[0].actual == results[1].actual
+
+
+def test_run_pde_tests_coords_validation_rejections():
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _coords_assert({"y": 1.0}),
+        _coords_assert({"x": 0.4}),   # → index 0
+        _coords_assert({"x": 8.6}),   # → index 9
+    ]
+    results = _run(doc)
+    assert len(results) == 3
+    assert all(not r.passed and r.actual is None for r in results)
+    assert "names unknown dimension 'y'" in results[0].message
+    assert "outside 1..8" in results[1].message
+    assert "resolves to index 0" in results[1].message
+    assert "resolves to index 9" in results[2].message
+
+
+def test_run_pde_tests_coords_on_scalar_variable_rejected():
+    """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
+    doc = {
+        "esm": "0.8.0",
+        "metadata": {"name": "scalar_coords"},
+        "models": {"M": {
+            "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
+            "equations": [
+                {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
+            "tests": [{
+                "id": "scalar",
+                "time_span": {"start": 0.0, "end": 1.0},
+                "assertions": [_coords_assert({"x": 1.0}, time=1.0, var="z")],
+            }],
+        }},
+    }
+    results = _run(doc)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "requires a spatially-shaped variable" in results[0].message
+
+
+def test_coords_and_reduce_are_mutually_exclusive_at_load():
+    from earthsci_toolkit.parse import SchemaValidationError
+
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        {"variable": "u", "time": 0.0, "expected": 0.0,
+         "coords": {"x": 1}, "reduce": "mean"},
+    ]
+    with pytest.raises(SchemaValidationError):
+        load(json.dumps(doc))
+
+
+def _doc_2d(ny):
+    """du_ij/dt = 1 with u(0) = 0, so u(t) = t everywhere: pins the
+    strict-subset rule — pinning only `x` is legal iff `y` is singleton."""
+    idx = {"op": "index", "args": ["u", "i", "j"]}
+    ranges = {"i": [1, 4], "j": [1, ny]}
+    return {
+        "esm": "0.8.0",
+        "metadata": {"name": "pde_inline_2d"},
+        "index_sets": {"x": {"kind": "interval", "size": 4},
+                       "y": {"kind": "interval", "size": ny}},
+        "models": {"M": {
+            "variables": {"u": {"type": "state", "units": "1",
+                                "shape": ["x", "y"]}},
+            "equations": [
+                {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                {"lhs": {"op": "aggregate", "args": [],
+                         "output_idx": ["i", "j"], "ranges": ranges,
+                         "expr": {"op": "D", "args": [idx], "wrt": "t"}},
+                 "rhs": {"op": "aggregate", "args": [],
+                         "output_idx": ["i", "j"], "ranges": ranges,
+                         "expr": 1.0}},
+            ],
+            "tests": [{
+                "id": "subset",
+                "time_span": {"start": 0.0, "end": 1.0},
+                "assertions": [_coords_assert({"x": 2}, time=1.0,
+                                              expected=1.0, abs_tol=1e-8)],
+            }],
+        }},
+    }
+
+
+def test_coords_strict_subset_requires_singleton_remainder():
+    ok = _run(_doc_2d(1))
+    assert len(ok) == 1
+    assert ok[0].passed, ok[0].message
+    assert ok[0].actual == pytest.approx(1.0, abs=1e-8)
+
+    bad = _run(_doc_2d(3))
+    assert len(bad) == 1
+    assert not bad[0].passed
+    assert "leaves dimension 'y' unpinned with 3 samples" in bad[0].message
+
+
+# ---------------------------------------------------------------------------
+# §6.6.5 from_file references (pinned convention: path relative to the .esm
+# file's directory; v1 format json — row-major nested array in field shape)
+# ---------------------------------------------------------------------------
+
+
+def _from_file_assert(ref, *, reduce="L2_error", abs_tol=1e-12):
+    return {"variable": "u", "time": 0.0, "expected": 0.0,
+            "tolerance": {"abs": abs_tol}, "reduce": reduce, "reference": ref}
+
+
+def test_from_file_reference_happy_path(tmp_path):
+    from earthsci_toolkit.pde_inline_tests import simulate_states
+
+    # The binding's own evaluated ic field, so the diff is exactly 0 (the
+    # loaded array is used exactly like an evaluated reference field).
+    f0 = load(json.dumps(_decay_doc()))
+    sim0 = simulate_states(f0, (0.0, 1.0), method="LSODA", rtol=1e-12,
+                           atol=1e-14, saveat=[0.0])
+    vals = [float(sim0.states[0][slot])
+            for _, slot in state_cells(sim0.var_map, "u", "M")]
+    (tmp_path / "ref.json").write_text(json.dumps(vals))
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _from_file_assert({"type": "from_file", "path": "ref.json"}),
+        _from_file_assert({"type": "from_file", "path": "ref.json",
+                           "format": "json"}, reduce="Linf_error"),
+    ]
+    prob = tmp_path / "prob.esm"
+    prob.write_text(json.dumps(doc))
+
+    # Path input: base_dir defaults to the .esm file's directory.
+    results = run_pde_tests(str(prob), model_name="M", method="LSODA",
+                            rtol=1e-12, atol=1e-14)
+    assert len(results) == 2
+    for r in results:
+        assert r.passed, r.message
+        assert r.actual == 0.0
+
+    # EsmFile input: explicit base_dir resolves the same way.
+    results2 = _run(doc, base_dir=str(tmp_path))
+    assert all(r.passed for r in results2)
+
+
+def test_from_file_reference_shape_mismatch(tmp_path):
+    vals = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
+    (tmp_path / "short.json").write_text(json.dumps(vals[:7]))
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _from_file_assert({"type": "from_file", "path": "short.json"})]
+    r = _run(doc, base_dir=str(tmp_path))[0]
+    assert not r.passed
+    assert ("shape mismatch along dimension 1: expected length 8, found 7"
+            in r.message)
+
+    # Deeper nesting than the field's rank.
+    (tmp_path / "deep.json").write_text(json.dumps([[v] for v in vals]))
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _from_file_assert({"type": "from_file", "path": "deep.json"})]
+    r = _run(doc, base_dir=str(tmp_path))[0]
+    assert not r.passed
+    assert "expected a number" in r.message
+
+
+def test_from_file_reference_missing_file_and_format(tmp_path):
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _from_file_assert({"type": "from_file", "path": "nope.json"})]
+    r = _run(doc, base_dir=str(tmp_path))[0]
+    assert not r.passed
+    assert "file not found" in r.message
+
+    (tmp_path / "ref.json").write_text("[1, 2, 3, 4, 5, 6, 7, 8]")
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        _from_file_assert({"type": "from_file", "path": "ref.json",
+                           "format": "netcdf"})]
+    r = _run(doc, base_dir=str(tmp_path))[0]
+    assert not r.passed
+    assert "format 'netcdf' is not supported" in r.message
+
+
+# ---------------------------------------------------------------------------
+# Shared executable fixture (identical input across the three bindings)
+# ---------------------------------------------------------------------------
+
+
+def test_shared_fixture_pde_inline_assertions_exec():
+    import os
+
+    fixture = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..",
+        "tests", "spatial", "pde_inline_assertions_exec.esm")
+    assert os.path.isfile(fixture)
+    results = run_pde_tests(fixture, model_name="M", method="LSODA",
+                            rtol=1e-12, atol=1e-14)
+    assert len(results) == 7
+    assert all(r.passed for r in results), \
+        [(r.assertion_idx, r.message) for r in results]
+    # The two tie-sampling coords assertions hit the SAME cell.
+    assert results[0].actual == results[1].actual
+    # integral == mean == 0 for the symmetric cosine field.
+    assert abs(results[4].actual) < 1e-12
+    # from_file error norms are ~0 against the committed exact snapshot.
+    assert results[5].actual < 1e-12
+    assert results[6].actual < 1e-12

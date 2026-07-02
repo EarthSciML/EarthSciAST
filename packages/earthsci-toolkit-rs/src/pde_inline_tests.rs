@@ -3,12 +3,38 @@
 //! binding's `pde_inline_tests.jl` and the Python `pde_inline_tests.py`).
 //!
 //! A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a
-//! spatial field — `reduce: L2_error | Linf_error` against an analytic
-//! `reference` expression, or the pure collapsers `mean | max | min` —
-//! rather than scalar point samples. This module drives the official
+//! spatial field — `reduce: L2_error | Linf_error` against a `reference`,
+//! or the pure collapsers `integral | mean | max | min` — or point-sample it
+//! via `coords`. This module drives the official
 //! [`crate::simulate::simulate`] pipeline (which dispatches array/spatial
 //! files to the vectorized `simulate_array` runtime) and collapses fields
 //! per assertion.
+//!
+//! Cross-binding pinned conventions (identical in the Julia / Python / Rust
+//! bindings; the esm-spec leaves these open, so determinism requires
+//! pinning):
+//!
+//! 1. `coords` point-sampling — coords values are positions in INDEX space
+//!    (1-based, fractional allowed) along the named interval index sets;
+//!    sampling picks the NEAREST grid index, with exact half-way ties
+//!    rounding DOWN toward the lower index (`idx = ceil(c - 1/2)`). Keys
+//!    must name the asserted field's index sets; a strict subset pins only
+//!    when every remaining dimension has exactly one sample; the resolved
+//!    index must lie in `1..=size`. Mutually exclusive with `reduce`.
+//! 2. `integral` reduce — the uniform-cell Riemann sum under a UNIT total
+//!    domain measure per axis: `integral = Σ field / N_cells = mean(field)`.
+//!    Authors of non-unit physical domains must scale the expectation until
+//!    the spec grows a measure concept. This is exactly the measure
+//!    convention under which the relative-L2 reduction is measure-free (the
+//!    per-cell measure cancels between numerator and denominator).
+//! 3. `from_file` references — `{type: "from_file", path, format?}`: `path`
+//!    resolves relative to the .esm file's directory (the
+//!    [`run_pde_tests_with_base_dir`] `base_dir`; [`run_pde_tests`] resolves
+//!    against the working directory); the default and only v1 `format` is
+//!    "json" — a row-major nested JSON array exactly matching the field's
+//!    shape (validated; mismatch is a clear error). The loaded array is used
+//!    exactly like an evaluated inline reference in the error-norm
+//!    reductions.
 //!
 //! Public surface (1:1 with the Julia / Python references):
 //!
@@ -25,12 +51,15 @@
 //!   (conformance runners record these).
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde::Serialize;
 
 use crate::simulate::{SimulateOptions, Solution, simulate_with_inspection};
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
-use crate::types::{AssertionReference, EsmFile, Expr, IndexSet, Model, Tolerance, VariableType};
+use crate::types::{
+    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance, VariableType,
+};
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
 /// assertion, its test, nor the model declares one (same constant as the
@@ -124,9 +153,12 @@ pub fn evaluate_cellwise(
 ///   the domain; requires `reference`).
 /// - `"Linf_error"` — `max |actual − reference|` (absolute supremum norm;
 ///   requires `reference`).
+/// - `"integral"` — the uniform-cell Riemann sum under a UNIT total domain
+///   measure per axis: `Σ field / N_cells`, i.e. exactly `mean`. This is the
+///   pinned cross-binding convention (the same measure convention under which
+///   the relative-L2 reduction is measure-free); non-unit physical domains
+///   must be scaled by the author until the spec grows a measure concept.
 /// - `"mean" | "max" | "min"` — pure collapsers of `actual`.
-///
-/// `"integral"` requires the grid measure and is not implemented here.
 pub fn field_reduce(kind: &str, actual: &[f64], reference: Option<&[f64]>) -> Result<f64, String> {
     match kind {
         "L2_error" | "Linf_error" => {
@@ -159,7 +191,7 @@ pub fn field_reduce(kind: &str, actual: &[f64], reference: Option<&[f64]>) -> Re
                     .fold(0.0f64, f64::max))
             }
         }
-        "mean" => {
+        "mean" | "integral" => {
             if actual.is_empty() {
                 return Err("field_reduce: empty field".to_string());
             }
@@ -365,6 +397,181 @@ fn observed_field(
     Some((field, cells))
 }
 
+/// The asserted variable's declared spatial shape (ordered index-set names).
+/// `Err` when the variable is missing or scalar — a `coords` assertion is
+/// ill-formed on a 0-D variable per esm-spec §6.6.5 (identical to the Julia
+/// reference's `_variable_shape`).
+fn variable_shape(file: &EsmFile, model_name: &str, variable: &str) -> Result<Vec<String>, String> {
+    let model = file
+        .models
+        .as_ref()
+        .and_then(|ms| ms.get(model_name))
+        .ok_or_else(|| format!("model '{model_name}' not found"))?;
+    let v = model
+        .variables
+        .get(variable)
+        .ok_or_else(|| format!("variable '{variable}' is not declared in model '{model_name}'"))?;
+    match &v.shape {
+        Some(shape) if !shape.is_empty() => Ok(shape.clone()),
+        _ => Err(format!(
+            "`coords` requires a spatially-shaped variable; '{variable}' is scalar"
+        )),
+    }
+}
+
+/// Resolve a §6.6.5 `coords` map to a concrete 1-based cell tuple over
+/// `shape` (the field's ordered index-set names), per the pinned
+/// cross-binding convention: coords values are positions in INDEX space
+/// (1-based, fractional allowed) along interval index sets; sampling =
+/// nearest grid index with exact half-way ties rounding DOWN
+/// (`idx = ceil(c - 1/2)`). A strict subset of dimensions may be pinned only
+/// when every remaining dimension is singleton (identical to the Julia
+/// reference's `_coords_cell`).
+fn coords_cell(
+    coords: &HashMap<String, f64>,
+    shape: &[String],
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<Vec<i64>, String> {
+    for k in coords.keys() {
+        if !shape.iter().any(|s| s == k) {
+            return Err(format!(
+                "`coords` names unknown dimension '{k}' (field dimensions: {})",
+                shape.join(", ")
+            ));
+        }
+    }
+    let mut cell = Vec::with_capacity(shape.len());
+    for s in shape {
+        let size = index_sets
+            .get(s)
+            .filter(|iset| iset.kind == "interval")
+            .and_then(|iset| iset.size)
+            .ok_or_else(|| {
+                format!(
+                    "`coords` sampling requires interval index sets with a \
+                     declared size; '{s}' is not one"
+                )
+            })?;
+        match coords.get(s) {
+            Some(&c) => {
+                let idx = (c - 0.5).ceil() as i64; // nearest index; exact ties round DOWN
+                if idx < 1 || idx > size {
+                    return Err(format!(
+                        "`coords` position {c} along '{s}' resolves to index \
+                         {idx}, outside 1..{size}"
+                    ));
+                }
+                cell.push(idx);
+            }
+            None => {
+                if size != 1 {
+                    return Err(format!(
+                        "`coords` leaves dimension '{s}' unpinned with {size} \
+                         samples; a strict subset pins only when every \
+                         remaining dimension is singleton"
+                    ));
+                }
+                cell.push(1);
+            }
+        }
+    }
+    Ok(cell)
+}
+
+/// Walk a row-major nested JSON array to the value at 1-based `cell`,
+/// validating each level's extent against `exts` (the field's per-dimension
+/// extents). The full Cartesian cell sweep visits every node, so ragged or
+/// mis-sized payloads always surface a shape-mismatch error.
+fn nested_at(data: &serde_json::Value, cell: &[i64], exts: &[usize]) -> Result<f64, String> {
+    let mut node = data;
+    for (d, &i) in cell.iter().enumerate() {
+        let arr = node.as_array().ok_or_else(|| {
+            format!(
+                "from_file reference shape mismatch along dimension {}: \
+                 expected a nested array of length {}",
+                d + 1,
+                exts[d]
+            )
+        })?;
+        if arr.len() != exts[d] {
+            return Err(format!(
+                "from_file reference shape mismatch along dimension {}: \
+                 expected length {}, found {}",
+                d + 1,
+                exts[d],
+                arr.len()
+            ));
+        }
+        node = &arr[(i - 1) as usize];
+    }
+    node.as_f64().ok_or_else(|| {
+        format!(
+            "from_file reference shape mismatch at cell [{}]: expected a number",
+            cell.iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    })
+}
+
+/// Load a `{type: "from_file", path, format?}` reference (esm-spec §6.6.5)
+/// as the per-cell reference field over `cell_tuples`, per the pinned
+/// cross-binding convention: `path` resolves relative to `base_dir` (the
+/// .esm file's directory; `None` resolves against the working directory);
+/// the default and only v1 `format` is "json" — a row-major nested array
+/// exactly matching the field's shape (identical to the Julia reference's
+/// `_from_file_reference`).
+fn from_file_reference(
+    ff: &FromFileReference,
+    base_dir: Option<&Path>,
+    cell_tuples: &[Vec<i64>],
+) -> Result<Vec<f64>, String> {
+    let fmt = ff
+        .format
+        .as_deref()
+        .map(str::to_lowercase)
+        .unwrap_or_else(|| "json".to_string());
+    if fmt != "json" {
+        return Err(format!(
+            "from_file reference format '{fmt}' is not supported (v1 supports \"json\" only)"
+        ));
+    }
+    let p = Path::new(&ff.path);
+    let resolved = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base_dir.unwrap_or_else(|| Path::new(".")).join(p)
+    };
+    if !resolved.is_file() {
+        return Err(format!(
+            "from_file reference file not found: {}",
+            resolved.display()
+        ));
+    }
+    let text = std::fs::read_to_string(&resolved)
+        .map_err(|e| format!("from_file reference read failed: {e}"))?;
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("from_file reference is not valid JSON: {e}"))?;
+    if cell_tuples.is_empty() {
+        return Err("from_file reference: field has no cells".to_string());
+    }
+    let nd = cell_tuples[0].len();
+    let exts: Vec<usize> = (0..nd)
+        .map(|d| {
+            cell_tuples
+                .iter()
+                .map(|c| c[d].max(0) as usize)
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    cell_tuples
+        .iter()
+        .map(|c| nested_at(&data, c, &exts))
+        .collect()
+}
+
 /// Evaluate one assertion against a solved trajectory; `Err` carries the
 /// reason text (recorded verbatim into the result's `message`).
 fn eval_assertion(
@@ -374,15 +581,26 @@ fn eval_assertion(
     index_sets: &HashMap<String, IndexSet>,
     file: &EsmFile,
     insp: &BuildInspection,
+    base_dir: Option<&Path>,
 ) -> Result<f64, String> {
     let ti = time_index(&sol.time, assertion.time)?;
-    if assertion.coords.is_some() {
-        return Err("`coords` point-sampling is not supported by run_pde_tests".to_string());
+    if assertion.coords.is_some() && assertion.reduce.is_some() {
+        return Err("`coords` and `reduce` are mutually exclusive".to_string());
     }
-    let Some(reduce) = &assertion.reduce else {
+    if assertion.coords.is_none() && assertion.reduce.is_none() {
         let slot = scalar_slot(&sol.state_variable_names, &assertion.variable, model_name)
             .ok_or_else(|| format!("scalar state '{}' not found", assertion.variable))?;
         return Ok(sol.state[slot][ti]);
+    }
+    // `coords` validation runs BEFORE field materialization so a coords
+    // assertion on a scalar variable fails with the §6.6.5 coords-specific
+    // message (identical to the Julia reference).
+    let coords_target = match &assertion.coords {
+        Some(coords) => {
+            let shape = variable_shape(file, model_name, &assertion.variable)?;
+            Some(coords_cell(coords, &shape, index_sets)?)
+        }
+        None => None,
     };
     let cells = state_cells(&sol.state_variable_names, &assertion.variable, model_name);
     let (field, cell_tuples): (Vec<f64>, Vec<Vec<i64>>) = if !cells.is_empty() {
@@ -402,16 +620,34 @@ fn eval_assertion(
             },
         )?
     };
+    if let Some(target) = coords_target {
+        let pos = cell_tuples
+            .iter()
+            .position(|c| *c == target)
+            .ok_or_else(|| {
+                format!(
+                    "no grid sample at cell [{}] of '{}'",
+                    target
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    assertion.variable
+                )
+            })?;
+        return Ok(field[pos]);
+    }
+    let reduce = assertion
+        .reduce
+        .as_ref()
+        .expect("reduce is set on the non-coords array path");
     let reference = match &assertion.reference {
         None => None,
         Some(AssertionReference::Expression(expr)) => {
             Some(evaluate_cellwise(expr, &cell_tuples, index_sets)?)
         }
-        Some(AssertionReference::FromFile(_)) => {
-            return Err(
-                "only inline-expression `reference` is supported (from_file references are not)"
-                    .to_string(),
-            );
+        Some(AssertionReference::FromFile(ff)) => {
+            Some(from_file_reference(ff, base_dir, &cell_tuples)?)
         }
     };
     field_reduce(reduce, &field, reference.as_deref())
@@ -424,6 +660,7 @@ fn run_model_tests(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
     opts: &SimulateOptions,
+    base_dir: Option<&Path>,
     results: &mut Vec<PdeAssertionResult>,
 ) {
     let Some(tests) = &model.tests else {
@@ -458,7 +695,7 @@ fn run_model_tests(
             );
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
-                Ok(sol) => eval_assertion(sol, a, model_name, index_sets, file, &insp)
+                Ok(sol) => eval_assertion(sol, a, model_name, index_sets, file, &insp, base_dir)
                     .map_err(|msg| format!("assertion evaluation failed: {msg}")),
             };
             let (actual, passed, message) = match outcome {
@@ -506,18 +743,35 @@ fn run_model_tests(
 /// `initial_conditions` / `parameter_overrides` applied and `opts` pinning
 /// the solver family and tolerances; the assertion times become the sampled
 /// `output_times`); then per assertion the asserted variable's field is read
-/// at the assertion time and collapsed per its `reduce` (error norms
-/// evaluate the analytic `reference` expression cellwise via
-/// [`evaluate_cellwise`]). An assertion with neither `coords` nor `reduce`
-/// samples a scalar state. `coords` point-sampling and `from_file`
-/// references are not supported and yield failed results with explanatory
-/// messages. Mirrors the Julia binding's `run_pde_tests` 1:1 (tolerances per
-/// §6.6.4; the pass predicate is Julia `isapprox`). Models iterate in sorted
-/// name order for deterministic output.
+/// at the assertion time and either point-sampled per its `coords`
+/// (positions in 1-based INDEX space; nearest grid index, exact ties
+/// rounding DOWN — the pinned cross-binding convention) or collapsed per its
+/// `reduce` (error norms evaluate the `reference` — an analytic expression
+/// cellwise via [`evaluate_cellwise`], or a `{type: "from_file", path,
+/// format?}` JSON snapshot resolved against the working directory; use
+/// [`run_pde_tests_with_base_dir`] to anchor at the .esm file's directory).
+/// An assertion with neither `coords` nor `reduce` samples a scalar state.
+/// Mirrors the Julia binding's `run_pde_tests` 1:1 (tolerances per §6.6.4;
+/// the pass predicate is Julia `isapprox`). Models iterate in sorted name
+/// order for deterministic output.
 pub fn run_pde_tests(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SimulateOptions,
+) -> Vec<PdeAssertionResult> {
+    run_pde_tests_with_base_dir(file, model_name, opts, None)
+}
+
+/// [`run_pde_tests`] with an explicit `base_dir` anchoring `from_file`
+/// reference paths (esm-spec §6.6.5, pinned convention: relative to the .esm
+/// file's directory). `None` resolves relative paths against the working
+/// directory — callers that loaded the document from a path should pass that
+/// path's parent, matching the Julia / Python bindings' default.
+pub fn run_pde_tests_with_base_dir(
+    file: &EsmFile,
+    model_name: Option<&str>,
+    opts: &SimulateOptions,
+    base_dir: Option<&Path>,
 ) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
     let Some(models) = &file.models else {
@@ -532,7 +786,15 @@ pub fn run_pde_tests(
         {
             continue;
         }
-        run_model_tests(file, mname, &models[mname], &index_sets, opts, &mut results);
+        run_model_tests(
+            file,
+            mname,
+            &models[mname],
+            &index_sets,
+            opts,
+            base_dir,
+            &mut results,
+        );
     }
     results
 }
@@ -705,7 +967,23 @@ mod tests {
         assert_eq!(field_reduce("min", &actual, None).unwrap(), 1.0);
         assert!(field_reduce("L2_error", &actual, None).is_err()); // reference required
         assert!(field_reduce("L2_error", &actual, Some(&[0.0, 0.0, 0.0])).is_err()); // zero norm
-        assert!(field_reduce("integral", &actual, None).is_err());
+        assert!(field_reduce("wat", &actual, None).is_err()); // unknown kind
+    }
+
+    /// Pinned cross-binding convention: `integral` is the uniform-cell
+    /// Riemann sum under a UNIT total domain measure per axis — Σ field /
+    /// N_cells, exactly `mean` (NOT the bare sum).
+    #[test]
+    fn field_reduce_integral_is_unit_measure_mean() {
+        let f = [1.0, 2.0, 3.0];
+        assert_eq!(field_reduce("integral", &f, None).unwrap(), 2.0);
+        assert_eq!(
+            field_reduce("integral", &f, None).unwrap(),
+            field_reduce("mean", &f, None).unwrap()
+        );
+        let g: Vec<f64> = (1..=8).map(|i| (i as f64 - 0.5) / 8.0).collect();
+        assert_eq!(field_reduce("integral", &g, None).unwrap(), 0.5);
+        assert!(field_reduce("integral", &[], None).is_err());
     }
 
     #[test]
@@ -899,5 +1177,325 @@ mod tests {
             results[2].message
         );
         assert_eq!(results[2].actual, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // §6.6.5 coords point-sampling (pinned convention: 1-based INDEX space,
+    // nearest grid index, exact half-way ties round DOWN)
+    // -----------------------------------------------------------------------
+
+    fn coords_assert(coords: serde_json::Value, time: f64, expected: f64) -> serde_json::Value {
+        json!({"variable": "u", "time": time, "expected": expected,
+               "tolerance": {"abs": 1e-9}, "coords": coords})
+    }
+
+    fn decay_doc_with(assertions: serde_json::Value) -> serde_json::Value {
+        let mut doc = decay_doc();
+        doc["models"]["M"]["tests"][0]["assertions"] = assertions;
+        doc
+    }
+
+    #[test]
+    fn run_pde_tests_coords_sampling_nearest_ties_down() {
+        let u = |i: f64| (std::f64::consts::PI * (i - 0.5) / N as f64).cos();
+        let mut doc = decay_doc_with(json!([
+            coords_assert(json!({"x": 3}), 0.0, u(3.0)),
+            coords_assert(json!({"x": 3.5}), 0.0, u(3.0)), // tie → lower index 3
+            coords_assert(json!({"x": 2.5}), 0.0, u(2.0)), // tie → 2
+            coords_assert(json!({"x": 5.6}), 0.0, u(6.0)), // nearest → 6
+            coords_assert(json!({"x": 8.5}), 0.0, u(8.0)), // tie at top edge → 8
+        ]));
+        doc["models"]["M"]["tests"][0]["assertions"]
+            .as_array_mut()
+            .unwrap()
+            .push({
+                let mut a = coords_assert(json!({"x": 3}), 1.0, (-1.0f64).exp() * u(3.0));
+                a["tolerance"] = json!({"abs": 1e-8});
+                a
+            });
+        let file = load(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 6);
+        for r in &results {
+            assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
+            assert!(r.reduce.is_none());
+        }
+        assert_eq!(results[0].actual, results[1].actual);
+    }
+
+    #[test]
+    fn run_pde_tests_coords_validation_rejections() {
+        let file = load(
+            &decay_doc_with(json!([
+                coords_assert(json!({"y": 1.0}), 0.0, 0.0),
+                coords_assert(json!({"x": 0.4}), 0.0, 0.0), // → index 0
+                coords_assert(json!({"x": 8.6}), 0.0, 0.0), // → index 9
+            ]))
+            .to_string(),
+        )
+        .expect("doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(!r.passed);
+            assert_eq!(r.actual, None);
+        }
+        assert!(results[0].message.contains("names unknown dimension 'y'"));
+        assert!(results[1].message.contains("outside 1..8"));
+        assert!(results[1].message.contains("resolves to index 0"));
+        assert!(results[2].message.contains("resolves to index 9"));
+    }
+
+    #[test]
+    fn run_pde_tests_coords_on_scalar_variable_rejected() {
+        // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
+        let doc = json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "scalar_coords"},
+            "models": {"M": {
+                "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
+                "tests": [{
+                    "id": "scalar",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [{"variable": "z", "time": 1.0, "expected": 1.0,
+                                    "tolerance": {"abs": 1e-9},
+                                    "coords": {"x": 1.0}}],
+                }],
+            }},
+        });
+        let file = load(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert!(
+            results[0]
+                .message
+                .contains("requires a spatially-shaped variable"),
+            "unexpected message: {}",
+            results[0].message
+        );
+    }
+
+    #[test]
+    fn coords_and_reduce_are_mutually_exclusive_at_load() {
+        let doc = decay_doc_with(json!([
+            {"variable": "u", "time": 0.0, "expected": 0.0,
+             "coords": {"x": 1}, "reduce": "mean"},
+        ]));
+        assert!(load(&doc.to_string()).is_err(), "schema must reject");
+    }
+
+    /// du_ij/dt = 1 with u(0) = 0, so u(t) = t everywhere: pins the
+    /// strict-subset rule — pinning only `x` is legal iff `y` is singleton.
+    fn doc_2d(ny: i64) -> serde_json::Value {
+        let idx = json!({"op": "index", "args": ["u", "i", "j"]});
+        let ranges = json!({"i": [1, 4], "j": [1, ny]});
+        json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "pde_inline_2d"},
+            "index_sets": {"x": {"kind": "interval", "size": 4},
+                           "y": {"kind": "interval", "size": ny}},
+            "models": {"M": {
+                "variables": {"u": {"type": "state", "units": "1",
+                                    "shape": ["x", "y"]}},
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                    {"lhs": {"op": "aggregate", "args": [],
+                             "output_idx": ["i", "j"], "ranges": ranges,
+                             "expr": {"op": "D", "args": [idx], "wrt": "t"}},
+                     "rhs": {"op": "aggregate", "args": [],
+                             "output_idx": ["i", "j"], "ranges": ranges,
+                             "expr": 1.0}},
+                ],
+                "tests": [{
+                    "id": "subset",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [{"variable": "u", "time": 1.0,
+                                    "expected": 1.0,
+                                    "tolerance": {"abs": 1e-8},
+                                    "coords": {"x": 2}}],
+                }],
+            }},
+        })
+    }
+
+    #[test]
+    fn coords_strict_subset_requires_singleton_remainder() {
+        let ok_file = load(&doc_2d(1).to_string()).expect("doc loads");
+        let ok = run_pde_tests(&ok_file, Some("M"), &tight_opts());
+        assert_eq!(ok.len(), 1);
+        assert!(ok[0].passed, "{}", ok[0].message);
+        assert!((ok[0].actual.unwrap() - 1.0).abs() < 1e-8);
+
+        let bad_file = load(&doc_2d(3).to_string()).expect("doc loads");
+        let bad = run_pde_tests(&bad_file, Some("M"), &tight_opts());
+        assert_eq!(bad.len(), 1);
+        assert!(!bad[0].passed);
+        assert!(
+            bad[0]
+                .message
+                .contains("leaves dimension 'y' unpinned with 3 samples"),
+            "unexpected message: {}",
+            bad[0].message
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // §6.6.5 from_file references (pinned convention: path relative to the
+    // .esm file's directory / explicit base_dir; v1 format json — row-major
+    // nested array in field shape)
+    // -----------------------------------------------------------------------
+
+    fn from_file_assert(reference: serde_json::Value, reduce: &str) -> serde_json::Value {
+        json!({"variable": "u", "time": 0.0, "expected": 0.0,
+               "tolerance": {"abs": 1e-12}, "reduce": reduce,
+               "reference": reference})
+    }
+
+    fn ic_cos_values() -> Vec<f64> {
+        (1..=N)
+            .map(|i| (std::f64::consts::PI * (i as f64 - 0.5) / N as f64).cos())
+            .collect()
+    }
+
+    #[test]
+    fn from_file_reference_happy_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("ref.json"),
+            serde_json::to_string(&ic_cos_values()).unwrap(),
+        )
+        .unwrap();
+        let doc = decay_doc_with(json!([
+            from_file_assert(json!({"type": "from_file", "path": "ref.json"}), "L2_error"),
+            from_file_assert(
+                json!({"type": "from_file", "path": "ref.json", "format": "json"}),
+                "Linf_error"
+            ),
+        ]));
+        let file = load(&doc.to_string()).expect("doc loads");
+        let results =
+            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
+        assert_eq!(results.len(), 2);
+        // Identical evaluation machinery seeded the ic, so the diff is 0.
+        for r in &results {
+            assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
+            assert_eq!(r.actual, Some(0.0));
+        }
+    }
+
+    #[test]
+    fn from_file_reference_shape_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vals = ic_cos_values();
+        std::fs::write(
+            dir.path().join("short.json"),
+            serde_json::to_string(&vals[..7]).unwrap(),
+        )
+        .unwrap();
+        let file = load(
+            &decay_doc_with(json!([from_file_assert(
+                json!({"type": "from_file", "path": "short.json"}),
+                "L2_error"
+            )]))
+            .to_string(),
+        )
+        .expect("doc loads");
+        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        assert!(!r.passed);
+        assert!(
+            r.message
+                .contains("shape mismatch along dimension 1: expected length 8, found 7"),
+            "unexpected message: {}",
+            r.message
+        );
+
+        // Deeper nesting than the field's rank.
+        let nested: Vec<Vec<f64>> = vals.iter().map(|&v| vec![v]).collect();
+        std::fs::write(
+            dir.path().join("deep.json"),
+            serde_json::to_string(&nested).unwrap(),
+        )
+        .unwrap();
+        let file = load(
+            &decay_doc_with(json!([from_file_assert(
+                json!({"type": "from_file", "path": "deep.json"}),
+                "L2_error"
+            )]))
+            .to_string(),
+        )
+        .expect("doc loads");
+        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        assert!(!r.passed);
+        assert!(
+            r.message.contains("expected a number"),
+            "unexpected message: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn from_file_reference_missing_file_and_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = load(
+            &decay_doc_with(json!([from_file_assert(
+                json!({"type": "from_file", "path": "nope.json"}),
+                "L2_error"
+            )]))
+            .to_string(),
+        )
+        .expect("doc loads");
+        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        assert!(!r.passed);
+        assert!(
+            r.message.contains("file not found"),
+            "unexpected message: {}",
+            r.message
+        );
+
+        std::fs::write(dir.path().join("ref.json"), "[1,2,3,4,5,6,7,8]").unwrap();
+        let file = load(
+            &decay_doc_with(json!([from_file_assert(
+                json!({"type": "from_file", "path": "ref.json", "format": "netcdf"}),
+                "L2_error"
+            )]))
+            .to_string(),
+        )
+        .expect("doc loads");
+        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        assert!(!r.passed);
+        assert!(
+            r.message.contains("format 'netcdf' is not supported"),
+            "unexpected message: {}",
+            r.message
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Shared executable fixture (identical input across the three bindings)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shared_fixture_pde_inline_assertions_exec() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/spatial/pde_inline_assertions_exec.esm");
+        assert!(fixture.is_file(), "missing shared fixture {fixture:?}");
+        let text = std::fs::read_to_string(&fixture).expect("fixture reads");
+        let file = load(&text).expect("fixture loads");
+        let results =
+            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
+        assert_eq!(results.len(), 7);
+        for r in &results {
+            assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
+        }
+        // The two tie-sampling coords assertions hit the SAME cell.
+        assert_eq!(results[0].actual, results[1].actual);
+        // integral == mean == 0 for the symmetric cosine field.
+        assert!(results[4].actual.unwrap().abs() < 1e-12);
+        // from_file error norms are ~0 against the committed exact snapshot.
+        assert!(results[5].actual.unwrap() < 1e-12);
+        assert!(results[6].actual.unwrap() < 1e-12);
     }
 }

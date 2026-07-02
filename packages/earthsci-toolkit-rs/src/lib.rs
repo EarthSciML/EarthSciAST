@@ -184,7 +184,8 @@ pub use compile_error::CompileError;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use pde_inline_tests::{
-    PdeAssertionResult, evaluate_cellwise, field_reduce, run_pde_tests, state_cells,
+    PdeAssertionResult, evaluate_cellwise, field_reduce, run_pde_tests,
+    run_pde_tests_with_base_dir, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]

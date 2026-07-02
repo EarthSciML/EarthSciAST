@@ -4,10 +4,34 @@ simulation pathway (the Python mirror of the Julia binding's
 
 A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
 field — ``reduce: L2_error | Linf_error`` against an analytic ``reference``
-expression, or the pure collapsers ``mean | max | min`` — rather than scalar
-point samples. This module drives the official NumPy tree-walk pipeline
-(:func:`earthsci_toolkit.simulation.simulate` over the array-op interpreter)
-and collapses fields per assertion.
+expression, or the pure collapsers ``integral | mean | max | min`` — or
+point-sample it via ``coords``. This module drives the official NumPy
+tree-walk pipeline (:func:`earthsci_toolkit.simulation.simulate` over the
+array-op interpreter) and collapses fields per assertion.
+
+Cross-binding pinned conventions (identical in the Julia / Python / Rust
+bindings; the esm-spec leaves these open, so determinism requires pinning):
+
+1. ``coords`` point-sampling — coords values are positions in INDEX space
+   (1-based, fractional allowed) along the named interval index sets;
+   sampling picks the NEAREST grid index, with exact half-way ties rounding
+   DOWN toward the lower index (``idx = ceil(c - 1/2)``). Keys must name the
+   asserted field's index sets; a strict subset pins only when every
+   remaining dimension has exactly one sample; the resolved index must lie
+   in ``1..size``. Mutually exclusive with ``reduce``.
+2. ``integral`` reduce — the uniform-cell Riemann sum under a UNIT total
+   domain measure per axis: ``integral = sum(field) / N_cells = mean(field)``.
+   Authors of non-unit physical domains must scale the expectation until the
+   spec grows a measure concept. This is exactly the measure convention under
+   which the relative-L2 reduction is measure-free (the per-cell measure
+   cancels between numerator and denominator).
+3. ``from_file`` references — ``{type: "from_file", path, format?}``:
+   ``path`` resolves relative to the .esm file's directory (``base_dir``,
+   defaulting to the loaded path's directory, else the working directory);
+   the default and only v1 ``format`` is ``"json"`` — a row-major nested JSON
+   array exactly matching the field's shape (validated; mismatch is a clear
+   error). The loaded array is used exactly like an evaluated inline
+   reference in the error-norm reductions.
 
 Public surface (1:1 with the Julia reference):
 
@@ -28,6 +52,9 @@ Public surface (1:1 with the Julia reference):
 
 from __future__ import annotations
 
+import json
+import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -108,9 +135,13 @@ def field_reduce(
       over the domain; requires ``reference``).
     - ``"Linf_error"`` — ``max |actual − reference|`` (absolute supremum norm;
       requires ``reference``).
+    - ``"integral"`` — the uniform-cell Riemann sum under a UNIT total domain
+      measure per axis: ``sum(field) / N_cells``, i.e. exactly ``mean``. This
+      is the pinned cross-binding convention (the same measure convention
+      under which the relative-L2 reduction is measure-free); non-unit
+      physical domains must be scaled by the author until the spec grows a
+      measure concept.
     - ``"mean" | "max" | "min"`` — pure collapsers of ``actual``.
-
-    ``"integral"`` requires the grid measure and is not implemented here.
     """
     k = str(kind)
     a = np.asarray(actual, dtype=float)
@@ -129,7 +160,7 @@ def field_reduce(
                 raise ValueError("field_reduce: L2_error reference has zero norm")
             return float(np.sqrt(np.sum(diff * diff)) / refnorm)
         return float(np.max(np.abs(diff)))
-    if k == "mean":
+    if k in ("mean", "integral"):
         if a.size == 0:
             raise ValueError("field_reduce: empty field")
         return float(np.sum(a) / a.size)
@@ -203,6 +234,129 @@ def _scalar_slot(var_map: Dict[str, int], variable: str, model: str) -> Optional
         if s in (qualified, variable) or bare == variable:
             return int(slot)
     return None
+
+
+def _variable_shape(file: EsmFile, mname: str, variable: str) -> List[str]:
+    """The asserted variable's declared spatial shape (ordered index-set
+    names). Raises when the variable is missing or scalar — a ``coords``
+    assertion is ill-formed on a 0-D variable per esm-spec §6.6.5. Identical
+    to the Julia reference's ``_variable_shape``."""
+    model = (file.models or {}).get(str(mname))
+    if model is None:
+        raise RuntimeError(f"model '{mname}' not found")
+    v = (model.variables or {}).get(str(variable))
+    if v is None:
+        raise RuntimeError(
+            f"variable '{variable}' is not declared in model '{mname}'")
+    if not v.shape:
+        raise RuntimeError(
+            f"`coords` requires a spatially-shaped variable; "
+            f"'{variable}' is scalar")
+    return [str(s) for s in v.shape]
+
+
+def _coords_cell(
+    coords: Dict[str, float],
+    shape: List[str],
+    index_sets: Optional[Dict[str, Any]],
+) -> List[int]:
+    """Resolve a §6.6.5 ``coords`` map to a concrete 1-based cell tuple over
+    ``shape`` (the field's ordered index-set names), per the pinned
+    cross-binding convention: coords values are positions in INDEX space
+    (1-based, fractional allowed) along interval index sets; sampling =
+    nearest grid index with exact half-way ties rounding DOWN
+    (``idx = ceil(c - 1/2)``). A strict subset of dimensions may be pinned
+    only when every remaining dimension is singleton. Identical to the Julia
+    reference's ``_coords_cell``."""
+    for k in coords:
+        if str(k) not in shape:
+            raise RuntimeError(
+                f"`coords` names unknown dimension '{k}' "
+                f"(field dimensions: {', '.join(shape)})")
+    index_sets = index_sets or {}
+    cell: List[int] = []
+    for s in shape:
+        entry = index_sets.get(s)
+        size = entry.get("size") if isinstance(entry, dict) and \
+            entry.get("kind") == "interval" else None
+        if not isinstance(size, int) or isinstance(size, bool):
+            raise RuntimeError(
+                f"`coords` sampling requires interval index sets with a "
+                f"declared size; '{s}' is not one")
+        n = int(size)
+        if s in coords:
+            c = float(coords[s])
+            idx = math.ceil(c - 0.5)  # nearest index; exact ties round DOWN
+            if not 1 <= idx <= n:
+                raise RuntimeError(
+                    f"`coords` position {c} along '{s}' resolves to index "
+                    f"{idx}, outside 1..{n}")
+            cell.append(int(idx))
+        else:
+            if n != 1:
+                raise RuntimeError(
+                    f"`coords` leaves dimension '{s}' unpinned with {n} "
+                    f"samples; a strict subset pins only when every "
+                    f"remaining dimension is singleton")
+            cell.append(1)
+    return cell
+
+
+def _nested_at(data: Any, cell: List[int], exts: List[int]) -> float:
+    """Walk a row-major nested JSON array to the value at 1-based ``cell``,
+    validating each level's extent against ``exts`` (the field's
+    per-dimension extents). The full Cartesian cell sweep visits every node,
+    so ragged or mis-sized payloads always surface a shape-mismatch error."""
+    node = data
+    for d, i in enumerate(cell, start=1):
+        if not isinstance(node, list):
+            raise RuntimeError(
+                f"from_file reference shape mismatch along dimension {d}: "
+                f"expected a nested array of length {exts[d - 1]}")
+        if len(node) != exts[d - 1]:
+            raise RuntimeError(
+                f"from_file reference shape mismatch along dimension {d}: "
+                f"expected length {exts[d - 1]}, found {len(node)}")
+        node = node[i - 1]
+    if not isinstance(node, (int, float)) or isinstance(node, bool):
+        raise RuntimeError(
+            f"from_file reference shape mismatch at cell "
+            f"[{','.join(str(c) for c in cell)}]: expected a number")
+    return float(node)
+
+
+def _from_file_reference(
+    ref: Dict[str, Any],
+    base_dir: str,
+    cell_tuples: List[List[int]],
+) -> List[float]:
+    """Load a ``{type: "from_file", path, format?}`` reference (esm-spec
+    §6.6.5) as the per-cell reference field over ``cell_tuples``, per the
+    pinned cross-binding convention: ``path`` resolves relative to
+    ``base_dir`` (the .esm file's directory); the default and only v1
+    ``format`` is ``"json"`` — a row-major nested array exactly matching the
+    field's shape. Identical to the Julia reference's
+    ``_from_file_reference``."""
+    fmt_raw = ref.get("format")
+    fmt = "json" if fmt_raw is None else str(fmt_raw).lower()
+    if fmt != "json":
+        raise RuntimeError(
+            f"from_file reference format '{fmt}' is not supported "
+            f'(v1 supports "json" only)')
+    path_raw = ref.get("path")
+    if path_raw is None:
+        raise RuntimeError("from_file reference is missing `path`")
+    p = str(path_raw)
+    resolved = p if os.path.isabs(p) else os.path.join(str(base_dir), p)
+    if not os.path.isfile(resolved):
+        raise RuntimeError(f"from_file reference file not found: {resolved}")
+    with open(resolved, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not cell_tuples:
+        raise RuntimeError("from_file reference: field has no cells")
+    nd = len(cell_tuples[0])
+    exts = [max(c[d] for c in cell_tuples) for d in range(nd)]
+    return [_nested_at(data, c, exts) for c in cell_tuples]
 
 
 @dataclass
@@ -294,6 +448,7 @@ def run_pde_tests(
     method: str = "RK45",
     rtol: float = 1e-10,
     atol: float = 1e-12,
+    base_dir: Optional[str] = None,
 ) -> List[PdeAssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
     assertions) of the selected model(s) of ``input`` (a path or a loaded
@@ -305,17 +460,28 @@ def run_pde_tests(
     Per test: simulate over the test's ``time_span`` (with its
     ``initial_conditions`` / ``parameter_overrides`` applied, ``method`` /
     ``rtol`` / ``atol`` pinning scipy's ``solve_ivp``); then per assertion the
-    asserted variable's field is read at the assertion time and collapsed per
-    its ``reduce`` (error norms evaluate the analytic ``reference`` expression
-    cellwise via :func:`evaluate_cellwise`). An assertion with neither
-    ``coords`` nor ``reduce`` samples a scalar state. ``coords``
-    point-sampling and ``from_file`` references are not supported and yield
-    failed results with explanatory messages. Mirrors the Julia binding's
-    ``run_pde_tests`` 1:1 (tolerances per §6.6.4; the pass predicate is Julia
-    ``isapprox``)."""
+    asserted variable's field is read at the assertion time and either
+    point-sampled per its ``coords`` (positions in 1-based INDEX space;
+    nearest grid index, exact ties rounding DOWN — the pinned cross-binding
+    convention) or collapsed per its ``reduce`` (error norms evaluate the
+    ``reference`` — an analytic expression cellwise via
+    :func:`evaluate_cellwise`, or a ``{type: "from_file", path, format?}``
+    JSON snapshot resolved against ``base_dir``). An assertion with neither
+    ``coords`` nor ``reduce`` samples a scalar state. ``base_dir`` defaults
+    to the .esm file's directory when ``input`` is a path, else the working
+    directory. Mirrors the Julia binding's ``run_pde_tests`` 1:1 (tolerances
+    per §6.6.4; the pass predicate is Julia ``isapprox``)."""
     file = load(input) if isinstance(input, str) else input
     if not isinstance(file, EsmFile):
         raise TypeError(f"run_pde_tests expects a path or EsmFile, got {type(input)}")
+    if base_dir is not None:
+        resolved_base = str(base_dir)
+    elif isinstance(input, str) and os.path.isfile(input):
+        # `load` accepts a path or raw JSON text; only a real path anchors
+        # from_file references at the .esm file's directory.
+        resolved_base = os.path.dirname(os.path.abspath(input))
+    else:
+        resolved_base = os.getcwd()
     results: List[PdeAssertionResult] = []
     for mname, model in (file.models or {}).items():
         if model_name is not None and str(mname) != str(model_name):
@@ -354,16 +520,26 @@ def run_pde_tests(
                 try:
                     ti = times.index(float(a.time))
                     state = sim.states[ti]
-                    if a.coords is not None:
+                    if a.coords is not None and a.reduce is not None:
                         raise RuntimeError(
-                            "`coords` point-sampling is not supported by run_pde_tests")
-                    if a.reduce is None:
+                            "`coords` and `reduce` are mutually exclusive")
+                    if a.coords is None and a.reduce is None:
                         slot = _scalar_slot(sim.var_map, a.variable, str(mname))
                         if slot is None:
                             raise RuntimeError(
                                 f"scalar state '{a.variable}' not found")
                         actual = float(state[slot])
                     else:
+                        # `coords` validation runs BEFORE field
+                        # materialization so a coords assertion on a scalar
+                        # variable fails with the §6.6.5 coords-specific
+                        # message (identical to the Julia reference).
+                        coords_target: Optional[List[int]] = None
+                        if a.coords is not None:
+                            shape = _variable_shape(file, str(mname),
+                                                    str(a.variable))
+                            coords_target = _coords_cell(a.coords, shape,
+                                                         file.index_sets)
                         cells = state_cells(sim.var_map, a.variable, str(mname))
                         if cells:
                             cell_tuples = [c for c, _ in cells]
@@ -384,16 +560,32 @@ def run_pde_tests(
                             cell_tuples = [[int(i) + 1 for i in idx]
                                            for idx in idxs]
                             field = [float(obs[idx]) for idx in idxs]
-                        ref = None
-                        if a.reference is not None:
-                            if not isinstance(a.reference, (ExprNode, int, float, str)):
+                        if coords_target is not None:
+                            try:
+                                pos = cell_tuples.index(coords_target)
+                            except ValueError:
                                 raise RuntimeError(
-                                    "only inline-expression `reference` is supported "
-                                    "(from_file references are not)")
-                            ref = evaluate_cellwise(a.reference,
-                                                    cell_tuples,
-                                                    index_sets=file.index_sets)
-                        actual = field_reduce(a.reduce, field, reference=ref)
+                                    f"no grid sample at cell "
+                                    f"[{','.join(str(c) for c in coords_target)}]"
+                                    f" of '{a.variable}'") from None
+                            actual = float(field[pos])
+                        else:
+                            ref = None
+                            if a.reference is not None:
+                                if isinstance(a.reference, dict) and \
+                                        a.reference.get("type") == "from_file":
+                                    ref = _from_file_reference(
+                                        a.reference, resolved_base, cell_tuples)
+                                elif isinstance(a.reference,
+                                                (ExprNode, int, float, str)):
+                                    ref = evaluate_cellwise(
+                                        a.reference, cell_tuples,
+                                        index_sets=file.index_sets)
+                                else:
+                                    raise RuntimeError(
+                                        "unsupported `reference` shape "
+                                        f"{type(a.reference)}")
+                            actual = field_reduce(a.reduce, field, reference=ref)
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
                     msg = f"assertion evaluation failed: {err}"
                 if actual is None:
