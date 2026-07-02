@@ -1,0 +1,57 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "makearray_region_inverted",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.3.2 'Empty and inverted bounds'). A §9.6.8-style discretized-derivative makearray whose interior region [2, N-1] is instantiated BELOW the centered scheme's minimum admissible extent: N defaults to 1, so the bound pair folds to [2, 0] — INVERTED (stop < start - 1, one past the canonical empty spelling [2, 1]). Loading MUST fail with makearray_region_inverted on the expanded, metaparameter-folded form (§9.6.4): a 3-point stencil cannot exist on a 1-cell grid, and silently treating the region as empty would hide the mis-sized instantiation (the two boundary-face regions would both cover the single cell and the last would win, yielding a plausible-looking but meaningless discretization). Contrast tests/valid/makearray_empty_region_min_extent.esm — the SAME shape at N = 2 folds the interior to the legal empty bound [2, 1] and loads cleanly."
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 1, "description": "zonal cell count — BELOW the centered scheme's minimum admissible extent of 2" }
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": "N" },
+    "lat": { "kind": "interval", "size": 3 }
+  },
+  "models": {
+    "Advection": {
+      "variables": {
+        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "default": 0.5, "description": "tracer" },
+        "dx": { "type": "parameter", "units": "m", "default": 2.5, "description": "grid spacing" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[2, { "op": "-", "args": ["N", 1] }], [1, 3]],
+              [[1, 1], [1, 3]],
+              [["N", "N"], [1, 3]]
+            ],
+            "values": [
+              { "op": "aggregate", "output_idx": ["i", "j"], "args": ["c"],
+                "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }], "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [
+                    { "op": "index", "args": ["c", { "op": "+", "args": ["i", 1] }, "j"] },
+                    { "op": "index", "args": ["c", { "op": "-", "args": ["i", 1] }, "j"] } ] },
+                  { "op": "*", "args": [2, "dx"] } ] } },
+              { "op": "aggregate", "output_idx": ["j"], "args": ["c"],
+                "ranges": { "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [ { "op": "index", "args": ["c", 2, "j"] },
+                                         { "op": "index", "args": ["c", 1, "j"] } ] },
+                  "dx" ] } },
+              { "op": "aggregate", "output_idx": ["j"], "args": ["c"],
+                "ranges": { "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [ { "op": "index", "args": ["c", "N", "j"] },
+                                         { "op": "index", "args": ["c", { "op": "-", "args": ["N", 1] }, "j"] } ] },
+                  "dx" ] } }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

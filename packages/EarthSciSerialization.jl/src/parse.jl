@@ -1848,10 +1848,13 @@ end
 Internal recursive resolver for subsystem references in an EsmFile.
 """
 function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String})
-    # Resolve model subsystem refs
+    # Resolve model subsystem refs. The document's own index-set registry is
+    # threaded down the walk so every referenced subsystem file's top-level
+    # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
     if file.models !== nothing
         for (name, model) in file.models
-            _resolve_model_refs!(file.models, name, model, base_path, visited)
+            _resolve_model_refs!(file.models, name, model, base_path, visited,
+                                 file.index_sets)
         end
     end
 
@@ -1864,12 +1867,16 @@ function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{S
 end
 
 """
-    _resolve_model_refs!(models_dict, name, model, base_path, visited)
+    _resolve_model_refs!(models_dict, name, model, base_path, visited, registry)
 
 Recursively resolve subsystem references within a Model's subsystems.
+`registry` is the importing **document's** index-set registry
+(`EsmFile.index_sets`): every referenced subsystem file's top-level
+`index_sets` merge into it at resolution time (esm-spec §4.7).
 """
 function _resolve_model_refs!(models_dict, name::String,
-                              model, base_path::String, visited::Set{String})
+                              model, base_path::String, visited::Set{String},
+                              registry::Dict{String,IndexSet})
     # Only Model values carry subsystems to walk; DataLoader / SubsystemRef
     # leaves have none.
     model isa Model || return
@@ -1878,16 +1885,66 @@ function _resolve_model_refs!(models_dict, name::String,
             # Replace the reference in place with the loaded component. The
             # loaded file's own refs are already resolved by `_load_ref`.
             model.subsystems[sub_name] =
-                _resolve_subsystem_ref(sub_value, base_path, visited)
+                _resolve_subsystem_ref(sub_value, base_path, visited, registry)
         else
             # Inline Model (recurse into its subsystems) or DataLoader (leaf).
-            _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path, visited)
+            _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path,
+                                 visited, registry)
         end
     end
 end
 
+# Deep (structural) equality of two typed `IndexSet` declarations — the §4.7 /
+# §9.7.5 idempotent-redeclaration test. Field-wise `==` (the default struct
+# `==` falls back to `===`, which is identity for heap-allocated member
+# vectors, so it cannot be used here).
+_index_set_deep_equal(a::IndexSet, b::IndexSet) =
+    a.kind == b.kind && a.size == b.size && a.members == b.members &&
+    a.of == b.of && a.offsets == b.offsets && a.values == b.values &&
+    a.from_faq == b.from_faq && a.members_raw == b.members_raw
+
+# One-line display of an IndexSet for the conflict diagnostic.
+_index_set_show(s::IndexSet) =
+    "kind=$(s.kind)" * (s.size === nothing ? "" : ", size=$(s.size)") *
+    (s.members === nothing ? "" : ", members=$(s.members)") *
+    (s.of === nothing ? "" : ", of=$(s.of)") *
+    (s.from_faq === nothing ? "" : ", from_faq=$(s.from_faq)")
+
 """
-    _resolve_subsystem_ref(ref, base_path, visited) -> Union{Model,DataLoader}
+    _merge_subsystem_index_sets!(registry, loaded, ref)
+
+Merge a referenced subsystem file's top-level `index_sets` into the importing
+document's registry (esm-spec §4.7, mirroring the §9.7.5 template-import
+merge). The referenced document's metaparameters are already closed and
+folded (`_load_ref` binds them at the edge, §9.7.6 site 3), so the merge
+compares concrete declarations. Deep-equal redeclaration is idempotent; a
+non-equal collision throws [`ExpressionTemplateError`](@ref) with the stable
+code `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh failure mode
+this makes loud: a mesh file whose axis size disagrees with the importer's
+declaration must fail at load, not silently resolve against the importer.
+"""
+function _merge_subsystem_index_sets!(registry::Dict{String,IndexSet},
+                                      loaded::EsmFile, ref::String)
+    for (n, decl) in loaded.index_sets
+        if haskey(registry, n)
+            _index_set_deep_equal(registry[n], decl) ||
+                throw(ExpressionTemplateError("subsystem_index_set_conflict",
+                    "index set '$(n)' from subsystem ref '$(ref)' " *
+                    "($(_index_set_show(decl))) collides with a non-deep-equal " *
+                    "declaration in the importing document " *
+                    "($(_index_set_show(registry[n]))). A referenced subsystem " *
+                    "file's top-level index_sets merge into the importing " *
+                    "document's registry; deep-equal redeclaration is idempotent, " *
+                    "a size/kind disagreement is a load-time error (esm-spec §4.7)."))
+        else
+            registry[n] = decl
+        end
+    end
+    return registry
+end
+
+"""
+    _resolve_subsystem_ref(ref, base_path, visited, registry) -> Union{Model,DataLoader}
 
 Load the ESM file at `ref` and return its single top-level model or data loader
 (esm-spec §4.7). A single-loader file (RFC pure-io-data-loaders §4.4) resolves to
@@ -1895,8 +1952,12 @@ that loader. Errors unless the file contains exactly one model or data loader.
 A `SubsystemRef`'s `bindings` close the referenced document's open
 metaparameters (esm-spec §9.7.6 binding site 3); a `ref` targeting a
 template-library file is rejected with `subsystem_ref_is_template_library`.
+The referenced file's top-level `index_sets` merge into `registry` — the
+importing document's registry — with the §4.7 deep-equal-or-error rule
+(`subsystem_index_set_conflict`).
 """
-function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String})
+function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String},
+                                registry::Dict{String,IndexSet})
     loaded = _load_ref(ref.ref, base_path, visited; metaparameters=ref.bindings)
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
     n_loaders = loaded.data_loaders === nothing ? 0 : length(loaded.data_loaders)
@@ -1906,11 +1967,17 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
             "Subsystem ref '$(ref.ref)' must resolve to exactly one top-level model " *
             "or data loader, found $(total)"))
     end
+    # esm-spec §4.7: the mounted file's document-scoped index sets (already
+    # metaparameter-folded, incl. any brought in by ITS own subsystem refs)
+    # join the importing document's registry, so the importer's variables may
+    # be shaped over the mesh file's axes and a disagreement fails loudly.
+    _merge_subsystem_index_sets!(registry, loaded, ref.ref)
     return n_models == 1 ? first(values(loaded.models)) : first(values(loaded.data_loaders))
 end
 
-_resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String}) =
-    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited)
+_resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},
+                       registry::Dict{String,IndexSet}=Dict{String,IndexSet}()) =
+    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry)
 
 """
     _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)

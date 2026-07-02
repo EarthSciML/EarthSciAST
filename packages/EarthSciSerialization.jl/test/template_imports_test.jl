@@ -234,9 +234,60 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
                      "template_import_rename_unknown_name",
                      "template_import_rebind_unknown_name",
                      "template_import_rename_collision",
-                     "template_import_rename_invalid"]
+                     "template_import_rename_invalid",
+                     "makearray_region_inverted", "subsystem_index_set_conflict"]
             @test code in seen_codes
         end
+    end
+
+    @testset "subsystem-mounted index_sets merge into the importer (§4.7)" begin
+        # tests/valid/subsystem_index_set_merge.esm mounts subsystem_mesh_lib.esm:
+        # the mesh file's top-level index_sets join the importing document's
+        # registry (deep-equal `cells` idempotent; `vertices` added).
+        f = EarthSciSerialization.load(joinpath(repo_root, "tests", "valid",
+                                                "subsystem_index_set_merge.esm"))
+        @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
+        @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
+        sub = f.models["Host"].subsystems["M"]
+        @test sub isa EarthSciSerialization.Model
+        @test haskey(sub.variables, "q")
+        # The mounted mesh file loads standalone too (it is an ordinary
+        # single-model document owning its axes).
+        mesh = EarthSciSerialization.load(joinpath(repo_root, "tests", "valid",
+                                                   "subsystem_mesh_lib.esm"))
+        @test mesh.index_sets["cells"].size == 5
+    end
+
+    @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin
+        # tests/valid/makearray_empty_region_min_extent.esm: a §9.6.8-style
+        # discretized derivative whose interior region [2, N-1] folds to the
+        # canonical EMPTY bound [2, 1] at the default N = 2 — a legal,
+        # load-clean spelling that contributes no elements.
+        fixture = joinpath(repo_root, "tests", "valid",
+                           "makearray_empty_region_min_extent.esm")
+        f = EarthSciSerialization.load(fixture)
+        @test f.index_sets["lon"].size == 2
+        ma = f.models["Advection"].equations[1].rhs
+        @test ma isa OpExpr && ma.op == "makearray"
+        @test ma.regions[1] == [[2, 1], [1, 3]]     # empty interior, folded
+        @test ma.regions[2] == [[1, 1], [1, 3]]     # west face
+        @test ma.regions[3] == [[2, 2], [1, 3]]     # east face
+        # The empty region is inert: the evaluator builds, and the two faces
+        # tile the axis — d(c)/dt is the one-sided difference everywhere. With
+        # a uniform state the differences vanish, so du == 0 exactly.
+        f!, u0, p, tspan, vmap = build_evaluator(f)
+        du = similar(u0); fill!(du, NaN)
+        f!(du, u0, p, 0.0)
+        @test all(du .== 0.0)
+
+        # The SAME file re-bound below the scheme's minimum extent at the
+        # loader API (§9.7.6 site 4) folds the interior region to [2, 0] —
+        # INVERTED (stop < start - 1) — and MUST fail loudly at load.
+        @test _err_code(() -> EarthSciSerialization.load(fixture;
+            metaparameters=Dict("N" => 1))) == "makearray_region_inverted"
+        # N = 3 has a genuine 1-cell interior [2, 2]: still legal.
+        f3 = EarthSciSerialization.load(fixture; metaparameters=Dict("N" => 3))
+        @test f3.models["Advection"].equations[1].rhs.regions[1] == [[2, 2], [1, 3]]
     end
 
     # ------------------------------------------------------------------

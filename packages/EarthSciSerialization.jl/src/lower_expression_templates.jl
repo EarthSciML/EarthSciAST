@@ -133,6 +133,7 @@ or one of the esm-spec §9.7 template-library / metaparameter codes
 - `template_import_unresolved`
 - `template_import_not_library`
 - `subsystem_ref_is_template_library`
+- `subsystem_index_set_conflict`
 - `template_import_cycle`
 - `template_import_name_conflict`
 - `template_import_unknown_name`
@@ -145,6 +146,7 @@ or one of the esm-spec §9.7 template-library / metaparameter codes
 - `metaparameter_unbound`
 - `metaparameter_type_error`
 - `metaparameter_name_conflict`
+- `makearray_region_inverted`
 """
 struct ExpressionTemplateError <: Exception
     code::String
@@ -820,6 +822,68 @@ function _validate_geometry_manifolds(x, path::String="")
     return
 end
 
+"""
+    _validate_makearray_regions(x, path="")
+
+Post-expansion validator (esm-spec §4.3.2 / §9.6.4): every `makearray` region
+bound pair `[start, stop]` on the expanded, metaparameter-folded tree must
+satisfy `stop >= start - 1`. `stop == start - 1` is the canonical EMPTY bound —
+the region covers no elements and contributes nothing (the spelling an interior
+region like `[2, N-1]` folds to at the minimum admissible extent `N = 2`).
+`stop < start - 1` is INVERTED and rejected with `makearray_region_inverted`:
+it is almost always an authoring bug (an interior stencil instantiated below
+its minimum extent, e.g. `[2, N-1]` at `N = 1` folding to `[2, 0]`), and
+silently treating it as empty would hide the defect. Template bodies are
+skipped — pre-substitution bounds may legally carry metaparameter names there;
+only concrete integer pairs are checked (a fully-folded document tree carries
+nothing else in bound position). Throws [`ExpressionTemplateError`](@ref) with
+code `makearray_region_inverted`.
+"""
+function _validate_makearray_regions(x, path::String="")
+    if _is_array(x)
+        for (i, child) in enumerate(x)
+            _validate_makearray_regions(child, "$path/$(i-1)")
+        end
+        return
+    end
+    _is_object(x) || return
+    op = get(x, "op", get(x, :op, nothing))
+    op_str = op === nothing ? "" : string(op)
+    if op_str == "makearray"
+        regions = get(x, "regions", get(x, :regions, nothing))
+        if regions !== nothing && _is_array(regions)
+            for (ri, region) in enumerate(regions)
+                _is_array(region) || continue
+                for (di, bounds) in enumerate(region)
+                    (_is_array(bounds) && length(bounds) == 2) || continue
+                    lo, hi = bounds[1], bounds[2]
+                    (lo isa Integer && !(lo isa Bool) &&
+                     hi isa Integer && !(hi isa Bool)) || continue
+                    if hi < lo - 1
+                        throw(ExpressionTemplateError(
+                            "makearray_region_inverted",
+                            "$path: makearray regions[$(ri-1)] dimension $(di-1) " *
+                            "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
+                            "An empty bound is spelled [start, start-1] and " *
+                            "contributes no elements (esm-spec §4.3.2); a further-" *
+                            "inverted pair is an authoring error — e.g. an interior " *
+                            "stencil region [2, N-1] instantiated at N below the " *
+                            "scheme's minimum extent (§9.6.8)."))
+                    end
+                end
+            end
+        end
+    end
+    for (k, v) in pairs(x)
+        ks = string(k)
+        # Template bodies/matches are pre-substitution trees; bounds may
+        # legally carry metaparameter names or fold later (esm-spec §9.7.6).
+        ks == "expression_templates" && continue
+        _validate_makearray_regions(v, "$path/$ks")
+    end
+    return
+end
+
 # ---------------------------------------------------------------------------
 # Pre-version-0.4.0 rejection
 # ---------------------------------------------------------------------------
@@ -898,6 +962,7 @@ function lower_expression_templates(raw_data)
         # No expansion to run, but the §9.6.4 expanded-form validators still
         # apply — the raw tree IS the expanded form.
         _validate_geometry_manifolds(raw_data)
+        _validate_makearray_regions(raw_data)
         return raw_data
     end
 
@@ -1022,8 +1087,10 @@ function lower_expression_templates(raw_data)
 
     # Validators run on the expanded form (esm-spec §9.6.4): reject any
     # geometry-kernel node whose (possibly just-substituted) `manifold` is
-    # outside the closed set.
+    # outside the closed set, and any makearray region whose folded bound
+    # pair is inverted (stop < start - 1; esm-spec §4.3.2).
     _validate_geometry_manifolds(root)
+    _validate_makearray_regions(root)
 
     return JSONLikeDict(root)
 end

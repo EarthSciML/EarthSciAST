@@ -352,6 +352,8 @@ Fields:
 
 **Overlap semantics.** Regions may overlap. When they do, **later entries overwrite earlier ones**. This matches `@makearray`'s documented behavior and is useful for expressing "default fill, then override" patterns.
 
+**Empty and inverted bounds.** A region bound pair `[start, stop]` with `stop == start − 1` is the canonical **empty** bound: the region covers no elements along that dimension, so the whole region contributes nothing to the assembled array and its `values` entry is never consulted. This is a legal, load-clean spelling — it is exactly what a metaparameter-folded interior region (§9.6.8) produces at the minimum admissible extent (`[2, N−1]` at `N = 2` folds to `[2, 1]`, leaving the boundary-face regions to cover the whole axis). A pair with `stop < start − 1` is **inverted** and MUST be rejected at load time with `makearray_region_inverted` (§9.6.6): a further-inverted bound is almost always an authoring error — an interior stencil instantiated below its scheme's minimum extent (`[2, N−1]` at `N = 1` folds to `[2, 0]`) — and silently treating it as empty would hide the defect. The check runs on the expanded, metaparameter-folded form (§9.6.4); bound pairs still carrying open metaparameter expressions inside a template-library body are not checked until they fold at a binding site (§9.7.6).
+
 **Example — 3×3 block-diagonal with corner cells:**
 
 ```json
@@ -576,6 +578,8 @@ A subsystem may be a child **model**, a child **reaction system**, or a pure-I/O
 - It must contain exactly one top-level model, reaction system, or data loader and must NOT carry a `"kind"` field (absence of `"kind"` identifies a subsystem file). The single model, reaction system, or data loader defined in the file is used as the subsystem definition. Because the file is single-component, no fragment selector is required.
 - A file whose sole top-level component is `data_loaders` (with exactly one entry) is itself a valid ESM document and is referenceable as a loader subsystem; this is the structural reason a co-located `model + loader` is split into separate files when the loader must be shared by reference.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
+
+**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
@@ -1799,6 +1803,34 @@ scalar area matters. `polygon_intersection_area` carries the same required
 `manifold` field and the same tolerance-based conformance contract as
 `intersect_polygon` (CONFORMANCE_SPEC §5.8.4).
 
+**Operand rings, padding, and degenerate vertices.** Each polygon operand of
+`intersect_polygon` / `polygon_intersection_area` is an `[verts, 2]` lon-lat
+vertex array with **implicit closure** (edge `n→1` implied). Two departures
+from the plain distinct-vertex ring MUST be accepted by every binding:
+
+1. **Explicit closure** — a closing duplicate final vertex
+   (`ring[last] == ring[first]`) is dropped.
+2. **Consecutive duplicate vertices** — in particular trailing repeats of the
+   final vertex. This is the rectangular-storage padding a mixed-valence mesh
+   requires: an MPAS pentagon stored in a hexagon-shaped `[cells, NVERT, 2]`
+   ring stack repeats its last vertex to fill the fixed `NVERT` slots, so the
+   dense narrow-phase `A_ij` aggregate can gather per-cell rings of uniform
+   extent.
+
+A binding MUST evaluate such a ring as its **deduplicated** form: consecutive
+duplicates (wrap pair included) are removed under the shared point-equality
+tolerance (`atol 1e-8`, `rtol 1e-5` — the `np.allclose` defaults all bindings
+pin), and the op's value MUST equal the same op over the already-distinct ring.
+Deduplication is the **binding kernel's** job, performed in its operand
+coercion *before* the backend clip — never delegated to the backend and never
+imposed on the caller — because backend tolerance differs: a zero-length edge
+is a no-op for a Sutherland–Hodgman half-plane pass but a **rejected degenerate
+edge for S2** (the Python/Rust spherical backend). A ring with fewer than 3
+*distinct* vertices after deduplication is a degenerate operand and is
+rejected (the existing ≥3-distinct-vertices operand error). `intersect_polygon`
+returns its overlap ring in the same normal form — distinct vertices, implicit
+closure — on every manifold.
+
 ### 8.7 Out of scope
 
 - **Authentication / credentials.** Env vars, API keys, S3 credentials, CDS API tokens — all runtime-side. The schema stores **no** credential information.
@@ -2401,6 +2433,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `template_import_unresolved` | An import `ref` failed to load or parse (reports path/URL and cause) (§9.7.2). |
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
+| `subsystem_index_set_conflict` | A §4.7 subsystem ref's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry (§4.7 "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
 | `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
 | `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2); or a metaparameter binding — at an import edge, a subsystem edge, or the loader API — names a metaparameter the target document neither declares nor re-exports (§9.7.6). |
@@ -2413,6 +2446,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_unbound` | A metaparameter is still open after edge bindings, API bindings, and defaults (§9.7.6). |
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name (§9.7.6). |
+| `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. |
 | `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the **expanded** tree — the post-expansion enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names; §9.6.4). |
 | `template_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `template_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
 
@@ -2482,7 +2516,7 @@ A discretization rule names its scheme and BC in its identity. `central_D_lon_ze
 }
 ```
 
-The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live.
+The first region fills the interior columns (`i ∈ [2,143]`) with the centered difference; the two single-cell faces (`i=1`, `i=144`) hold the one-sided (zero-gradient) difference. The three regions tile the axis, so the discretized derivative is fully defined with its BC and there is nowhere else a boundary condition could live. At the scheme's **minimum admissible extent** the interior region folds **empty** — a metaparameterized `[2, N−1]` (§9.7.6) at `N = 2` folds to `[2, 1]`, contributing no cells while the two faces still tile the axis; this loads cleanly (§4.3.2). Binding **below** the minimum extent folds the region **inverted** (`[2, N−1]` at `N = 1` → `[2, 0]`) and is rejected at load with `makearray_region_inverted` (§4.3.2, §9.6.6) — the rule's stencil cannot exist on that grid, and failing loudly at the binding site is what surfaces the mis-sized instantiation.
 
 **Choosing a scheme = choosing a rule** (central, upwind, WENO, a specific BC). A periodic-BC rule gathers with the `periodic` boundary policy (CONFORMANCE_SPEC §5.5.5) and needs no face overrides; a Dirichlet rule overwrites the faces with the fixed value; a Robin rule overwrites with the solved boundary expression; a rule for a seam shared with another variable overwrites the face with an `index` into that variable. A **compound** scheme (Godunov / WENO / flux-limited) out-ranks the plain per-derivative rule via `priority` (§9.6.3), so it fires on the whole compound before the inner `D`s are lowered.
 
@@ -2540,7 +2574,7 @@ Renaming (§9.7.7) applies per edge **before** this merge, so the effective sequ
 
 #### 9.7.5 `index_sets` merge
 
-An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation and after any edge renaming (§9.7.7) — i.e. under their **post-rename** names, with any rebound keyed factors already rewritten. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them — and lets two instances of one grid family coexist as, e.g., `fine.x` and `coarse.x`. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`.
+An imported file's top-level `index_sets` merge into the importing **document's** document-scoped registry, after metaparameter instantiation and after any edge renaming (§9.7.7) — i.e. under their **post-rename** names, with any rebound keyed factors already rewritten. This lets a grid library file own its axes: a consuming model's variables are shaped over the merged names without redeclaring them — and lets two instances of one grid family coexist as, e.g., `fine.x` and `coarse.x`. Deep-equal redeclaration is idempotent; a non-equal collision is `template_import_index_set_conflict`. A §4.7 subsystem reference edge merges the referenced file's top-level `index_sets` the same way, with its own diagnostic (`subsystem_index_set_conflict`, §4.7).
 
 #### 9.7.6 Load-time metaparameters
 
