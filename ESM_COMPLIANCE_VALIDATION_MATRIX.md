@@ -451,17 +451,37 @@ Where:
 > Goldens byte-identical: `import_rename_two_instances`, `import_rebind_keyed_factors`,
 > `import_rename_diamond`. Invalid fixtures raise the mapped diagnostics
 > `rename_invalid_identifier`).
+>
+> **`where.*.shape` rewrite (2026-07-03, EXPR-09-F-003)**: an import-edge
+> `prefix`/`rename` MUST carry a `where`-constrained rule's `where.*.shape`
+> index-set names through the edge's index-set map in lockstep with the rule's
+> declaration and body references (constraint KEYS — param names — stay
+> unchanged; unmapped shape names stay as spelled). Previously the rename walk
+> reused the metaparameter `_META_SUBST_SKIP_KEYS` (which protects `where`) and
+> copied `where` verbatim, so an imported `where`-rule renamed under `prefix`
+> failed rule registration with `template_constraint_unknown_index_set`
+> (body/registry used `<prefix>.x` while `where` still said `x`). Fixed in the
+> RENAME walk only (META-SUBST still skips `where`) via a positional `where`
+> branch (`_rename_where` / `rename_where` / `renameWhere`) in **all five
+> bindings** (`template_imports.jl`, `template_imports.py`, `template_imports.rs`,
+> `template_imports.ts`, `template_imports.go`). Guarded by the combined fixture
+> `import_where_rename_two_instances` (a `where`-rule library imported twice
+> under prefix `meshA`/`meshB`; each renamed rule instance fires only on its own
+> field — five-way byte-identical expanded AST) and the negative fixture
+> `import_where_rename_unknown_index_set` (a `where` shape naming a set the
+> library never declares survives the rename as spelled and is rejected at
+> registration with `template_constraint_unknown_index_set`).
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-F-001 | Edge pipeline order MUST be: target's own-scope resolution → `bindings` → `only` → `prefix`/`rename`/`rebind` → merge; `only`/`bindings`/`rename`/`rebind` speak the target's export vocabulary (pre this edge's rename) | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-002 | `prefix` MUST rename every surviving exported name without an explicit `rename` entry to `<prefix>.<name>`; `rename` entries override; prefixes nest through re-export chains (deeper edges and the loader API bind the renamed, dotted names) | esm-spec.md §9.7.7 | Yes | expression |
-| EXPR-09-F-003 | Renames MUST apply transitively through the pinned occurrence sites: index-set registry keys / registry `of` / `{"from"}` refs / `wrt`-`dim` scalar fields in `body` AND `match` (param-shadowed); metaparameter keys / expression-position bare strings / structural-site names; template keys / `apply_expression_template.name` | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-003 | Renames MUST apply transitively through the pinned occurrence sites: index-set registry keys / registry `of` / `{"from"}` refs / `wrt`-`dim` scalar fields / `where.*.shape` match-scoping index-set names in `body` AND `match` (param-shadowed); metaparameter keys / expression-position bare strings / structural-site names; template keys / `apply_expression_template.name` | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-004 | `rebind` MUST rewrite free variable names in bodies/matches (incl. `aggregate` `args` and `index` gathers) and ragged `offsets`/`values`; dotted targets are §4.6 scoped references | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-005 | Renaming a name the target does not export at the edge is `template_import_rename_unknown_name`; rebinding a non-occurring or declared name is `template_import_rebind_unknown_name`; rebinding a bound index symbol is `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
 | EXPR-09-F-006 | Post-rename names MUST be unique per namespace and new bare names fresh (no capture of free names, bound symbols, or params): `template_import_rename_collision`; `prefix`/targets MUST be dotted identifiers: `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
 | EXPR-09-F-007 | Same file under different renames = distinct registrations (no deep-equal dedup across renames); identical `ref` + instantiation + renames = dedupe at first occurrence; renamed `match`-rule instances register at their edges' §9.7.4 positions and identical patterns tie-break by that order | esm-spec.md §9.7.4, §9.7.7 | Yes | expression |
-| EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_rebind_*` | expression |
+| EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_where_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_where_rename_*`, `import_rebind_*` | expression |
 
 ### EXPR-09-G: Match-Pattern Scoping Constraints (`where`, esm-spec §9.6.1; RFC match-pattern-scoping-constraints)
 
