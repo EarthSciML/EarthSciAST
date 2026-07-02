@@ -49,6 +49,7 @@ include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
 include("run_tests.jl")
+include("pde_inline_tests.jl")
 
 export
     # Reference resolution — semiring-FAQ node addressing (RFC §6.1).
@@ -146,6 +147,8 @@ export
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
     discover_esm_files, run_esm_tests, write_junit_xml,
+    # PDE inline-test runner (spec §6.6.5) over the tree-walk pathway
+    PdeAssertionResult, run_pde_tests, evaluate_cellwise, field_reduce,
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, closed_function_names, ClosedFunctionError,
     lower_enums!,

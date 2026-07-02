@@ -3655,9 +3655,14 @@ element. Supported RHS forms, in order:
    rank matches the target grid; a single-element field is broadcast.
 2. A BROADCAST CONSTANT — an RHS that const-folds to a scalar applied to every
    cell.
+3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
+   `aggregate`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord` is a
+   grid-geometry aggregate expanded from a §9.7 template import). The expression
+   is indexed at this cell ([`_index_at_cell`](@ref)) and folded through the
+   standard `_resolve_indices` + `_compile` build-time machinery.
 
-Anything else (e.g. a coordinate/loaded expression the seed path cannot fold) is
-a hard error, so a scoped-reference ic that cannot be resolved is never silently
+Anything else (e.g. a loaded expression the seed path cannot fold) is a hard
+error, so a scoped-reference ic that cannot be resolved is never silently
 dropped.
 """
 function _resolve_field_ic(target::AbstractString, rhs::EarthSciSerialization.Expr,
@@ -3681,11 +3686,61 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciSerialization.Ex
                                      registered_functions=registered_functions))
     catch
     end
-    # (3) Unsupported RHS — a clear error, never a silent drop.
+    # (3) Coordinate expression over the grid geometry (per-cell field).
+    if rhs isa OpExpr
+        try
+            return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
+                                  registered_functions=registered_functions)
+        catch
+        end
+    end
+    # (4) Unsupported RHS — a clear error, never a silent drop.
     _fld = rhs isa VarExpr ? " (no const_arrays entry named '$(rhs.name)')" : ""
     throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-        "ic($(target)): RHS is neither a loaded const-array field nor a constant" *
-        "$(_fld); supply the initial field via const_arrays or a scalar expression"))
+        "ic($(target)): RHS is neither a loaded const-array field, a constant, " *
+        "nor a per-cell coordinate expression$(_fld); supply the initial field " *
+        "via const_arrays or a grid-geometry expression"))
+end
+
+"""
+    _index_at_cell(expr, idxs) -> Expr
+
+Broadcast-index an elementwise expression at the concrete 1-based cell `idxs`:
+every array-PRODUCING node (`makearray`, or `aggregate`/`arrayop` with non-empty
+`output_idx`) is wrapped in `index(node, idxs…)`, elementwise ops are descended,
+and scalar leaves (literals, scalar names, `index` gathers, scalar reductions)
+pass through. The concrete-index dual of `_index_array_leaves` (loop-name form).
+"""
+function _index_at_cell(expr::EarthSciSerialization.Expr, idxs::Vector{Int})::EarthSciSerialization.Expr
+    if expr isa OpExpr
+        if _is_array_producer(expr)
+            idx_args = Expr[expr]
+            for k in idxs
+                push!(idx_args, IntExpr(Int64(k)))
+            end
+            return OpExpr("index", idx_args)
+        end
+        (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
+         expr.op == "index") && return expr
+        return reconstruct(expr; args=Expr[_index_at_cell(a, idxs) for a in expr.args])
+    end
+    return expr
+end
+
+# Evaluate an elementwise-over-arrays expression at one concrete cell through
+# the standard build-time pipeline (_index_at_cell → _resolve_indices → _compile
+# → _eval_node). State references are not in scope — this is for build-time
+# fields (grid geometry, §6.6.5 analytic references), never for RHS terms.
+function _eval_cellwise(expr::EarthSciSerialization.Expr, cell::Vector{Int};
+                        const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
+                        registered_functions::AbstractDict=Dict{String,Function}())::Float64
+    cellwise = _index_at_cell(expr, cell)
+    resolved = _resolve_indices(cellwise,
+                                Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                Dict{String,Int}(), const_arrays)
+    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(), reg)
+    return _eval_node(node, Float64[], NamedTuple(), 0.0)
 end
 
 # Expand a ranges entry to the concrete list of integer values.
@@ -4395,13 +4450,46 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
     k_vals = [_eval_const_int(a, Dict{String,Int}(), const_arrays) for a in idx_args]
     ndim   = length(k_vals)
     result_expr::Expr = NumExpr(0.0)  # default: 0 if no region covers the point
+    result_region = nothing
     for (region, val_expr) in zip(regions, values)
         length(region) == ndim ||
             throw(TreeWalkError("E_TREEWALK_MAKEARRAY_NDIM",
                   "makearray region has $(length(region)) dims but $(ndim) indices"))
         in_region = all(k_vals[d] >= region[d][1] && k_vals[d] <= region[d][2]
                         for d in 1:ndim)
-        in_region && (result_expr = val_expr)  # overwrite; last match wins
+        in_region && ((result_expr, result_region) = (val_expr, region))  # overwrite; last match wins
+    end
+    # esm-spec §9.6.8: a region value MAY be a self-contained ARRAY-VALUED
+    # aggregate (the spec's worked example authors the interior stencil and the
+    # boundary faces this way, each with its own `output_idx`/`ranges`). The
+    # value array is indexed at the same point (k1, …). A value of lower rank
+    # than the makearray covers the region's NON-SINGLETON axes — a face region
+    # pins the other axes to a single line (e.g. the [[1,1],[1,NLAT]] west face
+    # holds an aggregate over `j` alone).
+    if _is_array_producer(result_expr)
+        re = result_expr::OpExpr
+        rank = re.op == "makearray" ?
+            ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
+            count(s -> s isa AbstractString, re.output_idx)
+        sel = if rank == ndim
+            k_vals
+        else
+            nonsingleton = [d for d in 1:ndim
+                            if result_region === nothing ||
+                               result_region[d][1] != result_region[d][2]]
+            rank == length(nonsingleton) ||
+                throw(TreeWalkError("E_TREEWALK_MAKEARRAY_VALUE_RANK",
+                      "makearray region value produces a rank-$(rank) array " *
+                      "but the region has $(length(nonsingleton)) non-singleton " *
+                      "axis/axes of $(ndim) total"))
+            k_vals[nonsingleton]
+        end
+        sel_exprs = Expr[IntExpr(Int64(v)) for v in sel]
+        return re.op == "makearray" ?
+            _resolve_index_of_makearray(re, sel_exprs, array_var_info, var_map,
+                                        const_arrays, pgather) :
+            _resolve_index_of_arrayop(re, sel_exprs, array_var_info, var_map,
+                                      const_arrays, pgather)
     end
     return _resolve_indices(result_expr, array_var_info, var_map, const_arrays, pgather)
 end

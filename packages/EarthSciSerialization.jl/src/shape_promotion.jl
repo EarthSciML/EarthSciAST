@@ -66,6 +66,15 @@ end
 # Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
 # leaving scalar leaves (params, constants, reductions' results) untouched. Does
 # not descend into nested aggregate/arrayop bodies — those carry their own indexing.
+#
+# An ARRAY-PRODUCING node in elementwise position (a `makearray`, or an
+# `aggregate`/`arrayop` with non-empty `output_idx`) gets the same broadcast
+# treatment as an array variable leaf: it is wrapped in `index(node, loops…)` so
+# the per-cell expansion gathers this cell's element. This is the whole-array
+# broadcast semantics of esm-spec §9.6.8 — a discretization rule lowers
+# `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
+# multiplies that array elementwise. A genuine scalar reduction (empty
+# `output_idx`) and an `index` gather stay untouched — they are already scalar.
 function _index_array_leaves(expr::EarthSciSerialization.Expr,
                              arrayvars::Set{String}, loops::Vector{String})::EarthSciSerialization.Expr
     if expr isa VarExpr
@@ -78,12 +87,30 @@ function _index_array_leaves(expr::EarthSciSerialization.Expr,
         end
         return expr
     elseif expr isa OpExpr
+        if _is_array_producer(expr)
+            idx = EarthSciSerialization.Expr[expr]
+            for l in loops
+                push!(idx, VarExpr(l))
+            end
+            return OpExpr("index", idx)
+        end
         (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
          expr.op == "index") && return expr
         new_args = EarthSciSerialization.Expr[_index_array_leaves(a, arrayvars, loops) for a in expr.args]
         return reconstruct(expr; args=new_args)
     end
     return expr
+end
+
+# True iff `expr` is an array-PRODUCING node: a `makearray`, or an
+# `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has an
+# empty `output_idx` and produces a scalar).
+function _is_array_producer(expr::EarthSciSerialization.Expr)::Bool
+    expr isa OpExpr || return false
+    expr.op == "makearray" && return true
+    (expr.op == "aggregate" || expr.op == "arrayop") || return false
+    expr.output_idx === nothing && return false
+    return any(s -> s isa AbstractString, expr.output_idx)
 end
 
 # Wrap a (formerly scalar) defining expression in an arrayop producing `shape`.
