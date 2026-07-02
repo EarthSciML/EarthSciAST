@@ -187,8 +187,15 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     expr = get(insp.observed_exprs, qualified,
                get(insp.observed_exprs, String(variable), nothing))
     expr === nothing && return nothing
-    cells = sort!(Vector{Int}[collect(Int, Tuple(I))
-                              for I in CartesianIndices(Tuple(exts))])
+    # `vec` flattens the comprehension to a `Vector{Vector{Int}}` for ANY rank:
+    # over a rank≥2 `CartesianIndices` the comprehension yields a `Matrix`
+    # (higher-D array), and `sort!` on that throws `UndefKeywordError: dims`.
+    # The trailing `sort!` fixes the cell order to lexicographic (row-major,
+    # last index fastest) regardless of the flatten order — matching
+    # `_state_cells` and the Python (`np.ndindex`) / Rust (row-major enum)
+    # observed-field ordering, so `field`/`reference` pair cell-for-cell.
+    cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
+                                  for I in CartesianIndices(Tuple(exts))]))
     field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays)
     return (field, cells)
 end
