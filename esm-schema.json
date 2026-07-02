@@ -1700,7 +1700,7 @@
     },
     "TemplateImport": {
       "type": "object",
-      "description": "One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope.",
+      "description": "One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).",
       "required": [
         "ref"
       ],
@@ -1727,6 +1727,27 @@
             "type": "integer"
           },
           "description": "Integer bindings closing the target document's metaparameters at this edge."
+        },
+        "prefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*."
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7)."
+        },
+        "rebind": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7)."
         }
       }
     },
