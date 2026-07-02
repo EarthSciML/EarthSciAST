@@ -1,6 +1,7 @@
 # RFC — Open operator namespace + fixpoint rewrite engine (grad/div/laplacian de-privileged)
 
-**Status:** Draft (proposed changeset for review — no binding work done yet)
+**Status:** Implemented across all 5 bindings + spec + schema (see §11); item 5 (log-arg
+dimensionality check) and the `integral` gate classification remain as tracked follow-ups
 **Bead:** TBD (file on acceptance)
 **Affects spec version:** 0.8.0 (rides *inside* the clean break; no compat shims)
 **Scope:** `esm-schema.json` (+ 4 copies), `esm-spec.md` §4.2 / §9.6 / §9.6.8, conformance
@@ -312,8 +313,34 @@ All four settled with the author (2026-07-02); folded into the changes above:
   shared fixture `ln`→`log` and removing the Python quarantine, is cross-binding and deferred
   to the fan-out.
 
-**Phase 2 — Rust / Go / TS / Python bindings + item 5 + harness wiring: PENDING** (fan-out; the
-four fixtures + the Julia semantics are the contract they must match).
+**Phase 2 — Rust / Go / TS / Python bindings: DONE** (fanned out in parallel worktrees against
+the Julia reference + the 4 fixtures; each independently re-verified after cherry-pick onto
+`fixes`):
+- **Go** (`a1d8071b`→cherry-pick): engine + eval-stage gate (`EvaluationError` code
+  `unlowered_operator`) + `attrs` round-trip; `go test ./...` 188 green; all 4 fixtures pass.
+- **Python** (`8907cca6`): engine + gate (`UnreachableSpatialOperatorError` /
+  `UnsupportedDimensionalityError` now carry `code="unlowered_operator"`); pytest 1026 pass
+  (+7); all 4 fixtures pass; `units_invalid_logarithm` quarantine intact (item 5).
+- **TypeScript** (`37f8563c`): engine + `UnloweredOperatorError` gate in `evalExprNode`;
+  regenerated `embedded-schema.ts`/`generated.ts` (open `op`, `attrs`, `priority`); `npm test`
+  1023 pass (+7); all 4 fixtures pass; quarantined the item-5 fixture in its own test file.
+- **Rust** (`269f174e`): engine + `UnreachableSpatialOperatorError`→`UnloweredOperatorError`
+  (Display `unlowered_operator`), gating spatial `D` while keeping structural LHS `D(_,t)`
+  evaluable; `cargo test` 656 pass; all 4 fixtures pass.
+
+All five bindings produce the byte-identical golden fixpoints for `godunov_beats_inner_deriv`
+and `fixpoint_nested_deriv`, reject `nonterminating_rewrite` with `rewrite_rule_nonterminating`,
+and gate `unlowered_operator/` before evaluation (all five have evaluators, so none is N/A).
+
+**Remaining (small, tracked):**
+- **Item 5** — hard log-argument dimensionality unit-check + `units_invalid_logarithm.esm`
+  `ln`→`log` flip + removing the Python/TS quarantines. Deferred; cross-binding; the fixture is
+  safely quarantined in every binding's suite meanwhile.
+- **`integral` classification** — RFC decision 1 folds `integral` into the open rewrite-target
+  tier, but no binding yet routes an unlowered `integral` to `unlowered_operator` at eval (Julia
+  hits its generic unsupported-op path; Go left it evaluable), and no fixture exercises it. A
+  latent consistency refinement, not a break: add `integral` to each binding's eval-stage gate
+  and an `integral`-in-eval fixture in a follow-up.
 
 ## 12. Phase-2 execution plan (Julia reference first, then delegate)
 
