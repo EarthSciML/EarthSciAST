@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "cellgrid", "description": "Minimal cell-count grid family for the rename-diamond fixture: metaparameter NC, index set cells, a zero-parameter n_cells template, and an axis-less match rule scale_by_cells whose body composes n_cells (esm-spec 9.7.3)" },
+  "metaparameters": {
+    "NC": { "type": "integer", "default": 6, "description": "cell count" }
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": "NC" }
+  },
+  "expression_templates": {
+    "n_cells": { "params": [], "body": "NC" },
+    "scale_by_cells": {
+      "params": ["g"],
+      "match": { "op": "scale_by_cells", "args": ["g"] },
+      "body": { "op": "*", "args": [
+        { "op": "apply_expression_template", "args": [], "name": "n_cells", "bindings": {} },
+        "g" ] }
+    }
+  }
+}

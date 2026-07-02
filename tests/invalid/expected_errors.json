@@ -2153,5 +2153,41 @@
     "resolver_only": true,
     "resolver_error_code": "template_import_version_too_old",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The file declares esm 0.7.0 but carries expression_template_imports; the §9.7 constructs arrive at esm 0.8.0 (esm-spec §9.6.5). The gate fires before the import ref is ever resolved."
+  },
+
+  "rename_unknown_name.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rename` map names 'nope', which the target does not export at this edge (surviving exports = templates after `only`, index sets, metaparameters left open by `bindings`): renames never invent names (esm-spec §9.7.7)."
+  },
+
+  "rebind_unknown_free_name.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rebind_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rebind` map names 'not_a_free_name', which does not occur free in the imported declarations: a rebind that binds nothing would silently leave the library's factor contract in force (esm-spec §9.7.7)."
+  },
+
+  "rename_collision.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_collision",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Two exported template names (area, perim) both renamed to 'geom' at one edge: a rename-target collision within one namespace (esm-spec §9.7.7)."
+  },
+
+  "rename_invalid_identifier.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_invalid",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `prefix` '9 bad' is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots); the grammar is resolver-enforced so the diagnostic is cross-binding uniform (esm-spec §9.7.7)."
   }
 }

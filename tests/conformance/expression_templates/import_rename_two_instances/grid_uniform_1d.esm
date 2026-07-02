@@ -1,0 +1,28 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "grid_uniform_1d", "description": "Uniform 1-D cartesian grid family sized by metaparameter N: index set x, grid-spacing template dx = 1/N, and a centered-difference interior rule matching D(f, wrt: x). Names are generic by design (the library-file no-edit bar, esm-spec 9.7.1); a consumer instantiates the family per grid with import-edge prefix + bindings (esm-spec 9.7.7)" },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 4, "description": "cell count" }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "dx": { "params": [], "body": { "op": "/", "args": [1, "N"] } },
+    "central_D_x": {
+      "params": ["f"],
+      "match": { "op": "D", "args": ["f"], "wrt": "x" },
+      "body": {
+        "op": "aggregate",
+        "output_idx": ["i"],
+        "args": ["f"],
+        "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }] },
+        "expr": { "op": "/", "args": [
+          { "op": "-", "args": [
+            { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }] },
+            { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }] } ] },
+          { "op": "*", "args": [2, { "op": "apply_expression_template", "args": [], "name": "dx", "bindings": {} }] } ] }
+      }
+    }
+  }
+}
