@@ -102,15 +102,24 @@ end
 
 Coerce a clip operand to an `n×2` array of *distinct* lon-lat vertices. A closing
 duplicate final vertex (`ring[end] == ring[1]`) is dropped so closure is implicit —
-the convention the schema fixtures use (a 4-vertex quad, edge 4→1 implied).
+the convention the schema fixtures use (a 4-vertex quad, edge 4→1 implied) — and
+**consecutive duplicate vertices are removed** (esm-spec §8.6.1): a padded ring —
+e.g. an MPAS pentagon stored in a hexagon-shaped `[cells, NVERT, 2]` array with
+its final vertex repeated to fill the rectangular slot — MUST be accepted and
+evaluated as the deduplicated ring. Dedup happens HERE, before any backend
+kernel, because backend tolerance differs (this package's planar clip and
+GeometryOps tolerate zero-length edges; S2 — the Python/Rust spherical backend —
+rejects them as degenerate edges), and the op's cross-binding contract cannot
+depend on that. A ring with fewer than 3 *distinct* vertices is degenerate and
+rejected.
 """
 function _as_ring(poly::AbstractMatrix, who::AbstractString)::Matrix{Float64}
     size(poly, 2) == 2 || throw(GeometryError(
         "intersect_polygon $who must be an [verts, 2] lon-lat ring, got array of shape $(size(poly))"))
-    arr = Matrix{Float64}(poly)
-    if size(arr, 1) >= 2 && _allclose_pt(arr[1, 1], arr[1, 2], arr[end, 1], arr[end, 2])
-        arr = arr[1:end-1, :]
-    end
+    # _dedup_consecutive drops consecutive duplicates AND the wrap pair (a
+    # closing first==last duplicate), so padding and explicit closure both
+    # collapse to the n distinct vertices with implicit closure.
+    arr = _dedup_consecutive(Matrix{Float64}(poly))
     size(arr, 1) >= 3 || throw(GeometryError(
         "intersect_polygon $who needs ≥3 distinct vertices, got $(size(arr, 1))"))
     return arr

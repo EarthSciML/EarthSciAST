@@ -1803,6 +1803,34 @@ scalar area matters. `polygon_intersection_area` carries the same required
 `manifold` field and the same tolerance-based conformance contract as
 `intersect_polygon` (CONFORMANCE_SPEC §5.8.4).
 
+**Operand rings, padding, and degenerate vertices.** Each polygon operand of
+`intersect_polygon` / `polygon_intersection_area` is an `[verts, 2]` lon-lat
+vertex array with **implicit closure** (edge `n→1` implied). Two departures
+from the plain distinct-vertex ring MUST be accepted by every binding:
+
+1. **Explicit closure** — a closing duplicate final vertex
+   (`ring[last] == ring[first]`) is dropped.
+2. **Consecutive duplicate vertices** — in particular trailing repeats of the
+   final vertex. This is the rectangular-storage padding a mixed-valence mesh
+   requires: an MPAS pentagon stored in a hexagon-shaped `[cells, NVERT, 2]`
+   ring stack repeats its last vertex to fill the fixed `NVERT` slots, so the
+   dense narrow-phase `A_ij` aggregate can gather per-cell rings of uniform
+   extent.
+
+A binding MUST evaluate such a ring as its **deduplicated** form: consecutive
+duplicates (wrap pair included) are removed under the shared point-equality
+tolerance (`atol 1e-8`, `rtol 1e-5` — the `np.allclose` defaults all bindings
+pin), and the op's value MUST equal the same op over the already-distinct ring.
+Deduplication is the **binding kernel's** job, performed in its operand
+coercion *before* the backend clip — never delegated to the backend and never
+imposed on the caller — because backend tolerance differs: a zero-length edge
+is a no-op for a Sutherland–Hodgman half-plane pass but a **rejected degenerate
+edge for S2** (the Python/Rust spherical backend). A ring with fewer than 3
+*distinct* vertices after deduplication is a degenerate operand and is
+rejected (the existing ≥3-distinct-vertices operand error). `intersect_polygon`
+returns its overlap ring in the same normal form — distinct vertices, implicit
+closure — on every manifold.
+
 ### 8.7 Out of scope
 
 - **Authentication / credentials.** Env vars, API keys, S3 credentials, CDS API tokens — all runtime-side. The schema stores **no** credential information.
