@@ -226,6 +226,9 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
   'expression_template_imports',
   'metaparameters',
   'only',
+  // `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
+  // NAMES, a structural namespace — never expression positions.
+  'where',
 ])
 
 /**
@@ -611,12 +614,398 @@ function loadImportRaw(
   return { raw, dir: dirName(path) }
 }
 
+// ---------------------------------------------------------------------------
+// Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+// docs/content/rfcs/template-import-renaming.md
+// ---------------------------------------------------------------------------
+
+const APPLY_EXPRESSION_TEMPLATE_OP = 'apply_expression_template'
+
+const NAME_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Grammar for a `prefix` and for `rename`/`rebind` TARGETS (esm-spec §9.7.7):
+ * one or more `[A-Za-z_][A-Za-z0-9_]*` segments joined by single dots — the
+ * §4.6 scoped-reference shape. Keys are never grammar-checked: they must match
+ * whatever the target actually exports (or whatever occurs free).
+ */
+function isValidDottedName(s: string): boolean {
+  return s.length > 0 && s.split('.').every((seg) => NAME_SEGMENT_RE.test(seg))
+}
+
+/** Parse a `rename`/`rebind` map (name → name), validating targets against the grammar. */
+function nameMap(raw: unknown, field: string, where: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (raw === undefined || raw === null) return out
+  if (!isObject(raw)) {
+    throw new ExpressionTemplateError(
+      'template_import_rename_invalid',
+      `${where}: \`${field}\` must be an object mapping names to names (esm-spec §9.7.7)`,
+    )
+  }
+  for (const [k, v] of Object.entries(raw)) {
+    if (k.length === 0) {
+      throw new ExpressionTemplateError(
+        'template_import_rename_invalid',
+        `${where}: \`${field}\` has an empty key (esm-spec §9.7.7)`,
+      )
+    }
+    if (!(typeof v === 'string' && isValidDottedName(v))) {
+      throw new ExpressionTemplateError(
+        'template_import_rename_invalid',
+        `${where}: \`${field}\`.${k} target ${JSON.stringify(v)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
+      )
+    }
+    out[k] = v
+  }
+  return out
+}
+
+// Scalar Expression-node fields whose string value names an AXIS / index set
+// (rewritten by the index-set rename map, param-shadowed like §9.6.1).
+const RENAME_AXIS_KEYS = new Set<string>(['wrt', 'dim'])
+
+// Object keys whose values are never variable-reference positions for the
+// rename walk: the metaparameter skip set plus the remaining scalar structural
+// ExpressionNode fields (`op`, closed-registry ids, literal enums). `from`,
+// `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
+const RENAME_PROTECTED_KEYS = new Set<string>([
+  ...META_SUBST_SKIP_KEYS,
+  'op',
+  'id',
+  'expect_cadence',
+  'reduce',
+  'semiring',
+  'manifold',
+  'fn',
+  'table',
+  'side',
+  'attrs',
+  'members',
+  'from_faq',
+])
+
+/**
+ * One transitive-substitution pass over an imported declaration (esm-spec
+ * §9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
+ * bare strings in variable-reference positions; `isetmap` rewrites index-set
+ * reference positions (`{"from": …}` values and the `wrt`/`dim` axis fields, in
+ * `body` and `match` alike); `tplmap` rewrites `apply_expression_template.name`.
+ * Structural scalar fields (`RENAME_PROTECTED_KEYS`) and bound-index lists
+ * (range `of`) are never rewritten. Pure syntactic substitution — no evaluation.
+ */
+function renameWalk(
+  x: Json,
+  varmap: Record<string, string>,
+  isetmap: Record<string, string>,
+  tplmap: Record<string, string>,
+): Json {
+  if (typeof x === 'string') {
+    return Object.prototype.hasOwnProperty.call(varmap, x) ? varmap[x]! : x
+  }
+  if (Array.isArray(x)) {
+    return x.map((v) => renameWalk(v, varmap, isetmap, tplmap))
+  }
+  if (isObject(x)) {
+    const isApply = x.op === APPLY_EXPRESSION_TEMPLATE_OP
+    const out: JsonObject = {}
+    for (const k of Object.keys(x)) {
+      const v = x[k]
+      if (k === 'from' && typeof v === 'string') {
+        out[k] = Object.prototype.hasOwnProperty.call(isetmap, v) ? isetmap[v]! : v
+      } else if (RENAME_AXIS_KEYS.has(k) && typeof v === 'string') {
+        out[k] = Object.prototype.hasOwnProperty.call(isetmap, v) ? isetmap[v]! : v
+      } else if (k === 'name' && isApply && typeof v === 'string') {
+        out[k] = Object.prototype.hasOwnProperty.call(tplmap, v) ? tplmap[v]! : v
+      } else if (k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
+        out[k] = deepClone(v)
+      } else {
+        out[k] = renameWalk(v, varmap, isetmap, tplmap)
+      }
+    }
+    return out
+  }
+  return x
+}
+
+/**
+ * `renameWalk` over one template declaration with the §9.6.1 shadowing rule:
+ * the template's own `params` shadow like-named entries of `varmap` and
+ * `isetmap` inside its `body`/`match` (a param is the inner binder; renaming
+ * must not capture it). `tplmap` is never shadowed — params do not bind
+ * template names.
+ */
+function renameDecl(
+  decl: Json,
+  varmap: Record<string, string>,
+  isetmap: Record<string, string>,
+  tplmap: Record<string, string>,
+): Json {
+  let v2 = varmap
+  let i2 = isetmap
+  const params = isObject(decl) ? decl.params : undefined
+  if (Array.isArray(params) && params.length > 0) {
+    const pset = new Set<string>()
+    for (const p of params) if (typeof p === 'string') pset.add(p)
+    if ([...pset].some((p) => Object.prototype.hasOwnProperty.call(varmap, p))) {
+      v2 = {}
+      for (const [k, v] of Object.entries(varmap)) if (!pset.has(k)) v2[k] = v
+    }
+    if ([...pset].some((p) => Object.prototype.hasOwnProperty.call(isetmap, p))) {
+      i2 = {}
+      for (const [k, v] of Object.entries(isetmap)) if (!pset.has(k)) i2[k] = v
+    }
+  }
+  return renameWalk(decl, v2, i2, tplmap)
+}
+
+/**
+ * Bound index symbols of a declaration: aggregate `output_idx` entries and
+ * `ranges` keys (at any nesting depth). Rebinding one would desynchronize the
+ * ranges KEYS (object keys, unreachable by value substitution) from their
+ * `expr` occurrences, so it is rejected outright.
+ */
+function collectBoundSyms(out: Set<string>, x: Json): Set<string> {
+  if (Array.isArray(x)) {
+    for (const v of x) collectBoundSyms(out, v)
+    return out
+  }
+  if (!isObject(x)) return out
+  if (x.op === 'aggregate') {
+    const oi = x.output_idx
+    if (Array.isArray(oi)) {
+      for (const e of oi) if (typeof e === 'string') out.add(e)
+    }
+    const rg = x.ranges
+    if (isObject(rg)) {
+      for (const k of Object.keys(rg)) out.add(k)
+    }
+  }
+  for (const k of Object.keys(x)) collectBoundSyms(out, x[k])
+  return out
+}
+
+/**
+ * Every bare string in a variable-reference position of a declaration (the
+ * positions `varmap` would rewrite), minus the per-template `params` shadow
+ * set. Used for the rebind occurs-check and the freshness (collision) guard.
+ */
+function collectRefNames(out: Set<string>, x: Json, shadowed: Set<string>): Set<string> {
+  if (typeof x === 'string') {
+    if (!shadowed.has(x)) out.add(x)
+    return out
+  }
+  if (Array.isArray(x)) {
+    for (const v of x) collectRefNames(out, v, shadowed)
+    return out
+  }
+  if (isObject(x)) {
+    for (const k of Object.keys(x)) {
+      if (k === 'from' || RENAME_AXIS_KEYS.has(k) || k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
+        continue
+      }
+      collectRefNames(out, x[k], shadowed)
+    }
+    return out
+  }
+  return out
+}
+
+/**
+ * Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
+ * the target's SURVIVING export scope — templates after `only`, all index sets,
+ * and metaparameters still open after this edge's `bindings` — transitively
+ * through every occurrence inside the surviving declarations (index-set
+ * references in `from`/`wrt`/`dim` and registry `of` lists, open-metaparameter
+ * names in expression positions, keyed-factor and other free names in
+ * variable-reference positions and registry `offsets`/`values`,
+ * `apply_expression_template.name` references). Runs after `bindings`
+ * instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge, so dedup
+ * and conflict detection operate on post-rename names. Pure load-time
+ * substitution: determinism, §9.6.3 ordering, and the expansion-depth bound are
+ * untouched. Mutates `scope` in place and returns it.
+ */
+function applyEdgeRenames(
+  scope: TemplateScope,
+  entry: JsonObject,
+  origin: string,
+  ref: string,
+): TemplateScope {
+  const where = `${origin}: import of '${ref}'`
+  const prefixRaw = entry.prefix
+  const rename = nameMap(entry.rename, 'rename', where)
+  const rebind = nameMap(entry.rebind, 'rebind', where)
+  if (
+    prefixRaw !== undefined &&
+    prefixRaw !== null &&
+    !(typeof prefixRaw === 'string' && isValidDottedName(prefixRaw))
+  ) {
+    throw new ExpressionTemplateError(
+      'template_import_rename_invalid',
+      `${where}: \`prefix\` ${JSON.stringify(prefixRaw)} is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)`,
+    )
+  }
+  const prefix = prefixRaw === undefined || prefixRaw === null ? null : String(prefixRaw)
+  if (prefix === null && Object.keys(rename).length === 0 && Object.keys(rebind).length === 0) {
+    return scope
+  }
+
+  // --- `rename` keys must name a surviving exported name (typo protection) ---
+  const exported = new Set<string>([
+    ...Object.keys(scope.templates),
+    ...Object.keys(scope.indexSets),
+    ...Object.keys(scope.metaparams),
+  ])
+  for (const k of Object.keys(rename)) {
+    if (!exported.has(k)) {
+      throw new ExpressionTemplateError(
+        'template_import_rename_unknown_name',
+        `${where}: \`rename\` names '${k}', which the target does not export at this edge (the surviving exports are templates after \`only\`, index sets, and metaparameters left open by this edge's \`bindings\`; esm-spec §9.7.7)`,
+      )
+    }
+  }
+
+  const finalName = (n: string): string =>
+    Object.prototype.hasOwnProperty.call(rename, n)
+      ? rename[n]!
+      : prefix === null
+        ? n
+        : `${prefix}.${n}`
+  const buildMap = (names: string[]): Record<string, string> => {
+    const m: Record<string, string> = {}
+    for (const n of names) m[n] = finalName(n)
+    return m
+  }
+  const tplmap = buildMap(Object.keys(scope.templates))
+  const isetmap = buildMap(Object.keys(scope.indexSets))
+  const metamap = buildMap(Object.keys(scope.metaparams))
+
+  // --- per-namespace final-name uniqueness ---
+  for (const [what, m] of [
+    ['template', tplmap],
+    ['index set', isetmap],
+    ['metaparameter', metamap],
+  ] as const) {
+    const seen: Record<string, string> = {}
+    for (const [o, n] of Object.entries(m)) {
+      if (Object.prototype.hasOwnProperty.call(seen, n)) {
+        throw new ExpressionTemplateError(
+          'template_import_rename_collision',
+          `${where}: ${what} names '${seen[n]}' and '${o}' both map to '${n}' after renaming (esm-spec §9.7.7)`,
+        )
+      }
+      seen[n] = o
+    }
+  }
+
+  // --- free / bound name inventory over the surviving declarations ---
+  const free = new Set<string>()
+  const bound = new Set<string>()
+  const paramsAll = new Set<string>()
+  for (const d of Object.values(scope.templates)) {
+    collectBoundSyms(bound, d)
+    const shadowed = new Set<string>()
+    const params = isObject(d) ? d.params : undefined
+    if (Array.isArray(params)) {
+      for (const p of params) if (typeof p === 'string') shadowed.add(p)
+    }
+    for (const p of shadowed) paramsAll.add(p)
+    collectRefNames(free, d, shadowed)
+  }
+  for (const d of Object.values(scope.indexSets)) {
+    for (const f of ['offsets', 'values']) {
+      const v = isObject(d) ? d[f] : undefined
+      if (typeof v === 'string') free.add(v)
+    }
+  }
+  for (const n of Object.keys(scope.metaparams)) free.delete(n) // declared names are not free
+
+  // --- `rebind` keys must denote free names (typo protection) ---
+  for (const k of Object.keys(rebind)) {
+    if (exported.has(k)) {
+      throw new ExpressionTemplateError(
+        'template_import_rebind_unknown_name',
+        `${where}: \`rebind\` names '${k}', a declared name of the target (template / index set / metaparameter) — \`rebind\` addresses only free names; use \`rename\` for declared names (esm-spec §9.7.7)`,
+      )
+    }
+    if (bound.has(k)) {
+      throw new ExpressionTemplateError(
+        'template_import_rename_invalid',
+        `${where}: \`rebind\` key '${k}' is a bound index symbol (\`output_idx\` / \`ranges\`) of an imported template, not a free name (esm-spec §9.7.7)`,
+      )
+    }
+    if (!free.has(k)) {
+      throw new ExpressionTemplateError(
+        'template_import_rebind_unknown_name',
+        `${where}: \`rebind\` names '${k}', which does not occur free in the imported declarations (esm-spec §9.7.7)`,
+      )
+    }
+  }
+
+  // --- freshness guard: new bare names must not capture / merge ---
+  const taken = new Set<string>()
+  for (const f of free) if (!Object.prototype.hasOwnProperty.call(rebind, f)) taken.add(f)
+  for (const b of bound) taken.add(b)
+  for (const p of paramsAll) taken.add(p)
+  const newnames: string[] = []
+  for (const [o, n] of Object.entries(metamap)) if (o !== n) newnames.push(n)
+  for (const [o, n] of Object.entries(rebind)) if (o !== n) newnames.push(n)
+  for (const t of newnames) {
+    if (taken.has(t)) {
+      throw new ExpressionTemplateError(
+        'template_import_rename_collision',
+        `${where}: renamed/rebound name '${t}' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)`,
+      )
+    }
+    taken.add(t)
+  }
+
+  // --- apply (identity entries dropped; one simultaneous substitution) ---
+  const varmap: Record<string, string> = {}
+  for (const [o, n] of Object.entries(metamap)) if (o !== n) varmap[o] = n
+  for (const [o, n] of Object.entries(rebind)) if (o !== n) varmap[o] = n
+  const isetChanged: Record<string, string> = {}
+  for (const [o, n] of Object.entries(isetmap)) if (o !== n) isetChanged[o] = n
+  const tplChanged: Record<string, string> = {}
+  for (const [o, n] of Object.entries(tplmap)) if (o !== n) tplChanged[o] = n
+
+  const newt: JsonObject = {}
+  for (const [n, d] of Object.entries(scope.templates)) {
+    newt[tplmap[n]!] = renameDecl(d, varmap, isetChanged, tplChanged)
+  }
+  scope.templates = newt
+
+  const newi: JsonObject = {}
+  for (const [n, d] of Object.entries(scope.indexSets)) {
+    const nd = renameWalk(d, varmap, isetChanged, tplChanged) as JsonObject
+    const of = isObject(nd) ? nd.of : undefined
+    if (Array.isArray(of)) {
+      nd.of = of.map((e) =>
+        typeof e === 'string'
+          ? Object.prototype.hasOwnProperty.call(isetChanged, e)
+            ? isetChanged[e]!
+            : e
+          : e,
+      )
+    }
+    newi[isetmap[n]!] = nd
+  }
+  scope.indexSets = newi
+
+  const newm: JsonObject = {}
+  for (const [n, d] of Object.entries(scope.metaparams)) {
+    newm[metamap[n]!] = d
+  }
+  scope.metaparams = newm
+  return scope
+}
+
 /**
  * Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
  * the target (path-scoped cycle detection over canonical refs, as §4.7),
  * verify library purity, resolve the target recursively in its own scope,
- * instantiate at this edge's `bindings`, then apply `only` visibility
- * filtering.
+ * instantiate at this edge's `bindings`, apply `only` visibility filtering,
+ * then apply the edge's `prefix`/`rename`/`rebind` (esm-spec §9.7.7).
  */
 function resolveImportEntry(
   entry: Json,
@@ -728,7 +1117,11 @@ function resolveImportEntry(
     }
     scope.templates = filtered
   }
-  return scope
+
+  // Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
+  // — after `bindings` instantiation and `only` filtering, before the
+  // §9.7.4/§9.7.5 merge, so dedup/conflict checks see post-rename names.
+  return applyEdgeRenames(scope, entry, origin, ref)
 }
 
 /**

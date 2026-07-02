@@ -89,6 +89,50 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.index_sets.cells.size).toBe(10) // NC default, deduped once
   })
 
+  it('import_rename_two_instances: one grid family, two prefixed instances (§9.7.7)', () => {
+    // prefix renames index set / templates / the rule's match `wrt` transitively;
+    // per-edge bindings instantiate N; each rule instance fires only on its own
+    // axis (fine.x vs coarse.x) with per-instance ranges and spacings.
+    expect(expandRaw(conf('import_rename_two_instances', 'fixture.esm'))).toEqual(
+      golden(conf('import_rename_two_instances', 'expanded.esm')),
+    )
+    const f = loadPath(conf('import_rename_two_instances', 'fixture.esm')) as any
+    expect(f.index_sets['fine.x'].size).toBe(16)
+    expect(f.index_sets['coarse.x'].size).toBe(8)
+    // Fine equation's interior range folded to [2, 15], coarse to [2, 7].
+    expect(f.models.TwoGrids.equations[0].rhs.ranges.i).toEqual([2, 15])
+    expect(f.models.TwoGrids.equations[1].rhs.ranges.i).toEqual([2, 7])
+  })
+
+  it('import_rebind_keyed_factors: free-name rebind rewrites body + registry factors (§9.7.7)', () => {
+    // rebind row_count/row_cols/row_w -> meshA_* transitively through the ragged
+    // index set's offsets/values AND the rule body; the consumer's own
+    // `row_count` parameter coexists (un-reserved).
+    expect(expandRaw(conf('import_rebind_keyed_factors', 'fixture.esm'))).toEqual(
+      golden(conf('import_rebind_keyed_factors', 'expanded.esm')),
+    )
+    const f = loadPath(conf('import_rebind_keyed_factors', 'fixture.esm')) as any
+    expect(f.index_sets.nz_of_row.offsets).toBe('meshA_count')
+    expect(f.index_sets.nz_of_row.values).toBe('meshA_cols')
+    // rowsum(u) lowered by the rebound rule instance to the aggregate over
+    // meshA_cols / meshA_w; the consumer's local `row_count` parameter survives.
+    expect(f.models.Sparse.variables.total.expression.args).toEqual(['u', 'meshA_cols', 'meshA_w'])
+    expect(f.models.Sparse.variables.row_count.type).toBe('parameter')
+  })
+
+  it('import_rename_diamond: rename-aware dedup + distinct instances (§9.7.4/§9.7.7)', () => {
+    // Edges 1 & 2 (prefix a, NC 6) dedupe deep-equal; edge 3 (prefix b, NC 9)
+    // registers distinctly. Both axis-less rule instances match; the §9.7.4
+    // effective order breaks the equal-priority tie, so a wins (y = 6 * x).
+    expect(expandRaw(conf('import_rename_diamond', 'fixture.esm'))).toEqual(
+      golden(conf('import_rename_diamond', 'expanded.esm')),
+    )
+    const f = loadPath(conf('import_rename_diamond', 'fixture.esm')) as any
+    expect(f.index_sets['a.cells'].size).toBe(6)
+    expect(f.index_sets['b.cells'].size).toBe(9)
+    expect(f.models.Diamond.variables.y.expression).toEqual({ op: '*', args: [6, 'x'] })
+  })
+
   it('effective order: import order pins the tie-break, priority flips it', () => {
     expect(expandRaw(conf('import_order_determinism', 'fixture_import_order.esm'))).toEqual(
       golden(conf('import_order_determinism', 'expanded_import_order.esm')),
