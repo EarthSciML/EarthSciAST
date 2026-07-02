@@ -235,3 +235,46 @@ def test_time_varying_observeds_flags_state_t_and_transitive() -> None:
     varying = _time_varying_observeds(ordered, state_names={"tracer"})
     assert "poly" not in varying
     assert varying == {"rate", "ramp", "scaled"}
+
+
+# ---------------------------------------------------------------------------
+# §8.6.1 operand rings: padding / consecutive-duplicate dedup + degenerate
+# reject (mirrors the Julia reference _as_ring / _dedup_consecutive)
+# ---------------------------------------------------------------------------
+
+
+def test_as_ring_dedups_padded_and_closing_vertices() -> None:
+    """§8.6.1: a padded ring (consecutive duplicate vertices, e.g. an MPAS
+    pentagon in a hexagon-shaped slot) and an explicitly-closed ring both
+    collapse to their distinct vertices with implicit closure — dedup happens in
+    operand coercion, before any backend clip."""
+    from earthsci_toolkit.geometry import _as_ring
+
+    padded = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
+    r = _as_ring(padded, who="poly_a")
+    assert r.shape[0] == 4
+    padded2 = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5],
+               [1.5, 3.5], [1.5, 3.5]]
+    assert _as_ring(padded2, who="poly_b").shape[0] == 4
+    closed = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]
+    assert _as_ring(closed, who="ring").shape[0] == 4
+
+
+def test_as_ring_rejects_degenerate_ring() -> None:
+    """§8.6.1: fewer than 3 distinct vertices after dedup is degenerate."""
+    from earthsci_toolkit.geometry import GeometryError, _as_ring
+
+    with pytest.raises(GeometryError):
+        _as_ring([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]], who="poly_a")
+
+
+def test_padded_ring_planar_overlap_area_is_one() -> None:
+    """§8.6.1 pin end-to-end (planar): the padded rings' overlap area equals the
+    deduplicated-ring overlap — the [1.5,2.5]x[1.5,2.5] box, exactly 1.0."""
+    from earthsci_toolkit.geometry import intersect_polygon, polygon_area
+
+    src = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
+    tgt = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5],
+           [1.5, 3.5], [1.5, 3.5]]
+    overlap = intersect_polygon(src, tgt, "planar")
+    assert polygon_area(overlap, "planar") == pytest.approx(1.0, abs=1e-12)

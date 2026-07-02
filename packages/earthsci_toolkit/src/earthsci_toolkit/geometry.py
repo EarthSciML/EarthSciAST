@@ -76,12 +76,21 @@ class GeometryBackendUnavailable(GeometryError):
 # --------------------------------------------------------------------------- #
 
 def _as_ring(poly: object, *, who: str) -> np.ndarray:
-    """Coerce a clip operand to an ``[n, 2]`` float array of lon-lat vertices.
+    """Coerce a clip operand to an ``[n, 2]`` float array of *distinct* lon-lat
+    vertices.
 
-    Accepts a 2-D ``[n, 2]`` array (the ``[verts, coord]`` polygon shape). A
-    closing duplicate final vertex (``ring[-1] == ring[0]``) is dropped so the
-    returned ring is the ``n`` *distinct* vertices with closure left implicit —
-    the convention the schema fixtures use (a 4-vertex quad, edge 4→1 implied).
+    Accepts a 2-D ``[n, 2]`` array (the ``[verts, coord]`` polygon shape).
+    Consecutive duplicate vertices AND a closing duplicate final vertex
+    (``ring[-1] == ring[0]``) are removed so the returned ring is the ``n``
+    distinct vertices with closure left implicit (esm-spec §8.6.1). A padded
+    ring — e.g. an MPAS pentagon stored in a hexagon-shaped ``[cells, NVERT, 2]``
+    array with its final vertex repeated to fill the rectangular slot — MUST be
+    accepted and evaluated as the deduplicated ring. Dedup happens HERE, before
+    any backend clip, because backend tolerance differs (the planar
+    Sutherland–Hodgman clip treats a zero-length edge as a no-op, but S2 — the
+    spherical backend via ``spherely`` — rejects it as a degenerate edge), and
+    the op's cross-binding contract cannot depend on that. A ring with fewer than
+    3 distinct vertices is degenerate and rejected.
     """
     arr = np.asarray(poly, dtype=float)
     if arr.ndim != 2 or arr.shape[1] != 2:
@@ -89,8 +98,10 @@ def _as_ring(poly: object, *, who: str) -> np.ndarray:
             f"intersect_polygon {who} must be an [verts, 2] lon-lat ring, "
             f"got array of shape {arr.shape}"
         )
-    if arr.shape[0] >= 2 and np.allclose(arr[0], arr[-1]):
-        arr = arr[:-1]
+    # _dedup_consecutive drops consecutive duplicates AND the wrap pair (a
+    # closing first==last duplicate), so padding and explicit closure both
+    # collapse to the n distinct vertices with implicit closure.
+    arr = _dedup_consecutive(arr)
     if arr.shape[0] < 3:
         raise GeometryError(
             f"intersect_polygon {who} needs ≥3 distinct vertices, got {arr.shape[0]}"
