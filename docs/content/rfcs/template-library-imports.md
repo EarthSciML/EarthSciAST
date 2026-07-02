@@ -320,7 +320,7 @@ neither `expression_template_imports` nor `metaparameters` nor top-level
       ],
       "variables": {
         "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
-        "u": { "type": "parameter", "units": "m/s", "value": 5.0, "description": "zonal wind" }
+        "u": { "type": "parameter", "units": "m/s", "default": 5.0, "description": "zonal wind" }
       },
       "equations": [
         { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
