@@ -1,6 +1,8 @@
 package esm
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,15 +25,23 @@ import (
 // resolved model or reaction system content.
 func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
 	visited := make(map[string]bool)
-	return resolveSubsystemRefsInternal(file, basePath, visited)
+	// The importing document's index_sets registry (esm-spec §4.7): a mounted
+	// subsystem file's top-level index_sets merge into it, so a mounted mesh's
+	// axes join the importer and a size disagreement fails loudly. Initialize an
+	// empty registry so a mount can bring axes into a host that declares none.
+	if file.IndexSets == nil {
+		file.IndexSets = map[string]IndexSet{}
+	}
+	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets)
 }
 
 // resolveSubsystemRefsInternal is the recursive implementation that tracks
-// visited paths for circular reference detection.
-func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool) error {
+// visited paths for circular reference detection and threads the importing
+// document's index_sets registry (esm-spec §4.7 index-set merge).
+func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool, registry map[string]IndexSet) error {
 	// Resolve subsystems in models
 	for modelName, model := range file.Models {
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited); err != nil {
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 		file.Models[modelName] = model
@@ -39,12 +49,56 @@ func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[st
 
 	// Resolve subsystems in reaction systems
 	for rsName, rs := range file.ReactionSystems {
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited); err != nil {
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 		file.ReactionSystems[rsName] = rs
 	}
 
+	return nil
+}
+
+// indexSetDeepEqual is the §4.7 / §9.7.5 idempotent-redeclaration test: two
+// IndexSet declarations are deep-equal iff they marshal to identical canonical
+// JSON (Go sorts object keys, and integer tokens — json.Number / int / float —
+// all render identically), so a redeclaration with the same kind/size/members/…
+// dedups while any field disagreement is a conflict.
+func indexSetDeepEqual(a, b IndexSet) bool {
+	ab, err1 := json.Marshal(a)
+	bb, err2 := json.Marshal(b)
+	return err1 == nil && err2 == nil && bytes.Equal(ab, bb)
+}
+
+// mergeSubsystemIndexSets merges a referenced subsystem file's (already
+// metaparameter-folded) top-level `index_sets` into the importing document's
+// registry (esm-spec §4.7, mirroring the §9.7.5 template-import merge).
+// Deep-equal redeclaration is idempotent; a non-equal collision is the
+// load-time error `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh
+// failure mode this makes loud. Mirrors the Julia reference
+// `_merge_subsystem_index_sets!`.
+func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]interface{}, ref string) error {
+	isetsRaw, ok := view["index_sets"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for _, n := range sortedKeys(isetsRaw) {
+		b, err := json.Marshal(isetsRaw[n])
+		if err != nil {
+			return fmt.Errorf("subsystem index set %q from ref %q: %w", n, ref, err)
+		}
+		var decl IndexSet
+		if err := json.Unmarshal(b, &decl); err != nil {
+			return fmt.Errorf("subsystem index set %q from ref %q: %w", n, ref, err)
+		}
+		if existing, has := registry[n]; has {
+			if !indexSetDeepEqual(existing, decl) {
+				return newETErr("subsystem_index_set_conflict",
+					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).", n, ref))
+			}
+			continue
+		}
+		registry[n] = decl
+	}
 	return nil
 }
 
@@ -59,7 +113,7 @@ func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[st
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool) error {
+func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool, registry map[string]IndexSet) error {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -164,8 +218,17 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 			return err
 		}
 
+		// esm-spec §4.7: the mounted file's document-scoped index_sets (already
+		// metaparameter-folded) merge into the importing document's registry, so
+		// the importer's variables may be shaped over the mesh file's axes and a
+		// size/kind disagreement fails loudly (subsystem_index_set_conflict).
+		if err := mergeSubsystemIndexSets(registry, view, ref); err != nil {
+			return err
+		}
+
 		// Recursively resolve subsystem refs nested in the loaded file's
-		// components, relative to its own directory.
+		// components, relative to its own directory; nested mounts merge their
+		// axes into the same importing-document registry (transitive, §4.7).
 		for _, kind := range []string{"models", "reaction_systems"} {
 			comps, ok := view[kind].(map[string]interface{})
 			if !ok {
@@ -177,7 +240,7 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 					continue
 				}
 				if subs, ok := compObj["subsystems"].(map[string]interface{}); ok {
-					if err := resolveSubsystemMap(subs, refBasePath, visited); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, registry); err != nil {
 						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, sourceDesc, err)
 					}
 				}

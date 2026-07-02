@@ -244,9 +244,54 @@ func validateTemplates(templates map[string]interface{}, scope string) error {
 		// — the bounded fixpoint (MaxRewritePasses, esm-spec §9.6.3) is the
 		// authoritative guard, so a self-reintroducing rule is rejected only when
 		// it actually fails to converge (`rewrite_rule_nonterminating`).
-		if match, ok := declObj["match"]; ok && match != nil {
-			if err := assertNoNestedApply(match, name, "/match"); err != nil {
+		matchRaw, hasMatch := declObj["match"]
+		if hasMatch && matchRaw != nil {
+			if err := assertNoNestedApply(matchRaw, name, "/match"); err != nil {
 				return err
+			}
+		}
+
+		// esm-spec §9.6.1 (0.8.0): an optional `where` block adds static
+		// match-scoping constraints on the captured params. Structural
+		// validation only, here; the unknown-index-set check runs at rule
+		// REGISTRATION in the consuming component (where the merged `index_sets`
+		// registry is in scope) — see registeredWhere.
+		if whrRaw, hasWhere := declObj["where"]; hasWhere && whrRaw != nil {
+			if !hasMatch || matchRaw == nil {
+				return newETErr("apply_expression_template_invalid_declaration",
+					fmt.Sprintf("%s.expression_templates.%s: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)", scope, name))
+			}
+			whr, ok := whrRaw.(map[string]interface{})
+			if !ok || len(whr) == 0 {
+				return newETErr("apply_expression_template_invalid_declaration",
+					fmt.Sprintf("%s.expression_templates.%s: 'where' must be a non-empty object mapping declared params to constraint objects", scope, name))
+			}
+			for _, p := range sortedKeys(whr) {
+				if _, isParam := seen[p]; !isParam {
+					return newETErr("apply_expression_template_invalid_declaration",
+						fmt.Sprintf("%s.expression_templates.%s: 'where' constrains '%s', which is not a declared param (esm-spec §9.6.1)", scope, name, p))
+				}
+				cobj, ok := whr[p].(map[string]interface{})
+				if !ok {
+					return newETErr("apply_expression_template_invalid_declaration",
+						fmt.Sprintf("%s.expression_templates.%s: where.%s must be a constraint object (v1 admits exactly the 'shape' kind)", scope, name, p))
+				}
+				ckeys := sortedKeys(cobj)
+				if len(ckeys) != 1 || ckeys[0] != "shape" {
+					return newETErr("apply_expression_template_invalid_declaration",
+						fmt.Sprintf("%s.expression_templates.%s: where.%s carries constraint kind(s) %s; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)", scope, name, p, strings.Join(ckeys, ", ")))
+				}
+				shp, ok := cobj["shape"].([]interface{})
+				if !ok || len(shp) == 0 {
+					return newETErr("apply_expression_template_invalid_declaration",
+						fmt.Sprintf("%s.expression_templates.%s: where.%s.shape must be a non-empty array of index-set names", scope, name, p))
+				}
+				for _, s := range shp {
+					if ss, ok := s.(string); !ok || ss == "" {
+						return newETErr("apply_expression_template_invalid_declaration",
+							fmt.Sprintf("%s.expression_templates.%s: where.%s.shape entries must be non-empty strings", scope, name, p))
+					}
+				}
 			}
 		}
 	}
@@ -497,6 +542,219 @@ func matchPattern(pattern, node interface{}, params map[string]struct{}, binding
 	return pattern == nil && node == nil
 }
 
+// ---------------------------------------------------------------------------
+// Static match-scoping constraints (`where`, esm-spec §9.6.1;
+// docs/rfcs/match-pattern-scoping-constraints.md)
+// ---------------------------------------------------------------------------
+
+// componentShapeEnv is the static shape environment of one component: every
+// declared variable name mapped to its declared `shape` (ordered index-set
+// names). This is the ONLY information a `where` constraint may consult
+// (esm-spec §9.6.1) — declared shapes at lowering time, never runtime values —
+// so constraint evaluation is fully static and the §9.6.3 determinism contract
+// is untouched. Variables with no `shape` (scalars) are absent from the
+// environment, as are species / parameters of reaction systems (no `shape`
+// field): a shape-constrained rule can only fire on a declared, shaped model
+// variable.
+func componentShapeEnv(comp map[string]interface{}) map[string][]string {
+	env := map[string][]string{}
+	vars, ok := comp["variables"].(map[string]interface{})
+	if !ok {
+		return env
+	}
+	for vn, vdRaw := range vars {
+		vd, ok := vdRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		shp, ok := vd["shape"].([]interface{})
+		if !ok {
+			continue
+		}
+		names := make([]string, 0, len(shp))
+		allStr := true
+		for _, s := range shp {
+			ss, ok := s.(string)
+			if !ok {
+				allStr = false
+				break
+			}
+			names = append(names, ss)
+		}
+		if !allStr {
+			continue
+		}
+		env[vn] = names
+	}
+	return env
+}
+
+// strSliceEqual reports whether two string slices are equal (same length, same
+// entries in the same order).
+func strSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// whereSatisfied evaluates a registered `where` constraint map (param → required
+// shape) against the bindings produced by a successful structural match
+// (esm-spec §9.6.1). A constraint on param `p` holds iff `bindings[p]` is a BARE
+// variable-reference string naming an entry of `shapeEnv` whose declared shape
+// equals the required list exactly (same names, same order). Everything else — a
+// compound sub-AST, a numeric literal, a scalar-field-bound literal, a scoped
+// (`System.var`) reference, an undeclared name, a scalar variable, or a param
+// that never bound — fails the constraint. The judgment is deliberately
+// syntactic and conservative: no shape inference over compound expressions, so
+// eligibility depends only on declarations and is byte-identical across
+// bindings.
+func whereSatisfied(whereC map[string][]string, bindings map[string]interface{}, shapeEnv map[string][]string) bool {
+	if whereC == nil {
+		return true
+	}
+	for p, req := range whereC {
+		b, ok := bindings[p]
+		if !ok {
+			return false
+		}
+		bs, ok := b.(string)
+		if !ok {
+			return false
+		}
+		shp, ok := shapeEnv[bs]
+		if !ok || !strSliceEqual(shp, req) {
+			return false
+		}
+	}
+	return true
+}
+
+// registeredWhere normalizes a template's `where` block into the registered
+// constraint map (param → required shape), checking every referenced index-set
+// name against the CONSUMING document's merged `index_sets` registry
+// (`isetNames`). An unknown name is `template_constraint_unknown_index_set`
+// (esm-spec §9.6.6) — raised here, at rule registration in the consuming
+// component, not when a library file is loaded standalone: constraints name
+// index sets as spelled in the consuming document's registry (post-§9.7.5
+// merge, composing with import-edge index-set renaming). Structural validity of
+// the `where` block is already guaranteed by validateTemplates.
+func registeredWhere(decl map[string]interface{}, isetNames map[string]struct{}, scope, tname string) (map[string][]string, error) {
+	whrRaw, has := decl["where"]
+	if !has || whrRaw == nil {
+		return nil, nil
+	}
+	whr, ok := whrRaw.(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+	out := map[string][]string{}
+	for _, p := range sortedKeys(whr) {
+		cobj, _ := whr[p].(map[string]interface{})
+		shpRaw, _ := cobj["shape"].([]interface{})
+		req := make([]string, 0, len(shpRaw))
+		for _, s := range shpRaw {
+			ss, _ := s.(string)
+			req = append(req, ss)
+		}
+		for _, s := range req {
+			if _, ok := isetNames[s]; !ok {
+				return nil, newETErr("template_constraint_unknown_index_set",
+					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, s))
+			}
+		}
+		out[p] = req
+	}
+	return out, nil
+}
+
+// asInt64Strict reports whether v is an INTEGER token (json.Number with integer
+// grammar, or a native int type — a bool/float/string is not) and returns its
+// int64 value. Used by validateMakearrayRegions, which checks only concrete
+// integer bound pairs on the folded tree.
+func asInt64Strict(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		if !strings.ContainsAny(string(n), ".eE") {
+			if i, err := n.Int64(); err == nil {
+				return i, true
+			}
+		}
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	}
+	return 0, false
+}
+
+// validateMakearrayRegions is the post-expansion validator (esm-spec §4.3.2 /
+// §9.6.4): every `makearray` region bound pair [start, stop] on the expanded,
+// metaparameter-folded tree must satisfy stop >= start - 1. stop == start - 1 is
+// the canonical EMPTY bound (the region covers no elements). stop < start - 1 is
+// INVERTED and rejected with `makearray_region_inverted`: it is almost always an
+// authoring bug (an interior stencil instantiated below its minimum extent, e.g.
+// [2, N-1] at N = 1 folding to [2, 0]). Template bodies are skipped —
+// pre-substitution bounds may legally carry metaparameter names; only concrete
+// integer pairs are checked. Mirrors the Julia reference
+// `_validate_makearray_regions`.
+func validateMakearrayRegions(tree interface{}, path string) error {
+	switch t := tree.(type) {
+	case []interface{}:
+		for i, child := range t {
+			if err := validateMakearrayRegions(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]interface{}:
+		if op, _ := t["op"].(string); op == "makearray" {
+			if regions, ok := t["regions"].([]interface{}); ok {
+				for ri, regionRaw := range regions {
+					region, ok := regionRaw.([]interface{})
+					if !ok {
+						continue
+					}
+					for di, boundsRaw := range region {
+						bounds, ok := boundsRaw.([]interface{})
+						if !ok || len(bounds) != 2 {
+							continue
+						}
+						lo, loOk := asInt64Strict(bounds[0])
+						hi, hiOk := asInt64Strict(bounds[1])
+						if !loOk || !hiOk {
+							continue
+						}
+						if hi < lo-1 {
+							return newETErr("makearray_region_inverted",
+								fmt.Sprintf("%s: makearray regions[%d] dimension %d bound pair [%d, %d] is inverted (stop < start - 1). An empty bound is spelled [start, start-1] and contributes no elements (esm-spec §4.3.2); a further-inverted pair is an authoring error — e.g. an interior stencil region [2, N-1] instantiated at N below the scheme's minimum extent (§9.6.8).", path, ri, di, lo, hi))
+						}
+					}
+				}
+			}
+		}
+		for _, k := range sortedKeys(t) {
+			// Template bodies/matches are pre-substitution trees; bounds may
+			// legally carry metaparameter names or fold later (esm-spec §9.7.6).
+			if k == "expression_templates" {
+				continue
+			}
+			if err := validateMakearrayRegions(t[k], path+"/"+k); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 // rulePriority returns the `priority` of a `match` rule (esm-spec §9.6.3): higher
 // fires first, ties break by declaration order. Absent ⇒ 0. Any numeric encoding
 // is coerced defensively.
@@ -531,6 +789,9 @@ type matchRule struct {
 	body     interface{}
 	priority int
 	declIdx  int
+	// whereC is the registered `where` shape-constraint map (param → required
+	// shape); nil when the rule carries no `where` block (esm-spec §9.6.1).
+	whereC map[string][]string
 }
 
 // rewritePass performs one pre-order (outermost-first) rewrite pass over `node`
@@ -542,13 +803,13 @@ type matchRule struct {
 // freshly-produced body during this pass. Otherwise it descends into children.
 // The returned bool is true iff any rewrite occurred; `last` records the op of
 // the most recent rewrite, for the non-convergence diagnostic.
-func rewritePass(node interface{}, named map[string]interface{}, rules []matchRule, scope string, last *string) (interface{}, bool, error) {
+func rewritePass(node interface{}, named map[string]interface{}, rules []matchRule, scope string, last *string, shapeEnv map[string][]string) (interface{}, bool, error) {
 	switch n := node.(type) {
 	case []interface{}:
 		changed := false
 		out := make([]interface{}, len(n))
 		for i, c := range n {
-			nc, ch, err := rewritePass(c, named, rules, scope, last)
+			nc, ch, err := rewritePass(c, named, rules, scope, last, shapeEnv)
 			if err != nil {
 				return nil, false, err
 			}
@@ -569,7 +830,12 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 		}
 		for i := range rules {
 			bindings := map[string]interface{}{}
-			if matchPattern(rules[i].pattern, n, rules[i].params, bindings) {
+			// Constraint filtering is part of match ELIGIBILITY (esm-spec
+			// §9.6.3 constraint 2): a `where`-excluded rule is treated exactly
+			// like a non-matching rule, so the scan proceeds to the next
+			// candidate in priority / declaration order.
+			if matchPattern(rules[i].pattern, n, rules[i].params, bindings) &&
+				whereSatisfied(rules[i].whereC, bindings, shapeEnv) {
 				*last = op
 				return substituteParams(rules[i].body, bindings), true, nil
 			}
@@ -578,7 +844,7 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 		changed := false
 		out := make(map[string]interface{}, len(n))
 		for k, v := range n {
-			nv, ch, err := rewritePass(v, named, rules, scope, last)
+			nv, ch, err := rewritePass(v, named, rules, scope, last, shapeEnv)
 			if err != nil {
 				return nil, false, err
 			}
@@ -596,11 +862,11 @@ func rewritePass(node interface{}, named map[string]interface{}, rules []matchRu
 // `rewrite_rule_nonterminating` once MaxRewritePasses productive passes have run
 // without converging. This bound — not a static check — is the authoritative
 // termination guard.
-func rewriteToFixpoint(node interface{}, named map[string]interface{}, rules []matchRule, scope string) (interface{}, error) {
+func rewriteToFixpoint(node interface{}, named map[string]interface{}, rules []matchRule, scope string, shapeEnv map[string][]string) (interface{}, error) {
 	last := ""
 	current := node
 	for pass := 0; pass < MaxRewritePasses; pass++ {
-		next, changed, err := rewritePass(current, named, rules, scope, &last)
+		next, changed, err := rewritePass(current, named, rules, scope, &last, shapeEnv)
 		if err != nil {
 			return nil, err
 		}
@@ -871,8 +1137,22 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	if !hasTemplateMachinery(view) {
 		stripExpressionTemplates(view)
 		// No expansion to run, but the §9.6.4 expanded-form validators still
-		// apply — the raw tree IS the expanded form.
-		return validateGeometryManifolds(view, "")
+		// apply — the raw tree IS the expanded form (esm-spec §4.3.2 makearray
+		// bounds + geometry manifolds).
+		if err := validateGeometryManifolds(view, ""); err != nil {
+			return err
+		}
+		return validateMakearrayRegions(view, "")
+	}
+	// The consuming document's merged index_sets registry (post-§9.7.5): the
+	// namespace `where` shape constraints resolve against at registration
+	// (esm-spec §9.6.1 — `template_constraint_unknown_index_set` for a name not
+	// declared here).
+	isetNames := map[string]struct{}{}
+	if isets, ok := view["index_sets"].(map[string]interface{}); ok {
+		for k := range isets {
+			isetNames[k] = struct{}{}
+		}
 	}
 	// Top-level `coupling` variable_map entries with an OBJECT `transform`
 	// (widened Expression transforms) rewrite with the rewrite context of
@@ -889,6 +1169,9 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 			if !ok {
 				continue
 			}
+			// Static shape environment for `where` constraint evaluation
+			// (esm-spec §9.6.1): declared variable shapes only.
+			shapeEnv := componentShapeEnv(compObj)
 			tplMap, _ := compObj["expression_templates"].(map[string]interface{})
 			if tplMap != nil {
 				if err := validateTemplates(tplMap, fmt.Sprintf("%s.%s", kind, cname)); err != nil {
@@ -925,6 +1208,15 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 								}
 							}
 						}
+						// `where` registration: normalize constraints and
+						// resolve every referenced index-set name against the
+						// consuming document's registry (esm-spec §9.6.1;
+						// `template_constraint_unknown_index_set`).
+						whereC, err := registeredWhere(decl, isetNames,
+							fmt.Sprintf("%s.%s", kind, cname), name)
+						if err != nil {
+							return err
+						}
 						rules = append(rules, matchRule{
 							name:     name,
 							pattern:  match,
@@ -932,6 +1224,7 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 							body:     decl["body"],
 							priority: rulePriority(decl),
 							declIdx:  idx,
+							whereC:   whereC,
 						})
 					}
 				}
@@ -945,7 +1238,7 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 			delete(compObj, "expression_templates")
 			for k, v := range compObj {
 				scope := fmt.Sprintf("%s.%s.%s", kind, cname, k)
-				rewritten, err := rewriteToFixpoint(v, named, rules, scope)
+				rewritten, err := rewriteToFixpoint(v, named, rules, scope, shapeEnv)
 				if err != nil {
 					return err
 				}
@@ -958,7 +1251,7 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 			if len(named) > 0 || len(rules) > 0 {
 				for _, site := range couplingSites[[2]string{kind, cname}] {
 					scope := fmt.Sprintf("coupling[%d].transform", site.idx)
-					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope)
+					rewritten, err := rewriteToFixpoint(site.entry["transform"], named, rules, scope, shapeEnv)
 					if err != nil {
 						return err
 					}
@@ -977,8 +1270,12 @@ func lowerExpressionTemplatesOrdered(view map[string]interface{}, orders map[str
 	}
 	// Validators run on the expanded form (esm-spec §9.6.4): reject any
 	// geometry-kernel node whose (possibly just-substituted) `manifold` is
-	// outside the closed set.
-	return validateGeometryManifolds(view, "")
+	// outside the closed set, and any makearray region whose folded bound pair
+	// is inverted (stop < start - 1; esm-spec §4.3.2).
+	if err := validateGeometryManifolds(view, ""); err != nil {
+		return err
+	}
+	return validateMakearrayRegions(view, "")
 }
 
 func stripExpressionTemplates(view map[string]interface{}) {

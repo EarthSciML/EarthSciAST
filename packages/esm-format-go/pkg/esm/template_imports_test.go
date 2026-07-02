@@ -130,6 +130,10 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_diamond", "fixture.esm", "expanded.esm"},
 		{"import_order_determinism", "fixture_import_order.esm", "expanded_import_order.esm"},
 		{"import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"},
+		// §9.7.7 import-edge renaming / namespacing + free-name rebinding.
+		{"import_rename_two_instances", "fixture.esm", "expanded.esm"},
+		{"import_rebind_keyed_factors", "fixture.esm", "expanded.esm"},
+		{"import_rename_diamond", "fixture.esm", "expanded.esm"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {
@@ -139,6 +143,86 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 				t.Errorf("expanded form diverges from golden:\n got=%s\nwant=%s", got, want)
 			}
 		})
+	}
+}
+
+// TestMatchScoping_ConformanceGoldens drives the §9.6.1 `where` match-scoping
+// fixtures through the raw §9.7 pipeline and asserts the lowered
+// models.m.variables subtree is byte-identical to the committed Julia goldens
+// (the goldens carry golden-specific metadata, so the comparison is scoped to
+// the rewritten variables exactly as the reference testset does).
+func TestMatchScoping_ConformanceGoldens(t *testing.T) {
+	modelMVars := func(doc string) interface{} {
+		var v map[string]interface{}
+		if err := json.Unmarshal([]byte(doc), &v); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return v["models"].(map[string]interface{})["m"].(map[string]interface{})["variables"]
+	}
+	for _, group := range []string{
+		"constrained_match_scope",          // shape-constrained div rule; one fires, one survives
+		"per_variable_scheme_literal_args", // ground-pattern per-variable selector
+		"two_div_two_meshes",               // identical patterns, distinct `where` scopes
+	} {
+		t.Run(group, func(t *testing.T) {
+			gotDoc := tiExpandRaw(t, tiConfDir(t, group, "fixture.esm"))
+			wantBytes, err := os.ReadFile(tiConfDir(t, group, "expanded.esm"))
+			if err != nil {
+				t.Fatalf("read golden: %v", err)
+			}
+			got := tiCanonJSON(t, modelMVars(gotDoc))
+			want := tiCanonJSON(t, modelMVars(string(wantBytes)))
+			if got != want {
+				t.Errorf("%s: lowered variables diverge from golden:\n got=%s\nwant=%s", group, got, want)
+			}
+		})
+	}
+}
+
+// TestMatchScoping_ConstraintUnknownIndexSet pins the §9.6.1/§9.6.6 registration
+// diagnostic: a `where` shape naming an index set absent from the consuming
+// document's registry is rejected at load.
+func TestMatchScoping_ConstraintUnknownIndexSet(t *testing.T) {
+	_, err := Load(tiConfDir(t, "constraint_unknown_index_set", "fixture.esm"))
+	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
+		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
+	}
+}
+
+// TestMakearrayRegions_EmptyLoadsInvertedRejected pins the §4.3.2 empty-vs-
+// inverted makearray bound distinction on the expanded, metaparameter-folded
+// tree: the same file loads at the scheme's minimum extent (empty bound) and is
+// rejected one below it (inverted bound).
+func TestMakearrayRegions_EmptyLoadsInvertedRejected(t *testing.T) {
+	valid := filepath.Join(tiRepoRoot(t), "tests", "valid", "makearray_empty_region_min_extent.esm")
+	// Default N = 2 folds the interior region [2, N-1] to the empty bound [2, 1].
+	if _, err := Load(valid); err != nil {
+		t.Fatalf("empty-bound makearray must load at default N=2: %v", err)
+	}
+	// N = 1 folds the interior region to [2, 0] — inverted (stop < start - 1).
+	_, err := Load(valid, WithMetaparameters(map[string]int64{"N": 1}))
+	if code := tiErrCode(t, err); code != "makearray_region_inverted" {
+		t.Errorf("N=1 code = %s; want makearray_region_inverted", code)
+	}
+}
+
+// TestSubsystemIndexSetMerge pins the §4.7 mounted index_sets merge: a mounted
+// mesh file's axes join the importing document's registry (deep-equal
+// redeclaration idempotent; a merged-in axis appears), while a size disagreement
+// is subsystem_index_set_conflict (exercised by the invalid-fixture loop).
+func TestSubsystemIndexSetMerge(t *testing.T) {
+	valid := filepath.Join(tiRepoRoot(t), "tests", "valid", "subsystem_index_set_merge.esm")
+	f, err := Load(valid)
+	if err != nil {
+		t.Fatalf("Load(merge): %v", err)
+	}
+	// `vertices` is not declared by the host; the mount brings it in (size 4).
+	if f.IndexSets["vertices"].Size == nil || *f.IndexSets["vertices"].Size != 4 {
+		t.Errorf("vertices size = %v; want 4 (merged from mounted mesh)", f.IndexSets["vertices"].Size)
+	}
+	// `cells` is deep-equal-redeclared (size 5), idempotent.
+	if f.IndexSets["cells"].Size == nil || *f.IndexSets["cells"].Size != 5 {
+		t.Errorf("cells size = %v; want 5", f.IndexSets["cells"].Size)
 	}
 }
 
