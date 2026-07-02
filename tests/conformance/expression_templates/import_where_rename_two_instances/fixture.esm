@@ -17,7 +17,10 @@
           "expression": { "op": "div", "args": ["F_B"] }
         }
       },
-      "equations": []
+      "equations": [
+        { "lhs": { "op": "D", "args": ["F_A"], "wrt": "t" }, "rhs": { "op": "-", "args": ["F_A"] } },
+        { "lhs": { "op": "D", "args": ["F_B"], "wrt": "t" }, "rhs": { "op": "-", "args": ["F_B"] } }
+      ]
     }
   }
 }

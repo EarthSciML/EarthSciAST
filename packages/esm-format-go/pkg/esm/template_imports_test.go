@@ -132,6 +132,7 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"},
 		// §9.7.7 import-edge renaming / namespacing + free-name rebinding.
 		{"import_rename_two_instances", "fixture.esm", "expanded.esm"},
+		{"import_where_rename_two_instances", "fixture.esm", "expanded.esm"},
 		{"import_rebind_keyed_factors", "fixture.esm", "expanded.esm"},
 		{"import_rename_diamond", "fixture.esm", "expanded.esm"},
 	}
@@ -176,6 +177,40 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 				t.Errorf("%s: lowered variables diverge from golden:\n got=%s\nwant=%s", group, got, want)
 			}
 		})
+	}
+}
+
+// TestTemplateImports_WhereRenameCarriesShape pins the §9.7.7 composition fix:
+// a `where`-constrained div rule imported twice under prefix has its
+// where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index set,
+// so each instance registers and fires only on its own field. Without the
+// rewrite this raised template_constraint_unknown_index_set.
+func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
+	doc := tiExpandRaw(t, tiConfDir(t, "import_where_rename_two_instances", "fixture.esm"))
+	var v map[string]interface{}
+	if err := json.Unmarshal([]byte(doc), &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	vars := v["models"].(map[string]interface{})["TwoGrids"].(map[string]interface{})["variables"].(map[string]interface{})
+	for name, wantN := range map[string]float64{"div_A": 16, "div_B": 8} {
+		expr := vars[name].(map[string]interface{})["expression"].(map[string]interface{})
+		if expr["op"] != "*" {
+			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
+		}
+		coef := expr["args"].([]interface{})[0].(map[string]interface{})
+		if coef["op"] != "/" || coef["args"].([]interface{})[1].(float64) != wantN {
+			t.Errorf("%s: coef = %v; want (1/%v)", name, coef, wantN)
+		}
+	}
+}
+
+// TestTemplateImports_WhereRenameUnknownIndexSet confirms a `where` shape naming
+// a set the library never declares survives the rename as spelled and is
+// rejected at rule registration — the fix does not paper over genuine typos.
+func TestTemplateImports_WhereRenameUnknownIndexSet(t *testing.T) {
+	_, err := Load(tiConfDir(t, "import_where_rename_unknown_index_set", "fixture.esm"))
+	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
+		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
 	}
 }
 

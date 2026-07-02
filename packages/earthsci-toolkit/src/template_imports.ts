@@ -689,10 +689,21 @@ const RENAME_PROTECTED_KEYS = new Set<string>([
  * One transitive-substitution pass over an imported declaration (esm-spec
  * §9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
  * bare strings in variable-reference positions; `isetmap` rewrites index-set
- * reference positions (`{"from": …}` values and the `wrt`/`dim` axis fields, in
- * `body` and `match` alike); `tplmap` rewrites `apply_expression_template.name`.
- * Structural scalar fields (`RENAME_PROTECTED_KEYS`) and bound-index lists
- * (range `of`) are never rewritten. Pure syntactic substitution — no evaluation.
+ * reference positions (`{"from": …}` values, the `wrt`/`dim` axis fields, and
+ * the `where.*.shape` match-scoping index-set names, in `body` and `match`
+ * alike); `tplmap` rewrites `apply_expression_template.name`. Structural scalar
+ * fields (`RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
+ * rewritten. Pure syntactic substitution — no evaluation.
+ *
+ * `where` is handled positionally (never by the protected-key copy that
+ * metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
+ * `{paramName: {shape: [indexSetName, …]}}`. Rename renames templates, index
+ * sets, and metaparameters — NOT template-internal param names — so the
+ * constraint KEYS (param names) are copied verbatim while each constraint's
+ * `shape` entries are mapped through `isetmap` (an unmapped name stays as
+ * spelled). Without this the rule body/registry would use the renamed set while
+ * `where` still named the original, and registration would fail with
+ * `template_constraint_unknown_index_set`.
  */
 function renameWalk(
   x: Json,
@@ -717,6 +728,8 @@ function renameWalk(
         out[k] = Object.prototype.hasOwnProperty.call(isetmap, v) ? isetmap[v]! : v
       } else if (k === 'name' && isApply && typeof v === 'string') {
         out[k] = Object.prototype.hasOwnProperty.call(tplmap, v) ? tplmap[v]! : v
+      } else if (k === 'where' && isObject(v)) {
+        out[k] = renameWhere(v, isetmap)
       } else if (k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         out[k] = deepClone(v)
       } else {
@@ -726,6 +739,41 @@ function renameWalk(
     return out
   }
   return x
+}
+
+/**
+ * Rewrite a `where` match-scoping block (esm-spec §9.6.1) under an import-edge
+ * index-set rename (esm-spec §9.7.7). Constraint KEYS (param names) are copied
+ * verbatim — rename never touches template-internal param names — and each
+ * constraint's `shape` entries (index-set names) are mapped through `isetmap`,
+ * with any unmapped name left as spelled (the body-reference rule).
+ */
+function renameWhere(whr: JsonObject, isetmap: Record<string, string>): JsonObject {
+  const out: JsonObject = {}
+  for (const p of Object.keys(whr)) {
+    const cobj = whr[p]
+    if (isObject(cobj)) {
+      const cout: JsonObject = {}
+      for (const ck of Object.keys(cobj)) {
+        const cv = cobj[ck]
+        if (ck === 'shape' && Array.isArray(cv)) {
+          cout[ck] = cv.map((e) =>
+            typeof e === 'string'
+              ? Object.prototype.hasOwnProperty.call(isetmap, e)
+                ? isetmap[e]!
+                : e
+              : deepClone(e),
+          )
+        } else {
+          cout[ck] = deepClone(cv)
+        }
+      }
+      out[p] = cout
+    } else {
+      out[p] = deepClone(cobj)
+    }
+  }
+  return out
 }
 
 /**

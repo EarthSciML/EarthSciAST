@@ -904,11 +904,20 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // renameWalk is one transitive-substitution pass over an imported declaration
 // (esm-spec §9.7.7): `varmap` (renamed open metaparameters + rebound free names)
 // rewrites bare strings in variable-reference positions; `isetmap` rewrites
-// index-set reference positions (`{"from": …}` values and the `wrt`/`dim` axis
-// fields, in `body` and `match` alike); `tplmap` rewrites
-// `apply_expression_template.name`. Structural scalar fields
-// (renameProtectedKeys) and bound-index lists (range `of`) are never rewritten.
-// Pure syntactic substitution — no evaluation.
+// index-set reference positions (`{"from": …}` values, the `wrt`/`dim` axis
+// fields, and the `where.*.shape` match-scoping index-set names, in `body` and
+// `match` alike); `tplmap` rewrites `apply_expression_template.name`. Structural
+// scalar fields (renameProtectedKeys) and bound-index lists (range `of`) are
+// never rewritten. Pure syntactic substitution — no evaluation.
+//
+// `where` is handled positionally (never by the protected-key copy that
+// metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
+// {paramName: {shape: [indexSetName, …]}}. Rename renames templates, index sets,
+// and metaparameters — NOT template-internal param names — so the constraint
+// KEYS (param names) are copied verbatim while each constraint's `shape` entries
+// are mapped through `isetmap` (an unmapped name stays as spelled). Without this
+// the rule body/registry would use the renamed set while `where` still named the
+// original, and registration would fail with template_constraint_unknown_index_set.
 func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interface{} {
 	switch v := x.(type) {
 	case string:
@@ -951,6 +960,12 @@ func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interf
 					continue
 				}
 			}
+			if k == "where" {
+				if w, ok := val.(map[string]interface{}); ok {
+					out[k] = renameWhere(w, isetmap)
+					continue
+				}
+			}
 			if k == "of" {
 				out[k] = deepCopyJSON(val)
 				continue
@@ -964,6 +979,42 @@ func renameWalk(x interface{}, varmap, isetmap, tplmap map[string]string) interf
 		return out
 	}
 	return x
+}
+
+// renameWhere rewrites a `where` match-scoping block (esm-spec §9.6.1) under an
+// import-edge index-set rename (esm-spec §9.7.7). Constraint KEYS (param names)
+// are copied verbatim — rename never touches template-internal param names — and
+// each constraint's `shape` entries (index-set names) are mapped through
+// `isetmap`, with any unmapped name left as spelled (the body-reference rule).
+func renameWhere(whr map[string]interface{}, isetmap map[string]string) map[string]interface{} {
+	out := make(map[string]interface{}, len(whr))
+	for p, cobj := range whr {
+		cmap, ok := cobj.(map[string]interface{})
+		if !ok {
+			out[p] = deepCopyJSON(cobj)
+			continue
+		}
+		cout := make(map[string]interface{}, len(cmap))
+		for ck, cv := range cmap {
+			if ck == "shape" {
+				if arr, ok := cv.([]interface{}); ok {
+					shape := make([]interface{}, len(arr))
+					for i, e := range arr {
+						if s, ok := e.(string); ok {
+							shape[i] = isetRenamed(s, isetmap)
+						} else {
+							shape[i] = deepCopyJSON(e)
+						}
+					}
+					cout[ck] = shape
+					continue
+				}
+			}
+			cout[ck] = deepCopyJSON(cv)
+		}
+		out[p] = cout
+	}
+	return out
 }
 
 // renameDecl is renameWalk over one template declaration with the §9.6.1

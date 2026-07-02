@@ -104,6 +104,35 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.models.TwoGrids.equations[1].rhs.ranges.i).toEqual([2, 7])
   })
 
+  it('import_where_rename_two_instances: rename carries where.shape (§9.7.7)', () => {
+    // A where-constrained div rule imported twice under prefix has its
+    // where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index
+    // set, so each instance registers and fires only on its own field. Without
+    // the rewrite this raised template_constraint_unknown_index_set.
+    const d = expandRaw(conf('import_where_rename_two_instances', 'fixture.esm')) as any
+    expect(d).toEqual(golden(conf('import_where_rename_two_instances', 'expanded.esm')))
+    const va = d.models.TwoGrids.variables.div_A.expression
+    const vb = d.models.TwoGrids.variables.div_B.expression
+    expect(va.op).toBe('*') // both div nodes lowered
+    expect(vb.op).toBe('*')
+    expect(va.args[0].op).toBe('/')
+    expect(va.args[0].args[1]).toBe(16)
+    expect(vb.args[0].args[1]).toBe(8)
+    expect(va.args[1]).toBe('F_A')
+    expect(vb.args[1]).toBe('F_B')
+    const f = loadPath(conf('import_where_rename_two_instances', 'fixture.esm')) as any
+    expect(f.index_sets['meshA.x'].size).toBe(16)
+    expect(f.index_sets['meshB.x'].size).toBe(8)
+  })
+
+  it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
+    // A where shape naming a set the library never declares survives the rename
+    // as spelled and is rejected at rule registration (esm-spec §9.6.6).
+    expect(errCode(() => loadPath(conf('import_where_rename_unknown_index_set', 'fixture.esm')))).toBe(
+      'template_constraint_unknown_index_set',
+    )
+  })
+
   it('import_rebind_keyed_factors: free-name rebind rewrites body + registry factors (§9.7.7)', () => {
     // rebind row_count/row_cols/row_w -> meshA_* transitively through the ragged
     // index set's offsets/values AND the rule body; the consumer's own

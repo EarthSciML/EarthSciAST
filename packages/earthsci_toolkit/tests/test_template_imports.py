@@ -72,6 +72,7 @@ def _err_code(fn) -> str | None:
          "expanded_priority_override.esm"),
         # §9.7.7 import renaming / namespacing / free-name rebinding
         ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
+        ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
         ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
         ("import_rename_diamond", "fixture.esm", "expanded.esm"),
     ],
@@ -189,6 +190,32 @@ def test_round_trip_emits_expanded_folded_form():
     reloaded = load(text)
     assert reloaded.index_sets["lon"]["size"] == 288
     assert reloaded.models["Advection"].equations[0].rhs.args[1].op == "makearray"
+
+
+def test_import_where_rename_carries_where_shape():
+    """§9.7.7: importing a `where`-constrained rule twice under prefix rewrites
+    each instance's ``where.F.shape`` from x to meshA.x / meshB.x in lockstep
+    with the index set, so each rule registers and fires ONLY on its own field.
+    Without the rewrite this raised template_constraint_unknown_index_set."""
+    d = _expand_raw(os.path.join(CONF, "import_where_rename_two_instances",
+                                 "fixture.esm"))
+    va = d["models"]["TwoGrids"]["variables"]["div_A"]["expression"]
+    vb = d["models"]["TwoGrids"]["variables"]["div_B"]["expression"]
+    assert va["op"] == "*" and vb["op"] == "*"          # both div nodes lowered
+    assert va["args"][0]["op"] == "/" and va["args"][0]["args"][1] == 16
+    assert vb["args"][0]["op"] == "/" and vb["args"][0]["args"][1] == 8
+    assert va["args"][1] == "F_A" and vb["args"][1] == "F_B"
+    f = load(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
+    assert f.index_sets["meshA.x"]["size"] == 16
+    assert f.index_sets["meshB.x"]["size"] == 8
+
+
+def test_import_where_rename_unknown_index_set_rejected():
+    """A `where` shape naming a set the library never declares survives the
+    rename as spelled and is rejected at rule registration (esm-spec §9.6.6)."""
+    assert _err_code(lambda: load(os.path.join(
+        CONF, "import_where_rename_unknown_index_set", "fixture.esm"))) == \
+        "template_constraint_unknown_index_set"
 
 
 # ---------------------------------------------------------------------------

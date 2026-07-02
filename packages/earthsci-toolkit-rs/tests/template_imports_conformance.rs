@@ -148,6 +148,44 @@ fn import_rename_two_instances_matches_golden() {
     );
 }
 
+/// import_where_rename_two_instances: a `where`-constrained div rule imported
+/// twice under prefix has its `where.F.shape` rewritten x -> meshA.x / meshB.x
+/// in lockstep with the index set, so each instance registers and fires only on
+/// its own field. Without the rewrite this raised
+/// template_constraint_unknown_index_set (§9.7.7 regression guard).
+#[test]
+fn import_where_rename_two_instances_matches_golden() {
+    let d = expand_raw(&conf(&["import_where_rename_two_instances", "fixture.esm"]));
+    assert_eq!(
+        d,
+        golden(&conf(&["import_where_rename_two_instances", "expanded.esm"]))
+    );
+    let vars = &d["models"]["TwoGrids"]["variables"];
+    let va = &vars["div_A"]["expression"];
+    let vb = &vars["div_B"]["expression"];
+    assert_eq!(va["op"], "*"); // both div nodes lowered
+    assert_eq!(vb["op"], "*");
+    assert_eq!(va["args"][0]["op"], "/");
+    assert_eq!(va["args"][0]["args"][1], 16);
+    assert_eq!(vb["args"][0]["args"][1], 8);
+    assert_eq!(va["args"][1], "F_A");
+    assert_eq!(vb["args"][1], "F_B");
+}
+
+/// import_where_rename_unknown_index_set: a `where` shape naming a set the
+/// library never declares survives the rename as spelled and is rejected at rule
+/// registration — the fix does not paper over genuine typos.
+#[test]
+fn import_where_rename_unknown_index_set_rejected() {
+    let e = load_path(conf(&["import_where_rename_unknown_index_set", "fixture.esm"]))
+        .expect_err("bad where set must fail to load");
+    let msg = e.to_string();
+    assert!(
+        msg.contains("[template_constraint_unknown_index_set]"),
+        "got: {msg}"
+    );
+}
+
 /// import_rebind_keyed_factors: `rebind` rewrites a free keyed-factor name in an
 /// imported template body/registry, transitively through every occurrence.
 #[test]

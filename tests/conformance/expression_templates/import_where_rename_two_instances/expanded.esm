@@ -16,7 +16,38 @@
   },
   "models": {
     "TwoGrids": {
-      "equations": [],
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "F_A"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "F_A"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "F_B"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "F_B"
+            ],
+            "op": "-"
+          }
+        }
+      ],
       "variables": {
         "F_A": {
           "default": 1.5,

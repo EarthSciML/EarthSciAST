@@ -582,11 +582,21 @@ fn name_map(
 /// One transitive-substitution pass over an imported declaration (esm-spec
 /// §9.7.7): `varmap` (renamed open metaparameters + rebound free names)
 /// rewrites bare strings in variable-reference positions; `isetmap` rewrites
-/// index-set reference positions (`{"from": …}` values and the `wrt`/`dim` axis
-/// fields, in `body` and `match` alike); `tplmap` rewrites
-/// `apply_expression_template.name`. Structural scalar fields
-/// ([`is_rename_protected`]) and bound-index lists (range `of`) are never
-/// rewritten. Pure syntactic substitution. Mirrors the Julia `_rename_walk`.
+/// index-set reference positions (`{"from": …}` values, the `wrt`/`dim` axis
+/// fields, and the `where.*.shape` match-scoping index-set names, in `body` and
+/// `match` alike); `tplmap` rewrites `apply_expression_template.name`. Structural
+/// scalar fields ([`is_rename_protected`]) and bound-index lists (range `of`) are
+/// never rewritten. Pure syntactic substitution. Mirrors the Julia `_rename_walk`.
+///
+/// `where` is handled positionally (never by the protected-key copy that
+/// metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
+/// `{paramName: {shape: [indexSetName, …]}}`. Rename renames templates, index
+/// sets, and metaparameters — NOT template-internal param names — so the
+/// constraint KEYS (param names) are copied verbatim while each constraint's
+/// `shape` entries are mapped through `isetmap` (an unmapped name stays as
+/// spelled). Without this the rule body/registry would use the renamed set while
+/// `where` still named the original, and registration would fail with
+/// `template_constraint_unknown_index_set`.
 fn rename_walk(
     x: &Value,
     varmap: &IndexMap<String, String>,
@@ -623,6 +633,8 @@ fn rename_walk(
                         k.clone(),
                         Value::String(tplmap.get(s).cloned().unwrap_or_else(|| s.to_string())),
                     );
+                } else if k == "where" && v.is_object() {
+                    out.insert(k.clone(), rename_where(v, isetmap));
                 } else if k == "of" || is_rename_protected(k) {
                     out.insert(k.clone(), v.clone());
                 } else {
@@ -633,6 +645,50 @@ fn rename_walk(
         }
         _ => x.clone(),
     }
+}
+
+/// Rewrite a `where` match-scoping block (esm-spec §9.6.1) under an import-edge
+/// index-set rename (esm-spec §9.7.7). Constraint KEYS (param names) are copied
+/// verbatim — rename never touches template-internal param names — and each
+/// constraint's `shape` entries (index-set names) are mapped through `isetmap`,
+/// with any unmapped name left as spelled (the body-reference rule). Mirrors the
+/// Julia `_rename_where`.
+fn rename_where(whr: &Value, isetmap: &IndexMap<String, String>) -> Value {
+    let obj = match whr.as_object() {
+        Some(o) => o,
+        None => return whr.clone(),
+    };
+    let mut out = Map::new();
+    for (p, cobj) in obj {
+        match cobj.as_object() {
+            Some(cmap) => {
+                let mut cout = Map::new();
+                for (ck, cv) in cmap {
+                    if ck == "shape" && cv.is_array() {
+                        let shape = cv
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|e| match e.as_str() {
+                                Some(s) => Value::String(
+                                    isetmap.get(s).cloned().unwrap_or_else(|| s.to_string()),
+                                ),
+                                None => e.clone(),
+                            })
+                            .collect();
+                        cout.insert(ck.clone(), Value::Array(shape));
+                    } else {
+                        cout.insert(ck.clone(), cv.clone());
+                    }
+                }
+                out.insert(p.clone(), Value::Object(cout));
+            }
+            None => {
+                out.insert(p.clone(), cobj.clone());
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// A copy of `map` with any key in `pset` dropped — the §9.6.1 shadowing rule:

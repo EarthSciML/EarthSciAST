@@ -630,11 +630,23 @@ def _rename_walk(x: Any, varmap: Dict[str, str], isetmap: Dict[str, str],
     """One transitive-substitution pass over an imported declaration (esm-spec
     §9.7.7): ``varmap`` (renamed open metaparameters + rebound free names)
     rewrites bare strings in variable-reference positions; ``isetmap`` rewrites
-    index-set reference positions (``{"from": …}`` values and the ``wrt``/``dim``
-    axis fields, in ``body`` and ``match`` alike); ``tplmap`` rewrites
+    index-set reference positions (``{"from": …}`` values, the ``wrt``/``dim``
+    axis fields, and the ``where.*.shape`` match-scoping index-set names, in
+    ``body`` and ``match`` alike); ``tplmap`` rewrites
     ``apply_expression_template.name``. Structural scalar fields
     (:data:`_RENAME_PROTECTED_KEYS`) and bound-index lists (range ``of``) are
-    never rewritten. Pure syntactic substitution — no evaluation."""
+    never rewritten. Pure syntactic substitution — no evaluation.
+
+    ``where`` is handled positionally (never by the protected-key copy that
+    metaparameter substitution uses, esm-spec §9.7.7): a ``where`` block is a
+    map ``{paramName: {shape: [indexSetName, …]}}``. Rename renames templates,
+    index sets, and metaparameters — NOT template-internal param names — so the
+    constraint KEYS (param names) are copied verbatim while each constraint's
+    ``shape`` entries are mapped through ``isetmap`` exactly like a ``wrt``/
+    ``from`` reference (an unmapped name stays as spelled). Without this the rule
+    body/registry would use the renamed set while ``where`` still named the
+    original, and registration would fail with
+    ``template_constraint_unknown_index_set``."""
     if isinstance(x, str):
         return varmap.get(x, x)
     if _is_array(x):
@@ -651,12 +663,37 @@ def _rename_walk(x: Any, varmap: Dict[str, str], isetmap: Dict[str, str],
                 out[ks] = isetmap.get(v, v)
             elif ks == "name" and is_apply and isinstance(v, str):
                 out[ks] = tplmap.get(v, v)
+            elif ks == "where" and _is_object(v):
+                out[ks] = _rename_where(v, isetmap)
             elif ks == "of" or ks in _RENAME_PROTECTED_KEYS:
                 out[ks] = copy.deepcopy(v)
             else:
                 out[ks] = _rename_walk(v, varmap, isetmap, tplmap)
         return out
     return x
+
+
+def _rename_where(whr: Any, isetmap: Dict[str, str]) -> Any:
+    """Rewrite a ``where`` match-scoping block (esm-spec §9.6.1) under an
+    import-edge index-set rename (esm-spec §9.7.7). Constraint KEYS (param names)
+    are copied verbatim — rename never touches template-internal param names —
+    and each constraint's ``shape`` entries (index-set names) are mapped through
+    ``isetmap``, with any unmapped name left as spelled (the body-reference
+    rule)."""
+    out: Dict[str, Any] = {}
+    for p, cobj in whr.items():
+        if _is_object(cobj):
+            cout: Dict[str, Any] = {}
+            for ck, cv in cobj.items():
+                if str(ck) == "shape" and _is_array(cv):
+                    cout[str(ck)] = [isetmap.get(e, e) if isinstance(e, str)
+                                     else copy.deepcopy(e) for e in cv]
+                else:
+                    cout[str(ck)] = copy.deepcopy(cv)
+            out[str(p)] = cout
+        else:
+            out[str(p)] = copy.deepcopy(cobj)
+    return out
 
 
 def _rename_decl(decl: Any, varmap: Dict[str, str], isetmap: Dict[str, str],
