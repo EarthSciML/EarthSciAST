@@ -899,12 +899,20 @@ fn flatten_rejects_spatial_operators() {
         ..empty_file()
     };
     let err = flatten(&file).unwrap_err();
+    let msg = format!("{err}");
     match err {
-        FlattenError::UnsupportedMapping { mapping_type, .. } => {
-            assert_eq!(mapping_type, "grad");
+        // esm-spec §4.2 / §9.6.8: `grad` is an unlowered rewrite-target op; the
+        // gate surfaces the uniform `unlowered_operator` code (superseding the
+        // old `UnsupportedMapping`-for-spatial-ops behavior).
+        FlattenError::UnloweredOperator { op } => {
+            assert_eq!(op, "grad");
         }
-        other => panic!("expected UnsupportedMapping, got {other:?}"),
+        other => panic!("expected UnloweredOperator, got {other:?}"),
     }
+    assert!(
+        msg.contains("unlowered_operator"),
+        "flatten error should carry the uniform `unlowered_operator` code"
+    );
 }
 
 // ============================================================================
@@ -963,15 +971,20 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         ..empty_file()
     };
     let err = flatten(&file).unwrap_err();
+    let msg = format!("{err}");
     match err {
-        FlattenError::UnsupportedMapping { mapping_type, .. } => {
-            assert!(
-                mapping_type.starts_with("D(wrt="),
-                "unexpected mapping_type '{mapping_type}'"
-            );
+        // esm-spec §4.2 / §9.6.8: a spatial `D` (`wrt` != "t") is an unlowered
+        // rewrite-target op; the gate surfaces the uniform `unlowered_operator`
+        // code with the offending op name `"D"`.
+        FlattenError::UnloweredOperator { op } => {
+            assert_eq!(op, "D", "unexpected op '{op}'");
         }
-        other => panic!("expected UnsupportedMapping, got {other:?}"),
+        other => panic!("expected UnloweredOperator, got {other:?}"),
     }
+    assert!(
+        msg.contains("unlowered_operator"),
+        "flatten error should carry the uniform `unlowered_operator` code"
+    );
 
     // Type-level parity check: the FlattenError::UnsupportedMapping variant
     // is also the channel for slice/project/regrid unsupported mappings.

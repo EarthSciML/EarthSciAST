@@ -1006,12 +1006,21 @@ fn resolve_expr(
             }
         }
         Expr::Operator(node) => {
-            // Reject spatial differential operators at compile time. Per the
-            // canonical pipeline contract, `grad`/`div`/`laplacian` MUST be
-            // rewritten by ESD discretization rules into `arrayop` AST before
-            // reaching any binding's simulator. (esm-i7b)
-            if matches!(node.op.as_str(), "grad" | "div" | "laplacian") {
-                return Err(CompileError::UnreachableSpatialOperatorError {
+            // Reject unlowered rewrite-target operators at compile time
+            // (esm-spec §4.2 / §9.6.8): the optional sugar ops
+            // `grad` / `div` / `laplacian` (and `curl` / `∇`) have no evaluator,
+            // and a SPATIAL `D` (`wrt` != "t") is a rewrite-target that a
+            // discretization rule must lower to a stencil before evaluation. The
+            // structural time derivative `D(_, t)` stays evaluable-core. The gate
+            // fires here — before evaluation — with the uniform
+            // `unlowered_operator` code.
+            let unlowered = match node.op.as_str() {
+                "grad" | "div" | "laplacian" | "curl" | "∇" => true,
+                "D" => node.wrt.as_deref().is_some_and(|w| w != "t"),
+                _ => false,
+            };
+            if unlowered {
+                return Err(CompileError::UnloweredOperatorError {
                     op: node.op.clone(),
                 });
             }

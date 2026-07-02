@@ -43,20 +43,24 @@ pub enum CompileError {
         details: String,
     },
 
-    /// A spatial differential operator (`grad`, `div`, `laplacian`, ...) was
-    /// found in an equation reaching the simulator. Per the canonical
-    /// pipeline contract, ESD discretization rules MUST rewrite these into
-    /// `arrayop` AST before any binding's simulator evaluates the equations.
-    /// Encountering one here means `discretize` was skipped or did not
-    /// rewrite this node — silently producing zeros (the previous behavior)
-    /// would mask a broken pipeline. (esm-i7b)
+    /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
+    /// optional sugar ops `grad` / `div` / `laplacian` / ...) survived the
+    /// lowering fixpoint into an evaluation position (esm-spec §4.2 / §9.6.8).
+    /// Such ops carry NO evaluator: a discretization `match` rewrite rule MUST
+    /// lower them to an `aggregate` / `makearray` stencil before evaluation.
+    /// The gate fires here — before evaluation, not at load — with the uniform
+    /// `unlowered_operator` code that supersedes the former per-binding
+    /// `UnreachableSpatialOperatorError` / `UnsupportedDimensionality` errors.
+    /// Silently producing zeros (the previous behavior) would mask a broken
+    /// pipeline. This format ships no discretization rules — they live in
+    /// EarthSciDiscretizations.
     #[error(
-        "UnreachableSpatialOperatorError: encountered '{op}' node in simulation evaluation. \
-         Spatial operators must be rewritten by ESD discretization rules before reaching the \
-         simulator. Pipeline contract violated."
+        "unlowered_operator: rewrite-target operator '{op}' reached evaluation without being \
+         lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). Discretization rules \
+         live in EarthSciDiscretizations, not this format."
     )]
-    UnreachableSpatialOperatorError {
-        /// The offending operator name (e.g. `"grad"`).
+    UnloweredOperatorError {
+        /// The offending operator name (e.g. `"grad"` or `"D"`).
         op: String,
     },
 

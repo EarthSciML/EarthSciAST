@@ -866,14 +866,12 @@ fn test_error_grad_in_simulator_rejected() {
     let err = Compiled::from_flattened(&flat).unwrap_err();
     let msg = err.to_string();
     assert!(
-        matches!(err, CompileError::UnreachableSpatialOperatorError { ref op } if op == "grad"),
-        "expected UnreachableSpatialOperatorError(grad), got: {msg}"
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        "expected UnloweredOperatorError(grad), got: {msg}"
     );
     assert!(
-        msg.contains("UnreachableSpatialOperatorError")
-            && msg.contains("grad")
-            && msg.contains("Pipeline contract violated"),
-        "expected canonical pipeline-violation message, got: {msg}"
+        msg.contains("unlowered_operator") && msg.contains("grad"),
+        "expected uniform unlowered_operator message, got: {msg}"
     );
 }
 
@@ -882,8 +880,8 @@ fn test_error_div_in_simulator_rejected() {
     let flat = flat_with_one_state_rhs(op("div", vec![var("u")]));
     let err = Compiled::from_flattened(&flat).unwrap_err();
     assert!(
-        matches!(err, CompileError::UnreachableSpatialOperatorError { ref op } if op == "div"),
-        "expected UnreachableSpatialOperatorError(div), got: {err}"
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "div"),
+        "expected UnloweredOperatorError(div), got: {err}"
     );
 }
 
@@ -894,17 +892,42 @@ fn test_error_laplacian_in_simulator_rejected() {
     assert!(
         matches!(
             err,
-            CompileError::UnreachableSpatialOperatorError { ref op } if op == "laplacian"
+            CompileError::UnloweredOperatorError { ref op } if op == "laplacian"
         ),
-        "expected UnreachableSpatialOperatorError(laplacian), got: {err}"
+        "expected UnloweredOperatorError(laplacian), got: {err}"
+    );
+}
+
+#[test]
+fn test_error_spatial_d_in_simulator_rejected() {
+    // esm-spec §4.2 / §9.6.8: a `D` reaching the evaluator (a spatial or
+    // right-hand-side derivative — the structural equation-LHS `D(u, t)` is
+    // consumed by flatten and never resolved here) is an unlowered
+    // rewrite-target op, surfaced with the same uniform `unlowered_operator`
+    // code as the sugar ops.
+    let flat = flat_with_one_state_rhs(Expr::Operator(ExpressionNode {
+        op: "D".to_string(),
+        args: vec![var("u")],
+        wrt: Some("x".to_string()),
+        ..Default::default()
+    }));
+    let err = Compiled::from_flattened(&flat).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "D"),
+        "expected UnloweredOperatorError(D), got: {msg}"
+    );
+    assert!(
+        msg.contains("unlowered_operator"),
+        "expected uniform unlowered_operator message, got: {msg}"
     );
 }
 
 #[test]
 fn test_error_grad_in_array_simulator_rejected() {
     // The array-op simulator (`ArrayCompiled::from_model`) must also reject
-    // spatial differential operators with the same canonical
-    // pipeline-violation error. Sneak a `grad` into an arrayop body so the
+    // unlowered rewrite-target operators with the same uniform
+    // `unlowered_operator` code. Sneak a `grad` into an arrayop body so the
     // dispatcher routes the model to the array path.
     use earthsci_toolkit::simulate_array::ArrayCompiled;
 
@@ -945,8 +968,8 @@ fn test_error_grad_in_array_simulator_rejected() {
         Err(e) => e,
     };
     assert!(
-        matches!(err, CompileError::UnreachableSpatialOperatorError { ref op } if op == "grad"),
-        "expected UnreachableSpatialOperatorError(grad) from array path, got: {err}"
+        matches!(err, CompileError::UnloweredOperatorError { ref op } if op == "grad"),
+        "expected UnloweredOperatorError(grad) from array path, got: {err}"
     );
 }
 

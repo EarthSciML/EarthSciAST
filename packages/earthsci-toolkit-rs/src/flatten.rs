@@ -7,11 +7,13 @@
 //! The Rust implementation targets the **Core tier** only: it supports
 //! `broadcast` and `identity` dimension mappings and raises
 //! [`FlattenError::UnsupportedMapping`] if the source file requires `slice`,
-//! `project`, or `regrid`. Spatial differential operators (`grad`, `div`,
-//! `laplacian`, or `D` with `wrt != "t"`) likewise raise
-//! `UnsupportedMapping` because the downstream Rust simulator
-//! (`gt-rust-simulate`, a diffsol-backed ODE solver) cannot consume PDE output.
-//! Higher tiers will be added when Rust gains PDE capability.
+//! `project`, or `regrid`. Unlowered rewrite-target operators (the sugar ops
+//! `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
+//! `wrt != "t"`) raise [`FlattenError::UnloweredOperator`] with the uniform
+//! `unlowered_operator` code (esm-spec §4.2 / §9.6.8): they must be lowered to a
+//! stencil by a `match` rewrite rule before evaluation, and the downstream
+//! diffsol-backed ODE solver has no evaluator for them. Higher tiers will be
+//! added when Rust gains PDE capability.
 
 use crate::types::{
     ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
@@ -66,6 +68,21 @@ pub enum FlattenError {
         mapping_type: String,
         reason: String,
     },
+
+    /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
+    /// optional sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`) reached
+    /// flattening without being lowered to a stencil by a `match` rewrite rule
+    /// (esm-spec §4.2 / §9.6.8). Flattening is part of the compile pipeline, so
+    /// this fires before evaluation (loading stays permissive). Carries the
+    /// uniform `unlowered_operator` code that supersedes the former per-binding
+    /// spatial-operator errors; the scalar / array simulators surface the same
+    /// code via [`crate::compile_error::CompileError::UnloweredOperatorError`].
+    #[error(
+        "unlowered_operator: rewrite-target operator '{op}' reached compilation without being \
+         lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8). Discretization rules \
+         live in EarthSciDiscretizations, not this format."
+    )]
+    UnloweredOperator { op: String },
 
     /// Incompatible units across a shared independent variable.
     #[error(
@@ -808,30 +825,33 @@ fn namespace_plain(name: &str, system_name: &str) -> String {
     }
 }
 
-/// Scan an expression tree and raise [`FlattenError::UnsupportedMapping`] if
-/// it contains any spatial differential operator. Per spec §4.7.6, Rust Core
-/// tier does not implement spatial derivatives — the downstream diffsol
-/// simulator is ODE-only.
+/// Scan an expression-tree RHS and reject any unlowered rewrite-target operator
+/// (esm-spec §4.2 / §9.6.8) with the uniform [`FlattenError::UnloweredOperator`]
+/// (`unlowered_operator`) code. These are the optional sugar ops
+/// `grad` / `div` / `laplacian` / `curl` / `∇`, and a spatial `D` — a `D` whose
+/// `wrt` is a spatial axis (e.g. `"x"`, `"lon"`) rather than the time variable
+/// `"t"`. `wrt` is now open (any declared differentiation variable); the
+/// structural equation-LHS `D(u, t)` stays evaluable-core and is untouched. A
+/// rewrite rule must lower these to a stencil before evaluation; this format
+/// ships no such rules (they live in EarthSciDiscretizations).
 fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => Ok(()),
         Expr::Operator(node) => {
             match node.op.as_str() {
                 "grad" | "div" | "laplacian" | "curl" | "∇" => {
-                    return Err(FlattenError::UnsupportedMapping {
-                        mapping_type: node.op.clone(),
-                        reason: format!("spatial operator '{}' requires PDE support", node.op),
+                    return Err(FlattenError::UnloweredOperator {
+                        op: node.op.clone(),
                     });
                 }
                 "D" => {
+                    // A spatial `D` (`wrt` != "t") is a rewrite-target; only the
+                    // structural time derivative `D(_, t)` is evaluable-core.
                     if let Some(wrt) = &node.wrt
                         && wrt != "t"
                     {
-                        return Err(FlattenError::UnsupportedMapping {
-                            mapping_type: format!("D(wrt={wrt})"),
-                            reason: format!(
-                                "non-time derivative 'D(_, {wrt})' requires PDE support"
-                            ),
+                        return Err(FlattenError::UnloweredOperator {
+                            op: node.op.clone(),
                         });
                     }
                 }

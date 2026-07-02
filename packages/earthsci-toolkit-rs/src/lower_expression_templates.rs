@@ -1,14 +1,30 @@
-//! Load-time expansion pass for `apply_expression_template` AST ops.
+//! Load-time rewrite engine for `expression_templates` (esm-spec §9.6 /
+//! §9.6.3, docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md).
 //!
-//! esm-spec §9.6, docs/rfcs/ast-expression-templates.md, esm-giy.
+//! Each `expression_templates` entry is a rewrite rule with `params`
+//! (metavariables) and a `body` (the replacement Expression), applied in one of
+//! two ways: WITHOUT a `match` field it is invoked explicitly by an
+//! `apply_expression_template` node; WITH a `match` field it is an auto-applied
+//! rewrite rule fired wherever the pattern structurally matches a node.
 //!
-//! Walks each `models.<m>` and `reaction_systems.<rs>` block; if an
-//! `expression_templates` entry is present, every `apply_expression_template`
-//! node anywhere in that component's expressions is replaced by the
-//! substituted template body. After the pass, the file's expression trees
-//! contain no `apply_expression_template` nodes and no `expression_templates`
-//! blocks — downstream consumers see only normal Expression ASTs (Option A
-//! round-trip).
+//! Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
+//! (esm-spec §9.6.3). One pass (`rewrite_pass`) is a single pre-order
+//! (outermost-first) walk: at each node the engine first tries to fire a rule
+//! AT that node before descending — an `apply_expression_template` op is
+//! expanded, otherwise the `match` rules are consulted and the winner is
+//! selected deterministically (highest `priority`, ties broken by declaration
+//! order). The winner's body replaces the node and the walk does NOT descend
+//! into that freshly-produced body during the current pass. Passes repeat until
+//! a pass performs zero rewrites (the fixpoint) or until `MAX_REWRITE_PASSES`
+//! productive passes have run without converging, in which case the file is
+//! rejected with `rewrite_rule_nonterminating` (the pass bound — not a static
+//! check — is the authoritative termination guard). Because selection and
+//! traversal are fully deterministic, all bindings produce byte-identical
+//! fixpoints. After convergence the tree contains no `apply_expression_template`
+//! ops and no `expression_templates` blocks — downstream consumers see only
+//! normal Expression ASTs (Option A round-trip). Any rewrite-target op (e.g. a
+//! spatial `D`) that survives the fixpoint into an evaluation position is caught
+//! later by the `unlowered_operator` gate, not here.
 //!
 //! Operates on the pre-deserialization `serde_json::Value` view, so it must
 //! run after schema validation but before deserializing into typed structs.
@@ -130,6 +146,13 @@ fn validate_templates(
             )
         })?;
         assert_no_nested_apply(body, name, "/body")?;
+
+        // An optional `match` pattern turns the entry into an auto-applied
+        // rewrite rule (esm-spec §9.6); like the body it MUST NOT contain nested
+        // `apply_expression_template` ops.
+        if let Some(pattern) = decl_obj.get("match") {
+            assert_no_nested_apply(pattern, name, "/match")?;
+        }
     }
     Ok(())
 }
@@ -155,6 +178,12 @@ fn substitute(body: &Value, bindings: &Map<String, Value>) -> Value {
     }
 }
 
+/// Maximum number of productive rewrite passes before a file is rejected as
+/// non-converging (esm-spec §9.6.3, diagnostic `rewrite_rule_nonterminating`).
+/// Pinned identically across all bindings so the accept/reject decision — and
+/// the resulting fixpoint — is byte-identical everywhere.
+const MAX_REWRITE_PASSES: usize = 64;
+
 /// An auto-applied rewrite rule: an `expression_templates` entry that carries
 /// a `match` pattern (esm-spec §9.6). Named templates *without* a `match` are
 /// expanded only by explicit `apply_expression_template`; those with a `match`
@@ -168,23 +197,44 @@ struct MatchRule {
     pattern: Value,
     /// The replacement Expression instantiated with the bound metavariables.
     body: Value,
+    /// Selection precedence (esm-spec §9.6.3): higher fires first; ties break by
+    /// declaration order. Absent ⇒ `0`.
+    priority: i64,
 }
 
-/// Bundles the per-component rewrite inputs threaded through the single pass.
+/// Bundles the per-component rewrite inputs threaded through each pass.
 struct RewriteCtx<'a> {
     /// All templates declared in the component (named-expansion lookup table).
     templates: &'a Map<String, Value>,
-    /// Auto-applied `match` rules, in template **declaration order**.
+    /// Auto-applied `match` rules, **pre-sorted** highest-`priority`-first with
+    /// ties broken by declaration order (esm-spec §9.6.3). `rewrite_pass` fires
+    /// the first rule in this order whose pattern matches a node.
     rules: &'a [MatchRule],
 }
 
-/// Collect the auto-applied `match` rules from a component's templates, in
-/// declaration order, and reject any rule whose `body` re-introduces its own
-/// pattern (`rewrite_rule_nonterminating`, esm-spec §9.6.3).
-fn collect_match_rules(
-    templates: &Map<String, Value>,
-    scope: &str,
-) -> Result<Vec<MatchRule>, ExpressionTemplateError> {
+/// The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first, ties
+/// break by declaration order. Absent ⇒ `0`. The schema constrains `priority`
+/// to an integer; any numeric encoding is coerced defensively (a boolean, like
+/// any non-number, yields `0`).
+fn rule_priority(decl: &Map<String, Value>) -> i64 {
+    match decl.get("priority") {
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f.round() as i64))
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Collect the auto-applied `match` rules from a component's templates in
+/// declaration order (serde_json's `preserve_order` feature keeps source
+/// order), then pre-sort them by descending `priority` with ties broken by
+/// declaration order (a stable sort preserves push order for equal
+/// priorities). The old static self-reintroduction / nontermination pre-check
+/// is GONE — the bounded fixpoint (`MAX_REWRITE_PASSES`) is now the sole
+/// termination guard (esm-spec §9.6.3), so a self-reintroducing rule simply
+/// fails to converge rather than being detected up front.
+fn collect_match_rules(templates: &Map<String, Value>) -> Vec<MatchRule> {
     let mut rules = Vec::new();
     for (name, decl) in templates {
         let Some(obj) = decl.as_object() else { continue };
@@ -201,28 +251,19 @@ fn collect_match_rules(
             })
             .unwrap_or_default();
         let body = obj.get("body").cloned().unwrap_or(Value::Null);
-
-        // Single-pass, no-rescan: a replacement is not re-scanned, so a rule
-        // whose body re-introduces its own pattern is a static error.
-        let param_set: std::collections::HashSet<&str> =
-            params.iter().map(String::as_str).collect();
-        if pattern_occurs_in(pattern, &param_set, &body) {
-            return Err(err(
-                "rewrite_rule_nonterminating",
-                format!(
-                    "{scope}.expression_templates.{name}: 'body' re-introduces the rule's own \
-                     'match' pattern; a replacement is never re-scanned (esm-spec §9.6.3)"
-                ),
-            ));
-        }
         rules.push(MatchRule {
             name: name.clone(),
             params,
             pattern: pattern.clone(),
             body,
+            priority: rule_priority(obj),
         });
     }
-    Ok(rules)
+    // Deterministic selection order (esm-spec §9.6.3): highest `priority` first,
+    // ties broken by declaration order. `sort_by_key` is stable, so equal
+    // priorities retain their push (declaration) order.
+    rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
+    rules
 }
 
 /// Structurally match `pattern` against `target`, binding metavariables (names
@@ -266,24 +307,6 @@ fn try_match(
         },
         // numbers / bools / null: exact equality.
         _ => pattern == target,
-    }
-}
-
-/// True if `pattern` matches `node` or any descendant of `node`. Used for the
-/// static `rewrite_rule_nonterminating` check.
-fn pattern_occurs_in(
-    pattern: &Value,
-    params: &std::collections::HashSet<&str>,
-    node: &Value,
-) -> bool {
-    let mut binds = Map::new();
-    if try_match(pattern, node, params, &mut binds) {
-        return true;
-    }
-    match node {
-        Value::Array(arr) => arr.iter().any(|c| pattern_occurs_in(pattern, params, c)),
-        Value::Object(obj) => obj.values().any(|c| pattern_occurs_in(pattern, params, c)),
-        _ => false,
     }
 }
 
@@ -352,59 +375,111 @@ fn expand_apply(
         }
     }
 
-    // Recursively rewrite bindings (template bodies cannot contain
-    // apply_expression_template, but the *bindings* may, and may themselves
-    // match auto-applied rules).
+    // Splice the bindings' sub-ASTs into the body AS-IS (esm-spec §9.6.3): the
+    // substituted body is re-scanned in a SUBSEQUENT pass, so any
+    // `apply_expression_template` op or `match`-eligible sub-AST inside a
+    // binding is rewritten then — not here. A body itself may not contain
+    // `apply_expression_template` (rejected by `validate_templates`).
     let mut resolved = Map::new();
     for (k, v) in bindings {
-        resolved.insert(k.clone(), rewrite(v, ctx, scope)?);
+        resolved.insert(k.clone(), v.clone());
     }
     let body = decl_obj.get("body").cloned().unwrap_or(Value::Null);
-    // The substituted body is a replacement and is NOT re-scanned (§9.6.3).
     Ok(substitute(&body, &resolved))
 }
 
-/// The single bottom-up load-time rewrite pass (esm-spec §9.6.3). For each
-/// node: rewrite children first; expand an `apply_expression_template` node
-/// into its substituted body; otherwise try the auto-applied `match` rules in
-/// declaration order against the (children-rewritten) node and instantiate the
-/// first rule that fires. A replacement is returned as-is — never re-scanned.
-fn rewrite(node: &Value, ctx: &RewriteCtx, scope: &str) -> Result<Value, ExpressionTemplateError> {
-    let processed = match node {
+/// One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3).
+/// At each object node the engine tries to fire a rule AT the node BEFORE
+/// descending:
+///
+/// 1. an `apply_expression_template` op is expanded (`expand_apply`), OR
+/// 2. the first rule in `ctx.rules` (pre-sorted highest-`priority`-first, ties
+///    by declaration order) whose `match` pattern structurally matches the node
+///    fires.
+///
+/// A fired rule's body replaces the node and the walk does NOT descend into
+/// that freshly-produced body during this pass (it is revisited next pass). If
+/// nothing fires, the walk descends into the node's children. Returns the
+/// rewritten node and whether any rewrite occurred in this subtree; `last`
+/// records the op of the most recent rewrite, for the non-convergence
+/// diagnostic.
+fn rewrite_pass(
+    node: &Value,
+    ctx: &RewriteCtx,
+    scope: &str,
+    last: &mut String,
+) -> Result<(Value, bool), ExpressionTemplateError> {
+    match node {
         Value::Array(arr) => {
+            let mut changed = false;
             let mut out = Vec::with_capacity(arr.len());
             for c in arr {
-                out.push(rewrite(c, ctx, scope)?);
+                let (nc, ch) = rewrite_pass(c, ctx, scope, last)?;
+                out.push(nc);
+                changed |= ch;
             }
-            Value::Array(out)
+            Ok((Value::Array(out), changed))
         }
         Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
-                // Named-template expansion is itself a replacement: return it
-                // without offering it to the auto-applied `match` rules.
-                return expand_apply(obj, ctx, scope);
+            let op = obj.get("op").and_then(|v| v.as_str());
+            // (1) Outermost-first: fire a rule AT this node before descending.
+            if op == Some(APPLY_OP) {
+                *last = APPLY_OP.to_string();
+                return Ok((expand_apply(obj, ctx, scope)?, true));
             }
+            for rule in ctx.rules {
+                let param_set: std::collections::HashSet<&str> =
+                    rule.params.iter().map(String::as_str).collect();
+                let mut binds = Map::new();
+                if try_match(&rule.pattern, node, &param_set, &mut binds) {
+                    let _ = &rule.name; // retained for diagnostics / future tracing
+                    *last = op.unwrap_or("").to_string();
+                    return Ok((substitute(&rule.body, &binds), true));
+                }
+            }
+            // (2) No rule fired here — descend into children.
+            let mut changed = false;
             let mut out = Map::new();
             for (k, v) in obj {
-                out.insert(k.clone(), rewrite(v, ctx, scope)?);
+                let (nv, ch) = rewrite_pass(v, ctx, scope, last)?;
+                out.insert(k.clone(), nv);
+                changed |= ch;
             }
-            Value::Object(out)
+            Ok((Value::Object(out), changed))
         }
-        _ => node.clone(),
-    };
+        _ => Ok((node.clone(), false)),
+    }
+}
 
-    for rule in ctx.rules {
-        let param_set: std::collections::HashSet<&str> =
-            rule.params.iter().map(String::as_str).collect();
-        let mut binds = Map::new();
-        if try_match(&rule.pattern, &processed, &param_set, &mut binds) {
-            let _ = &rule.name; // retained for diagnostics / future tracing
-            // Instantiate the body; first rule wins, result is not re-scanned.
-            return Ok(substitute(&rule.body, &binds));
+/// Drive `rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat pre-order passes
+/// until a pass performs zero rewrites, or reject the file with
+/// `rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES` productive passes
+/// have run without converging. This bound — not a static check — is the
+/// authoritative termination guard, so a self-reintroducing rule fails to
+/// converge rather than being flagged up front. Selection and traversal are
+/// fully deterministic, so all bindings produce byte-identical fixpoints.
+fn rewrite_to_fixpoint(
+    node: &Value,
+    ctx: &RewriteCtx,
+    scope: &str,
+) -> Result<Value, ExpressionTemplateError> {
+    let mut current = node.clone();
+    let mut last = String::new();
+    for _ in 0..MAX_REWRITE_PASSES {
+        let (next, changed) = rewrite_pass(&current, ctx, scope, &mut last)?;
+        current = next;
+        if !changed {
+            return Ok(current); // fixpoint reached
         }
     }
-
-    Ok(processed)
+    Err(err(
+        "rewrite_rule_nonterminating",
+        format!(
+            "{scope}: expression-template rewriting did not converge within \
+             MAX_REWRITE_PASSES={MAX_REWRITE_PASSES} passes (last rewritten op '{last}'). \
+             A `match` rule likely re-introduces its own pattern (esm-spec §9.6.3)."
+        ),
+    ))
 }
 
 fn find_apply_paths(view: &Value, path: &str, hits: &mut Vec<String>) {
@@ -515,16 +590,20 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                 continue;
             }
             validate_templates(&templates, &scope_base)?;
-            let rules = collect_match_rules(&templates, &scope_base)?;
+            let rules = collect_match_rules(&templates);
             let ctx = RewriteCtx {
                 templates: &templates,
                 rules: &rules,
             };
+            // Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+            // non-template field (esm-spec §9.6.3): expands
+            // `apply_expression_template` ops AND fires auto `match` rules until
+            // a pass performs zero rewrites (or the pass bound rejects).
             let keys: Vec<String> = comp.keys().cloned().collect();
             for k in keys {
                 let scope = format!("{scope_base}.{k}");
                 if let Some(child) = comp.get(&k).cloned() {
-                    let rewritten = rewrite(&child, &ctx, &scope)?;
+                    let rewritten = rewrite_to_fixpoint(&child, &ctx, &scope)?;
                     comp.insert(k, rewritten);
                 }
             }
@@ -787,8 +866,10 @@ mod tests {
         assert_eq!(rhs["wrt"], json!("y")); // scalar metavar d -> literal "y"
     }
 
-    /// A `match` rule whose `body` re-introduces its own pattern is rejected;
-    /// replacements are never re-scanned (esm-spec §9.6.3).
+    /// A `match` rule whose `body` re-introduces its own pattern never reaches a
+    /// fixpoint. There is no static pre-check any more (esm-spec §9.6.3): the
+    /// bounded fixpoint runs `MAX_REWRITE_PASSES` productive passes without
+    /// converging and then rejects the file with `rewrite_rule_nonterminating`.
     #[test]
     fn rejects_nonterminating_match_rule() {
         let mut v = json!({
@@ -847,5 +928,77 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         assert_eq!(rhs["op"], json!("winner"));
+    }
+
+    /// `priority` out-ranks declaration order (esm-spec §9.6.3): a
+    /// later-declared rule with higher `priority` fires over an earlier-declared
+    /// default-priority rule matching the same node.
+    #[test]
+    fn higher_priority_rule_wins_over_earlier_declared() {
+        let mut v = json!({
+          "esm": "0.8.0",
+          "metadata": {"name": "prio", "authors": ["t"]},
+          "models": {
+            "M": {
+              "variables": {"u": {"type": "state"}},
+              "expression_templates": {
+                "low": {
+                  "params": ["f"],
+                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "body": {"op": "loser", "args": ["f"]}
+                },
+                "high": {
+                  "params": ["f"],
+                  "priority": 100,
+                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "body": {"op": "winner", "args": ["f"]}
+                }
+              },
+              "equations": [
+                {"lhs": "u", "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}
+              ]
+            }
+          }
+        });
+        lower_expression_templates(&mut v).expect("rewrite");
+        assert_eq!(
+            v["models"]["M"]["equations"][0]["rhs"]["op"],
+            json!("winner")
+        );
+    }
+
+    /// The bounded fixpoint re-scans a freshly-produced body only in a SUBSEQUENT
+    /// pass (esm-spec §9.6.3): a sugar rule emits a nested op that a second rule
+    /// lowers on the next pass, converging to a fully-lowered tree.
+    #[test]
+    fn produced_body_is_rescanned_in_a_later_pass() {
+        let mut v = json!({
+          "esm": "0.8.0",
+          "metadata": {"name": "fixpoint", "authors": ["t"]},
+          "models": {
+            "M": {
+              "variables": {"u": {"type": "state"}},
+              "expression_templates": {
+                "sugar": {
+                  "params": ["f"],
+                  "match": {"op": "sugar", "args": ["f"]},
+                  "body": {"op": "inner", "args": ["f"]}
+                },
+                "inner_to_leaf": {
+                  "params": ["f"],
+                  "match": {"op": "inner", "args": ["f"]},
+                  "body": {"op": "*", "args": ["k", "f"]}
+                }
+              },
+              "equations": [
+                {"lhs": "u", "rhs": {"op": "sugar", "args": ["u"]}}
+              ]
+            }
+          }
+        });
+        lower_expression_templates(&mut v).expect("rewrite");
+        let rhs = &v["models"]["M"]["equations"][0]["rhs"];
+        // sugar(u) -> inner(u) (pass 1) -> k * u (pass 2).
+        assert_eq!(*rhs, json!({"op": "*", "args": ["k", "u"]}));
     }
 }

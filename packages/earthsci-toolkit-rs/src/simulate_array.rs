@@ -578,8 +578,17 @@ fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => Ok(()),
         Expr::Operator(node) => {
-            if matches!(node.op.as_str(), "grad" | "div" | "laplacian") {
-                return Err(CompileError::UnreachableSpatialOperatorError {
+            // Reject unlowered rewrite-target ops (esm-spec §4.2 / §9.6.8). This
+            // walk sees both the equation LHS and RHS, so it must NOT reject the
+            // structural time derivative `D(_, t)` (evaluable-core); only a
+            // SPATIAL `D` (`wrt` != "t") is a rewrite-target.
+            let unlowered = match node.op.as_str() {
+                "grad" | "div" | "laplacian" | "curl" | "∇" => true,
+                "D" => node.wrt.as_deref().is_some_and(|w| w != "t"),
+                _ => false,
+            };
+            if unlowered {
+                return Err(CompileError::UnloweredOperatorError {
                     op: node.op.clone(),
                 });
             }
@@ -3316,15 +3325,14 @@ fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // D(anything) = 0 for parity with the scalar interpreter.
         "D" => Value::Scalar(0.0),
 
-        // Spatial differential operators must be rewritten by ESD
-        // discretization rules before reaching the simulator (esm-i7b).
-        // The compile-time `check_no_spatial_ops` walk in `from_model`
-        // catches these; panicking here is defense-in-depth in case the
-        // build path is bypassed.
+        // Rewrite-target sugar ops must be lowered to a stencil by a `match`
+        // rewrite rule before reaching the simulator (esm-spec §4.2 / §9.6.8).
+        // The compile-time `check_no_spatial_ops` walk in `from_model` catches
+        // these with the uniform `unlowered_operator` code; panicking here is
+        // defense-in-depth in case the build path is bypassed.
         "grad" | "div" | "laplacian" => panic!(
-            "UnreachableSpatialOperatorError: encountered '{}' node in simulation evaluation. \
-             Spatial operators must be rewritten by ESD discretization rules before reaching \
-             the simulator. Pipeline contract violated.",
+            "unlowered_operator: rewrite-target operator '{}' reached evaluation without being \
+             lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8).",
             node.op
         ),
 
