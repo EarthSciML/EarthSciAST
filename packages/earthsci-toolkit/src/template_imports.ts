@@ -1,0 +1,1038 @@
+/**
+ * Load-time resolution for esm-spec §9.7: template-library files, cross-file
+ * `expression_template_imports`, and load-time `metaparameters`
+ * (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
+ *
+ * Everything here resolves BEFORE the §9.6.3 rewrite fixpoint
+ * (`lowerExpressionTemplates`) and before any validator sees the tree.
+ * Per document the order is innermost-first (esm-spec §9.7.6):
+ *
+ *   1. resolve imports (recursively, depth-first post-order, instantiating the
+ *      imported subtree with the edge's metaparameter `bindings` at each edge);
+ *   2. merge imported `index_sets` into the document registry;
+ *   3. close and fold this document's metaparameters (loader-API bindings,
+ *      then defaults; `metaparameter_unbound` if still open);
+ *   4. §9.7.3 registration-time body composition (`composeTemplateBodies`,
+ *      invoked per component from `lowerExpressionTemplates`);
+ *   5. the §9.6.3 fixpoint on fully-concrete trees.
+ *
+ * Round-trip is Option A: `expression_template_imports`, `metaparameters`, and
+ * top-level `expression_templates` do not survive `parse → emit`; the emitted
+ * form is the expanded, folded document.
+ *
+ * All diagnostics are raised as `ExpressionTemplateError` with the stable
+ * §9.6.6 codes so they are machine-checkable across bindings. Mirrors the
+ * Julia reference implementation (`EarthSciSerialization.jl/src/template_imports.jl`).
+ *
+ * File access is synchronous (imports resolve inside the synchronous
+ * `load()`): under Node the built-in `fs` module is obtained via
+ * `process.getBuiltinModule`; other environments must supply a `readFile`
+ * hook. Remote (`http(s)://`) template-library refs are not fetchable from a
+ * synchronous loader and are rejected as `template_import_unresolved`.
+ */
+
+import {
+  ExpressionTemplateError,
+  composeTemplateBodies,
+  deepEqual,
+  rejectExpressionTemplatesPreV04,
+  validateTemplates,
+} from './lower_expression_templates.js'
+import { isNumericLiteral } from './numeric-literal.js'
+
+type Json = unknown
+type JsonObject = Record<string, unknown>
+
+/** Schema-error shape accepted from the host's schema validator. */
+export interface TemplateSchemaError {
+  path: string
+  message: string
+}
+
+/** Options threaded through §9.7 resolution. */
+export interface TemplateResolveOptions {
+  /**
+   * Loader-API metaparameter bindings for the ROOT document
+   * (esm-spec §9.7.6 binding site 4). Already-closed edge bindings win;
+   * API bindings beat `default`s.
+   */
+  metaparameters?: Record<string, number> | undefined
+  /**
+   * Synchronous file reader for import refs. Defaults to Node's
+   * `fs.readFileSync` (via `process.getBuiltinModule`); browser hosts must
+   * supply their own.
+   */
+  readFile?: ((path: string) => string) | undefined
+  /**
+   * Schema validator applied to each import target (a target failing schema
+   * validation is `template_import_unresolved`, mirroring the Julia
+   * reference). Supplied by `load()`; optional for direct/raw use.
+   */
+  validateSchema?: ((raw: unknown) => TemplateSchemaError[]) | undefined
+}
+
+const COMPONENT_KINDS = ['models', 'reaction_systems'] as const
+
+// A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
+const LIBRARY_FORBIDDEN_KEYS = [
+  'models',
+  'reaction_systems',
+  'data_loaders',
+  'coupling',
+  'domain',
+] as const
+
+function isObject(v: unknown): v is JsonObject {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) && !isNumericLiteral(v)
+}
+
+/** Deep clone preserving tagged `NumericLiteral` leaves by reference. */
+function deepClone<T>(v: T): T {
+  if (v === null || v === undefined) return v
+  if (isNumericLiteral(v)) return v
+  if (Array.isArray(v)) return v.map(deepClone) as unknown as T
+  if (typeof v === 'object') {
+    const out: JsonObject = {}
+    for (const k of Object.keys(v as object)) out[k] = deepClone((v as JsonObject)[k])
+    return out as unknown as T
+  }
+  return v
+}
+
+/**
+ * Read an INTEGER literal (plain JSON integer or an int-tagged
+ * `NumericLiteral` leaf from canonical mode). Returns `undefined` for
+ * anything else. Note the JS parser caveat: plain `JSON.parse` narrows
+ * integral floats (`2.0` → `2`), so those are indistinguishable from
+ * integers here — shared fixtures avoid integral-float literals.
+ */
+function asInt(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isInteger(v)) return v
+  if (isNumericLiteral(v) && v.kind === 'int') return v.value
+  return undefined
+}
+
+// ---------------------------------------------------------------------------
+// Spec-version gate (esm-spec §9.6.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * `expression_template_imports`, top-level `expression_templates`
+ * (template-library files), and `metaparameters` arrive at `esm: 0.8.0`;
+ * files declaring an earlier version that carry any of them are rejected
+ * with `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
+ * `rejectExpressionTemplatesPreV04` for the §9.7 constructs.
+ */
+export function rejectTemplateImportsPreV08(view: unknown): void {
+  if (!isObject(view)) return
+  const esm = view.esm
+  if (typeof esm !== 'string') return
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
+  if (!m) return
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  if (!(major === 0 && minor < 8)) return
+
+  const offences: string[] = []
+  if ('expression_templates' in view) offences.push('/expression_templates')
+  if ('metaparameters' in view) offences.push('/metaparameters')
+  if ('expression_template_imports' in view) offences.push('/expression_template_imports')
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = view[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (isObject(comp) && 'expression_template_imports' in comp) {
+        offences.push(`/${compKind}/${cname}/expression_template_imports`)
+      }
+    }
+  }
+  if (offences.length === 0) return
+  throw new ExpressionTemplateError(
+    'template_import_version_too_old',
+    `expression_template_imports / top-level expression_templates / metaparameters require esm >= 0.8.0; file declares ${esm}. Offending paths: ${offences.join(', ')}`,
+  )
+}
+
+/**
+ * True when `raw` has the template-library-file FORM (top-level
+ * `expression_templates`, esm-spec §9.7.1). Purity (no models / reaction
+ * systems / loaders / coupling / domain) is checked separately at import
+ * edges.
+ */
+export function isTemplateLibraryDoc(raw: unknown): boolean {
+  return isObject(raw) && 'expression_templates' in raw
+}
+
+// ---------------------------------------------------------------------------
+// Metaparameters (esm-spec §9.7.6)
+// ---------------------------------------------------------------------------
+
+function requireInt(v: unknown, ctx: string): number {
+  const i = asInt(v)
+  if (i === undefined || typeof v === 'boolean') {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: value ${JSON.stringify(v)} is not an integer (esm-spec §9.7.6)`,
+    )
+  }
+  return i
+}
+
+function collectMetaparamDecls(raw: unknown, origin: string): JsonObject {
+  const out: JsonObject = {}
+  if (!isObject(raw)) return out
+  const mp = raw.metaparameters
+  if (mp === undefined || mp === null) return out
+  if (!isObject(mp)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${origin}: \`metaparameters\` must be an object`,
+    )
+  }
+  for (const [name, v] of Object.entries(mp)) {
+    if (!isObject(v)) {
+      throw new ExpressionTemplateError(
+        'metaparameter_type_error',
+        `${origin}: metaparameters.${name} must be an object with \`type: "integer"\``,
+      )
+    }
+    if (String(v.type) !== 'integer') {
+      throw new ExpressionTemplateError(
+        'metaparameter_type_error',
+        `${origin}: metaparameters.${name}: \`type\` must be "integer" (the only kind)`,
+      )
+    }
+    if (v.default !== undefined && v.default !== null) {
+      requireInt(v.default, `${origin}: metaparameters.${name} default`)
+    }
+    out[name] = deepClone(v)
+  }
+  return out
+}
+
+// Keys whose VALUES are never expression positions: metaparameter names are
+// substituted as bare variable-reference strings, so structural string fields
+// must not be rewritten. Template `params` shadowing is handled separately in
+// `substituteMetaparamsDecl`.
+const META_SUBST_SKIP_KEYS = new Set<string>([
+  'metadata',
+  'params',
+  'type',
+  'units',
+  'kind',
+  'description',
+  'name',
+  'wrt',
+  'expression_template_imports',
+  'metaparameters',
+  'only',
+])
+
+/**
+ * Substitute closed metaparameter names — appearing as bare strings, the
+ * variable-reference surface syntax — with their integer values, everywhere
+ * except the `META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
+ * expression-position substitution; no folding here).
+ */
+function substituteMetaparams(x: Json, values: Record<string, number>): Json {
+  if (typeof x === 'string') {
+    return Object.prototype.hasOwnProperty.call(values, x) ? values[x] : x
+  }
+  if (Array.isArray(x)) {
+    return x.map((v) => substituteMetaparams(v, values))
+  }
+  if (isObject(x)) {
+    const out: JsonObject = {}
+    for (const k of Object.keys(x)) {
+      out[k] = META_SUBST_SKIP_KEYS.has(k) ? deepClone(x[k]) : substituteMetaparams(x[k], values)
+    }
+    return out
+  }
+  return x
+}
+
+/**
+ * Metaparameter substitution over one `expression_templates` entry: the
+ * template's own `params` shadow like-named metaparameters inside its `body`
+ * and `match` (a param is the inner binder; substitution must not capture it).
+ */
+function substituteMetaparamsDecl(decl: Json, values: Record<string, number>): Json {
+  let shadowed = values
+  if (isObject(decl) && Array.isArray(decl.params)) {
+    const params = decl.params
+    if (params.some((p) => Object.prototype.hasOwnProperty.call(values, String(p)))) {
+      shadowed = { ...values }
+      for (const p of params) delete shadowed[String(p)]
+    }
+  }
+  return substituteMetaparams(decl, shadowed)
+}
+
+const INT64_MIN = -(2n ** 63n)
+const INT64_MAX = 2n ** 63n - 1n
+
+function checkedInt64(v: bigint, ctx: string): bigint {
+  if (v < INT64_MIN || v > INT64_MAX) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: 64-bit integer overflow while folding a metaparameter expression`,
+    )
+  }
+  return v
+}
+
+/**
+ * Fold a metaparameter expression (integer literal, name, or `{op, args}`
+ * over `+ - * /`) to a concrete integer with exact 64-bit arithmetic
+ * (esm-spec §9.7.6; BigInt-backed, range-checked against Int64). Returns
+ * `null` when the expression still contains a bare name (an open
+ * metaparameter awaiting a later binding site, or a template-param slot
+ * inside a rule body) — the site is left symbolic for a later pass. Throws
+ * `metaparameter_type_error` for a non-integer literal, an op outside
+ * `+ - * /` over concrete args, inexact division, or 64-bit overflow.
+ */
+function tryFold(x: Json, ctx: string): bigint | null {
+  const i = asInt(x)
+  if (i !== undefined && typeof x !== 'boolean') return BigInt(i)
+  if (typeof x === 'string') return null
+  if (typeof x === 'number' || isNumericLiteral(x)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: non-integer literal ${JSON.stringify(isNumericLiteral(x) ? x.value : x)} in a structural integer site (esm-spec §9.7.6)`,
+    )
+  }
+  if (!isObject(x)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: invalid metaparameter expression (expected integer, name, or {op, args})`,
+    )
+  }
+  const opRaw = x.op
+  const args = x.args
+  if (opRaw === undefined || !Array.isArray(args) || args.length === 0) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})`,
+    )
+  }
+  const vals = args.map((a) => tryFold(a, ctx))
+  if (vals.some((v) => v === null)) return null
+  const ivals = vals as bigint[]
+  const op = String(opRaw)
+  if (!['+', '-', '*', '/'].includes(op)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: op '${op}' is not allowed in a metaparameter expression (only + - * /)`,
+    )
+  }
+  let acc = ivals[0]!
+  if (op === '-' && ivals.length === 1) {
+    return checkedInt64(-acc, ctx)
+  }
+  for (const v of ivals.slice(1)) {
+    if (op === '+') {
+      acc = checkedInt64(acc + v, ctx)
+    } else if (op === '-') {
+      acc = checkedInt64(acc - v, ctx)
+    } else if (op === '*') {
+      acc = checkedInt64(acc * v, ctx)
+    } else {
+      if (v === 0n) {
+        throw new ExpressionTemplateError('metaparameter_type_error', `${ctx}: division by zero`)
+      }
+      if (acc % v !== 0n) {
+        throw new ExpressionTemplateError(
+          'metaparameter_type_error',
+          `${ctx}: ${acc} / ${v} does not divide exactly (esm-spec §9.7.6)`,
+        )
+      }
+      acc = acc / v
+    }
+  }
+  return acc
+}
+
+function collectNames(x: Json, out: string[]): string[] {
+  if (typeof x === 'string') {
+    out.push(x)
+  } else if (Array.isArray(x)) {
+    for (const v of x) collectNames(v, out)
+  } else if (isObject(x)) {
+    for (const k of Object.keys(x)) {
+      if (k === 'op') continue
+      collectNames(x[k], out)
+    }
+  }
+  return out
+}
+
+/**
+ * Fold metaparameter expressions in the structural integer sites —
+ * `aggregate` dense `ranges` tuple entries and `makearray` `regions` bound
+ * pairs — to concrete integers, in place, wherever they are already closed.
+ * Entries still carrying a bare name (a template-param slot, or an open
+ * metaparameter in a not-yet-fully-bound library) are left symbolic for a
+ * later binding site. Index-set sizes are folded separately by
+ * `foldIndexSetSizes`.
+ */
+function foldStructuralSites(x: Json, ctx: string): void {
+  if (Array.isArray(x)) {
+    for (const v of x) foldStructuralSites(v, ctx)
+    return
+  }
+  if (!isObject(x)) return
+  const op = typeof x.op === 'string' ? x.op : ''
+  if (op === 'aggregate') {
+    const ranges = x.ranges
+    if (isObject(ranges)) {
+      for (const [k, rv] of Object.entries(ranges)) {
+        if (!Array.isArray(rv)) continue // {from: ...} index-set refs untouched
+        for (let i = 0; i < rv.length; i++) {
+          if (asInt(rv[i]) !== undefined) continue
+          const f = tryFold(rv[i], `${ctx}: aggregate ranges.${k}`)
+          if (f !== null) rv[i] = Number(f)
+        }
+      }
+    }
+  } else if (op === 'makearray') {
+    const regions = x.regions
+    if (Array.isArray(regions)) {
+      for (const region of regions) {
+        if (!Array.isArray(region)) continue
+        for (const bounds of region) {
+          if (!Array.isArray(bounds)) continue
+          for (let i = 0; i < bounds.length; i++) {
+            if (asInt(bounds[i]) !== undefined) continue
+            const f = tryFold(bounds[i], `${ctx}: makearray regions bound`)
+            if (f !== null) bounds[i] = Number(f)
+          }
+        }
+      }
+    }
+  }
+  for (const k of Object.keys(x)) foldStructuralSites(x[k], ctx)
+}
+
+/**
+ * Fold interval `size` metaparameter expressions in an `index_sets`
+ * registry. With `strict = true` (the root document, after its
+ * metaparameters closed) any remaining bare name is `metaparameter_unbound`;
+ * with `strict = false` (a library instantiated at an edge that left some
+ * metaparameters open) open sizes stay symbolic and close at a later
+ * binding site.
+ */
+function foldIndexSetSizes(indexSets: JsonObject, ctx: string, strict: boolean): void {
+  for (const [name, decl] of Object.entries(indexSets)) {
+    if (!isObject(decl)) continue
+    const sz = decl.size
+    if (sz === undefined || sz === null) continue
+    if (asInt(sz) !== undefined) continue
+    const f = tryFold(sz, `${ctx}: index_sets.${name}.size`)
+    if (f === null) {
+      if (strict) {
+        const names = [...new Set(collectNames(sz, []))]
+        throw new ExpressionTemplateError(
+          'metaparameter_unbound',
+          `${ctx}: index_sets.${name}.size references unbound name(s) ${names.join(', ')} (esm-spec §9.7.6)`,
+        )
+      }
+    } else {
+      decl.size = Number(f)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import-graph resolution (esm-spec §9.7.2 / §9.7.4 / §9.7.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything one template-library file exports after resolution in its OWN
+ * scope: its effective template sequence (imports depth-first post-order,
+ * then own declarations; esm-spec §9.7.4), its instantiated `index_sets`,
+ * and its still-open metaparameter declarations (re-exported to the
+ * importer, esm-spec §9.7.6 binding site 2). Plain-object key order IS the
+ * effective order.
+ */
+interface TemplateScope {
+  templates: JsonObject
+  indexSets: JsonObject
+  metaparams: JsonObject
+}
+
+function newScope(): TemplateScope {
+  return { templates: {}, indexSets: {}, metaparams: {} }
+}
+
+function mergeNamed(
+  dst: JsonObject,
+  name: string,
+  decl: Json,
+  code: string,
+  what: string,
+  origin: string,
+): void {
+  if (Object.prototype.hasOwnProperty.call(dst, name)) {
+    // Deep-equal redeclaration (a diamond import) dedups at first occurrence;
+    // a non-equal collision is a conflict (esm-spec §9.7.4/§9.7.5).
+    if (deepEqual(dst[name], decl)) return
+    throw new ExpressionTemplateError(
+      code,
+      `${origin}: ${what} '${name}' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)`,
+    )
+  }
+  dst[name] = decl
+}
+
+function mergeScope(dst: TemplateScope, src: TemplateScope, origin: string): void {
+  for (const [n, d] of Object.entries(src.templates)) {
+    mergeNamed(dst.templates, n, d, 'template_import_name_conflict', 'template', origin)
+  }
+  for (const [n, d] of Object.entries(src.indexSets)) {
+    mergeNamed(dst.indexSets, n, d, 'template_import_index_set_conflict', 'index set', origin)
+  }
+  for (const [n, d] of Object.entries(src.metaparams)) {
+    mergeNamed(dst.metaparams, n, d, 'template_import_name_conflict', 'metaparameter', origin)
+  }
+}
+
+/**
+ * Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
+ * substitute the bound names as integer literals throughout the exported
+ * templates and index sets, then fold the structural sites that are now
+ * closed.
+ */
+function instantiateScope(scope: TemplateScope, values: Record<string, number>, ctx: string): void {
+  const newTemplates: JsonObject = {}
+  for (const [n, d] of Object.entries(scope.templates)) {
+    const nd = substituteMetaparamsDecl(d, values)
+    foldStructuralSites(nd, ctx)
+    newTemplates[n] = nd
+  }
+  scope.templates = newTemplates
+  const newIndexSets: JsonObject = {}
+  for (const [n, d] of Object.entries(scope.indexSets)) {
+    newIndexSets[n] = substituteMetaparams(d, values)
+  }
+  foldIndexSetSizes(newIndexSets, ctx, false)
+  scope.indexSets = newIndexSets
+}
+
+// ---- path + file access helpers (POSIX-style, mirroring ref-loading.ts) ----
+
+function isRemoteRef(ref: string): boolean {
+  return ref.startsWith('http://') || ref.startsWith('https://')
+}
+
+function joinPath(a: string, b: string): string {
+  if (b.startsWith('/')) return b
+  if (a.endsWith('/')) return `${a}${b}`
+  return `${a}/${b}`
+}
+
+function canonicalizePath(p: string): string {
+  const isAbs = p.startsWith('/')
+  const parts = p.split('/').filter((seg) => seg.length > 0 && seg !== '.')
+  const stack: string[] = []
+  for (const seg of parts) {
+    if (seg === '..') {
+      if (stack.length > 0 && stack[stack.length - 1] !== '..') {
+        stack.pop()
+      } else if (!isAbs) {
+        stack.push('..')
+      }
+    } else {
+      stack.push(seg)
+    }
+  }
+  const joined = stack.join('/')
+  return isAbs ? `/${joined}` : joined || '.'
+}
+
+function dirName(p: string): string {
+  const lastSlash = p.lastIndexOf('/')
+  return lastSlash > 0 ? p.substring(0, lastSlash) : '/'
+}
+
+/** Canonical key for import-cycle detection (esm-spec §9.7.2, as §4.7). */
+function canonicalRef(ref: string, baseDir: string): string {
+  if (isRemoteRef(ref)) return ref
+  return canonicalizePath(joinPath(baseDir.replace(/\\/g, '/'), ref))
+}
+
+function defaultReadFile(path: string): string {
+  const proc = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process
+  const getBuiltin = proc?.getBuiltinModule
+  if (typeof getBuiltin === 'function') {
+    const fs = getBuiltin.call(proc, 'node:fs') as {
+      readFileSync: (p: string, enc: string) => string
+    }
+    return fs.readFileSync(path, 'utf8')
+  }
+  throw new Error(
+    'synchronous file access is unavailable in this environment; supply LoadOptions.readFile',
+  )
+}
+
+function loadImportRaw(
+  ref: string,
+  baseDir: string,
+  origin: string,
+  opts: TemplateResolveOptions,
+): { raw: unknown; dir: string } {
+  if (isRemoteRef(ref)) {
+    // The synchronous §9.7 resolver cannot fetch over the network (mirrors
+    // the Rust binding's remote-ref stance): download the library first and
+    // import it by local path.
+    throw new ExpressionTemplateError(
+      'template_import_unresolved',
+      `${origin}: failed to load template-library ref '${ref}': remote refs are not fetchable from the synchronous loader; download the file and import it by local path`,
+    )
+  }
+  const path = canonicalRef(ref, baseDir)
+  let content: string
+  try {
+    content = (opts.readFile ?? defaultReadFile)(path)
+  } catch (e) {
+    throw new ExpressionTemplateError(
+      'template_import_unresolved',
+      `${origin}: template-library file not found or unreadable: ${path} (from ref '${ref}'): ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(content)
+  } catch (e) {
+    throw new ExpressionTemplateError(
+      'template_import_unresolved',
+      `${origin}: template-library ref '${path}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+  return { raw, dir: dirName(path) }
+}
+
+/**
+ * Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
+ * the target (path-scoped cycle detection over canonical refs, as §4.7),
+ * verify library purity, resolve the target recursively in its own scope,
+ * instantiate at this edge's `bindings`, then apply `only` visibility
+ * filtering.
+ */
+function resolveImportEntry(
+  entry: Json,
+  baseDir: string,
+  stack: string[],
+  origin: string,
+  opts: TemplateResolveOptions,
+): TemplateScope {
+  if (!isObject(entry)) {
+    throw new ExpressionTemplateError(
+      'template_import_unresolved',
+      `${origin}: expression_template_imports entries must be objects with a \`ref\` field`,
+    )
+  }
+  const refRaw = entry.ref
+  if (typeof refRaw !== 'string' || refRaw.length === 0) {
+    throw new ExpressionTemplateError(
+      'template_import_unresolved',
+      `${origin}: expression_template_imports entry requires a non-empty string \`ref\``,
+    )
+  }
+  const ref = refRaw
+  const canonical = canonicalRef(ref, baseDir)
+  if (stack.includes(canonical)) {
+    const cyc = [...stack.slice(stack.indexOf(canonical)), canonical]
+    throw new ExpressionTemplateError(
+      'template_import_cycle',
+      `${origin}: import-graph cycle detected: ${cyc.join(' -> ')} (esm-spec §9.7.2)`,
+    )
+  }
+
+  const { raw, dir: targetDir } = loadImportRaw(ref, baseDir, origin, opts)
+  // Version gates on the target (esm-spec §9.6.5).
+  rejectExpressionTemplatesPreV04(raw)
+  rejectTemplateImportsPreV08(raw)
+
+  // Library purity (esm-spec §9.7.1): the two reference mechanisms are
+  // disjoint — a component/subsystem file is not importable as a library.
+  if (!isTemplateLibraryDoc(raw)) {
+    throw new ExpressionTemplateError(
+      'template_import_not_library',
+      `${origin}: import target '${ref}' lacks top-level \`expression_templates\` — not a template-library file (esm-spec §9.7.1)`,
+    )
+  }
+  for (const k of LIBRARY_FORBIDDEN_KEYS) {
+    if (isObject(raw) && k in raw) {
+      throw new ExpressionTemplateError(
+        'template_import_not_library',
+        `${origin}: import target '${ref}' declares \`${k}\` — not a pure template-library file (esm-spec §9.7.1)`,
+      )
+    }
+  }
+  if (opts.validateSchema) {
+    const schemaErrors = opts.validateSchema(raw)
+    if (schemaErrors.length > 0) {
+      throw new ExpressionTemplateError(
+        'template_import_unresolved',
+        `${origin}: import target '${ref}' failed schema validation: ${schemaErrors[0]!.path}: ${schemaErrors[0]!.message}`,
+      )
+    }
+  }
+
+  stack.push(canonical)
+  let scope: TemplateScope
+  try {
+    scope = processLibrary(raw, targetDir, stack, `${origin} -> ${ref}`, opts)
+  } finally {
+    stack.pop()
+  }
+
+  // Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
+  const values: Record<string, number> = {}
+  const bindingsRaw = entry.bindings
+  if (isObject(bindingsRaw)) {
+    for (const [name, v] of Object.entries(bindingsRaw)) {
+      if (!Object.prototype.hasOwnProperty.call(scope.metaparams, name)) {
+        throw new ExpressionTemplateError(
+          'template_import_unknown_name',
+          `${origin}: import of '${ref}' binds metaparameter '${name}', which the target neither declares nor re-exports (esm-spec §9.7.6)`,
+        )
+      }
+      values[name] = requireInt(v, `${origin}: import of '${ref}', binding '${name}'`)
+    }
+  }
+  if (Object.keys(values).length > 0) {
+    instantiateScope(scope, values, `${origin} -> ${ref}`)
+    for (const name of Object.keys(values)) {
+      delete scope.metaparams[name]
+    }
+  }
+
+  // `only` visibility filtering (esm-spec §9.7.2) — after the target's own
+  // internal wiring resolved in its own scope.
+  const onlyRaw = entry.only
+  if (Array.isArray(onlyRaw)) {
+    const keep = onlyRaw.map(String)
+    for (const n of keep) {
+      if (!Object.prototype.hasOwnProperty.call(scope.templates, n)) {
+        throw new ExpressionTemplateError(
+          'template_import_unknown_name',
+          `${origin}: \`only\` names template '${n}', which '${ref}' does not declare (esm-spec §9.7.2)`,
+        )
+      }
+    }
+    const keepSet = new Set(keep)
+    const filtered: JsonObject = {}
+    for (const [n, d] of Object.entries(scope.templates)) {
+      if (keepSet.has(n)) filtered[n] = d
+    }
+    scope.templates = filtered
+  }
+  return scope
+}
+
+/**
+ * Resolve a template-library document in its OWN scope: its imports
+ * (depth-first post-order), then its own templates / index sets /
+ * metaparameters appended in declaration order (esm-spec §9.7.4), then
+ * §9.7.3 body composition — so a BC-layer body reference to an imported
+ * interior stencil closes here, before any `only` filtering by a downstream
+ * importer.
+ */
+function processLibrary(
+  raw: unknown,
+  dir: string,
+  stack: string[],
+  origin: string,
+  opts: TemplateResolveOptions,
+): TemplateScope {
+  const scope = newScope()
+  if (isObject(raw) && Array.isArray(raw.expression_template_imports)) {
+    for (const entry of raw.expression_template_imports) {
+      const sub = resolveImportEntry(entry, dir, stack, origin, opts)
+      mergeScope(scope, sub, origin)
+    }
+  }
+
+  const own: JsonObject = {}
+  if (isObject(raw) && isObject(raw.expression_templates)) {
+    for (const [n, d] of Object.entries(raw.expression_templates)) {
+      own[n] = deepClone(d)
+    }
+  }
+  validateTemplates(own as never, origin)
+  for (const [n, d] of Object.entries(own)) {
+    mergeNamed(scope.templates, n, d, 'template_import_name_conflict', 'template', origin)
+  }
+
+  if (isObject(raw) && isObject(raw.index_sets)) {
+    for (const [n, d] of Object.entries(raw.index_sets)) {
+      mergeNamed(
+        scope.indexSets,
+        n,
+        deepClone(d),
+        'template_import_index_set_conflict',
+        'index set',
+        origin,
+      )
+    }
+  }
+
+  for (const [n, d] of Object.entries(collectMetaparamDecls(raw, origin))) {
+    mergeNamed(scope.metaparams, n, d, 'template_import_name_conflict', 'metaparameter', origin)
+  }
+
+  // §9.7.3 body composition in the library's own scope (decl objects are
+  // mutated in place, so scope.templates sees the closed bodies).
+  composeTemplateBodies(scope.templates as never, origin)
+  return scope
+}
+
+// ---------------------------------------------------------------------------
+// Root-document resolution (the load-time entry point)
+// ---------------------------------------------------------------------------
+
+function hasImportMachinery(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  if (
+    'expression_templates' in raw ||
+    'metaparameters' in raw ||
+    'expression_template_imports' in raw
+  ) {
+    return true
+  }
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = raw[compKind]
+    if (!isObject(comps)) continue
+    for (const comp of Object.values(comps)) {
+      if (isObject(comp) && 'expression_template_imports' in comp) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Resolve every esm-spec §9.7 construct of the ROOT document `rawData`
+ * (relative import refs resolve against `basePath`): imports recursively
+ * with per-edge instantiation, `index_sets` merge, metaparameter close
+ * (`options.metaparameters` is the loader-API binding site 4;
+ * already-closed edge bindings win, then API bindings, then defaults) and
+ * fold, expression-position substitution, and — for a root library file —
+ * §9.7.3 body composition.
+ *
+ * Returns an order-preserving plain-object tree ready for
+ * `lowerExpressionTemplates` with `expression_template_imports`,
+ * `metaparameters`, and top-level `expression_templates` consumed (Option A
+ * round-trip: none survives `parse → emit`), or `null` when the document
+ * carries no §9.7 machinery (the legacy fast path).
+ */
+export function resolveTemplateMachinery(
+  rawData: unknown,
+  basePath: string,
+  options: TemplateResolveOptions = {},
+): JsonObject | null {
+  const api: Record<string, number> = {}
+  for (const [k, v] of Object.entries(options.metaparameters ?? {})) {
+    api[k] = requireInt(v, `loader API metaparameter '${k}'`)
+  }
+
+  if (!hasImportMachinery(rawData)) {
+    if (Object.keys(api).length > 0) {
+      throw new ExpressionTemplateError(
+        'template_import_unknown_name',
+        `loader API binds metaparameter(s) ${Object.keys(api).sort().join(', ')} but the document declares none (esm-spec §9.7.6)`,
+      )
+    }
+    return null
+  }
+  const baseDir = basePath.replace(/\\/g, '/')
+  const root = deepClone(rawData) as JsonObject
+  const stack: string[] = []
+
+  const docMeta = collectMetaparamDecls(root, 'document')
+  let docIsets: JsonObject = {}
+  if (isObject(root.index_sets)) {
+    for (const [n, d] of Object.entries(root.index_sets)) {
+      docIsets[n] = d
+    }
+  }
+
+  // --- top-level templates + imports (root template-library file) ---
+  const isLibrary = 'expression_templates' in root
+  let topTemplates: JsonObject = {}
+  if (isLibrary) {
+    const topScope = newScope()
+    if (Array.isArray(root.expression_template_imports)) {
+      for (const entry of root.expression_template_imports) {
+        const sub = resolveImportEntry(entry, baseDir, stack, 'document', options)
+        mergeScope(topScope, sub, 'document')
+      }
+    }
+    const own: JsonObject = {}
+    if (isObject(root.expression_templates)) {
+      for (const [n, d] of Object.entries(root.expression_templates)) {
+        own[n] = d
+      }
+    }
+    validateTemplates(own as never, 'document')
+    for (const [n, d] of Object.entries(own)) {
+      mergeNamed(topScope.templates, n, d, 'template_import_name_conflict', 'template', 'document')
+    }
+    for (const [n, d] of Object.entries(topScope.indexSets)) {
+      mergeNamed(docIsets, n, d, 'template_import_index_set_conflict', 'index set', 'document')
+    }
+    for (const [n, d] of Object.entries(topScope.metaparams)) {
+      mergeNamed(docMeta, n, d, 'template_import_name_conflict', 'metaparameter', 'document')
+    }
+    topTemplates = topScope.templates
+  }
+
+  // --- per-component imports (models / reaction systems, esm-spec §9.7.2) ---
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      const imports = comp.expression_template_imports
+      if (imports === undefined) continue
+      const cscope = newScope()
+      const corigin = `${compKind}.${cname}`
+      if (Array.isArray(imports)) {
+        for (const entry of imports) {
+          const sub = resolveImportEntry(entry, baseDir, stack, corigin, options)
+          mergeScope(cscope, sub, corigin)
+        }
+      }
+      if (isObject(comp.expression_templates)) {
+        const own: JsonObject = {}
+        for (const [n, d] of Object.entries(comp.expression_templates)) {
+          own[n] = d
+        }
+        validateTemplates(own as never, corigin)
+        for (const [n, d] of Object.entries(own)) {
+          mergeNamed(cscope.templates, n, d, 'template_import_name_conflict', 'template', corigin)
+        }
+      }
+      for (const [n, d] of Object.entries(cscope.indexSets)) {
+        mergeNamed(docIsets, n, d, 'template_import_index_set_conflict', 'index set', corigin)
+      }
+      for (const [n, d] of Object.entries(cscope.metaparams)) {
+        mergeNamed(docMeta, n, d, 'template_import_name_conflict', 'metaparameter', corigin)
+      }
+      // The effective sequence (imports depth-first post-order, then local
+      // declarations) becomes the component's template block; plain-object
+      // key order IS the §9.6.3 declaration order.
+      comp.expression_templates = cscope.templates
+      delete comp.expression_template_imports
+    }
+  }
+
+  // --- close this document's metaparameters (§9.7.6 sites 4-5) ---
+  for (const k of Object.keys(api).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(docMeta, k)) {
+      throw new ExpressionTemplateError(
+        'template_import_unknown_name',
+        `loader API binds metaparameter '${k}', which the document does not declare (esm-spec §9.7.6)`,
+      )
+    }
+  }
+  const values: Record<string, number> = {}
+  const openNames: string[] = []
+  for (const [name, decl] of Object.entries(docMeta)) {
+    if (Object.prototype.hasOwnProperty.call(api, name)) {
+      values[name] = api[name]!
+    } else {
+      const d = isObject(decl) ? decl.default : undefined
+      if (d === undefined || d === null) {
+        openNames.push(name)
+      } else {
+        values[name] = asInt(d) as number
+      }
+    }
+  }
+  if (openNames.length > 0) {
+    throw new ExpressionTemplateError(
+      'metaparameter_unbound',
+      `metaparameter(s) ${openNames.join(', ')} still open after edge bindings, loader-API bindings, and defaults (esm-spec §9.7.6)`,
+    )
+  }
+
+  // --- §9.7.6 name-collision check: no shadowing of visible names ---
+  if (Object.keys(docMeta).length > 0) {
+    const visible = new Set<string>(Object.keys(docIsets))
+    for (const compKind of COMPONENT_KINDS) {
+      const comps = root[compKind]
+      if (!isObject(comps)) continue
+      for (const comp of Object.values(comps)) {
+        if (!isObject(comp)) continue
+        for (const blk of ['variables', 'species', 'parameters']) {
+          const b = comp[blk]
+          if (!isObject(b)) continue
+          for (const vn of Object.keys(b)) visible.add(vn)
+        }
+      }
+    }
+    for (const name of Object.keys(docMeta)) {
+      if (visible.has(name)) {
+        throw new ExpressionTemplateError(
+          'metaparameter_name_conflict',
+          `metaparameter '${name}' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)`,
+        )
+      }
+    }
+  }
+
+  // --- expression-position substitution of the closed values ---
+  if (Object.keys(values).length > 0) {
+    for (const compKind of COMPONENT_KINDS) {
+      const comps = root[compKind]
+      if (!isObject(comps)) continue
+      for (const comp of Object.values(comps)) {
+        if (!isObject(comp)) continue
+        for (const k of Object.keys(comp)) {
+          if (k === 'expression_templates' && isObject(comp[k])) {
+            const tpl = comp[k] as JsonObject
+            for (const [tn, td] of Object.entries(tpl)) {
+              tpl[tn] = substituteMetaparamsDecl(td, values)
+            }
+          } else {
+            comp[k] = substituteMetaparams(comp[k], values)
+          }
+        }
+      }
+    }
+    for (const [tn, td] of Object.entries(topTemplates)) {
+      topTemplates[tn] = substituteMetaparamsDecl(td, values)
+    }
+    const newIsets: JsonObject = {}
+    for (const [n, d] of Object.entries(docIsets)) {
+      newIsets[n] = substituteMetaparams(d, values)
+    }
+    docIsets = newIsets
+  }
+
+  // --- fold structural sites on the closed document ---
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    for (const [cname, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      foldStructuralSites(comp, `${compKind}.${cname}`)
+    }
+  }
+  for (const [tn, td] of Object.entries(topTemplates)) {
+    foldStructuralSites(td, `document.expression_templates.${tn}`)
+  }
+  foldIndexSetSizes(docIsets, 'document', true)
+
+  // --- root library file: compose bodies (validation), then strip; no §9.7
+  //     construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+  if (isLibrary) {
+    composeTemplateBodies(topTemplates as never, 'document')
+    delete root.expression_templates
+  }
+  delete root.expression_template_imports
+  delete root.metaparameters
+  if (Object.keys(docIsets).length > 0) root.index_sets = docIsets
+  return root
+}

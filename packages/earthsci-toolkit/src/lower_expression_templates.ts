@@ -52,6 +52,22 @@
  *   - apply_expression_template_version_too_old
  *   - apply_expression_template_invalid_declaration
  *   - rewrite_rule_nonterminating
+ *
+ * plus the esm-spec §9.7 template-library / metaparameter codes (§9.6.6,
+ * raised from `template_imports.ts` and `ref-loading.ts`):
+ *
+ *   - template_import_version_too_old
+ *   - template_import_unresolved
+ *   - template_import_not_library
+ *   - subsystem_ref_is_template_library
+ *   - template_import_cycle
+ *   - template_import_name_conflict
+ *   - template_import_unknown_name
+ *   - template_import_index_set_conflict
+ *   - template_body_expansion_too_deep
+ *   - metaparameter_unbound
+ *   - metaparameter_type_error
+ *   - metaparameter_name_conflict
  */
 
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
@@ -114,9 +130,10 @@ function rulePriority(decl: TemplateDecl): number {
 /**
  * Structural deep equality over the JSON AST, treating plain `number`
  * and tagged `NumericLiteral` leaves as equal when their numeric values
- * agree. Used for match-binding consistency and pattern literal checks.
+ * agree. Used for match-binding consistency, pattern literal checks, and
+ * the §9.7.4 / §9.7.5 deep-equal dedup of diamond imports.
  */
-function deepEqual(a: Json, b: Json): boolean {
+export function deepEqual(a: Json, b: Json): boolean {
   if (a === b) return true
   const av = numericValue(a)
   const bv = numericValue(b)
@@ -230,7 +247,10 @@ function substitute(body: Json, bindings: Record<string, Json>): Json {
   return body
 }
 
-/** Validate a template body contains no apply_expression_template nodes. */
+/**
+ * Reject `apply_expression_template` nodes inside a `match` pattern
+ * (esm-spec §9.7.3: match patterns MUST NOT reference templates).
+ */
 function assertNoNestedApply(body: Json, templateName: string, path: string): void {
   if (Array.isArray(body)) {
     for (let i = 0; i < body.length; i++) {
@@ -241,8 +261,8 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   if (isObject(body)) {
     if (body.op === APPLY_OP) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_recursive_body',
-        `expression_templates.${templateName}: body contains nested 'apply_expression_template' at ${path}; templates MUST NOT call other templates`,
+        'apply_expression_template_invalid_declaration',
+        `expression_templates.${templateName}: \`match\` contains an 'apply_expression_template' node at ${path}; match patterns MUST NOT reference templates (esm-spec §9.7.3)`,
       )
     }
     for (const k of Object.keys(body)) {
@@ -251,7 +271,7 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   }
 }
 
-function validateTemplates(templates: Templates, scope: string): void {
+export function validateTemplates(templates: Templates, scope: string): void {
   for (const [name, decl] of Object.entries(templates)) {
     if (!decl || typeof decl !== 'object') {
       throw new ExpressionTemplateError(
@@ -259,11 +279,13 @@ function validateTemplates(templates: Templates, scope: string): void {
         `${scope}.expression_templates.${name}: entry must be an object with params + body`,
       )
     }
+    // `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
+    // template is a named constant fragment (common in library files).
     const params = (decl as { params?: unknown }).params
-    if (!Array.isArray(params) || params.length === 0) {
+    if (!Array.isArray(params)) {
       throw new ExpressionTemplateError(
         'apply_expression_template_invalid_declaration',
-        `${scope}.expression_templates.${name}: 'params' must be a non-empty array of strings`,
+        `${scope}.expression_templates.${name}: 'params' must be an array of strings`,
       )
     }
     const seen = new Set<string>()
@@ -288,8 +310,12 @@ function validateTemplates(templates: Templates, scope: string): void {
         `${scope}.expression_templates.${name}: 'body' is required`,
       )
     }
-    const body = (decl as { body: Json }).body
-    assertNoNestedApply(body, name, '/body')
+    // A body MAY reference other match-less in-scope templates via
+    // apply_expression_template nodes (esm-spec §9.7.3); those are checked
+    // (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and inlined at
+    // registration by `composeTemplateBodies` — the old any-nesting rejection
+    // is now cycle-only (`apply_expression_template_recursive_body`).
+    //
     // esm-spec §9.6.3: nontermination is NOT checked statically any more — the
     // bounded fixpoint (`MAX_REWRITE_PASSES`) is the authoritative guard, so a
     // self-reintroducing rule is rejected (`rewrite_rule_nonterminating`) only
@@ -299,6 +325,133 @@ function validateTemplates(templates: Templates, scope: string): void {
     if (match !== undefined) {
       assertNoNestedApply(match, name, '/match')
     }
+  }
+}
+
+/**
+ * Maximum template-body reference-chain depth (counted in TEMPLATES along the
+ * longest chain, so a 33-template chain is rejected while a 32-template chain
+ * is accepted) before a file is rejected with
+ * `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
+ * across all bindings.
+ */
+export const MAX_TEMPLATE_EXPANSION_DEPTH = 32
+
+/** Collect the `name`s of every `apply_expression_template` node in a tree. */
+function collectApplyNames(x: Json, out: string[]): string[] {
+  if (Array.isArray(x)) {
+    for (const c of x) collectApplyNames(c, out)
+    return out
+  }
+  if (isObject(x)) {
+    if (x.op === APPLY_OP && typeof x.name === 'string') out.push(x.name)
+    for (const k of Object.keys(x)) collectApplyNames(x[k], out)
+  }
+  return out
+}
+
+/**
+ * Inline every `apply_expression_template` node in `node` against
+ * `templates`, post-order (so the bindings' own sub-ASTs are inlined first).
+ * Referenced bodies are already closed when this runs in topological order,
+ * so a single `expandApply` produces an apply-free subtree.
+ */
+function inlineApplies(node: Json, templates: Templates, scope: string): Json {
+  if (Array.isArray(node)) {
+    return node.map((c) => inlineApplies(c, templates, scope))
+  }
+  if (!isObject(node)) return node
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(node)) {
+    out[k] = inlineApplies(node[k], templates, scope)
+  }
+  if (out.op === APPLY_OP) {
+    return expandApply(out, templates, scope)
+  }
+  return out
+}
+
+/**
+ * Registration-time body composition (esm-spec §9.7.3): template bodies MAY
+ * reference other in-scope MATCH-LESS templates via `apply_expression_template`
+ * nodes. Builds the body-reference graph, rejects cycles
+ * (`apply_expression_template_recursive_body`) and chains deeper than
+ * `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`),
+ * then inlines dependencies-first by pure substitution — confluent, so
+ * topological order cannot affect the result. Afterwards every `body` is a
+ * closed Expression AST with zero `apply_expression_template` nodes; runs
+ * BEFORE the §9.6.3 fixpoint ever consults a `match` rule. Mutates the decl
+ * objects in `templates` in place.
+ */
+export function composeTemplateBodies(templates: Templates, scope: string): void {
+  const names = Object.keys(templates)
+  if (names.length === 0) return
+  const refs: Record<string, string[]> = {}
+  let anyRefs = false
+  for (const name of names) {
+    refs[name] = collectApplyNames((templates[name] as { body?: Json }).body, [])
+    if (refs[name]!.length > 0) anyRefs = true
+  }
+  if (!anyRefs) return
+
+  for (const name of [...names].sort()) {
+    for (const r of refs[name]!) {
+      const tdecl = templates[r]
+      if (!tdecl) {
+        throw new ExpressionTemplateError(
+          'apply_expression_template_unknown_template',
+          `${scope}.expression_templates.${name}: body references undeclared template '${r}' (esm-spec §9.7.3)`,
+        )
+      }
+      if ((tdecl as { match?: Json }).match !== undefined) {
+        throw new ExpressionTemplateError(
+          'apply_expression_template_unknown_template',
+          `${scope}.expression_templates.${name}: body references '${r}', a \`match\` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)`,
+        )
+      }
+    }
+  }
+
+  // DFS over the reference graph: cycle detection, chain-depth bound, and a
+  // dependencies-first (post-) order for inlining.
+  const state: Record<string, number> = {} // 1 = on stack, 2 = done
+  const depth: Record<string, number> = {} // templates on the longest chain
+  const order: string[] = []
+  const chain: string[] = []
+  const visit = (name: string): number => {
+    const st = state[name] ?? 0
+    if (st === 1) {
+      const cyc = [...chain.slice(chain.indexOf(name)), name]
+      throw new ExpressionTemplateError(
+        'apply_expression_template_recursive_body',
+        `${scope}.expression_templates: template-body reference cycle ${cyc.join(' -> ')} (esm-spec §9.7.3)`,
+      )
+    }
+    if (st === 2) return depth[name]!
+    state[name] = 1
+    chain.push(name)
+    let d = 1
+    for (const r of refs[name]!) {
+      d = Math.max(d, 1 + visit(r))
+    }
+    chain.pop()
+    state[name] = 2
+    depth[name] = d
+    if (d > MAX_TEMPLATE_EXPANSION_DEPTH) {
+      throw new ExpressionTemplateError(
+        'template_body_expansion_too_deep',
+        `${scope}.expression_templates.${name}: body-reference chain of ${d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=${MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)`,
+      )
+    }
+    order.push(name)
+    return d
+  }
+  for (const name of [...names].sort()) visit(name)
+
+  for (const name of order) {
+    if (refs[name]!.length === 0) continue
+    const decl = templates[name] as { body: Json }
+    decl.body = inlineApplies(decl.body, templates, `${scope}.expression_templates.${name}`)
   }
 }
 
@@ -576,6 +729,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
           all[tname] = tdecl as TemplateDecl
         }
         validateTemplates(all, `${compKind}.${compName}`)
+        // Registration-time body composition (esm-spec §9.7.3): inline body
+        // references to match-less in-scope templates as a statically-checked
+        // acyclic DAG, so every rule body the fixpoint sees is a closed AST.
+        composeTemplateBodies(all, `${compKind}.${compName}`)
         // Object key order in JS preserves declaration order, so the
         // enumeration index IS the authored declaration order.
         let declIndex = 0

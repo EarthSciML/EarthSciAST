@@ -6,7 +6,7 @@
  */
 
 /**
- * EarthSciML Serialization Format (v0.8.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops.
+ * EarthSciML Serialization Format (v0.8.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.
  */
 export type ESMFormat = ESMFormat1 & ESMFormat2;
 export type ESMFormat1 = {
@@ -137,12 +137,12 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   semiring?: "sum_product" | "max_product" | "min_sum" | "max_sum" | "bool_and_or";
   /**
-   * For aggregate: optional map from index symbol name to the range it iterates over. Each value is EITHER (a) a dense integer tuple — a 2-element array [start, stop] (unit step) or a 3-element array [start, step, stop], as today, mirroring SymbolicUtils.ArrayOp.ranges; OR (b) a reference to a declared index set (RFC semiring-faq-unified-ir §5.2): an object { "from": <index_sets key> }, optionally with "of": [parent index names] for a ragged / dependent inner set (e.g. the edges of cell "i"). Indices not present are inferred from the domain / operand shapes at runtime.
+   * For aggregate: optional map from index symbol name to the range it iterates over. Each value is EITHER (a) a dense integer tuple — a 2-element array [start, stop] (unit step) or a 3-element array [start, step, stop], as today, mirroring SymbolicUtils.ArrayOp.ranges — entries MAY be metaparameter expressions folded to concrete integers at load (esm-spec §9.7.6); OR (b) a reference to a declared index set (RFC semiring-faq-unified-ir §5.2): an object { "from": <index_sets key> }, optionally with "of": [parent index names] for a ragged / dependent inner set (e.g. the edges of cell "i"). Indices not present are inferred from the domain / operand shapes at runtime.
    */
   ranges?: {
     [k: string]:
-      | [number, number]
-      | [number, number, number]
+      | [MetaparameterExpression, MetaparameterExpression]
+      | [MetaparameterExpression, MetaparameterExpression, MetaparameterExpression]
       | {
           /**
            * Name of a declared index set: a key in the document-scoped top-level index_sets registry. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set.
@@ -186,9 +186,12 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   manifold?: "planar" | "spherical" | "geodesic";
   /**
-   * For makearray: list of sub-region boxes of the output array. Each region is an array of [start, stop] pairs, one per output dimension. The nth region is filled with the nth entry of values. Overlapping regions are permitted; later regions overwrite earlier ones. Mirrors SymbolicUtils.ArrayMaker.regions.
+   * For makearray: list of sub-region boxes of the output array. Each region is an array of [start, stop] pairs, one per output dimension. The nth region is filled with the nth entry of values. Overlapping regions are permitted; later regions overwrite earlier ones. Bound pairs MAY be metaparameter expressions folded to concrete integers at load (esm-spec §9.7.6). Mirrors SymbolicUtils.ArrayMaker.regions.
    */
-  regions?: [[number, number], ...[number, number][]][];
+  regions?: [
+    [MetaparameterExpression, MetaparameterExpression],
+    ...[MetaparameterExpression, MetaparameterExpression][]
+  ][];
   /**
    * For makearray: list of expressions, one per entry in regions. Each value may be a scalar expression (broadcast across the region) or an array-valued expression whose shape matches the region (excluding singleton dimensions). Mirrors SymbolicUtils.ArrayMaker.values.
    */
@@ -249,6 +252,19 @@ export type ExpressionNode1 = {
  * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
  */
 export type Expression = number | string | ExpressionNode1;
+/**
+ * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.
+ */
+export type MetaparameterExpression =
+  | number
+  | string
+  | {
+      op: "+" | "-" | "*" | "/";
+      /**
+       * @minItems 1
+       */
+      args: [MetaparameterExpression, ...MetaparameterExpression[]];
+    };
 /**
  * Fires when a boolean condition is true at end of a timestep, or at preset/periodic times. Maps to MTK SymbolicDiscreteCallback.
  */
@@ -541,9 +557,18 @@ export type IndexSet = IndexSet1 & {
    */
   kind: "interval" | "categorical" | "derived" | "ragged";
   /**
-   * interval: number of members in the dense interval (the grid-axis length). Required when kind is "interval".
+   * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.
    */
-  size?: number;
+  size?:
+    | number
+    | string
+    | {
+        op: "+" | "-" | "*" | "/";
+        /**
+         * @minItems 1
+         */
+        args: [MetaparameterExpression, ...MetaparameterExpression[]];
+      };
   /**
    * categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is "categorical".
    */
@@ -616,6 +641,17 @@ export interface ESMFormat2 {
   index_sets?: {
     [k: string]: IndexSet;
   };
+  /**
+   * Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).
+   */
+  expression_templates?: {
+    [k: string]: ExpressionTemplate;
+  };
+  /**
+   * Ordered imports of template-library files at document top level — only valid in a library file layering on other libraries (esm-spec §9.7.2). Models and reaction systems carry their own `expression_template_imports` field.
+   */
+  expression_template_imports?: TemplateImport[];
+  metaparameters?: Metaparameters;
 }
 /**
  * Authorship, provenance, and description.
@@ -728,6 +764,10 @@ export interface Model {
   expression_templates?: {
     [k: string]: ExpressionTemplate;
   };
+  /**
+   * Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).
+   */
+  expression_template_imports?: TemplateImport[];
 }
 /**
  * An equation: lhs = rhs (or lhs ~ rhs in MTK notation).
@@ -925,6 +965,12 @@ export interface SubsystemRef {
    * Optional model selector. When the referenced file defines more than one top-level model, names which one to splice in. Omit for single-model files. Lets a multi-model component library (e.g. an ESD regridder file holding several kernels) be referenced by one of its models.
    */
   model?: string;
+  /**
+   * Integer bindings closing the referenced document's metaparameters (esm-spec §9.7.6), e.g. a convergence wrapper instantiating a problem file at a given grid size.
+   */
+  bindings?: {
+    [k: string]: number;
+  };
 }
 /**
  * Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own.
@@ -1099,15 +1145,15 @@ export interface PlotSeries {
   variable: string;
 }
 /**
- * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. Bodies MUST NOT contain `apply_expression_template` nodes (no template-calls-template); bindings reject this with 'apply_expression_template_recursive_body'.
+ * A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes.
  */
 export interface ExpressionTemplate {
   /**
-   * Ordered list of parameter (metavariable) names. MUST be unique within this template. Each name occurs zero or more times inside `body` and (when present) `match`; for an explicitly-invoked template every name MUST also appear as a key in every `apply_expression_template.bindings` referencing it.
+   * Ordered list of parameter (metavariable) names. MUST be unique within this template; MAY be empty (a zero-parameter template is a named constant fragment, common in library files). Each name occurs zero or more times inside `body` and (when present) `match`; for an explicitly-invoked template every name MUST also appear as a key in every `apply_expression_template.bindings` referencing it.
    *
-   * @minItems 1
+   * @minItems 0
    */
-  params: [string, ...string[]];
+  params: string[];
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
@@ -1121,6 +1167,27 @@ export interface ExpressionTemplate {
    */
   body: number | string | ExpressionNode1;
   description?: string;
+}
+/**
+ * One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope.
+ */
+export interface TemplateImport {
+  /**
+   * Path or URL of a template-library file, per the §4.7 reference-format table.
+   */
+  ref: string;
+  /**
+   * Template names to import; absent = all.
+   *
+   * @minItems 1
+   */
+  only?: [string, ...string[]];
+  /**
+   * Integer bindings closing the target document's metaparameters at this edge.
+   */
+  bindings?: {
+    [k: string]: number;
+  };
 }
 /**
  * A reaction network — declarative representation of chemical or biological reactions.
@@ -1176,6 +1243,10 @@ export interface ReactionSystem {
   expression_templates?: {
     [k: string]: ExpressionTemplate;
   };
+  /**
+   * Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).
+   */
+  expression_template_imports?: TemplateImport[];
 }
 /**
  * A reactive species in a reaction system.
@@ -1445,4 +1516,20 @@ export interface FunctionTableAxis {
    * @minItems 2
    */
   values: [number, number, ...number[]];
+}
+/**
+ * Document-scoped named integers bound at load (esm-spec §9.7.6): at import/subsystem edges via `bindings`, at the loader API for the root document, or by `default`. Admissible — as names or `{op, args}` integer expressions — in `index_sets` interval sizes, `aggregate` dense ranges, and `makearray` regions (folded exactly at load), and substituted as integer literals in ordinary expression positions. A metaparameter name MUST NOT collide with any visible variable/parameter/species/index-set name (`metaparameter_name_conflict`).
+ */
+export interface Metaparameters {
+  [k: string]: {
+    /**
+     * The only v1 metaparameter kind.
+     */
+    type: "integer";
+    /**
+     * Fallback applied at root resolution, after edge and loader-API bindings; a still-open metaparameter with no default is `metaparameter_unbound`.
+     */
+    default?: number;
+    description?: string;
+  };
 }

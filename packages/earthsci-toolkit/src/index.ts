@@ -114,7 +114,17 @@ export {
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
   ExpressionTemplateError,
+  MAX_TEMPLATE_EXPANSION_DEPTH,
 } from './lower_expression_templates.js'
+
+// Template-library imports + load-time metaparameters (esm-spec §9.7 /
+// docs/content/rfcs/template-library-imports.md).
+export {
+  resolveTemplateMachinery,
+  rejectTemplateImportsPreV08,
+  isTemplateLibraryDoc,
+} from './template_imports.js'
+export type { TemplateResolveOptions } from './template_imports.js'
 
 // Package metadata
 export const VERSION = '0.1.0'

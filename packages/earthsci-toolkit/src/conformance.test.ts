@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, dirname } from 'path';
 import {
   load,
   save,
@@ -94,17 +94,31 @@ describe('Conformance Test Suite', () => {
     const validFiles = findEsmFiles(join(testsDir, 'valid'));
 
     it.each(validFiles)('should round-trip %s', (filePath) => {
-      // Load original file
+      // Load original file. `basePath` anchors relative
+      // expression_template_imports refs (esm-spec §9.7.2).
       const originalContent = readFileSync(filePath, 'utf-8');
-      const original = load(originalContent);
+      const basePath = dirname(filePath);
+      const original = load(originalContent, { basePath });
+
+      // A pure template-library file (top-level expression_templates,
+      // esm-spec §9.7.1) loads clean, but its §9.7 payload does not survive
+      // parse → emit (Option A round-trip, §9.7.6) — the emitted registry
+      // document carries no models/reaction_systems/data_loaders payload and
+      // is not a standalone loadable file, exactly as in the Julia reference.
+      // Assert load-clean only.
+      const rawView = JSON.parse(originalContent) as Record<string, unknown>;
+      if ('expression_templates' in rawView) {
+        expect(original).toBeDefined();
+        return;
+      }
 
       // Save and reload
       const serialized = save(original);
-      const reloaded = load(serialized);
+      const reloaded = load(serialized, { basePath });
 
       // Second round-trip to ensure stability
       const secondSerialized = save(reloaded);
-      const secondReloaded = load(secondSerialized);
+      const secondReloaded = load(secondSerialized, { basePath });
 
       // Verify load(save(load(file))) produces identical parsed result
       expect(secondReloaded).toEqual(original);

@@ -15,6 +15,10 @@ import {
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
 } from './lower_expression_templates.js'
+import {
+  rejectTemplateImportsPreV08,
+  resolveTemplateMachinery,
+} from './template_imports.js'
 import { schema } from './embedded-schema.js'
 
 /**
@@ -461,6 +465,28 @@ export interface LoadOptions {
    * run `losslessJsonParse` themselves before passing the object in).
    */
   canonical?: boolean
+
+  /**
+   * Directory anchoring relative `expression_template_imports` refs
+   * (esm-spec §9.7.2). Defaults to the current working directory. Callers
+   * loading from a known file path should pass that file's directory.
+   */
+  basePath?: string | undefined
+
+  /**
+   * Loader-API metaparameter bindings for the root document
+   * (esm-spec §9.7.6 binding site 4): name → integer. Already-closed edge
+   * bindings win; API bindings beat `default`s. Binding a name the
+   * document does not declare raises `template_import_unknown_name`.
+   */
+  metaparameters?: Record<string, number> | undefined
+
+  /**
+   * Synchronous file reader used to resolve template-library import refs.
+   * Defaults to Node's `fs.readFileSync` (via `process.getBuiltinModule`);
+   * browser hosts that need template imports must supply their own.
+   */
+  readFile?: ((path: string) => string) | undefined
 }
 
 /**
@@ -508,6 +534,11 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   // sees the version hint instead of a generic "extra property" error.
   rejectExpressionTemplatesPreV04(validationView)
 
+  // Step 2c: v0.8.0 §9.7 constructs (expression_template_imports, top-level
+  // expression_templates, metaparameters) are rejected when the file
+  // declares esm < 0.8.0 (esm-spec §9.6.5).
+  rejectTemplateImportsPreV08(validationView)
+
   // Step 3: Schema validation with version compatibility
   const schemaErrors = validateSchemaWithVersionCompatibility(validationView)
   if (schemaErrors.length > 0) {
@@ -517,11 +548,23 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
     )
   }
 
-  // Step 3a: Expand all `apply_expression_template` ops at load time
-  // (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). After this
-  // pass, the file's expression trees contain no apply_expression_template
-  // nodes and no `expression_templates` blocks — downstream consumers see
-  // only normal Expression ASTs (Option A round-trip).
+  // Step 3a: Resolve esm-spec §9.7 machinery first — template-library
+  // imports (depth-first post-order, per-edge metaparameter instantiation),
+  // index_sets merge, metaparameter close+fold — then expand
+  // `apply_expression_template` ops / fire `match` rules to the §9.6.3
+  // fixpoint. After both passes the tree carries no
+  // apply_expression_template nodes, no `expression_templates` blocks, no
+  // imports, and no metaparameters — downstream consumers see only normal
+  // Expression ASTs (Option A round-trip).
+  const basePath =
+    options?.basePath ??
+    (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.')
+  const resolved = resolveTemplateMachinery(data, basePath, {
+    metaparameters: options?.metaparameters,
+    readFile: options?.readFile,
+    validateSchema,
+  })
+  if (resolved !== null) data = resolved
   data = lowerExpressionTemplates(data as object)
 
   // Step 4: Clean up unknown fields for forward compatibility and type coercion

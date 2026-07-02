@@ -10,6 +10,17 @@
  */
 
 import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
+import {
+  ExpressionTemplateError,
+  lowerExpressionTemplates,
+  rejectExpressionTemplatesPreV04,
+} from './lower_expression_templates.js'
+import {
+  isTemplateLibraryDoc,
+  rejectTemplateImportsPreV08,
+  resolveTemplateMachinery,
+} from './template_imports.js'
+import { validateSchema } from './parse.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -82,6 +93,70 @@ export async function resolveSubsystemRefs(
 }
 
 /**
+ * Read the optional metaparameter `bindings` off a `{ ref, bindings }`
+ * subsystem entry (esm-spec §9.7.6 binding site 3). Values MUST be
+ * integers (`metaparameter_type_error` otherwise).
+ */
+function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<string, number> {
+  const out: Record<string, number> = {}
+  const raw = sub.bindings
+  if (raw === undefined || raw === null) return out
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `subsystems.${subName}: \`bindings\` must be an object of integers (esm-spec §9.7.6)`,
+    )
+  }
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v !== 'number' || !Number.isInteger(v)) {
+      throw new ExpressionTemplateError(
+        'metaparameter_type_error',
+        `subsystems.${subName}: binding '${k}' is not an integer (esm-spec §9.7.6)`,
+      )
+    }
+    out[k] = v
+  }
+  return out
+}
+
+/**
+ * Post-parse handling shared by model / reaction-system ref resolution:
+ *
+ * 1. A §4.7 subsystem ref MUST NOT target a template-library file — the two
+ *    reference mechanisms are disjoint (`subsystem_ref_is_template_library`,
+ *    esm-spec §9.7.1).
+ * 2. The referenced document's §9.7 machinery (template imports and
+ *    metaparameters) is resolved in the referenced file's own directory,
+ *    closed with this edge's `bindings` (esm-spec §9.7.6 binding site 3),
+ *    and lowered to the §9.6.3 fixpoint before the single component is
+ *    extracted and inlined.
+ */
+function resolveRefDocument(
+  parsed: EsmFile,
+  ref: string,
+  refBasePath: string,
+  bindings: Record<string, number>,
+): EsmFile {
+  if (isTemplateLibraryDoc(parsed)) {
+    throw new ExpressionTemplateError(
+      'subsystem_ref_is_template_library',
+      `Subsystem ref '${ref}' targets a template-library file; libraries are imported via expression_template_imports (esm-spec §9.7.1)`,
+    )
+  }
+  rejectExpressionTemplatesPreV04(parsed)
+  rejectTemplateImportsPreV08(parsed)
+  // `resolveTemplateMachinery` returns null when the document carries no
+  // §9.7 machinery (and rejects non-empty bindings against such a document
+  // with `template_import_unknown_name`).
+  const resolved = resolveTemplateMachinery(parsed, refBasePath, {
+    metaparameters: bindings,
+    validateSchema,
+  })
+  if (resolved === null) return parsed
+  return lowerExpressionTemplates(resolved) as EsmFile
+}
+
+/**
  * Recursively resolve refs in a Model's subsystems.
  */
 async function resolveModelRefs(
@@ -97,7 +172,7 @@ async function resolveModelRefs(
   if (!('subsystems' in model) || !model.subsystems) return
 
   for (const [subName, subsystem] of Object.entries(model.subsystems)) {
-    const sub = subsystem as Model & { ref?: string }
+    const sub = subsystem as Model & { ref?: string; bindings?: unknown }
     if (sub.ref) {
       const ref = sub.ref
       const chainKey = normalizeRef(ref, basePath)
@@ -111,7 +186,13 @@ async function resolveModelRefs(
 
       try {
         const content = await loadRef(ref, basePath)
-        const parsed = JSON.parse(content) as EsmFile
+        const refBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
+        const parsed = resolveRefDocument(
+          JSON.parse(content) as EsmFile,
+          ref,
+          refBasePath,
+          readEdgeBindings(sub, subName),
+        )
 
         // Extract the first model from the referenced file
         if (parsed.models) {
@@ -122,13 +203,11 @@ async function resolveModelRefs(
             // Replace the ref subsystem with the resolved model content
             model.subsystems![subName] = resolvedModel
 
-            // Compute new basePath for recursive resolution
-            const newBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
-
-            // Recursively resolve any refs in the resolved model
+            // Recursively resolve any refs in the resolved model, relative
+            // to the referenced file's own directory
             await resolveModelRefs(
               resolvedModel,
-              newBasePath,
+              refBasePath,
               visited,
               resolving,
               [...refChain, subName]
@@ -172,7 +251,7 @@ async function resolveReactionSystemRefs(
   if (!rs.subsystems) return
 
   for (const [subName, subsystem] of Object.entries(rs.subsystems)) {
-    const sub = subsystem as ReactionSystem & { ref?: string }
+    const sub = subsystem as ReactionSystem & { ref?: string; bindings?: unknown }
     if (sub.ref) {
       const ref = sub.ref
       const chainKey = normalizeRef(ref, basePath)
@@ -186,7 +265,13 @@ async function resolveReactionSystemRefs(
 
       try {
         const content = await loadRef(ref, basePath)
-        const parsed = JSON.parse(content) as EsmFile
+        const refBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
+        const parsed = resolveRefDocument(
+          JSON.parse(content) as EsmFile,
+          ref,
+          refBasePath,
+          readEdgeBindings(sub, subName),
+        )
 
         // Extract the first reaction system from the referenced file
         if (parsed.reaction_systems) {
@@ -197,13 +282,11 @@ async function resolveReactionSystemRefs(
             // Replace the ref subsystem with the resolved reaction system content
             rs.subsystems![subName] = resolvedRs
 
-            // Compute new basePath for recursive resolution
-            const newBasePath = isRemoteRef(ref) ? getRemoteBase(ref) : getLocalBase(ref, basePath)
-
-            // Recursively resolve any refs in the resolved system
+            // Recursively resolve any refs in the resolved system, relative
+            // to the referenced file's own directory
             await resolveReactionSystemRefs(
               resolvedRs,
-              newBasePath,
+              refBasePath,
               visited,
               resolving,
               [...refChain, subName]
