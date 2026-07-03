@@ -271,6 +271,14 @@ pub struct BuildInspection {
     pub setup_arrays: HashMap<String, ArrayD<f64>>,
     /// Resolved observed body expressions, keyed like `setup_arrays`.
     pub observed_exprs: HashMap<String, Expr>,
+    /// Resolved SCALAR parameter values (model defaults with any overrides
+    /// applied), keyed by (flattened) parameter name. Load-time constants, so a
+    /// build-time cellwise evaluation (a §6.6.5 analytic `reference`,
+    /// coordinate-expression `ic` seeding) may bind them into scope — STATE
+    /// stays out. The observed-assertion form already binds them (a state-free
+    /// observed is materialized into `setup_arrays` with these values); `params`
+    /// exposes the same map for the reference / `ic` positions.
+    pub params: HashMap<String, f64>,
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
@@ -1621,7 +1629,10 @@ impl ArrayCompiled {
     /// provider-seeded forcing buffer and folded into the lifted grid state's cells
     /// (column-major, matching the slot enumeration in [`Self::from_model`]); a
     /// constant RHS broadcasts to every cell. Empty on the non-`ic` path.
-    fn resolve_field_ics(&self) -> Result<HashMap<usize, f64>, SimulateError> {
+    fn resolve_field_ics(
+        &self,
+        params: &HashMap<String, f64>,
+    ) -> Result<HashMap<usize, f64>, SimulateError> {
         let mut out: HashMap<usize, f64> = HashMap::new();
         if self.field_ics.is_empty() {
             return Ok(out);
@@ -1641,7 +1652,14 @@ impl ArrayCompiled {
                 let slot = vs.flat_offset + flat;
                 out.insert(
                     slot,
-                    resolve_field_ic_cell(target, rhs, &multi, &forcing, &self.index_sets)?,
+                    resolve_field_ic_cell(
+                        target,
+                        rhs,
+                        &multi,
+                        &forcing,
+                        &self.index_sets,
+                        params,
+                    )?,
                 );
             }
         }
@@ -1704,7 +1722,16 @@ impl ArrayCompiled {
         // the provider-seeded forcing buffer (DESIGN pde_simulation_pipeline §2 R2).
         // Priority per slot: explicit `initial_conditions` override > loaded field
         // ic > variable default.
-        let field_ic_map = self.resolve_field_ics()?;
+        // Resolved scalar-parameter scope (load-time constants) for the ic
+        // coordinate-expression path — a parameter-dependent grid-geometry
+        // template (`x0 + (i − 1/2)·dx`) binds here; STATE is not in scope.
+        let resolved_params: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(param_vec.iter().copied())
+            .collect();
+        let field_ic_map = self.resolve_field_ics(&resolved_params)?;
         let mut ic_vec = vec![0.0f64; n_states];
         for (i, name) in self.scalar_state_names.iter().enumerate() {
             if let Some(&v) = initial_conditions.get(name) {
@@ -1972,6 +1999,13 @@ impl ArrayCompiled {
         param_vec: &[f64],
         t0: f64,
     ) {
+        // Resolved scalar parameters (load-time constants) so the reference /
+        // ic positions can bind them into a build-time cellwise evaluation,
+        // matching the observed-assertion form (materialized below with the
+        // same `param_vec`).
+        for (i, name) in self.param_names.iter().enumerate() {
+            insp.params.insert(name.clone(), param_vec[i]);
+        }
         let sa = build_state_arrays(&self.var_shapes, ic_vec);
         let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let obs = materialize_observeds(
@@ -2018,16 +2052,29 @@ impl ArrayCompiled {
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
 /// (pre-compile) expression evaluates exactly as an equation expression does
-/// after [`crate::aggregate::resolve_aggregate_ranges`]. State references are
-/// not in scope — the context carries no states. Mirrors the Python
-/// `_eval_buildtime_field` / Julia `_eval_cellwise` machinery.
+/// after [`crate::aggregate::resolve_aggregate_ranges`].
+///
+/// STATE references are not in scope — the context carries no states. Model
+/// PARAMETERS (load-time constants) ARE in scope when supplied via `params`
+/// (name → value): a parameter-dependent coordinate expression / reference then
+/// resolves (esm-spec §6.6.5). Mirrors the Python `_eval_buildtime_field` /
+/// Julia `_eval_cellwise` machinery.
 pub(crate) fn eval_buildtime_field(
     expr: &Expr,
     index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
 ) -> Result<Value, CompileError> {
     let mut resolved = expr.clone();
     crate::aggregate::resolve_expr_ranges(&mut resolved, index_sets)?;
-    Ok(eval_expression(&resolved, &HashMap::new(), &[], &[], 0.0))
+    let param_names: Vec<String> = params.keys().cloned().collect();
+    let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
+    Ok(eval_expression(
+        &resolved,
+        &HashMap::new(),
+        &param_vec,
+        &param_names,
+        0.0,
+    ))
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -2054,6 +2101,7 @@ fn resolve_field_ic_cell(
     cell: &[usize],
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
@@ -2076,14 +2124,15 @@ fn resolve_field_ic_cell(
     // outside the scalar interpreter (an `aggregate` grid-geometry node) as
     // NaN rather than erroring, and a NaN must fall through to the
     // coordinate-expression path — never silently seed the state vector.
-    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, &HashMap::new())
+    if let Ok(c) = crate::simulate::fold_constant_expr(rhs, params)
         && c.is_finite()
     {
         return Ok(c);
     }
-    // (3) Coordinate expression over grid-geometry aggregates.
+    // (3) Coordinate expression over grid-geometry aggregates (model
+    // parameters — e.g. a free-name geometry `x0`/`dx` — bind via `params`).
     if let Expr::Operator(_) = rhs {
-        match eval_buildtime_field(rhs, index_sets) {
+        match eval_buildtime_field(rhs, index_sets, params) {
             Ok(Value::Scalar(s)) if s.is_finite() => return Ok(s),
             Ok(Value::Array(arr)) => {
                 if arr.ndim() != cell.len() {

@@ -320,7 +320,10 @@ fn cmd_convergence(
         let field: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         let cell_tuples: Vec<Vec<i64>> = cells.iter().map(|(c, _)| c.clone()).collect();
         let index_sets = file.index_sets.clone().unwrap_or_default();
-        let reference_field = evaluate_cellwise(&reference, &cell_tuples, &index_sets)?;
+        // Analytic convergence reference over domain dimensions (no parameters).
+        let no_params: HashMap<String, f64> = HashMap::new();
+        let reference_field =
+            evaluate_cellwise(&reference, &cell_tuples, &index_sets, &no_params)?;
         let mut row = serde_json::Map::new();
         row.insert("n".to_string(), json!(n));
         for norm in &norms {
