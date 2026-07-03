@@ -27,6 +27,7 @@ Design notes
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -574,10 +575,14 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
         return _SCALAR_FUNCS[op](v)
     if op == "min":
         vals = [eval_expr(a, ctx) for a in expr.args]
-        return np.minimum.reduce(vals) if len(vals) > 1 else vals[0]
+        # Pairwise reduce (not ufunc.reduce): `np.minimum.reduce` stacks the
+        # operand list into one array first, which fails on mixed array/scalar
+        # operands (e.g. `min(field[l], scalar)`); pairwise reduction broadcasts
+        # each step, keeping array operands array-valued.
+        return functools.reduce(np.minimum, vals) if len(vals) > 1 else vals[0]
     if op == "max":
         vals = [eval_expr(a, ctx) for a in expr.args]
-        return np.maximum.reduce(vals) if len(vals) > 1 else vals[0]
+        return functools.reduce(np.maximum, vals) if len(vals) > 1 else vals[0]
     if op == "ifelse":
         if len(expr.args) != 3:
             raise NumpyInterpreterError("ifelse expects 3 args")

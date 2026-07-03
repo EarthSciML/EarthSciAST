@@ -70,6 +70,35 @@ def test_scalar_arithmetic_and_elementary_funcs() -> None:
     assert eval_expr(expr, ctx) == pytest.approx(3.0 * 2.0 + 0.0 + 4.0)
 
 
+def test_max_min_broadcast_array_and_scalar() -> None:
+    """``max``/``min`` of an array field against a scalar broadcast elementwise.
+
+    Regression: the interpreter used ``np.maximum.reduce(vals)`` /
+    ``np.minimum.reduce(vals)``, which stack the operand list into one array
+    first and fail with "setting an array element with a sequence
+    (inhomogeneous shape)" when operands have mixed shapes — exactly the
+    ``max(h[l], h_min)`` floor a multi-array-state PDE RHS evaluates every
+    step. Pairwise reduction broadcasts instead, keeping the field array-valued.
+    """
+    ctx = _ctx({"h": np.array([1.0e-6, 2.0e-3, 5.0e-4])})
+    np.testing.assert_allclose(
+        eval_expr(ExprNode(op="max", args=["h", 1.0e-5]), ctx),
+        [1.0e-5, 2.0e-3, 5.0e-4],
+    )
+    np.testing.assert_allclose(
+        eval_expr(ExprNode(op="min", args=["h", 1.0e-5]), ctx),
+        [1.0e-6, 1.0e-5, 1.0e-5],
+    )
+    # Three operands (scalar, array, array) still reduce pairwise.
+    ctx2 = _ctx({"a": np.array([1.0, 9.0]), "b": np.array([4.0, 4.0])})
+    np.testing.assert_allclose(
+        eval_expr(ExprNode(op="max", args=[3.0, "a", "b"]), ctx2),
+        [4.0, 9.0],
+    )
+    # All-scalar and all-same-shape-array cases are unchanged.
+    assert eval_expr(ExprNode(op="max", args=[2.0, 5.0, 3.0]), _ctx({})) == 5.0
+
+
 def test_index_1d_and_2d() -> None:
     ctx = _ctx({"u": np.array([1.0, 2.0, 3.0, 4.0])})
     assert eval_expr(
