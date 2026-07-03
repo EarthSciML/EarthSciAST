@@ -1475,6 +1475,14 @@ class BuildInspection:
     * ``observed_exprs`` — the dependency-ordered observed substitution map
       (flattened name → RHS expression), exactly as the RHS driver
       materializes it each step.
+    * ``params`` — the resolved SCALAR parameter values (model defaults with
+      any ``parameter_overrides`` applied), keyed by (flattened) parameter
+      name. These are load-time CONSTANTS, so a build-time cellwise evaluation
+      (``evaluate_cellwise``, a §6.6.5 analytic ``reference``, coordinate-
+      expression ``ic`` seeding) may bind them into scope — while STATE stays
+      out of scope. The observed-assertion form already binds them (a state-
+      free observed is materialized into ``setup_arrays`` with these values);
+      ``params`` exposes the same map for the reference / ``ic`` positions.
 
     Filling the record never changes the simulation: the returned
     :class:`SimulationResult` is identical with or without ``inspect``
@@ -1485,6 +1493,7 @@ class BuildInspection:
     setup_arrays: Dict[str, "np.ndarray"] = field(default_factory=dict)
     const_arrays: Dict[str, Any] = field(default_factory=dict)
     observed_exprs: Dict[str, Expr] = field(default_factory=dict)
+    params: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -1515,9 +1524,12 @@ def _resolve_field_ic(
     cell: Tuple[int, ...],
     loader_arrays: Dict[str, "np.ndarray"],
     index_sets: Optional[Dict[str, Any]] = None,
+    param_values: Optional[Dict[str, float]] = None,
 ) -> float:
     """Resolve one grid cell's initial value for a scoped-reference / array ``ic``
     equation (esm-spec §11.4.1). ``cell`` is the 1-based integer index tuple.
+    Model PARAMETERS (load-time constants) bind via ``param_values``; STATE is
+    not in scope.
 
     Supported RHS forms, in order:
 
@@ -1550,7 +1562,8 @@ def _resolve_field_ic(
         return float(rhs)
     if isinstance(rhs, ExprNode):
         try:
-            value = _eval_buildtime_field(rhs, index_sets=index_sets)
+            value = _eval_buildtime_field(rhs, index_sets=index_sets,
+                                          param_values=param_values)
         except Exception:
             value = None
         if value is not None:
@@ -1576,19 +1589,24 @@ def _resolve_field_ic(
 def _eval_buildtime_field(
     expr: Expr,
     index_sets: Optional[Dict[str, Any]] = None,
+    param_values: Optional[Dict[str, float]] = None,
 ) -> Union[float, "np.ndarray"]:
     """Evaluate a state-free build-time expression (grid geometry, §6.6.5
     analytic references) through the official NumPy interpreter. Array-
     producing ``aggregate``/``makearray`` nodes yield ndarrays; elementwise
-    ops broadcast over them. State references are not in scope — the context
-    carries no states, so any state reference raises."""
+    ops broadcast over them.
+
+    STATE references are not in scope — the context carries no states, so any
+    state reference raises. Model PARAMETERS (load-time constants) ARE in scope
+    when supplied via ``param_values`` (name → value): a parameter-dependent
+    coordinate expression / reference then resolves (esm-spec §6.6.5)."""
     from .numpy_interpreter import EvalContext as _EvalCtx
     from .numpy_interpreter import eval_expr as _eval_expr
 
     ctx = _EvalCtx(
         state_layout={},
         state_shapes={},
-        param_values={},
+        param_values=dict(param_values or {}),
         observed_values={},
         y=np.empty((0,), dtype=float),
         t=0.0,
@@ -1604,10 +1622,13 @@ def _fold_field_ics(
     state_layout: Dict[str, slice],
     loader_arrays: Dict[str, "np.ndarray"],
     index_sets: Optional[Dict[str, Any]] = None,
+    param_values: Optional[Dict[str, float]] = None,
 ) -> None:
     """Fold every scoped-reference / array ``ic`` equation into ``y0`` cell-by-cell
     (esm-spec §11.4.1). Each target must name a lifted/array state of the
-    flattened system; an unresolved target or RHS is a hard error."""
+    flattened system; an unresolved target or RHS is a hard error. Model
+    PARAMETERS (load-time constants) bind via ``param_values``; STATE is not in
+    scope."""
     for target, rhs in field_ic_eqs:
         if target not in state_layout:
             raise SimulationError(
@@ -1624,7 +1645,8 @@ def _fold_field_ics(
         for multi in np.ndindex(*shape):
             cell = tuple(int(i) + 1 for i in multi)
             y0[start + _linear_pos(shape, list(cell))] = _resolve_field_ic(
-                target, rhs, cell, loader_arrays, index_sets=index_sets
+                target, rhs, cell, loader_arrays, index_sets=index_sets,
+                param_values=param_values,
             )
 
 
@@ -1806,6 +1828,11 @@ def _fill_build_inspection(
         sink.const_arrays[k] = arr
     for k, arr in (loader_arrays or {}).items():
         sink.const_arrays[k] = arr
+    # Resolved scalar parameters (load-time constants) so the reference / ic
+    # positions can bind them into a build-time cellwise evaluation, matching
+    # the observed-assertion form (materialized below with these values).
+    for k, v in build.param_values.items():
+        sink.params[str(k)] = float(v)
     varying = _time_varying_observeds(build.ordered_observed,
                                       set(build.state_names))
     static_obs = [(n, r) for n, r in build.ordered_observed if n not in varying]
@@ -1984,7 +2011,7 @@ def _build_numpy_rhs(
     # over the lifted grid, or a broadcast constant. Runs before the explicit
     # per-element overrides so those still win.
     _fold_field_ics(y0, field_ic_eqs, shapes, state_layout, loader_arrays,
-                    index_sets=flat.index_sets)
+                    index_sets=flat.index_sets, param_values=param_values)
     _apply_initial_conditions(
         y0, state_layout, shapes, state_names, initial_conditions
     )
