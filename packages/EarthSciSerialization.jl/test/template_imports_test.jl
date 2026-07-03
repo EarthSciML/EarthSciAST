@@ -56,6 +56,49 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
         @test eq.rhs.args[2].op == "makearray"
     end
 
+    @testset "aggregate_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
+        # Guards the AST-GOLDEN pathway (resolve_template_machinery →
+        # lower_expression_templates → canonical write), which never calls
+        # `parse_expression`. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
+        # is expanded so an integer ratio {op:/,args:[1,8]} lands inside a nested,
+        # float-heavy aggregate `expr`. JSON3's structural number inference widens
+        # those bare integer tokens to Float64; `lower_expression_templates` now
+        # narrows integral Int64-representable Float64 in `args` positions back to
+        # integers (CONFORMANCE_SPEC §5.5.3.1 rule 1), so the emitted golden is
+        # `[1,8]` — byte-identical with Python/Rust/TS/Go.
+        fixture = conf("aggregate_int_ratio_golden", "fixture.esm")
+
+        # (a) The fixture actually exercises the bug: the raw JSON3 reader widens
+        # the in-aggregate ratio to `1.0/8.0` while the standalone dx=1/8 stays
+        # integer (the inside-vs-outside smoking gun).
+        raw_bytes = JSON3.write(JSON3.read(read(fixture, String)))
+        @test occursin("[1.0,8.0]", raw_bytes)   # JSON3 widened inside the aggregate
+        @test occursin("[1,8]", raw_bytes)        # standalone dx=1/8 stayed integer
+
+        # (b) The expanded tree matches the committed golden structurally.
+        tree = _expand_raw(fixture)
+        @test tree == _golden(conf("aggregate_int_ratio_golden", "expanded.esm"))
+
+        # (c) Byte-level: no float promotion survives into the emitted
+        # expression subtree (scoped to the expression — NOT the whole document,
+        # whose metadata prose legitimately spells the literal `[1.0,8.0]`), and
+        # the in-aggregate ratio operands are narrowed to Int64 (like the
+        # standalone dx), so inside and outside now agree.
+        c0 = tree["models"]["M"]["variables"]["c0"]["expression"]
+        @test !occursin("1.0", JSON3.write(c0))   # no widened float in the subtree
+        agg_ratio = c0["args"][1]["args"][2]["expr"]["args"][2]  # {op:/,args:[1,8]}
+        @test agg_ratio["op"] == "/"
+        @test agg_ratio["args"][1] isa Int64 && agg_ratio["args"][2] isa Int64
+        @test agg_ratio["args"][1] == 1 && agg_ratio["args"][2] == 8
+        dx = tree["models"]["M"]["variables"]["dx"]["expression"]
+        @test dx["args"][1] isa Int64 && dx["args"][2] isa Int64
+
+        # (d) Value preservation: 1/8 is true float division = 0.125.
+        f = EarthSciSerialization.load(fixture)
+        dxv = f.models["M"].variables["dx"].expression
+        @test EarthSciSerialization.evaluate_expr(dxv, Dict{String,Float64}()) == 0.125
+    end
+
     @testset "import_diamond: deep-equal dedup at first occurrence" begin
         @test _expand_raw(conf("import_diamond", "fixture.esm")) ==
               _golden(conf("import_diamond", "expanded.esm"))

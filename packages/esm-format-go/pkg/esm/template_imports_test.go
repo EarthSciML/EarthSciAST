@@ -130,6 +130,9 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_diamond", "fixture.esm", "expanded.esm"},
 		{"import_order_determinism", "fixture_import_order.esm", "expanded_import_order.esm"},
 		{"import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"},
+		// §5.5.3.1 rule 1: integer ratio {op:/,args:[1,N]} inside a nested
+		// aggregate expr stays integer on the AST-golden pathway.
+		{"aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"},
 		// §9.7.7 import-edge renaming / namespacing + free-name rebinding.
 		{"import_rename_two_instances", "fixture.esm", "expanded.esm"},
 		{"import_where_rename_two_instances", "fixture.esm", "expanded.esm"},

@@ -89,6 +89,22 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.index_sets.cells.size).toBe(10) // NC default, deduped once
   })
 
+  it('aggregate_int_ratio_golden: integer ratio inside a nested aggregate stays integer (§5.5.3.1)', () => {
+    // A `coord` template body cos(pi·aggregate((i−1/2)·(1/8))) expands so an
+    // integer ratio {op:/,args:[1,8]} lands inside a nested, float-heavy
+    // aggregate expr. Julia's JSON3 reader widened it to `1.0/8.0`; every other
+    // binding keeps `[1,8]`, so the committed golden is `[1,8]` and this binding
+    // must reproduce it.
+    expect(expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm'))).toEqual(
+      golden(conf('aggregate_int_ratio_golden', 'expanded.esm')),
+    )
+    const d = expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')) as any
+    expect(d.models.M.variables.dx.expression).toEqual({ op: '/', args: [1, 8] })
+    expect(
+      d.models.M.variables.c0.expression.args[0].args[1].expr.args[1],
+    ).toEqual({ op: '/', args: [1, 8] })
+  })
+
   it('import_rename_two_instances: one grid family, two prefixed instances (§9.7.7)', () => {
     // prefix renames index set / templates / the rule's match `wrt` transitively;
     // per-edge bindings instantiate N; each rule instance fires only on its own

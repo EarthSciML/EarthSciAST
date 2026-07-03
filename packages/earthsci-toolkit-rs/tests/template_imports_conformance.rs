@@ -92,6 +92,26 @@ fn import_smoke_matches_golden() {
     assert_eq!(stencil.op, "makearray");
 }
 
+/// aggregate_int_ratio_golden: CONFORMANCE_SPEC §5.5.3.1 rule 1 on the
+/// AST-golden pathway. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
+/// is expanded so an integer ratio {op:/,args:[1,8]} lands inside a nested,
+/// float-heavy aggregate `expr`. Julia's JSON3 reader widened those integer
+/// tokens to `1.0/8.0`; serde_json reads them as integers, so this binding must
+/// reproduce the committed `[1,8]` golden byte-for-byte (serde_json `Value`
+/// equality distinguishes an integer from a float).
+#[test]
+fn aggregate_int_ratio_golden_matches_golden() {
+    assert_eq!(
+        expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"])),
+        golden(&conf(&["aggregate_int_ratio_golden", "expanded.esm"]))
+    );
+    // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
+    let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
+    let dx = &expanded["models"]["M"]["variables"]["dx"]["expression"]["args"];
+    assert!(dx[0].is_i64() || dx[0].is_u64());
+    assert!(dx[1].is_i64() || dx[1].is_u64());
+}
+
 /// import_diamond: grid_shared reaches the model twice (via lib_flux_a and
 /// lib_flux_b, both unbound); the deep-equal duplicates dedup at first
 /// occurrence (§9.7.4/§9.7.5) and NC closes by default (10) at the root.

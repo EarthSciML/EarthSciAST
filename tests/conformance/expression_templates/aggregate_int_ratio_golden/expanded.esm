@@ -1,0 +1,155 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 8
+    }
+  },
+  "metadata": {
+    "description": "Regression guard for CONFORMANCE_SPEC §5.5.3.1 rule 1 on the AST-GOLDEN pathway (resolve_template_machinery -> lower_expression_templates -> canonical sorted write), NOT the typed Load/Save path. A `coord` expression template whose body is cos(pi * aggregate((i - 1/2)*(1/8))) is expanded via apply_expression_template, so an integer ratio {op:/,args:[1,8]} lands INSIDE a nested, float-heavy aggregate `expr` body. JSON3's context-dependent structural number inference widens those bare integer tokens to Float64 (1 -> 1.0, 8 -> 8.0) when they share a schema-repeating, float-heavy document with cos(pi*...) siblings, so before the fix the Julia golden emitted `[1.0,8.0]` inside the aggregate while Python/Rust/TS/Go emitted `[1,8]` — Julia the lone outlier. `lower_expression_templates` now narrows integral Int64-representable Float64 in `args` positions back to integers, so the expanded golden is `[1,8]` everywhere and byte-identical across the five bindings. The standalone `dx = 1/8` sits OUTSIDE any aggregate and already stayed an integer ratio; it is retained here to pin that inside-vs-outside now agree. `/` is true float division so the value is unchanged (1/8 = 0.125).",
+    "name": "aggregate_int_ratio_golden"
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "u",
+                    "i"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "D",
+              "wrt": "t"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          },
+          "rhs": {
+            "args": [],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    3.141592653589793,
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "i",
+                            0.5
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            1,
+                            8
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "*"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "cos"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            }
+          }
+        }
+      ],
+      "variables": {
+        "c0": {
+          "expression": {
+            "args": [
+              {
+                "args": [
+                  3.141592653589793,
+                  {
+                    "args": [],
+                    "expr": {
+                      "args": [
+                        {
+                          "args": [
+                            "i",
+                            0.5
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            1,
+                            8
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    "op": "aggregate",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    }
+                  }
+                ],
+                "op": "*"
+              }
+            ],
+            "op": "cos"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "dx": {
+          "expression": {
+            "args": [
+              1,
+              8
+            ],
+            "op": "/"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "u": {
+          "default": 0,
+          "shape": [
+            "x"
+          ],
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}
