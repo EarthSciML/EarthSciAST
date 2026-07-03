@@ -483,3 +483,71 @@ def test_shared_fixture_pde_inline_assertions_exec():
     # from_file error norms are ~0 against the committed exact snapshot.
     assert results[5].actual < 1e-12
     assert results[6].actual < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# Regression: a SCALAR OBSERVED asserted under per-test parameter_overrides
+# must be read from the ASSERTED MODEL's slot and reflect that test's
+# overrides — not the first same-bare-name observed of a sibling component.
+# ---------------------------------------------------------------------------
+
+
+def _scalar_observed_doc() -> dict:
+    """Two independent components, each with a scalar observed ``k = a·T`` and
+    a trivial constant state ``x`` (so the scalar SymPy pathway exposes the
+    observed on the trajectory). The bare name ``k`` is shared across ``M1``
+    and ``M2`` — flattening qualifies them as ``M1.k`` / ``M2.k``. ``M2`` owns
+    the tests; each overrides ``T`` differently, so a correct runner reads
+    ``M2.k`` (a=5) and returns ``5·T``."""
+
+    def component(a: float, tests: list) -> dict:
+        return {
+            "variables": {
+                "T": {"type": "parameter", "units": "K", "default": 10.0},
+                "a": {"type": "parameter", "units": "1", "default": a},
+                "x": {"type": "state", "units": "1", "default": 1.0},
+                "k": {"type": "observed", "units": "1",
+                      "expression": {"op": "*", "args": ["a", "T"]}},
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0},
+            ],
+            "tests": tests,
+        }
+
+    return {
+        "esm": "0.8.0",
+        "metadata": {"name": "scalar_observed_param_override"},
+        "models": {
+            # M1 (a=2) is laid out first, so its `k` shadows M2's under a
+            # bare-name-only slot match — the exact bug this guards.
+            "M1": component(2.0, []),
+            "M2": component(5.0, [
+                {"id": "t_lo", "time_span": {"start": 0.0, "end": 1.0},
+                 "parameter_overrides": {"T": 10.0},
+                 "assertions": [{"variable": "k", "time": 1.0,
+                                 "expected": 50.0,
+                                 "tolerance": {"rel": 1e-9}}]},
+                {"id": "t_hi", "time_span": {"start": 0.0, "end": 1.0},
+                 "parameter_overrides": {"T": 20.0},
+                 "assertions": [{"variable": "k", "time": 1.0,
+                                 "expected": 100.0,
+                                 "tolerance": {"rel": 1e-9}}]},
+            ]),
+        },
+    }
+
+
+def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
+    f = load(json.dumps(_scalar_observed_doc()))
+    results = run_pde_tests(f, model_name="M2", method="LSODA",
+                            rtol=1e-12, atol=1e-14)
+    by_id = {r.test_id: r for r in results}
+    assert set(by_id) == {"t_lo", "t_hi"}
+    # Each test's override must flow through: M2.k = 5·T, distinct per test —
+    # not M1.k (=2·T) and not a single shared default value.
+    assert by_id["t_lo"].actual == pytest.approx(50.0, rel=1e-9)
+    assert by_id["t_hi"].actual == pytest.approx(100.0, rel=1e-9)
+    assert by_id["t_lo"].actual != by_id["t_hi"].actual
+    assert all(r.passed for r in results), \
+        [(r.test_id, r.message) for r in results]

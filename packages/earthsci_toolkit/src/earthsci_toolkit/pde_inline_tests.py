@@ -258,12 +258,26 @@ def _inspection_field(
 
 
 def _scalar_slot(var_map: Dict[str, int], variable: str, model: str) -> Optional[int]:
-    """Flat slot of a SCALAR state by bare or model-qualified name."""
+    """Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
+    (preferred) or bare name.
+
+    Flattening qualifies every element with its owning model (``"arrh.k"``),
+    and a coupled build routinely reuses the same bare observed name across
+    sibling components — several reaction-rate coefficients all named ``k``.
+    So the model-qualified name MUST win: a bare-name match alone returns the
+    first ``k`` in layout order (``rate_toppb.k``) for every model's ``k``
+    assertion, reading the wrong component's value. We therefore do two passes
+    — an exact qualified / exact-bare match first, then a bare-suffix fallback
+    (reached only when the qualified element is absent, e.g. a bare-keyed
+    single-model build)."""
     qualified = f"{model}.{variable}"
+    for name, slot in var_map.items():
+        if str(name) in (qualified, variable):
+            return int(slot)
     for name, slot in var_map.items():
         s = str(name)
         bare = s.split(".", 1)[1] if "." in s else s
-        if s in (qualified, variable) or bare == variable:
+        if bare == variable:
             return int(slot)
     return None
 

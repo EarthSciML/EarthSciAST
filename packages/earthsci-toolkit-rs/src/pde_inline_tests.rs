@@ -238,37 +238,65 @@ fn parse_cell_name(name: &str) -> Option<(&str, Vec<i64>)> {
 
 /// Collect the (cell-index-tuple, row) pairs of one array state from the
 /// simulation's element names (`element_names[row]` is the name of state row
-/// `row`, e.g. `"Heat.u[3]"`). Flattening may prefix element names with the
-/// owning model; a name matches when its element stem equals `variable`
-/// bare, or `model.variable` qualified. Sorted by cell tuple so callers get
-/// a deterministic pairing (identical to the Julia / Python `state_cells`).
+/// `row`, e.g. `"Heat.u[3]"`). Flattening prefixes element names with the
+/// owning model, and a coupled build may reuse the same bare array name across
+/// components (`M1.u`, `M2.u`); to avoid mixing every model's cells into one
+/// field, the model-qualified stem wins — an exact `model.variable` /
+/// bare-`variable` stem match first, then a bare-suffix fallback reached only
+/// when no exact stem exists (a bare-keyed single-model build). This is the
+/// array analog of [`scalar_slot`]'s qualified-first two-pass resolution.
+/// Sorted by cell tuple so callers get a deterministic pairing.
 pub fn state_cells(
     element_names: &[String],
     variable: &str,
     model: &str,
 ) -> Vec<(Vec<i64>, usize)> {
     let qualified = format!("{model}.{variable}");
-    let mut out: Vec<(Vec<i64>, usize)> = Vec::new();
+    // Two passes mirroring `scalar_slot`: gather exact model-qualified /
+    // exact-bare stem matches, and only fall back to the bare-suffix stems when
+    // no exact stem matched. A single pass that unions both would splice every
+    // sibling model's `u` cells into one field on a shared bare name.
+    let mut exact: Vec<(Vec<i64>, usize)> = Vec::new();
+    let mut fallback: Vec<(Vec<i64>, usize)> = Vec::new();
     for (row, name) in element_names.iter().enumerate() {
         let Some((stem, cell)) = parse_cell_name(name) else {
             continue;
         };
-        let bare = stem.split_once('.').map(|(_, b)| b).unwrap_or(stem);
-        if stem != qualified && stem != variable && bare != variable {
-            continue;
+        if stem == qualified || stem == variable {
+            exact.push((cell, row));
+        } else if stem.split_once('.').map(|(_, b)| b).unwrap_or(stem) == variable {
+            fallback.push((cell, row));
         }
-        out.push((cell, row));
     }
+    let mut out = if exact.is_empty() { fallback } else { exact };
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
-/// Row of a SCALAR state by bare or model-qualified name; `None` if absent.
+/// Row of a SCALAR state / scalar OBSERVED by model-qualified name (preferred)
+/// or bare name; `None` if absent.
+///
+/// Flattening qualifies every element with its owning model (`"arrh.k"`), and a
+/// coupled build routinely reuses the same bare observed name across sibling
+/// components — several reaction-rate coefficients all named `k`. So the
+/// model-qualified name MUST win: a bare-name match alone returns the first `k`
+/// in layout order (`M1.k`) for every model's `k` assertion, reading the wrong
+/// component's value. We therefore do two passes — an exact qualified /
+/// exact-bare match first, then a bare-suffix fallback (reached only when the
+/// qualified element is absent, e.g. a bare-keyed single-model build). Mirrors
+/// the Python `_scalar_slot` two-pass semantics.
 fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<usize> {
     let qualified = format!("{model}.{variable}");
+    // Pass 1: exact model-qualified or exact bare match.
+    for (row, name) in element_names.iter().enumerate() {
+        if name == &qualified || name == variable {
+            return Some(row);
+        }
+    }
+    // Pass 2: bare-suffix fallback, reached only when no exact match exists.
     for (row, name) in element_names.iter().enumerate() {
         let bare = name.split_once('.').map(|(_, b)| b).unwrap_or(name);
-        if name == &qualified || name == variable || bare == variable {
+        if bare == variable {
             return Some(row);
         }
     }
@@ -1648,5 +1676,88 @@ mod tests {
         // from_file error norms are ~0 against the committed exact snapshot.
         assert!(results[5].actual.unwrap() < 1e-12);
         assert!(results[6].actual.unwrap() < 1e-12);
+    }
+
+    /// Two coupled components, each with a scalar observed `k = a·T` and a
+    /// trivial spatial state `x`. The bare name `k` is shared across `M1` and
+    /// `M2` — flattening qualifies them `M1.k` / `M2.k` and the array runtime
+    /// exposes both scalar observeds on the trajectory (a size-1 spatial state
+    /// routes the coupled file through that runtime). `M1` (a=2) is laid out
+    /// first, so `M1.k` precedes `M2.k`.
+    fn scalar_observed_coupled_doc() -> serde_json::Value {
+        let comp = |a: f64, tests: serde_json::Value| -> serde_json::Value {
+            let idx = json!({"op": "index", "args": ["x", "i"]});
+            json!({
+                "variables": {
+                    "T": {"type": "parameter", "units": "K", "default": 10.0},
+                    "a": {"type": "parameter", "units": "1", "default": a},
+                    "x": {"type": "state", "units": "1", "shape": ["s"]},
+                    "k": {"type": "observed", "units": "1",
+                          "expression": {"op": "*", "args": ["a", "T"]}},
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["x"]}, "rhs": 0.0},
+                    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": [1, 1]},
+                             "expr": {"op": "D", "args": [idx], "wrt": "t"}},
+                     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                             "ranges": {"i": [1, 1]}, "expr": 0.0}},
+                ],
+                "tests": tests,
+            })
+        };
+        json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "scalar_observed_param_override"},
+            "index_sets": {"s": {"kind": "interval", "size": 1}},
+            "models": {
+                // M1 (a=2) is laid out first, so its `k` shadows M2's under a
+                // bare-name-only slot match — the exact bug this guards.
+                "M1": comp(2.0, json!([])),
+                "M2": comp(5.0, json!([
+                    {"id": "t_lo", "time_span": {"start": 0.0, "end": 1.0},
+                     "parameter_overrides": {"M2.T": 10.0},
+                     "assertions": [{"variable": "k", "time": 1.0,
+                                     "expected": 50.0,
+                                     "tolerance": {"rel": 1e-9}}]},
+                    {"id": "t_hi", "time_span": {"start": 0.0, "end": 1.0},
+                     "parameter_overrides": {"M2.T": 20.0},
+                     "assertions": [{"variable": "k", "time": 1.0,
+                                     "expected": 100.0,
+                                     "tolerance": {"rel": 1e-9}}]},
+                ])),
+            },
+        })
+    }
+
+    /// Regression for the cross-binding scalar-observed slot-resolution bug
+    /// (mirror of the Python `test_run_pde_tests_scalar_observed_tracks_
+    /// parameter_overrides`). Each of M2's two tests overrides its own `T`, so
+    /// a correct runner reads `M2.k = 5·T` (50, then 100) — distinct per test.
+    /// The pre-fix single-pass `scalar_slot` returned the FIRST bare-`k` slot
+    /// (`M1.k = 2·T = 20`) for every M2 assertion, so both tests read 20 and
+    /// failed; the qualified-first two-pass resolver reads `M2.k`.
+    #[test]
+    fn run_pde_tests_scalar_observed_tracks_parameter_overrides() {
+        let file = load(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("M2"), &tight_opts());
+        let by_id: HashMap<&str, &PdeAssertionResult> =
+            results.iter().map(|r| (r.test_id.as_str(), r)).collect();
+        assert_eq!(by_id.len(), 2, "expected the two M2 tests");
+        let lo = by_id["t_lo"].actual.expect("t_lo actual recorded");
+        let hi = by_id["t_hi"].actual.expect("t_hi actual recorded");
+        // Each override must flow through to M2.k = 5·T, distinct per test —
+        // not M1.k (= 2·T = 20) and not a single shared value.
+        assert!((lo - 50.0).abs() <= 1e-9 * 50.0, "t_lo actual {lo}, want 50");
+        assert!((hi - 100.0).abs() <= 1e-9 * 100.0, "t_hi actual {hi}, want 100");
+        assert_ne!(lo, hi);
+        assert!(
+            results.iter().all(|r| r.passed),
+            "{:?}",
+            results
+                .iter()
+                .map(|r| (r.test_id.clone(), r.message.clone()))
+                .collect::<Vec<_>>()
+        );
     }
 }

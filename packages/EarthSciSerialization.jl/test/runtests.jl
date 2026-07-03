@@ -60,6 +60,7 @@ using JSON3
     include("geometry_ranged_clip_test.jl")
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
+    include("pde_inline_scalar_slot_collision_test.jl")
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
     include("tree_walk_join_test.jl")

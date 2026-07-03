@@ -149,22 +149,34 @@ end
 
 # Collect the (cell-index-tuple, flat-slot) pairs of one array state from a
 # var_map. Flattening may prefix element names with the owning model
-# ("Heat.u[3]"); a name matches when its element stem equals `variable` bare,
-# or `model.variable` qualified. Sorted by cell tuple so callers get a
+# ("Heat.u[3]"); a name matches when its element stem equals `model.variable`
+# qualified, or `variable` bare. Sorted by cell tuple so callers get a
 # deterministic pairing.
+#
+# Model-qualified-first, exactly like `_scalar_slot`: two sibling components
+# sharing an array field name (each a `u`) both bare-match `variable`, so a
+# single OR-pass would MIS-COLLECT the union of both models' cells. We therefore
+# collect the exact qualified / exact-bare stems first, and only fall back to
+# the bare-suffix match when no exact stem is present (a bare-keyed single-model
+# build). Same qualified-first hardening as the Python `state_cells`.
 function _state_cells(var_map::AbstractDict, variable::AbstractString,
                       model::AbstractString)
-    out = Tuple{Vector{Int},Int}[]
     qualified = String(model) * "." * String(variable)
+    exact = Tuple{Vector{Int},Int}[]
+    fallback = Tuple{Vector{Int},Int}[]
     for (name, slot) in var_map
         m = match(r"^(.+)\[([0-9,]+)\]$", String(name))
         m === nothing && continue
-        stem = m.captures[1]
-        bare = occursin('.', stem) ? String(split(stem, '.'; limit=2)[2]) : String(stem)
-        (stem == qualified || stem == String(variable) || bare == String(variable)) ||
-            continue
-        push!(out, ([parse(Int, x) for x in split(m.captures[2], ",")], Int(slot)))
+        stem = String(m.captures[1])
+        cell = [parse(Int, x) for x in split(m.captures[2], ",")]
+        if stem == qualified || stem == String(variable)
+            push!(exact, (cell, Int(slot)))
+        else
+            bare = occursin('.', stem) ? String(split(stem, '.'; limit=2)[2]) : stem
+            bare == String(variable) && push!(fallback, (cell, Int(slot)))
+        end
     end
+    out = isempty(exact) ? fallback : exact
     sort!(out; by=first)
     return out
 end
@@ -237,15 +249,30 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     return (field, cells)
 end
 
-# Flat slot of a SCALAR state by bare or model-qualified name; 0 if absent.
+# Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
+# (preferred) or bare name; 0 if absent.
+#
+# Flattening qualifies every element with its owning model ("arrh.k"), and a
+# coupled build routinely reuses the same bare observed/state name across
+# sibling components — several reaction-rate coefficients all named `k`. So the
+# model-qualified name MUST win: a lone bare-name match returns whichever `k`
+# happens to come first in `var_map` iteration (NON-DETERMINISTIC for a `Dict`),
+# reading the WRONG component's value for every model's `k` assertion. We
+# therefore do two passes — an exact qualified / exact-bare match first, then a
+# bare-suffix fallback (reached only when no exact element is present, e.g. a
+# bare-keyed single-model build). Byte-identical selection to the Python
+# `_scalar_slot`.
 function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
                       model::AbstractString)::Int
     qualified = String(model) * "." * String(variable)
     for (name, slot) in var_map
         s = String(name)
+        (s == qualified || s == String(variable)) && return Int(slot)
+    end
+    for (name, slot) in var_map
+        s = String(name)
         bare = occursin('.', s) ? String(split(s, '.'; limit=2)[2]) : s
-        (s == qualified || s == String(variable) || bare == String(variable)) &&
-            return Int(slot)
+        bare == String(variable) && return Int(slot)
     end
     return 0
 end
