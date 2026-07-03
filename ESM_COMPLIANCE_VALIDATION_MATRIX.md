@@ -550,6 +550,16 @@ Where:
 | SERIAL-02-A-002 | Output MUST validate against schema | esm-libraries-spec.md:145 | Yes | serialization |
 | SERIAL-02-A-003 | MUST round-trip identically | esm-libraries-spec.md:145 | Yes | serialization |
 
+### SERIAL-05-A: Canonical Number Formatting (CONFORMANCE_SPEC §5.5.3.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| SERIAL-05-A-001 | Integral, `Int64`-representable numbers serialize as integer literals regardless of source spelling (`0.0` → `0`) — rule 1, applied uniformly at the AST-literal boundary | CONFORMANCE_SPEC.md §5.5.3.1 rule 1 | Yes | serialization |
+| SERIAL-05-A-002 | Non-integral finite floats use shortest round-trip formatting (Julia-style positional/scientific split) | CONFORMANCE_SPEC.md §5.5.3.1 rule 2 | Yes | serialization |
+| SERIAL-05-A-003 | Arithmetic-op operand literal types are by value, not reader-inferred storage: an **integer operand of `+ - * / ^ neg` stays an integer literal inside AND outside an `aggregate` `expr` body**. A binding whose JSON reader widens a bare integer token to float (Julia `JSON3` structural inference) MUST re-apply rule 1 when building the AST | CONFORMANCE_SPEC.md §5.5.3.1 rule 3 | Yes | serialization |
+| SERIAL-05-A-004 | An integer ratio `{op:"/",args:[1,N]}` has one canonical byte form all five bindings produce identically; `/` is true (float-returning) division at evaluation (`1/8` = `0.125`), so integer operands are value-preserving | CONFORMANCE_SPEC.md §5.5.3.1 rule 3 | Yes | serialization |
+
+**Conformance fixture:** `tests/valid/aggregate/coordinate_int_ratio_spacing.esm` (registered in `tests/conformance/round_trip/manifest.json`, tag `ess-aggregate-intdiv`) authors cell-centre spacing `(i − 1/2)·(1/N)` with the exact integer ratio `{op:"/",args:[1,8]}` / `[1,16]` INSIDE an `aggregate` `expr` body; all five bindings (julia/python/rust/ts/go) MUST round-trip it byte-identically, and the inline `tests` block pins the values (`coordA[1]=0.0625`, i.e. `0.5·(1/8)`; `coordB[1]=0.03125`). Julia regression guard: `parse_test.jl` "Integer ratio inside aggregate stays integer (§5.5.3.1)" loads a `cos(pi·…)`-nested document that provokes the JSON3 widening and asserts the ratio re-serializes as `1/8`, not `1.0/8.0`.
+
 ---
 
 ## 10. VERSIONING REQUIREMENTS
@@ -576,9 +586,9 @@ Where:
 | Validation | 21 | 21 | validation |
 | Display | 17 | 17 | display |
 | Expression | 25 | 25 | expression |
-| Serialization | 6 | 6 | serialization |
+| Serialization | 10 | 10 | serialization |
 | Versioning | 4 | 4 | versioning |
-| **TOTAL** | **134** | **134** | **10 categories** |
+| **TOTAL** | **138** | **138** | **10 categories** |
 
 ## Test Fixture Mapping
 

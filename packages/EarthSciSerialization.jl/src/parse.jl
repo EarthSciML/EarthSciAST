@@ -57,7 +57,21 @@ function parse_expression(data::Any)::Expr
         # JSON integer token (no '.', no 'e') → IntExpr (RFC §5.4.6 parse rule)
         return IntExpr(Int64(data))
     elseif isa(data, AbstractFloat)
-        # JSON float token (has '.' or 'e') → NumExpr (float node)
+        # A JSON number whose value is integral and Int64-representable is an
+        # INTEGER literal, regardless of source spelling (CONFORMANCE_SPEC
+        # §5.5.3.1 rule 1). JSON3's scalar reader already narrows an integral
+        # float token (`1.0`) to `Int64` on parse; the same narrowing is applied
+        # here so the AST-literal boundary is uniform even when JSON3's
+        # context-dependent structural inference materialises a bare integer
+        # token (`1`) as `Float64` in a deeply-nested, schema-repeating document
+        # (e.g. an integer ratio `{op:"/",args:[1,N]}` inside an `aggregate`
+        # `expr` body). Without this an integer ratio inside an aggregate would
+        # round-trip as `1.0/N.0` and could never be byte-identical across the
+        # five bindings. Non-integral floats stay `NumExpr`.
+        if isfinite(data) && isinteger(data) &&
+           typemin(Int64) <= data <= typemax(Int64) && Float64(Int64(data)) == data
+            return IntExpr(Int64(data))
+        end
         return NumExpr(Float64(data))
     elseif isa(data, String)
         return VarExpr(data)

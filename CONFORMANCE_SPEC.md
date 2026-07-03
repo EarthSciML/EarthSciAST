@@ -725,6 +725,37 @@ numbers by one shared scheme, pinned to what the Julia reference's
    | `123456789.25` | `1.2345678925e8` |
    | `0.0` | `0` (rule 1) |
 
+3. **Literal type is by value, not by reader-inferred storage — everywhere,
+   including arithmetic operands and aggregate bodies (normative).** Rule 1 is
+   a property of a number's *value*, so it MUST hold at the AST-literal boundary
+   **uniformly**, independent of any binding's JSON-reader number typing. A
+   conforming reader whose number inference is context-dependent (Julia's
+   `JSON3` applies a structural inference that can materialise a bare integer
+   token — e.g. `1` — as `Float64` inside a deeply-nested, schema-repeating
+   document) MUST re-apply rule 1 when building the AST: **an integral,
+   `Int64`-representable number is an integer literal (`IntExpr`); a
+   non-integral number is a float literal (`NumExpr`)** — regardless of where
+   the number appears. In particular this governs the **operand literal types of
+   arithmetic ops** (`+ - * / ^ neg`): an integer operand stays an integer
+   literal whether the operation sits at the top level, inside another
+   expression, or **inside an `aggregate` `expr` body / `makearray` values**.
+
+   The canonical consequence for division: **`/` is true, float-returning
+   division at evaluation for every operand type** (integer operands never
+   trigger integer/floor division — `1/8` evaluates to `0.125`, not `0`), so
+   keeping integer operands as integer literals is value-preserving. An integer
+   ratio such as `{"op":"/","args":[1,N]}` therefore has ONE canonical byte
+   form — `{"op":"/","args":[1,N]}` — that all five bindings MUST produce
+   identically, inside and outside an aggregate. A binding that emits
+   `{"op":"/","args":[1.0,N.0]}` for an integer-spelled ratio is **non-conformant**.
+   Fixtures MAY spell an exact integer ratio (`1/N`) directly inside an
+   aggregate `expr` (e.g. cell-centre spacing `(i − 1/2)·(1/N)`); they need not
+   pre-fold it to a non-integral decimal to stay byte-portable. (Rule 1 still
+   forbids relying on an integral *float* literal like `1.0` keeping its
+   float-ness — that is `1` — so a semantically-float operand must be
+   non-integral; see `tests/valid/aggregate/coordinate_int_ratio_spacing.esm`
+   and the `round_trip` conformance manifest.)
+
 #### 5.5.4 Conformance requirement and the adversarial harness
 
 The suite MUST feed **identical** mesh / table inputs to every producing binding
