@@ -344,6 +344,12 @@ def _serialize_example(e: Example) -> Dict[str, Any]:
         result["parameter_sweep"] = _serialize_parameter_sweep(e.parameter_sweep)
     if e.plots:
         result["plots"] = [_serialize_plot(p) for p in e.plots]
+    # esm-spec §9.7.10 form C: an example's injected imports are authored per-run
+    # config and DO survive parse → emit (unlike a component's own imports,
+    # which are consumed by the fixpoint at load). Mirrors _serialize_test.
+    if e.expression_template_imports:
+        result["expression_template_imports"] = json.loads(
+            json.dumps(e.expression_template_imports))
     return result
 
 

@@ -8,6 +8,7 @@ with schema validation using the bundled esm-schema.json file.
 import copy
 import json
 import os
+import re
 from pathlib import Path
 from typing import Union, Dict, Any, List, Optional, TYPE_CHECKING
 from dataclasses import fields
@@ -538,6 +539,11 @@ def _parse_example(data: Dict[str, Any]) -> Example:
         parameters=dict(data.get("parameters", {})),
         parameter_sweep=sweep,
         plots=[_parse_plot(p) for p in data.get("plots", [])],
+        # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
+        # discretization this example runs under. Retained (not consumed at load)
+        # so the field survives round-trip, mirroring _parse_test above.
+        expression_template_imports=copy.deepcopy(
+            data.get("expression_template_imports", []) or []),
     )
 
 
@@ -1257,6 +1263,19 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
     )
 
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_ref_env(ref: str) -> str:
+    """Expand ``${VAR}`` tokens in a §4.7 ref from the environment.
+
+    esm-spec §4.7: OPTIONAL loader capability; an unset variable is left literal
+    (so the ref fails to resolve rather than misresolving). Only the braced
+    ``${VAR}`` form is expanded, matching the Julia binding.
+    """
+    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
+
+
 def _fetch_ref_content(ref: str, base_path: str) -> str:
     """Fetch content from a subsystem ref (URL or file path).
 
@@ -1270,6 +1289,7 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     Raises:
         SubsystemRefError: If the reference cannot be fetched or read
     """
+    ref = _expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
     if ref.startswith("http://") or ref.startswith("https://"):
         import urllib.request
         import urllib.error
@@ -1357,6 +1377,7 @@ def _load_ref_data(
         resolve_template_machinery,
     )
 
+    ref_str = _expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
     content = _fetch_ref_content(ref_str, base_path)
     ref_data = json.loads(content)
 

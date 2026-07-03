@@ -923,7 +923,23 @@ def _apply_edge_renames(scope: "_TemplateScope", entry: Any, origin: str,
     return scope
 
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_ref_env(ref: str) -> str:
+    """Expand ``${VAR}`` tokens in a §4.7 ref from the environment.
+
+    esm-spec §4.7: an OPTIONAL loader capability (like URL refs). An UNSET
+    variable is left literal, so the ref simply fails to resolve
+    (``template_import_unresolved`` / the subsystem error) rather than silently
+    misresolving. Only the braced ``${VAR}`` form is expanded (not bare
+    ``$VAR``), for byte-consistency with the Julia binding.
+    """
+    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
+
+
 def _load_import_raw(ref: str, base_dir: str, origin: str):
+    ref = _expand_ref_env(ref)
     if ref.startswith("http://") or ref.startswith("https://"):
         import urllib.error
         import urllib.request

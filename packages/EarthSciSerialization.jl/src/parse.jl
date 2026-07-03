@@ -1757,7 +1757,7 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
     for (name, entry) in collect(models)
         (entry isa AbstractDict && haskey(entry, "ref") &&
             !haskey(entry, "variables")) || continue
-        ref = String(entry["ref"])
+        ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
         # Optional model selector: when the referenced file holds several models
         # (e.g. an ESD regridder library), `model` names which one to splice in.
         sel = haskey(entry, "model") && entry["model"] !== nothing ?
@@ -1823,9 +1823,10 @@ whose directory differs.
 function _absolutize_nested_refs!(node, compdir::String)
     if node isa AbstractDict
         r = get(node, "ref", nothing)
-        if r isa AbstractString && !startswith(r, "/") &&
-           !startswith(r, "http://") && !startswith(r, "https://")
-            node["ref"] = abspath(joinpath(compdir, r))
+        if r isa AbstractString
+            r = _expand_ref_env(r)  # esm-spec §4.7 ${VAR} expansion (before anchoring)
+            node["ref"] = (startswith(r, "/") || startswith(r, "http://") ||
+                           startswith(r, "https://")) ? r : abspath(joinpath(compdir, r))
         end
         for v in values(node)
             _absolutize_nested_refs!(v, compdir)
@@ -2065,6 +2066,8 @@ Load a referenced ESM file from a local path or URL, with circular reference det
 function _load_ref(ref::String, base_path::String, visited::Set{String};
                    metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                    injected_imports::AbstractVector=Any[])::EsmFile
+    # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
+    ref = _expand_ref_env(ref)
     # Normalize the reference for cycle detection
     canonical = _canonical_ref(ref, base_path)
 

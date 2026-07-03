@@ -950,7 +950,19 @@ function _instantiate_scope!(scope::_TemplateScope, values::Dict{String,Int64}, 
     return
 end
 
+# esm-spec §4.7: a `${VAR}` token in a ref (subsystem or template import) is
+# expanded from the process environment before resolution — an OPTIONAL loader
+# capability (like URL refs). An UNSET variable is left literal, so the ref
+# simply fails to resolve (`template_import_unresolved` / the subsystem error)
+# rather than silently misresolving. Bindings without this capability treat
+# `${VAR}` as a literal path segment, i.e. the same unresolved failure.
+function _expand_ref_env(ref::AbstractString)
+    return replace(String(ref), r"\$\{[A-Za-z_][A-Za-z0-9_]*\}" =>
+        m -> get(ENV, m[3:prevind(m, lastindex(m))], m))
+end
+
 function _load_import_raw(ref::String, base_dir::String, origin::String)
+    ref = _expand_ref_env(ref)
     if _is_url(ref) || _is_url(base_dir)
         # An absolute URL ref, or a relative ref inside a library that was
         # itself loaded from a URL: join against the URL base (RFC 3986

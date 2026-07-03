@@ -310,3 +310,66 @@ def test_roundtrip_preserves_empty_temporal_block():
     assert reparsed.temporal is not None
     assert reparsed.temporal.start is None
     assert reparsed.temporal.end is None
+
+
+def test_roundtrip_preserves_example_expression_template_imports():
+    """An Example's `expression_template_imports` (esm-spec §9.7.10 form C — a
+    per-run discretization injected for an example) is authored per-run config
+    and MUST survive load → _serialize_esm_file, exactly like a Test's does.
+    Regression: the Python binding previously dropped it on parse → emit."""
+    from earthsci_toolkit.parse import load
+    from earthsci_toolkit.serialize import _serialize_esm_file
+
+    imports = [{"ref": "./upwind1.esm", "bindings": {"N": 100}}]
+    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+             "rhs": {"op": "*", "args": [-1, "u"]}}
+    doc = {
+        "esm": "0.8.0",
+        "metadata": {"name": "example_import_roundtrip"},
+        "models": {"M": {
+            "variables": {"u": {"type": "state", "units": "1"}},
+            "equations": [decay],
+            "examples": [{
+                "id": "run_under_discretization",
+                "time_span": {"start": 0.0, "end": 1.0},
+                "expression_template_imports": imports,
+            }],
+        }},
+    }
+
+    f = load(json.dumps(doc))
+
+    # The parsed Example carries the imports on its dataclass field.
+    example = f.models["M"].examples[0]
+    assert example.expression_template_imports == imports
+
+    # ... and they round-trip verbatim on emit.
+    ser = _serialize_esm_file(f)["models"]["M"]["examples"][0]
+    assert ser["expression_template_imports"] == imports
+
+
+def test_example_without_imports_omits_key():
+    """An Example with no `expression_template_imports` must not emit the key
+    (empty-list default stays backward-compatible / off the wire)."""
+    from earthsci_toolkit.parse import load
+    from earthsci_toolkit.serialize import _serialize_esm_file
+
+    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+             "rhs": {"op": "*", "args": [-1, "u"]}}
+    doc = {
+        "esm": "0.8.0",
+        "metadata": {"name": "example_no_import"},
+        "models": {"M": {
+            "variables": {"u": {"type": "state", "units": "1"}},
+            "equations": [decay],
+            "examples": [{
+                "id": "plain",
+                "time_span": {"start": 0.0, "end": 1.0},
+            }],
+        }},
+    }
+
+    f = load(json.dumps(doc))
+    assert f.models["M"].examples[0].expression_template_imports == []
+    ser = _serialize_esm_file(f)["models"]["M"]["examples"][0]
+    assert "expression_template_imports" not in ser

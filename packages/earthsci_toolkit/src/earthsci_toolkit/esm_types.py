@@ -377,6 +377,10 @@ class Example:
     parameters: Dict[str, float] = field(default_factory=dict)
     parameter_sweep: Optional[ParameterSweep] = None
     plots: List[Plot] = field(default_factory=list)
+    # esm-spec §9.7.10 form C: raw §9.7.2 import entries naming the
+    # discretization this example runs under. Retained (not consumed at load)
+    # so the field survives round-trip, mirroring Test.expression_template_imports.
+    expression_template_imports: List[Any] = field(default_factory=list)
 
 
 # ========================================
