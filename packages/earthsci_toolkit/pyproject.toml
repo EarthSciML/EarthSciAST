@@ -67,17 +67,6 @@ test = [
     # Property-based / fuzz testing (gt-72z)
     "hypothesis>=6.0",
 ]
-# Analytics/performance monitoring. The `esm-monitoring` companion package
-# lives in this repo at `../../monitoring/` and is not yet published to PyPI.
-# To enable analytics locally, install it alongside this package:
-#
-#     pip install -e ../../monitoring
-#     pip install -e packages/earthsci_toolkit[monitoring]
-#
-# The earthsci_toolkit binding imports monitoring lazily with a no-op fallback,
-# so this extra is currently a documented marker rather than a hard requirement.
-# Once `esm-monitoring` is on PyPI, list it here.
-monitoring = []
 # Conservative-regridding geometry kernel (RFC semiring-faq-unified-ir §8.1 /
 # Appendix B.2; bead ess-my4.4.4). The `intersect_polygon` leaf's spherical /
 # geodesic manifolds clip on the sphere via `spherely` (vectorized S2 bindings

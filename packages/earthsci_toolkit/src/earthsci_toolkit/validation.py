@@ -14,7 +14,6 @@ import traceback
 import jsonschema
 from jsonschema import ValidationError as JsonSchemaValidationError
 
-from ._monitoring import track_performance
 from .parse import load, SchemaValidationError, UnsupportedVersionError, _get_schema
 from .error_handling import (
     ESMErrorFactory, ErrorCollector, ESMError, ErrorCode, Severity, ErrorContext, FixSuggestion
@@ -87,7 +86,6 @@ def _convert_jsonschema_error(error: JsonSchemaValidationError) -> ValidationErr
     )
 
 
-@track_performance("validate")
 def validate(esm_file) -> ValidationResult:
     """
     Validate an ESM file against schema, structural, and unit requirements.

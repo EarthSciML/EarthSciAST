@@ -332,13 +332,6 @@ from .operator_registry import (
 
 __version__ = "0.1.0"
 
-# Optional analytics — no-op when the `monitoring` companion package is absent
-# or ESM_ANALYTICS_ENABLED is disabled. See src/earthsci_toolkit/_monitoring.py.
-from ._monitoring import initialize_if_enabled as _init_analytics
-
-_init_analytics("earthsci-toolkit", __version__)
-del _init_analytics
-
 # Streamlined public API - only Core + Analysis + Simulation tier functionality
 __all__ = [
     # Core data types

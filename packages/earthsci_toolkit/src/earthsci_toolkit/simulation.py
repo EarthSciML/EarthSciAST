@@ -29,7 +29,6 @@ except (ImportError, ValueError):
     SCIPY_AVAILABLE = False
     solve_ivp = None
 
-from ._monitoring import track_performance
 from .esm_types import (
     ReactionSystem,
     ContinuousEvent, DiscreteEvent, Expr, ExprNode, EsmFile,
@@ -418,7 +417,6 @@ def simulate_legacy(
     return simulate_reaction_system(reaction_system, initial_conditions, time_span, events, **solver_options)
 
 
-@track_performance("simulate")
 def simulate(
     file_or_flat: Union[EsmFile, FlattenedSystem],
     tspan: Tuple[float, float],
