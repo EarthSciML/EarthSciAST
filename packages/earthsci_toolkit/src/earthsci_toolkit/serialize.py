@@ -261,6 +261,12 @@ def _serialize_test(t: Test) -> Dict[str, Any]:
     result["time_span"] = _serialize_time_span(t.time_span)
     if t.tolerance is not None:
         result["tolerance"] = _serialize_tolerance(t.tolerance)
+    # esm-spec §9.7.10 form C: a test's injected imports are authored per-run
+    # config and DO survive parse → emit (unlike a component's own imports,
+    # which are consumed by the fixpoint at load).
+    if t.expression_template_imports:
+        result["expression_template_imports"] = json.loads(
+            json.dumps(t.expression_template_imports))
     result["assertions"] = [_serialize_assertion(a) for a in t.assertions]
     return result
 

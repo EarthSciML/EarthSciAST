@@ -372,10 +372,14 @@ function _serialize_subsystem(v)::Dict{String,Any}
     elseif v isa SubsystemRef
         out = Dict{String,Any}("ref" => v.ref)
         # Metaparameter bindings at the subsystem edge (esm-spec §9.7.6 site 3)
-        # survive only while the ref is unresolved; a resolved subsystem
-        # round-trips as the instantiated inline component.
+        # and injected imports (§9.7.10 form A) survive only while the ref is
+        # unresolved; a resolved subsystem round-trips as the instantiated,
+        # fixpoint-lowered inline component and neither field remains.
         isempty(v.bindings) || (out["bindings"] = Dict{String,Any}(
             k => b for (k, b) in v.bindings))
+        isempty(v.expression_template_imports) ||
+            (out["expression_template_imports"] =
+                [_to_native_json(e) for e in v.expression_template_imports])
         return out
     else
         return serialize_model(v)
@@ -516,6 +520,13 @@ function serialize_test(t::EarthSciSerialization.Test)::Dict{String,Any}
     end
     if t.tolerance !== nothing
         result["tolerance"] = serialize_tolerance(t.tolerance)
+    end
+    # esm-spec §9.7.10 form C: a test's injected imports are authored per-run
+    # config and DO survive parse → emit (unlike a component's own imports,
+    # which are consumed by the fixpoint at load).
+    if !isempty(t.expression_template_imports)
+        result["expression_template_imports"] =
+            [_to_native_json(e) for e in t.expression_template_imports]
     end
     return result
 end

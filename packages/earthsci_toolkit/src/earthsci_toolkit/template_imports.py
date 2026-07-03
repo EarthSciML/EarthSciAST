@@ -41,6 +41,7 @@ from .lower_expression_templates import (
 
 __all__ = [
     "MAX_TEMPLATE_EXPANSION_DEPTH",
+    "apply_scope_injections",
     "reject_template_imports_pre_v08",
     "resolve_template_machinery",
 ]
@@ -1359,4 +1360,220 @@ def resolve_template_machinery(
     root.pop("metaparameters", None)
     if doc_isets:
         root["index_sets"] = doc_isets
+    return root
+
+
+# ===========================================================================
+# Scope-directed template injection (esm-spec §9.7.10)
+#
+# The consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
+# entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+# into a TARGET component's own scope without editing the leaf. Forms A/B are
+# applied here, at the raw-data level, BEFORE :func:`resolve_template_machinery`:
+# each widens the target component's ``expression_template_imports`` in the
+# §9.7.10 merge order, so the ordinary import resolver + §9.6.3 fixpoint lower
+# the target's rewrite-targets with no engine change. Form C is applied by the
+# PDE test runner (``pde_inline_tests.py``) in a per-test ephemeral build.
+# Mirrors the Julia reference ``template_imports.jl`` injection section.
+# ===========================================================================
+
+
+def _has_scope_injection(raw: Any, injected: Any) -> bool:
+    """True iff a scope-directed injection (esm-spec §9.7.10) must be applied to
+    ``raw`` before template resolution: a non-empty subsystem-ref edge list
+    ``injected`` (form A), or any ``coupling`` entry carrying an
+    ``expression_template_imports`` map (form B)."""
+    if injected:
+        return True
+    if not _is_object(raw):
+        return False
+    coupling = raw.get("coupling")
+    if not _is_array(coupling):
+        return False
+    for entry in coupling:
+        if _is_object(entry) and "expression_template_imports" in entry:
+            return True
+    return False
+
+
+def _append_component_imports(comp: Dict[str, Any], imports: Any) -> Dict[str, Any]:
+    """Append raw §9.7.2 import entries to a component's own
+    ``expression_template_imports`` (esm-spec §9.7.10 merge order: the target's
+    own imports first, then the injected list). ``comp`` is a mutable dict."""
+    existing = comp.get("expression_template_imports")
+    base = list(existing) if _is_array(existing) else []
+    for e in imports:
+        base.append(copy.deepcopy(e))
+    comp["expression_template_imports"] = base
+    return comp
+
+
+def _apply_subsystem_ref_injection(root: Dict[str, Any],
+                                   injected: Any) -> Dict[str, Any]:
+    """esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
+    import entries to the single top-level component's own
+    ``expression_template_imports``, so the referenced document is lowered under
+    the assembler-chosen discretization. A referenced subsystem file holds
+    exactly one top-level model or reaction system (§4.7), the implicit target.
+    A data-loader-only file has no expression positions, so the injection finds
+    no home and the mount fails cleanly downstream."""
+    if not injected:
+        return root
+    for compkind in _COMPONENT_KINDS:
+        comps = root.get(compkind)
+        if not (_is_object(comps) and comps):
+            continue
+        cname = next(iter(comps))
+        comp = comps[cname]
+        if not _is_object(comp):
+            continue
+        _append_component_imports(comp, injected)
+        return root
+    return root
+
+
+def _collect_scoped_owners(out: set, x: Any) -> set:
+    """Walk ``x`` and add the owning-system segment of every scoped reference (a
+    string ``"System.var"``) to ``out``. Used for ``event`` entries whose system
+    references are spread across conditions / affects."""
+    if isinstance(x, str):
+        if "." in x:
+            out.add(x.split(".", 1)[0])
+    elif _is_object(x):
+        for v in x.values():
+            _collect_scoped_owners(out, v)
+    elif _is_array(x):
+        for v in x:
+            _collect_scoped_owners(out, v)
+    return out
+
+
+def _coupling_referenced_systems(entry: Dict[str, Any]) -> set:
+    """The set of system names one coupling entry references (esm-spec §10.8):
+    ``operator_compose``/``couple`` → ``systems``; ``variable_map`` → owning
+    systems of ``from``/``to``; ``event`` → owning systems of any scoped
+    reference in the entry. A ``callback`` references none."""
+    out: set = set()
+    ctype = str(entry.get("type", ""))
+    if ctype in ("operator_compose", "couple"):
+        syss = entry.get("systems")
+        if _is_array(syss):
+            for s in syss:
+                s = str(s)
+                out.add(s)
+                out.add(s.split(".", 1)[0])
+    elif ctype == "variable_map":
+        for k in ("from", "to"):
+            v = entry.get(k)
+            if v is None:
+                continue
+            out.add(str(v).split(".", 1)[0])
+    elif ctype == "event":
+        _collect_scoped_owners(out, entry)
+    return out
+
+
+def _apply_coupling_injections(root: Dict[str, Any]) -> Dict[str, Any]:
+    """esm-spec §9.7.10 form B / §10.8: for each ``coupling`` entry carrying an
+    ``expression_template_imports`` map ``{ <target>: [imports...] }``, resolve
+    each target key to a top-level system and append its imports to that
+    system's own ``expression_template_imports`` (merge order §9.7.10). The map
+    is consumed here (deleted from the entry) so form B does not survive
+    ``parse → emit``.
+
+    Diagnostics (esm-spec §9.6.6): a key naming no system the entry references
+    is ``template_inject_target_unknown``; a key resolving to a data loader is
+    ``template_inject_target_is_loader``; a key resolving to neither model,
+    reaction system, nor loader is ``template_inject_target_not_component``.
+    Only top-level system targets are resolved by this binding — a nested
+    ``Parent.Child`` key is out of scope and reported as
+    ``template_inject_target_not_component``."""
+    coupling = root.get("coupling")
+    if not _is_array(coupling):
+        return root
+    models = root.get("models")
+    rsystems = root.get("reaction_systems")
+    loaders = root.get("data_loaders")
+
+    def _is_top(d: Any, k: str) -> bool:
+        return _is_object(d) and k in d
+
+    for entry in coupling:
+        if not _is_object(entry):
+            continue
+        inj = entry.get("expression_template_imports")
+        if inj is None:
+            continue
+        if not _is_object(inj):
+            raise ExpressionTemplateError(
+                "template_inject_target_not_component",
+                "coupling entry `expression_template_imports` must be a map from "
+                "a target system name to a list of imports (esm-spec §9.7.10 / "
+                "§10.8)",
+            )
+        referenced = _coupling_referenced_systems(entry)
+        for target, imports in inj.items():
+            tname = str(target)
+            if tname not in referenced:
+                ref_list = ("(none)" if not referenced
+                            else ", ".join(sorted(referenced)))
+                raise ExpressionTemplateError(
+                    "template_inject_target_unknown",
+                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    "names no system referenced by that entry (esm-spec §9.7.10 "
+                    f"/ §10.8). The entry references: {ref_list}.",
+                )
+            if _is_top(models, tname):
+                comp = models[tname]
+            elif _is_top(rsystems, tname):
+                comp = rsystems[tname]
+            elif _is_top(loaders, tname):
+                raise ExpressionTemplateError(
+                    "template_inject_target_is_loader",
+                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    "resolves to a data loader, which is pure I/O with no "
+                    "expression positions to rewrite (esm-spec §9.7.10 / §14).",
+                )
+            else:
+                raise ExpressionTemplateError(
+                    "template_inject_target_not_component",
+                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    "resolves to neither a top-level model, reaction system, nor "
+                    "data loader (esm-spec §9.7.10). Nested `Parent.Child` "
+                    "targets are out of scope.",
+                )
+            if not _is_object(comp):
+                raise ExpressionTemplateError(
+                    "template_inject_target_not_component",
+                    f"coupling entry `expression_template_imports` key '{tname}' "
+                    "does not name a component object (esm-spec §9.7.10).",
+                )
+            if not _is_array(imports):
+                raise ExpressionTemplateError(
+                    "template_import_not_library",
+                    "coupling entry `expression_template_imports` value for "
+                    f"'{tname}' must be a list of §9.7.2 import entries "
+                    "(esm-spec §9.7.10 / §10.8).",
+                )
+            _append_component_imports(comp, imports)
+        del entry["expression_template_imports"]
+    return root
+
+
+def apply_scope_injections(raw: Any,
+                           injected: Any = None) -> Optional[Dict[str, Any]]:
+    """esm-spec §9.7.10 forms A + B: if ``raw`` needs a scope-directed injection
+    (a non-empty subsystem-ref edge list ``injected``, or a coupling entry
+    carrying an injection map), return a deep-copied dict tree with the injected
+    imports folded into the target components' own
+    ``expression_template_imports``, ready for
+    :func:`resolve_template_machinery`. Returns ``None`` when no injection
+    applies, so the caller keeps its original fast path. Does not mutate the
+    input."""
+    injected = injected or []
+    if not _has_scope_injection(raw, injected):
+        return None
+    root: Dict[str, Any] = copy.deepcopy(raw)
+    _apply_subsystem_ref_injection(root, injected)
+    _apply_coupling_injections(root)
     return root

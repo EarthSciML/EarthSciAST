@@ -250,6 +250,19 @@ fn resolve_value(
             crate::template_imports::reject_template_imports_pre_v08(&parsed)
                 .map_err(|e| e.to_string())?;
             let bindings = read_edge_bindings(obj)?;
+            // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
+            // inject a discretization into the referenced component's own
+            // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
+            // its rewrite-targets at the mount. Consumed here (does not survive
+            // parse → emit; the mount round-trips as the lowered inline
+            // component). Refs resolve against the referenced file's directory.
+            let injected: Vec<Value> = obj
+                .get("expression_template_imports")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            crate::template_imports::apply_scope_injections(&mut parsed, &injected)
+                .map_err(|e| e.to_string())?;
             if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
                 &parsed,
                 &parent_dir,

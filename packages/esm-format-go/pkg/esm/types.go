@@ -210,11 +210,24 @@ type TimeSpan struct {
 }
 
 // Assertion is a single scalar (variable, time, expected) check inside a Test.
+// PDE-aware variants pin a spatial point via `coords` or reduce the field to a
+// scalar via `reduce` (esm-spec §6.6.5); `coords` and `reduce` are mutually
+// exclusive. Error-norm reductions require a `reference` solution. These extra
+// fields round-trip verbatim; this binding does not evaluate them.
 type Assertion struct {
 	Variable  string     `json:"variable"`
 	Time      float64    `json:"time"`
 	Expected  float64    `json:"expected"`
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
+	// Coords pins a spatial-point evaluation: index-set/dimension name → numeric
+	// coordinate. Mutually exclusive with Reduce (esm-spec §6.6.5).
+	Coords map[string]float64 `json:"coords,omitempty"`
+	// Reduce collapses the spatial field to a scalar before comparison
+	// ("integral"/"mean"/"max"/"min"/"L2_error"/"Linf_error"; esm-spec §6.6.5).
+	Reduce string `json:"reduce,omitempty"`
+	// Reference is the analytic/precomputed solution required by error-norm
+	// reductions: an inline Expression or a from_file shape (esm-spec §6.6.5).
+	Reference interface{} `json:"reference,omitempty"`
 }
 
 // Test is an inline validation test for a Model or ReactionSystem.
@@ -225,7 +238,15 @@ type Test struct {
 	ParameterOverrides map[string]float64 `json:"parameter_overrides,omitempty"`
 	TimeSpan           TimeSpan           `json:"time_span"`
 	Tolerance          *Tolerance         `json:"tolerance,omitempty"`
-	Assertions         []Assertion        `json:"assertions"`
+	// ExpressionTemplateImports are raw §9.7.2 import entries injected into the
+	// ENCLOSING component's template scope for THIS test's run only (esm-spec
+	// §9.7.10 form C / §6.6.6): the discretization a discretization-agnostic PDE
+	// leaf is lowered under in a per-test ephemeral build. Authored per-run
+	// config (a peer of ParameterOverrides), so — unlike a component's own
+	// imports — this DOES survive parse → emit. Consumed only by an ephemeral
+	// per-run build, which this binding does not perform (no numeric solver).
+	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
+	Assertions                []Assertion   `json:"assertions"`
 }
 
 // PlotAxis is an axis specification for a plot.
@@ -349,6 +370,12 @@ type Example struct {
 	TimeSpan       TimeSpan           `json:"time_span"`
 	ParameterSweep *ParameterSweep    `json:"parameter_sweep,omitempty"`
 	Plots          []Plot             `json:"plots,omitempty"`
+	// ExpressionTemplateImports are raw §9.7.2 import entries injected into the
+	// ENCLOSING component's template scope for THIS example's run only (esm-spec
+	// §9.7.10 form C / §6.7). Authored per-run config (a peer of Parameters), so
+	// it DOES survive parse → emit; consumed only by an ephemeral per-run build,
+	// which this binding does not perform.
+	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
 }
 
 // ========================================

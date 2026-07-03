@@ -1477,3 +1477,212 @@ export function resolveTemplateMachinery(
   if (Object.keys(docIsets).length > 0) root.index_sets = docIsets
   return root
 }
+
+// ===================================================================
+// Scope-directed template injection (esm-spec §9.7.10)
+// ===================================================================
+//
+// A consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
+// entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+// into a TARGET component's own scope without editing the leaf. Forms A/B are
+// applied here, at the raw-data level, BEFORE `resolveTemplateMachinery`: each
+// widens the target component's `expression_template_imports` in the §9.7.10
+// merge order (the target's own imports first, then the subsystem-ref edge,
+// then coupling entries in `coupling`-array order), so the ordinary import
+// resolver + §9.6.3 fixpoint lower the target's rewrite-targets with no engine
+// change. Form C is applied by the PDE test runner in a per-test ephemeral
+// build (`ephemeralInjectedFile` in `ref-loading.ts`). Mirrors the Julia
+// reference (`EarthSciSerialization.jl/src/template_imports.jl`).
+
+/**
+ * True iff a scope-directed injection (esm-spec §9.7.10) must be applied to
+ * `raw` before template resolution: a non-empty subsystem-ref edge list
+ * `injected` (form A), or any `coupling` entry carrying an
+ * `expression_template_imports` map (form B).
+ */
+function hasScopeInjection(raw: unknown, injected: readonly unknown[]): boolean {
+  if (injected.length > 0) return true
+  if (!isObject(raw)) return false
+  const coupling = raw.coupling
+  if (!Array.isArray(coupling)) return false
+  for (const entry of coupling) {
+    if (isObject(entry) && 'expression_template_imports' in entry) return true
+  }
+  return false
+}
+
+/**
+ * Append raw §9.7.2 import entries to a component's own
+ * `expression_template_imports` (esm-spec §9.7.10 merge order: the target's
+ * own imports first, then the injected list). `comp` is mutated in place.
+ */
+function appendComponentImports(comp: JsonObject, imports: readonly unknown[]): void {
+  const existing = comp.expression_template_imports
+  const base: unknown[] = Array.isArray(existing) ? [...existing] : []
+  for (const e of imports) base.push(deepClone(e))
+  comp.expression_template_imports = base
+}
+
+/**
+ * esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
+ * import entries to the single top-level component's own
+ * `expression_template_imports`, so the referenced document is lowered under
+ * the assembler-chosen discretization. A referenced subsystem file holds
+ * exactly one top-level model or reaction system (§4.7), the implicit target;
+ * a loader-only referenced file has no expression positions, so the injection
+ * finds no home and the mount fails cleanly downstream.
+ */
+function applySubsystemRefInjection(root: JsonObject, injected: readonly unknown[]): void {
+  if (injected.length === 0) return
+  for (const compKind of COMPONENT_KINDS) {
+    const comps = root[compKind]
+    if (!isObject(comps)) continue
+    const names = Object.keys(comps)
+    if (names.length === 0) continue
+    const comp = comps[names[0]!]
+    if (!isObject(comp)) continue
+    appendComponentImports(comp, injected)
+    return
+  }
+}
+
+/**
+ * Add the owning-system segment of every scoped reference (a string of the
+ * form "System.var") in `x` to `out`. Used for `event` entries whose system
+ * references are spread across conditions / affects.
+ */
+function collectScopedOwners(out: Set<string>, x: unknown): void {
+  if (typeof x === 'string') {
+    if (x.includes('.')) out.add(x.split('.')[0]!)
+  } else if (Array.isArray(x)) {
+    for (const v of x) collectScopedOwners(out, v)
+  } else if (isObject(x)) {
+    for (const v of Object.values(x)) collectScopedOwners(out, v)
+  }
+}
+
+/**
+ * Collect, for one coupling entry, the set of system names it references
+ * (esm-spec §10.8): `operator_compose`/`couple` → `systems`; `variable_map` →
+ * the owning systems of `from`/`to`; `event` → owning systems of any scoped
+ * reference in the entry. A `callback` references none.
+ */
+function couplingReferencedSystems(entry: JsonObject): Set<string> {
+  const out = new Set<string>()
+  const ctype = typeof entry.type === 'string' ? entry.type : ''
+  if (ctype === 'operator_compose' || ctype === 'couple') {
+    const sys = entry.systems
+    if (Array.isArray(sys)) {
+      for (const s of sys) {
+        const str = String(s)
+        out.add(str)
+        out.add(str.split('.')[0]!)
+      }
+    }
+  } else if (ctype === 'variable_map') {
+    for (const k of ['from', 'to'] as const) {
+      const v = entry[k]
+      if (v === undefined || v === null) continue
+      out.add(String(v).split('.')[0]!)
+    }
+  } else if (ctype === 'event') {
+    collectScopedOwners(out, entry)
+  }
+  return out
+}
+
+/**
+ * esm-spec §9.7.10 form B / §10.8: for each `coupling` entry carrying an
+ * `expression_template_imports` map `{ <target>: [imports...] }`, resolve
+ * each target key to a top-level system and append its imports to that
+ * system's own `expression_template_imports` (merge order §9.7.10). The map
+ * is consumed here (deleted from the entry) so form B does not survive
+ * `parse → emit`.
+ *
+ * Diagnostics (esm-spec §9.6.6): a key naming no system the entry references
+ * is `template_inject_target_unknown`; a key resolving to a data loader is
+ * `template_inject_target_is_loader`; a key resolving to neither model,
+ * reaction system, nor loader is `template_inject_target_not_component`. Only
+ * top-level system targets are resolved by this binding — a nested
+ * `Parent.Child` key is out of scope (RFC §8.3) → `..._not_component`.
+ */
+function applyCouplingInjections(root: JsonObject): void {
+  const coupling = root.coupling
+  if (!Array.isArray(coupling)) return
+  const models = root.models
+  const rsystems = root.reaction_systems
+  const loaders = root.data_loaders
+  const hasKey = (d: unknown, k: string): boolean =>
+    isObject(d) && Object.prototype.hasOwnProperty.call(d, k)
+  for (const entry of coupling) {
+    if (!isObject(entry)) continue
+    const inj = entry.expression_template_imports
+    if (inj === undefined || inj === null) continue
+    if (!isObject(inj)) {
+      throw new ExpressionTemplateError(
+        'template_inject_target_not_component',
+        'coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)',
+      )
+    }
+    const referenced = couplingReferencedSystems(entry)
+    for (const [tname, imports] of Object.entries(inj)) {
+      if (!referenced.has(tname)) {
+        throw new ExpressionTemplateError(
+          'template_inject_target_unknown',
+          `coupling entry \`expression_template_imports\` key '${tname}' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: ${
+            referenced.size === 0 ? '(none)' : [...referenced].sort().join(', ')
+          }.`,
+        )
+      }
+      let comp: unknown
+      if (hasKey(models, tname)) {
+        comp = (models as JsonObject)[tname]
+      } else if (hasKey(rsystems, tname)) {
+        comp = (rsystems as JsonObject)[tname]
+      } else if (hasKey(loaders, tname)) {
+        throw new ExpressionTemplateError(
+          'template_inject_target_is_loader',
+          `coupling entry \`expression_template_imports\` key '${tname}' resolves to a data loader, which is pure I/O with no expression positions to rewrite (esm-spec §9.7.10 / §14).`,
+        )
+      } else {
+        throw new ExpressionTemplateError(
+          'template_inject_target_not_component',
+          `coupling entry \`expression_template_imports\` key '${tname}' resolves to neither a top-level model, reaction system, nor data loader (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
+        )
+      }
+      if (!isObject(comp)) {
+        throw new ExpressionTemplateError(
+          'template_inject_target_not_component',
+          `coupling entry \`expression_template_imports\` key '${tname}' does not name a component object (esm-spec §9.7.10).`,
+        )
+      }
+      if (!Array.isArray(imports)) {
+        throw new ExpressionTemplateError(
+          'template_import_not_library',
+          `coupling entry \`expression_template_imports\` value for '${tname}' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).`,
+        )
+      }
+      appendComponentImports(comp, imports)
+    }
+    delete entry.expression_template_imports
+  }
+}
+
+/**
+ * esm-spec §9.7.10 forms A + B: if `raw` needs a scope-directed injection (a
+ * non-empty subsystem-ref edge list `injected`, or a coupling entry carrying
+ * an injection map), return a fresh plain-object tree with the injected
+ * imports folded into the target components' own `expression_template_imports`,
+ * ready for `resolveTemplateMachinery`. Returns `null` when no injection
+ * applies, so the caller keeps its original fast path.
+ */
+export function applyScopeInjections(
+  raw: unknown,
+  injected: readonly unknown[] = [],
+): JsonObject | null {
+  if (!hasScopeInjection(raw, injected)) return null
+  const root = deepClone(raw) as JsonObject
+  applySubsystemRefInjection(root, injected)
+  applyCouplingInjections(root)
+  return root
+}

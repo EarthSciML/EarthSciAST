@@ -1,0 +1,52 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "inject_test_block",
+    "description": "esm-spec §9.7.10 form C / §6.6.6: a discretization-agnostic PDE leaf (bare D(c, wrt: lon), no import of its own) whose inline tests each carry expression_template_imports naming the discretization to run under. Each test runs as an independent per-test ephemeral build, so one suite exercises the leaf under two grid resolutions with no conflict. Unlike a component's own imports, a test's imports are authored per-run config and SURVIVE parse->emit: the enclosing component round-trips with its D intact and each test keeps its import field."
+  },
+  "models": {
+    "Advection": {
+      "variables": {
+        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
+        "u": { "type": "parameter", "units": "m/s", "default": 5.5, "description": "zonal wind" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [ { "op": "-", "args": ["u"] },
+                                        { "op": "D", "args": ["c"], "wrt": "lon" } ] } }
+      ],
+      "tests": [
+        {
+          "id": "central_n288",
+          "description": "Constant field is preserved under central differences on the 288x181 grid.",
+          "time_span": { "start": 0.0, "end": 10.0 },
+          "initial_conditions": { "c": 3.0 },
+          "expression_template_imports": [
+            { "ref": "./central_D_lon_zero_grad_bc.esm",
+              "only": ["central_D_lon_zero_grad_bc"],
+              "bindings": { "NLON": 288, "NLAT": 181 } }
+          ],
+          "assertions": [
+            { "variable": "c", "time": 10.0, "expected": 3.0, "reduce": "mean",
+              "tolerance": { "abs": 1e-6 } }
+          ]
+        },
+        {
+          "id": "central_n144",
+          "description": "Same suite, coarser 144x91 grid — one suite, many schemes.",
+          "time_span": { "start": 0.0, "end": 10.0 },
+          "initial_conditions": { "c": 3.0 },
+          "expression_template_imports": [
+            { "ref": "./central_D_lon_zero_grad_bc.esm",
+              "only": ["central_D_lon_zero_grad_bc"],
+              "bindings": { "NLON": 144, "NLAT": 91 } }
+          ],
+          "assertions": [
+            { "variable": "c", "time": 10.0, "expected": 3.0, "reduce": "mean",
+              "tolerance": { "abs": 1e-6 } }
+          ]
+        }
+      ]
+    }
+  }
+}

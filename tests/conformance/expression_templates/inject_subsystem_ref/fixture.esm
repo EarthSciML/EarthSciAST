@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "inject_subsystem_ref",
+    "description": "esm-spec §9.7.10 form A: a composing document mounts the discretization-agnostic leaf.esm as a subsystem by ref and injects the central-difference BC rule into the referenced component's own scope via the subsystem-ref edge's expression_template_imports. The referenced leaf is lowered under the assembler-chosen discretization at the mount; the injection is consumed by the §9.6.3 fixpoint and does not survive parse->emit (the mounted subsystem round-trips as the lowered inline component)."
+  },
+  "models": {
+    "Assembly": {
+      "variables": {
+        "total": { "type": "state", "units": "kg/m^3", "default": 0.0, "description": "assembly-level diagnostic" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["total"], "wrt": "t" }, "rhs": 0.0 }
+      ],
+      "subsystems": {
+        "Runoff": {
+          "ref": "./leaf.esm",
+          "expression_template_imports": [
+            { "ref": "./central_D_lon_zero_grad_bc.esm",
+              "only": ["central_D_lon_zero_grad_bc"],
+              "bindings": { "NLON": 288, "NLAT": 181 } }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -145,6 +145,16 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
     // Validate against schema
     validate_schema(&json_value)?;
 
+    // esm-spec §9.7.10 form B: fold any coupling-entry injection map into its
+    // target components' own `expression_template_imports` BEFORE resolution,
+    // so the ordinary import resolver + §9.6.3 fixpoint lower the named
+    // target under the assembler-chosen discretization. The injection map is
+    // consumed here (does not survive parse → emit); target diagnostics
+    // (`template_inject_target_*`) surface as load errors. (Form A is threaded
+    // through the subsystem-ref pass in `ref_loading::resolve_value` above.)
+    crate::template_imports::apply_scope_injections(&mut json_value, &[])
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
     // Resolve esm-spec §9.7 machinery — template-library imports
     // (depth-first post-order, per-edge metaparameter instantiation),
     // index_sets merge, metaparameter close+fold — before structural

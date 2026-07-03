@@ -475,6 +475,12 @@ export type CouplingVariableMap = CouplingVariableMap1 & {
    * Strategy for mapping between 0D and spatial systems.
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
+  /**
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: {
+    [k: string]: TemplateImport[];
+  };
   description?: string;
 };
 export type CouplingVariableMap1 = {
@@ -534,6 +540,12 @@ export type CouplingEvent = CouplingEvent1 & {
   discrete_parameters?: string[];
   root_find?: "left" | "right" | "all";
   reinitialize?: boolean;
+  /**
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: {
+    [k: string]: TemplateImport[];
+  };
   description?: string;
 } & CouplingEvent2;
 export type CouplingEvent1 = {
@@ -977,6 +989,47 @@ export interface SubsystemRef {
   bindings?: {
     [k: string]: number;
   };
+  /**
+   * Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: TemplateImport[];
+}
+/**
+ * One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).
+ */
+export interface TemplateImport {
+  /**
+   * Path or URL of a template-library file, per the §4.7 reference-format table.
+   */
+  ref: string;
+  /**
+   * Template names to import; absent = all.
+   *
+   * @minItems 1
+   */
+  only?: [string, ...string[]];
+  /**
+   * Integer bindings closing the target document's metaparameters at this edge.
+   */
+  bindings?: {
+    [k: string]: number;
+  };
+  /**
+   * Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*.
+   */
+  prefix?: string;
+  /**
+   * Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7).
+   */
+  rename?: {
+    [k: string]: string;
+  };
+  /**
+   * Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7).
+   */
+  rebind?: {
+    [k: string]: string;
+  };
 }
 /**
  * Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own.
@@ -1017,6 +1070,10 @@ export interface Test {
   };
   time_span: TimeSpan;
   tolerance?: Tolerance1;
+  /**
+   * Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).
+   */
+  expression_template_imports?: TemplateImport[];
   /**
    * Scalar (variable, time) checks that define the pass/fail criterion of the test.
    *
@@ -1087,6 +1144,10 @@ export interface Example {
    * Plot specifications derived from this example's run(s).
    */
   plots?: Plot[];
+  /**
+   * Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline examples run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).
+   */
+  expression_template_imports?: TemplateImport[];
 }
 /**
  * Optional parameter sweep. When present, the example represents a family of runs (one per Cartesian combination) rather than a single trajectory.
@@ -1184,43 +1245,6 @@ export interface ExpressionTemplate {
    */
   body: number | string | ExpressionNode1;
   description?: string;
-}
-/**
- * One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).
- */
-export interface TemplateImport {
-  /**
-   * Path or URL of a template-library file, per the §4.7 reference-format table.
-   */
-  ref: string;
-  /**
-   * Template names to import; absent = all.
-   *
-   * @minItems 1
-   */
-  only?: [string, ...string[]];
-  /**
-   * Integer bindings closing the target document's metaparameters at this edge.
-   */
-  bindings?: {
-    [k: string]: number;
-  };
-  /**
-   * Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*.
-   */
-  prefix?: string;
-  /**
-   * Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7).
-   */
-  rename?: {
-    [k: string]: string;
-  };
-  /**
-   * Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7).
-   */
-  rebind?: {
-    [k: string]: string;
-  };
 }
 /**
  * A reaction network — declarative representation of chemical or biological reactions.
@@ -1380,6 +1404,12 @@ export interface CouplingOperatorCompose {
    * Strategy for mapping between 0D and spatial systems.
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
+  /**
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: {
+    [k: string]: TemplateImport[];
+  };
   description?: string;
 }
 /**
@@ -1402,6 +1432,12 @@ export interface CouplingCouple {
    * Strategy for mapping between 0D and spatial systems.
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
+  /**
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: {
+    [k: string]: TemplateImport[];
+  };
   description?: string;
 }
 /**
@@ -1436,6 +1472,12 @@ export interface CouplingCallback {
   callback_id: string;
   config?: {
     [k: string]: unknown;
+  };
+  /**
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   */
+  expression_template_imports?: {
+    [k: string]: TemplateImport[];
   };
   description?: string;
 }

@@ -238,3 +238,50 @@ across renames). Both renamed instances of the axis-less `scale_by_cells`
 rule register; the §9.6.3 equal-priority tie breaks by the §9.7.4 effective
 order (DFS post-order over the edges), so the first instance wins:
 `y = 6 * x`, and the registry carries `a.cells` (6) and `b.cells` (9).
+
+## Scope-directed template injection (esm-spec §9.7.10)
+
+These fixtures exercise the assembler- or test-chosen discretization for a
+discretization-agnostic PDE leaf (`docs/content/rfcs/scoped-template-injection.md`):
+an `expression_template_imports` list registered into a *target* component's
+own scope from the consuming surface, without editing the leaf. All three forms
+reuse the §9.7.2 `TemplateImport` shape and the §9.6.3 fixpoint verbatim — the
+only new capability is *who may write into a component's scope*. They share the
+`grid_latlon.esm` → `central_D_lon_interior.esm` → `central_D_lon_zero_grad_bc.esm`
+central-difference library from `import_smoke/`.
+
+### `inject_subsystem_ref/` (form A — §4.7 / §9.7.10)
+
+`leaf.esm` is a bare-`D(c, wrt: lon)` PDE leaf with NO import of its own.
+`fixture.esm` mounts it as a subsystem by `ref` and injects the BC rule via the
+subsystem-ref edge's `expression_template_imports` (bound `NLON=288, NLAT=181`).
+The golden `expanded.esm` (full typed load, re-emitted) is the assembled
+document with the mounted leaf's derivative lowered to the `makearray` stencil
+and the injection field GONE — form A is consumed by the fixpoint and does not
+survive `parse → emit`. `no_inject.esm` is the negative twin: the same mount
+without injection loads cleanly (the `D` survives) but is `unlowered_operator`
+at the evaluation gate (parse/validate-only bindings mark it N/A).
+
+### `inject_coupling_entry/` (form B — §10.8 / §9.7.10)
+
+`fixture.esm` composes a 0-D system (`Emit`) and a spatial model (`Advection`,
+agnostic) with `operator_compose`, injecting the BC rule into `Advection` by
+name through the entry's `expression_template_imports` map. The golden
+`expanded.esm` has `Advection`'s derivative lowered and the coupling entry's
+injection map consumed (form B does not survive `parse → emit`); `Emit` names no
+key and is untouched. Negatives (load-time `ExpressionTemplateError`):
+`neg_target_unknown.esm` (key names no referenced system →
+`template_inject_target_unknown`) and `neg_target_is_loader.esm` (key resolves
+to a data loader → `template_inject_target_is_loader`).
+
+### `inject_test_block/` (form C — §6.6.6 / §9.7.10)
+
+`fixture.esm` is an agnostic PDE leaf whose two inline tests each carry
+`expression_template_imports` naming the discretization to run under (grids
+288×181 and 144×91 — one suite, many schemes). The golden `roundtrip.esm` is the
+full typed load re-emitted: unlike a component's own imports, a test's imports
+are authored per-run config, so the enclosing component round-trips with its `D`
+INTACT and each test KEEPS its import field (form C survives `parse → emit`).
+Each test runs as an independent per-test ephemeral build in which the leaf's
+derivative is lowered under that test's grid; the persisted component is never
+mutated (the Julia reference runs this through `run_pde_tests`).

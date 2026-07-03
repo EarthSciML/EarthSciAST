@@ -1443,6 +1443,13 @@ export const schema: AnySchemaObject = {
             "type": "integer"
           },
           "description": "Integer bindings closing the referenced document's metaparameters (esm-spec §9.7.6), e.g. a convergence wrapper instantiating a problem file at a given grid size."
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
         }
       }
     },
@@ -2042,6 +2049,13 @@ export const schema: AnySchemaObject = {
           "$ref": "#/$defs/Tolerance",
           "description": "Test-level default tolerance applied to all assertions in this test that do not override it."
         },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
         "assertions": {
           "type": "array",
           "description": "Scalar (variable, time) checks that define the pass/fail criterion of the test.",
@@ -2395,6 +2409,13 @@ export const schema: AnySchemaObject = {
           "items": {
             "$ref": "#/$defs/Plot"
           }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline examples run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
         }
       }
     },
@@ -2707,6 +2728,16 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
         },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "description": {
           "type": "string"
         }
@@ -2758,6 +2789,16 @@ export const schema: AnySchemaObject = {
             "integral"
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
         },
         "description": {
           "type": "string"
@@ -2818,6 +2859,16 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Strategy for mapping between 0D and spatial systems."
         },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
         "description": {
           "type": "string"
         }
@@ -2863,6 +2914,16 @@ export const schema: AnySchemaObject = {
         "config": {
           "type": "object",
           "additionalProperties": true
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
         },
         "description": {
           "type": "string"
@@ -2944,6 +3005,16 @@ export const schema: AnySchemaObject = {
         },
         "reinitialize": {
           "type": "boolean"
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
         },
         "description": {
           "type": "string"

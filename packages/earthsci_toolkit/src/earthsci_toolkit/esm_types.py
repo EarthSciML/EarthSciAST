@@ -297,6 +297,13 @@ class Test:
     initial_conditions: Dict[str, float] = field(default_factory=dict)
     parameter_overrides: Dict[str, float] = field(default_factory=dict)
     tolerance: Optional[Tolerance] = None
+    # Raw §9.7.2 import entries injected into the ENCLOSING component's scope
+    # for THIS test's run only (esm-spec §9.7.10 form C / §6.6.6): the
+    # discretization a discretization-agnostic PDE leaf is lowered under in the
+    # per-test ephemeral build. Authored per-run config — a peer of
+    # `parameter_overrides` — so unlike a component's own imports it DOES
+    # survive `parse → emit`. Empty for a non-PDE / agnostic-free test.
+    expression_template_imports: List[Any] = field(default_factory=list)
 
 
 @dataclass

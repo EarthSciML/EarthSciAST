@@ -126,6 +126,18 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 
 		ref := refObj
 
+		// esm-spec §9.7.10 form A: the edge's optional `expression_template_imports`
+		// inject a discretization into the REFERENCED component's own scope. Kept
+		// as raw §9.7.2 entries and threaded into the referenced document's load,
+		// where the §9.6.3 fixpoint lowers its rewrite-targets before the mounted
+		// form is inlined (so the field does not survive parse → emit).
+		var injected []interface{}
+		if m, ok := value.(map[string]interface{}); ok {
+			if inj, ok := m["expression_template_imports"].([]interface{}); ok {
+				injected = inj
+			}
+		}
+
 		// The edge's metaparameter bindings (esm-spec §9.7.6 binding site 3).
 		bindings := map[string]int64{}
 		for _, bk := range sortedKeys(bindingsRaw) {
@@ -206,6 +218,11 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 			return newETErr("subsystem_ref_is_template_library",
 				fmt.Sprintf("subsystem %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", key, ref, sourceDesc))
 		}
+
+		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
+		// referenced file's single top-level component BEFORE resolution, so its
+		// rewrite-targets lower under the assembler-chosen discretization.
+		applySubsystemRefInjection(view, injected)
 
 		// Resolve the referenced document's §9.7 machinery with this edge's
 		// bindings, then run the §9.6.3 rewrite fixpoint so the inlined

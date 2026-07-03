@@ -16,6 +16,7 @@ import {
   rejectExpressionTemplatesPreV04,
 } from './lower_expression_templates.js'
 import {
+  applyScopeInjections,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template_imports.js'
@@ -487,6 +488,16 @@ export interface LoadOptions {
    * browser hosts that need template imports must supply their own.
    */
   readFile?: ((path: string) => string) | undefined
+
+  /**
+   * Scope-directed template injection for a §4.7 subsystem-ref edge
+   * (esm-spec §9.7.10 form A): raw §9.7.2 import entries folded into this
+   * document's single top-level component's own scope BEFORE the §9.6.3
+   * fixpoint, so a mounted discretization-agnostic PDE leaf is lowered under
+   * the assembler-chosen discretization. Threaded in by `resolveSubsystemRefs`
+   * from the subsystem edge; not part of the public authoring surface.
+   */
+  injectedImports?: readonly unknown[] | undefined
 }
 
 /**
@@ -559,12 +570,20 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   const basePath =
     options?.basePath ??
     (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.')
-  const resolved = resolveTemplateMachinery(data, basePath, {
+  // esm-spec §9.7.10 forms A/B: fold any scope-directed injection — a
+  // subsystem-ref edge's `injectedImports` (form A) or a coupling entry's
+  // injection map (form B) — into the target components' own
+  // `expression_template_imports` BEFORE resolution, so the ordinary import
+  // resolver + §9.6.3 fixpoint lower the target under the chosen
+  // discretization. `null` when no injection applies (the fast path).
+  const injectedRoot = applyScopeInjections(data, options?.injectedImports ?? [])
+  const machineryInput = injectedRoot ?? data
+  const resolved = resolveTemplateMachinery(machineryInput, basePath, {
     metaparameters: options?.metaparameters,
     readFile: options?.readFile,
     validateSchema,
   })
-  if (resolved !== null) data = resolved
+  data = resolved ?? machineryInput
   data = lowerExpressionTemplates(data as object)
 
   // Step 4: Clean up unknown fields for forward compatibility and type coercion

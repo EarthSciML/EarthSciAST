@@ -545,16 +545,25 @@ struct Test
     time_span::TimeSpan
     tolerance::Union{Tolerance,Nothing}
     assertions::Vector{Assertion}
+    # Raw §9.7.2 import entries injected into the ENCLOSING component's scope
+    # for THIS test's run only (esm-spec §9.7.10 form C / §6.6.6): the
+    # discretization a discretization-agnostic PDE leaf is lowered under in the
+    # per-test ephemeral build. Authored per-run config — a peer of
+    # `parameter_overrides` — so unlike a component's own imports it DOES
+    # survive `parse → emit`. Empty for a non-PDE / agnostic-free test.
+    expression_template_imports::Vector{Any}
 
     function Test(id::AbstractString, time_span::TimeSpan, assertions::Vector{Assertion};
                   description=nothing,
                   initial_conditions=Dict{String,Float64}(),
                   parameter_overrides=Dict{String,Float64}(),
-                  tolerance=nothing)
+                  tolerance=nothing,
+                  expression_template_imports=Any[])
         return new(String(id), description,
                    Dict{String,Float64}(string(k) => Float64(v) for (k, v) in initial_conditions),
                    Dict{String,Float64}(string(k) => Float64(v) for (k, v) in parameter_overrides),
-                   time_span, tolerance, assertions)
+                   time_span, tolerance, assertions,
+                   Vector{Any}(expression_template_imports))
     end
 end
 
@@ -621,14 +630,24 @@ A `SubsystemRef` only survives parsing when references are not resolved (e.g.
 `load(::IO)` without a base path); `load(::String)` always resolves them.
 `bindings` closes the referenced document's open metaparameters at this edge
 (esm-spec §9.7.6 binding site 3 — e.g. a convergence wrapper instantiating a
-problem file at a given size).
+problem file at a given size). `expression_template_imports` are the raw
+§9.7.2 import entries injected into the REFERENCED component's own template
+scope (esm-spec §9.7.10 form A — assembler-chosen discretization for a mounted
+PDE leaf); they are threaded into the referenced document's load and consumed by
+the §9.6.3 fixpoint, so a resolved subsystem round-trips as the lowered inline
+component and the field does not survive `parse → emit`.
 """
 struct SubsystemRef
     ref::String
     bindings::Dict{String,Int}
+    expression_template_imports::Vector{Any}
 end
 
-SubsystemRef(ref::String) = SubsystemRef(ref, Dict{String,Int}())
+SubsystemRef(ref::AbstractString, bindings::AbstractDict) =
+    SubsystemRef(String(ref),
+                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings), Any[])
+SubsystemRef(ref::AbstractString) =
+    SubsystemRef(String(ref), Dict{String,Int}(), Any[])
 
 """
     Model

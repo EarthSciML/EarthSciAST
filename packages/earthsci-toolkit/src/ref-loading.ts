@@ -17,11 +17,13 @@ import {
   rejectExpressionTemplatesPreV04,
 } from './lower_expression_templates.js'
 import {
+  applyScopeInjections,
   isTemplateLibraryDoc,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template_imports.js'
-import { validateSchema } from './parse.js'
+import { load, validateSchema } from './parse.js'
+import { save } from './serialize.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -170,6 +172,25 @@ function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<
 }
 
 /**
+ * Read the optional `expression_template_imports` off a `{ ref, ... }`
+ * subsystem edge (esm-spec §9.7.10 form A): raw §9.7.2 import entries injected
+ * into the REFERENCED component's own template scope so a mounted
+ * discretization-agnostic PDE leaf is lowered under the assembler-chosen
+ * discretization. Returns `[]` when absent.
+ */
+function readEdgeInjectedImports(sub: { expression_template_imports?: unknown }): unknown[] {
+  const raw = sub.expression_template_imports
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) {
+    throw new ExpressionTemplateError(
+      'template_import_not_library',
+      'subsystem-ref `expression_template_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
+    )
+  }
+  return raw
+}
+
+/**
  * Post-parse handling shared by model / reaction-system ref resolution:
  *
  * 1. A §4.7 subsystem ref MUST NOT target a template-library file — the two
@@ -180,12 +201,18 @@ function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<
  *    closed with this edge's `bindings` (esm-spec §9.7.6 binding site 3),
  *    and lowered to the §9.6.3 fixpoint before the single component is
  *    extracted and inlined.
+ * 3. The edge's `injectedImports` (esm-spec §9.7.10 form A) are folded into
+ *    the referenced component's own scope BEFORE resolution, so its
+ *    rewrite-targets lower under the assembler-chosen discretization at the
+ *    mount (the injection is consumed by the fixpoint and does not survive
+ *    parse → emit).
  */
 function resolveRefDocument(
   parsed: EsmFile,
   ref: string,
   refBasePath: string,
   bindings: Record<string, number>,
+  injectedImports: readonly unknown[] = [],
 ): EsmFile {
   if (isTemplateLibraryDoc(parsed)) {
     throw new ExpressionTemplateError(
@@ -195,14 +222,18 @@ function resolveRefDocument(
   }
   rejectExpressionTemplatesPreV04(parsed)
   rejectTemplateImportsPreV08(parsed)
+  // esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
+  // into the referenced component's scope before resolution.
+  const injectedRoot = applyScopeInjections(parsed, injectedImports)
+  const machineryInput = (injectedRoot ?? parsed) as EsmFile
   // `resolveTemplateMachinery` returns null when the document carries no
   // §9.7 machinery (and rejects non-empty bindings against such a document
   // with `template_import_unknown_name`).
-  const resolved = resolveTemplateMachinery(parsed, refBasePath, {
+  const resolved = resolveTemplateMachinery(machineryInput, refBasePath, {
     metaparameters: bindings,
     validateSchema,
   })
-  if (resolved === null) return parsed
+  if (resolved === null) return machineryInput
   return lowerExpressionTemplates(resolved) as EsmFile
 }
 
@@ -223,7 +254,11 @@ async function resolveModelRefs(
   if (!('subsystems' in model) || !model.subsystems) return
 
   for (const [subName, subsystem] of Object.entries(model.subsystems)) {
-    const sub = subsystem as Model & { ref?: string; bindings?: unknown }
+    const sub = subsystem as Model & {
+      ref?: string
+      bindings?: unknown
+      expression_template_imports?: unknown
+    }
     if (sub.ref) {
       const ref = sub.ref
       const chainKey = normalizeRef(ref, basePath)
@@ -243,6 +278,7 @@ async function resolveModelRefs(
           ref,
           refBasePath,
           readEdgeBindings(sub, subName),
+          readEdgeInjectedImports(sub),
         )
 
         // esm-spec §4.7: the mounted file's document-scoped index sets (already
@@ -309,7 +345,11 @@ async function resolveReactionSystemRefs(
   if (!rs.subsystems) return
 
   for (const [subName, subsystem] of Object.entries(rs.subsystems)) {
-    const sub = subsystem as ReactionSystem & { ref?: string; bindings?: unknown }
+    const sub = subsystem as ReactionSystem & {
+      ref?: string
+      bindings?: unknown
+      expression_template_imports?: unknown
+    }
     if (sub.ref) {
       const ref = sub.ref
       const chainKey = normalizeRef(ref, basePath)
@@ -329,6 +369,7 @@ async function resolveReactionSystemRefs(
           ref,
           refBasePath,
           readEdgeBindings(sub, subName),
+          readEdgeInjectedImports(sub),
         )
 
         // Extract the first reaction system from the referenced file
@@ -361,6 +402,64 @@ async function resolveReactionSystemRefs(
       await resolveReactionSystemRefs(sub, basePath, visited, resolving, [...refChain, subName])
     }
   }
+}
+
+/**
+ * esm-spec §9.7.10 form C: build a throwaway `EsmFile` in which component
+ * `mname` has the run's `imports` (raw §9.7.2 entries) appended to its own
+ * `expression_template_imports`, so the ordinary import resolver + §9.6.3
+ * fixpoint lower its rewrite-targets under the run-chosen discretization. The
+ * persisted `file` is never mutated. This is what lets one test/example suite
+ * exercise a discretization-agnostic PDE leaf under several schemes with no
+ * conflict between runs.
+ *
+ * The raw base is re-read from `sourcePath` when given (relative import `ref`s
+ * resolve against its directory), else re-serialized from `file`; `baseDir`
+ * anchors the injected `ref`s. Mirrors the Julia reference
+ * `_ephemeral_injected_file` (`EarthSciSerialization.jl/src/pde_inline_tests.jl`).
+ *
+ * This binding does not numerically simulate PDEs; the ephemeral build is the
+ * structural-lowering half of form C (the leaf's rewrite-target is lowered in
+ * this copy only). No solver is implied.
+ */
+export async function ephemeralInjectedFile(
+  file: EsmFile | null,
+  sourcePath: string | null,
+  mname: string,
+  imports: readonly unknown[],
+  baseDir: string,
+): Promise<EsmFile> {
+  let raw: Record<string, unknown>
+  if (sourcePath !== null) {
+    const fs = await import('node:fs/promises')
+    raw = JSON.parse(await fs.readFile(sourcePath, 'utf-8')) as Record<string, unknown>
+  } else if (file !== null) {
+    raw = JSON.parse(save(file)) as Record<string, unknown>
+  } else {
+    throw new Error('ephemeralInjectedFile: one of `file` or `sourcePath` must be provided')
+  }
+
+  let injected = false
+  for (const kind of ['models', 'reaction_systems'] as const) {
+    const comps = raw[kind]
+    if (typeof comps !== 'object' || comps === null || Array.isArray(comps)) continue
+    const comp = (comps as Record<string, unknown>)[mname]
+    if (typeof comp !== 'object' || comp === null || Array.isArray(comp)) continue
+    const c = comp as Record<string, unknown>
+    const existing = c.expression_template_imports
+    const base: unknown[] = Array.isArray(existing) ? [...existing] : []
+    for (const e of imports) base.push(e)
+    c.expression_template_imports = base
+    injected = true
+    break
+  }
+  if (!injected) {
+    throw new Error(`component '${mname}' not found for per-run injection (esm-spec §9.7.10)`)
+  }
+
+  const f = load(JSON.stringify(raw), { basePath: baseDir })
+  await resolveSubsystemRefs(f, baseDir)
+  return f
 }
 
 /**

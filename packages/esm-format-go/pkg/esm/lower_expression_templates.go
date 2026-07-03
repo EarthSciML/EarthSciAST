@@ -1336,6 +1336,14 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 		return "", fmt.Errorf("template resolution pass: %w", err)
 	}
 	orders := extractTemplateOrders(jsonStr)
+	// esm-spec §9.7.10 form B: fold any coupling-entry injection into the target
+	// components' own `expression_template_imports` BEFORE resolution, so the
+	// ordinary import resolver + §9.6.3 fixpoint lower the target under the
+	// assembler-chosen discretization. No-op when no coupling entry carries an
+	// injection map.
+	if err := applyCouplingInjections(view); err != nil {
+		return "", err
+	}
 	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
 		return "", err
 	}

@@ -1382,3 +1382,208 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     isempty(doc_isets) || (root["index_sets"] = doc_isets)
     return root
 end
+
+# ===================================================================
+# Scope-directed template injection (esm-spec §9.7.10)
+#
+# The consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
+# entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+# into a TARGET component's own scope without editing the leaf. Forms A/B are
+# applied here, at the raw-data level, BEFORE `resolve_template_machinery`: each
+# widens the target component's `expression_template_imports` in the §9.7.10
+# merge order, so the ordinary import resolver + §9.6.3 fixpoint lower the
+# target's rewrite-targets with no engine change. Form C is applied by the PDE
+# test runner (`pde_inline_tests.jl`) in a per-test ephemeral build.
+# ===================================================================
+
+"""
+    _has_scope_injection(raw, injected) -> Bool
+
+True iff a scope-directed injection (esm-spec §9.7.10) must be applied to
+`raw` before template resolution: a non-empty subsystem-ref edge list
+`injected` (form A), or any `coupling` entry carrying an
+`expression_template_imports` map (form B).
+"""
+function _has_scope_injection(raw, injected)::Bool
+    injected !== nothing && !isempty(injected) && return true
+    _is_object(raw) || return false
+    coupling = _raw_get(raw, "coupling")
+    coupling isa AbstractVector || return false
+    for entry in coupling
+        _is_object(entry) && _raw_haskey(entry, "expression_template_imports") && return true
+    end
+    return false
+end
+
+# Append raw §9.7.2 import entries to a component's own
+# `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
+# imports first, then the injected list). `comp` is a mutable native tree.
+function _append_component_imports!(comp::AbstractDict, imports)
+    existing = get(comp, "expression_template_imports", nothing)
+    base = existing === nothing ? Any[] : Any[e for e in existing]
+    for e in imports
+        push!(base, _to_ordered(e))
+    end
+    comp["expression_template_imports"] = base
+    return comp
+end
+
+"""
+    _apply_subsystem_ref_injection!(root, injected)
+
+esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2 import
+entries to the single top-level component's own `expression_template_imports`,
+so the referenced document is lowered under the assembler-chosen discretization.
+`root` is a mutable native tree; a referenced subsystem file holds exactly one
+top-level model or reaction system (§4.7), which is the implicit target. A
+data-loader-only referenced file has no expression positions, so the injection
+finds no home and the mount fails cleanly downstream.
+"""
+function _apply_subsystem_ref_injection!(root::AbstractDict, injected)
+    (injected === nothing || isempty(injected)) && return root
+    for compkind in _COMPONENT_KINDS
+        comps = get(root, compkind, nothing)
+        (comps isa AbstractDict && !isempty(comps)) || continue
+        cname = first(keys(comps))
+        comp = comps[cname]
+        comp isa AbstractDict || continue
+        _append_component_imports!(comp, injected)
+        return root
+    end
+    return root
+end
+
+# Collect, for one coupling entry, the set of system names it references
+# (esm-spec §10.8): `operator_compose`/`couple` → `systems`; `variable_map` →
+# the owning systems of `from`/`to`; `event` → owning systems of any scoped
+# reference in the entry. A `callback` references none.
+function _coupling_referenced_systems(entry::AbstractDict)::Set{String}
+    out = Set{String}()
+    ctype = string(get(entry, "type", ""))
+    if ctype in ("operator_compose", "couple")
+        sys = get(entry, "systems", nothing)
+        if sys isa AbstractVector
+            for s in sys
+                push!(out, string(s))
+                push!(out, String(first(split(string(s), '.'))))
+            end
+        end
+    elseif ctype == "variable_map"
+        for k in ("from", "to")
+            v = get(entry, k, nothing)
+            v === nothing && continue
+            push!(out, String(first(split(string(v), '.'))))
+        end
+    elseif ctype == "event"
+        _collect_scoped_owners!(out, entry)
+    end
+    return out
+end
+
+# Walk `x` and add the owning-system segment of every scoped reference (a
+# string of the form "System.var") to `out`. Used for `event` entries whose
+# system references are spread across conditions/affects.
+function _collect_scoped_owners!(out::Set{String}, x)
+    if x isa AbstractString
+        occursin('.', x) && push!(out, String(first(split(x, '.'))))
+    elseif x isa AbstractDict
+        for (_, v) in pairs(x)
+            _collect_scoped_owners!(out, v)
+        end
+    elseif x isa AbstractVector
+        for v in x
+            _collect_scoped_owners!(out, v)
+        end
+    end
+    return out
+end
+
+"""
+    _apply_coupling_injections!(root)
+
+esm-spec §9.7.10 form B / §10.8: for each `coupling` entry carrying an
+`expression_template_imports` map `{ <target>: [imports...] }`, resolve each
+target key to a top-level system and append its imports to that system's own
+`expression_template_imports` (merge order §9.7.10). The map is consumed here
+(deleted from the entry) so form B does not survive `parse → emit`.
+
+Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
+`template_inject_target_unknown`; a key resolving to a data loader is
+`template_inject_target_is_loader`; a key resolving to neither model, reaction
+system, nor loader is `template_inject_target_not_component`. Only top-level
+system targets are resolved by this binding — a nested `Parent.Child` key is
+out of scope (RFC §8.3) and reported as `template_inject_target_not_component`.
+"""
+function _apply_coupling_injections!(root::AbstractDict)
+    coupling = get(root, "coupling", nothing)
+    coupling isa AbstractVector || return root
+    models = get(root, "models", nothing)
+    rsystems = get(root, "reaction_systems", nothing)
+    loaders = get(root, "data_loaders", nothing)
+    _is_top(d, k) = d isa AbstractDict && haskey(d, k)
+    for entry in coupling
+        entry isa AbstractDict || continue
+        inj = get(entry, "expression_template_imports", nothing)
+        inj === nothing && continue
+        inj isa AbstractDict || throw(ExpressionTemplateError(
+            "template_inject_target_not_component",
+            "coupling entry `expression_template_imports` must be a map from a " *
+            "target system name to a list of imports (esm-spec §9.7.10 / §10.8)"))
+        referenced = _coupling_referenced_systems(entry)
+        for (target, imports) in pairs(inj)
+            tname = string(target)
+            (tname in referenced) || throw(ExpressionTemplateError(
+                "template_inject_target_unknown",
+                "coupling entry `expression_template_imports` key '$tname' names no " *
+                "system referenced by that entry (esm-spec §9.7.10 / §10.8). " *
+                "The entry references: " *
+                "$(isempty(referenced) ? "(none)" : join(sort(collect(referenced)), ", "))."))
+            if _is_top(models, tname)
+                comp = models[tname]
+            elseif _is_top(rsystems, tname)
+                comp = rsystems[tname]
+            elseif _is_top(loaders, tname)
+                throw(ExpressionTemplateError(
+                    "template_inject_target_is_loader",
+                    "coupling entry `expression_template_imports` key '$tname' resolves to " *
+                    "a data loader, which is pure I/O with no expression positions to " *
+                    "rewrite (esm-spec §9.7.10 / §14)."))
+            else
+                throw(ExpressionTemplateError(
+                    "template_inject_target_not_component",
+                    "coupling entry `expression_template_imports` key '$tname' resolves to " *
+                    "neither a top-level model, reaction system, nor data loader " *
+                    "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."))
+            end
+            comp isa AbstractDict || throw(ExpressionTemplateError(
+                "template_inject_target_not_component",
+                "coupling entry `expression_template_imports` key '$tname' does not name a " *
+                "component object (esm-spec §9.7.10)."))
+            imports isa AbstractVector || throw(ExpressionTemplateError(
+                "template_import_not_library",
+                "coupling entry `expression_template_imports` value for '$tname' must be a " *
+                "list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."))
+            _append_component_imports!(comp, imports)
+        end
+        delete!(entry, "expression_template_imports")
+    end
+    return root
+end
+
+"""
+    apply_scope_injections(raw, injected) -> mutable native tree
+
+esm-spec §9.7.10 forms A + B: if `raw` needs a scope-directed injection (a
+non-empty subsystem-ref edge list `injected`, or a coupling entry carrying an
+injection map), return a mutable native copy of `raw` with the injected imports
+folded into the target components' own `expression_template_imports`, ready for
+`resolve_template_machinery`. Returns `nothing` when no injection applies, so
+the caller keeps its original (JSON3) fast path.
+"""
+function apply_scope_injections(raw, injected)
+    _has_scope_injection(raw, injected) || return nothing
+    root = _to_ordered(raw)::OrderedDict{String,Any}
+    _apply_subsystem_ref_injection!(root, injected)
+    _apply_coupling_injections!(root)
+    return root
+end

@@ -793,7 +793,17 @@ function coerce_model(data::Any)::Model
                         bindings[string(bk)] = Int(bv)
                     end
                 end
-                SubsystemRef(string(v.ref), bindings)
+                # Optional `expression_template_imports` injects a discretization
+                # into the REFERENCED component's own scope (esm-spec §9.7.10
+                # form A). Kept as raw §9.7.2 entries; `_resolve_subsystem_ref`
+                # threads them into the referenced document's load and the
+                # §9.6.3 fixpoint consumes them before the mounted form is set.
+                injected = Any[]
+                if haskey(v, :expression_template_imports) &&
+                   v.expression_template_imports !== nothing
+                    injected = Any[_to_native_json(e) for e in v.expression_template_imports]
+                end
+                SubsystemRef(string(v.ref), bindings, injected)
             elseif haskey(v, :kind) && haskey(v, :source)
                 # Loader-required fields (kind + source) discriminate an inline
                 # data loader from a Model, which carries equations instead.
@@ -916,11 +926,21 @@ function coerce_test(data::Any)::EarthSciSerialization.Test
     end
     tolerance = haskey(data, :tolerance) && data.tolerance !== nothing ?
         coerce_tolerance(data.tolerance) : nothing
+    # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
+    # discretization this test runs under. Retained (not consumed at load) so
+    # the PDE runner can build a per-test ephemeral instance and so the field
+    # survives round-trip.
+    injected = Any[]
+    if haskey(data, :expression_template_imports) &&
+       data.expression_template_imports !== nothing
+        injected = Any[_to_native_json(e) for e in data.expression_template_imports]
+    end
     return EarthSciSerialization.Test(id, time_span, assertions;
         description=description,
         initial_conditions=ic,
         parameter_overrides=po,
-        tolerance=tolerance)
+        tolerance=tolerance,
+        expression_template_imports=injected)
 end
 
 """
@@ -1608,7 +1628,8 @@ Load and parse an ESM file from an IO stream. `base_path` anchors relative
 the document's open metaparameters at the loader API (esm-spec §9.7.6).
 """
 function load(io::IO; base_path::AbstractString=pwd(),
-              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+              injected_imports::AbstractVector=Any[])::EsmFile
     try
         # Read JSON content
         json_string = read(io, String)
@@ -1657,9 +1678,17 @@ function load(io::IO; base_path::AbstractString=pwd(),
         # apply_expression_template nodes, no `expression_templates` blocks,
         # no imports, and no metaparameters — downstream consumers see only
         # normal Expression ASTs (Option A round-trip).
-        resolved = resolve_template_machinery(raw_data, String(base_path);
+        # esm-spec §9.7.10 forms A/B: fold any scope-directed injection — a
+        # subsystem-ref edge's `injected_imports` (form A) or a coupling
+        # entry's injection map (form B) — into the target components' own
+        # `expression_template_imports` BEFORE resolution, so the ordinary
+        # import resolver + §9.6.3 fixpoint lower the target under the
+        # assembler-chosen discretization. `nothing` when no injection applies.
+        injected_root = apply_scope_injections(raw_data, injected_imports)
+        machinery_input = injected_root === nothing ? raw_data : injected_root
+        resolved = resolve_template_machinery(machinery_input, String(base_path);
                                               metaparameters=metaparameters)
-        expanded = lower_expression_templates(resolved === nothing ? raw_data : resolved)
+        expanded = lower_expression_templates(resolved === nothing ? machinery_input : resolved)
         if resolved !== nothing && !(expanded isa JSONLikeDict)
             # The lowering pass fast-paths files without component templates
             # (e.g. a directly-loaded library file, or a metaparameters-only
@@ -1984,7 +2013,12 @@ importing document's registry — with the §4.7 deep-equal-or-error rule
 """
 function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String},
                                 registry::Dict{String,IndexSet})
-    loaded = _load_ref(ref.ref, base_path, visited; metaparameters=ref.bindings)
+    # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
+    # discretization into the referenced component's own scope, threaded into
+    # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
+    loaded = _load_ref(ref.ref, base_path, visited;
+                       metaparameters=ref.bindings,
+                       injected_imports=ref.expression_template_imports)
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
     n_loaders = loaded.data_loaders === nothing ? 0 : length(loaded.data_loaders)
     total = n_models + n_loaders
@@ -2029,7 +2063,8 @@ Load a referenced ESM file from a local path or URL, with circular reference det
 - `visited::Set{String}`: set of already-visited references for cycle detection
 """
 function _load_ref(ref::String, base_path::String, visited::Set{String};
-                   metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+                   metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                   injected_imports::AbstractVector=Any[])::EsmFile
     # Normalize the reference for cycle detection
     canonical = _canonical_ref(ref, base_path)
 
@@ -2043,9 +2078,11 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
             # An absolute URL ref, or a relative ref inside a document that
             # was itself loaded from a URL: resolve against the URL base
             # (`canonical` is exactly the joined, normalized URL).
-            return _load_remote_ref(canonical, visited; metaparameters=metaparameters)
+            return _load_remote_ref(canonical, visited; metaparameters=metaparameters,
+                                    injected_imports=injected_imports)
         else
-            return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters)
+            return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters,
+                                   injected_imports=injected_imports)
         end
     catch e
         if e isa SubsystemRefError || e isa ExpressionTemplateError
@@ -2188,7 +2225,8 @@ end
 Load a locally referenced ESM file.
 """
 function _load_local_ref(ref::String, base_path::String, visited::Set{String};
-                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+                         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                         injected_imports::AbstractVector=Any[])::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
 
     if !isfile(resolved_path)
@@ -2206,10 +2244,13 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     end
 
     # Parse the referenced file using the IO-based load (no ref resolution on
-    # its own); the ref's directory anchors its template imports, and the
-    # edge's `bindings` close its metaparameters (esm-spec §9.7.6 site 3).
+    # its own); the ref's directory anchors its template imports, the edge's
+    # `bindings` close its metaparameters (esm-spec §9.7.6 site 3), and
+    # `injected_imports` inject the edge's discretization into its single
+    # component's scope (esm-spec §9.7.10 form A).
     ref_base = dirname(resolved_path)
-    file = load(IOBuffer(content); base_path=ref_base, metaparameters=metaparameters)
+    file = load(IOBuffer(content); base_path=ref_base, metaparameters=metaparameters,
+                injected_imports=injected_imports)
 
     # Recursively resolve refs in the loaded file, relative to its own directory
     _resolve_refs_in_file!(file, ref_base, visited)
@@ -2227,7 +2268,8 @@ mirroring `_load_local_ref`'s dirname anchoring; cycle detection carries
 `visited` through with canonical URL identity.
 """
 function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
-                          metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+                          metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                          injected_imports::AbstractVector=Any[])::EsmFile
     local content::String
     try
         content = _fetch_url(url)
@@ -2255,10 +2297,14 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
 
     # The URL base anchors the remote document's own template imports
     # (esm-spec §9.7.2: relative refs resolve against the referencing
-    # file's location — for a URL-loaded file, its URL directory).
+    # file's location — for a URL-loaded file, its URL directory). A
+    # subsystem-ref edge's injected discretization (esm-spec §9.7.10 form A)
+    # folds into the single component's scope before resolution.
     url_base = _url_dirname(url)
-    resolved = resolve_template_machinery(raw_data, url_base; metaparameters=metaparameters)
-    expanded = lower_expression_templates(resolved === nothing ? raw_data : resolved)
+    injected_root = apply_scope_injections(raw_data, injected_imports)
+    machinery_input = injected_root === nothing ? raw_data : injected_root
+    resolved = resolve_template_machinery(machinery_input, url_base; metaparameters=metaparameters)
+    expanded = lower_expression_templates(resolved === nothing ? machinery_input : resolved)
     if resolved !== nothing && !(expanded isa JSONLikeDict)
         expanded = JSONLikeDict(_to_dict(expanded))
     end

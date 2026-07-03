@@ -348,6 +348,46 @@ function _from_file_reference(ref::AbstractDict, base_dir::AbstractString,
 end
 
 """
+    _ephemeral_injected_file(file, source_path, mname, imports, base_dir) -> EsmFile
+
+esm-spec §9.7.10 form C: build a throwaway [`EsmFile`](@ref) in which component
+`mname` has the test's `imports` (raw §9.7.2 entries) appended to its own
+`expression_template_imports`, so the ordinary import resolver + §9.6.3 fixpoint
+lower its rewrite-targets under the test-chosen discretization. The persisted
+`file` is never mutated. The raw base is re-read from `source_path` when `input`
+was a path (relative `ref`s resolve against its directory), else re-serialized
+from the loaded `file` (`base_dir` anchors the injected `ref`s). This is what
+lets one test suite exercise a discretization-agnostic PDE leaf under several
+schemes with no conflict between tests.
+"""
+function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,AbstractString},
+                                  mname::AbstractString, imports, base_dir::AbstractString)::EsmFile
+    raw = source_path !== nothing ?
+        _to_native_json(JSON3.read(read(String(source_path), String))) :
+        serialize_esm_file(file)
+    injected = false
+    for kind in ("models", "reaction_systems")
+        comps = get(raw, kind, nothing)
+        comps isa AbstractDict || continue
+        haskey(comps, String(mname)) || continue
+        comp = comps[String(mname)]
+        comp isa AbstractDict || continue
+        existing = get(comp, "expression_template_imports", nothing)
+        base = existing === nothing ? Any[] : Any[e for e in existing]
+        for e in imports
+            push!(base, _to_native_json(e))
+        end
+        comp["expression_template_imports"] = base
+        injected = true
+        break
+    end
+    injected || error("component '$(mname)' not found for per-test injection (esm-spec §9.7.10)")
+    f = load(IOBuffer(JSON3.write(raw)); base_path=String(base_dir))
+    resolve_subsystem_refs!(f, String(base_dir))
+    return f
+end
+
+"""
     run_pde_tests(input; model_name=nothing, alg=nothing,
                   reltol=1e-10, abstol=1e-12,
                   base_dir=nothing) -> Vector{PdeAssertionResult}
@@ -393,26 +433,52 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
             times = sort!(unique(Float64[a.time for a in t.assertions]))
             sim = nothing
             sim_err = ""
+            # esm-spec §9.7.10 form C: a test that injects a discretization runs
+            # against an EPHEMERAL instance of this component with the test's
+            # imports appended to its scope and its rewrite-targets lowered; the
+            # persisted `file` is untouched. A test with no injection runs
+            # against the file as loaded.
+            run_file::Union{EsmFile,Nothing} = file
+            run_model = model
+            if !isempty(t.expression_template_imports)
+                try
+                    src = input isa AbstractString ? String(input) : nothing
+                    run_file = _ephemeral_injected_file(file, src, String(mname),
+                        t.expression_template_imports, resolved_base)
+                    rm = run_file.models === nothing ? nothing :
+                        get(run_file.models, String(mname), nothing)
+                    rm === nothing &&
+                        error("component '$(mname)' vanished from the ephemeral build")
+                    run_model = rm
+                catch err
+                    sim_err = "per-test discretization injection failed: " *
+                              "$(sprint(showerror, err))"
+                    run_file = nothing
+                end
+            end
             # Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
             # slot) evaluate their resolved expression from here (`_observed_field`).
             insp = BuildInspection()
-            try
-                # `simulate` flattens the file (models + coupling) into ONE
-                # runnable system named "Flattened", so no model_name is passed
-                # here; element names keep their owning-model prefix, which the
-                # `_state_cells` / `_scalar_slot` lookups resolve per assertion.
-                sim = simulate(file, (t.time_span.start, t.time_span.stop);
-                               alg=alg, reltol=reltol, abstol=abstol, saveat=times,
-                               parameters=t.parameter_overrides,
-                               initial_conditions=t.initial_conditions,
-                               inspect=insp)
-                sim.success || (sim_err = "solver retcode $(sim.retcode): $(sim.message)"; sim = nothing)
-            catch err
-                sim_err = "simulate failed: $(sprint(showerror, err))"
-                sim = nothing
+            if run_file !== nothing
+                try
+                    # `simulate` flattens the file (models + coupling) into ONE
+                    # runnable system named "Flattened", so no model_name is passed
+                    # here; element names keep their owning-model prefix, which the
+                    # `_state_cells` / `_scalar_slot` lookups resolve per assertion.
+                    sim = simulate(run_file, (t.time_span.start, t.time_span.stop);
+                                   alg=alg, reltol=reltol, abstol=abstol, saveat=times,
+                                   parameters=t.parameter_overrides,
+                                   initial_conditions=t.initial_conditions,
+                                   inspect=insp)
+                    sim.success || (sim_err = "solver retcode $(sim.retcode): $(sim.message)"; sim = nothing)
+                catch err
+                    sim_err = "simulate failed: $(sprint(showerror, err))"
+                    sim = nothing
+                end
             end
+            eval_file = run_file === nothing ? file : run_file
             for (i, a) in enumerate(t.assertions)
-                rtol, atol = _resolve_tolerance(model.tolerance, t.tolerance, a.tolerance)
+                rtol, atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
                 if sim === nothing
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, nothing,
@@ -436,10 +502,10 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                         # the §6.6.5 coords-specific message.
                         coords_target = nothing
                         if a.coords !== nothing
-                            shape = _variable_shape(file, String(mname),
+                            shape = _variable_shape(eval_file, String(mname),
                                                     String(a.variable))
                             coords_target = _coords_cell(a.coords, shape,
-                                                         file.index_sets)
+                                                         eval_file.index_sets)
                         end
                         cells = _state_cells(sim.var_map, a.variable, String(mname))
                         local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
@@ -449,7 +515,7 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                         else
                             # No ODE slots: try a state-free ARRAY OBSERVED (a
                             # rule output asserted directly, §6.6.5).
-                            obs = _observed_field(insp, file, String(mname),
+                            obs = _observed_field(insp, eval_file, String(mname),
                                                   String(a.variable))
                             obs === nothing &&
                                 error("array state '$(a.variable)' has no cells in var_map")

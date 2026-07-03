@@ -1,0 +1,31 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "inject_coupling_entry_neg_target_unknown",
+    "description": "NEGATIVE (esm-spec §9.7.10 / §10.8): the coupling entry's injection map key 'Nonexistent' names no system the entry references (systems are Emit and Advection). MUST be rejected at load with template_inject_target_unknown."
+  },
+  "models": {
+    "Emit": {
+      "variables": { "e": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["e"], "wrt": "t" }, "rhs": 0.0 } ]
+    },
+    "Advection": {
+      "variables": { "c": { "type": "state", "units": "1", "shape": ["lon", "lat"] } },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "D", "args": ["c"], "wrt": "lon" } }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": ["Emit", "Advection"],
+      "expression_template_imports": {
+        "Nonexistent": [
+          { "ref": "./central_D_lon_zero_grad_bc.esm", "bindings": { "NLON": 288, "NLAT": 181 } }
+        ]
+      }
+    }
+  ]
+}

@@ -79,7 +79,12 @@ export { flatten } from './flatten.js'
 export type { FlattenedEquation, FlattenMetadata, FlattenedSystem } from './flatten.js'
 
 // Subsystem reference loading
-export { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
+export {
+  resolveSubsystemRefs,
+  ephemeralInjectedFile,
+  CircularReferenceError,
+  RefLoadError,
+} from './ref-loading.js'
 
 // Canonical AST form (RFC §5.4). TS lacks native int/float distinction;
 // see canonicalize.ts for the gt-ca2u limitation note.
@@ -123,6 +128,7 @@ export {
   resolveTemplateMachinery,
   rejectTemplateImportsPreV08,
   isTemplateLibraryDoc,
+  applyScopeInjections,
 } from './template_imports.js'
 export type { TemplateResolveOptions } from './template_imports.js'
 

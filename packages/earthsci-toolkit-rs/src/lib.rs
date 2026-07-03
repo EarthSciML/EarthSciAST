@@ -151,7 +151,8 @@ pub use substitute::{
     substitute_with_context,
 };
 pub use template_imports::{
-    is_template_library_doc, reject_template_imports_pre_v08, resolve_template_machinery,
+    apply_scope_injections, is_template_library_doc, reject_template_imports_pre_v08,
+    resolve_template_machinery,
 };
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, CouplingEntry, DaeInfo, DataLoader,
@@ -184,7 +185,7 @@ pub use compile_error::CompileError;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use pde_inline_tests::{
-    PdeAssertionResult, evaluate_cellwise, field_reduce, run_pde_tests,
+    PdeAssertionResult, ephemeral_injected_file, evaluate_cellwise, field_reduce, run_pde_tests,
     run_pde_tests_with_base_dir, state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};

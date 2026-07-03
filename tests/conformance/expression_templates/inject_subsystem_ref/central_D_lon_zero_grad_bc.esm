@@ -1,0 +1,35 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "central_D_lon_zero_grad_bc" },
+  "expression_template_imports": [ { "ref": "./central_D_lon_interior.esm" } ],
+  "expression_templates": {
+    "central_D_lon_zero_grad_bc": {
+      "params": ["f"],
+      "match": { "op": "D", "args": ["f"], "wrt": "lon" },
+      "body": {
+        "op": "makearray", "args": [],
+        "regions": [
+          [[2, { "op": "-", "args": ["NLON", 1] }], [1, "NLAT"]],
+          [[1, 1], [1, "NLAT"]],
+          [["NLON", "NLON"], [1, "NLAT"]]
+        ],
+        "values": [
+          { "op": "apply_expression_template", "args": [],
+            "name": "central_D_lon_interior", "bindings": { "f": "f" } },
+          { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+            "ranges": { "j": { "from": "lat" } },
+            "expr": { "op": "/", "args": [
+              { "op": "-", "args": [ { "op": "index", "args": ["f", 2, "j"] },
+                                     { "op": "index", "args": ["f", 1, "j"] } ] },
+              { "op": "apply_expression_template", "args": [], "name": "dlon_deg", "bindings": {} } ] } },
+          { "op": "aggregate", "output_idx": ["j"], "args": ["f"],
+            "ranges": { "j": { "from": "lat" } },
+            "expr": { "op": "/", "args": [
+              { "op": "-", "args": [ { "op": "index", "args": ["f", "NLON", "j"] },
+                                     { "op": "index", "args": ["f", { "op": "-", "args": ["NLON", 1] }, "j"] } ] },
+              { "op": "apply_expression_template", "args": [], "name": "dlon_deg", "bindings": {} } ] } }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "central_D_lon_interior" },
+  "expression_template_imports": [ { "ref": "./grid_latlon.esm" } ],
+  "expression_templates": {
+    "central_D_lon_interior": {
+      "params": ["f"],
+      "body": {
+        "op": "aggregate", "output_idx": ["i", "j"], "args": ["f"],
+        "ranges": { "i": [2, { "op": "-", "args": ["NLON", 1] }], "j": { "from": "lat" } },
+        "expr": { "op": "/", "args": [
+          { "op": "-", "args": [
+            { "op": "index", "args": ["f", { "op": "+", "args": ["i", 1] }, "j"] },
+            { "op": "index", "args": ["f", { "op": "-", "args": ["i", 1] }, "j"] } ] },
+          { "op": "*", "args": [2, { "op": "apply_expression_template", "args": [],
+                                     "name": "dlon_deg", "bindings": {} }] } ] }
+      }
+    }
+  }
+}

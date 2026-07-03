@@ -52,6 +52,7 @@ Public surface (1:1 with the Julia reference):
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -472,6 +473,55 @@ def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -
     )
 
 
+def _ephemeral_injected_file(
+    file: EsmFile,
+    source_path: Optional[str],
+    mname: str,
+    imports: List[Any],
+    base_dir: str,
+) -> EsmFile:
+    """esm-spec §9.7.10 form C: build a throwaway :class:`EsmFile` in which
+    component ``mname`` has the test's ``imports`` (raw §9.7.2 entries) appended
+    to its own ``expression_template_imports``, so the ordinary import resolver
+    + §9.6.3 fixpoint lower its rewrite-targets under the test-chosen
+    discretization. The persisted ``file`` is never mutated.
+
+    The raw base is re-read from ``source_path`` when the runner input was a
+    path (relative ``ref``\\ s resolve against its directory), else re-serialized
+    from the loaded ``file`` (``base_dir`` anchors the injected ``ref``\\ s).
+    This is what lets one test suite exercise a discretization-agnostic PDE leaf
+    under several schemes with no conflict between tests. Mirrors the Julia
+    reference ``_ephemeral_injected_file``."""
+    from .serialize import _serialize_esm_file
+
+    if source_path is not None:
+        with open(source_path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    else:
+        raw = _serialize_esm_file(file)
+
+    injected = False
+    for kind in ("models", "reaction_systems"):
+        comps = raw.get(kind)
+        if not isinstance(comps, dict) or mname not in comps:
+            continue
+        comp = comps[mname]
+        if not isinstance(comp, dict):
+            continue
+        existing = comp.get("expression_template_imports")
+        base = list(existing) if isinstance(existing, list) else []
+        for e in imports:
+            base.append(copy.deepcopy(e))
+        comp["expression_template_imports"] = base
+        injected = True
+        break
+    if not injected:
+        raise ValueError(
+            f"component '{mname}' not found for per-test injection "
+            "(esm-spec §9.7.10)")
+    return load(json.dumps(raw), base_path=str(base_dir))
+
+
 def run_pde_tests(
     input: Union[str, EsmFile],
     *,
@@ -523,24 +573,50 @@ def run_pde_tests(
             times = sorted({float(a.time) for a in t.assertions})
             sim: Optional[SimulatedStates] = None
             sim_err = ""
+            # esm-spec §9.7.10 form C: a test that injects a discretization runs
+            # against an EPHEMERAL instance of this component with the test's
+            # imports appended to its scope and its rewrite-targets lowered; the
+            # persisted `file` is untouched. A test with no injection runs
+            # against the file as loaded.
+            run_file: Optional[EsmFile] = file
+            run_model = model
+            if t.expression_template_imports:
+                try:
+                    src = input if (isinstance(input, str)
+                                    and os.path.isfile(input)) else None
+                    run_file = _ephemeral_injected_file(
+                        file, src, str(mname),
+                        t.expression_template_imports, resolved_base)
+                    rm = (run_file.models or {}).get(str(mname))
+                    if rm is None:
+                        raise RuntimeError(
+                            f"component '{mname}' vanished from the ephemeral "
+                            "build")
+                    run_model = rm
+                except Exception as err:  # noqa: BLE001 — recorded per assertion
+                    sim_err = ("per-test discretization injection failed: "
+                               f"{err}")
+                    run_file = None
             # Build inspection sink: a §6.6.5 assertion may target a
             # state-free ARRAY OBSERVED (the observed-assertion form); its
             # field is read from the setup arrays the build materializes.
             insp = BuildInspection()
-            try:
-                sim = simulate_states(
-                    file, (t.time_span.start, t.time_span.end),
-                    method=method, rtol=rtol, atol=atol, saveat=times,
-                    parameters=t.parameter_overrides,
-                    initial_conditions=t.initial_conditions,
-                    inspect=insp,
-                )
-            except Exception as err:  # noqa: BLE001 — recorded per assertion
-                sim_err = f"simulate failed: {err}"
-                sim = None
+            if run_file is not None:
+                try:
+                    sim = simulate_states(
+                        run_file, (t.time_span.start, t.time_span.end),
+                        method=method, rtol=rtol, atol=atol, saveat=times,
+                        parameters=t.parameter_overrides,
+                        initial_conditions=t.initial_conditions,
+                        inspect=insp,
+                    )
+                except Exception as err:  # noqa: BLE001 — recorded per assertion
+                    sim_err = f"simulate failed: {err}"
+                    sim = None
+            eval_file = file if run_file is None else run_file
             for i, a in enumerate(t.assertions, start=1):
-                a_rtol, a_atol = _resolve_tolerance(model.tolerance, t.tolerance,
-                                                    a.tolerance)
+                a_rtol, a_atol = _resolve_tolerance(run_model.tolerance,
+                                                    t.tolerance, a.tolerance)
                 if sim is None:
                     results.append(PdeAssertionResult(
                         str(mname), t.id, i, a.variable, a.time, a.reduce,
@@ -567,10 +643,10 @@ def run_pde_tests(
                         # message (identical to the Julia reference).
                         coords_target: Optional[List[int]] = None
                         if a.coords is not None:
-                            shape = _variable_shape(file, str(mname),
+                            shape = _variable_shape(eval_file, str(mname),
                                                     str(a.variable))
                             coords_target = _coords_cell(a.coords, shape,
-                                                         file.index_sets)
+                                                         eval_file.index_sets)
                         cells = state_cells(sim.var_map, a.variable, str(mname))
                         if cells:
                             cell_tuples = [c for c, _ in cells]
@@ -615,7 +691,7 @@ def run_pde_tests(
                                     # build's resolved scalar params.
                                     ref = evaluate_cellwise(
                                         a.reference, cell_tuples,
-                                        index_sets=file.index_sets,
+                                        index_sets=eval_file.index_sets,
                                         params=_param_scope_with_aliases(insp.params))
                                 else:
                                     raise RuntimeError(

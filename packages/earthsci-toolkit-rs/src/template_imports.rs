@@ -1770,3 +1770,273 @@ pub fn resolve_template_machinery(
     }
     Ok(Some(Value::Object(root)))
 }
+
+// ===================================================================
+// Scope-directed template injection (esm-spec §9.7.10)
+//
+// The consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
+// entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+// into a TARGET component's own scope without editing the leaf. Forms A/B are
+// applied here, at the raw-Value level, BEFORE `resolve_template_machinery`:
+// each widens the target component's `expression_template_imports` in the
+// §9.7.10 merge order, so the ordinary import resolver + §9.6.3 fixpoint lower
+// the target's rewrite-targets with no engine change. Form C is applied by the
+// PDE test runner (`pde_inline_tests.rs`) in a per-test ephemeral build.
+// Mirrors the Julia reference (`template_imports.jl` `apply_scope_injections`).
+// ===================================================================
+
+/// Append raw §9.7.2 import entries to a component's own
+/// `expression_template_imports` (esm-spec §9.7.10 merge order: the target's
+/// own imports first, then the injected list).
+fn append_component_imports(comp: &mut Map<String, Value>, imports: &[Value]) {
+    let mut base: Vec<Value> = comp
+        .get("expression_template_imports")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    base.extend(imports.iter().cloned());
+    comp.insert(
+        "expression_template_imports".to_string(),
+        Value::Array(base),
+    );
+}
+
+/// esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
+/// import entries to the single top-level component's own
+/// `expression_template_imports`, so the referenced document is lowered under
+/// the assembler-chosen discretization. A referenced subsystem file holds
+/// exactly one top-level model or reaction system (§4.7), the implicit target.
+/// A data-loader-only referenced file has no expression positions, so the
+/// injection finds no home and the mount fails cleanly downstream.
+fn apply_subsystem_ref_injection(root: &mut Value, injected: &[Value]) -> bool {
+    if injected.is_empty() {
+        return false;
+    }
+    let Some(root_obj) = root.as_object_mut() else {
+        return false;
+    };
+    for compkind in COMPONENT_KINDS {
+        let Some(Value::Object(comps)) = root_obj.get_mut(compkind) else {
+            continue;
+        };
+        let Some(cname) = comps.keys().next().cloned() else {
+            continue;
+        };
+        if let Some(Value::Object(comp)) = comps.get_mut(&cname) {
+            append_component_imports(comp, injected);
+            return true;
+        }
+    }
+    false
+}
+
+/// The set of system names one coupling entry references (esm-spec §10.8):
+/// `operator_compose`/`couple` → members of `systems`; `variable_map` → owning
+/// systems of `from`/`to`; `event` → owning systems of any scoped reference in
+/// the entry. A `callback` references none.
+fn coupling_referenced_systems(entry: &Map<String, Value>) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let ctype = entry.get("type").and_then(Value::as_str).unwrap_or("");
+    match ctype {
+        "operator_compose" | "couple" => {
+            if let Some(sys) = entry.get("systems").and_then(Value::as_array) {
+                for s in sys {
+                    if let Some(s) = s.as_str() {
+                        out.insert(s.to_string());
+                        out.insert(s.split('.').next().unwrap_or(s).to_string());
+                    }
+                }
+            }
+        }
+        "variable_map" => {
+            for k in ["from", "to"] {
+                if let Some(v) = entry.get(k).and_then(Value::as_str) {
+                    out.insert(v.split('.').next().unwrap_or(v).to_string());
+                }
+            }
+        }
+        "event" => {
+            for v in entry.values() {
+                collect_scoped_owners(v, &mut out);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Walk `x` and add the owning-system segment of every scoped reference (a
+/// string of the form `"System.var"`) to `out`. Used for `event` entries whose
+/// system references are spread across conditions/affects.
+fn collect_scoped_owners(x: &Value, out: &mut std::collections::HashSet<String>) {
+    match x {
+        Value::String(s) => {
+            if let Some((head, _)) = s.split_once('.') {
+                out.insert(head.to_string());
+            }
+        }
+        Value::Array(a) => {
+            for v in a {
+                collect_scoped_owners(v, out);
+            }
+        }
+        Value::Object(m) => {
+            for v in m.values() {
+                collect_scoped_owners(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// esm-spec §9.7.10 form B / §10.8: for each `coupling` entry carrying an
+/// `expression_template_imports` map `{ <target>: [imports...] }`, resolve each
+/// target key to a top-level system and append its imports to that system's own
+/// `expression_template_imports` (merge order §9.7.10). The map is consumed here
+/// (removed from the entry) so form B does not survive `parse → emit`.
+///
+/// Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
+/// `template_inject_target_unknown`; a key resolving to a data loader is
+/// `template_inject_target_is_loader`; a key resolving to neither model,
+/// reaction system, nor loader is `template_inject_target_not_component`. Only
+/// TOP-LEVEL system targets are resolved by this binding — a nested
+/// `Parent.Child` key is out of scope (RFC §8.3) → `template_inject_target_not_component`.
+fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplateError> {
+    let Some(root_obj) = root.as_object_mut() else {
+        return Ok(false);
+    };
+    let has_injection = root_obj
+        .get("coupling")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| {
+            arr.iter().any(|e| {
+                e.as_object()
+                    .is_some_and(|o| o.contains_key("expression_template_imports"))
+            })
+        });
+    if !has_injection {
+        return Ok(false);
+    }
+
+    // Snapshot the top-level system key sets for target resolution (each `.get`
+    // is a scoped borrow that ends before `coupling` is taken mutably below).
+    let model_keys: std::collections::HashSet<String> = root_obj
+        .get("models")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    let rsys_keys: std::collections::HashSet<String> = root_obj
+        .get("reaction_systems")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    let loader_keys: std::collections::HashSet<String> = root_obj
+        .get("data_loaders")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+
+    // Resolve every injection to (compkind, target, imports), consuming the maps
+    // off the coupling entries; then apply, so target diagnostics fire before any
+    // mutation (esm-spec §9.7.10 merge order 3, coupling-array order).
+    let mut plan: Vec<(&'static str, String, Vec<Value>)> = Vec::new();
+    {
+        let Some(Value::Array(coupling)) = root_obj.get_mut("coupling") else {
+            return Ok(false);
+        };
+        for entry in coupling.iter_mut() {
+            let Some(entry_obj) = entry.as_object_mut() else {
+                continue;
+            };
+            let Some(inj_val) = entry_obj.get("expression_template_imports").cloned() else {
+                continue;
+            };
+            let Some(inj_map) = inj_val.as_object() else {
+                return Err(err(
+                    "template_inject_target_not_component",
+                    "coupling entry `expression_template_imports` must be a map from a target \
+                     system name to a list of imports (esm-spec §9.7.10 / §10.8)",
+                ));
+            };
+            let referenced = coupling_referenced_systems(entry_obj);
+            for (target, imports_val) in inj_map {
+                if !referenced.contains(target) {
+                    let mut refs: Vec<String> = referenced.iter().cloned().collect();
+                    refs.sort();
+                    let refs_str = if refs.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        refs.join(", ")
+                    };
+                    return Err(err(
+                        "template_inject_target_unknown",
+                        format!(
+                            "coupling entry `expression_template_imports` key '{target}' names no \
+                             system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry \
+                             references: {refs_str}."
+                        ),
+                    ));
+                }
+                let compkind = if model_keys.contains(target) {
+                    "models"
+                } else if rsys_keys.contains(target) {
+                    "reaction_systems"
+                } else if loader_keys.contains(target) {
+                    return Err(err(
+                        "template_inject_target_is_loader",
+                        format!(
+                            "coupling entry `expression_template_imports` key '{target}' resolves \
+                             to a data loader, which is pure I/O with no expression positions to \
+                             rewrite (esm-spec §9.7.10 / §14)."
+                        ),
+                    ));
+                } else {
+                    return Err(err(
+                        "template_inject_target_not_component",
+                        format!(
+                            "coupling entry `expression_template_imports` key '{target}' resolves \
+                             to neither a top-level model, reaction system, nor data loader \
+                             (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."
+                        ),
+                    ));
+                };
+                let Some(imports_arr) = imports_val.as_array() else {
+                    return Err(err(
+                        "template_import_not_library",
+                        format!(
+                            "coupling entry `expression_template_imports` value for '{target}' \
+                             must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."
+                        ),
+                    ));
+                };
+                plan.push((compkind, target.clone(), imports_arr.clone()));
+            }
+            entry_obj.remove("expression_template_imports");
+        }
+    }
+
+    for (compkind, target, imports) in plan {
+        if let Some(Value::Object(comps)) = root_obj.get_mut(compkind)
+            && let Some(Value::Object(comp)) = comps.get_mut(&target)
+        {
+            append_component_imports(comp, &imports);
+        }
+    }
+    Ok(true)
+}
+
+/// esm-spec §9.7.10 forms A + B: fold any scope-directed injection — a
+/// subsystem-ref edge's `injected` import list (form A) or a coupling entry's
+/// injection map (form B) — into the target components' own
+/// `expression_template_imports`, in place, so the ordinary import resolver +
+/// §9.6.3 fixpoint lower the target under the consumer-chosen discretization.
+/// Runs BEFORE `resolve_template_machinery`; form B target diagnostics
+/// (`template_inject_target_*`) surface here.
+pub fn apply_scope_injections(
+    root: &mut Value,
+    injected: &[Value],
+) -> Result<(), ExpressionTemplateError> {
+    apply_subsystem_ref_injection(root, injected);
+    apply_coupling_injections(root)?;
+    Ok(())
+}

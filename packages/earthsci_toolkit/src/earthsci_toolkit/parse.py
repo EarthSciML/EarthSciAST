@@ -447,6 +447,12 @@ def _parse_test(data: Dict[str, Any]) -> Test:
         initial_conditions=dict(data.get("initial_conditions", {})),
         parameter_overrides=dict(data.get("parameter_overrides", {})),
         tolerance=_parse_tolerance(data["tolerance"]) if "tolerance" in data else None,
+        # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
+        # discretization this test runs under. Retained (not consumed at load)
+        # so the PDE runner can build a per-test ephemeral instance and so the
+        # field survives round-trip.
+        expression_template_imports=copy.deepcopy(
+            data.get("expression_template_imports", []) or []),
     )
 
 
@@ -1304,11 +1310,24 @@ def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, 
     return bindings
 
 
+def _subsystem_ref_injected_imports(sub_value: Dict[str, Any]) -> List[Any]:
+    """The optional ``expression_template_imports`` of a §4.7 subsystem-ref edge
+    (esm-spec §9.7.10 form A): raw §9.7.2 import entries the mounting document
+    injects into the REFERENCED component's own template scope. Returned as a
+    list of raw dicts (empty when absent); schema-validated as an array of
+    TemplateImport before this runs."""
+    raw = sub_value.get("expression_template_imports")
+    if isinstance(raw, list):
+        return list(raw)
+    return []
+
+
 def _load_ref_data(
     ref_str: str,
     base_path: str,
     bindings: Dict[str, int],
     kind: str,
+    injected_imports: Optional[List[Any]] = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1319,6 +1338,12 @@ def _load_ref_data(
     targets a template-library file is rejected with the stable
     ``subsystem_ref_is_template_library`` diagnostic (esm-spec §9.7.1): the
     two reference mechanisms are disjoint.
+
+    ``injected_imports`` are the §4.7 subsystem-ref edge's
+    ``expression_template_imports`` (esm-spec §9.7.10 form A): they are
+    appended to the referenced document's single component's own scope BEFORE
+    resolution, so the §9.6.3 fixpoint lowers its rewrite-targets at the mount
+    under the assembler-chosen discretization.
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1327,6 +1352,7 @@ def _load_ref_data(
     )
     from .template_imports import (
         _is_template_library_doc,
+        apply_scope_injections,
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
@@ -1362,6 +1388,14 @@ def _load_ref_data(
         raise SubsystemRefError(
             f"Schema validation failed for {kind} ref '{ref_str}': {e.message}"
         )
+
+    # esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
+    # into the referenced document's single component's own
+    # `expression_template_imports` before resolution (returns None when there
+    # is nothing to inject, keeping the fast path).
+    injected_root = apply_scope_injections(ref_data, injected_imports or [])
+    if injected_root is not None:
+        ref_data = injected_root
 
     # Resolve the referenced document's §9.7 machinery with this edge's
     # metaparameter bindings (esm-spec §9.7.6 binding site 3), then run the
@@ -1474,10 +1508,13 @@ def _resolve_model_subsystems(
             new_seen = seen_refs | {canonical}
 
             # Optional `bindings` close the referenced document's open
-            # metaparameters at this edge (esm-spec §9.7.6 binding site 3).
+            # metaparameters at this edge (esm-spec §9.7.6 binding site 3);
+            # optional `expression_template_imports` inject a discretization
+            # into the referenced component's scope (esm-spec §9.7.10 form A).
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
+            injected = _subsystem_ref_injected_imports(sub_value)
             ref_data, new_base = _load_ref_data(
-                ref_str, base_path, bindings, "subsystem")
+                ref_str, base_path, bindings, "subsystem", injected)
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1548,8 +1585,9 @@ def _resolve_reaction_system_subsystems(
             new_seen = seen_refs | {canonical}
 
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
+            injected = _subsystem_ref_injected_imports(sub_value)
             ref_data, new_base = _load_ref_data(
-                ref_str, base_path, bindings, "subsystem")
+                ref_str, base_path, bindings, "subsystem", injected)
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1666,7 +1704,9 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
         seen = {canonical}
 
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
-        ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "model")
+        injected = _subsystem_ref_injected_imports(model_value)
+        ref_data, new_base = _load_ref_data(
+            ref_str, base_path, bindings, "model", injected)
 
         parsed = _parse_esm_data(ref_data)
 
@@ -2923,6 +2963,7 @@ def load(
         lower_expression_templates,
     )
     from .template_imports import (
+        apply_scope_injections,
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
@@ -2942,6 +2983,18 @@ def load(
 
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))
+
+    # esm-spec §9.7.10 form B: fold any coupling-entry injection map into the
+    # named target components' own `expression_template_imports` BEFORE
+    # resolution, so the ordinary import resolver + §9.6.3 fixpoint lower the
+    # target under the assembler-chosen discretization. The injection map is
+    # consumed (does not survive parse → emit). Returns None (fast path) when
+    # no coupling entry carries an injection. Form A (subsystem-ref edge) is
+    # threaded through subsystem resolution; form C (test) is applied per-run
+    # by the PDE runner.
+    injected_root = apply_scope_injections(data, [])
+    if injected_root is not None:
+        data = injected_root
 
     # Resolve esm-spec §9.7 machinery — template-library imports (depth-first
     # post-order, per-edge metaparameter instantiation), index_sets merge,

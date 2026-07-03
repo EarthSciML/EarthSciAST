@@ -687,6 +687,68 @@ fn eval_assertion(
     field_reduce(reduce, &field, reference.as_deref())
 }
 
+/// esm-spec §9.7.10 form C: build a throwaway [`EsmFile`] in which component
+/// `model_name` has the test's `imports` (raw §9.7.2 entries) appended to its
+/// own `expression_template_imports`, so the ordinary import resolver + §9.6.3
+/// fixpoint lower its rewrite-targets under the test-chosen discretization. The
+/// persisted `file` is never mutated. When `source_path` is `Some`, the raw base
+/// is re-read from it (relative `ref`s resolve against its directory); otherwise
+/// it is re-serialized from the loaded `file` (`base_dir` anchors the injected
+/// `ref`s). This is what lets one test suite exercise a discretization-agnostic
+/// PDE leaf under several schemes with no conflict between tests. Mirrors the
+/// Julia reference (`pde_inline_tests.jl` `_ephemeral_injected_file`).
+pub fn ephemeral_injected_file(
+    file: &EsmFile,
+    source_path: Option<&Path>,
+    model_name: &str,
+    imports: &[serde_json::Value],
+    base_dir: &Path,
+) -> Result<EsmFile, crate::EsmError> {
+    let mut raw: serde_json::Value = match source_path {
+        Some(p) => {
+            let s = std::fs::read_to_string(p).map_err(|e| {
+                crate::EsmError::SchemaValidation(format!("failed to read {}: {e}", p.display()))
+            })?;
+            serde_json::from_str(&s).map_err(crate::EsmError::JsonParse)?
+        }
+        None => serde_json::to_value(file).map_err(crate::EsmError::JsonParse)?,
+    };
+    let mut injected = false;
+    if let Some(root) = raw.as_object_mut() {
+        for kind in ["models", "reaction_systems"] {
+            let Some(comps) = root.get_mut(kind).and_then(|v| v.as_object_mut()) else {
+                continue;
+            };
+            let Some(comp) = comps.get_mut(model_name).and_then(|v| v.as_object_mut()) else {
+                continue;
+            };
+            let mut base: Vec<serde_json::Value> = comp
+                .get("expression_template_imports")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            base.extend(imports.iter().cloned());
+            comp.insert(
+                "expression_template_imports".to_string(),
+                serde_json::Value::Array(base),
+            );
+            injected = true;
+            break;
+        }
+    }
+    if !injected {
+        return Err(crate::EsmError::SchemaValidation(format!(
+            "component '{model_name}' not found for per-test injection (esm-spec §9.7.10)"
+        )));
+    }
+    let text = serde_json::to_string(&raw).map_err(crate::EsmError::JsonParse)?;
+    let options = crate::parse::LoadOptions {
+        base_path: Some(base_dir.to_path_buf()),
+        metaparameters: std::collections::BTreeMap::new(),
+    };
+    crate::parse::load_with_options(&text, &options)
+}
+
 /// Run every inline test of one model, appending per-assertion results.
 fn run_model_tests(
     file: &EsmFile,
@@ -701,6 +763,58 @@ fn run_model_tests(
         return;
     };
     for t in tests {
+        // esm-spec §9.7.10 form C: a test that injects a discretization runs
+        // against an EPHEMERAL instance of this component with the test's
+        // imports appended to its scope and its rewrite-targets lowered; the
+        // persisted `file` is untouched. A test with no injection runs against
+        // the file as loaded.
+        let ephemeral;
+        let (run_file, run_index_sets_owned): (&EsmFile, Option<HashMap<String, IndexSet>>) =
+            if t.expression_template_imports.is_empty() {
+                (file, None)
+            } else {
+                match ephemeral_injected_file(
+                    file,
+                    None,
+                    model_name,
+                    &t.expression_template_imports,
+                    base_dir.unwrap_or_else(|| Path::new(".")),
+                ) {
+                    Ok(f) => {
+                        ephemeral = f;
+                        let is = ephemeral.index_sets.clone().unwrap_or_default();
+                        (&ephemeral, Some(is))
+                    }
+                    Err(e) => {
+                        // Record the build failure for every assertion and skip.
+                        for (i, a) in t.assertions.iter().enumerate() {
+                            let (rtol, atol) = resolve_tolerance(
+                                model.tolerance.as_ref(),
+                                t.tolerance.as_ref(),
+                                a.tolerance.as_ref(),
+                            );
+                            results.push(PdeAssertionResult {
+                                model: model_name.to_string(),
+                                test_id: t.id.clone(),
+                                assertion_idx: i + 1,
+                                variable: a.variable.clone(),
+                                time: a.time,
+                                reduce: a.reduce.clone(),
+                                expected: a.expected,
+                                actual: None,
+                                rtol,
+                                atol,
+                                passed: false,
+                                message: format!("per-test discretization injection failed: {e}"),
+                            });
+                        }
+                        continue;
+                    }
+                }
+            };
+        let run_index_sets: &HashMap<String, IndexSet> =
+            run_index_sets_owned.as_ref().unwrap_or(index_sets);
+
         let mut times: Vec<f64> = t.assertions.iter().map(|a| a.time).collect();
         times.sort_by(f64::total_cmp);
         times.dedup();
@@ -713,7 +827,7 @@ fn run_model_tests(
         // (`observed_field`).
         let mut insp = BuildInspection::default();
         let sim = simulate_with_inspection(
-            file,
+            run_file,
             (t.time_span.start, t.time_span.end),
             &params,
             &ics,
@@ -729,8 +843,10 @@ fn run_model_tests(
             );
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
-                Ok(sol) => eval_assertion(sol, a, model_name, index_sets, file, &insp, base_dir)
-                    .map_err(|msg| format!("assertion evaluation failed: {msg}")),
+                Ok(sol) => {
+                    eval_assertion(sol, a, model_name, run_index_sets, run_file, &insp, base_dir)
+                        .map_err(|msg| format!("assertion evaluation failed: {msg}"))
+                }
             };
             let (actual, passed, message) = match outcome {
                 Err(msg) => (None, false, msg),

@@ -645,6 +645,17 @@ pub struct ModelTest {
 
     /// Scalar `(variable, time)` checks that define the pass/fail criterion.
     pub assertions: Vec<ModelTestAssertion>,
+
+    /// esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries injected into
+    /// the ENCLOSING component's template scope for THIS test's run only — the
+    /// discretization a discretization-agnostic PDE leaf is lowered under in the
+    /// per-test ephemeral build ([`crate::pde_inline_tests::ephemeral_injected_file`]).
+    /// Authored per-run config (a peer of `parameter_overrides` / `tolerance`),
+    /// so unlike a component's own imports it DOES survive `parse → emit`; the
+    /// enclosing component round-trips with its rewrite-targets intact. Empty
+    /// for a non-PDE / discretization-free test.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expression_template_imports: Vec<serde_json::Value>,
 }
 
 /// A document-scoped index set declared in a model's `index_sets` registry
