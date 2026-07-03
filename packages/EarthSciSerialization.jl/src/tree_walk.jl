@@ -1139,6 +1139,14 @@ BUILD-TIME products that are otherwise internal to the evaluator closure:
 * `observed_exprs::Dict{String,Expr}` — the resolved observed substitution
   map (post index-set-range resolution and observed-into-observed inlining),
   exactly as inlined into the compiled RHS.
+* `params::Dict{String,Float64}` — the resolved SCALAR parameter values (the
+  model defaults with any `parameter_overrides` applied), keyed by the
+  (flattened) parameter name exactly as it appears in a compiled expression
+  (`"Flattened.k"`). These are load-time CONSTANTS, so binding them into a
+  build-time cellwise evaluation (`evaluate_cellwise`, §6.6.5 observed/
+  reference assertions, `ic` seeding) is sound and determinism-safe — unlike
+  STATE, which stays out of scope. Array-backed parameters live on
+  `const_arrays`, not here (the scalar map stays homogeneous `Float64`).
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -1147,9 +1155,11 @@ mutable struct BuildInspection
     setup_arrays::Dict{String,Array{Float64}}
     const_arrays::Dict{String,Any}
     observed_exprs::Dict{String,Expr}
+    params::Dict{String,Float64}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
-                                    Dict{String,Any}(), Dict{String,Expr}())
+                                    Dict{String,Any}(), Dict{String,Expr}(),
+                                    Dict{String,Float64}())
 
 function _build_evaluator_impl(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
@@ -1506,6 +1516,21 @@ function _build_evaluator_impl(model::Model;
     end
     sort!(param_names)
 
+    # ---- Scalar parameter scope (load-time constants) ----
+    # Each scalar parameter's RESOLVED value: `parameter_overrides` if given,
+    # else the model default (else 0.0). These are load-time CONSTANTS, so they
+    # are bindable into the build-time cellwise evaluation (coordinate-expression
+    # `ic` seeding, and — via `inspect.params` — the §6.6.5 observed/reference
+    # assertions), while STATE stays out of scope. Computed here (before the ic
+    # fold) so the same map feeds both the seed path and the parameter NamedTuple.
+    param_scope = Dict{String,Float64}()
+    for name in param_names
+        param_scope[name] = haskey(parameter_overrides, name) ?
+            Float64(parameter_overrides[name]) :
+            (model.variables[name].default === nothing ? 0.0 :
+             Float64(model.variables[name].default))
+    end
+
     # ---- M4: materialize intersect_polygon clip rings at setup time ----
     # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
     # registered below as a 2D const_array; `_derived_extents` maps each clip's
@@ -1738,7 +1763,8 @@ function _build_evaluator_impl(model::Model;
         for cell in cells
             idxs = collect(Int, cell)
             _eq_ics[_cell_key(target, idxs)] =
-                _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions)
+                _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
+                                  params=param_scope)
         end
     end
 
@@ -1802,12 +1828,7 @@ function _build_evaluator_impl(model::Model;
     p_syms = Symbol[]
     for name in param_names
         push!(p_syms, Symbol(name))
-        if haskey(parameter_overrides, name)
-            push!(p_vals, Float64(parameter_overrides[name]))
-        else
-            d = model.variables[name].default
-            push!(p_vals, d === nothing ? 0.0 : Float64(d))
-        end
+        push!(p_vals, param_scope[name])  # resolved above (override-or-default)
     end
     # Use `nothing` for parameter-free models: some SciMLBase versions enter
     # an infinite recursion in SymbolicIndexingInterface when the problem
@@ -1901,6 +1922,12 @@ function _build_evaluator_impl(model::Model;
         end
         for (k, e) in resolved_obs
             inspect.observed_exprs[String(k)] = e
+        end
+        # Resolved scalar parameter values (load-time constants) so a build-time
+        # cellwise re-evaluation of a parameter-dependent observed / reference
+        # (§6.6.5) binds them — see `evaluate_cellwise(...; params=…)`.
+        for (k, val) in param_scope
+            inspect.params[String(k)] = val
         end
     end
 
@@ -3920,7 +3947,8 @@ error, so a scoped-reference ic that cannot be resolved is never silently
 dropped.
 """
 function _resolve_field_ic(target::AbstractString, rhs::EarthSciSerialization.Expr,
-                           cell::Vector{Int}, const_arrays, registered_functions)::Float64
+                           cell::Vector{Int}, const_arrays, registered_functions;
+                           params::AbstractDict=_EMPTY_PARAMS)::Float64
     # (1) Loaded field supplied as a const array over the lifted grid.
     if rhs isa VarExpr && haskey(const_arrays, rhs.name)
         arr = const_arrays[rhs.name]
@@ -3934,17 +3962,20 @@ function _resolve_field_ic(target::AbstractString, rhs::EarthSciSerialization.Ex
                 "which does not match the $(length(cell))-D lifted target grid"))
         end
     end
-    # (2) Broadcast constant.
+    # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
+    # constants; STATE is not — `params` carries only resolved scalar params).
     try
-        return Float64(evaluate_expr(rhs, Dict{String,Float64}();
+        return Float64(evaluate_expr(rhs, params;
                                      registered_functions=registered_functions))
     catch
     end
-    # (3) Coordinate expression over the grid geometry (per-cell field).
+    # (3) Coordinate expression over the grid geometry (per-cell field); model
+    # parameters (e.g. a free-name geometry `x0`/`dx`) bind via `params`.
     if rhs isa OpExpr
         try
             return _eval_cellwise(rhs, cell; const_arrays=const_arrays,
-                                  registered_functions=registered_functions)
+                                  registered_functions=registered_functions,
+                                  params=params)
         catch
         end
     end
@@ -3983,18 +4014,31 @@ end
 
 # Evaluate an elementwise-over-arrays expression at one concrete cell through
 # the standard build-time pipeline (_index_at_cell → _resolve_indices → _compile
-# → _eval_node). State references are not in scope — this is for build-time
+# → _eval_node). STATE references are not in scope — this is for build-time
 # fields (grid geometry, §6.6.5 analytic references), never for RHS terms.
+# Model PARAMETERS (load-time constants) supplied via `params` (name → value)
+# ARE in scope: their names bind to their resolved values, so a
+# parameter-dependent coordinate expression / observed / reference resolves
+# (esm-spec §6.6.5). Binding them widens only what NAMES resolve, never how a
+# value is computed — determinism and byte-identical output are preserved.
 function _eval_cellwise(expr::EarthSciSerialization.Expr, cell::Vector{Int};
                         const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                        registered_functions::AbstractDict=Dict{String,Function}())::Float64
+                        registered_functions::AbstractDict=Dict{String,Function}(),
+                        params::AbstractDict=_EMPTY_PARAMS)::Float64
     cellwise = _index_at_cell(expr, cell)
     resolved = _resolve_indices(cellwise,
                                 Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
                                 Dict{String,Int}(), const_arrays)
     reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
-    node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(), reg)
-    return _eval_node(node, Float64[], NamedTuple(), 0.0)
+    if isempty(params)
+        node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(), reg)
+        return _eval_node(node, Float64[], NamedTuple(), 0.0)
+    end
+    psyms = Symbol[Symbol(k) for k in keys(params)]
+    pvals = Float64[Float64(params[k]) for k in keys(params)]
+    node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+    p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
+    return _eval_node(node, Float64[], p_nt, 0.0)
 end
 
 # Expand a ranges entry to the concrete list of integer values.
@@ -4842,6 +4886,11 @@ end
 #   keyed by array name; index(name, i1, i2, ...) → NumExpr(const_arrays[name][i1,i2,...])
 #   also used for indirect gather: u[index(conn, c, k)] resolves conn[c,k] as an integer index.
 const _EMPTY_CONST_ARRAYS = Dict{String,AbstractArray{Float64}}()
+
+# Empty scalar-parameter scope for a build-time cellwise evaluation with no
+# parameters bound (the common case). Shared so `_eval_cellwise` /
+# `evaluate_cellwise` avoid allocating a fresh dict per call on the no-param path.
+const _EMPTY_PARAMS = Dict{String,Float64}()
 
 # A live forcing buffer bound by reference into the evaluator (ess-14f.3, JL-J0).
 # Unlike `const_arrays` (build-time-FROZEN: `index(arr,…)` const-folds to a

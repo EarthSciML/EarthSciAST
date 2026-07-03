@@ -97,6 +97,7 @@ def evaluate_cellwise(
     expr: Expr,
     cells: Sequence[Sequence[int]],
     index_sets: Optional[Dict[str, Any]] = None,
+    params: Optional[Dict[str, float]] = None,
 ) -> List[float]:
     """Evaluate an array-valued expression (elementwise ops over
     array-producing ``aggregate``/``makearray`` nodes — e.g. a grid-geometry
@@ -105,10 +106,15 @@ def evaluate_cellwise(
 
     This is the public entry to the same build-time machinery the evaluator
     uses to seed coordinate-expression ``ic`` fields
-    (:func:`earthsci_toolkit.simulation._eval_buildtime_field`); state
-    references are not in scope. A scalar (const-folded) result broadcasts.
+    (:func:`earthsci_toolkit.simulation._eval_buildtime_field`).
+
+    STATE references are not in scope. Model PARAMETERS (load-time constants)
+    ARE: pass their resolved values as ``params`` (name → value, e.g. a build's
+    :attr:`BuildInspection.params`) and a parameter-dependent expression
+    resolves (esm-spec §6.6.5). A scalar (const-folded) result broadcasts.
     """
-    value = _eval_buildtime_field(expr, index_sets=index_sets)
+    value = _eval_buildtime_field(expr, index_sets=index_sets,
+                                  param_values=params)
     if np.ndim(value) == 0:
         return [float(value)] * len(cells)
     arr = np.asarray(value, dtype=float)
@@ -194,6 +200,31 @@ def state_cells(
             continue
         out.append(([int(x) for x in m.group(2).split(",")], int(slot)))
     out.sort(key=lambda p: p[0])
+    return out
+
+
+def _param_scope_with_aliases(params: Optional[Dict[str, float]]) -> Dict[str, float]:
+    """Build-time scalar-parameter scope for §6.6.5 cellwise references, with
+    bare aliases. :attr:`BuildInspection.params` is keyed by the FLATTENED
+    parameter name (``"M.k"``) — matching a resolved observed expression, which
+    flattening qualifies. A test author's analytic ``reference``, though, names
+    the parameter BARE (``"k"``). So we expose BOTH: the flattened key verbatim,
+    plus an unambiguous bare alias (the final dotted segment). On a bare-name
+    collision across subsystems the flattened key stays authoritative and the
+    ambiguous alias is dropped (the qualified reference still resolves).
+    Mirrors the Julia ``_param_scope_with_aliases``."""
+    if not params:
+        return {}
+    out: Dict[str, float] = {str(k): float(v) for k, v in params.items()}
+    counts: Dict[str, int] = {}
+    for k in params:
+        bare = str(k).rsplit(".", 1)[-1]
+        counts[bare] = counts.get(bare, 0) + 1
+    for k, v in params.items():
+        s = str(k)
+        bare = s.rsplit(".", 1)[-1]
+        if bare != s and counts[bare] == 1 and bare not in out:
+            out[bare] = float(v)
     return out
 
 
@@ -578,9 +609,14 @@ def run_pde_tests(
                                         a.reference, resolved_base, cell_tuples)
                                 elif isinstance(a.reference,
                                                 (ExprNode, int, float, str)):
+                                    # Model parameters (load-time constants) are
+                                    # in scope for a §6.6.5 analytic reference;
+                                    # state is not. `insp.params` carries the
+                                    # build's resolved scalar params.
                                     ref = evaluate_cellwise(
                                         a.reference, cell_tuples,
-                                        index_sets=file.index_sets)
+                                        index_sets=file.index_sets,
+                                        params=_param_scope_with_aliases(insp.params))
                                 else:
                                     raise RuntimeError(
                                         "unsupported `reference` shape "

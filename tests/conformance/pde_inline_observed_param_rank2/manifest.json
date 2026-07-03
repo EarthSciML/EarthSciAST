@@ -1,0 +1,64 @@
+{
+  "category": "pde_inline_observed_param_rank2",
+  "version": "1.0",
+  "description": "Cross-binding conformance for §6.6.5 inline-test assertions on a RANK-2 array OBSERVED whose expression references a model PARAMETER. The asserted variable `scaled` = k * base is a state-free computed observed of shape [rows, cols] with parameter k (default 1.5); each binding materializes it over the field's Cartesian index sets — with model parameters (load-time constants) in scope, but state NOT — and evaluates `reduce` collapses (max/min) and `coords` point-samples. This guards the build-time cellwise-evaluation parameter-binding fix: previously the Julia observed-assertion path re-materialized the observed via evaluate_cellwise with only the const-array registry in scope, so a parameter-dependent observed asserted directly raised E_TREEWALK_UNBOUND_VARIABLE. Python (setup_arrays materialized with param_values) and Rust (setup_arrays materialized with param_vec) already bound parameters in this path, so all three must agree on the assertion actuals. Julia is the reference binding: its `run_pde_tests` minted golden/observed_param_rank2.json.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-11
+  },
+  "fixtures": [
+    {
+      "id": "observed_param_rank2",
+      "path": "fixtures/observed_param_rank2.esm",
+      "model": "M",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-6.6.5",
+        "array-observed",
+        "rank2",
+        "parameter-dependent",
+        "reduce-max",
+        "reduce-min",
+        "coords"
+      ],
+      "shape": {
+        "rows": 2,
+        "cols": 3
+      },
+      "assertions": [
+        { "test_id": "observed_param_rank2", "assertion_idx": 1, "variable": "scaled", "reduce": "max",    "expected": 8.25 },
+        { "test_id": "observed_param_rank2", "assertion_idx": 2, "variable": "scaled", "reduce": "min",    "expected": 0.75 },
+        { "test_id": "observed_param_rank2", "assertion_idx": 3, "variable": "scaled", "coords": { "rows": 2, "cols": 1 }, "expected": 5.25 },
+        { "test_id": "observed_param_rank2", "assertion_idx": 4, "variable": "scaled", "coords": { "rows": 1, "cols": 3 }, "expected": 3.75 }
+      ],
+      "golden": "golden/observed_param_rank2.json"
+    }
+  ]
+}

@@ -350,6 +350,77 @@ end
     @test results[4].actual == 3.75
 end
 
+# A parameter-dependent array observed `scaled = k * base` (k a PARAMETER,
+# default 1.5) asserted DIRECTLY. Before the build-time cellwise parameter
+# binding, `_observed_field` re-evaluated `scaled` with only the const-array
+# registry in scope, so the bare `k` raised E_TREEWALK_UNBOUND_VARIABLE — a
+# rank-2 parameter-dependent observed could not be asserted at all. STATE stays
+# out of scope (an observed that reads a state still errors). Mirrors the
+# tests/conformance/pde_inline_observed_param_rank2 fixture.
+function _pit_param_observed_doc(assertions::Vector)
+    idx = Dict{String,Any}("op" => "index", "args" => Any["base", "i", "j"])
+    scaled_expr = Dict{String,Any}("op" => "aggregate", "semiring" => "sum_product",
+        "output_idx" => Any["i", "j"],
+        "ranges" => Dict{String,Any}("i" => Any[1, 2], "j" => Any[1, 3]),
+        "args" => Any["base"],
+        "expr" => Dict{String,Any}("op" => "*", "args" => Any["k", idx]))
+    Dict{String,Any}(
+        "esm" => "0.8.0",
+        "metadata" => Dict("name" => "pde_inline_param_observed"),
+        "index_sets" => Dict{String,Any}(
+            "d1" => Dict("kind" => "interval", "size" => 2),
+            "d2" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict{String,Any}("M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "k" => Dict("type" => "parameter", "default" => 1.5),
+                "base" => Dict("type" => "observed", "shape" => Any["d1", "d2"],
+                    "expression" => Dict("op" => "const", "args" => Any[],
+                        "value" => Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]])),
+                "scaled" => Dict("type" => "observed", "shape" => Any["d1", "d2"],
+                    "expression" => scaled_expr),
+                "u" => Dict("type" => "state", "shape" => Any["d1", "d2"],
+                            "default" => 0.5)),
+            "equations" => Any[Dict{String,Any}(
+                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                "rhs" => "scaled")],
+            "tests" => Any[Dict{String,Any}(
+                "id" => "param_observed",
+                "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                "assertions" => Any[assertions...])])))
+end
+
+@testset "parameter-dependent array observed asserted directly (§6.6.5 param scope)" begin
+    doc = _pit_param_observed_doc(Any[
+        _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
+        _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
+        _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
+        _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
+    ])
+    results = _pit_run(_pit_load(doc))
+    @test length(results) == 4
+    for r in results
+        @test r.passed
+        @test r.message == ""
+    end
+    @test results[3].actual == 5.25
+    @test results[4].actual == 3.75
+end
+
+@testset "inline-Expression §6.6.5 reference loaded from file (parse fix)" begin
+    # A JSON3-loaded inline reference is an `AbstractDict`; the pre-fix
+    # `coerce_assertion` misclassified it as `from_file` and `run_pde_tests`
+    # rejected it ("unsupported `reference` shape Dict"). At t=0 the cos(pi x)
+    # ic exactly equals the cos(pi x) analytic reference → relative L2 ≈ 0.
+    file = _pit_load(_pit_decay_doc(Any[
+        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
+            "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
+            "reference" => _pit_cos_pi_x())]))
+    results = _pit_run(file)
+    @test length(results) == 1
+    @test results[1].passed
+    @test results[1].actual < 1e-12
+end
+
 @testset "shared fixture — tests/spatial/pde_inline_assertions_exec.esm" begin
     fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
                        "pde_inline_assertions_exec.esm")

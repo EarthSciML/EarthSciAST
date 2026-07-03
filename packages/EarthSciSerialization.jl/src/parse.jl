@@ -847,9 +847,21 @@ function coerce_assertion(data::Any)::Assertion
     if haskey(data, :reference) && data.reference !== nothing
         ref = data.reference
         # The from_file shape is a JSON object whose `type` is the literal
-        # string "from_file"; everything else is treated as an Expression AST.
-        if ref isa AbstractDict || (hasproperty(ref, :type) &&
-                                    string(getproperty(ref, :type)) == "from_file")
+        # string "from_file"; everything else — including an inline Expression
+        # AST, which is ALSO an object — is parsed as an Expression. The
+        # discriminator MUST be the `type` field: a loaded `JSON3.Object` is an
+        # `AbstractDict`, so testing "is it dict-like" (the previous bug) routed
+        # every inline reference to the from_file branch and left the §6.6.5
+        # analytic-reference path unreachable.
+        reftype = if ref isa AbstractDict
+            haskey(ref, :type) ? string(ref[:type]) :
+                (haskey(ref, "type") ? string(ref["type"]) : "")
+        elseif hasproperty(ref, :type)
+            string(getproperty(ref, :type))
+        else
+            ""
+        end
+        if reftype == "from_file"
             reference = Dict{String,Any}()
             for (k, v) in pairs(ref)
                 reference[string(k)] = v

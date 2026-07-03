@@ -107,15 +107,20 @@ pub struct PdeAssertionResult {
 ///
 /// This is the public entry to the same build-time machinery the simulator
 /// uses to seed coordinate-expression `ic` fields
-/// ([`crate::simulate_array::eval_buildtime_field`]); state references are
-/// not in scope. A scalar (const-folded) result broadcasts. Mirrors the
+/// ([`crate::simulate_array::eval_buildtime_field`]).
+///
+/// STATE references are not in scope. Model PARAMETERS (load-time constants)
+/// ARE: pass their resolved values as `params` (name → value, e.g. a build's
+/// [`BuildInspection::params`]) and a parameter-dependent expression resolves
+/// (esm-spec §6.6.5). A scalar (const-folded) result broadcasts. Mirrors the
 /// Julia `evaluate_cellwise` / Python `evaluate_cellwise` 1:1.
 pub fn evaluate_cellwise(
     expr: &Expr,
     cells: &[Vec<i64>],
     index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
 ) -> Result<Vec<f64>, String> {
-    let value = eval_buildtime_field(expr, index_sets).map_err(|e| e.to_string())?;
+    let value = eval_buildtime_field(expr, index_sets, params).map_err(|e| e.to_string())?;
     match value {
         Value::Scalar(s) => Ok(vec![s; cells.len()]),
         Value::Array(arr) => {
@@ -314,6 +319,31 @@ fn time_index(times: &[f64], t: f64) -> Result<usize, String> {
     } else {
         Err(format!("no saved state at t={t} (nearest {})", times[i]))
     }
+}
+
+/// Build-time scalar-parameter scope for §6.6.5 cellwise references, with bare
+/// aliases. [`BuildInspection::params`] is keyed by the FLATTENED parameter
+/// name (`"M.k"`) — matching a resolved observed expression, which flattening
+/// qualifies. A test author's analytic `reference`, though, names the parameter
+/// BARE (`"k"`). So we expose BOTH: the flattened key verbatim, plus an
+/// unambiguous bare alias (the final dotted segment). On a bare-name collision
+/// across subsystems the flattened key stays authoritative and the ambiguous
+/// alias is dropped (the qualified reference still resolves). Mirrors the Julia
+/// / Python `param_scope_with_aliases`.
+fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f64> {
+    let mut out: HashMap<String, f64> = params.clone();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for k in params.keys() {
+        let bare = k.rsplit('.').next().unwrap_or(k.as_str());
+        *counts.entry(bare).or_insert(0) += 1;
+    }
+    for (k, v) in params {
+        let bare = k.rsplit('.').next().unwrap_or(k.as_str());
+        if bare != k.as_str() && counts.get(bare) == Some(&1) && !out.contains_key(bare) {
+            out.insert(bare.to_string(), *v);
+        }
+    }
+    out
 }
 
 /// A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output
@@ -644,7 +674,11 @@ fn eval_assertion(
     let reference = match &assertion.reference {
         None => None,
         Some(AssertionReference::Expression(expr)) => {
-            Some(evaluate_cellwise(expr, &cell_tuples, index_sets)?)
+            // Model parameters (load-time constants) are in scope for a §6.6.5
+            // analytic reference; state is not. `insp.params` carries the
+            // build's resolved scalar params.
+            let scope = param_scope_with_aliases(&insp.params);
+            Some(evaluate_cellwise(expr, &cell_tuples, index_sets, &scope)?)
         }
         Some(AssertionReference::FromFile(ff)) => {
             Some(from_file_reference(ff, base_dir, &cell_tuples)?)
@@ -935,7 +969,8 @@ mod tests {
         };
         let index_sets = file.index_sets.clone().unwrap();
         let cells: Vec<Vec<i64>> = (1..=N).map(|i| vec![i]).collect();
-        let vals = evaluate_cellwise(expr, &cells, &index_sets).expect("evaluates");
+        let no_params: HashMap<String, f64> = HashMap::new();
+        let vals = evaluate_cellwise(expr, &cells, &index_sets, &no_params).expect("evaluates");
         for (i, v) in (1..=N).zip(&vals) {
             let want = (std::f64::consts::PI * (i as f64 - 0.5) / N as f64).cos();
             assert!((v - want).abs() < 1e-15, "cell {i}: {v} vs {want}");
@@ -947,7 +982,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(
-            evaluate_cellwise(&two, &cells, &index_sets).unwrap(),
+            evaluate_cellwise(&two, &cells, &index_sets, &no_params).unwrap(),
             vec![2.0; N as usize]
         );
     }
