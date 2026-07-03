@@ -15,8 +15,11 @@ using JSON3
         @test expr2 isa VarExpr
         @test expr2.name == "x"
 
-        # Test OpExpr (object with 'op')
-        op_data = Dict("op" => "+", "args" => [1.0, "x"])
+        # Test OpExpr (object with 'op'). Use a NON-integral float literal:
+        # `parse_expression` applies CONFORMANCE_SPEC §5.5.3.1 rule 1, so an
+        # integral-valued float (`1.0`) narrows to an IntExpr; a genuinely
+        # fractional float stays a NumExpr.
+        op_data = Dict("op" => "+", "args" => [1.5, "x"])
         expr3 = EarthSciSerialization.parse_expression(op_data)
         @test expr3 isa OpExpr
         @test expr3.op == "+"
@@ -25,6 +28,20 @@ using JSON3
         @test expr3.args[2] isa VarExpr
         @test expr3.wrt === nothing
         @test expr3.dim === nothing
+
+        # §5.5.3.1 rule 1: an integral-valued float literal is an integer
+        # literal, regardless of source spelling. This makes an integer ratio
+        # `{op:"/",args:[1,N]}` inside an `aggregate` `expr` body byte-stable
+        # across bindings even when JSON3's context-dependent number inference
+        # materialises a bare integer token as Float64 (aggregate int-division
+        # cross-binding canonical-form fix).
+        @test EarthSciSerialization.parse_expression(1.0) isa IntExpr
+        @test EarthSciSerialization.parse_expression(8.0) == IntExpr(8)
+        int_ratio = EarthSciSerialization.parse_expression(
+            Dict("op" => "/", "args" => [1.0, 8.0]))
+        @test int_ratio.args[1] isa IntExpr
+        @test int_ratio.args[2] isa IntExpr
+        @test EarthSciSerialization.parse_expression(2.5) isa NumExpr
 
         # Test OpExpr with optional parameters
         op_data_wrt = Dict("op" => "D", "args" => ["x"], "wrt" => "t")
@@ -327,6 +344,62 @@ using JSON3
             "\"transform\": { \"op\": \"+\"" =>
             "\"factor\": 2.0, \"transform\": { \"op\": \"+\"")
         @test_throws Exception load(IOBuffer(bad))
+    end
+
+    @testset "Integer ratio inside aggregate stays integer (§5.5.3.1)" begin
+        # Regression guard for the aggregate int-division cross-binding divergence
+        # (CONFORMANCE_SPEC §5.5.3.1 rule 1). JSON3's context-dependent structural
+        # number inference materialises a bare integer token (`1`, `8`) as Float64
+        # when an integer ratio `{op:/,args:[1,N]}` is authored inside an
+        # `aggregate` `expr` body that is a sibling of a non-integral float (here
+        # `cos(pi * ...)`), so the same ratio would round-trip as `1.0/8.0` in
+        # Julia but `1/8` in the other four bindings — a byte divergence the AST
+        # rule-1 narrowing at the parse boundary removes.
+        doc = """
+        {
+          "esm": "0.8.0",
+          "metadata": { "name": "agg_int_ratio_regression" },
+          "index_sets": { "x": { "kind": "interval", "size": 8 } },
+          "models": { "M": {
+            "variables": {
+              "u": { "type": "state", "shape": ["x"] },
+              "dx": { "type": "observed", "units": "1", "expression": { "op": "/", "args": [1, 8] } }
+            },
+            "equations": [
+              { "lhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+                         "ranges": { "i": { "from": "x" } },
+                         "expr": { "op": "D", "args": [ { "op": "index", "args": ["u","i"] } ], "wrt": "t" } },
+                "rhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+                         "ranges": { "i": { "from": "x" } },
+                         "expr": { "op": "cos", "args": [ { "op": "*", "args": [ 3.141592653589793,
+                                     { "op": "*", "args": [ { "op": "-", "args": ["i", 0.5] },
+                                                            { "op": "/", "args": [1, 8] } ] } ] } ] } } }
+            ]
+          } }
+        }
+        """
+        # The raw JSON3 lazy reader corrupts the integer tokens for this shape:
+        # this asserts the fixture actually exercises the bug being guarded (the
+        # `1/8` INSIDE the aggregate widens to `1.0/8.0`, while the standalone
+        # `dx = 1/8` outside the aggregate stays integer).
+        raw = JSON3.write(JSON3.read(doc))
+        @test occursin("[1.0,8.0]", raw)          # JSON3 widened the in-aggregate ratio
+        @test occursin("[1,8]", raw)              # the standalone dx=1/8 stayed integer
+
+        # `load` narrows integral floats at the AST-literal boundary, so every
+        # integer ratio — inside the aggregate AND the standalone `dx` — is an
+        # IntExpr and re-serializes as a bare integer.
+        file = load(IOBuffer(doc))
+        s = JSON3.write(EarthSciSerialization.serialize_esm_file(file))
+        @test occursin("[1,8]", s)                 # ratios preserved as integers
+        @test !occursin("[1.0,8.0]", s)            # NO float promotion survives
+        @test !occursin("1.0,8.0", s)
+
+        # Every `/` node's operands are IntExpr, and it evaluates as TRUE division.
+        u_rate_dx = file.models["M"].variables["dx"].expression
+        @test u_rate_dx.args[1] isa IntExpr
+        @test u_rate_dx.args[2] isa IntExpr
+        @test EarthSciSerialization.evaluate_expr(u_rate_dx, Dict{String,Float64}()) == 0.125
     end
 
 end
