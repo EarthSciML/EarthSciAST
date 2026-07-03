@@ -1,6 +1,6 @@
 {
   "name": "earthsci-toolkit",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "TypeScript types and utilities for EarthSciML Serialization Format",
   "main": "dist/cjs/index.js",
