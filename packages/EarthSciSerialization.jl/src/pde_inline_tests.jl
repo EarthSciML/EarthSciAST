@@ -74,22 +74,31 @@ struct PdeAssertionResult
 end
 
 """
-    evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict())
-        -> Vector{Float64}
+    evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict(),
+                      params=Dict()) -> Vector{Float64}
 
 Evaluate an array-valued expression (elementwise ops over array-producing
 `aggregate`/`makearray` nodes — e.g. a grid-geometry template expanded by a
 §9.7 import, or a §6.6.5 analytic `reference`) at each 1-based integer cell of
 `cells`, returning one Float64 per cell. This is the public entry to the same
 build-time machinery `build_evaluator` uses to seed coordinate-expression `ic`
-fields; state references are not in scope.
+fields.
+
+STATE references are not in scope. Model PARAMETERS (load-time constants) ARE:
+pass their resolved values as `params` (name → value, e.g. a build's
+`BuildInspection.params`) and a parameter-dependent expression resolves. This
+is what lets a parameter-backed rank≥2 observed / analytic reference be
+asserted directly (esm-spec §6.6.5) instead of erroring with
+`E_TREEWALK_UNBOUND_VARIABLE`.
 """
 function evaluate_cellwise(expr::Expr, cells::AbstractVector{<:AbstractVector{<:Integer}};
                            const_arrays::AbstractDict=Dict{String,Any}(),
-                           registered_functions::AbstractDict=Dict{String,Function}())::Vector{Float64}
+                           registered_functions::AbstractDict=Dict{String,Function}(),
+                           params::AbstractDict=Dict{String,Float64}())::Vector{Float64}
     return Float64[_eval_cellwise(expr, collect(Int, c);
                                   const_arrays=const_arrays,
-                                  registered_functions=registered_functions)
+                                  registered_functions=registered_functions,
+                                  params=params)
                    for c in cells]
 end
 
@@ -160,13 +169,40 @@ function _state_cells(var_map::AbstractDict, variable::AbstractString,
     return out
 end
 
+# Build-time scalar-parameter scope for §6.6.5 cellwise references, with bare
+# aliases. `BuildInspection.params` is keyed by the FLATTENED parameter name
+# (e.g. "M.k") — matching a resolved observed expression, which flattening
+# qualifies. A test author's analytic `reference`, however, names the parameter
+# BARE ("k"). So we expose BOTH: the flattened key verbatim, plus an
+# unambiguous bare alias (the final dotted segment). On a bare-name collision
+# across subsystems the flattened key stays authoritative and the ambiguous
+# alias is dropped (the qualified reference still resolves).
+function _param_scope_with_aliases(params::AbstractDict)::Dict{String,Float64}
+    out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
+    counts = Dict{String,Int}()
+    for k in keys(params)
+        s = String(k)
+        bare = occursin('.', s) ? String(split(s, '.')[end]) : s
+        counts[bare] = get(counts, bare, 0) + 1
+    end
+    for (k, v) in params
+        s = String(k)
+        bare = occursin('.', s) ? String(split(s, '.')[end]) : s
+        (bare != s && counts[bare] == 1 && !haskey(out, bare)) &&
+            (out[bare] = Float64(v))
+    end
+    return out
+end
+
 # A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output surfaced
 # "for direct assertion", like the MPAS `div_flux`) rather than a state: an
 # observed carries no ODE slot, so its field is evaluated from the build's
 # RESOLVED observed expression (BuildInspection.observed_exprs) through the same
 # official `evaluate_cellwise` machinery as an analytic `reference`, with the
-# build's const-array registry in scope. STATE-FREE observeds only — a
-# state-dependent observed's references stay unbound and error like before.
+# build's const-array registry AND resolved scalar parameters
+# (BuildInspection.params — load-time constants) in scope. STATE-FREE observeds
+# only — a state-dependent observed's references stay unbound and error like
+# before; a PARAMETER-dependent one now resolves (esm-spec §6.6.5).
 # Cells are enumerated from the declared shape's interval index sets. Returns
 # `(field, cells)` or `nothing` when the variable is not such an observed.
 function _observed_field(insp::BuildInspection, file::EsmFile,
@@ -196,7 +232,8 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # observed-field ordering, so `field`/`reference` pair cell-for-cell.
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
-    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays)
+    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays,
+                              params=_param_scope_with_aliases(insp.params))
     return (field, cells)
 end
 
@@ -428,7 +465,13 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                             ref = nothing
                             if a.reference !== nothing
                                 if a.reference isa Expr
-                                    ref = evaluate_cellwise(a.reference, cell_tuples)
+                                    # Model parameters (load-time constants) are in
+                                    # scope for a §6.6.5 analytic `reference`; state
+                                    # is not. `insp.params` carries the build's
+                                    # resolved scalar params (override-or-default).
+                                    ref = evaluate_cellwise(a.reference, cell_tuples;
+                                                            const_arrays=insp.const_arrays,
+                                                            params=_param_scope_with_aliases(insp.params))
                                 elseif a.reference isa AbstractDict &&
                                        string(get(a.reference, "type", "")) == "from_file"
                                     ref = _from_file_reference(a.reference,
