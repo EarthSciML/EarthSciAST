@@ -127,3 +127,30 @@ end
     @test haskey(n2.observed_variables, "M.y")       # scalar observed untouched
     @test length(n2.equations) == length(f2.equations)
 end
+
+@testset "build_evaluator folds elementwise array observeds (WS4)" begin
+    # A spatial state psi[c] fed by a chain of ELEMENTWISE array observeds
+    # (a = psi + 1, b = a * 2, both shape [c]) with D(psi,t) = -b. This is the
+    # readable PDE-leaf decomposition the level-set uses (`grad_safe`, `U_n`,
+    # `S_n`, …). Without `_fold_elementwise_array_observeds`, build_evaluator
+    # rejects a, b as E_TREEWALK_UNSUPPORTED_SHAPE; the fold inlines them so the
+    # state RHS carries `-((psi+1)*2)` and evaluates per cell.
+    d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
+      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
+      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
+        "variables"=>Dict{String,Any}(
+          "psi"=>Dict{String,Any}("type"=>"state","shape"=>Any["c"]),
+          "a"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("+","psi",1)),
+          "b"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("*","a",2))),
+        "equations"=>Any[Dict{String,Any}(
+          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
+          "rhs"=>op("-","b"))])))
+    f!, u0, p, _t, vmap = E.build_evaluator(d;
+        initial_conditions=Dict("psi[1]"=>1.0, "psi[2]"=>2.0, "psi[3]"=>3.0))
+    # The elementwise array observeds are gone from the ODE partition (folded).
+    @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
+    du = similar(u0); f!(du, u0, p, 0.0)
+    for (i, expect) in zip(1:3, (-4.0, -6.0, -8.0))   # -b = -((psi+1)*2)
+        @test du[vmap["psi[$i]"]] ≈ expect
+    end
+end

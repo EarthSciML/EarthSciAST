@@ -1342,12 +1342,46 @@ def _subsystem_ref_injected_imports(sub_value: Dict[str, Any]) -> List[Any]:
     return []
 
 
+def _absolutize_injected_imports(
+    injected_imports: Optional[List[Any]], mount_base: str,
+) -> List[Any]:
+    """Rewrite each §9.7.10 form-A injected import entry's relative ``ref`` to an
+    absolute path anchored at the MOUNTING document's directory (``mount_base``).
+
+    The ref edge's ``expression_template_imports`` are authored relative to the
+    document that CARRIES the edge (the assembler), but they are folded into the
+    REFERENCED component's own scope and then resolved relative to THAT
+    component's directory (``new_base``). Without this rewrite an injected rule
+    ``../earthscidiscretizations/...`` would resolve under the leaf's directory
+    (``…/earthscimodels/components/…/earthscidiscretizations/…``) and 404.
+    Absolutizing here — mirroring the Julia reference, which absolutizes the edge
+    imports against the assembler dir before splicing — makes each injected
+    library resolve from the assembler regardless of where the leaf lives;
+    absolute refs bypass the per-component ``base_dir`` in ``_load_import_raw``.
+    URLs and already-absolute refs pass through unchanged, and every other field
+    on the entry (``bindings`` / ``only`` / ``as``) is preserved."""
+    if not injected_imports:
+        return []
+    out: List[Any] = []
+    for entry in injected_imports:
+        e = copy.deepcopy(entry)
+        if isinstance(e, dict):
+            ref = e.get("ref")
+            if (isinstance(ref, str) and ref
+                    and not ref.startswith(("http://", "https://"))
+                    and not os.path.isabs(ref)):
+                e["ref"] = os.path.abspath(os.path.join(mount_base, ref))
+        out.append(e)
+    return out
+
+
 def _load_ref_data(
     ref_str: str,
     base_path: str,
     bindings: Dict[str, int],
     kind: str,
     injected_imports: Optional[List[Any]] = None,
+    loader_metaparameters: Optional[Dict[str, int]] = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1359,11 +1393,22 @@ def _load_ref_data(
     ``subsystem_ref_is_template_library`` diagnostic (esm-spec §9.7.1): the
     two reference mechanisms are disjoint.
 
-    ``injected_imports`` are the §4.7 subsystem-ref edge's
+    ``injected_imports`` are the §4.7 ref edge's
     ``expression_template_imports`` (esm-spec §9.7.10 form A): they are
     appended to the referenced document's single component's own scope BEFORE
     resolution, so the §9.6.3 fixpoint lowers its rewrite-targets at the mount
-    under the assembler-chosen discretization.
+    under the assembler-chosen discretization. Their relative refs are
+    absolutized against ``base_path`` (the MOUNTING document's dir) first — they
+    are authored relative to the assembler that carries the edge, not the leaf
+    they land in.
+
+    ``loader_metaparameters`` are the top-level ``load()`` API bindings (esm-spec
+    §9.7.6 binding site 4). Those the referenced document DECLARES are propagated
+    into its close so a leaf mounted with no explicit edge ``bindings`` still
+    resolves under the loader's grid (e.g. NX/NY), matching the Julia/Rust
+    single-root-resolve semantics; explicit edge ``bindings`` (site 3) win over
+    them, and names the leaf does not declare are dropped (never forwarded, so
+    they cannot raise ``template_import_unknown_name`` against the leaf).
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1410,20 +1455,34 @@ def _load_ref_data(
             f"Schema validation failed for {kind} ref '{ref_str}': {e.message}"
         )
 
-    # esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
-    # into the referenced document's single component's own
-    # `expression_template_imports` before resolution (returns None when there
-    # is nothing to inject, keeping the fast path).
-    injected_root = apply_scope_injections(ref_data, injected_imports or [])
+    # esm-spec §9.7.10 form A: fold the ref edge's injected imports into the
+    # referenced document's single component's own `expression_template_imports`
+    # before resolution (returns None when there is nothing to inject, keeping
+    # the fast path). The injected refs are absolutized against the MOUNTING
+    # document's dir (`base_path`) first, so they resolve from the assembler that
+    # authored them rather than from the leaf they are folded into.
+    injected_abs = _absolutize_injected_imports(injected_imports, base_path)
+    injected_root = apply_scope_injections(ref_data, injected_abs)
     if injected_root is not None:
         ref_data = injected_root
 
-    # Resolve the referenced document's §9.7 machinery with this edge's
-    # metaparameter bindings (esm-spec §9.7.6 binding site 3), then run the
-    # §9.6.3 rewrite fixpoint so the inlined component carries only normal
-    # Expression ASTs (Option A round-trip).
+    # Close the referenced document's metaparameters (esm-spec §9.7.6): explicit
+    # edge `bindings` (site 3) take precedence, backfilled by the loader-API
+    # bindings (site 4) for names the leaf declares — so a leaf mounted with no
+    # edge bindings still inherits the loader's grid instead of falling to its
+    # own defaults. Names the leaf does not declare are never forwarded.
+    leaf_decls = set((ref_data.get("metaparameters") or {}).keys())
+    effective_bindings: Dict[str, int] = {
+        k: v for k, v in (loader_metaparameters or {}).items()
+        if k in leaf_decls
+    }
+    effective_bindings.update(bindings or {})
+
+    # Resolve the referenced document's §9.7 machinery under the effective
+    # metaparameter close, then run the §9.6.3 rewrite fixpoint so the inlined
+    # component carries only normal Expression ASTs (Option A round-trip).
     resolved = resolve_template_machinery(
-        ref_data, new_base, metaparameters=bindings)
+        ref_data, new_base, metaparameters=effective_bindings)
     if resolved is not None:
         ref_data = resolved
     ref_data = lower_expression_templates(ref_data)
@@ -1671,7 +1730,11 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
         _resolve_reaction_system_subsystems(rs, base_path, seen)
 
 
-def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
+def resolve_model_refs(
+    esm_file: EsmFile,
+    base_path: str,
+    loader_metaparameters: Optional[Dict[str, int]] = None,
+) -> None:
     """Resolve all top-level model references in an ESM file.
 
     The top-level analog of :func:`resolve_subsystem_refs`. Walks
@@ -1699,6 +1762,11 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
     Args:
         esm_file: The parsed ESM file to resolve references in (modified in place)
         base_path: The base directory for resolving relative file paths
+        loader_metaparameters: The top-level ``load()`` API metaparameter
+            bindings (esm-spec §9.7.6 binding site 4). Forwarded to each mounted
+            leaf's resolution so a §9.7.10 form-A mount edge closes the leaf's
+            declared metaparameters (e.g. NX/NY) under the loader's grid when the
+            edge itself carries no explicit ``bindings``.
 
     Raises:
         CircularReferenceError: If circular references are detected
@@ -1727,9 +1795,22 @@ def resolve_model_refs(esm_file: EsmFile, base_path: str) -> None:
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
         injected = _subsystem_ref_injected_imports(model_value)
         ref_data, new_base = _load_ref_data(
-            ref_str, base_path, bindings, "model", injected)
+            ref_str, base_path, bindings, "model", injected,
+            loader_metaparameters=loader_metaparameters)
 
         parsed = _parse_esm_data(ref_data)
+
+        # esm-spec §4.7: the referenced file's document-scoped index sets — now
+        # metaparameter-folded and, for a §9.7.10 form-A mount edge, carrying the
+        # grid axes SYNTHESIZED by the injected discretization's grid contract
+        # (e.g. `x`/`y` intervals of size NX/NY imported transitively via the
+        # rules' `grid.esm`) — join the importing document's registry. Without
+        # this the leaf's array states (psi shaped `[x, y]`) and any aggregate
+        # `ic` ranging `from x` have no index sets to resolve against and the
+        # flattened system is grid-less. Mirrors the subsystem-ref path's merge
+        # (`_resolve_model_subsystems`) and the Julia/Rust single-root resolve,
+        # which keep these axes in the flattened system.
+        _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
 
         # A top-level model ref must resolve to exactly one model. Unlike a
         # subsystem ref, a data loader or reaction system is not a valid
@@ -3044,8 +3125,13 @@ def load(
     # esm_file.models is a concrete Model (rather than a `{ref: ...}` dict)
     # before resolve_subsystem_refs — which assumes `model.subsystems` exists
     # — walks them. A model imported by reference splices in under its own key,
-    # so its flat names `X.<var>` already equal the coupling-edge names.
-    resolve_model_refs(esm_file, base_path)
+    # so its flat names `X.<var>` already equal the coupling-edge names. The
+    # loader-API metaparameters are threaded in so a §9.7.10 form-A mount edge
+    # resolves its leaf's discretization under the loader's grid (NX/NY) even
+    # when the edge carries no explicit `bindings` — matching the Julia/Rust
+    # single-root-resolve semantics so the SAME file runs identically.
+    resolve_model_refs(esm_file, base_path,
+                       loader_metaparameters=metaparameters)
 
     # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the

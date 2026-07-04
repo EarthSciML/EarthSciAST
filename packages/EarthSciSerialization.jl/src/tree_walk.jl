@@ -1097,8 +1097,7 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
             ranges = Dict{String,Any}()
             for i in eachindex(shape)
-                ranges[loops[i]] = haskey(index_sets, shape[i]) ?
-                    IndexSetRef(shape[i]) : IndexSetRef(shape[i])
+                ranges[loops[i]] = IndexSetRef(shape[i])
             end
             idx_args = Expr[VarExpr(vname)]
             for l in loops
@@ -1115,6 +1114,111 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
         end
     end
     return out
+end
+
+# Elementwise scalar ops whose ARRAY-shaped observed the WS4 fold may inline: the
+# arithmetic / transcendental functions that broadcast per cell. An array observed
+# whose top-level op is anything else — a producer (`makearray`/`arrayop`/
+# `aggregate`), a `const` field, a geometry kernel (`intersect_polygon`, …), a
+# gather/reshape (`index`, `reshape`, `transpose`, `concat`, `broadcast`), a
+# value-invention op (`skolem`/`distinct`/`rank`), or a bare alias — is left to
+# its own dedicated handler (const_arrays, `_array_inline_vars`, geometry setup,
+# the bare-alias path). Restricting the fold to this allowlist keeps it provably
+# regression-free: an elementwise array observed was previously REJECTED
+# (`E_TREEWALK_UNSUPPORTED_SHAPE`), so no prior-passing build exercised one.
+const _WS4_FOLDABLE_ELEMENTWISE_OPS = Set{String}([
+    "+", "-", "*", "/", "^", "neg", "square",
+    "sqrt", "cbrt", "abs", "sign", "pow",
+    "exp", "log", "log2", "log10", "log1p", "expm1",
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh",
+    "max", "min", "mod", "rem", "floor", "ceil", "round",
+])
+
+# ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
+# Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
+# equation RHS is an ELEMENTWISE expression — top-level op in
+# `_WS4_FOLDABLE_ELEMENTWISE_OPS` — into the equations that read it, in dependency
+# order, returning `(rewritten_equations, folded_names)`.
+#
+# This lets a library PDE leaf be authored with readable intermediate array fields
+# (a level-set's `grad_safe = grad_mag + ε`, `U_n = (u·∇ψ)/grad_safe`,
+# `S_n = R_0·(1+φ_W+φ_S)`) instead of one monolithic inlined `D(ψ,t)` RHS — the
+# evaluator otherwise rejects such an observed as `E_TREEWALK_UNSUPPORTED_SHAPE`
+# (only a producer-defined array observed inlines, via `_array_inline_vars`, and
+# only a clip ring materializes). Array observeds defined by a bare array PRODUCER
+# (the discretized `psi_x = D(ψ,x)`, `grad_mag = sqrt(D(ψ,x)²+D(ψ,y)²)`, both
+# lowered to `makearray` by the mounted scheme) are LEFT UNTOUCHED — they define
+# their own per-cell indexing and are inlined by the `_array_inline_vars` index
+# beta-reduction downstream. So the fold pulls only the elementwise combinators
+# into the state equation, whose whole-array lift then indexes the surviving
+# producer refs per cell — reproducing the hand-inlined RHS the leaf used to carry.
+#
+# This is the model-level counterpart of `inline_elementwise_array_observeds`
+# (shape_promotion.jl). Runs after observed-equation synthesis and before the
+# whole-array derivative lift. Byte-identical (empty fold, same equations vector)
+# for any model with no elementwise array observed.
+function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::Model)
+    function is_array_obs(name)
+        var = get(model.variables, name, nothing)
+        return var !== nothing && var.type == ObservedVariable &&
+               _is_array_shape(var.shape)
+    end
+    # A bare `name = rhs` algebraic definition per name (the D(state,t) equation
+    # has an OpExpr lhs, so it is never a target — only its RHS is rewritten).
+    defs = Dict{String,Expr}()
+    for eq in equations
+        lhs = eq.lhs
+        if lhs isa VarExpr
+            defs[lhs.name] = eq.rhs
+        end
+    end
+    targets = Dict{String,Expr}()
+    for (name, rhs) in defs
+        if is_array_obs(name) && rhs isa OpExpr &&
+           rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS
+            targets[name] = rhs
+        end
+    end
+    isempty(targets) && return (equations, Set{String}())
+
+    # Dependency order among the targets (the chain is feed-forward; a cycle is a
+    # genuine authoring error). Only target→target edges are ordered; references
+    # to producer observeds / params / state are leaves left in place.
+    deps = Dict(name => intersect(free_variables(rhs), keys(targets))
+                for (name, rhs) in targets)
+    order = String[]
+    done = Set{String}()
+    while length(order) < length(targets)
+        progressed = false
+        for name in keys(targets)
+            name in done && continue
+            if all(d -> d in done, deps[name])
+                push!(order, name)
+                push!(done, name)
+                progressed = true
+            end
+        end
+        progressed || throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
+            "cyclic elementwise array-observed dependency among $(collect(keys(targets)))"))
+    end
+    resolved = Dict{String,Expr}()
+    for name in order
+        resolved[name] = substitute(targets[name], resolved)
+    end
+
+    # Drop each folded definition and substitute its fully-resolved RHS into
+    # every remaining reader.
+    folded = Set{String}(keys(targets))
+    out = Equation[]
+    for eq in equations
+        lhs = eq.lhs
+        if lhs isa VarExpr && lhs.name in folded
+            continue
+        end
+        push!(out, Equation(lhs, substitute(eq.rhs, resolved); _comment=eq._comment))
+    end
+    return (out, folded)
 end
 
 """
@@ -1236,6 +1340,15 @@ function _build_evaluator_impl(model::Model;
         end
         isempty(synth) || (_model_equations = vcat(model.equations, synth))
     end
+    # ---- Elementwise array-observed fold (WS4) ----
+    # Fold every array-shaped observed whose lowered defining RHS is elementwise
+    # (a level-set's `U_n`, `S_n`, …) into its readers, so a discretization-
+    # agnostic PDE leaf can be authored with readable intermediate array fields
+    # rather than one inlined `D(ψ,t)` RHS. Producer-defined array observeds
+    # (`psi_x`, `grad_mag`) survive for `_array_inline_vars` below. Must run
+    # BEFORE the whole-array lift so the state equation carries the folded RHS.
+    _model_equations, _folded_array_obs =
+        _fold_elementwise_array_observeds(_model_equations, model)
     # ---- Whole-array declared-shape derivative lift ----
     # A WHOLE-ARRAY `D(state) = <array rhs>` over a declared shape is lifted into
     # the per-cell `arrayop` form the derivative partition consumes (see
@@ -1474,6 +1587,9 @@ function _build_evaluator_impl(model::Model;
         # inlined into their readers (ess-14f.4 / shape-promotion); no partition slot.
         name in _geom_inline_vars && continue
         name in _array_inline_vars && continue
+        # Elementwise array observeds folded into their readers (WS4): their
+        # defining equation is gone and their value lives inline in the state RHS.
+        name in _folded_array_obs && continue
         # polygon_intersection_area operand rings (const polygon vertex rings) are
         # materialized into const_arrays and read by the fused leaf; not a partition
         # member (they carry no state — like an intersect_polygon clip ring).

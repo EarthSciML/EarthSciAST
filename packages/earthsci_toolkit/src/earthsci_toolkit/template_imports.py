@@ -1250,6 +1250,18 @@ def resolve_template_machinery(
         for cname, comp in comps.items():
             if not _is_object(comp):
                 continue
+            # A §4.7 ref-stub component (``{"ref": ...}``) is a mount edge, not a
+            # concrete component: its optional ``expression_template_imports``
+            # are a §9.7.10 form-A injection to be applied to the REFERENCED leaf
+            # at ref-resolution time (parse._load_ref_data), never root-level
+            # template machinery for the stub itself — which carries no
+            # expression positions to lower. Consuming them here (folding into
+            # the stub's ``expression_templates``) would strand the discretization
+            # on the empty stub and leave the spliced leaf's rewrite-targets
+            # unlowered. Leave them intact so resolve_model_refs /
+            # resolve_subsystem_refs inject them into the spliced leaf.
+            if "ref" in comp:
+                continue
             imports = comp.get("expression_template_imports")
             if imports is None:
                 continue

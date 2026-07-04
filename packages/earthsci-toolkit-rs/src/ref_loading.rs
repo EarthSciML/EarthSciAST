@@ -83,6 +83,17 @@ fn walk_top_level(
         None => return Ok(()),
     };
 
+    // esm-spec §4.7 / §9.7.10: a top-level `models.<k>` that is a bare `{ref}`
+    // (has `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in
+    // the referenced leaf's single model, carrying the edge's
+    // `expression_template_imports` into that model's own scope, BEFORE the
+    // ordinary subsystem walk (the spliced model may itself carry subsystems).
+    // Resolution of the injected discretization is DEFERRED to the root
+    // template-machinery pass (`load_with_options`), so the loader-API
+    // metaparameters (grid resolution) reach the leaf document-wide — mirroring
+    // the Julia inliner (`_inline_toplevel_model_refs!`).
+    inline_toplevel_model_refs(obj, base_path, visited)?;
+
     // The importing document's index-set registry starts from its own
     // top-level `index_sets`; model subsystem refs merge theirs into it
     // (esm-spec §4.7). Reaction-system subsystem refs do NOT merge (Julia
@@ -111,6 +122,225 @@ fn walk_top_level(
         obj.insert("index_sets".to_string(), Value::Object(registry));
     }
     Ok(())
+}
+
+/// Inline every top-level `models.<k>` MOUNT EDGE — a bare `{ref}` (has `ref`,
+/// no inline `variables`) — by splicing in the referenced leaf's single model,
+/// with the edge's `expression_template_imports` folded into that model's own
+/// scope (esm-spec §9.7.10 form A at a top-level model-ref edge). Mirrors the
+/// Julia `_inline_toplevel_model_refs!`:
+///
+/// * the leaf's own nested top-level model-refs are inlined first (component of
+///   component), sharing this walk's path-scoped cycle set;
+/// * the leaf's single model (or the `model`-selected one) is spliced in;
+/// * the model's own relative `{ref}`s (its `expression_template_imports`,
+///   subsystems) are absolutized against the LEAF's dir, and the edge's imports
+///   against THIS document's dir, so both resolve after the model lands in a
+///   parent whose directory differs;
+/// * the leaf's `function_tables` / `data_loaders` / `enums` are merged in
+///   (parent wins on a key clash).
+///
+/// The injected discretization is NOT resolved here — it is left as model-level
+/// `expression_template_imports` for the root template-machinery pass, so the
+/// loader-API metaparameters reach the leaf document-wide.
+fn inline_toplevel_model_refs(
+    obj: &mut Map<String, Value>,
+    base_path: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
+        Some(models) => models
+            .iter()
+            .filter(|(_, m)| {
+                m.is_object() && m.get("ref").is_some() && m.get("variables").is_none()
+            })
+            .map(|(k, _)| k.clone())
+            .collect(),
+        None => return Ok(()),
+    };
+    if edge_names.is_empty() {
+        return Ok(());
+    }
+
+    for name in edge_names {
+        let entry = obj
+            .get_mut("models")
+            .and_then(|v| v.as_object_mut())
+            .and_then(|m| m.remove(&name))
+            .expect("edge entry present");
+        let entry_obj = entry.as_object().expect("edge entry is an object");
+        let ref_str = entry_obj
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "top-level model ref must be a string".to_string())?;
+        if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+            return Err(format!(
+                "Remote top-level model refs are not supported in the Rust loader; \
+                 download {ref_str:?} to a local file first"
+            ));
+        }
+        let canonical = base_path.join(ref_str).canonicalize().map_err(|e| {
+            format!("failed to resolve top-level model ref {ref_str:?}: {e}")
+        })?;
+        if visited.contains(&canonical) {
+            return Err(format!(
+                "circular top-level model reference detected: {}",
+                canonical.display()
+            ));
+        }
+        visited.insert(canonical.clone());
+        let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
+
+        let result: Result<(Value, Value), String> = (|| {
+            let content = std::fs::read_to_string(&canonical).map_err(|e| {
+                format!("failed to read top-level model ref {}: {}", canonical.display(), e)
+            })?;
+            let mut comp: Value = serde_json::from_str(&content).map_err(|e| {
+                format!("failed to parse top-level model ref {}: {}", canonical.display(), e)
+            })?;
+            // Component-of-component: inline the leaf's own top-level model-refs.
+            if let Some(comp_obj) = comp.as_object_mut() {
+                inline_toplevel_model_refs(comp_obj, &leaf_dir, visited)?;
+            }
+            let sel = entry_obj.get("model").and_then(|v| v.as_str());
+            let mut model = extract_toplevel_model(&comp, sel, ref_str, &canonical)?;
+            // The leaf model's own relative refs anchor at the leaf's dir; the
+            // edge's injected imports anchor at THIS document's dir (§9.7.10
+            // merge order: target's own first, then injected).
+            absolutize_nested_refs(&mut model, &leaf_dir);
+            if let Some(imports) = entry_obj
+                .get("expression_template_imports")
+                .and_then(|v| v.as_array())
+            {
+                let mut injected = imports.clone();
+                for e in injected.iter_mut() {
+                    absolutize_nested_refs(e, base_path);
+                }
+                append_component_imports(
+                    model.as_object_mut().ok_or_else(|| {
+                        format!("top-level model ref {ref_str:?} is not an object")
+                    })?,
+                    injected,
+                );
+            }
+            Ok((model, comp))
+        })();
+        visited.remove(&canonical);
+        let (model, comp) = result?;
+
+        // Splice the resolved model back under the same key, then merge the
+        // leaf's by-name blocks (parent wins on a clash).
+        obj.get_mut("models")
+            .and_then(|v| v.as_object_mut())
+            .expect("models map present")
+            .insert(name, model);
+        for blk in ["function_tables", "data_loaders", "enums"] {
+            let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            if src.is_empty() {
+                continue;
+            }
+            let src = src.clone();
+            let dst = obj
+                .entry(blk.to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(dst) = dst.as_object_mut() {
+                for (k, v) in src {
+                    dst.entry(k).or_insert(v);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extract the single top-level model from a referenced component file (or the
+/// `sel`-named one when the file holds several), for a top-level model-ref mount.
+fn extract_toplevel_model(
+    comp: &Value,
+    sel: Option<&str>,
+    ref_str: &str,
+    source: &Path,
+) -> Result<Value, String> {
+    let models = comp
+        .as_object()
+        .and_then(|o| o.get("models"))
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            format!(
+                "top-level model ref '{ref_str}' resolves to a file with no models block ({})",
+                source.display()
+            )
+        })?;
+    match sel {
+        Some(name) => models.get(name).cloned().ok_or_else(|| {
+            let mut avail: Vec<&String> = models.keys().collect();
+            avail.sort();
+            format!(
+                "top-level model ref '{ref_str}' has no model '{name}' (available: {})",
+                avail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        }),
+        None => {
+            if models.len() == 1 {
+                Ok(models.values().next().cloned().expect("one model"))
+            } else {
+                let mut avail: Vec<&String> = models.keys().collect();
+                avail.sort();
+                Err(format!(
+                    "top-level model ref '{ref_str}' resolves to {} models; add a \"model\" \
+                     selector to choose one (available: {})",
+                    models.len(),
+                    avail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                ))
+            }
+        }
+    }
+}
+
+/// Append raw §9.7.2 import entries to a model's own
+/// `expression_template_imports` (esm-spec §9.7.10 merge order: the target's own
+/// imports first, then the injected list).
+fn append_component_imports(model: &mut Map<String, Value>, injected: Vec<Value>) {
+    let arr = model
+        .entry("expression_template_imports".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(arr) = arr.as_array_mut() {
+        arr.extend(injected);
+    }
+}
+
+/// Rewrite every relative `{"ref": "..."}` under `value` to an absolute path
+/// anchored at `base_dir`, so the references resolve after the containing model
+/// is spliced into a parent whose directory differs. Absolute paths and URLs are
+/// left untouched. Mirrors the Julia `_absolutize_nested_refs!`.
+fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(r)) = map.get("ref") {
+                let is_abs =
+                    r.starts_with('/') || r.starts_with("http://") || r.starts_with("https://");
+                if !is_abs {
+                    let joined = base_dir.join(r.as_str());
+                    let abs = joined
+                        .canonicalize()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| joined.to_string_lossy().into_owned());
+                    map.insert("ref".to_string(), Value::String(abs));
+                }
+            }
+            for v in map.values_mut() {
+                absolutize_nested_refs(v, base_dir);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                absolutize_nested_refs(v, base_dir);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Walk a model or reaction system value and resolve any refs in its

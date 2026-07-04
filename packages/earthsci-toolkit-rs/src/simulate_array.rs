@@ -344,6 +344,15 @@ pub struct ArrayCompiled {
     /// references on the flattened path) resolve at `u0` build time exactly as
     /// equation expressions do at compile time.
     index_sets: HashMap<String, IndexSet>,
+    /// The single-model namespace (the top-level `models` map key), set by
+    /// [`Self::from_file`]. The raw single-model path keys params/states by their
+    /// BARE variable names (`R_0`, `psi[i,j]`), but the scalar backend, the
+    /// `flatten` path, and the Julia toolkit all namespace them (`Model.R_0`).
+    /// So a caller's `parameters` / `initial_conditions` override key is accepted
+    /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
+    /// cross-toolkit override-naming parity). `None` on the `from_flattened`
+    /// path, whose names are already fully namespaced.
+    namespace: Option<String>,
 }
 
 // ============================================================================
@@ -885,11 +894,16 @@ impl ArrayCompiled {
                     .to_string(),
             });
         }
-        let (_model_name, model) = models.iter().next().unwrap();
+        let (model_name, model) = models.iter().next().unwrap();
         // v0.8.0: `index_sets` is document-scoped (one registry shared by all
         // models), so source it from the file rather than the model.
         let index_sets = file.index_sets.clone().unwrap_or_default();
-        Self::from_model(model, &index_sets)
+        let mut compiled = Self::from_model(model, &index_sets)?;
+        // Record the model's namespace so overrides may be keyed `Model.param`
+        // (the scalar/flatten/Julia convention) as well as the raw `param` this
+        // single-model path builds (WS3 override-naming parity).
+        compiled.namespace = Some(model_name.clone());
+        Ok(compiled)
     }
 
     /// Build from a [`FlattenedSystem`] — the array-runtime analogue of the
@@ -1197,7 +1211,14 @@ impl ArrayCompiled {
         let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
         let mut observed_shapes: HashMap<String, VarShape> = HashMap::new();
 
-        // Declared observed variables with an `expression` field.
+        // Declared observed variables with an `expression` field. An array-shaped
+        // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
+        // `U_n`, `S_n`, a `const`-op field, a keyed-factor alias — is evaluated
+        // WHOLESALE here: `eval` looks each array-valued observed reference up in
+        // the observed-array map and broadcasts the elementwise ops over it, so a
+        // readable intermediate decomposition (WS4) already runs as authored. The
+        // rules are dependency-ordered below, so `grad_mag` materializes before
+        // `U_n`/`S_n` read it.
         for (name, var) in &observed_vars {
             if let Some(expr) = &var.expression {
                 observed_rules.push(AlgebraicRule::Scalar {
@@ -1500,6 +1521,7 @@ impl ArrayCompiled {
             forcing: Rc::new(RefCell::new(HashMap::new())),
             field_ics,
             index_sets: index_sets.clone(),
+            namespace: None,
         })
     }
 
@@ -1667,6 +1689,23 @@ impl ArrayCompiled {
     }
 
     /// Run the simulation.
+    /// Rewrite override-map keys to the BARE names this single-model system uses,
+    /// stripping a leading `<namespace>.` when present (WS3 parity). A no-op clone
+    /// when `namespace` is `None` (the already-namespaced `from_flattened` path)
+    /// or when a key carries no such prefix.
+    fn normalize_override_keys(&self, m: &HashMap<String, f64>) -> HashMap<String, f64> {
+        let Some(ns) = &self.namespace else {
+            return m.clone();
+        };
+        let prefix = format!("{ns}.");
+        m.iter()
+            .map(|(k, v)| {
+                let key = k.strip_prefix(&prefix).map(str::to_string).unwrap_or_else(|| k.clone());
+                (key, *v)
+            })
+            .collect()
+    }
+
     pub fn simulate(
         &self,
         tspan: (f64, f64),
@@ -1691,6 +1730,15 @@ impl ArrayCompiled {
         opts: &SimulateOptions,
         inspect: Option<&mut BuildInspection>,
     ) -> Result<Solution, SimulateError> {
+        // WS3 override-naming parity: on the single-model path names are BARE
+        // (`R_0`), but callers (and the Julia toolkit) key overrides by the
+        // namespaced `Model.R_0`. Strip this model's `<namespace>.` prefix from
+        // any override key so both forms resolve; keys without the prefix pass
+        // through unchanged. No-op on the already-namespaced `from_flattened` path.
+        let params_owned = self.normalize_override_keys(params);
+        let ics_owned = self.normalize_override_keys(initial_conditions);
+        let params = &params_owned;
+        let initial_conditions = &ics_owned;
         let (t0, t_end) = tspan;
         let n_states = self.n_states;
         let n_params = self.param_names.len();
@@ -6752,5 +6800,86 @@ mod subsystem_ragged_and_inspection_tests {
         assert_eq!(w_ij.shape(), [2, 1]);
         assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
         assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
+    }
+}
+
+#[cfg(test)]
+mod elementwise_array_observed_tests {
+    //! WS4: a discretization-agnostic PDE leaf may be authored with readable
+    //! intermediate ARRAY-shaped observeds (a level-set's `grad_mag`, `U_n`,
+    //! `S_n`, …) rather than one inlined `D(state)` RHS. The array runtime
+    //! evaluates each declared array observed WHOLESALE — `eval` looks every
+    //! array-valued observed reference up in the observed-array map and
+    //! broadcasts the elementwise ops over it — and `materialize_observeds`
+    //! builds them in dependency order, so the decomposition runs as authored
+    //! with no special per-cell lift. This is the Rust mirror of the Julia
+    //! `_fold_elementwise_array_observeds` pass; the test locks the behaviour so
+    //! the same `.esm` keeps running identically in both toolkits.
+    use super::*;
+    use crate::simulate::{SolverChoice, simulate};
+    use serde_json::json;
+
+    fn typed(doc: serde_json::Value) -> EsmFile {
+        serde_json::from_value(doc).expect("test document deserializes")
+    }
+    fn erk() -> SimulateOptions {
+        SimulateOptions {
+            solver: SolverChoice::Erk,
+            reltol: 1e-10,
+            abstol: 1e-12,
+            output_times: Some(vec![1.0]),
+            ..Default::default()
+        }
+    }
+
+    /// A spatial state psi[c] fed by a chain of ELEMENTWISE array observeds
+    /// (`k[c]` const field, `a = psi + k`) with `D(psi,t) = -a`. From psi(0)=0
+    /// the solution is psi(1) = -k·(1 - e⁻¹), DISTINCT per cell — so a correct
+    /// result proves the observeds are evaluated element-wise (not collapsed to
+    /// a scalar) and feed the state per cell.
+    #[test]
+    fn elementwise_array_observed_chain_drives_state_per_cell() {
+        let doc = json!({
+            "esm": "0.8.0",
+            "metadata": {"name": "ew_obs"},
+            "index_sets": {"c": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "psi": {"type": "state", "units": "1", "shape": ["c"]},
+                    "k": {"type": "observed", "shape": ["c"],
+                          "expression": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
+                    "a": {"type": "observed", "shape": ["c"],
+                          "expression": {"op": "+", "args": ["psi", "k"]}}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
+                    {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"}, "rhs": {"op": "-", "args": ["a"]}}
+                ]
+            }}
+        });
+        let file = typed(doc);
+        let sol = simulate(
+            &file,
+            (0.0, 1.0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &erk(),
+        )
+        .expect("simulates");
+        let ti = sol.time.len() - 1;
+        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
+        assert_eq!(cells.len(), 3);
+        let psi: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
+        let one_minus_em1 = 1.0 - (-1.0f64).exp();
+        for (i, k) in [1.0f64, 2.0, 3.0].iter().enumerate() {
+            let expect = -k * one_minus_em1;
+            assert!(
+                (psi[i] - expect).abs() < 1e-6,
+                "psi[{}](1) = {} != {}",
+                i + 1,
+                psi[i],
+                expect
+            );
+        }
     }
 }

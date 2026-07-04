@@ -1795,6 +1795,23 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             end
             _absolutize_nested_refs!(cmodel, compdir)
             models[name] = cmodel
+            # esm-spec §9.7.10 form A at a TOP-LEVEL model-ref edge: the edge's
+            # `expression_template_imports` inject a discretization into the
+            # referenced (now spliced-in) component's own scope — exactly as a
+            # subsystem-ref edge does (`_resolve_subsystem_ref`), so an assembler
+            # chooses the scheme for a discretization-agnostic PDE leaf without
+            # editing the leaf. The edge's import refs are authored relative to
+            # THIS document's directory (not the leaf's), so absolutize them
+            # against `base_path`, then append AFTER the leaf's own imports
+            # (§9.7.10 merge order: target's own first, then injected). The merged
+            # doc is resolved once at the root, so the loader-API metaparameters
+            # (grid resolution) reach the leaf document-wide.
+            edge_imports = get(entry, "expression_template_imports", nothing)
+            if edge_imports isa AbstractVector && !isempty(edge_imports)
+                imports_native = _to_native_json(edge_imports)
+                _absolutize_nested_refs!(imports_native, base_path)
+                _append_component_imports!(cmodel, imports_native)
+            end
             # Merge the by-name blocks the model's AST references; the parent wins
             # on a key clash (its own definitions take precedence).
             for blk in ("function_tables", "data_loaders", "enums")
