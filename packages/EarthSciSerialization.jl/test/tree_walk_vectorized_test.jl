@@ -254,3 +254,43 @@ end
         end
     end
 end
+
+# The symbolic stencil compiler (ess-perf §4c) builds one spine template per
+# structural branch and derives each cell's gather slots by evaluating the index
+# expressions per lane, instead of running sub→resolve→compile for every cell.
+# It is provably identical to the per-cell path where it applies and falls back
+# otherwise. This regression guards that equivalence AND that the fast path fires.
+@testset "symbolic stencil compiler ≡ per-cell fallback (differential, ess-perf)" begin
+    # `ESS_STENCIL_DISABLE=1` forces the byte-identical per-cell path.
+    _build(model, ics, disable) =
+        withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
+            build_evaluator(model; initial_conditions=ics)
+        end
+
+    # Bit-identical du across interior + ghost-boundary kernels, every grid size.
+    @testset "bit-identical du (N=$N)" for N in (8, 32, 64)
+        model = _stencil_model(N)
+        ics = Dict("u[$k]" => sin(0.7k) - 0.05k for k in 1:N)
+        fsym, u0, p, = _build(model, ics, false)
+        ffb,  _,  _, = _build(model, ics, true)
+        for trial in 0:5
+            u = Float64[sin(2.3k + 1.1trial) + 0.3cos(0.9k - trial) for k in 1:N]
+            dus = similar(u); duf = similar(u)
+            fsym(dus, u, p, Float64(trial))
+            ffb(duf, u, p, Float64(trial))
+            @test dus == duf   # bit-identical, not merely ≈
+        end
+    end
+
+    # The fast path actually fires: compiling the spine once (not per cell) must
+    # allocate strictly less than the forced per-cell fallback.
+    @testset "fast path fires (fewer build allocations)" begin
+        N = 128
+        model = _stencil_model(N)
+        ics = Dict("u[$k]" => 0.0 for k in 1:N)
+        _build(model, ics, false); _build(model, ics, true)   # warm up both
+        a_sym = @allocated _build(model, ics, false)
+        a_fb  = @allocated _build(model, ics, true)
+        @test a_sym < a_fb
+    end
+end
