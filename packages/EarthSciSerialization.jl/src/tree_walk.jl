@@ -2238,6 +2238,11 @@ function _build_evaluator_impl(model::Model;
             end
 
             range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+            # Compile one representative per structural group: all cells of this
+            # equation share the same resolve/compile context, so a per-equation memo
+            # (a plain local, passed explicitly) lets every subexpression shared across
+            # cells resolve and compile exactly once instead of once per cell.
+            cell_memo = _BuildMemo()
             for idx_tuple in Iterators.product(range_iters...)
                 idx_env  = Dict{String,Int}(idx_names[d] => idx_tuple[d]
                                             for d in 1:length(idx_names))
@@ -2272,8 +2277,8 @@ function _build_evaluator_impl(model::Model;
                     # No contracted indices — standard unrolled-body path.
                     sub_rhs = isempty(resolved_obs) ? sub_rhs_outer :
                               _sub_preserving(sub_rhs_outer, resolved_obs)
-                    rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, _const_arrays, _pgather)
-                    push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs)))
+                    rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, _const_arrays, _pgather, cell_memo)
+                    push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo)))
                 else
                     # Generalized einsum: compile each contracted-index term
                     # separately, then accumulate at runtime using _NK_CONTRACTION
@@ -2319,8 +2324,8 @@ function _build_evaluator_impl(model::Model;
                         end
                         term = isempty(resolved_obs) ? term :
                                _sub_preserving(term, resolved_obs)
-                        rhs_r = _resolve_indices(term, array_var_info, var_map, _const_arrays, _pgather)
-                        push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, reg_funcs))
+                        rhs_r = _resolve_indices(term, array_var_info, var_map, _const_arrays, _pgather, cell_memo)
+                        push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo))
                     end
                     if isempty(k_nodes)
                         # A per-cell dynamic bound can be empty (e.g. an isolated
@@ -2596,6 +2601,30 @@ struct _Node
     children::Vector{_Node}
 end
 
+# ── Per-equation build memo (ess-perf: compile one representative per group) ──
+# Within one array equation's cell loop every cell resolves/compiles against the
+# SAME resolve context (array_var_info / var_map / const_arrays / pgather) and
+# compile context (var_map / param_syms / reg_funcs), so `_resolve_indices` and
+# `_compile` are pure functions of the input expression OBJECT. A subexpression shared across cells — every state-independent
+# subtree is the SAME object across cells, thanks to the `_sub_preserving` /
+# `_resolve_indices` identity short-circuits — is then resolved and compiled ONCE
+# instead of once per cell. `_Node` is immutable and `_merge_nodes` never mutates
+# its inputs, so sharing a compiled node across cells is safe.
+#
+# The memo is a plain local value created in `_build_evaluator_impl` and passed
+# EXPLICITLY down the resolve/compile recursion (no module-level or task-local
+# state — safe under concurrent builds). Threading is fail-safe: a `_resolve_indices`
+# / `_compile` call that receives `nothing` (the default, used everywhere outside
+# the array-cell loop) is byte-identical to the un-memoized function, and a
+# recursion that forgets to forward the memo merely stops memoizing that subtree —
+# it never changes a result.
+struct _BuildMemo
+    resolve::IdDict{OpExpr,Expr}
+    compile::IdDict{OpExpr,_Node}
+end
+_BuildMemo() = _BuildMemo(IdDict{OpExpr,Expr}(), IdDict{OpExpr,_Node}())
+const _MaybeMemo = Union{Nothing,_BuildMemo}
+
 function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
                  literal::Float64=0.0, idx::Int=0,
                  sym::Symbol=Symbol(""), handler=nothing,
@@ -2605,13 +2634,13 @@ end
 
 # `param_syms` is a `Set{Symbol}` so parameters can be distinguished
 # from unbound-variable errors without another pass.
-function _compile(expr::NumExpr, var_map, param_syms, reg_funcs)
+function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
     return _mknode(kind=_NK_LITERAL, literal=expr.value)
 end
-function _compile(expr::IntExpr, var_map, param_syms, reg_funcs)
+function _compile(expr::IntExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
     return _mknode(kind=_NK_LITERAL, literal=Float64(expr.value))
 end
-function _compile(expr::VarExpr, var_map, param_syms, reg_funcs)
+function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
     name = expr.name
     if name == "t"
         return _mknode(kind=_NK_TIME)
@@ -2626,7 +2655,16 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs)
     end
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
-function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
+function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
+    memo === nothing && return _compile_op(expr, var_map, param_syms, reg_funcs, nothing)
+    m = memo.compile
+    r = get(m, expr, nothing)
+    r === nothing || return r
+    r = _compile_op(expr, var_map, param_syms, reg_funcs, memo)
+    m[expr] = r
+    return r
+end
+function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
     handler = nothing
     if op_sym === :fn
@@ -2653,7 +2691,7 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
             # Compile only the scalar first arg as a child; carry the
             # constant array on the node so the runtime call is one
             # _eval_node + one closed-function dispatch.
-            children = _Node[_compile(expr.args[1], var_map, param_syms, reg_funcs)]
+            children = _Node[_compile(expr.args[1], var_map, param_syms, reg_funcs, memo)]
             handler = (fname, Any[tab.value])
         elseif fname == "interp.linear"
             # Args = (table, axis, x). Const arrays at positions [1, 2];
@@ -2664,7 +2702,7 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
                     "interp.linear expects 3 args, got $(length(expr.args))"))
             tbl  = _require_const_array(expr.args[1], "interp.linear", "table")
             axs  = _require_const_array(expr.args[2], "interp.linear", "axis")
-            children = _Node[_compile(expr.args[3], var_map, param_syms, reg_funcs)]
+            children = _Node[_compile(expr.args[3], var_map, param_syms, reg_funcs, memo)]
             handler = (fname, Any[tbl, axs])
         elseif fname == "interp.bilinear"
             # Args = (table, axis_x, axis_y, x, y). Const arrays at [1, 2, 3];
@@ -2676,12 +2714,12 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs)
             axx  = _require_const_array(expr.args[2], "interp.bilinear", "axis_x")
             axy  = _require_const_array(expr.args[3], "interp.bilinear", "axis_y")
             children = _Node[
-                _compile(expr.args[4], var_map, param_syms, reg_funcs),
-                _compile(expr.args[5], var_map, param_syms, reg_funcs),
+                _compile(expr.args[4], var_map, param_syms, reg_funcs, memo),
+                _compile(expr.args[5], var_map, param_syms, reg_funcs, memo),
             ]
             handler = (fname, Any[tbl, axx, axy])
         else
-            children = _Node[_compile(a, var_map, param_syms, reg_funcs)
+            children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
                              for a in expr.args]
             handler = (fname, nothing)
         end
@@ -4881,7 +4919,8 @@ end
 # ~280-370) but produces a scalar Expr instead of writing to rhs_list.
 function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
                                     array_var_info, var_map, const_arrays,
-                                    pgather::AbstractDict=_EMPTY_PGATHER)
+                                    pgather::AbstractDict=_EMPTY_PGATHER,
+                                    memo::_MaybeMemo=nothing)
     output_idx_raw = arrayop_expr.output_idx === nothing ? Any[] : arrayop_expr.output_idx
     output_idx_strs = [String(s) for s in output_idx_raw if s isa AbstractString]
     length(output_idx_strs) == length(idx_args) ||
@@ -4928,7 +4967,7 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
     gates = arrayop_expr.join_gates
     filt0 = arrayop_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
+        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather, memo)
     end
 
     terms = Expr[]
@@ -4951,7 +4990,7 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
             filt = _sub_preserving(_sub_preserving(filt0, idx_exprs), k_exprs)
             term = OpExpr("ifelse", Expr[filt, term, NumExpr(zerobar)])
         end
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather))
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather, memo))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -4962,7 +5001,8 @@ end
 # semantics (_eval_makearray in numpy_interpreter.py:429-457).
 function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Expr},
                                       array_var_info, var_map, const_arrays,
-                                      pgather::AbstractDict=_EMPTY_PGATHER)
+                                      pgather::AbstractDict=_EMPTY_PGATHER,
+                                      memo::_MaybeMemo=nothing)
     regions = makearray_expr.regions === nothing ?
               Vector{Vector{Vector{Int}}}() : makearray_expr.regions
     values  = makearray_expr.values  === nothing ? Expr[] : makearray_expr.values
@@ -5014,7 +5054,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
             _resolve_index_of_arrayop(re, sel_exprs, array_var_info, var_map,
                                       const_arrays, pgather)
     end
-    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays, pgather)
+    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays, pgather, memo)
 end
 
 # Expand a scalar arrayop (empty output_idx) to a plain scalar Expr by
@@ -5022,7 +5062,8 @@ end
 # declared reducer. This is the build-time equivalent of an einsum over a
 # general expression body — compile once, evaluate cheaply at every RHS call.
 function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, const_arrays,
-                                 pgather::AbstractDict=_EMPTY_PGATHER)
+                                 pgather::AbstractDict=_EMPTY_PGATHER,
+                                 memo::_MaybeMemo=nothing)
     body = arrayop_expr.expr_body
     body === nothing &&
         throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
@@ -5049,7 +5090,7 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
     gates = arrayop_expr.join_gates
     filt0 = arrayop_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(body, array_var_info, var_map, const_arrays, pgather)
+        return _resolve_indices(body, array_var_info, var_map, const_arrays, pgather, memo)
     end
     terms = Expr[]
     for k_tuple in Iterators.product(contract_iters...)
@@ -5068,7 +5109,7 @@ function _resolve_scalar_arrayop(arrayop_expr::OpExpr, array_var_info, var_map, 
             filt = _sub_preserving(filt0, k_exprs)
             term = OpExpr("ifelse", Expr[filt, term, NumExpr(zerobar)])
         end
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather))
+        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays, pgather, memo))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -5115,11 +5156,12 @@ function _resolve_arg_vec(args::Vector{Expr},
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict,
-                          pgather::AbstractDict)
+                          pgather::AbstractDict,
+                          memo::_MaybeMemo=nothing)
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
-        r = _resolve_indices(args[i], array_var_info, var_map, const_arrays, pgather)
+        r = _resolve_indices(args[i], array_var_info, var_map, const_arrays, pgather, memo)
         if r !== args[i]
             if !changed
                 new_args = copy(args)
@@ -5135,28 +5177,47 @@ function _resolve_indices(expr::NumExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER)
+                          pgather::AbstractDict=_EMPTY_PGATHER,
+                          memo::_MaybeMemo=nothing)
     return expr
 end
 function _resolve_indices(expr::IntExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER)
+                          pgather::AbstractDict=_EMPTY_PGATHER,
+                          memo::_MaybeMemo=nothing)
     return expr
 end
 function _resolve_indices(expr::VarExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER)
+                          pgather::AbstractDict=_EMPTY_PGATHER,
+                          memo::_MaybeMemo=nothing)
     return expr
 end
 function _resolve_indices(expr::OpExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER)
+                          pgather::AbstractDict=_EMPTY_PGATHER,
+                          memo::_MaybeMemo=nothing)
+    memo === nothing &&
+        return _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, nothing)
+    m = memo.resolve
+    r = get(m, expr, nothing)
+    r === nothing || return r
+    r = _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, memo)
+    m[expr] = r
+    return r
+end
+function _resolve_indices_op(expr::OpExpr,
+                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
+                          var_map::Dict{String,Int},
+                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
+                          pgather::AbstractDict=_EMPTY_PGATHER,
+                          memo::_MaybeMemo=nothing)
     if expr.op == "polygon_intersection_area"
         # FUSED clip+area scalar leaf (esm-spec §8.6.1). Both operands are
         # build-time-known const polygon rings (registered in `const_arrays`), so the
@@ -5181,13 +5242,13 @@ function _resolve_indices(expr::OpExpr,
         # equation path in build_evaluator, ~lines 280-370).
         if first_arg isa OpExpr && _is_aggregate_op(first_arg.op)
             return _resolve_index_of_arrayop(first_arg::OpExpr, expr.args[2:end],
-                                             array_var_info, var_map, const_arrays, pgather)
+                                             array_var_info, var_map, const_arrays, pgather, memo)
         end
         # Expression-position makearray: index(makearray(...), k1, k2, ...)
         # Select the value whose region covers (k1,...); later regions win.
         if first_arg isa OpExpr && first_arg.op == "makearray"
             return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
-                                               array_var_info, var_map, const_arrays, pgather)
+                                               array_var_info, var_map, const_arrays, pgather, memo)
         end
         if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
             vname = first_arg.name
@@ -5253,7 +5314,7 @@ function _resolve_indices(expr::OpExpr,
             return NumExpr(Float64(vals[int_indices...]))
         end
         # scalar or unknown variable inside index — recurse on sub-exprs only
-        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather)
+        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo)
         changed || return expr   # nothing under this index resolved → keep node intact
         return OpExpr(expr.op, new_args;
                       wrt=expr.wrt, dim=expr.dim, int_var=expr.int_var,
@@ -5303,20 +5364,20 @@ function _resolve_indices(expr::OpExpr,
         output_idx_raw = expr.output_idx === nothing ? Any[] : expr.output_idx
         output_idx_strs = [s for s in output_idx_raw if s isa AbstractString]
         if isempty(output_idx_strs)
-            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather)
+            return _resolve_scalar_arrayop(expr, array_var_info, var_map, const_arrays, pgather, memo)
         end
         # Non-scalar arrayop without index() — pass through (will become a
         # compile-time error in _compile with a helpful message).
     end
-    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather)
+    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo)
     new_body = expr.expr_body
     if expr.expr_body !== nothing
-        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather)
+        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather, memo)
         changed |= new_body !== expr.expr_body
     end
     new_values = expr.values
     if expr.values !== nothing
-        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather)
+        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather, memo)
         new_values = nv
         changed |= vchanged
     end
