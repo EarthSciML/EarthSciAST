@@ -465,16 +465,29 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
     Returns a Python float for scalar results or a numpy ndarray for
     array-valued sub-expressions.
     """
-    if isinstance(expr, (int, float)) and not isinstance(expr, bool):
-        return float(expr)
-    if isinstance(expr, bool):
-        return float(expr)
-    if isinstance(expr, str):
-        return _resolve_symbol(expr, ctx)
+    # Interior AST nodes dominate a deep stencil tree and recurse the most, so
+    # test ExprNode FIRST (one isinstance on the hot path) and handle the three
+    # leaf kinds — string symbol, bool, number — only when it is not a node. This
+    # is semantically identical to the leaf-first order but pays a single
+    # isinstance per interior node instead of four (`isinstance` was ~13% of the
+    # profile's self time).
     if not isinstance(expr, ExprNode):
+        if isinstance(expr, str):
+            return _resolve_symbol(expr, ctx)
+        if isinstance(expr, bool):
+            return float(expr)
+        if isinstance(expr, (int, float)):
+            return float(expr)
         raise NumpyInterpreterError(f"Cannot evaluate expression of type {type(expr).__name__}")
 
     op = expr.op
+    # `index` is the most frequent interior op in a discretized stencil body
+    # (every array read is one); dispatch it before the long arithmetic /
+    # closed-function chain so an `index` node does not pay ~18 failed string
+    # comparisons per evaluation. The duplicate `index` case further down the
+    # chain is removed.
+    if op == "index":
+        return _eval_index(expr, ctx)
     # --- closed function registry ops (esm-spec §9.2 / §9.3) ---
     if op == "const":
         v = expr.value
@@ -623,9 +636,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
         # rather than substituting zero. Uniform `unlowered_operator` code.
         raise UnreachableSpatialOperatorError(op)
 
-    # --- array ops ---
-    if op == "index":
-        return _eval_index(expr, ctx)
+    # --- array ops --- (`index` is dispatched at the top of eval_expr)
     # "aggregate" is the canonical Functional Aggregate Query op tag.
     if op == "aggregate":
         return _eval_arrayop(expr, ctx)
