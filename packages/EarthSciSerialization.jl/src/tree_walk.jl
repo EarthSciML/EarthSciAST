@@ -998,6 +998,15 @@ end
 
 const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 
+# Shared read-only empty loop-variable environment. `_eval_const_int` only ever
+# reads its `idx_env` (haskey / getindex, never assigns), so index args that
+# carry no unresolved loop variable — the common per-cell gather case, where the
+# outer loop vars are already substituted to literals — can pass this single
+# instance instead of allocating a fresh `Dict{String,Int}()` per index arg. In
+# a stencil RHS that is a handful of freshly-GC'd dicts per neighbour gather per
+# cell removed from the build-time allocation load.
+const _EMPTY_IDX_ENV = Dict{String,Int}()
+
 # An explicit empty shape (`[]`, a rank-0 declaration) is scalar, not an array;
 # only a non-empty declared shape marks an array variable. `nothing` (no shape) is
 # also scalar.
@@ -2160,7 +2169,7 @@ function _build_evaluator_impl(model::Model;
             var_expr isa VarExpr ||
                 throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_LHS",
                                     "index first arg must be a variable name"))
-            concrete_idxs = [_eval_const_int(a, Dict{String,Int}())
+            concrete_idxs = [_eval_const_int(a, _EMPTY_IDX_ENV)
                              for a in inner.args[2:end]]
             cname = _cell_key(var_expr.name, concrete_idxs)
             idx = get(var_map, cname, 0)
@@ -2247,7 +2256,7 @@ function _build_evaluator_impl(model::Model;
                 ve isa VarExpr ||
                     throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS",
                                         "index first arg must be a variable name"))
-                concrete_idxs = [_eval_const_int(a, Dict{String,Int}())
+                concrete_idxs = [_eval_const_int(a, _EMPTY_IDX_ENV)
                                  for a in inner.args[2:end]]
                 cname = _cell_key(ve.name, concrete_idxs)
                 idx = get(var_map, cname, 0)
@@ -3354,31 +3363,57 @@ _count_vecnodes(n::_VecNode) =
 # index, LITERAL value). Same signature ⇒ unambiguous merge into one template.
 # Different signatures (in-bounds STATE vs ghost LITERAL, makearray region A vs
 # B, valence-5 vs valence-6 contraction) ⇒ separate kernels.
-function _struct_sig(n::_Node)::String
+#
+# The signature is written token-by-token into a caller-supplied `IOBuffer` and
+# materialised to a `String` exactly ONCE per top-level node (see the reusable
+# buffer in `_vectorize_cell_entries`). The earlier `string(…, join(…), …)` form
+# allocated an intermediate `String` at every interior node and re-copied every
+# descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
+# emitted bytes are unchanged, so the grouping is identical.
+function _struct_sig!(io::IOBuffer, n::_Node)
     k = n.kind
     if k === _NK_STATE
-        return "S"
+        print(io, 'S')
     elseif k === _NK_LITERAL
-        return "L"
+        print(io, 'L')
     elseif k === _NK_PARAM
-        return string("P:", n.sym)
+        print(io, "P:", n.sym)
     elseif k === _NK_PARAM_GATHER
         # Cells gathering from the SAME captured buffer (same `handler` object)
         # merge into one `_VK_PGATHER`, exactly as same-array STATE cells merge to
         # `_VK_GATHER`; the per-lane linear `idx` becomes the gather `slots`.
         # Different buffers ⇒ different `objectid` ⇒ separate kernels.
-        return string("PG:", objectid(n.handler))
+        print(io, "PG:", objectid(n.handler))
     elseif k === _NK_TIME
-        return "T"
+        print(io, 'T')
     elseif k === _NK_CONTRACTION
-        return string("C:", n.op, "(",
-                      join((_struct_sig(ch) for ch in n.children), ","), ")")
+        print(io, "C:", n.op, '(')
+        _sig_children!(io, n.children)
+        print(io, ')')
     else  # _NK_OP (including closed `fn`)
-        h = (n.handler isa Tuple && length(n.handler) >= 1) ?
-            string("@", n.handler[1]) : ""
-        return string("O:", n.op, h, "(",
-                      join((_struct_sig(ch) for ch in n.children), ","), ")")
+        print(io, "O:", n.op)
+        if n.handler isa Tuple && length(n.handler) >= 1
+            print(io, '@', n.handler[1])
+        end
+        print(io, '(')
+        _sig_children!(io, n.children)
+        print(io, ')')
     end
+    return io
+end
+
+function _sig_children!(io::IOBuffer, children)
+    first = true
+    for ch in children
+        first || print(io, ',')
+        first = false
+        _struct_sig!(io, ch)
+    end
+    return io
+end
+
+function _struct_sig(n::_Node)::String
+    return String(take!(_struct_sig!(IOBuffer(), n)))
 end
 
 # Allocate the closed-function argument vector for a vectorized all-scalar `fn`
@@ -3516,8 +3551,9 @@ function _vectorize_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_Vec
     isempty(entries) && return _VecKernel[]
     order = String[]
     groups = Dict{String,Tuple{Vector{Int},Vector{_Node}}}()
+    sigbuf = IOBuffer()   # reused across every cell; `take!` empties it each turn
     for (slot, node) in entries
-        sig = _struct_sig(node)
+        sig = String(take!(_struct_sig!(sigbuf, node)))
         if !haskey(groups, sig)
             groups[sig] = (Int[], _Node[])
             push!(order, sig)
@@ -3949,22 +3985,61 @@ end
 function _sub_preserving(expr::VarExpr, bindings::Dict{String,Expr})
     return get(bindings, expr.name, expr)
 end
+
+# Substitute each expression in `args`, returning `(substituted, changed)`. Like
+# `_resolve_arg_vec`, the ORIGINAL vector is returned untouched (no allocation)
+# when no element binds, and only the first differing element triggers a copy.
+function _sub_arg_vec(args::Vector{Expr}, bindings::Dict{String,Expr})
+    changed = false
+    new_args = args
+    @inbounds for i in eachindex(args)
+        r = _sub_preserving(args[i], bindings)
+        if r !== args[i]
+            if !changed
+                new_args = copy(args)
+                changed = true
+            end
+            new_args[i] = r
+        end
+    end
+    return new_args, changed
+end
+
 function _sub_preserving(expr::OpExpr, bindings::Dict{String,Expr})
-    new_args = Expr[_sub_preserving(a, bindings) for a in expr.args]
-    new_body = expr.expr_body === nothing ?
-               nothing : _sub_preserving(expr.expr_body, bindings)
-    new_values = expr.values === nothing ?
-                 nothing : Expr[_sub_preserving(v, bindings) for v in expr.values]
+    new_args, changed = _sub_arg_vec(expr.args, bindings)
+    new_body = expr.expr_body
+    if expr.expr_body !== nothing
+        new_body = _sub_preserving(expr.expr_body, bindings)
+        changed |= new_body !== expr.expr_body
+    end
+    new_values = expr.values
+    if expr.values !== nothing
+        nv, vchanged = _sub_arg_vec(expr.values, bindings)
+        new_values = nv
+        changed |= vchanged
+    end
+    # Substitute loop-var bindings into a `filter` predicate too, so a nested
+    # aggregate's filter sees the outer index values (the join's `join_gates` are
+    # position-keyed and need no substitution — they are carried through).
+    new_filter = expr.filter
+    if expr.filter !== nothing
+        new_filter = _sub_preserving(expr.filter, bindings)
+        changed |= new_filter !== expr.filter
+    end
+    # A node with no bound descendant AND no range bounds to rewrite is returned
+    # verbatim — no ~30-field OpExpr rebuilt. Nodes carrying `ranges` (only nested
+    # aggregates do) always take the reconstruct path so their bound expressions
+    # get substituted; those are rare relative to the plain stencil math ops that
+    # dominate a per-cell substitution.
+    if expr.ranges === nothing && !changed
+        return expr
+    end
     # Substitute loop-var bindings into range BOUNDS too, so a nested arrayop
     # whose reduction bound references an OUTER loop index — e.g. a per-cell
     # variable-valence reduction `k ∈ [1, index(n_edges_on_cell, i)]` inside an
     # outer `i`-loop — has `i` resolved when the inner arrayop is later expanded.
     # Bounds are Int (pass through) or Expr (recursively substituted).
     new_ranges = _sub_ranges(expr.ranges, bindings)
-    # Substitute loop-var bindings into a `filter` predicate too, so a nested
-    # aggregate's filter sees the outer index values (the join's `join_gates` are
-    # position-keyed and need no substitution — they are carried through).
-    new_filter = expr.filter === nothing ? nothing : _sub_preserving(expr.filter, bindings)
     return OpExpr(expr.op, new_args;
                   wrt=expr.wrt, dim=expr.dim,
                   int_var=expr.int_var, lower=expr.lower, upper=expr.upper,
@@ -4821,7 +4896,7 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
     oplus, zerobar = _aggregate_oplus_identity(arrayop_expr.semiring, arrayop_expr.reduce)
 
     # Substitute concrete output-index values into body.
-    k_vals = [_eval_const_int(a, Dict{String,Int}(), const_arrays) for a in idx_args]
+    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
     idx_exprs = Dict{String,Expr}(
         output_idx_strs[d] => IntExpr(Int64(k_vals[d]))
         for d in 1:length(output_idx_strs))
@@ -4895,7 +4970,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{Ex
         throw(TreeWalkError("E_TREEWALK_MAKEARRAY_MISMATCH",
               "makearray regions/values length mismatch " *
               "($(length(regions)) vs $(length(values)))"))
-    k_vals = [_eval_const_int(a, Dict{String,Int}(), const_arrays) for a in idx_args]
+    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
     ndim   = length(k_vals)
     result_expr::Expr = NumExpr(0.0)  # default: 0 if no region covers the point
     result_region = nothing
@@ -5031,6 +5106,31 @@ struct _PGatherArray
 end
 const _EMPTY_PGATHER = Dict{String,_PGatherArray}()
 
+# Resolve each expression in `args`, returning `(resolved, changed)`. When no
+# element changes under resolution the ORIGINAL `args` vector is returned (no
+# allocation) and `changed` is false, letting the caller keep its node verbatim;
+# only the first differing element triggers a single copy. Shared by the `index`
+# fallback and the generic-recurse arm of `_resolve_indices`.
+function _resolve_arg_vec(args::Vector{Expr},
+                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
+                          var_map::Dict{String,Int},
+                          const_arrays::AbstractDict,
+                          pgather::AbstractDict)
+    changed = false
+    new_args = args
+    @inbounds for i in eachindex(args)
+        r = _resolve_indices(args[i], array_var_info, var_map, const_arrays, pgather)
+        if r !== args[i]
+            if !changed
+                new_args = copy(args)
+                changed = true
+            end
+            new_args[i] = r
+        end
+    end
+    return new_args, changed
+end
+
 function _resolve_indices(expr::NumExpr,
                           array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
                           var_map::Dict{String,Int},
@@ -5098,7 +5198,7 @@ function _resolve_indices(expr::OpExpr,
                       "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"))
             # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
             # resolved: _eval_const_int will look up conn[c,k] as an integer.
-            indices = [_eval_const_int(a, Dict{String,Int}(), const_arrays) for a in idx_args]
+            indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
             for d in 1:length(indices)
                 if indices[d] < lo[d] || indices[d] > hi[d]
                     return NumExpr(0.0)  # ghost cell
@@ -5125,7 +5225,7 @@ function _resolve_indices(expr::OpExpr,
                 throw(TreeWalkError("E_TREEWALK_PGATHER_NDIM",
                       "forcing array '$(first_arg.name)' is $(length(pg.dims))D " *
                       "but got $(length(idx_args_expr)) indices"))
-            int_indices = [_eval_const_int(a, Dict{String,Int}(), const_arrays)
+            int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                            for a in idx_args_expr]
             for d in 1:length(pg.dims)
                 (1 <= int_indices[d] <= pg.dims[d]) ||
@@ -5145,7 +5245,7 @@ function _resolve_indices(expr::OpExpr,
                 throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
                       "const array '$(first_arg.name)' is $(ndims(vals))D " *
                       "but got $(length(idx_args_expr)) indices"))
-            int_indices = [_eval_const_int(a, Dict{String,Int}(), const_arrays)
+            int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                            for a in idx_args_expr]
             for d in 1:ndims(vals)
                 int_indices[d] = _resolve_const_index(vals, first_arg.name, d, int_indices[d], size(vals, d))
@@ -5153,7 +5253,8 @@ function _resolve_indices(expr::OpExpr,
             return NumExpr(Float64(vals[int_indices...]))
         end
         # scalar or unknown variable inside index — recurse on sub-exprs only
-        new_args = Expr[_resolve_indices(a, array_var_info, var_map, const_arrays, pgather) for a in expr.args]
+        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather)
+        changed || return expr   # nothing under this index resolved → keep node intact
         return OpExpr(expr.op, new_args;
                       wrt=expr.wrt, dim=expr.dim, int_var=expr.int_var,
                       lower=expr.lower, upper=expr.upper,
@@ -5207,11 +5308,22 @@ function _resolve_indices(expr::OpExpr,
         # Non-scalar arrayop without index() — pass through (will become a
         # compile-time error in _compile with a helpful message).
     end
-    new_args = Expr[_resolve_indices(a, array_var_info, var_map, const_arrays, pgather) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing :
-               _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather)
-    new_values = expr.values === nothing ? nothing :
-                 Expr[_resolve_indices(v, array_var_info, var_map, const_arrays, pgather) for v in expr.values]
+    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather)
+    new_body = expr.expr_body
+    if expr.expr_body !== nothing
+        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather)
+        changed |= new_body !== expr.expr_body
+    end
+    new_values = expr.values
+    if expr.values !== nothing
+        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather)
+        new_values = nv
+        changed |= vchanged
+    end
+    # No child, body, or value expression changed under resolution ⇒ the node is
+    # already fully resolved; return it verbatim rather than rebuilding a ~30-field
+    # OpExpr. In a stencil RHS the pure-parameter subtrees hit this fast path.
+    changed || return expr
     return OpExpr(expr.op, new_args;
                   wrt=expr.wrt, dim=expr.dim, int_var=expr.int_var,
                   lower=expr.lower, upper=expr.upper,
@@ -5304,7 +5416,7 @@ function _scan_lhs_cells!(cells, lhs::Expr, array_var_names::Set{String})
         first_arg.name in array_var_names || return
         idx_args = inner.args[2:end]
         try
-            indices = [_eval_const_int(a, Dict{String,Int}()) for a in idx_args]
+            indices = [_eval_const_int(a, _EMPTY_IDX_ENV) for a in idx_args]
             vname = first_arg.name
             if !haskey(cells, vname); cells[vname] = Set{Vector{Int}}(); end
             push!(cells[vname], indices)
