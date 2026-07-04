@@ -3918,7 +3918,60 @@ fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         "concat" => eval_concat(node, ctx),
         "broadcast" => eval_broadcast(node, ctx),
 
+        // Closed-registry function call (esm-spec §9.2): `datetime.*` calendar
+        // accessors and `interp.linear` / `interp.bilinear` tensor
+        // interpolation. Routes to the shared `registered_functions` kernel —
+        // the same one the Julia/Python bindings use — so a coupled model whose
+        // observeds compute fuel/table lookups via `fn` evaluates identically
+        // here (the fire stack's `FuelModelLookup` is the motivating case).
+        "fn" => eval_fn(node, ctx),
+
         _ => Value::Scalar(f64::NAN),
+    }
+}
+
+/// Evaluate a `fn` op: a call into the closed function registry
+/// (esm-spec §9.2 / [`crate::registered_functions`]). Each argument is
+/// evaluated to a runtime [`Value`] and coerced to a [`ClosedArg`] — a scalar
+/// (or 0-D array) to `Scalar`, a 1-D array to `Array`, a 2-D array to
+/// `Array2D`. The result is lifted back to `f64`. A missing `name`, an
+/// unsupported argument rank (≥ 3), or a registry error (unknown function,
+/// arity/shape mismatch, non-monotonic axis) surfaces as the NaN sentinel —
+/// the same runtime-error convention every other op in this interpreter uses
+/// (the solver detects NaN as a step failure).
+fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+
+    let Some(name) = node.name.as_deref() else {
+        return Value::Scalar(f64::NAN);
+    };
+    let mut args: Vec<ClosedArg> = Vec::with_capacity(node.args.len());
+    for a in &node.args {
+        let arg = match eval(a, ctx) {
+            Value::Scalar(s) => ClosedArg::Scalar(s),
+            Value::Array(arr) => match arr.ndim() {
+                0 => ClosedArg::Scalar(arr[IxDyn(&[])]),
+                1 => ClosedArg::Array(arr.iter().copied().collect()),
+                2 => {
+                    let (rows, cols) = (arr.shape()[0], arr.shape()[1]);
+                    let mut out = Vec::with_capacity(rows);
+                    for i in 0..rows {
+                        let mut row = Vec::with_capacity(cols);
+                        for j in 0..cols {
+                            row.push(arr[IxDyn(&[i, j])]);
+                        }
+                        out.push(row);
+                    }
+                    ClosedArg::Array2D(out)
+                }
+                _ => return Value::Scalar(f64::NAN),
+            },
+        };
+        args.push(arg);
+    }
+    match evaluate_closed_function(name, &args) {
+        Ok(v) => Value::Scalar(v.as_f64()),
+        Err(_) => Value::Scalar(f64::NAN),
     }
 }
 
@@ -6460,6 +6513,58 @@ mod forcing_channel_tests {
             vec![6.0, 10.0],
             "an unrelated forcing entry must not perturb the parameter path"
         );
+    }
+
+    #[test]
+    fn fn_op_interp_linear_in_array_runtime() {
+        // A scalar observed computed via `interp.linear` (a fuel-table lookup,
+        // as in the coupled fire stack's FuelModelLookup) drives an array
+        // state: D(u[i]) = looked_up. Before the `fn` arm existed, the observed
+        // NaN-ed out and poisoned the whole RHS. At code = 2.0 the lookup is
+        // the exact knot 40.0, so both cells' derivative must be 40.0.
+        let json = r#"{
+         "esm": "0.8.0",
+         "metadata": {"name": "fn_array_path"},
+         "models": {
+          "F": {
+           "variables": {
+             "u": {"type": "state", "shape": ["i"]},
+             "code": {"type": "parameter"},
+             "looked_up": {"type": "observed", "expression": {
+                "op": "fn", "name": "interp.linear", "args": [
+                   {"op": "const", "value": [10.0, 20.0, 40.0, 80.0, 160.0], "args": []},
+                   {"op": "const", "value": [0.0, 1.0, 2.0, 3.0, 4.0], "args": []},
+                   "code"]}}
+           },
+           "equations": [
+            {
+             "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                     "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+                     "ranges": {"i": [1, 2]}},
+             "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                     "ranges": {"i": [1, 2]},
+                     "expr": "looked_up"}
+            }
+           ]
+          }
+         }
+        }"#;
+        let file = load(json).expect("parse fn model");
+        let compiled = ArrayCompiled::from_file(&file).expect("compile fn model");
+        let mut params = HashMap::new();
+        params.insert("code".to_string(), 2.0);
+        let state = vec![0.0, 0.0];
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        assert_eq!(
+            dy,
+            vec![40.0, 40.0],
+            "interp.linear(...,2.0)=40 must drive both cells (was NaN before the `fn` arm)"
+        );
+
+        // The blend (not just a knot): code = 0.5 -> 15.0.
+        params.insert("code".to_string(), 0.5);
+        let (dy2, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        assert_eq!(dy2, vec![15.0, 15.0], "interp.linear(...,0.5)=15");
     }
 }
 

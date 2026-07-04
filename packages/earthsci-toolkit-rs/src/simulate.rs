@@ -984,6 +984,34 @@ pub enum ResolvedExpr {
         /// Resolved children.
         args: Vec<ResolvedExpr>,
     },
+    /// Closed-registry function call (the `fn` op, esm-spec §9.2). Held as a
+    /// distinct variant because — unlike a plain [`ResolvedExpr::Op`] — it
+    /// carries the dotted function `name` and its arguments may be array
+    /// literals (the `table` / `axis` of `interp.linear` / `interp.bilinear`),
+    /// which the scalar `f64` interpreter otherwise has no way to represent.
+    /// Array arguments are inline `const` literals, so they are materialized
+    /// once at resolve time; scalar arguments stay as sub-expressions evaluated
+    /// per call.
+    Fn {
+        /// Dotted module path of the registered function (e.g. `interp.linear`).
+        name: String,
+        /// Resolved arguments, each either a per-call scalar sub-expression or a
+        /// materialized constant array.
+        args: Vec<ResolvedFnArg>,
+    },
+}
+
+/// One argument to a resolved [`ResolvedExpr::Fn`] call.
+#[derive(Debug, Clone)]
+pub enum ResolvedFnArg {
+    /// A scalar argument, evaluated per call (e.g. the query point `x`, which
+    /// may reference a parameter or state).
+    Scalar(Box<ResolvedExpr>),
+    /// A 1-D constant array argument (an inline `const` literal — e.g. the
+    /// `table` or `axis` of `interp.linear`).
+    Array(Vec<f64>),
+    /// A 2-D constant array argument (the `table` of `interp.bilinear`).
+    Array2D(Vec<Vec<f64>>),
 }
 
 /// Build a `name -> position` lookup from an ordered list of names.
@@ -1052,6 +1080,25 @@ fn resolve_expr(
                     op: node.op.clone(),
                 });
             }
+            // Closed-registry function call (esm-spec §9.2): resolve to the
+            // dedicated `Fn` variant so the callee `name` and any inline array
+            // arguments survive to evaluation (a plain `Op` drops both — the
+            // root cause of `fn` ops NaN-ing on the scalar path).
+            if node.op == "fn" {
+                let name = node.name.clone().ok_or_else(|| {
+                    CompileError::InterpreterBuildError {
+                        details: "`fn` op is missing its required `name` field".to_string(),
+                    }
+                })?;
+                let args = node
+                    .args
+                    .iter()
+                    .map(|a| {
+                        resolve_fn_arg(a, state_index, param_index, observed_index, obs_limit)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(ResolvedExpr::Fn { name, args });
+            }
             let args = node
                 .args
                 .iter()
@@ -1062,6 +1109,55 @@ fn resolve_expr(
                 args,
             })
         }
+    }
+}
+
+/// Resolve one argument of a `fn` op. An inline `const` literal whose value is
+/// a JSON array is materialized to a constant [`ResolvedFnArg::Array`] /
+/// [`ResolvedFnArg::Array2D`] (the `table` / `axis` operands of the `interp.*`
+/// functions are always compile-time constants); every other argument — a
+/// scalar `const`, a number, a variable, or a nested expression — resolves to a
+/// per-call [`ResolvedFnArg::Scalar`] sub-expression.
+fn resolve_fn_arg(
+    expr: &Expr,
+    state_index: &HashMap<String, usize>,
+    param_index: &HashMap<String, usize>,
+    observed_index: &HashMap<String, usize>,
+    obs_limit: Option<usize>,
+) -> Result<ResolvedFnArg, CompileError> {
+    if let Expr::Operator(node) = expr
+        && node.op == "const"
+        && let Some(value) = &node.value
+        && let Some(arg) = json_to_fn_array_arg(value)
+    {
+        return Ok(arg);
+    }
+    let resolved = resolve_expr(expr, state_index, param_index, observed_index, obs_limit)?;
+    Ok(ResolvedFnArg::Scalar(Box::new(resolved)))
+}
+
+/// Materialize a `const`-op JSON value into an array `fn` argument. Returns
+/// `Some(Array)` for a flat numeric list, `Some(Array2D)` for a list of
+/// equal-length numeric rows, and `None` for a scalar number or any non-numeric
+/// / ragged shape (a scalar `const` falls back to the per-call scalar path).
+fn json_to_fn_array_arg(value: &serde_json::Value) -> Option<ResolvedFnArg> {
+    let items = value.as_array()?;
+    if items.iter().all(|it| it.is_array()) {
+        // 2-D: every element is itself a numeric row.
+        let rows: Option<Vec<Vec<f64>>> = items
+            .iter()
+            .map(|row| {
+                row.as_array()?
+                    .iter()
+                    .map(|n| n.as_f64())
+                    .collect::<Option<Vec<f64>>>()
+            })
+            .collect();
+        rows.map(ResolvedFnArg::Array2D)
+    } else {
+        // 1-D: a flat numeric list.
+        let flat: Option<Vec<f64>> = items.iter().map(|n| n.as_f64()).collect();
+        flat.map(ResolvedFnArg::Array)
     }
 }
 
@@ -1233,6 +1329,40 @@ pub fn interpret(
         ResolvedExpr::Observed(i) => observed[*i],
         ResolvedExpr::Time => t,
         ResolvedExpr::Op { op, args } => eval_op(op, args, state, params, observed, t),
+        ResolvedExpr::Fn { name, args } => eval_fn(name, args, state, params, observed, t),
+    }
+}
+
+/// Evaluate a resolved `fn` call (esm-spec §9.2). Scalar arguments are folded
+/// per call through [`interpret`]; array arguments were materialized at resolve
+/// time. Dispatches to the shared [`crate::registered_functions`] kernel and
+/// lifts the result to `f64`. A registry error (unknown function, arity /
+/// shape mismatch, non-monotonic axis) surfaces as the NaN sentinel — the same
+/// runtime-error convention [`eval_op`] uses; the solver reads NaN as a step
+/// failure.
+fn eval_fn(
+    name: &str,
+    args: &[ResolvedFnArg],
+    state: &[f64],
+    params: &[f64],
+    observed: &[f64],
+    t: f64,
+) -> f64 {
+    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+
+    let closed_args: Vec<ClosedArg> = args
+        .iter()
+        .map(|a| match a {
+            ResolvedFnArg::Scalar(e) => {
+                ClosedArg::Scalar(interpret(e, state, params, observed, t))
+            }
+            ResolvedFnArg::Array(v) => ClosedArg::Array(v.clone()),
+            ResolvedFnArg::Array2D(v) => ClosedArg::Array2D(v.clone()),
+        })
+        .collect();
+    match evaluate_closed_function(name, &closed_args) {
+        Ok(v) => v.as_f64(),
+        Err(_) => f64::NAN,
     }
 }
 
@@ -1621,6 +1751,120 @@ mod tests {
         assert!(
             msg.contains("a") && msg.contains("b"),
             "cycle error should name both vars: {msg}"
+        );
+    }
+
+    /// A `fn`-op observed (`interp.linear` fuel-table lookup) must evaluate
+    /// through the closed-function registry on the scalar path — not NaN out.
+    /// Regression for the coupled-fire blocker: `resolve_expr` used to drop the
+    /// `fn` op's `name` and its inline array args, so `interp.linear` fell
+    /// through `eval_op`'s `_ => NaN` arm and poisoned every downstream state.
+    #[test]
+    fn fn_op_interp_linear_scalar_path() {
+        // looked_up = interp.linear([10,20,40,80,160], [0,1,2,3,4], code);
+        // dx/dt = looked_up, x(0) = 0. At code = 2.0 the lookup is the exact
+        // knot 40.0, so x(1) = 40.0.
+        let json = r#"{
+            "esm": "0.8.0",
+            "metadata": {"name": "FnFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "x": {"type": "state", "default": 0.0},
+                        "code": {"type": "parameter", "default": 2.0},
+                        "looked_up": {"type": "observed", "expression": {
+                            "op": "fn", "name": "interp.linear", "args": [
+                                {"op": "const", "value": [10.0, 20.0, 40.0, 80.0, 160.0], "args": []},
+                                {"op": "const", "value": [0.0, 1.0, 2.0, 3.0, 4.0], "args": []},
+                                "code"
+                            ]}}
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                            "rhs": "looked_up"
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let file = crate::parse::load(json).expect("parse fixture");
+        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let opts = SimulateOptions {
+            output_times: Some(vec![0.0, 1.0]),
+            ..Default::default()
+        };
+        let sol = compiled
+            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .expect("simulate succeeds");
+        let x_idx = sol
+            .state_variable_names
+            .iter()
+            .position(|n| n.ends_with("x"))
+            .expect("x in solution");
+        assert!(
+            (sol.state[x_idx][1] - 40.0).abs() < 1e-6,
+            "x(1) should be 40.0 (dx/dt = interp.linear(...,2.0) = 40), got {}",
+            sol.state[x_idx][1]
+        );
+
+        // A different query point exercises the blend, not just a knot: at
+        // code = 0.5 the lookup is 0.5*(10+20)... = 15.0.
+        let mut params = HashMap::new();
+        params.insert("M.code".to_string(), 0.5);
+        let sol2 = compiled
+            .simulate((0.0, 1.0), &params, &HashMap::new(), &opts)
+            .expect("simulate succeeds");
+        assert!(
+            (sol2.state[x_idx][1] - 15.0).abs() < 1e-6,
+            "x(1) should be 15.0 at code=0.5, got {}",
+            sol2.state[x_idx][1]
+        );
+    }
+
+    /// A `fn`-op with a *scalar* argument (`datetime.year`) exercises the
+    /// `name`-threading fix independent of the array-arg materialization path.
+    #[test]
+    fn fn_op_datetime_scalar_arg() {
+        // yr = datetime.year(946684800) = 2000 (2000-01-01T00:00:00Z).
+        // dx/dt = yr, x(0) = 0, so x(1) = 2000.
+        let json = r#"{
+            "esm": "0.8.0",
+            "metadata": {"name": "DatetimeFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "x": {"type": "state", "default": 0.0},
+                        "yr": {"type": "observed", "expression": {
+                            "op": "fn", "name": "datetime.year", "args": [946684800.0]}}
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                            "rhs": "yr"
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let file = crate::parse::load(json).expect("parse fixture");
+        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let opts = SimulateOptions {
+            output_times: Some(vec![0.0, 1.0]),
+            ..Default::default()
+        };
+        let sol = compiled
+            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .expect("simulate succeeds");
+        let x_idx = sol
+            .state_variable_names
+            .iter()
+            .position(|n| n.ends_with("x"))
+            .expect("x in solution");
+        assert!(
+            (sol.state[x_idx][1] - 2000.0).abs() < 1e-9,
+            "x(1) should be 2000.0 (dx/dt = datetime.year = 2000), got {}",
+            sol.state[x_idx][1]
         );
     }
 
