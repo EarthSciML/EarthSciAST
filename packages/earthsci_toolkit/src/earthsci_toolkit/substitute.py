@@ -31,20 +31,22 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
         return expr
     elif isinstance(expr, ExprNode):
         # Recursively substitute in all arguments
+        # ``substitute(None, ...)`` returns ``None``, so no per-field None guard
+        # is needed; only ``values`` needs one because it is iterated.
         substituted_args = [substitute(arg, bindings) for arg in expr.args]
-        substituted_body = substitute(expr.expr, bindings) if expr.expr is not None else None
+        substituted_body = substitute(expr.expr, bindings)
         substituted_values = (
             [substitute(v, bindings) for v in expr.values]
             if expr.values is not None else None
         )
-        substituted_lower = substitute(expr.lower, bindings) if expr.lower is not None else None
-        substituted_upper = substitute(expr.upper, bindings) if expr.upper is not None else None
+        substituted_lower = substitute(expr.lower, bindings)
+        substituted_upper = substitute(expr.upper, bindings)
         # Aggregate (arrayop) carries semiring/join/filter/distinct/key beside
         # output_idx/reduce/ranges; preserve all of them so a substituted
         # aggregate keeps its full semantics (RFC §5.1/§5.3/§5.5). ``filter``
         # and ``key`` are nested Expressions and must themselves be substituted.
-        substituted_filter = substitute(expr.filter, bindings) if expr.filter is not None else None
-        substituted_key = substitute(expr.key, bindings) if expr.key is not None else None
+        substituted_filter = substitute(expr.filter, bindings)
+        substituted_key = substitute(expr.key, bindings)
         # Use ``replace`` so closed-function / lookup metadata (``name``,
         # ``value``, ``id``, ``manifold``, ``handler_id``, ``table``,
         # ``table_axes``, ``output``) is carried verbatim. The previous explicit
@@ -368,10 +370,7 @@ def process_operator_compose_placeholders(esm_file: EsmFile) -> EsmFile:
                     all_state_variables.extend(state_vars)
 
             # Remove duplicates while preserving order
-            unique_state_variables = []
-            for var in all_state_variables:
-                if var not in unique_state_variables:
-                    unique_state_variables.append(var)
+            unique_state_variables = list(dict.fromkeys(all_state_variables))
 
             # Process each system in the coupling
             for system_name in coupling.systems:

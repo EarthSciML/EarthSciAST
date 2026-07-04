@@ -276,6 +276,17 @@ def _parse_functional_affect(functional_affect_data: Dict[str, Any]) -> Function
     )
 
 
+def _parse_affect(affect: Any):
+    """Parse one affect entry from an event's ``affects`` / ``affect_neg`` list.
+
+    A dict carrying a ``handler_id`` is a :class:`FunctionalAffect`; anything
+    else is an :class:`AffectEquation`.
+    """
+    if isinstance(affect, dict) and "handler_id" in affect:
+        return _parse_functional_affect(affect)
+    return _parse_affect_equation(affect)
+
+
 def _parse_model_variable(var_data: Dict[str, Any]) -> ModelVariable:
     """Parse a model variable from JSON data."""
     var_type = var_data["type"]
@@ -333,11 +344,7 @@ def _parse_continuous_event(event_data: Dict[str, Any]) -> ContinuousEvent:
 
     # Parse affects: distinguish AffectEquation from FunctionalAffect
     if "affects" in event_data:
-        for affect in event_data["affects"]:
-            if isinstance(affect, dict) and "handler_id" in affect:
-                affects.append(_parse_functional_affect(affect))
-            else:
-                affects.append(_parse_affect_equation(affect))
+        affects = [_parse_affect(affect) for affect in event_data["affects"]]
 
     # Parse functional_affect (FunctionalAffect object)
     if "functional_affect" in event_data:
@@ -349,15 +356,7 @@ def _parse_continuous_event(event_data: Dict[str, Any]) -> ContinuousEvent:
     # Parse new fields
     affect_neg = None
     if "affect_neg" in event_data:
-        affect_neg_list = []
-        for affect in event_data["affect_neg"]:
-            if isinstance(affect, dict) and "handler_id" in affect:
-                # This is a functional affect
-                affect_neg_list.append(_parse_functional_affect(affect))
-            else:
-                # This is a regular affect equation
-                affect_neg_list.append(_parse_affect_equation(affect))
-        affect_neg = affect_neg_list
+        affect_neg = [_parse_affect(affect) for affect in event_data["affect_neg"]]
 
     root_find = event_data.get("root_find", "left")
     reinitialize = event_data.get("reinitialize", False)
@@ -383,11 +382,7 @@ def _parse_discrete_event(event_data: Dict[str, Any]) -> DiscreteEvent:
 
     # Parse affects: distinguish AffectEquation from FunctionalAffect
     if "affects" in event_data:
-        for affect in event_data["affects"]:
-            if isinstance(affect, dict) and "handler_id" in affect:
-                affects.append(_parse_functional_affect(affect))
-            else:
-                affects.append(_parse_affect_equation(affect))
+        affects = [_parse_affect(affect) for affect in event_data["affects"]]
 
     # Parse functional_affect (FunctionalAffect object)
     if "functional_affect" in event_data:
@@ -643,25 +638,24 @@ def _parse_parameter(param_data: Dict[str, Any]) -> Parameter:
     )
 
 
+def _parse_stoichiometry(entries: Any) -> Dict[str, Any]:
+    """Build a ``{species: stoichiometry}`` map from substrate/product entries.
+
+    Preserves `int` vs `float` coefficients so a parse/re-emit cycle stays
+    byte-identical for integer-only fixtures and round-trips fractional
+    stoichiometries untouched.
+    """
+    return {e["species"]: e["stoichiometry"] for e in entries or []}
+
+
 def _parse_reaction(reaction_data: Dict[str, Any]) -> Reaction:
     """Parse a reaction from JSON data."""
     rxn_id = reaction_data.get("id")
     name = reaction_data.get("name", rxn_id)
 
-    # Parse reactants (substrates in schema). Preserve `int` vs `float` so a
-    # parse/re-emit cycle stays byte-identical for integer-only fixtures and
-    # round-trips fractional stoichiometries untouched.
-    reactants = {}
-    if reaction_data.get("substrates"):
-        for substrate in reaction_data["substrates"]:
-            species = substrate["species"]
-            reactants[species] = substrate["stoichiometry"]
-
-    products = {}
-    if reaction_data.get("products"):
-        for product in reaction_data["products"]:
-            species = product["species"]
-            products[species] = product["stoichiometry"]
+    # Substrates in the schema become reactants in the model.
+    reactants = _parse_stoichiometry(reaction_data.get("substrates"))
+    products = _parse_stoichiometry(reaction_data.get("products"))
 
     # Parse rate
     rate_constant = None
@@ -1008,13 +1002,7 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
         # Parse affect_neg
         affect_neg = []
         if "affect_neg" in coupling_data and coupling_data["affect_neg"] is not None:
-            for affect in coupling_data["affect_neg"]:
-                if isinstance(affect, dict) and "handler_id" in affect:
-                    # This is a functional affect
-                    affect_neg.append(_parse_functional_affect(affect))
-                else:
-                    # This is a regular affect equation
-                    affect_neg.append(_parse_affect_equation(affect))
+            affect_neg = [_parse_affect(affect) for affect in coupling_data["affect_neg"]]
 
         return EventCoupling(
             description=description,

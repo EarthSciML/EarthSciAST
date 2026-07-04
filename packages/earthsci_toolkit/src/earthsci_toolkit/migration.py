@@ -137,7 +137,6 @@ def migrate(esm_file, target_version: str):
     """
     current_version = _get_version(esm_file)
 
-    _parse_version(current_version)
     current_ver = _parse_version(current_version)
     target_ver = _parse_version(target_version)
 

@@ -103,22 +103,7 @@ def validate(esm_file) -> ValidationResult:
         ValidationResult containing schema_errors, structural_errors, unit_warnings, and is_valid flag
     """
     # Handle JSON string or dict input by parsing first
-    if isinstance(esm_file, str):
-        try:
-            esm_file = load(esm_file)
-        except SchemaValidationError as e:
-            return ValidationResult(
-                is_valid=False,
-                schema_errors=[ValidationError(path="$", message=str(e), code="schema")],
-                structural_errors=[]
-            )
-        except Exception as e:
-            return ValidationResult(
-                is_valid=False,
-                schema_errors=[ValidationError(path="$", message=str(e), code="parse")],
-                structural_errors=[]
-            )
-    elif isinstance(esm_file, dict):
+    if isinstance(esm_file, (str, dict)):
         try:
             esm_file = load(esm_file)
         except SchemaValidationError as e:
@@ -322,9 +307,9 @@ def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollecto
     `data_loaders`) is valid — it is referenceable as a loader subsystem
     (RFC pure-io-data-loaders §4.4 / esm-spec §4.7).
     """
-    has_models = esm_file.models and len(esm_file.models) > 0
-    has_reaction_systems = esm_file.reaction_systems and len(esm_file.reaction_systems) > 0
-    has_data_loaders = esm_file.data_loaders and len(esm_file.data_loaders) > 0
+    has_models = bool(esm_file.models)
+    has_reaction_systems = bool(esm_file.reaction_systems)
+    has_data_loaders = bool(esm_file.data_loaders)
 
     if not has_models and not has_reaction_systems and not has_data_loaders:
         error = ESMError(

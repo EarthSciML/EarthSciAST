@@ -146,6 +146,26 @@ def derive_odes(system: ReactionSystem) -> Model:
     )
 
 
+def _build_stoich_matrix(system: ReactionSystem, cell_coeff) -> np.ndarray:
+    """Build a ``(n_species, n_reactions)`` coefficient matrix.
+
+    ``cell_coeff(reaction, species_name)`` supplies each entry; the three public
+    matrix functions differ only in that per-cell rule. Returns an empty array
+    for a system with no species or no reactions.
+    """
+    if not system.species or not system.reactions:
+        return np.array([])
+
+    species_names = [s.name for s in system.species]
+    matrix = np.zeros((len(species_names), len(system.reactions)))
+
+    for j, reaction in enumerate(system.reactions):
+        for i, species_name in enumerate(species_names):
+            matrix[i, j] = cell_coeff(reaction, species_name)
+
+    return matrix
+
+
 def stoichiometric_matrix(system: ReactionSystem) -> np.ndarray:
     """
     Compute the net stoichiometric matrix for a reaction system.
@@ -164,30 +184,10 @@ def stoichiometric_matrix(system: ReactionSystem) -> np.ndarray:
     Raises:
         ValueError: If system is empty
     """
-    if not system.species or not system.reactions:
-        return np.array([])
-
-    species_names = [s.name for s in system.species]
-    n_species = len(species_names)
-    n_reactions = len(system.reactions)
-
-    matrix = np.zeros((n_species, n_reactions))
-
-    for j, reaction in enumerate(system.reactions):
-        for i, species_name in enumerate(species_names):
-            net_coeff = 0
-
-            # Subtract reactant coefficient (negative contribution)
-            if species_name in reaction.reactants:
-                net_coeff -= reaction.reactants[species_name]
-
-            # Add product coefficient (positive contribution)
-            if species_name in reaction.products:
-                net_coeff += reaction.products[species_name]
-
-            matrix[i, j] = net_coeff
-
-    return matrix
+    return _build_stoich_matrix(
+        system,
+        lambda r, sp: r.products.get(sp, 0) - r.reactants.get(sp, 0),
+    )
 
 
 def substrate_matrix(system: ReactionSystem) -> np.ndarray:
@@ -205,21 +205,7 @@ def substrate_matrix(system: ReactionSystem) -> np.ndarray:
         np.ndarray: Substrate matrix with shape (n_species, n_reactions)
                    where S[i,j] = reactant coefficient of species i in reaction j
     """
-    if not system.species or not system.reactions:
-        return np.array([])
-
-    species_names = [s.name for s in system.species]
-    n_species = len(species_names)
-    n_reactions = len(system.reactions)
-
-    matrix = np.zeros((n_species, n_reactions))
-
-    for j, reaction in enumerate(system.reactions):
-        for i, species_name in enumerate(species_names):
-            if species_name in reaction.reactants:
-                matrix[i, j] = reaction.reactants[species_name]
-
-    return matrix
+    return _build_stoich_matrix(system, lambda r, sp: r.reactants.get(sp, 0))
 
 
 def product_matrix(system: ReactionSystem) -> np.ndarray:
@@ -237,21 +223,7 @@ def product_matrix(system: ReactionSystem) -> np.ndarray:
         np.ndarray: Product matrix with shape (n_species, n_reactions)
                    where P[i,j] = product coefficient of species i in reaction j
     """
-    if not system.species or not system.reactions:
-        return np.array([])
-
-    species_names = [s.name for s in system.species]
-    n_species = len(species_names)
-    n_reactions = len(system.reactions)
-
-    matrix = np.zeros((n_species, n_reactions))
-
-    for j, reaction in enumerate(system.reactions):
-        for i, species_name in enumerate(species_names):
-            if species_name in reaction.products:
-                matrix[i, j] = reaction.products[species_name]
-
-    return matrix
+    return _build_stoich_matrix(system, lambda r, sp: r.products.get(sp, 0))
 
 
 # Helper functions for expression manipulation

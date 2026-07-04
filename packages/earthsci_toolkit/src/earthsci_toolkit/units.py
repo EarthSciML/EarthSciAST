@@ -88,27 +88,33 @@ class UnitValidator:
         """
         result = UnitValidationResult(is_valid=True)
 
-        # Validate all models
         if esm_file.models:
-            for model in esm_file.models.values():
-                model_result = self.validate_model(model)
-                result.errors.extend([f"Model {model.name}: {e}" for e in model_result.errors])
-                result.warnings.extend([f"Model {model.name}: {w}" for w in model_result.warnings])
-                result.unit_registry.update(model_result.unit_registry)
+            self._merge_component_results(
+                esm_file.models.values(), self.validate_model, "Model", result
+            )
 
-        # Validate all reaction systems
         if esm_file.reaction_systems:
-            for rs in esm_file.reaction_systems.values():
-                rs_result = self.validate_reaction_system(rs)
-                result.errors.extend([f"ReactionSystem {rs.name}: {e}" for e in rs_result.errors])
-                result.warnings.extend([f"ReactionSystem {rs.name}: {w}" for w in rs_result.warnings])
-                result.unit_registry.update(rs_result.unit_registry)
+            self._merge_component_results(
+                esm_file.reaction_systems.values(),
+                self.validate_reaction_system,
+                "ReactionSystem",
+                result,
+            )
 
         # Check for cross-system unit consistency
         self._check_cross_system_consistency(esm_file, result)
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _merge_component_results(self, components, validator, prefix, result):
+        """Validate each component and fold its errors/warnings/registry into
+        ``result``, prefixing every message with ``"{prefix} {name}: "``."""
+        for component in components:
+            sub = validator(component)
+            result.errors.extend(f"{prefix} {component.name}: {e}" for e in sub.errors)
+            result.warnings.extend(f"{prefix} {component.name}: {w}" for w in sub.warnings)
+            result.unit_registry.update(sub.unit_registry)
 
     def validate_model(self, model: Model) -> UnitValidationResult:
         """

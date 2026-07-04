@@ -178,6 +178,33 @@ def simplify(expr: Expr) -> Expr:
         return expr
 
 
+# Unary math operators that all lower to ``func(arg)`` and share the arity-1
+# error message ``"<label> requires exactly 1 argument, got <n>"``. Kept as a
+# table so each op is one row instead of a five-line ``elif`` arm.
+_UNARY_SYMPY_OPS = {
+    "exp": (sp.exp, "Exponential"),
+    "log": (sp.log, "Logarithm"),
+    "sin": (sp.sin, "Sine"),
+    "cos": (sp.cos, "Cosine"),
+    "tan": (sp.tan, "Tangent"),
+    "asin": (sp.asin, "Arcsine"),
+    "acos": (sp.acos, "Arccosine"),
+    "atan": (sp.atan, "Arctangent"),
+    "sinh": (sp.sinh, "Hyperbolic sine"),
+    "cosh": (sp.cosh, "Hyperbolic cosine"),
+    "tanh": (sp.tanh, "Hyperbolic tangent"),
+    "asinh": (sp.asinh, "Inverse hyperbolic sine"),
+    "acosh": (sp.acosh, "Inverse hyperbolic cosine"),
+    "atanh": (sp.atanh, "Inverse hyperbolic tangent"),
+    "abs": (sp.Abs, "Absolute value"),
+    "sign": (sp.sign, "Sign function"),
+    "sqrt": (sp.sqrt, "Square root"),
+    "log10": (lambda a: sp.log(a, 10), "Log10"),
+    "floor": (sp.floor, "Floor"),
+    "ceil": (sp.ceiling, "Ceiling"),
+}
+
+
 def to_sympy(expr: Expr, symbol_map: Optional[Dict[str, sp.Symbol]] = None) -> sp.Expr:
     """
     Convert ESM expression to SymPy expression.
@@ -229,91 +256,16 @@ def to_sympy(expr: Expr, symbol_map: Optional[Dict[str, sp.Symbol]] = None) -> s
             if len(sympy_args) != 2:
                 raise TypeError(f"Power requires exactly 2 arguments, got {len(sympy_args)}")
             return sympy_args[0] ** sympy_args[1]
-        elif expr.op == "exp":
+        elif expr.op in _UNARY_SYMPY_OPS:
+            func, label = _UNARY_SYMPY_OPS[expr.op]
             if len(sympy_args) != 1:
-                raise TypeError(f"Exponential requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.exp(sympy_args[0])
-        elif expr.op == "log":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Logarithm requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.log(sympy_args[0])
-        elif expr.op == "sin":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Sine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sin(sympy_args[0])
-        elif expr.op == "cos":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Cosine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.cos(sympy_args[0])
-        elif expr.op == "tan":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Tangent requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.tan(sympy_args[0])
-        elif expr.op == "asin":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Arcsine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.asin(sympy_args[0])
-        elif expr.op == "acos":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Arccosine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.acos(sympy_args[0])
-        elif expr.op == "atan":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Arctangent requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.atan(sympy_args[0])
+                raise TypeError(f"{label} requires exactly 1 argument, got {len(sympy_args)}")
+            return func(sympy_args[0])
         elif expr.op == "atan2":
             if len(sympy_args) != 2:
                 raise TypeError(f"Arctangent2 requires exactly 2 arguments, got {len(sympy_args)}")
             # Use a custom function to preserve structure when possible
             return sp.Function('atan2')(sympy_args[0], sympy_args[1])
-        elif expr.op == "sinh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Hyperbolic sine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sinh(sympy_args[0])
-        elif expr.op == "cosh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Hyperbolic cosine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.cosh(sympy_args[0])
-        elif expr.op == "tanh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Hyperbolic tangent requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.tanh(sympy_args[0])
-        elif expr.op == "asinh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Inverse hyperbolic sine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.asinh(sympy_args[0])
-        elif expr.op == "acosh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Inverse hyperbolic cosine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.acosh(sympy_args[0])
-        elif expr.op == "atanh":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Inverse hyperbolic tangent requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.atanh(sympy_args[0])
-        elif expr.op == "abs":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Absolute value requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.Abs(sympy_args[0])
-        elif expr.op == "sign":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Sign function requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sign(sympy_args[0])
-        elif expr.op == "sqrt":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Square root requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sqrt(sympy_args[0])
-        elif expr.op == "log10":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Log10 requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.log(sympy_args[0], 10)
-        elif expr.op == "floor":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Floor requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.floor(sympy_args[0])
-        elif expr.op == "ceil":
-            if len(sympy_args) != 1:
-                raise TypeError(f"Ceiling requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.ceiling(sympy_args[0])
         elif expr.op == "min":
             # n-ary min (esm-spec §4.2 — arity ≥ 2)
             if len(sympy_args) < 2:

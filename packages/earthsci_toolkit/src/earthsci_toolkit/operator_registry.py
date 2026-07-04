@@ -167,19 +167,9 @@ class OperatorRegistry:
         This is a simplified heuristic - in practice, you might have
         more sophisticated rules based on operator types.
         """
-        methods = []
-
-        # All operators should have a __str__ method
-        methods.append('__str__')
-
-        # If there are inputs and outputs, assume it's a processing operator
-        if input_vars and output_vars:
-            # Look for common method names
-            potential_methods = ['apply', 'process', 'execute', 'run', 'compute']
-            # For now, we'll be flexible and not require specific method names
-            # In practice, you might define interfaces/protocols
-
-        return methods
+        # All operators must expose __str__. Per-operator-type requirements
+        # (apply/process/execute/...) can be layered on here in the future.
+        return ['__str__']
 
     def has_operator(self, name: str, version: Optional[str] = None) -> bool:
         """
