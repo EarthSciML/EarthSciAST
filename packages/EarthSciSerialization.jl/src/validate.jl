@@ -733,24 +733,34 @@ end
 """
     validate_model_gradient_units(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
 
-Flag `grad` / `div` / `laplacian` operators whose spatial coordinate is declared
-in the enclosing model's domain but carries no units. Mirrors the TypeScript
-binding's coordinate-resolution path (see `packages/earthsci-toolkit/src/units.ts`):
-the coordinate is identified by the operator node's `dim` and looked up in
-`file.domains[model.domain].spatial`. Coordinates absent from the domain map
-are left alone (fallback to the legacy metre denominator behaviour); coordinates
-that are declared without units are dimensionally ambiguous and surface as
-`unit_inconsistency`. Recurses into subsystems.
+Flag `grad` / `div` / `laplacian` operators whose spatial coordinate is
+declared in the enclosing model but carries no units. Since the v0.8.0
+removal of the `Domain.spatial` table, a domain carries no spatial-grid
+geometry: a PDE's axes are `index_sets` entries and their physical
+coordinates are ordinary data — declared as model variables/parameters or
+loaded fields (esm-spec §"The domain object"). The operator node's `dim` is
+therefore resolved against the enclosing model's declared variables:
+
+- `dim` names a variable declared WITH units → resolvable; no error.
+- `dim` names a variable declared WITHOUT units → dimensionally ambiguous;
+  `unit_inconsistency` (a validator must not silently assume a metre
+  denominator — see `tests/invalid/units_gradient_operator_mismatch.esm`).
+- `dim` names no declared variable — an index-set axis whose physical
+  coordinate is bound elsewhere, e.g. by a discretization rewrite rule
+  (esm-spec §9.6.8) — → left alone (legacy metre-denominator fallback).
+
+Mirrors the TypeScript binding's grad/div/laplacian dimension rule
+(`packages/earthsci-toolkit/src/units.ts`: a coordinate present in the
+binding table but dimensionless is flagged; one absent falls back) and the
+Rust binding's `validate_model_gradient_units`. Recurses into subsystems.
 """
 function validate_model_gradient_units(file::EsmFile, model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # Build coordinate → units-string map from the enclosing domain. A missing
-    # domain reference, missing domain entry, or missing `spatial` table all
-    # short-circuit: we cannot resolve coordinates and therefore fall back to
-    # legacy behaviour for child operators. Subsystems still recurse so they
-    # can pick up their own domain (none currently override, but the recursion
-    # mirrors the other *_consistency validators).
+    # Coordinate → units-string map from the model's declared variables. A
+    # model with no variables short-circuits: there is nothing to resolve a
+    # `dim` against, so child operators fall back to legacy behaviour.
+    # Subsystems still recurse so each resolves against its own declarations.
     coord_units = _collect_coordinate_units(file, model)
 
     if coord_units !== nothing
@@ -771,14 +781,22 @@ function validate_model_gradient_units(file::EsmFile, model::Model, path::String
     return errors
 end
 
-# Returns a Dict{String, Union{String,Nothing}} mapping dim-name → declared
-# units (or `nothing` if the coordinate entry has no units field), or `nothing`
-# when no resolvable domain/spatial table exists.
+# Returns a Dict{String, Union{String,Nothing}} mapping declared-variable name
+# → declared units (`nothing` when the variable has no — or an empty — `units`
+# field), or `nothing` when the model declares no variables at all. The model's
+# own variable declarations are the coordinate source: "their physical
+# coordinates, spacing, and CRS parameters are ordinary data — loaded from a
+# `data_loaders` primitive or declared as variables/parameters" (esm-spec,
+# domain section). The `file` argument is kept for signature parity with the
+# Rust binding and for a future loader-declared-coordinate resolution path.
 function _collect_coordinate_units(file::EsmFile, model::Model)::Union{Dict{String,Union{String,Nothing}},Nothing}
-    # Coordinate units used to be resolved from the (now removed) Domain.spatial
-    # table. With that block gone there is no domain coordinate source, so
-    # callers fall back to legacy behaviour for grad/div/laplacian operators.
-    return nothing
+    isempty(model.variables) && return nothing
+    coord_units = Dict{String,Union{String,Nothing}}()
+    for (name, v) in model.variables
+        units = v.units
+        coord_units[name] = (units === nothing || isempty(units)) ? nothing : units
+    end
+    return coord_units
 end
 
 function _check_gradient_ops(expr::Expr, coord_units::Dict{String,Union{String,Nothing}},

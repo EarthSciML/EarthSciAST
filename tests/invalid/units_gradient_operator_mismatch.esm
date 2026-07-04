@@ -12,6 +12,7 @@
       "variables": {
         "c":         { "type": "state",     "units": "mol/m^3", "default": 0.0, "description": "Tracer concentration (state)" },
         "t":         { "type": "parameter", "units": "s",       "default": 1.0, "description": "Time (independent variable placeholder)" },
+        "x":         { "type": "parameter", "default": 0.0, "description": "Spatial coordinate declared WITHOUT units — the grad over dim 'x' is dimensionally ambiguous. Since the v0.8.0 Domain.spatial removal, physical coordinates are ordinary declared variables/parameters, so this is the declared-but-unitless case validators must flag rather than assume metres." },
         "D_coef":    { "type": "parameter", "units": "m^2/s",   "default": 0.1, "description": "Diffusion coefficient" },
         "length":    { "type": "parameter", "units": "m",       "default": 1.0, "description": "Length parameter used to make the dimensional mismatch visible to bindings that only inspect observed variable additions" },
         "mass":      { "type": "parameter", "units": "kg",      "default": 1.0, "description": "Mass parameter used to trigger an addition unit mismatch" },

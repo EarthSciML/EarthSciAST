@@ -1881,7 +1881,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Primary demonstration: grad applied over coordinate 'x' whose units are undeclared in the domain — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian (Julia, Rust, Python, Go) still surface this fixture as invalid. Currently the TypeScript validator is the only binding to surface the grad-specific inconsistency; follow-up beads track gradient support elsewhere."
+    "notes": "Primary demonstration: grad applied over coordinate 'x' that the model declares WITHOUT units — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. Since the v0.8.0 Domain.spatial removal, physical coordinates are ordinary declared variables/parameters, so the fixture declares 'x' as a units-less parameter; a grad dim naming NO declared variable (an index-set axis lowered by a discretization rewrite rule, spec §9.6.8) is instead left to the legacy metre fallback and never flagged. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian still surface this fixture as invalid. The Julia binding surfaces the grad-specific inconsistency by resolving the dim against declared model variables (validate.jl::validate_model_gradient_units); follow-up beads track the same declared-variable resolution in the TypeScript/Rust bindings (whose coordinate tables are currently never populated) and gradient support in Python/Go."
   },
 
   "units_mixed_dimensional_operations.esm": {

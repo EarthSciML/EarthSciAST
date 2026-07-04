@@ -459,4 +459,74 @@ using EarthSciSerialization
         end
     end
 
+    @testset "Gradient operator spatial-coordinate units" begin
+        # Since the v0.8.0 Domain.spatial removal, a grad/div/laplacian node's
+        # `dim` resolves against the enclosing model's declared variables (the
+        # physical coordinate is ordinary declared data, esm-spec domain
+        # section). Declared WITHOUT units → unit_inconsistency; declared WITH
+        # units → fine; undeclared → legacy metre fallback, never flagged.
+        metadata = EarthSciSerialization.Metadata("test-grad-units")
+
+        grad_model(x_var) = begin
+            variables = Dict(
+                "c" => EarthSciSerialization.ModelVariable(
+                    EarthSciSerialization.StateVariable, default=0.0, units="mol/m^3"),
+            )
+            x_var !== nothing && (variables["x"] = x_var)
+            equations = [
+                EarthSciSerialization.Equation(
+                    EarthSciSerialization.OpExpr(
+                        "D", EarthSciSerialization.Expr[EarthSciSerialization.VarExpr("c")]; wrt="t"),
+                    EarthSciSerialization.OpExpr(
+                        "grad", EarthSciSerialization.Expr[EarthSciSerialization.VarExpr("c")]; dim="x")),
+            ]
+            EarthSciSerialization.Model(variables, equations)
+        end
+
+        @testset "Coordinate declared without units is rejected" begin
+            model = grad_model(EarthSciSerialization.ModelVariable(
+                EarthSciSerialization.ParameterVariable, default=0.0))
+            file = EarthSciSerialization.EsmFile("0.1.0", metadata, models=Dict("M" => model))
+            errors = EarthSciSerialization.validate_model_gradient_units(file, model, "/models/M")
+            @test length(errors) == 1
+            @test errors[1].error_type == "unit_inconsistency"
+            @test errors[1].path == "/models/M/equations/0"
+            @test occursin("coordinate 'x' has no declared units", errors[1].message)
+            @test occursin("variable 'c'", errors[1].message)
+        end
+
+        @testset "Coordinate declared with units passes" begin
+            model = grad_model(EarthSciSerialization.ModelVariable(
+                EarthSciSerialization.ParameterVariable, default=0.0, units="m"))
+            file = EarthSciSerialization.EsmFile("0.1.0", metadata, models=Dict("M" => model))
+            @test isempty(EarthSciSerialization.validate_model_gradient_units(file, model, "/models/M"))
+        end
+
+        @testset "Undeclared dim is left to the legacy fallback" begin
+            # `x` is not declared as a variable — an index-set axis whose
+            # physical coordinate is bound elsewhere (e.g. a discretization
+            # rewrite rule, esm-spec §9.6.8) must not be flagged.
+            model = grad_model(nothing)
+            file = EarthSciSerialization.EsmFile("0.1.0", metadata, models=Dict("M" => model))
+            @test isempty(EarthSciSerialization.validate_model_gradient_units(file, model, "/models/M"))
+        end
+
+        @testset "Invalid fixture units_gradient_operator_mismatch.esm surfaces the grad error" begin
+            fixture_path = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid", "units_gradient_operator_mismatch.esm")
+            if isfile(fixture_path)
+                esm_data = EarthSciSerialization.load(fixture_path)
+                result = EarthSciSerialization.validate(esm_data)
+                @test !result.is_valid
+                matching = filter(e -> e.error_type == "unit_inconsistency" &&
+                                       e.path == "/models/SpatialModel/equations/0" &&
+                                       occursin("coordinate 'x' has no declared units", e.message),
+                                  result.structural_errors)
+                @test length(matching) == 1
+            else
+                @warn "Fixture not found: $fixture_path"
+                @test_broken false
+            end
+        end
+    end
+
 end
