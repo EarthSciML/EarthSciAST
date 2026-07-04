@@ -1890,11 +1890,17 @@ function _build_evaluator_impl(model::Model;
             "E_TREEWALK_UNSUPPORTED_EQUATION",
             "ic($(target)): scoped-reference target resolves to no array cells; the " *
             "target must name a lifted/array state variable of the flattened system"))
+        # Compile the coordinate field ONCE (indices as params) when possible; else
+        # fall back to the per-cell resolve+compile. `ESS_STENCIL_DISABLE` forces the
+        # per-cell path for both this and the symbolic stencil compiler.
+        fast = _stencil_disabled() ? nothing :
+               _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays)
         for cell in cells
             idxs = collect(Int, cell)
-            _eq_ics[_cell_key(target, idxs)] =
+            _eq_ics[_cell_key(target, idxs)] = fast === nothing ?
                 _resolve_field_ic(target, rhs, idxs, const_arrays, registered_functions;
-                                  params=param_scope)
+                                  params=param_scope) :
+                fast(idxs)
         end
     end
 
@@ -3892,34 +3898,92 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{Expr}, idxset::Set{
     return _stencilize(sub_body, idxset, recipes, idx_env, array_var_info, const_arrays, pgather)
 end
 
+# Memoized set of every variable name appearing anywhere in `e`, covering the SAME
+# `Expr`-typed fields as `_refs_loop_var` (args / expr_body / lower / upper /
+# filter / key / values / table_axes / ranges) so `_refs_idxset` below is exactly
+# equivalent to a fresh `_refs_loop_var` call. Built lazily, once per node, and
+# reused across every cell — turning the per-cell branch-key guard from an
+# O(subtree) re-walk into an O(|idxset|) probe of the cached set.
+_accum_vars!(::Set{String}, ::NumExpr, ::IdDict{OpExpr,Set{String}}) = nothing
+_accum_vars!(::Set{String}, ::IntExpr, ::IdDict{OpExpr,Set{String}}) = nothing
+_accum_vars!(s::Set{String}, e::VarExpr, ::IdDict{OpExpr,Set{String}}) = (push!(s, e.name); nothing)
+_accum_vars!(s::Set{String}, e::OpExpr, memo::IdDict{OpExpr,Set{String}}) =
+    (union!(s, _stencil_var_set(e, memo)); nothing)
+function _stencil_var_set(e::OpExpr, memo::IdDict{OpExpr,Set{String}})
+    cached = get(memo, e, nothing)
+    cached === nothing || return cached
+    s = Set{String}()
+    for a in e.args
+        _accum_vars!(s, a, memo)
+    end
+    e.expr_body !== nothing && _accum_vars!(s, e.expr_body::Expr, memo)
+    e.lower     !== nothing && _accum_vars!(s, e.lower::Expr, memo)
+    e.upper     !== nothing && _accum_vars!(s, e.upper::Expr, memo)
+    e.filter    !== nothing && _accum_vars!(s, e.filter::Expr, memo)
+    e.key       !== nothing && _accum_vars!(s, e.key::Expr, memo)
+    if e.values !== nothing
+        for v in e.values
+            _accum_vars!(s, v, memo)
+        end
+    end
+    if e.table_axes !== nothing
+        for (_, ax) in e.table_axes
+            _accum_vars!(s, ax, memo)
+        end
+    end
+    if e.ranges !== nothing
+        for (_, spec) in e.ranges
+            spec isa AbstractVector || continue
+            for x in spec
+                x isa Expr && _accum_vars!(s, x, memo)
+            end
+        end
+    end
+    memo[e] = s
+    return s
+end
+
+# `_refs_loop_var(e, idxset)` without re-walking `e`: probe the small `idxset`
+# against `e`'s memoized variable set. Byte-for-byte the same guard decision.
+@inline function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Set{String}})
+    vs = _stencil_var_set(e, memo)
+    for v in idxset
+        v in vs && return true
+    end
+    return false
+end
+
 # Per-cell branch signature: the `index(makearray)` region selections a cell
 # takes, in traversal order. Cells with equal signatures resolve to the same
 # spine template (the ONLY per-cell structural branch is makearray region choice;
 # gather ghosts are handled separately). Mirrors `_stencilize`'s traversal — same
 # invariant short-circuit, same region selection, same aggregate output-index
-# substitution — so a shared signature guarantees a shared template.
-function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays)
+# substitution — so a shared signature guarantees a shared template. `memo` caches
+# per-node variable sets across cells so the invariant guard costs O(|idxset|).
+function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
+                      memo::IdDict{OpExpr,Set{String}})
     e isa OpExpr || return
-    _refs_loop_var(e, idxset) || return
+    _refs_idxset(e, idxset, memo) || return
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         if fa isa OpExpr && (fa.op == "makearray" || _is_aggregate_op(fa.op))
-            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays)
+            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo)
             return
         end
     end
     for a in e.args
-        _branch_key!(io, a, idxset, idx_env, const_arrays)
+        _branch_key!(io, a, idxset, idx_env, const_arrays, memo)
     end
-    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays)
+    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo)
     if e.values !== nothing
         for v in e.values
-            _branch_key!(io, v, idxset, idx_env, const_arrays)
+            _branch_key!(io, v, idxset, idx_env, const_arrays, memo)
         end
     end
 end
 function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{Expr},
-                              idxset::Set{String}, idx_env, const_arrays)
+                              idxset::Set{String}, idx_env, const_arrays,
+                              memo::IdDict{OpExpr,Set{String}})
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
         r, _ = _select_region(producer, kvals)
@@ -3928,29 +3992,42 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{Expr
         values = producer.values === nothing ? Expr[] : producer.values
         sel = values[r]
         if _is_array_producer(sel)
-            _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays)
+            _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays, memo)
         else
-            _branch_key!(io, sel, idxset, idx_env, const_arrays)
+            _branch_key!(io, sel, idxset, idx_env, const_arrays, memo)
         end
         return
     end
-    # aggregate / arrayop: recurse the body with the output indices bound in an
-    # EXTENDED env (and marked as loop vars) — never a per-cell `_sub_preserving`,
-    # which would re-clone the whole stencil spine on every cell just to find
-    # nested region selections. The body's own `index(makearray)` k-args reference
-    # these output indices, so they resolve to the same values a substitution would.
+    # aggregate / arrayop: recurse the body with the output indices bound in the
+    # SAME env/idxset (restored on the way out) — never a per-cell `_sub_preserving`
+    # (which would re-clone the whole stencil spine on every cell) and never a
+    # per-cell `copy` of the env/idxset (which fed the build's GC). The body's own
+    # `index(makearray)` k-args reference these output indices, so they resolve to
+    # the same values a substitution would.
     oi_raw = producer.output_idx === nothing ? Any[] : producer.output_idx
     oi = String[String(s) for s in oi_raw if s isa AbstractString]
     body = producer.expr_body
     (body === nothing || length(oi) != length(kargs)) && return
     kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
-    env2 = copy(idx_env)
-    idxset2 = copy(idxset)
-    for d in 1:length(oi)
-        env2[oi[d]] = kvals[d]
-        push!(idxset2, oi[d])
+    n = length(oi)
+    saved = Vector{Union{Nothing,Int}}(undef, n)
+    added = falses(n)
+    for d in 1:n
+        nm = oi[d]
+        saved[d] = get(idx_env, nm, nothing)
+        idx_env[nm] = kvals[d]
+        if !(nm in idxset)
+            push!(idxset, nm)
+            added[d] = true
+        end
     end
-    _branch_key!(io, body, idxset2, env2, const_arrays)
+    _branch_key!(io, body, idxset, idx_env, const_arrays, memo)
+    for d in n:-1:1
+        nm = oi[d]
+        old = saved[d]
+        old === nothing ? delete!(idx_env, nm) : (idx_env[nm] = old)
+        added[d] && delete!(idxset, nm)
+    end
 end
 
 # Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
@@ -4123,6 +4200,9 @@ function _try_symbolic_stencil(rhs_body::Expr, idx_names::Vector{String},
     cn_ordered = String[]
     idx_env = Dict{String,Int}()
     bio = IOBuffer()
+    # Per-node variable-set cache for the branch-key guard, built once and reused
+    # across every cell (the spine is structurally identical cell to cell).
+    bmemo = IdDict{OpExpr,Set{String}}()
     try
         for idx_tuple in Iterators.product(range_iters...)
             empty!(idx_env)
@@ -4136,7 +4216,7 @@ function _try_symbolic_stencil(rhs_body::Expr, idx_names::Vector{String},
             du_slot = get(var_map, cname, 0)
             du_slot == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE", cname))
 
-            _branch_key!(bio, body, idxset, idx_env, const_arrays)
+            _branch_key!(bio, body, idxset, idx_env, const_arrays, bmemo)
             bkey = String(take!(bio))
             entry = get(branch_cache, bkey, nothing)
             if entry === nothing
@@ -4863,6 +4943,91 @@ function _eval_cellwise(expr::EarthSciSerialization.Expr, cell::Vector{Int};
     node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
     return _eval_node(node, Float64[], p_nt, 0.0)
+end
+
+const _NO_STATE_U = Float64[]
+
+# A field-ic RHS body is "closed form" iff it has no gather / array-producer node
+# that would need per-cell index resolution — every op is scalar-computable with
+# the loop indices bound as parameters. Reduction bounds / filters / table axes /
+# ranges on an inner node are conservatively rejected.
+function _ic_body_is_closed_form(e)::Bool
+    e isa OpExpr || return true
+    (e.op == "index" || e.op == "makearray" || e.op == "aggregate" ||
+     e.op == "arrayop") && return false
+    _is_array_producer(e) && return false
+    (e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
+     e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing) && return false
+    for a in e.args
+        _ic_body_is_closed_form(a) || return false
+    end
+    e.expr_body !== nothing && (_ic_body_is_closed_form(e.expr_body::Expr) || return false)
+    if e.values !== nothing
+        for v in e.values
+            _ic_body_is_closed_form(v) || return false
+        end
+    end
+    return true
+end
+
+# Compile-once fast path for a coordinate-field ic: an `aggregate`/`arrayop` over
+# the output loop indices whose body is pure closed-form (see above). The body is
+# compiled a SINGLE time with the loop indices bound as parameters; each cell then
+# only rebinds the index values and re-evaluates — replacing the per-cell
+# `_index_at_cell → _resolve_indices → _compile` rebuild that dominated
+# `_resolve_field_ic` for large grids. Result is bit-identical to the per-cell
+# path: `_eval_node` computes every leaf in `Float64`, so a loop index bound as a
+# `Float64` param equals that index folded to a `Float64` literal. Returns a
+# `(cell) -> Float64` closure, or `nothing` to signal the per-cell fallback.
+function _try_field_ic_fastpath(rhs, params::AbstractDict,
+                                registered_functions, const_arrays)
+    rhs isa OpExpr || return nothing
+    (rhs.op == "aggregate" || rhs.op == "arrayop") || return nothing
+    (rhs.join_gates === nothing && rhs.filter === nothing) || return nothing
+    body = rhs.expr_body
+    body === nothing && return nothing
+    oi_raw = rhs.output_idx === nothing ? Any[] : rhs.output_idx
+    all(s -> s isa AbstractString, oi_raw) || return nothing
+    oi = String[String(s) for s in oi_raw]
+    isempty(oi) && return nothing
+    # Non-contracting: every declared range index is an output index (a contracted
+    # index would need reduction, not a single per-cell value).
+    ranges = rhs.ranges === nothing ? Dict{String,Any}() : rhs.ranges
+    all(n -> n in oi, keys(ranges)) || return nothing
+    # A loop index must not collide with a scalar-param name or the time symbol.
+    for nm in oi
+        (nm == "t" || haskey(params, nm)) && return nothing
+    end
+    _ic_body_is_closed_form(body) || return nothing
+
+    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    pkeys = collect(keys(params))
+    psyms = Symbol[Symbol(k) for k in pkeys]
+    for nm in oi
+        push!(psyms, Symbol(nm))
+    end
+    node = try
+        _compile(body, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+    catch
+        return nothing   # anything the closed-form guard missed → per-cell fallback
+    end
+    pbase = Float64[Float64(params[k]) for k in pkeys]
+    npar = length(pbase)
+    nidx = length(oi)
+    symtup = Tuple(psyms)
+    return function (cell::AbstractVector{<:Integer})
+        length(cell) == nidx || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+            "field-ic fast path: cell rank $(length(cell)) ≠ output rank $nidx"))
+        vals = Vector{Float64}(undef, npar + nidx)
+        @inbounds for d in 1:npar
+            vals[d] = pbase[d]
+        end
+        @inbounds for d in 1:nidx
+            vals[npar + d] = Float64(cell[d])
+        end
+        p_nt = NamedTuple{symtup}(Tuple(vals))
+        return _eval_node(node, _NO_STATE_U, p_nt, 0.0)
+    end
 end
 
 # Expand a ranges entry to the concrete list of integer values.

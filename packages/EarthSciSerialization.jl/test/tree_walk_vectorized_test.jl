@@ -44,6 +44,29 @@ function _stencil_model(N)
                                   _ao1(body, "i", 1, N))])
 end
 
+# A 2-D field with a bare-aggregate coordinate initial condition: ic(psi) is a
+# closed-form signed-distance field over [1,N]×[1,N]. Exercises the compile-once
+# field-ic fast path (indices bound as params, compiled a SINGLE time) against the
+# per-cell resolve+compile fallback. Mirrors the wildland-fire InitialPerimeter IC.
+function _fieldic_model(N)
+    vars = Dict("psi" => ModelVariable(StateVariable; shape=["i", "j"]))
+    dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt="t")
+    drhs = _op("neg", _idx("psi", _v("i"), _v("j")))
+    dlhs = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i", "j"],
+        expr_body=dref, ranges=Dict("i" => [1, N], "j" => [1, N]))
+    drhs_ao = OpExpr("arrayop", ESM.Expr[]; output_idx=Any["i", "j"],
+        expr_body=drhs, ranges=Dict("i" => [1, N], "j" => [1, N]))
+    icbody = _op("-",
+        _op("sqrt", _op("+",
+            _op("^", _op("-", _op("*", _op("-", _v("i"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)),
+            _op("^", _op("-", _op("*", _op("-", _v("j"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)))),
+        _n(0.3 * N))
+    ic_agg = OpExpr("aggregate", ESM.Expr[]; output_idx=Any["i", "j"],
+        expr_body=icbody, ranges=Dict("i" => [1, N], "j" => [1, N]))
+    ESM.Model(vars, [ESM.Equation(dlhs, drhs_ao),
+                     ESM.Equation(_op("ic", _v("psi")), ic_agg)])
+end
+
 @testset "tree_walk vectorized array-kernel RHS (ess-dhq)" begin
 
     @testset "N-independent compiled-kernel count (two+ grid sizes)" begin
@@ -292,5 +315,33 @@ end
         a_sym = @allocated _build(model, ics, false)
         a_fb  = @allocated _build(model, ics, true)
         @test a_sym < a_fb
+    end
+end
+
+# The compile-once field-ic fast path (ess-perf) compiles a coordinate ic's
+# closed-form body ONCE with the loop indices bound as parameters, deriving each
+# cell's u0 by re-evaluation instead of a per-cell _index_at_cell→resolve→compile
+# rebuild. `_eval_node` computes every leaf in Float64, so an index bound as a
+# param equals that index folded to a literal — the u0 field must be bit-identical
+# to the forced per-cell path. `ESS_STENCIL_DISABLE=1` forces that per-cell path.
+@testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
+    _build_u0(N, disable) =
+        withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do
+            build_evaluator(_fieldic_model(N))[2]   # u0 is the 2nd return value
+        end
+
+    @testset "bit-identical u0 (N=$N)" for N in (4, 16, 32)
+        u0_fast = _build_u0(N, false)
+        u0_slow = _build_u0(N, true)
+        @test length(u0_fast) == N * N
+        @test u0_fast == u0_slow   # bit-identical initial field, not merely ≈
+    end
+
+    @testset "fast path fires (fewer build allocations)" begin
+        N = 48
+        _build_u0(N, false); _build_u0(N, true)   # warm up both
+        a_fast = @allocated _build_u0(N, false)
+        a_slow = @allocated _build_u0(N, true)
+        @test a_fast < a_slow
     end
 end
