@@ -51,6 +51,25 @@ impl std::fmt::Display for EditError {
 
 impl std::error::Error for EditError {}
 
+/// Remove the element at `index` from an optional vector, collapsing the field
+/// back to `None` once it becomes empty. Produces `index_error(index)` when the
+/// vector is absent or the index is out of range.
+fn remove_from_optional_vec<T>(
+    field: &mut Option<Vec<T>>,
+    index: usize,
+    index_error: impl Fn(usize) -> EditError,
+) -> EditResult<()> {
+    let items = field.as_mut().ok_or_else(|| index_error(index))?;
+    if index >= items.len() {
+        return Err(index_error(index));
+    }
+    items.remove(index);
+    if items.is_empty() {
+        *field = None;
+    }
+    Ok(())
+}
+
 /// Add a new model to an ESM file
 ///
 /// # Arguments
@@ -421,13 +440,10 @@ pub fn substitute_in_expression(expr: &Expr, substitutions: &HashMap<String, Exp
 /// * `EditResult<Model>` - New model with the added discrete event
 pub fn add_discrete_event(model: &Model, event: DiscreteEvent) -> EditResult<Model> {
     let mut new_model = model.clone();
-
-    // Initialize discrete_events if it doesn't exist
-    if new_model.discrete_events.is_none() {
-        new_model.discrete_events = Some(Vec::new());
-    }
-
-    new_model.discrete_events.as_mut().unwrap().push(event);
+    new_model
+        .discrete_events
+        .get_or_insert_with(Vec::new)
+        .push(event);
     Ok(new_model)
 }
 
@@ -443,21 +459,11 @@ pub fn add_discrete_event(model: &Model, event: DiscreteEvent) -> EditResult<Mod
 /// * `EditResult<Model>` - New model without the discrete event
 pub fn remove_discrete_event(model: &Model, index: usize) -> EditResult<Model> {
     let mut new_model = model.clone();
-
-    if let Some(ref mut events) = new_model.discrete_events {
-        if index >= events.len() {
-            return Err(EditError::EventIndexError(index));
-        }
-        events.remove(index);
-
-        // Clean up empty vector by setting to None
-        if events.is_empty() {
-            new_model.discrete_events = None;
-        }
-    } else {
-        return Err(EditError::EventIndexError(index));
-    }
-
+    remove_from_optional_vec(
+        &mut new_model.discrete_events,
+        index,
+        EditError::EventIndexError,
+    )?;
     Ok(new_model)
 }
 
@@ -473,13 +479,10 @@ pub fn remove_discrete_event(model: &Model, index: usize) -> EditResult<Model> {
 /// * `EditResult<Model>` - New model with the added continuous event
 pub fn add_continuous_event(model: &Model, event: ContinuousEvent) -> EditResult<Model> {
     let mut new_model = model.clone();
-
-    // Initialize continuous_events if it doesn't exist
-    if new_model.continuous_events.is_none() {
-        new_model.continuous_events = Some(Vec::new());
-    }
-
-    new_model.continuous_events.as_mut().unwrap().push(event);
+    new_model
+        .continuous_events
+        .get_or_insert_with(Vec::new)
+        .push(event);
     Ok(new_model)
 }
 
@@ -495,21 +498,11 @@ pub fn add_continuous_event(model: &Model, event: ContinuousEvent) -> EditResult
 /// * `EditResult<Model>` - New model without the continuous event
 pub fn remove_continuous_event(model: &Model, index: usize) -> EditResult<Model> {
     let mut new_model = model.clone();
-
-    if let Some(ref mut events) = new_model.continuous_events {
-        if index >= events.len() {
-            return Err(EditError::EventIndexError(index));
-        }
-        events.remove(index);
-
-        // Clean up empty vector by setting to None
-        if events.is_empty() {
-            new_model.continuous_events = None;
-        }
-    } else {
-        return Err(EditError::EventIndexError(index));
-    }
-
+    remove_from_optional_vec(
+        &mut new_model.continuous_events,
+        index,
+        EditError::EventIndexError,
+    )?;
     Ok(new_model)
 }
 
@@ -525,13 +518,7 @@ pub fn remove_continuous_event(model: &Model, index: usize) -> EditResult<Model>
 /// * `EditResult<EsmFile>` - New ESM file with the added coupling entry
 pub fn add_coupling(esm_file: &EsmFile, coupling: CouplingEntry) -> EditResult<EsmFile> {
     let mut new_file = esm_file.clone();
-
-    // Initialize coupling vector if it doesn't exist
-    if new_file.coupling.is_none() {
-        new_file.coupling = Some(Vec::new());
-    }
-
-    new_file.coupling.as_mut().unwrap().push(coupling);
+    new_file.coupling.get_or_insert_with(Vec::new).push(coupling);
     Ok(new_file)
 }
 
@@ -547,21 +534,11 @@ pub fn add_coupling(esm_file: &EsmFile, coupling: CouplingEntry) -> EditResult<E
 /// * `EditResult<EsmFile>` - New ESM file without the coupling entry
 pub fn remove_coupling(esm_file: &EsmFile, index: usize) -> EditResult<EsmFile> {
     let mut new_file = esm_file.clone();
-
-    if let Some(ref mut coupling_entries) = new_file.coupling {
-        if index >= coupling_entries.len() {
-            return Err(EditError::CouplingIndexError(index));
-        }
-        coupling_entries.remove(index);
-
-        // Clean up empty vector by setting to None
-        if coupling_entries.is_empty() {
-            new_file.coupling = None;
-        }
-    } else {
-        return Err(EditError::CouplingIndexError(index));
-    }
-
+    remove_from_optional_vec(
+        &mut new_file.coupling,
+        index,
+        EditError::CouplingIndexError,
+    )?;
     Ok(new_file)
 }
 

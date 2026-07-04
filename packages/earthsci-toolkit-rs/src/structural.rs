@@ -83,22 +83,16 @@ pub(crate) fn validate_model(
     // Check that all equation references are defined and validate dimensional consistency
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         let eq_path = format!("{model_path}/equations/{eq_idx}");
-        validate_expression_references_with_systems(
-            &equation.lhs,
-            &defined_vars,
-            system_refs,
-            &eq_path,
-            eq_idx,
-            errors,
-        );
-        validate_expression_references_with_systems(
-            &equation.rhs,
-            &defined_vars,
-            system_refs,
-            &eq_path,
-            eq_idx,
-            errors,
-        );
+        for expr in [&equation.lhs, &equation.rhs] {
+            validate_expression_references_with_systems(
+                expr,
+                &defined_vars,
+                system_refs,
+                &eq_path,
+                eq_idx,
+                errors,
+            );
+        }
 
         // Validate dimensional consistency of equation via expression-level
         // propagation over the Expr AST.

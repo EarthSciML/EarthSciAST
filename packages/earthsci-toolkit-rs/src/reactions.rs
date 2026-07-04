@@ -112,15 +112,9 @@ pub fn lower_reactions_to_equations(
 
                 if net_stoichiometry == 1.0 {
                     rate_terms.push(enhanced_rate);
-                } else if net_stoichiometry == -1.0 {
-                    rate_terms.push(Expr::Operator(ExpressionNode {
-                        op: "*".to_string(),
-                        args: vec![Expr::Number(-1.0), enhanced_rate],
-                        wrt: None,
-                        dim: None,
-                        ..Default::default()
-                    }));
                 } else {
+                    // Covers -1.0 too: `Number(net_stoichiometry)` is exactly
+                    // `Number(-1.0)` when the coefficient is -1.
                     rate_terms.push(Expr::Operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![Expr::Number(net_stoichiometry), enhanced_rate],

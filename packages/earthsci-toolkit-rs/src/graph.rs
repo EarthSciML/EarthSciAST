@@ -205,35 +205,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
 ///
 /// * `true` if the component exists, `false` otherwise
 pub fn component_exists(esm_file: &EsmFile, component_id: &str) -> bool {
-    // Check models
-    if let Some(ref models) = esm_file.models
-        && models.contains_key(component_id)
-    {
-        return true;
-    }
-
-    // Check reaction systems
-    if let Some(ref reaction_systems) = esm_file.reaction_systems
-        && reaction_systems.contains_key(component_id)
-    {
-        return true;
-    }
-
-    // Check data loaders
-    if let Some(ref data_loaders) = esm_file.data_loaders
-        && data_loaders.contains_key(component_id)
-    {
-        return true;
-    }
-
-    // Check operators
-    if let Some(ref operators) = esm_file.operators
-        && operators.contains_key(component_id)
-    {
-        return true;
-    }
-
-    false
+    get_component_type(esm_file, component_id).is_some()
 }
 
 /// Get the type of a component
@@ -248,35 +220,21 @@ pub fn component_exists(esm_file: &EsmFile, component_id: &str) -> bool {
 /// * `Some(ComponentType)` if the component exists
 /// * `None` if the component doesn't exist
 pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<ComponentType> {
-    // Check models
-    if let Some(ref models) = esm_file.models
-        && models.contains_key(component_id)
-    {
-        return Some(ComponentType::Model);
+    fn contains<V>(map: &Option<std::collections::HashMap<String, V>>, key: &str) -> bool {
+        map.as_ref().is_some_and(|m| m.contains_key(key))
     }
 
-    // Check reaction systems
-    if let Some(ref reaction_systems) = esm_file.reaction_systems
-        && reaction_systems.contains_key(component_id)
-    {
-        return Some(ComponentType::ReactionSystem);
+    if contains(&esm_file.models, component_id) {
+        Some(ComponentType::Model)
+    } else if contains(&esm_file.reaction_systems, component_id) {
+        Some(ComponentType::ReactionSystem)
+    } else if contains(&esm_file.data_loaders, component_id) {
+        Some(ComponentType::DataLoader)
+    } else if contains(&esm_file.operators, component_id) {
+        Some(ComponentType::Operator)
+    } else {
+        None
     }
-
-    // Check data loaders
-    if let Some(ref data_loaders) = esm_file.data_loaders
-        && data_loaders.contains_key(component_id)
-    {
-        return Some(ComponentType::DataLoader);
-    }
-
-    // Check operators
-    if let Some(ref operators) = esm_file.operators
-        && operators.contains_key(component_id)
-    {
-        return Some(ComponentType::Operator);
-    }
-
-    None
 }
 
 /// Expression graph representing variable dependencies within expressions

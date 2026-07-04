@@ -598,14 +598,12 @@ fn check_circular_model_dependencies(
                 collect_variable_refs(rhs, &mut refs);
             }
             for r in refs {
-                if let Some((system, _var)) = r.split_once('.') {
-                    let system_str = system.to_string();
-                    if system_str != *mname
-                        && let Some(target) = model_names.get(system.to_string().as_str())
-                        && let Some(set) = deps.get_mut(mname.as_str())
-                    {
-                        set.insert(*target);
-                    }
+                if let Some((system, _var)) = r.split_once('.')
+                    && system != mname.as_str()
+                    && let Some(target) = model_names.get(system)
+                    && let Some(set) = deps.get_mut(mname.as_str())
+                {
+                    set.insert(*target);
                 }
             }
         }
@@ -866,6 +864,16 @@ impl SymbolTables {
     }
 }
 
+/// Collect the keys of a component's `variables` object as a set of names,
+/// yielding an empty set when the field is absent or not an object.
+fn variable_keys(node: &Value) -> std::collections::HashSet<String> {
+    node.as_object()
+        .and_then(|o| o.get("variables"))
+        .and_then(|v| v.as_object())
+        .map(|vs| vs.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
     let mut all_systems: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut per_system: std::collections::HashMap<String, std::collections::HashSet<String>> =
@@ -874,13 +882,7 @@ fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
     if let Some(models) = obj.get("models").and_then(|v| v.as_object()) {
         for (name, m) in models {
             all_systems.insert(name.clone());
-            let vars: std::collections::HashSet<String> = m
-                .as_object()
-                .and_then(|o| o.get("variables"))
-                .and_then(|v| v.as_object())
-                .map(|vs| vs.keys().cloned().collect())
-                .unwrap_or_default();
-            per_system.insert(name.clone(), vars);
+            per_system.insert(name.clone(), variable_keys(m));
         }
     }
 
@@ -903,13 +905,7 @@ fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
     if let Some(loaders) = obj.get("data_loaders").and_then(|v| v.as_object()) {
         for (name, d) in loaders {
             all_systems.insert(name.clone());
-            let vars: std::collections::HashSet<String> = d
-                .as_object()
-                .and_then(|o| o.get("variables"))
-                .and_then(|v| v.as_object())
-                .map(|vs| vs.keys().cloned().collect())
-                .unwrap_or_default();
-            per_system.insert(name.clone(), vars);
+            per_system.insert(name.clone(), variable_keys(d));
         }
     }
 

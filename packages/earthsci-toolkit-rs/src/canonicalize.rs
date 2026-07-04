@@ -57,35 +57,8 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     for a in &node.args {
         new_args.push(canonicalize(a)?);
     }
-    let mut work = ExpressionNode {
-        op: node.op.clone(),
-        args: new_args,
-        wrt: node.wrt.clone(),
-        dim: node.dim.clone(),
-        int_var: node.int_var.clone(),
-        lower: node.lower.clone(),
-        upper: node.upper.clone(),
-        expr: node.expr.clone(),
-        output_idx: node.output_idx.clone(),
-        ranges: node.ranges.clone(),
-        reduce: node.reduce.clone(),
-        semiring: node.semiring.clone(),
-        join: node.join.clone(),
-        filter: node.filter.clone(),
-        regions: node.regions.clone(),
-        values: node.values.clone(),
-        shape: node.shape.clone(),
-        perm: node.perm.clone(),
-        axis: node.axis,
-        broadcast_fn: node.broadcast_fn.clone(),
-        name: node.name.clone(),
-        value: node.value.clone(),
-        table: node.table.clone(),
-        axes: node.axes.clone(),
-        output: node.output.clone(),
-        id: node.id.clone(),
-        manifold: node.manifold.clone(),
-    };
+    let mut work = node.clone();
+    work.args = new_args;
     match work.op.as_str() {
         "+" => canon_add(&mut work),
         "*" => canon_mul(&mut work),

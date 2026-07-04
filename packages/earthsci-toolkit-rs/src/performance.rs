@@ -159,11 +159,14 @@ impl ParallelEvaluator {
 pub mod simd_math {
     use super::*;
 
-    /// SIMD-optimized vector addition
-    pub fn add_vectors_simd(
+    /// Apply an element-wise binary op over two vectors, four lanes at a time.
+    /// `simd_op` handles full `f64x4` chunks; `scalar_op` handles the tail.
+    fn elementwise_simd(
         a: &[f64],
         b: &[f64],
         result: &mut [f64],
+        simd_op: impl Fn(f64x4, f64x4) -> f64x4,
+        scalar_op: impl Fn(f64, f64) -> f64,
     ) -> Result<(), PerformanceError> {
         if a.len() != b.len() || a.len() != result.len() {
             return Err(PerformanceError::SimdError(
@@ -178,17 +181,26 @@ pub mod simd_math {
             let idx = i * 4;
             let va = f64x4::from([a[idx], a[idx + 1], a[idx + 2], a[idx + 3]]);
             let vb = f64x4::from([b[idx], b[idx + 1], b[idx + 2], b[idx + 3]]);
-            let vr = va + vb;
+            let vr = simd_op(va, vb);
 
             result[idx..idx + 4].copy_from_slice(&vr.to_array());
         }
 
         // Handle remaining elements
         for i in (chunks * 4)..a.len() {
-            result[i] = a[i] + b[i];
+            result[i] = scalar_op(a[i], b[i]);
         }
 
         Ok(())
+    }
+
+    /// SIMD-optimized vector addition
+    pub fn add_vectors_simd(
+        a: &[f64],
+        b: &[f64],
+        result: &mut [f64],
+    ) -> Result<(), PerformanceError> {
+        elementwise_simd(a, b, result, |va, vb| va + vb, |x, y| x + y)
     }
 
     /// SIMD-optimized element-wise multiplication
@@ -197,30 +209,7 @@ pub mod simd_math {
         b: &[f64],
         result: &mut [f64],
     ) -> Result<(), PerformanceError> {
-        if a.len() != b.len() || a.len() != result.len() {
-            return Err(PerformanceError::SimdError(
-                "Vector length mismatch".to_string(),
-            ));
-        }
-
-        let chunks = a.len() / 4;
-
-        // Process 4 elements at a time with SIMD
-        for i in 0..chunks {
-            let idx = i * 4;
-            let va = f64x4::from([a[idx], a[idx + 1], a[idx + 2], a[idx + 3]]);
-            let vb = f64x4::from([b[idx], b[idx + 1], b[idx + 2], b[idx + 3]]);
-            let vr = va * vb;
-
-            result[idx..idx + 4].copy_from_slice(&vr.to_array());
-        }
-
-        // Handle remaining elements
-        for i in (chunks * 4)..a.len() {
-            result[i] = a[i] * b[i];
-        }
-
-        Ok(())
+        elementwise_simd(a, b, result, |va, vb| va * vb, |x, y| x * y)
     }
 
     /// SIMD-optimized dot product
@@ -363,7 +352,29 @@ impl CompactExpr {
     /// Fast evaluation using stack-based postfix evaluation
     #[cfg(feature = "parallel")]
     pub fn evaluate_fast(&self, variables: &HashMap<String, f64>) -> Result<f64, PerformanceError> {
-        let mut stack = smallvec::SmallVec::<[f64; 16]>::new();
+        type Stack = smallvec::SmallVec<[f64; 16]>;
+
+        fn underflow() -> PerformanceError {
+            PerformanceError::ParallelError("Stack underflow".to_string())
+        }
+
+        // Pop the two operands of a binary op, returning `(a, b)` in
+        // left-to-right order (`b` was on top of the stack).
+        fn pop2(stack: &mut Stack) -> Result<(f64, f64), PerformanceError> {
+            if stack.len() < 2 {
+                return Err(underflow());
+            }
+            let b = stack.pop().unwrap();
+            let a = stack.pop().unwrap();
+            Ok((a, b))
+        }
+
+        // Pop the single operand of a unary op.
+        fn pop1(stack: &mut Stack) -> Result<f64, PerformanceError> {
+            stack.pop().ok_or_else(underflow)
+        }
+
+        let mut stack = Stack::new();
 
         for node in &self.nodes {
             match node {
@@ -376,43 +387,19 @@ impl CompactExpr {
                 }
                 CompactNode::Operator(op) => match op.as_str() {
                     "+" => {
-                        if stack.len() < 2 {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let b = stack.pop().unwrap();
-                        let a = stack.pop().unwrap();
+                        let (a, b) = pop2(&mut stack)?;
                         stack.push(a + b);
                     }
                     "-" => {
-                        if stack.len() < 2 {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let b = stack.pop().unwrap();
-                        let a = stack.pop().unwrap();
+                        let (a, b) = pop2(&mut stack)?;
                         stack.push(a - b);
                     }
                     "*" => {
-                        if stack.len() < 2 {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let b = stack.pop().unwrap();
-                        let a = stack.pop().unwrap();
+                        let (a, b) = pop2(&mut stack)?;
                         stack.push(a * b);
                     }
                     "/" => {
-                        if stack.len() < 2 {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let b = stack.pop().unwrap();
-                        let a = stack.pop().unwrap();
+                        let (a, b) = pop2(&mut stack)?;
                         if b == 0.0 {
                             return Err(PerformanceError::ParallelError(
                                 "Division by zero".to_string(),
@@ -421,49 +408,23 @@ impl CompactExpr {
                         stack.push(a / b);
                     }
                     "^" | "**" => {
-                        if stack.len() < 2 {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let b = stack.pop().unwrap();
-                        let a = stack.pop().unwrap();
+                        let (a, b) = pop2(&mut stack)?;
                         stack.push(a.powf(b));
                     }
                     "sin" => {
-                        if stack.is_empty() {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let a = stack.pop().unwrap();
+                        let a = pop1(&mut stack)?;
                         stack.push(a.sin());
                     }
                     "cos" => {
-                        if stack.is_empty() {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let a = stack.pop().unwrap();
+                        let a = pop1(&mut stack)?;
                         stack.push(a.cos());
                     }
                     "exp" => {
-                        if stack.is_empty() {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let a = stack.pop().unwrap();
+                        let a = pop1(&mut stack)?;
                         stack.push(a.exp());
                     }
                     "log" => {
-                        if stack.is_empty() {
-                            return Err(PerformanceError::ParallelError(
-                                "Stack underflow".to_string(),
-                            ));
-                        }
-                        let a = stack.pop().unwrap();
+                        let a = pop1(&mut stack)?;
                         if a <= 0.0 {
                             return Err(PerformanceError::ParallelError(
                                 "Invalid log argument".to_string(),

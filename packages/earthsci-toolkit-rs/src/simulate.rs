@@ -246,29 +246,17 @@ impl Compiled {
 
         // (3) Build name -> index tables for state, params, observed.
         let state_names: Vec<String> = flat.state_variables.keys().cloned().collect();
-        let state_index: HashMap<String, usize> = state_names
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.clone(), i))
-            .collect();
+        let state_index = build_index_map(&state_names);
         let state_defaults: Vec<Option<f64>> =
             flat.state_variables.values().map(|mv| mv.default).collect();
 
         let param_names: Vec<String> = flat.parameters.keys().cloned().collect();
-        let param_index: HashMap<String, usize> = param_names
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.clone(), i))
-            .collect();
+        let param_index = build_index_map(&param_names);
         let param_defaults: Vec<Option<f64>> =
             flat.parameters.values().map(|mv| mv.default).collect();
 
         let observed_names_raw: Vec<String> = flat.observed_variables.keys().cloned().collect();
-        let observed_index_raw: HashMap<String, usize> = observed_names_raw
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.clone(), i))
-            .collect();
+        let observed_index_raw = build_index_map(&observed_names_raw);
 
         // (4) Walk equations: classify each as differential state derivative,
         // algebraic state definition, or observed assignment.
@@ -358,11 +346,7 @@ impl Compiled {
             .iter()
             .map(|&i| observed_names_raw[i].clone())
             .collect();
-        let observed_index: HashMap<String, usize> = observed_names
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.clone(), i))
-            .collect();
+        let observed_index = build_index_map(&observed_names);
         let observed_raw_in_order: Vec<Option<Expr>> =
             order.iter().map(|&i| observed_rhs_raw[i].clone()).collect();
 
@@ -1000,6 +984,15 @@ pub enum ResolvedExpr {
         /// Resolved children.
         args: Vec<ResolvedExpr>,
     },
+}
+
+/// Build a `name -> position` lookup from an ordered list of names.
+fn build_index_map(names: &[String]) -> HashMap<String, usize> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i))
+        .collect()
 }
 
 /// Resolve an `Expr` against name -> index tables. If `obs_limit` is `Some(i)`,

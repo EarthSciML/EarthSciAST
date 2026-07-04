@@ -64,22 +64,8 @@ pub fn substitute_in_discrete_event_trigger(
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
             expression: substitute(expression, substitutions),
         },
-        DiscreteEventTrigger::Periodic {
-            interval,
-            initial_offset,
-        } => {
-            // Periodic triggers have no expressions to substitute
-            DiscreteEventTrigger::Periodic {
-                interval: *interval,
-                initial_offset: *initial_offset,
-            }
-        }
-        DiscreteEventTrigger::PresetTimes { times } => {
-            // Preset times have no expressions to substitute
-            DiscreteEventTrigger::PresetTimes {
-                times: times.clone(),
-            }
-        }
+        // Periodic and preset-time triggers carry no expressions to substitute.
+        other => other.clone(),
     }
 }
 
@@ -197,10 +183,6 @@ pub fn substitute_in_model(
         .collect();
 
     Model {
-        name: model.name.clone(),
-        coupletype: model.coupletype.clone(),
-        reference: model.reference.clone(),
-        variables: model.variables.clone(),
         equations: new_equations,
         discrete_events: model.discrete_events.as_ref().map(|events| {
             events
@@ -214,13 +196,7 @@ pub fn substitute_in_model(
                 .map(|event| substitute_in_continuous_event(event, substitutions))
                 .collect()
         }),
-        subsystems: model.subsystems.clone(),
-        description: model.description.clone(),
-        tolerance: model.tolerance.clone(),
-        tests: model.tests.clone(),
-        initialization_equations: model.initialization_equations.clone(),
-        guesses: model.guesses.clone(),
-        system_kind: model.system_kind.clone(),
+        ..model.clone()
     }
 }
 
@@ -252,15 +228,8 @@ pub fn substitute_in_reaction_system(
         .collect();
 
     ReactionSystem {
-        coupletype: reaction_system.coupletype.clone(),
-        reference: reaction_system.reference.clone(),
-        species: reaction_system.species.clone(),
-        parameters: reaction_system.parameters.clone(),
         reactions: new_reactions,
-        constraint_equations: reaction_system.constraint_equations.clone(),
-        discrete_events: reaction_system.discrete_events.clone(),
-        continuous_events: reaction_system.continuous_events.clone(),
-        subsystems: reaction_system.subsystems.clone(),
+        ..reaction_system.clone()
     }
 }
 
@@ -491,10 +460,6 @@ pub fn substitute_in_model_with_context(
         .collect();
 
     Model {
-        name: model.name.clone(),
-        coupletype: model.coupletype.clone(),
-        reference: model.reference.clone(),
-        variables: model.variables.clone(),
         equations: new_equations,
         discrete_events: model.discrete_events.as_ref().map(|events| {
             events
@@ -512,13 +477,7 @@ pub fn substitute_in_model_with_context(
                 })
                 .collect()
         }),
-        subsystems: model.subsystems.clone(),
-        description: model.description.clone(),
-        tolerance: model.tolerance.clone(),
-        tests: model.tests.clone(),
-        initialization_equations: model.initialization_equations.clone(),
-        guesses: model.guesses.clone(),
-        system_kind: model.system_kind.clone(),
+        ..model.clone()
     }
 }
 
@@ -542,22 +501,8 @@ pub fn substitute_in_discrete_event_trigger_with_context(
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
             expression: substitute_with_context(expression, substitutions, context),
         },
-        DiscreteEventTrigger::Periodic {
-            interval,
-            initial_offset,
-        } => {
-            // Periodic triggers have no expressions to substitute
-            DiscreteEventTrigger::Periodic {
-                interval: *interval,
-                initial_offset: *initial_offset,
-            }
-        }
-        DiscreteEventTrigger::PresetTimes { times } => {
-            // Preset times have no expressions to substitute
-            DiscreteEventTrigger::PresetTimes {
-                times: times.clone(),
-            }
-        }
+        // Periodic and preset-time triggers carry no expressions to substitute.
+        other => other.clone(),
     }
 }
 
@@ -697,15 +642,8 @@ pub fn substitute_in_reaction_system_with_context(
         .collect();
 
     ReactionSystem {
-        coupletype: reaction_system.coupletype.clone(),
-        reference: reaction_system.reference.clone(),
-        species: reaction_system.species.clone(),
-        parameters: reaction_system.parameters.clone(),
         reactions: new_reactions,
-        constraint_equations: reaction_system.constraint_equations.clone(),
-        discrete_events: reaction_system.discrete_events.clone(),
-        continuous_events: reaction_system.continuous_events.clone(),
-        subsystems: reaction_system.subsystems.clone(),
+        ..reaction_system.clone()
     }
 }
 

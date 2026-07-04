@@ -37,37 +37,21 @@ pub struct VersionInfo {
 
 /// Parse a semantic version string into components
 fn parse_version(version: &str) -> Result<VersionInfo, MigrationError> {
+    let invalid = || MigrationError {
+        message: format!("Invalid version format: {version}"),
+        from_version: version.to_string(),
+        to_version: String::new(),
+    };
+
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() != 3 {
-        return Err(MigrationError {
-            message: format!("Invalid version format: {version}"),
-            from_version: version.to_string(),
-            to_version: String::new(),
-        });
+        return Err(invalid());
     }
 
-    let major = parts[0].parse::<u32>().map_err(|_| MigrationError {
-        message: format!("Invalid version format: {version}"),
-        from_version: version.to_string(),
-        to_version: String::new(),
-    })?;
-
-    let minor = parts[1].parse::<u32>().map_err(|_| MigrationError {
-        message: format!("Invalid version format: {version}"),
-        from_version: version.to_string(),
-        to_version: String::new(),
-    })?;
-
-    let patch = parts[2].parse::<u32>().map_err(|_| MigrationError {
-        message: format!("Invalid version format: {version}"),
-        from_version: version.to_string(),
-        to_version: String::new(),
-    })?;
-
     Ok(VersionInfo {
-        major,
-        minor,
-        patch,
+        major: parts[0].parse().map_err(|_| invalid())?,
+        minor: parts[1].parse().map_err(|_| invalid())?,
+        patch: parts[2].parse().map_err(|_| invalid())?,
     })
 }
 

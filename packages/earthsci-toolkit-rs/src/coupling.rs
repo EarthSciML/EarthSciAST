@@ -133,67 +133,63 @@ pub(crate) fn validate_coupling(
                 }
             }
             crate::CouplingEntry::Couple { systems, .. } => {
-                if systems.len() >= 2 {
-                    for system in systems.iter().take(2) {
-                        if !system_refs.contains_key(system) {
-                            errors.push(StructuralError {
-                                path: coupling_path.clone(),
-                                code: StructuralErrorCode::UndefinedSystem,
-                                message: format!("Coupling entry references nonexistent system '{system}'"),
-                                details: serde_json::json!({
-                                    "system": system,
-                                    "coupling_type": "couple",
-                                    "expected_in": "models, reaction_systems, data_loaders, operators"
-                                }),
-                            });
-                        }
-                    }
-                } else {
-                    errors.push(StructuralError {
-                        path: coupling_path.clone(),
-                        code: StructuralErrorCode::UndefinedSystem,
-                        message: "Couple coupling requires exactly 2 systems".to_string(),
-                        details: serde_json::json!({
-                            "coupling_type": "couple",
-                            "systems_count": systems.len(),
-                            "expected_count": 2
-                        }),
-                    });
-                }
+                validate_pairwise_systems(systems, "Couple", "couple", &coupling_path, system_refs, errors);
             }
             crate::CouplingEntry::OperatorCompose { systems, .. } => {
-                if systems.len() >= 2 {
-                    for system in systems.iter().take(2) {
-                        if !system_refs.contains_key(system) {
-                            errors.push(StructuralError {
-                                path: coupling_path.clone(),
-                                code: StructuralErrorCode::UndefinedSystem,
-                                message: format!("Coupling entry references nonexistent system '{system}'"),
-                                details: serde_json::json!({
-                                    "system": system,
-                                    "coupling_type": "operator_compose",
-                                    "expected_in": "models, reaction_systems, data_loaders, operators"
-                                }),
-                            });
-                        }
-                    }
-                } else {
-                    errors.push(StructuralError {
-                        path: coupling_path.clone(),
-                        code: StructuralErrorCode::UndefinedSystem,
-                        message: "OperatorCompose coupling requires exactly 2 systems".to_string(),
-                        details: serde_json::json!({
-                            "coupling_type": "operator_compose",
-                            "systems_count": systems.len(),
-                            "expected_count": 2
-                        }),
-                    });
-                }
+                validate_pairwise_systems(
+                    systems,
+                    "OperatorCompose",
+                    "operator_compose",
+                    &coupling_path,
+                    system_refs,
+                    errors,
+                );
             }
             _ => {
                 // Handle other coupling types as needed
             }
         }
+    }
+}
+
+/// Validate a `couple` / `operator_compose` entry: the first two systems must
+/// exist, and exactly 2 systems are required. `label` is the human-readable
+/// coupling name in the arity error; `coupling_type` is the snake-case tag
+/// echoed into the error details.
+fn validate_pairwise_systems(
+    systems: &[String],
+    label: &str,
+    coupling_type: &str,
+    coupling_path: &str,
+    system_refs: &HashMap<String, SystemInfo>,
+    errors: &mut Vec<StructuralError>,
+) {
+    if systems.len() >= 2 {
+        for system in systems.iter().take(2) {
+            if !system_refs.contains_key(system) {
+                errors.push(StructuralError {
+                    path: coupling_path.to_string(),
+                    code: StructuralErrorCode::UndefinedSystem,
+                    message: format!("Coupling entry references nonexistent system '{system}'"),
+                    details: serde_json::json!({
+                        "system": system,
+                        "coupling_type": coupling_type,
+                        "expected_in": "models, reaction_systems, data_loaders, operators"
+                    }),
+                });
+            }
+        }
+    } else {
+        errors.push(StructuralError {
+            path: coupling_path.to_string(),
+            code: StructuralErrorCode::UndefinedSystem,
+            message: format!("{label} coupling requires exactly 2 systems"),
+            details: serde_json::json!({
+                "coupling_type": coupling_type,
+                "systems_count": systems.len(),
+                "expected_count": 2
+            }),
+        });
     }
 }
 

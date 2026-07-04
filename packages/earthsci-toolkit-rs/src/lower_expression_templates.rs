@@ -229,7 +229,7 @@ pub(crate) fn validate_templates(
                         )
                     })?;
                 for s in shp {
-                    if !s.as_str().is_some_and(|s| !s.is_empty()) {
+                    if s.as_str().is_none_or(|s| s.is_empty()) {
                         return Err(err(
                             "apply_expression_template_invalid_declaration",
                             format!(
@@ -1176,27 +1176,25 @@ pub fn validate_geometry_manifolds(
             Ok(())
         }
         Value::Object(obj) => {
-            if let Some(op) = obj.get("op").and_then(|v| v.as_str()) {
-                if GEOMETRY_MANIFOLD_OPS.contains(&op) {
-                    if let Some(m) = obj.get("manifold") {
-                        let ok = m
-                            .as_str()
-                            .map(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s))
-                            .unwrap_or(false);
-                        if !ok {
-                            return Err(err(
-                                "geometry_manifold_invalid",
-                                format!(
-                                    "{path}: `{op}` carries manifold {m}, not a member of the \
-                                     closed set {{planar, spherical, geodesic}}. The manifold \
-                                     enum is enforced on the expanded form (esm-spec §9.6.4; \
-                                     CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
-                                     into this scalar field must be bound to one of the \
-                                     closed-set literals."
-                                ),
-                            ));
-                        }
-                    }
+            if let Some(op) = obj.get("op").and_then(|v| v.as_str())
+                && GEOMETRY_MANIFOLD_OPS.contains(&op)
+                && let Some(m) = obj.get("manifold")
+            {
+                let ok = m
+                    .as_str()
+                    .is_some_and(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s));
+                if !ok {
+                    return Err(err(
+                        "geometry_manifold_invalid",
+                        format!(
+                            "{path}: `{op}` carries manifold {m}, not a member of the \
+                             closed set {{planar, spherical, geodesic}}. The manifold \
+                             enum is enforced on the expanded form (esm-spec §9.6.4; \
+                             CONFORMANCE_SPEC §5.8.4) — a template parameter substituted \
+                             into this scalar field must be bound to one of the \
+                             closed-set literals."
+                        ),
+                    ));
                 }
             }
             for (k, v) in obj {

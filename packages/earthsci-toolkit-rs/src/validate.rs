@@ -288,20 +288,22 @@ pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationRes
     let mut unit_warnings = Vec::new();
 
     // Schema validation
-    if let Err(e) = serde_json::from_str::<Value>(json_str) {
-        schema_errors.push(SchemaError {
-            path: "".to_string(),
-            message: format!("Invalid JSON: {e}"),
-            keyword: "format".to_string(),
-        });
-    } else {
-        let json_value: Value = serde_json::from_str(json_str).unwrap();
-        if let Err(e) = validate_schema(&json_value) {
+    match serde_json::from_str::<Value>(json_str) {
+        Err(e) => {
             schema_errors.push(SchemaError {
                 path: "".to_string(),
-                message: e.to_string(),
-                keyword: "schema".to_string(),
+                message: format!("Invalid JSON: {e}"),
+                keyword: "format".to_string(),
             });
+        }
+        Ok(json_value) => {
+            if let Err(e) = validate_schema(&json_value) {
+                schema_errors.push(SchemaError {
+                    path: "".to_string(),
+                    message: e.to_string(),
+                    keyword: "schema".to_string(),
+                });
+            }
         }
     }
 
@@ -330,10 +332,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     // Add models
     if let Some(ref models) = esm_file.models {
         for (name, model) in models {
-            let mut variables = HashSet::new();
-            for var_name in model.variables.keys() {
-                variables.insert(var_name.clone());
-            }
+            let variables: HashSet<String> = model.variables.keys().cloned().collect();
             systems.insert(
                 name.clone(),
                 SystemInfo {
@@ -349,21 +348,14 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     // Add reaction systems
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for (name, rs) in reaction_systems {
-            let mut species = HashSet::new();
-            for spec_name in rs.species.keys() {
-                species.insert(spec_name.clone());
-            }
-
-            // Note: parameters field would be added here when ReactionSystem supports it
-            let parameters = HashSet::new();
-
+            let species: HashSet<String> = rs.species.keys().cloned().collect();
             systems.insert(
                 name.clone(),
                 SystemInfo {
                     _system_type: SystemType::ReactionSystem,
                     variables: HashSet::new(),
                     species,
-                    parameters,
+                    parameters: HashSet::new(),
                 },
             );
         }

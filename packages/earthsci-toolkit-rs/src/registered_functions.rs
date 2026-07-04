@@ -184,36 +184,11 @@ pub fn evaluate_closed_function(
             let (y, _, _, _, _, _) = decompose_utc(t);
             Ok(ClosedValue::Integer(check_i32(name, y as i64)?))
         }
-        "datetime.month" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (_, m, _, _, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(m as i32))
-        }
-        "datetime.day" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (_, _, d, _, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(d as i32))
-        }
-        "datetime.hour" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (_, _, _, h, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(h as i32))
-        }
-        "datetime.minute" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (_, _, _, _, mi, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(mi as i32))
-        }
-        "datetime.second" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (_, _, _, _, _, s) = decompose_utc(t);
-            Ok(ClosedValue::Integer(s as i32))
-        }
+        "datetime.month" => datetime_field(name, args, |(_, m, _, _, _, _)| m),
+        "datetime.day" => datetime_field(name, args, |(_, _, d, _, _, _)| d),
+        "datetime.hour" => datetime_field(name, args, |(_, _, _, h, _, _)| h),
+        "datetime.minute" => datetime_field(name, args, |(_, _, _, _, mi, _)| mi),
+        "datetime.second" => datetime_field(name, args, |(_, _, _, _, _, s)| s),
         "datetime.day_of_year" => {
             expect_arity(name, args, 1)?;
             let t = args[0].expect_scalar(name, 0)?;
@@ -263,6 +238,18 @@ pub fn evaluate_closed_function(
             format!("internal: `{name}` is in the registry but has no dispatch arm"),
         )),
     }
+}
+
+/// Evaluate a unary `datetime.*` accessor that returns one `u32` field of the
+/// UTC decomposition as an integer (month, day, hour, minute, second).
+fn datetime_field(
+    name: &str,
+    args: &[ClosedArg],
+    select: impl Fn((i32, u32, u32, u32, u32, u32)) -> u32,
+) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 1)?;
+    let t = args[0].expect_scalar(name, 0)?;
+    Ok(ClosedValue::Integer(select(decompose_utc(t)) as i32))
 }
 
 fn expect_arity(name: &str, args: &[ClosedArg], n: usize) -> Result<(), ClosedFunctionError> {

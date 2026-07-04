@@ -320,24 +320,18 @@ fn format_operator_unicode(
         }
         "^" => {
             if args.len() == 2 {
-                if let Expr::Number(n) = &args[1] {
-                    if *n == 2.0 {
+                match &args[1] {
+                    Expr::Number(n) if *n == 2.0 => {
                         format!("{}²", args[0].to_unicode_with_precedence(op_prec))
-                    } else if *n == 3.0 {
-                        format!("{}³", args[0].to_unicode_with_precedence(op_prec))
-                    } else {
-                        format!(
-                            "{}^{}",
-                            args[0].to_unicode_with_precedence(op_prec),
-                            args[1].to_unicode_with_precedence(op_prec + 1)
-                        )
                     }
-                } else {
-                    format!(
+                    Expr::Number(n) if *n == 3.0 => {
+                        format!("{}³", args[0].to_unicode_with_precedence(op_prec))
+                    }
+                    _ => format!(
                         "{}^{}",
                         args[0].to_unicode_with_precedence(op_prec),
                         args[1].to_unicode_with_precedence(op_prec + 1)
-                    )
+                    ),
                 }
             } else {
                 format!(
