@@ -219,7 +219,7 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
         end
         # `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
         # template is a named constant fragment (common in library files).
-        params = get(decl, "params", get(decl, :params, nothing))
+        params = _raw_get(decl, "params")
         if params === nothing || !_is_array(params)
             throw(ExpressionTemplateError(
                 "apply_expression_template_invalid_declaration",
@@ -240,7 +240,7 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
             end
             push!(seen, ps)
         end
-        body = get(decl, "body", get(decl, :body, nothing))
+        body = _raw_get(decl, "body")
         if body === nothing
             throw(ExpressionTemplateError(
                 "apply_expression_template_invalid_declaration",
@@ -260,7 +260,7 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
         # esm-spec §9.6.3) is the authoritative guard, so a self-reintroducing
         # rule is rejected at load time (`rewrite_rule_nonterminating`) only when
         # it actually fails to converge within the pass bound.
-        match = get(decl, "match", get(decl, :match, nothing))
+        match = _raw_get(decl, "match")
         if match !== nothing
             _assert_no_nested_apply(match, name, "/match")
         end
@@ -270,7 +270,7 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
         # validation only, here; the unknown-index-set check runs at rule
         # REGISTRATION in the consuming component (where the merged
         # `index_sets` registry is in scope) — see `_registered_where`.
-        whr = get(decl, "where", get(decl, :where, nothing))
+        whr = _raw_get(decl, "where")
         if whr !== nothing
             match === nothing && throw(ExpressionTemplateError(
                 "apply_expression_template_invalid_declaration",
@@ -298,7 +298,7 @@ function _validate_templates(templates::Dict{String,Any}, scope::String)
                     "$scope.expression_templates.$name: where.$ps carries " *
                     "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
                     "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"))
-                shp = get(cobj, "shape", get(cobj, :shape, nothing))
+                shp = _raw_get(cobj, "shape")
                 (_is_array(shp) && !isempty(shp)) || throw(ExpressionTemplateError(
                     "apply_expression_template_invalid_declaration",
                     "$scope.expression_templates.$name: where.$ps.shape must be a " *
@@ -341,7 +341,7 @@ function _substitute(body, bindings::Dict{String,Any})
 end
 
 function _expand_apply(node, templates::AbstractDict, scope::String)
-    name_raw = get(node, "name", get(node, :name, nothing))
+    name_raw = _raw_get(node, "name")
     if name_raw === nothing
         throw(ExpressionTemplateError(
             "apply_expression_template_invalid_declaration",
@@ -354,7 +354,7 @@ function _expand_apply(node, templates::AbstractDict, scope::String)
             "apply_expression_template_unknown_template",
             "$scope: apply_expression_template references undeclared template '$name'"))
     end
-    bindings_raw = get(node, "bindings", get(node, :bindings, nothing))
+    bindings_raw = _raw_get(node, "bindings")
     if bindings_raw === nothing || !_is_object(bindings_raw)
         throw(ExpressionTemplateError(
             "apply_expression_template_bindings_mismatch",
@@ -387,7 +387,7 @@ function _expand_apply(node, templates::AbstractDict, scope::String)
     for (k, v) in pairs(bindings_raw)
         resolved[string(k)] = v
     end
-    body = get(decl, "body", get(decl, :body, nothing))
+    body = _raw_get(decl, "body")
     return _substitute(body, resolved)
 end
 
@@ -499,11 +499,11 @@ shape-constrained rule can only fire on a declared, shaped model variable.
 """
 function _component_shape_env(comp)::Dict{String,Vector{String}}
     env = Dict{String,Vector{String}}()
-    vars = get(comp, "variables", get(comp, :variables, nothing))
+    vars = _raw_get(comp, "variables")
     (vars !== nothing && _is_object(vars)) || return env
     for (vn, vd) in pairs(vars)
         _is_object(vd) || continue
-        shp = get(vd, "shape", get(vd, :shape, nothing))
+        shp = _raw_get(vd, "shape")
         (shp !== nothing && _is_array(shp)) || continue
         all(s -> s isa AbstractString, shp) || continue
         env[string(vn)] = String[string(s) for s in shp]
@@ -554,11 +554,11 @@ merge, composing with import-edge index-set renaming).
 """
 function _registered_where(decl, iset_names::Set{String}, scope::String,
                            tname::String)
-    whr = get(decl, "where", get(decl, :where, nothing))
+    whr = _raw_get(decl, "where")
     whr === nothing && return nothing
     out = Dict{String,Vector{String}}()
     for (p, cobj) in pairs(whr)
-        shp = get(cobj, "shape", get(cobj, :shape, nothing))
+        shp = _raw_get(cobj, "shape")
         req = String[string(s) for s in shp]
         for s in req
             s in iset_names || throw(ExpressionTemplateError(
@@ -588,7 +588,7 @@ break by declaration order. Absent ⇒ `0`. The schema constrains `priority` to 
 integer; any numeric encoding is coerced defensively.
 """
 function _rule_priority(decl)::Int
-    p = get(decl, "priority", get(decl, :priority, nothing))
+    p = _raw_get(decl, "priority")
     p === nothing && return 0
     p isa Bool && return 0
     p isa Integer && return Int(p)
@@ -635,7 +635,7 @@ function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
     if !_is_object(node)
         return (node, false)
     end
-    op = get(node, "op", get(node, :op, nothing))
+    op = _raw_get(node, "op")
     op_str = op === nothing ? "" : string(op)
     # (1) Outermost-first: fire a rule AT this node before descending.
     if op_str == APPLY_EXPRESSION_TEMPLATE_OP
@@ -704,7 +704,7 @@ function _find_apply_paths!(hits::Vector{String}, x, path::String)
         return
     end
     if _is_object(x)
-        op = get(x, "op", get(x, :op, nothing))
+        op = _raw_get(x, "op")
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
             push!(hits, path)
@@ -723,7 +723,7 @@ function _has_apply_op(x)
         return false
     end
     if _is_object(x)
-        op = get(x, "op", get(x, :op, nothing))
+        op = _raw_get(x, "op")
         op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP && return true
         for (_, v) in pairs(x)
             _has_apply_op(v) && return true
@@ -750,7 +750,7 @@ function _has_template_machinery(raw_data)
         _is_object(comps) || continue
         for (_, comp) in pairs(comps)
             _is_object(comp) || continue
-            tpl = get(comp, "expression_templates", get(comp, :expression_templates, nothing))
+            tpl = _raw_get(comp, "expression_templates")
             if _is_object(tpl) && length(collect(pairs(tpl))) > 0
                 return true
             end
@@ -798,10 +798,10 @@ function _validate_geometry_manifolds(x, path::String="")
         return
     end
     _is_object(x) || return
-    op = get(x, "op", get(x, :op, nothing))
+    op = _raw_get(x, "op")
     op_str = op === nothing ? "" : string(op)
     if op_str in GEOMETRY_MANIFOLD_OPS
-        m = get(x, "manifold", get(x, :manifold, nothing))
+        m = _raw_get(x, "manifold")
         if m !== nothing && !(m isa AbstractString && string(m) in GEOMETRY_MANIFOLD_VALUES)
             throw(ExpressionTemplateError(
                 "geometry_manifold_invalid",
@@ -847,10 +847,10 @@ function _validate_makearray_regions(x, path::String="")
         return
     end
     _is_object(x) || return
-    op = get(x, "op", get(x, :op, nothing))
+    op = _raw_get(x, "op")
     op_str = op === nothing ? "" : string(op)
     if op_str == "makearray"
-        regions = get(x, "regions", get(x, :regions, nothing))
+        regions = _raw_get(x, "regions")
         if regions !== nothing && _is_array(regions)
             for (ri, region) in enumerate(regions)
                 _is_array(region) || continue
@@ -1088,7 +1088,7 @@ function lower_expression_templates(raw_data)
                     decl_index += 1
                     decl = templates[tname]
                     named[tname] = decl
-                    m = get(decl, "match", get(decl, :match, nothing))
+                    m = _raw_get(decl, "match")
                     if m !== nothing
                         params = Set{String}(string(p) for p in get(decl, "params", String[]))
                         body = get(decl, "body", nothing)

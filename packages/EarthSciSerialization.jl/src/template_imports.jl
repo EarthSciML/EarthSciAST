@@ -748,7 +748,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
             "$where: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
             "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"))
     end
-    prefix = prefix_raw === nothing ? nothing : string(prefix_raw)
+    prefix = _maybe(string, prefix_raw)
     (prefix === nothing && isempty(rename) && isempty(rebind)) && return scope
 
     # --- `rename` keys must name a surviving exported name (typo protection) ---

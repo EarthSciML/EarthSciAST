@@ -330,27 +330,24 @@ function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
     # Create mapping from scoped variable name to node
     node_map = Dict{String, VariableNode}()
 
-    # Process all models
-    for (model_name, model) in file.models
-        model_graph = expression_graph(model)
-
-        # Add scoped nodes
-        for node in model_graph.nodes
-            scoped_name = "$(model_name).$(node.name)"
+    # Merge a component's expression graph, prefixing every node and edge
+    # endpoint with "<component_name>." scoping.
+    function add_scoped_subgraph!(component_name, subgraph)
+        for node in subgraph.nodes
+            scoped_name = "$(component_name).$(node.name)"
             scoped_node = VariableNode(
                 scoped_name,
                 node.kind,
                 node.units,
-                model_name
+                component_name
             )
             push!(nodes, scoped_node)
             node_map[scoped_name] = scoped_node
         end
 
-        # Add scoped edges
-        for edge in model_graph.edges
-            source_scoped = "$(model_name).$(edge.data.source)"
-            target_scoped = "$(model_name).$(edge.data.target)"
+        for edge in subgraph.edges
+            source_scoped = "$(component_name).$(edge.data.source)"
+            target_scoped = "$(component_name).$(edge.data.target)"
 
             source_node = get(node_map, source_scoped, nothing)
             target_node = get(node_map, target_scoped, nothing)
@@ -368,42 +365,12 @@ function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
         end
     end
 
-    # Process all reaction systems
+    for (model_name, model) in file.models
+        add_scoped_subgraph!(model_name, expression_graph(model))
+    end
+
     for (rxn_name, rxn_sys) in file.reaction_systems
-        rxn_graph = expression_graph(rxn_sys)
-
-        # Add scoped nodes
-        for node in rxn_graph.nodes
-            scoped_name = "$(rxn_name).$(node.name)"
-            scoped_node = VariableNode(
-                scoped_name,
-                node.kind,
-                node.units,
-                rxn_name
-            )
-            push!(nodes, scoped_node)
-            node_map[scoped_name] = scoped_node
-        end
-
-        # Add scoped edges
-        for edge in rxn_graph.edges
-            source_scoped = "$(rxn_name).$(edge.data.source)"
-            target_scoped = "$(rxn_name).$(edge.data.target)"
-
-            source_node = get(node_map, source_scoped, nothing)
-            target_node = get(node_map, target_scoped, nothing)
-
-            if source_node !== nothing && target_node !== nothing
-                scoped_edge = DependencyEdge(
-                    source_scoped,
-                    target_scoped,
-                    edge.data.relationship,
-                    edge.data.equation_index,
-                    edge.data.expression
-                )
-                push!(edges, (source=source_node, target=target_node, data=scoped_edge))
-            end
-        end
+        add_scoped_subgraph!(rxn_name, expression_graph(rxn_sys))
     end
 
     # Add cross-system coupling edges

@@ -126,12 +126,9 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
     wrt = get(data, kwrt, nothing)
     dim = get(data, kdim, nothing)
 
-    int_var_val = get(data, kint_var, nothing)
-    int_var_str = int_var_val === nothing ? nothing : string(int_var_val)
-    lower_raw = get(data, klower, nothing)
-    lower_expr = lower_raw === nothing ? nothing : parse_expression(lower_raw)
-    upper_raw = get(data, kupper, nothing)
-    upper_expr = upper_raw === nothing ? nothing : parse_expression(upper_raw)
+    int_var_str = _maybe(string, get(data, kint_var, nothing))
+    lower_expr = _maybe(parse_expression, get(data, klower, nothing))
+    upper_expr = _maybe(parse_expression, get(data, kupper, nothing))
 
     if op == "integral"
         if int_var_str === nothing
@@ -146,12 +143,9 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
     end
 
     output_idx = _coerce_output_idx(get(data, koutput_idx, nothing))
-    raw_expr = get(data, kexpr, nothing)
-    expr_body = raw_expr === nothing ? nothing : parse_expression(raw_expr)
-    reduce_val = get(data, kreduce, nothing)
-    reduce_str = reduce_val === nothing ? nothing : string(reduce_val)
-    semiring_val = get(data, ksemiring, nothing)
-    semiring_str = semiring_val === nothing ? nothing : string(semiring_val)
+    expr_body = _maybe(parse_expression, get(data, kexpr, nothing))
+    reduce_str = _maybe(string, get(data, kreduce, nothing))
+    semiring_str = _maybe(string, get(data, ksemiring, nothing))
     ranges = _coerce_ranges(get(data, kranges, nothing))
     regions = _coerce_regions(get(data, kregions, nothing))
     raw_values = get(data, kvalues, nothing)
@@ -160,23 +154,18 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
     shape_vec = _coerce_shape(get(data, kshape, nothing))
     perm_raw = get(data, kperm, nothing)
     perm_vec = perm_raw === nothing ? nothing : Vector{Int}([Int(p) for p in perm_raw])
-    axis_val = get(data, kaxis, nothing)
-    axis_int = axis_val === nothing ? nothing : Int(axis_val)
-    fn_val = get(data, kfn, nothing)
-    fn_str = fn_val === nothing ? nothing : string(fn_val)
-    name_val = get(data, kname, nothing)
-    name_str = name_val === nothing ? nothing : string(name_val)
-    value_raw = get(data, kvalue, nothing)
+    axis_int = _maybe(Int, get(data, kaxis, nothing))
+    fn_str = _maybe(string, get(data, kfn, nothing))
+    name_str = _maybe(string, get(data, kname, nothing))
     # `const` value is JSON-typed (number, integer, or nested array); convert
     # JSON3 arrays / objects to native Julia containers so downstream code
     # doesn't have to special-case JSON3 types.
-    value_native = value_raw === nothing ? nothing : _to_native_json(value_raw)
+    value_native = _maybe(_to_native_json, get(data, kvalue, nothing))
 
     # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input expression
     # map (carried under JSON key "axes"), optional output selector. ``args``
     # MUST be empty for a table_lookup node.
-    table_val = get(data, ktable, nothing)
-    table_str = table_val === nothing ? nothing : string(table_val)
+    table_str = _maybe(string, get(data, ktable, nothing))
     table_axes_raw = get(data, ktable_axes, nothing)
     table_axes_dict = nothing
     if op == "table_lookup"
@@ -195,15 +184,19 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
         end
     end
     output_raw = get(data, koutput, nothing)
-    output_native = output_raw === nothing ? nothing :
-        (isa(output_raw, Integer) ? Int(output_raw) : string(output_raw))
+    if output_raw === nothing
+        output_native = nothing
+    elseif output_raw isa Integer
+        output_native = Int(output_raw)
+    else
+        output_native = string(output_raw)
+    end
 
     # M2 (RFC §5.3 / §7.2): the optional value-equality `join` clauses and the
     # boolean `filter` predicate that gate which index combinations of an
     # aggregate / arrayop contribute a ⊗-product term.
     join_clauses = _coerce_join(get(data, kjoin, nothing))
-    filter_raw = get(data, kfilter, nothing)
-    filter_expr = filter_raw === nothing ? nothing : parse_expression(filter_raw)
+    filter_expr = _maybe(parse_expression, get(data, kfilter, nothing))
 
     # M4 geometry kernel (RFC §8.1 / Appendix B; schema bead ess-my4.4.2): the
     # node-local `id` (§6.1, by which a derived index set names its producer) and
@@ -213,10 +206,8 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
     # hand-built node mirrors that.
     kid = kop isa Symbol ? :id : "id"
     kmanifold = kop isa Symbol ? :manifold : "manifold"
-    id_raw = get(data, kid, nothing)
-    id_str = id_raw === nothing ? nothing : string(id_raw)
-    manifold_raw = get(data, kmanifold, nothing)
-    manifold_str = manifold_raw === nothing ? nothing : string(manifold_raw)
+    id_str = _maybe(string, get(data, kid, nothing))
+    manifold_str = _maybe(string, get(data, kmanifold, nothing))
     if op == "intersect_polygon" && manifold_str === nothing
         throw(ParseError("`intersect_polygon` op requires a `manifold` field " *
                          "(planar / spherical / geodesic); it carries no default"))
@@ -227,14 +218,12 @@ function _parse_op_dict(data, kop, kargs, kwrt, kdim,
     # through the typed IR so a flattened document's producer is still recognised.
     kdistinct = kop isa Symbol ? :distinct : "distinct"
     kkey = kop isa Symbol ? :key : "key"
-    distinct_raw = get(data, kdistinct, nothing)
-    distinct_val = distinct_raw === nothing ? nothing : Bool(distinct_raw)
-    key_raw = get(data, kkey, nothing)
-    key_expr = key_raw === nothing ? nothing : parse_expression(key_raw)
+    distinct_val = _maybe(Bool, get(data, kdistinct, nothing))
+    key_expr = _maybe(parse_expression, get(data, kkey, nothing))
 
     return OpExpr(op, args;
-        wrt=(wrt === nothing ? nothing : string(wrt)),
-        dim=(dim === nothing ? nothing : string(dim)),
+        wrt=_maybe(string, wrt),
+        dim=_maybe(string, dim),
         int_var=int_var_str, lower=lower_expr, upper=upper_expr,
         output_idx=output_idx, expr_body=expr_body, reduce=reduce_str,
         semiring=semiring_str,
@@ -371,8 +360,7 @@ Schema-defined variants:
 - {"type": "preset_times", "times": [...]} -> PresetTimesTrigger
 """
 function parse_trigger(data)::DiscreteEventTrigger
-    trigger_type = _get_field(data, :type, nothing)
-    trigger_type_str = trigger_type === nothing ? nothing : string(trigger_type)
+    trigger_type_str = _maybe(string, _get_field(data, :type, nothing))
 
     if trigger_type_str == "condition" || (trigger_type_str === nothing && _has_field(data, :expression))
         expression = _get_field(data, :expression, nothing)
@@ -633,20 +621,16 @@ function coerce_function_tables(data)::Dict{String,FunctionTable}
                 throw(ParseError("function_tables.$(table_name).axes.$(ax_name): `values` is required"))
             end
             ax_values = Vector{Float64}([Float64(v) for v in ax_values_raw])
-            ax_units_raw = get(ax_raw, :units, nothing)
-            ax_units = ax_units_raw === nothing ? nothing : string(ax_units_raw)
+            ax_units = _maybe(string, get(ax_raw, :units, nothing))
             push!(axes_vec, FunctionTableAxis(ax_name, ax_values; units=ax_units))
         end
         if !haskey(entry_raw, :data)
             throw(ParseError("function_tables.$(table_name): `data` is required (esm-spec §9.5)"))
         end
         data_native = _to_native_json(entry_raw.data)
-        description = haskey(entry_raw, :description) && entry_raw.description !== nothing ?
-            string(entry_raw.description) : nothing
-        interpolation = haskey(entry_raw, :interpolation) && entry_raw.interpolation !== nothing ?
-            string(entry_raw.interpolation) : nothing
-        out_of_bounds = haskey(entry_raw, :out_of_bounds) && entry_raw.out_of_bounds !== nothing ?
-            string(entry_raw.out_of_bounds) : nothing
+        description = _maybe(string, get(entry_raw, :description, nothing))
+        interpolation = _maybe(string, get(entry_raw, :interpolation, nothing))
+        out_of_bounds = _maybe(string, get(entry_raw, :out_of_bounds, nothing))
         outputs = if haskey(entry_raw, :outputs) && entry_raw.outputs !== nothing
             Vector{String}([string(s) for s in entry_raw.outputs])
         else
@@ -1042,11 +1026,7 @@ function coerce_discrete_event(data::Any)::DiscreteEvent
         end
     end
 
-    description = nothing
-    if _has_field(data, :description)
-        desc_val = _get_field(data, :description, nothing)
-        description = desc_val === nothing ? nothing : string(desc_val)
-    end
+    description = _maybe(string, _get_field(data, :description, nothing))
     return DiscreteEvent(trigger, affects, description=description)
 end
 
@@ -1081,11 +1061,7 @@ function coerce_continuous_event(data::Any)::ContinuousEvent
     raw_affects = _has_field(data, :affects) ? _get_field(data, :affects, []) : []
     affects = AffectEquation[coerce_affect_equation(a) for a in raw_affects]
 
-    description = nothing
-    if _has_field(data, :description)
-        desc_val = _get_field(data, :description, nothing)
-        description = desc_val === nothing ? nothing : string(desc_val)
-    end
+    description = _maybe(string, _get_field(data, :description, nothing))
 
     return ContinuousEvent(conditions, affects, description=description)
 end
@@ -1146,30 +1122,20 @@ Coerce JSON data into Reaction type.
 """
 function coerce_reaction(data::Any)::Reaction
     id = string(data.id)
-    name = haskey(data, :name) && data.name !== nothing ? string(data.name) : nothing
+    name = _maybe(string, get(data, :name, nothing))
 
-    # Handle substrates (can be null for source reactions).
+    # Substrates / products can be null (source / sink reactions).
     # Stoichiometry may be integer or fractional per v0.2.x schema — the
     # StoichiometryEntry constructor enforces finite positivity.
-    substrates = if haskey(data, :substrates) && data.substrates !== nothing
-        [StoichiometryEntry(string(entry.species), entry.stoichiometry) for entry in data.substrates]
-    else
-        nothing
+    stoich_entries(key) = _maybe(get(data, key, nothing)) do entries
+        [StoichiometryEntry(string(entry.species), entry.stoichiometry) for entry in entries]
     end
-
-    products = if haskey(data, :products) && data.products !== nothing
-        [StoichiometryEntry(string(entry.species), entry.stoichiometry) for entry in data.products]
-    else
-        nothing
-    end
+    substrates = stoich_entries(:substrates)
+    products = stoich_entries(:products)
 
     rate = parse_expression(data.rate)
 
-    reference = if haskey(data, :reference) && data.reference !== nothing
-        coerce_reference(data.reference)
-    else
-        nothing
-    end
+    reference = _maybe(coerce_reference, get(data, :reference, nothing))
 
     return Reaction(id, substrates, products, rate, name=name, reference=reference)
 end
@@ -1520,8 +1486,7 @@ function coerce_index_set(data::Any)::IndexSet
     kind_raw = _json_get(data, "kind")
     kind_raw === nothing &&
         throw(ParseError("index_sets entry requires a `kind` field"))
-    size_raw = _json_get(data, "size")
-    size_val = size_raw === nothing ? nothing : Int(size_raw)
+    size_val = _maybe(Int, _json_get(data, "size"))
     members_raw = _json_get(data, "members")
     members = members_raw === nothing ? nothing : String[string(x) for x in members_raw]
     # Keep the original member types ONLY when some member is not a string, so the
@@ -1531,12 +1496,9 @@ function coerce_index_set(data::Any)::IndexSet
         (any(x -> !(x isa AbstractString), members_raw) ? Any[x for x in members_raw] : nothing)
     of_raw = _json_get(data, "of")
     of = of_raw === nothing ? nothing : String[string(x) for x in of_raw]
-    offsets_raw = _json_get(data, "offsets")
-    offsets = offsets_raw === nothing ? nothing : string(offsets_raw)
-    values_raw = _json_get(data, "values")
-    values = values_raw === nothing ? nothing : string(values_raw)
-    from_faq_raw = _json_get(data, "from_faq")
-    from_faq = from_faq_raw === nothing ? nothing : string(from_faq_raw)
+    offsets = _maybe(string, _json_get(data, "offsets"))
+    values = _maybe(string, _json_get(data, "values"))
+    from_faq = _maybe(string, _json_get(data, "from_faq"))
     return IndexSet(string(kind_raw); size=size_val, members=members, of=of,
                     offsets=offsets, values=values, from_faq=from_faq,
                     members_raw=members_typed)
@@ -1548,8 +1510,9 @@ end
 Coerce JSON data into Domain type.
 """
 function coerce_domain(data::Any)::Domain
-    temporal = haskey(data, :temporal) && data.temporal !== nothing ? Dict{String,Any}(string(k) => v for (k, v) in pairs(data.temporal)) : nothing
-
+    temporal = _maybe(get(data, :temporal, nothing)) do t
+        Dict{String,Any}(string(k) => v for (k, v) in pairs(t))
+    end
     return Domain(temporal=temporal)
 end
 

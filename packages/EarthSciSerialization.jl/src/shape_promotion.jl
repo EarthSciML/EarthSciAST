@@ -115,28 +115,16 @@ end
 
 # Wrap a (formerly scalar) defining expression in an arrayop producing `shape`.
 # Loop vars are fresh simple names (`_p0`, `_p1`, …) — NOT the index-set names,
-# which may be dotted/namespaced. A shape axis that names a declared index set
-# ranges over it (`{from: …}`); one that names a grid/domain dimension ranges over
-# a dense `[1, size]` (grid dims are global, not index sets).
+# which may be dotted/namespaced. Each shape axis ranges over the index set it
+# names (`{from: …}`); dimension sizes are declared via `index_sets` since the
+# removal of the Domain.spatial spec, so the domain contributes none here.
 function _lift_to_arrayop(expr::EarthSciSerialization.Expr, shape::Vector{String},
-                          arrayvars::Set{String}, index_sets, dim_sizes::Dict{String,Int})::OpExpr
+                          arrayvars::Set{String})::OpExpr
     loops = String["_p$(i-1)" for i in 1:length(shape)]
-    ranges = Dict{String,Any}()
-    for i in eachindex(shape)
-        s = shape[i]
-        ranges[loops[i]] = haskey(index_sets, s) ? IndexSetRef(s) :
-            (haskey(dim_sizes, s) ? Any[1, dim_sizes[s]] : IndexSetRef(s))
-    end
+    ranges = Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
     body = _index_array_leaves(expr, arrayvars, loops)
     return OpExpr("arrayop", EarthSciSerialization.Expr[];
                   output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
-end
-
-# Grid/domain dimension → cell count. Spatial dimension sizes used to come from
-# the removed Domain.spatial spec; they are now declared via `index_sets`, so
-# the domain itself contributes no array dim sizes here.
-function _domain_dim_sizes(flat::FlattenedSystem)::Dict{String,Int}
-    return Dict{String,Int}()
 end
 
 """
@@ -294,7 +282,6 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
 
     # The set of variables that are now array-shaped (for leaf indexing).
     arrayvars = Set{String}(k for (k, s) in shapes if !isempty(s))
-    dim_sizes = _domain_dim_sizes(flat)
 
     # Rebuild variable partitions with promoted shapes.
     function promote_partition(part)
@@ -323,7 +310,7 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
            (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
             name = (eq.lhs::VarExpr).name
             push!(new_eqs, Equation(eq.lhs,
-                _lift_to_arrayop(eq.rhs, shapes[name], arrayvars, flat.index_sets, dim_sizes);
+                _lift_to_arrayop(eq.rhs, shapes[name], arrayvars);
                 _comment=eq._comment))
         else
             push!(new_eqs, eq)

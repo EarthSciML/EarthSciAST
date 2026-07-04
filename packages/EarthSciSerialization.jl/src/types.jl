@@ -5,6 +5,10 @@ This module defines the complete type hierarchy for the ESM format,
 matching the JSON schema definitions for language-agnostic model interchange.
 """
 
+# Apply `f` to `x`, propagating `nothing` (the standard absent-optional-field
+# guard: `_maybe(string, get(data, key, nothing))`).
+_maybe(f, x) = x === nothing ? nothing : f(x)
+
 # ========================================
 # 1. Expression Type Hierarchy
 # ========================================
@@ -524,7 +528,7 @@ struct Assertion
         end
         coords_typed = coords === nothing ? nothing :
             Dict{String,Float64}(string(k) => Float64(v) for (k, v) in coords)
-        reduce_typed = reduce === nothing ? nothing : String(reduce)
+        reduce_typed = _maybe(String, reduce)
         return new(String(variable), Float64(time), Float64(expected),
                    tolerance, coords_typed, reduce_typed, reference)
     end

@@ -190,16 +190,16 @@ end
 # across subsystems the flattened key stays authoritative and the ambiguous
 # alias is dropped (the qualified reference still resolves).
 function _param_scope_with_aliases(params::AbstractDict)::Dict{String,Float64}
+    bare_name(s) = String(split(s, '.')[end])   # final dotted segment; s itself when undotted
     out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
     counts = Dict{String,Int}()
     for k in keys(params)
-        s = String(k)
-        bare = occursin('.', s) ? String(split(s, '.')[end]) : s
+        bare = bare_name(String(k))
         counts[bare] = get(counts, bare, 0) + 1
     end
     for (k, v) in params
         s = String(k)
-        bare = occursin('.', s) ? String(split(s, '.')[end]) : s
+        bare = bare_name(s)
         (bare != s && counts[bare] == 1 && !haskey(out, bare)) &&
             (out[bare] = Float64(v))
     end

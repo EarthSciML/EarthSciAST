@@ -65,7 +65,11 @@ function ESS._spherical_clip_geometryops(a::AbstractMatrix, b::AbstractMatrix,
     pb = _unitsphere_polygon(b, to_unit)
     res = GO.intersection(GO.ConvexConvexSutherlandHodgman(GO.Spherical()), pa, pb;
                           target=GI.PolygonTrait())
-    poly = res isa AbstractVector ? (isempty(res) ? nothing : first(res)) : res
+    if res isa AbstractVector
+        poly = isempty(res) ? nothing : first(res)
+    else
+        poly = res
+    end
     return _ring_lonlat(poly, to_geo)
 end
 

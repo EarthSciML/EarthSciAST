@@ -781,31 +781,6 @@ function _collect_coordinate_units(file::EsmFile, model::Model)::Union{Dict{Stri
     return nothing
 end
 
-# Look up a `units` field on a coord descriptor produced by either path:
-# parse.jl preserves the raw JSON3 object (symbol keys) in Dict{String,Any}
-# values, while test-time constructors pass plain Dict{String,String} for
-# ergonomics. Check Symbol first (JSON3 path), then fall back to String.
-function _lookup_units_field(dim)::Union{String,Nothing}
-    for key in (:units, "units")
-        local ok, val
-        try
-            ok = haskey(dim, key)
-        catch
-            ok = false
-        end
-        ok || continue
-        try
-            val = dim[key]
-        catch
-            continue
-        end
-        val === nothing && continue
-        s = String(val)
-        isempty(s) || return s
-    end
-    return nothing
-end
-
 function _check_gradient_ops(expr::Expr, coord_units::Dict{String,Union{String,Nothing}},
                              eq_path::String, eq_index::Int)::Vector{StructuralError}
     errors = StructuralError[]

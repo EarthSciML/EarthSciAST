@@ -1083,15 +1083,17 @@ end
 function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
         var_shapes::Dict{String,Vector{String}}, arrayvars::Set{String},
         index_sets::AbstractDict)
-    any(eq -> eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D" &&
-              length((eq.lhs::OpExpr).args) == 1 &&
-              (eq.lhs::OpExpr).args[1] isa VarExpr &&
-              (eq.lhs::OpExpr).args[1].name in arrayvars, eqs) || return eqs
+    # `D(x)` where the whole (un-indexed) `x` is a declared array variable.
+    is_wholearray_D(lhs) = lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
+        length((lhs::OpExpr).args) == 1 &&
+        (lhs::OpExpr).args[1] isa VarExpr &&
+        ((lhs::OpExpr).args[1]::VarExpr).name in arrayvars
+    any(eq -> is_wholearray_D(eq.lhs), eqs) || return eqs
     out = Equation[]
     for eq in eqs
         lhs = eq.lhs
-        if lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1 &&
-           lhs.args[1] isa VarExpr && (lhs.args[1]::VarExpr).name in arrayvars
+        if is_wholearray_D(lhs)
+            lhs = lhs::OpExpr
             vname = (lhs.args[1]::VarExpr).name
             shape = var_shapes[vname]
             loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
@@ -1469,19 +1471,19 @@ function _build_evaluator_impl(model::Model;
             v.expression isa Expr && _collect_pia_operands!(v.expression, _pia_names)
         end
         for name in _pia_names
+            var = get(model.variables, name, nothing)
             mat = if haskey(const_arrays, name)
                 Matrix{Float64}(const_arrays[name])
-            elseif haskey(model.variables, name) &&
-                   model.variables[name].expression isa OpExpr &&
-                   (model.variables[name].expression::OpExpr).op == "const"
-                _pia_const_matrix((model.variables[name].expression::OpExpr).value)
+            elseif var !== nothing && var.expression isa OpExpr &&
+                   (var.expression::OpExpr).op == "const"
+                _pia_const_matrix((var.expression::OpExpr).value)
             else
                 throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
                     "polygon_intersection_area operand '$(name)' must be a const polygon " *
                     "ring (supplied via `const_arrays` or a `const`-op observed)"))
             end
             _pia_operand_arrays[name] = mat
-            (haskey(model.variables, name) && _is_array_shape(model.variables[name].shape)) &&
+            (var !== nothing && _is_array_shape(var.shape)) &&
                 push!(_pia_operand_vars, name)
         end
     end
@@ -1555,8 +1557,7 @@ function _build_evaluator_impl(model::Model;
                 if haskey(_const_obs_arrays, tgt)
                     arr = _const_obs_arrays[tgt]
                 elseif haskey(const_arrays, tgt)
-                    va = const_arrays[tgt]
-                    arr = ndims(va) == 1 ? Vector{Float64}(va) : Array{Float64}(va)
+                    arr = Array{Float64}(const_arrays[tgt])
                 elseif haskey(model.variables, tgt) &&
                        model.variables[tgt].type == ObservedVariable &&
                        _is_const_op(model.variables[tgt].expression)
@@ -1830,9 +1831,13 @@ function _build_evaluator_impl(model::Model;
             ss = String(s)
             e = if haskey(index_sets, ss)
                 is = index_sets[ss]
-                is.kind == "interval" ? is.size :
-                is.kind == "categorical" ? (is.members === nothing ? nothing : length(is.members)) :
-                get(_derived_extents, ss, nothing)
+                if is.kind == "interval"
+                    is.size
+                elseif is.kind == "categorical"
+                    _maybe(length, is.members)
+                else
+                    get(_derived_extents, ss, nothing)
+                end
             else
                 get(_derived_extents, ss, nothing)
             end

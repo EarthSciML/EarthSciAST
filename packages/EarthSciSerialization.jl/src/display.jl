@@ -321,13 +321,16 @@ function Base.show(io::IO, ::MIME"text/ascii", expr::Expr)
 end
 
 """
-    format_expression_unicode(expr::Expr) -> String
+    format_expression(expr::Expr, format::Symbol) -> String
 
-Format an expression as Unicode mathematical notation.
+Format an expression in the given notation (`:unicode`, `:latex`, or `:ascii`).
 """
-function format_expression_unicode(expr::Expr)
+function format_expression(expr::Expr, format::Symbol)
+    format in (:unicode, :latex, :ascii) ||
+        throw(ArgumentError("Unsupported format: $format"))
+
     if isa(expr, NumExpr)
-        return format_number(expr.value, :unicode)
+        return format_number(expr.value, format)
     end
 
     if isa(expr, IntExpr)
@@ -335,65 +338,36 @@ function format_expression_unicode(expr::Expr)
     end
 
     if isa(expr, VarExpr)
-        return format_chemical_subscripts(expr.name, :unicode)
+        return format_chemical_subscripts(expr.name, format)
     end
 
     if isa(expr, OpExpr)
-        return format_operator_expression(expr, :unicode)
+        return format_operator_expression(expr, format)
     end
 
     throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
 end
+
+"""
+    format_expression_unicode(expr::Expr) -> String
+
+Format an expression as Unicode mathematical notation.
+"""
+format_expression_unicode(expr::Expr) = format_expression(expr, :unicode)
 
 """
     format_expression_latex(expr::Expr) -> String
 
 Format an expression as LaTeX mathematical notation.
 """
-function format_expression_latex(expr::Expr)
-    if isa(expr, NumExpr)
-        return format_number(expr.value, :latex)
-    end
-
-    if isa(expr, IntExpr)
-        return string(expr.value)
-    end
-
-    if isa(expr, VarExpr)
-        return format_chemical_subscripts(expr.name, :latex)
-    end
-
-    if isa(expr, OpExpr)
-        return format_operator_expression(expr, :latex)
-    end
-
-    throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
-end
+format_expression_latex(expr::Expr) = format_expression(expr, :latex)
 
 """
     format_expression_ascii(expr::Expr) -> String
 
 Format an expression as plain ASCII mathematical notation.
 """
-function format_expression_ascii(expr::Expr)
-    if isa(expr, NumExpr)
-        return format_number(expr.value, :ascii)
-    end
-
-    if isa(expr, IntExpr)
-        return string(expr.value)
-    end
-
-    if isa(expr, VarExpr)
-        return format_chemical_subscripts(expr.name, :ascii)
-    end
-
-    if isa(expr, OpExpr)
-        return format_operator_expression(expr, :ascii)
-    end
-
-    throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
-end
+format_expression_ascii(expr::Expr) = format_expression(expr, :ascii)
 
 """
     format_operator_expression(node::OpExpr, format::Symbol) -> String
@@ -407,15 +381,7 @@ function format_operator_expression(node::OpExpr, format::Symbol)
 
     # Helper to format arguments with proper parenthesization
     format_arg = function(arg, is_right_operand=false)
-        if format == :unicode
-            result = format_expression_unicode(arg)
-        elseif format == :latex
-            result = format_expression_latex(arg)
-        elseif format == :ascii
-            result = format_expression_ascii(arg)
-        else
-            throw(ArgumentError("Unsupported format: $format"))
-        end
+        result = format_expression(arg, format)
 
         if needs_parentheses(op, arg, is_right_operand)
             if format == :latex
@@ -596,7 +562,13 @@ function format_operator_expression(node::OpExpr, format::Symbol)
             return join([format_arg(arg) for arg in args], " + ")
         elseif op == "*"
             # N-ary multiplication
-            sep = format == :unicode ? "·" : (format == :latex ? " \\cdot " : (format == :ascii ? "*" : " * "))
+            if format == :unicode
+                sep = "·"
+            elseif format == :latex
+                sep = " \\cdot "
+            else
+                sep = "*"
+            end
             return join([format_arg(arg) for arg in args], sep)
         elseif op == "or"
             # N-ary or
@@ -607,10 +579,7 @@ function format_operator_expression(node::OpExpr, format::Symbol)
             end
         elseif op == "max" || op == "min"
             # N-ary max / min (esm-spec §4.2)
-            arg_list = join([format == :unicode ? format_expression_unicode(arg) :
-                           (format == :latex ? format_expression_latex(arg) :
-                           (format == :ascii ? format_expression_ascii(arg) : format_arg(arg)))
-                           for arg in args], ", ")
+            arg_list = join([format_expression(arg, format) for arg in args], ", ")
 
             if format == :latex
                 return "\\$op($arg_list)"
@@ -622,10 +591,7 @@ function format_operator_expression(node::OpExpr, format::Symbol)
 
     # Binary min/max (≥ 2 args) — n-ary branch handles ≥ 3
     if length(args) == 2 && (op == "min" || op == "max")
-        arg_list = join([format == :unicode ? format_expression_unicode(arg) :
-                       (format == :latex ? format_expression_latex(arg) :
-                       (format == :ascii ? format_expression_ascii(arg) : format_arg(arg)))
-                       for arg in args], ", ")
+        arg_list = join([format_expression(arg, format) for arg in args], ", ")
         if format == :latex
             return "\\$op($arg_list)"
         else
@@ -634,10 +600,7 @@ function format_operator_expression(node::OpExpr, format::Symbol)
     end
 
     # Fallback: function call notation
-    arg_list = join([format == :unicode ? format_expression_unicode(arg) :
-                    (format == :latex ? format_expression_latex(arg) :
-                    (format == :ascii ? format_expression_ascii(arg) : format_arg(arg)))
-                    for arg in args], ", ")
+    arg_list = join([format_expression(arg, format) for arg in args], ", ")
 
     if format == :latex
         return "\\text{$op}\\left($arg_list\\right)"
