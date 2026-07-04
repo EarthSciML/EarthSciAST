@@ -48,6 +48,7 @@ use crate::types::{
 };
 use indexmap::IndexMap;
 use ndarray::{ArrayD, ArrayViewD, IxDyn, Slice};
+use rustc_hash::FxBuildHasher;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -58,6 +59,36 @@ use std::rc::Rc;
 /// zero-allocation steady-state RHS (ess-mro).
 type DimI = SmallVec<[i64; 4]>;
 type DimU = SmallVec<[usize; 4]>;
+
+/// Fast, fixed-seed loop-index binding map for the hot per-cell interpreter.
+/// `EvalCtx::loop_binds` holds the current output/contraction index values and
+/// is probed FIRST on every variable reference during the per-cell tree walk
+/// ([`lookup_variable`]), so it is the highest-frequency hash in the evaluator —
+/// a coupled level-set solve spent ~19% of its samples in std's SipHash. The
+/// keys are trusted internal index names (`i`, `j`, `k`, …), so SipHash's DoS
+/// resistance is unused cost; `FxBuildHasher` is a fixed seed (so *more*
+/// deterministic than the randomized `RandomState` it replaces). `loop_binds` is
+/// only ever built inline at each `EvalCtx` construction and probed/inserted/
+/// removed by key — never iterated in an order-affecting way — so switching the
+/// hasher is byte-identical. (The borrowed `state_arrays`/`observed_arrays` name
+/// maps still use std `HashMap`; swapping their hasher too is a natural
+/// follow-up but crosses the public `eval_expression`/`forcing_handle` boundary.)
+type IdxMap = HashMap<String, i64, FxBuildHasher>;
+
+/// Fast, fixed-seed name→array map for the hot per-cell interpreter's variable
+/// resolution ([`lookup_variable`] probes `state_arrays` then `observed_arrays`
+/// on every non-index reference). Same rationale as [`IdxMap`]: trusted internal
+/// variable names, no order-affecting iteration, byte-identical results. The
+/// public boundary ([`eval_expression`]'s `inputs`, `forcing_handle`,
+/// `BuildInspection::setup_arrays`) stays on std `HashMap`; conversion happens
+/// there (a shallow clone of the small FAQ/coordinate input maps).
+type ArrMap = HashMap<String, ArrayD<f64>, FxBuildHasher>;
+
+/// Stack-inlined operand buffer for the per-node scalar evaluator. An operator's
+/// arity is ≤ 4 in practice (most are binary), so evaluating `node.args` into
+/// this never touches the heap — removing the per-node `Vec<Value>` temporary
+/// that dominated allocation in the per-cell interpreter profile.
+type ValVec = SmallVec<[Value; 4]>;
 
 use diffsol::{
     Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Sdirk, VectorHost,
@@ -420,9 +451,9 @@ impl Pool {
 pub struct RhsScratch {
     /// Per-variable state arrays, logical row-major over each variable's shape,
     /// refilled in place from the flat state slice each call.
-    state_arrays: HashMap<String, ArrayD<f64>>,
+    state_arrays: ArrMap,
     /// Observed (algebraic) arrays; the container is reused across calls.
-    observed_arrays: HashMap<String, ArrayD<f64>>,
+    observed_arrays: ArrMap,
     /// Recycled `f64` buffers for vectorized kernel intermediates.
     pool: Pool,
 }
@@ -432,13 +463,14 @@ impl RhsScratch {
     /// allocated once here (zero-filled); subsequent RHS calls only overwrite
     /// their contents. Observed value arrays are materialized lazily.
     fn new(var_shapes: &IndexMap<String, VarShape>) -> Self {
-        let mut state_arrays = HashMap::with_capacity(var_shapes.len());
+        let mut state_arrays =
+            ArrMap::with_capacity_and_hasher(var_shapes.len(), FxBuildHasher);
         for (name, vs) in var_shapes {
             state_arrays.insert(name.clone(), ArrayD::<f64>::zeros(IxDyn(&vs.shape)));
         }
         RhsScratch {
             state_arrays,
-            observed_arrays: HashMap::new(),
+            observed_arrays: ArrMap::default(),
             pool: Pool::default(),
         }
     }
@@ -449,7 +481,7 @@ impl RhsScratch {
 /// per-element address is computed explicitly, so no per-call allocation and no
 /// reliance on ndarray iteration order is needed.
 fn refill_state_arrays(
-    state_arrays: &mut HashMap<String, ArrayD<f64>>,
+    state_arrays: &mut ArrMap,
     var_shapes: &IndexMap<String, VarShape>,
     state: &[f64],
 ) {
@@ -1669,6 +1701,13 @@ impl ArrayCompiled {
                 }
             })?;
             let total = vs.shape.iter().copied().product::<usize>().max(1);
+            // Coordinate-expression ICs (case 3 in `resolve_field_ic_cell`)
+            // evaluate the WHOLE field with one `eval_buildtime_field` call and
+            // then read a single cell — so recomputing it per cell was O(cells)
+            // full-field evaluations for an O(cells)-sized result. Resolve it
+            // once per target and let every cell index the cached field. The
+            // cell-independent cases (1 loaded field / 2 constant) ignore it.
+            let mut cached_field: Option<Value> = None;
             for flat in 0..total {
                 let multi = flat_to_multi_col_major(flat, &vs.shape);
                 let slot = vs.flat_offset + flat;
@@ -1681,6 +1720,7 @@ impl ArrayCompiled {
                         &forcing,
                         &self.index_sets,
                         params,
+                        &mut cached_field,
                     )?,
                 );
             }
@@ -1981,7 +2021,7 @@ impl ArrayCompiled {
         if !self.observed_rules.is_empty() && !time.is_empty() {
             // Which observeds resolve to scalars? Materialize once at the first
             // node, preserving the dependency-ordered rule order.
-            let obs_at = |k: usize| -> HashMap<String, ArrayD<f64>> {
+            let obs_at = |k: usize| -> ArrMap {
                 let flat: Vec<f64> = (0..n_states).map(|i| state[i][k]).collect();
                 let sa = build_state_arrays(&self.var_shapes, &flat);
                 let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
@@ -2150,6 +2190,10 @@ fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
+    // Per-target memo of the case-(3) whole-field evaluation (cell-independent),
+    // so the coordinate expression is evaluated once per target rather than once
+    // per cell. `None` on entry for the first cell; filled on first use.
+    cached_field: &mut Option<Value>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
@@ -2179,10 +2223,20 @@ fn resolve_field_ic_cell(
     }
     // (3) Coordinate expression over grid-geometry aggregates (model
     // parameters — e.g. a free-name geometry `x0`/`dx` — bind via `params`).
+    // The whole-field evaluation is memoized in `cached_field` (see caller): it
+    // is cell-independent, so it runs once per target instead of once per cell.
     if let Expr::Operator(_) = rhs {
-        match eval_buildtime_field(rhs, index_sets, params) {
-            Ok(Value::Scalar(s)) if s.is_finite() => return Ok(s),
-            Ok(Value::Array(arr)) => {
+        if cached_field.is_none() {
+            // On a `CompileError` the memo stays empty and we fall through to
+            // the case-(4) hard error below (byte-identical to the old
+            // `match … { _ => {} }` arm, which likewise dropped the error).
+            if let Ok(v) = eval_buildtime_field(rhs, index_sets, params) {
+                *cached_field = Some(v);
+            }
+        }
+        match cached_field.as_ref() {
+            Some(Value::Scalar(s)) if s.is_finite() => return Ok(*s),
+            Some(Value::Array(arr)) => {
                 if arr.ndim() != cell.len() {
                     return Err(SimulateError::InvalidInitialCondition {
                         name: format!(
@@ -2327,8 +2381,8 @@ fn dependency_order_observed(rules: Vec<AlgebraicRule>) -> Vec<AlgebraicRule> {
 fn build_state_arrays(
     var_shapes: &IndexMap<String, VarShape>,
     state: &[f64],
-) -> HashMap<String, ArrayD<f64>> {
-    let mut state_arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
+) -> ArrMap {
+    let mut state_arrays: ArrMap = ArrMap::default();
     for (name, vs) in var_shapes {
         let total = vs.shape.iter().copied().product::<usize>().max(1);
         let block = &state[vs.flat_offset..vs.flat_offset + total];
@@ -2352,14 +2406,14 @@ fn build_state_arrays(
 /// see identical observed values.
 fn materialize_observeds(
     observed_rules: &[AlgebraicRule],
-    state_arrays: &HashMap<String, ArrayD<f64>>,
+    state_arrays: &ArrMap,
     params: &[f64],
     param_names: &[String],
     t: f64,
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-) -> HashMap<String, ArrayD<f64>> {
-    let mut observed_arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
+) -> ArrMap {
+    let mut observed_arrays: ArrMap = ArrMap::default();
     for rule in observed_rules {
         match rule {
             AlgebraicRule::Scalar { var, body } => {
@@ -2368,7 +2422,7 @@ fn materialize_observeds(
                     observed_arrays: &observed_arrays,
                     params,
                     param_names,
-                    loop_binds: HashMap::new(),
+                    loop_binds: IdxMap::default(),
                     t,
                     derived_rings,
                     forcing,
@@ -2400,7 +2454,7 @@ fn materialize_observeds(
                         observed_arrays: &observed_arrays,
                         params,
                         param_names,
-                        loop_binds: HashMap::new(),
+                        loop_binds: IdxMap::default(),
                         t,
                         derived_rings,
                         forcing,
@@ -2430,9 +2484,9 @@ fn materialize_observeds(
 /// that actually carry algebraic observeds pay that, and they are outside the
 /// zero-allocation stencil path being verified).
 fn materialize_observeds_into(
-    dst: &mut HashMap<String, ArrayD<f64>>,
+    dst: &mut ArrMap,
     observed_rules: &[AlgebraicRule],
-    state_arrays: &HashMap<String, ArrayD<f64>>,
+    state_arrays: &ArrMap,
     params: &[f64],
     param_names: &[String],
     t: f64,
@@ -2448,7 +2502,7 @@ fn materialize_observeds_into(
                     observed_arrays: &*dst,
                     params,
                     param_names,
-                    loop_binds: HashMap::new(),
+                    loop_binds: IdxMap::default(),
                     t,
                     derived_rings,
                     forcing,
@@ -2476,7 +2530,7 @@ fn materialize_observeds_into(
                         observed_arrays: &*dst,
                         params,
                         param_names,
-                        loop_binds: HashMap::new(),
+                        loop_binds: IdxMap::default(),
                         t,
                         derived_rings,
                         forcing,
@@ -2572,7 +2626,7 @@ fn evaluate_rhs_with_scratch(
                     observed_arrays,
                     params,
                     param_names,
-                    loop_binds: HashMap::new(),
+                    loop_binds: IdxMap::default(),
                     t,
                     derived_rings: &derived_rings,
                     forcing,
@@ -2586,7 +2640,7 @@ fn evaluate_rhs_with_scratch(
                     observed_arrays,
                     params,
                     param_names,
-                    loop_binds: HashMap::new(),
+                    loop_binds: IdxMap::default(),
                     t,
                     derived_rings: &derived_rings,
                     forcing,
@@ -2633,7 +2687,7 @@ fn evaluate_rhs_with_scratch(
                             observed_arrays,
                             params,
                             param_names,
-                            loop_binds: HashMap::new(),
+                            loop_binds: IdxMap::default(),
                             t,
                             derived_rings: &derived_rings,
                             forcing,
@@ -2671,7 +2725,7 @@ fn evaluate_rhs_with_scratch(
                         observed_arrays,
                         params,
                         param_names,
-                        loop_binds: HashMap::new(),
+                        loop_binds: IdxMap::default(),
                         t,
                         derived_rings: &derived_rings,
                         forcing,
@@ -3192,8 +3246,37 @@ fn eval_vec_op<'a>(
                 eval_vec(&node.args[2], bx, ctx, pool, ops)
             }
         }
+        // Unary transcendentals / rounding over the whole box — bit-identical to
+        // the oracle's `eval_unary` (same `apply_unary` kernel). Keeping these on
+        // the fast path is what lets a level-set / upwind stencil whose speed uses
+        // `sqrt`/`abs` (Godunov `|∇φ|`) avoid scalarizing.
+        "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
+        | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
+        | "acosh" | "atanh" => {
+            if node.args.len() != 1 {
+                return None;
+            }
+            let v = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
+            Some(vec_unary(&node.op, v, pool))
+        }
+        // Elementwise `broadcast(fn; a, b, …)` — the whole-array analogue of
+        // `eval_broadcast`, folding operands with the SAME `apply_binary` kernel
+        // (via `vec_combine`) in the SAME left-to-right order, so it is
+        // bit-identical to the oracle. `vec_combine` returns `None` for a
+        // `broadcast_fn` it does not vectorize (e.g. `atan2`), bailing safely.
+        "broadcast" => {
+            let fn_name = node.broadcast_fn.as_deref().unwrap_or("+");
+            let mut it = node.args.iter();
+            let first = it.next()?;
+            let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
+            for a in it {
+                let v = eval_vec(a, bx, ctx, pool, ops)?;
+                acc = vec_combine(fn_name, acc, v, pool)?;
+            }
+            Some(acc)
+        }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
-        // concat, broadcast, transcendentals over arrays, D, …) falls back.
+        // concat, `fn` closed-registry calls, atan2, D, …) falls back.
         _ => None,
     }
 }
@@ -3245,6 +3328,30 @@ fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
             ndarray::Zip::from(&mut buf)
                 .and(data)
                 .for_each(|o, &x| *o = -x);
+            VecValue::Owned { data: buf, origin }
+        }
+    }
+}
+
+/// Vectorized unary transcendental/rounding op — the whole-array analogue of
+/// [`eval_unary`], applying the SAME per-element [`apply_unary`] kernel so the
+/// result is bit-identical to the per-cell oracle (element-wise maps are
+/// order-independent). A `Scalar` stays scalar; an `Owned` buffer is mapped in
+/// place (no allocation, ess-mro); a `View` is mapped into a fresh pooled buffer.
+/// Lets a stencil whose speed/flux uses `sqrt`/`abs`/`exp`/… (e.g. the level-set
+/// Godunov `|∇φ|`) stay on the whole-array fast path instead of scalarizing.
+fn vec_unary<'a>(op: &str, v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
+    match v {
+        VecValue::Scalar(s) => VecValue::Scalar(apply_unary(op, s)),
+        VecValue::Owned { mut data, origin } => {
+            data.mapv_inplace(|x| apply_unary(op, x));
+            VecValue::Owned { data, origin }
+        }
+        VecValue::View { data, origin } => {
+            let mut buf = pool.take_array(data.shape());
+            ndarray::Zip::from(&mut buf)
+                .and(data)
+                .for_each(|o, &x| *o = apply_unary(op, x));
             VecValue::Owned { data: buf, origin }
         }
     }
@@ -3709,11 +3816,11 @@ fn as_cmp_const<'e>(expr: &'e Expr, op: &str) -> Option<(&'e Expr, i64)> {
 // ============================================================================
 
 struct EvalCtx<'a> {
-    state_arrays: &'a HashMap<String, ArrayD<f64>>,
-    observed_arrays: &'a HashMap<String, ArrayD<f64>>,
+    state_arrays: &'a ArrMap,
+    observed_arrays: &'a ArrMap,
     params: &'a [f64],
     param_names: &'a [String],
-    loop_binds: HashMap<String, i64>,
+    loop_binds: IdxMap,
     t: f64,
     /// Runtime registry of FAQ-materialized derived rings (RFC §8.1): an
     /// `intersect_polygon` clip self-registers its closed overlap ring here
@@ -3976,7 +4083,9 @@ fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 }
 
 fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
-    let mut values: Vec<Value> = args.iter().map(|a| eval(a, ctx)).collect();
+    // Stack-inlined operand buffer (arity ≤ 4 in practice) — no per-node heap
+    // allocation in the hot per-cell loop.
+    let mut values: ValVec = args.iter().map(|a| eval(a, ctx)).collect();
 
     // Unary minus: 1 arg.
     if op == "-" && values.len() == 1 {
@@ -3985,7 +4094,7 @@ fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 
     // Scalar fast path — if all operands are scalars, compute scalar.
     if values.iter().all(|v| matches!(v, Value::Scalar(_))) {
-        let scalars: Vec<f64> = values
+        let scalars: SmallVec<[f64; 4]> = values
             .iter()
             .map(|v| match v {
                 Value::Scalar(s) => *s,
@@ -4207,7 +4316,8 @@ fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // ghost-cell semantics: a discretized PDE's stencil can reference u[i-1]
     // when i=1 (ghost cell at i=0) and the boundary condition is u=0.
     let mut in_bounds = true;
-    let indices: Vec<usize> = node.args[1..]
+    // Stack-inlined index buffer (array rank ≤ 4) — no per-node heap allocation.
+    let indices: DimU = node.args[1..]
         .iter()
         .enumerate()
         .map(|(d, a)| {
@@ -4486,17 +4596,27 @@ pub fn eval_expression(
     param_names: &[String],
     t: f64,
 ) -> Value {
-    let empty: HashMap<String, ArrayD<f64>> = HashMap::new();
+    let empty: ArrMap = ArrMap::default();
+    // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
+    // `HashMap` (FAQ rings, coordinate fields). Rehash into the fast [`ArrMap`]
+    // the interpreter uses so the per-node tree walk gets the fast lookups. The
+    // input maps are small (a clipped ring, a couple of coordinate arrays) and
+    // this runs once per call (per-cell IC recompute was removed — see
+    // `resolve_field_ics`), so the shallow re-map is negligible.
+    let inputs: ArrMap = inputs
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     // Standalone expression evaluation (FAQ rings, area integrands) carries no
     // loader forcing — an empty buffer keeps the channel byte-identical here.
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut ctx = EvalCtx {
         state_arrays: &empty,
-        observed_arrays: inputs,
+        observed_arrays: &inputs,
         params,
         param_names,
-        loop_binds: HashMap::new(),
+        loop_binds: IdxMap::default(),
         t,
         derived_rings: &derived_rings,
         forcing: &forcing,
@@ -4592,10 +4712,15 @@ fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     //
     // Supports generalized einsum: indices present in `ranges` but absent
     // from `output_idx` are contracted (summed/reduced) per `reduce`.
-    let idx_names = node.output_idx.clone().unwrap_or_default();
-    let ranges_map = node.ranges.clone().unwrap_or_default();
-    let body = match &node.expr {
-        Some(b) => b.as_ref().clone(),
+    // Borrow the node's index names / ranges / body rather than cloning them:
+    // a standalone aggregate is re-evaluated on every observed materialization
+    // (every RHS call), and the body can be a large stencil subtree — cloning it
+    // per call was a leading source of allocation in the per-cell profile.
+    let idx_names: &[String] = node.output_idx.as_deref().unwrap_or(&[]);
+    let empty_ranges: HashMap<String, crate::types::RangeSpec> = HashMap::new();
+    let ranges_map = node.ranges.as_ref().unwrap_or(&empty_ranges);
+    let body: &Expr = match node.expr.as_deref() {
+        Some(b) => b,
         None => return Value::Scalar(f64::NAN),
     };
     let ranges: Vec<(i64, i64)> = idx_names
@@ -4630,6 +4755,55 @@ fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .collect();
     let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
+
+    // ---- Vectorized fast path for a pure MAP aggregate ---------------------
+    // A standalone aggregate with NO contracted index and no `filter` (the
+    // `out == ranges` case — e.g. a level-set Godunov `|∇φ|` / upwind-gradient
+    // stencil built as a `makearray` region body) is a whole-array map, not a
+    // reduction. Evaluate it with the same `eval_vec` kernels the compiled-RHS
+    // stencil vectorizer uses — shifted-slice `index`, broadcast arithmetic,
+    // whole-array transcendentals — instead of walking the body once per cell.
+    // The kernels reuse the identical `apply_binary`/`apply_unary` functions and
+    // ghost-0 out-of-bounds convention, so the result is bit-identical to the
+    // per-cell oracle below; any op `eval_vec` does not handle returns `None`
+    // and we fall through. A local `Pool` recycles the intermediates (far fewer
+    // buffers than the per-cell path allocates temporaries).
+    if contract_names.is_empty() && filter.is_none() && !shape.is_empty() {
+        let lo: DimI = origin.iter().copied().collect();
+        let shp: DimU = shape.iter().copied().collect();
+        if !shp.contains(&0) {
+            let mut pool = Pool::default();
+            let mut ops = 0usize;
+            let bx = VecBox {
+                syms: idx_names,
+                lo: &lo[..],
+                shape: &shp[..],
+                cnames: &[],
+                cvals: &[],
+            };
+            if let Some(vv) = eval_vec(body, &bx, &*ctx, &mut pool, &mut ops) {
+                // The result must cover the output box exactly (a bare scalar is
+                // broadcast); a shape/origin mismatch means the fast path does
+                // not apply and we release and fall through.
+                let covers = match vv.shape() {
+                    None => true,
+                    Some(s) => {
+                        s == &shp[..] && vv.origin().map(|o| o == &lo[..]).unwrap_or(false)
+                    }
+                };
+                if covers {
+                    let out = match &vv {
+                        VecValue::Scalar(s) => ArrayD::from_elem(IxDyn(&shape), *s),
+                        _ => vv.view().expect("array value has a view").to_owned(),
+                    };
+                    vv.release(&mut pool);
+                    return Value::Array(out);
+                }
+                vv.release(&mut pool);
+            }
+        }
+    }
+
     let mut buf = vec![0.0f64; total];
     let saved_binds: Vec<(String, Option<i64>)> = idx_names
         .iter()
@@ -4640,7 +4814,7 @@ fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         for (name, val) in idx_names.iter().zip(tuple.iter()) {
             ctx.loop_binds.insert(name.clone(), *val);
         }
-        let v = reduce_contraction(&contract_names, &contract_dims, &body, reduce, filter, ctx);
+        let v = reduce_contraction(&contract_names, &contract_dims, body, reduce, filter, ctx);
         let flat = multi_to_flat_col_major(&tuple, &shape, &origin);
         buf[flat] = v;
     }
@@ -4662,8 +4836,11 @@ fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 }
 
 fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let regions = node.regions.clone().unwrap_or_default();
-    let values = node.values.clone().unwrap_or_default();
+    // Borrow (don't clone) the region boxes and their value exprs — a boundary
+    // `makearray` is rebuilt on every observed materialization, and its `values`
+    // are full stencil subtrees; cloning them per call was pure allocation.
+    let regions: &[Vec<[i64; 2]>] = node.regions.as_deref().unwrap_or(&[]);
+    let values: &[Expr] = node.values.as_deref().unwrap_or(&[]);
     if regions.is_empty() || values.len() != regions.len() {
         return Value::Scalar(f64::NAN);
     }
@@ -4671,7 +4848,7 @@ fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let ndim = regions[0].len();
     let mut lo = vec![i64::MAX; ndim];
     let mut hi = vec![i64::MIN; ndim];
-    for region in &regions {
+    for region in regions {
         for (d, r) in region.iter().enumerate() {
             lo[d] = lo[d].min(r[0]);
             hi[d] = hi[d].max(r[1]);
@@ -4782,16 +4959,19 @@ fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 }
 
 fn eval_broadcast(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    let fn_name = node.broadcast_fn.clone().unwrap_or_else(|| "+".to_string());
-    let vs: Vec<Value> = node.args.iter().map(|a| eval(a, ctx)).collect();
-    if vs.is_empty() {
+    // Fold the operands left-to-right without materializing a `Vec<Value>`:
+    // evaluate the first arg, then combine each subsequent one in place. This is
+    // the hottest node in the per-cell profile; the old `.collect()` allocated a
+    // temporary vector per node per cell.
+    let fn_name = node.broadcast_fn.as_deref().unwrap_or("+");
+    let mut args = node.args.iter();
+    let Some(first) = args.next() else {
         return Value::Scalar(f64::NAN);
-    }
-    let mut acc = vs.into_iter();
-    let first = acc.next().unwrap();
-    let mut out = first;
-    for next in acc {
-        out = combine(&fn_name, out, next);
+    };
+    let mut out = eval(first, ctx);
+    for next in args {
+        let v = eval(next, ctx);
+        out = combine(fn_name, out, v);
     }
     out
 }
@@ -5775,7 +5955,12 @@ fn walk_for_shapes(
 
 /// Evaluate a simple index expression given concrete loop variable bindings.
 /// Supports integer literals, bare variable lookups, and `a + b` / `a - b`.
-fn eval_simple_index(expr: &Expr, binds: &HashMap<String, i64>) -> i64 {
+/// Generic over the map hasher so it accepts both the build-time std-`HashMap`
+/// binds and the hot-path [`IdxMap`] (`ctx.loop_binds`).
+fn eval_simple_index<S: std::hash::BuildHasher>(
+    expr: &Expr,
+    binds: &HashMap<String, i64, S>,
+) -> i64 {
     match expr {
         Expr::Integer(n) => *n,
         Expr::Number(n) => *n as i64,

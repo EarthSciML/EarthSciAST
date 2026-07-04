@@ -47,6 +47,14 @@ web-sys = { version = "0.3", optional = true }
 rayon = { version = "1.8", optional = true }
 simd-json = { version = "0.13", optional = true }
 smallvec = { version = "1.11", features = ["serde"] }
+# Fast, *fixed-seed* (hence deterministic — unlike std's randomized RandomState)
+# hasher for the hot per-cell interpreter maps (`simulate_array`). Keys are
+# trusted internal variable/index names, so the SipHash DoS resistance is unused
+# overhead: the profile of a coupled level-set solve spent ~19% of samples in
+# SipHash (`write_u8`/`write_str`/`make_hash`). rustc-hash has zero transitive
+# deps. Only lookup-by-key maps are switched (no order-dependent iteration), so
+# results are byte-identical.
+rustc-hash = "2"
 bumpalo = { version = "3.14", optional = true }
 wide = { version = "0.7", optional = true }
 bytemuck = { version = "1.14", optional = true }
