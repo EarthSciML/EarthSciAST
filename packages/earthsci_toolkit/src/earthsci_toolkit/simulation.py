@@ -1429,6 +1429,7 @@ def _time_varying_observeds(
 def _materialize_observeds(
     ordered_observed: List[Tuple[str, Expr]],
     ctx: EvalContext,
+    skip_unresolved: bool = False,
 ) -> None:
     """Evaluate observed assignments into ``ctx`` in dependency order.
 
@@ -1441,9 +1442,24 @@ def _materialize_observeds(
     resolution. This is what lets a geometry model — ``clip = intersect_polygon``,
     ``area = sum_product FAQ(clip)``, ``D(tracer) = -area·tracer`` — integrate
     end-to-end through :func:`simulate` (RFC §8.1; CONFORMANCE_SPEC.md §5.8).
+
+    ``skip_unresolved`` silently drops an observed whose body cannot be
+    evaluated — a DEAD observed nothing live reads, e.g. a passive-axis
+    ``dy = 1/NY`` whose count ``NY`` was closed at an import edge and so stays a
+    bare symbol (esm-spec §9.7.6). Such an observed is never consumed, so
+    skipping it is lossless; a live observed a downstream reader needs still
+    fails clearly at that read. Used by the per-step RHS driver (parity with the
+    Julia reference, which evaluates only the state-derivative dependency cone)
+    and by the read-only :class:`BuildInspection` fill.
     """
     for name, rhs in ordered_observed:
-        val = eval_expr(rhs, ctx)
+        if skip_unresolved:
+            try:
+                val = eval_expr(rhs, ctx)
+            except NumpyInterpreterError:
+                continue
+        else:
+            val = eval_expr(rhs, ctx)
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
         else:
@@ -1815,11 +1831,14 @@ def _fill_build_inspection(
 
     The STATE-FREE observeds (no transitive state / ``t`` reference — the
     complement of :func:`_time_varying_observeds`, a dependency-closed set)
-    are materialized once into a fresh context; this is the very same
-    evaluation the RHS driver performs on every step, so no new failure mode
-    is introduced. Each array-valued one is recorded in ``setup_arrays``
-    under its flattened name (the per-pair regrid geometry ``A_ij`` / ``A_j``
-    / ``W_ij``, a mesh subsystem's connectivity factors, …)."""
+    are materialized once into a fresh context; each array-valued one is
+    recorded in ``setup_arrays`` under its flattened name (the per-pair regrid
+    geometry ``A_ij`` / ``A_j`` / ``W_ij``, a mesh subsystem's connectivity
+    factors, …). A DEAD state-free observed whose body cannot be evaluated (a
+    passive-axis ``dy = 1/NY`` with ``NY`` closed at an import edge) is skipped
+    — the sink is read-only and records only array observeds, so an
+    unevaluable scalar nothing consumes contributes nothing to it (the RHS
+    driver already prunes such observeds from its dependency cone)."""
     for name, rhs in build.ordered_observed:
         sink.observed_exprs[name] = rhs
     for k, arr in build.join_key_buffers.items():
@@ -1849,7 +1868,7 @@ def _fill_build_inspection(
         join_key_index_sets=build.join_key_index_sets,
         factor_scope=build.factor_scope,
     )
-    _materialize_observeds(static_obs, ctx)
+    _materialize_observeds(static_obs, ctx, skip_unresolved=True)
     for name, _ in static_obs:
         val = ctx.derived_rings.get(name)
         if val is not None:
@@ -2050,8 +2069,21 @@ def _build_numpy_rhs(
         # derivatives below can reference them. Re-run each call because an
         # observed may depend on the current state y (and the derived_rings /
         # observed_values registries are fresh per EvalContext).
+        #
+        # `skip_unresolved`: a DEAD observed nothing in the ODE reads — e.g. a
+        # passive-axis `dy = 1/NY` whose count NY was closed at an import edge
+        # and so stays a bare symbol after §9.7 resolution in BOTH the Julia and
+        # Python resolvers (esm-spec §9.7.6) — is skipped rather than aborting
+        # the integration, matching the Julia reference (its tree-walk only
+        # evaluates observeds in the state-derivative dependency cone, so it
+        # never touches a dead one). This can only DROP an observed nothing
+        # consumes: a live observed a driver equation actually reads still
+        # surfaces a clear unresolved-symbol error when that equation evaluates
+        # below (the numpy interpreter never defaults an unbound name), so no
+        # real defect is masked and the state trajectory is unchanged. CPython's
+        # zero-cost exceptions make the guard free on the common (no-dead) path.
         try:
-            _materialize_observeds(ordered_observed, ctx)
+            _materialize_observeds(ordered_observed, ctx, skip_unresolved=True)
         except NumpyInterpreterError as exc:
             raise SimulationError(str(exc)) from exc
         dy.fill(0.0)
