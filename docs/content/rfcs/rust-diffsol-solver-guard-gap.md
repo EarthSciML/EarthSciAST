@@ -7,9 +7,11 @@
 ## Symptom
 
 Running the Rust PDE conformance runner (`scripts/runners/run-rust.sh --categories
-simulation,convergence`) on the EarthSciDiscretizations suite, **33 cases hang the Rust
-process indefinitely** (observed a single solve stuck >2.5 h on one case), rather than
-erroring or completing. This is why a full Rust numeric sweep never terminates. Julia
+simulation,convergence`) on the EarthSciDiscretizations suite, **33 cases cannot produce a
+gate-passing Rust result** — most **hang the process indefinitely** at the tight tolerance the
+conformance gate requires (observed a single solve stuck >2.5 h on one case), rather than
+erroring or completing; the rest terminate only at a tolerance too loose to meet the gate (see
+the per-case sweep below). This is why a full Rust numeric run never terminates. Julia
 (`Tsit5`) and Python (`LSODA`) solve every one of these cases without issue.
 
 ## Which cases, and the common factor
@@ -36,6 +38,28 @@ exists for — hangs under all three. That rules out "wrong solver choice" and p
 guard**, so when the adaptive step controller cannot make progress (stiffness the explicit
 method can't step; a discontinuous Jacobian the Newton iteration can't converge; a step that
 keeps getting rejected) it drives `dt → 0` and loops forever instead of returning an error.
+
+## Tolerance dependence (per-case sweep)
+
+A per-case sweep (`reltol` 1e-6 … 1e-9, all three solvers) sharpens the diagnosis into a
+*fail-fast* gap, not a *can't-solve* gap:
+
+- **22 cases hang at _every_ tolerance**, down to the loosest `reltol 1e-6` — genuinely stiff
+  (full 2-D Laplacians), `sqrt(0)`-Jacobian-singular (the Godunov `|∇u|` on a constant field), or
+  huge-AST WENO / HJ-WENO.
+- **11 cases terminate only at a loose tolerance** (`1e-6`–`1e-8`), but then their temporal error
+  no longer matches the Julia (`Tsit5`, `1e-10`) reference within the conformance gate (`1e-9`
+  cross-binding-actuals for simulation, `1e-4` errors-vs-golden for convergence); at the tight
+  tolerance the gate needs, they hang. So there is **no tolerance that both terminates and passes**
+  — the hang lands exactly on the accuracy the gate requires.
+- **2 low-order latlon zonal-advection convergence cases *do* pass**, pinned at `reltol 1e-7`
+  (loose enough not to hang, tight enough that their spatially-dominated error still matches the
+  golden) — un-blocked downstream.
+
+So the driver hangs precisely when asked for the accuracy the conformance model requires: a
+fail-fast guard turns that into a clean error (CI never wedges), and genuine coverage of the
+blocked cases additionally needs the solver to *reach* tight tolerances on stiff / non-smooth
+RHS without the step size collapsing.
 
 ## Requested fix
 
