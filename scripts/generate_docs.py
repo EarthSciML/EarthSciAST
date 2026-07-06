@@ -107,7 +107,7 @@ class DocumentationExtractor:
             functions.extend(self._parse_julia_exports(main_file))
 
         # Extract from all source files
-        for julia_file in src_dir.glob("*.jl"):
+        for julia_file in src_dir.rglob("*.jl"):
             file_functions, file_types = self._parse_julia_file(julia_file)
             functions.extend(file_functions)
             types.extend(file_types)

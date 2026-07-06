@@ -32,6 +32,14 @@ function _unitsphere_polygon(ring::AbstractMatrix, to_unit)
     return GI.Polygon([GI.LinearRing(pts)])
 end
 
+# Tolerances for detecting the closing duplicate vertex when converting a
+# clipped ring back to the planar "n distinct vertices, implicit closure"
+# convention: tight enough that genuinely distinct lon-lat vertices are never
+# merged (1e-7° ≈ 1 cm on Earth), loose enough to absorb the float noise of
+# the unit-sphere round-trip.
+const _RING_CLOSE_ATOL = 1e-9
+const _RING_CLOSE_RTOL = 1e-7
+
 # Extract the exterior-ring lon-lat vertices from a clipped polygon (its coords are
 # UnitSphericalPoints), dropping the closing duplicate so the result matches the
 # planar convention: `n` distinct vertices, implicit closure.
@@ -47,8 +55,8 @@ function _ring_lonlat(poly, to_geo)
         out[i, 2] = lonlat[2]
     end
     if npt >= 2 &&
-       isapprox(out[1, 1], out[npt, 1]; atol=1e-9, rtol=1e-7) &&
-       isapprox(out[1, 2], out[npt, 2]; atol=1e-9, rtol=1e-7)
+       isapprox(out[1, 1], out[npt, 1]; atol=_RING_CLOSE_ATOL, rtol=_RING_CLOSE_RTOL) &&
+       isapprox(out[1, 2], out[npt, 2]; atol=_RING_CLOSE_ATOL, rtol=_RING_CLOSE_RTOL)
         out = out[1:npt-1, :]
     end
     return out

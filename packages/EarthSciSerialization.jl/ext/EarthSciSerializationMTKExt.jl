@@ -11,7 +11,11 @@ using EarthSciSerialization: FlattenedSystem, ModelVariable, StateVariable,
     Equation, AffectEquation, Model, EventType, ContinuousEvent, DiscreteEvent,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger, FunctionalAffect,
     Domain, flatten, infer_array_shapes,
-    GapReport, Metadata, EsmFile
+    GapReport, Metadata, EsmFile,
+    # MTK-independent export helpers shared with the Catalyst extension
+    # (defined next to GapReport in src/mtk_export.jl).
+    _strip_time, _meta_string, _meta_vec_string, _gap_to_note,
+    _reference_notes, _esm_file_metadata, _warn_gaps
 # Explicit import so we can add methods to these generics.
 import EarthSciSerialization: mtk2esm, mtk2esm_gaps
 const EsmExpr = EarthSciSerialization.Expr
@@ -77,7 +81,7 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
         elseif haskey(dim_dict, expr.name)
             return dim_dict[expr.name]
         else
-            error("Variable '$(expr.name)' not found in variable dictionary")
+            throw(ArgumentError("Variable '$(expr.name)' not found in variable dictionary"))
         end
     elseif expr isa OpExpr
         op = expr.op
@@ -92,12 +96,12 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
             end
         elseif op == "grad"
             arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-            expr.dim === nothing && error("grad operator requires dim parameter")
+            expr.dim === nothing && throw(ArgumentError("grad operator requires dim parameter"))
             dim_sym = _get_or_make_dim(dim_dict, expr.dim)
             return Differential(dim_sym)(arg)
         elseif op == "div"
             arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-            expr.dim === nothing && error("div operator requires dim parameter")
+            expr.dim === nothing && throw(ArgumentError("div operator requires dim parameter"))
             dim_sym = _get_or_make_dim(dim_dict, expr.dim)
             return Differential(dim_sym)(arg)
         elseif op == "laplacian"
@@ -133,7 +137,7 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
             fn = getfield(Base, Symbol(op))
             return fn(arg)
         elseif op == "min" || op == "max"
-            length(expr.args) < 2 && error("$op requires at least 2 arguments (esm-spec §4.2)")
+            length(expr.args) < 2 && throw(ArgumentError("$op requires at least 2 arguments (esm-spec §4.2)"))
             args = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
             fn = op == "min" ? min : max
             return foldl(fn, args)
@@ -171,7 +175,7 @@ function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
         elseif op == "fn"
             return _build_fn(expr, var_dict, t_sym, dim_dict)
         else
-            error("Unsupported operator: $op")
+            throw(ArgumentError("Unsupported operator: $op"))
         end
     end
     error("Unknown expression type: $(typeof(expr))")
@@ -189,7 +193,7 @@ function _reduce_fn(name::Union{Nothing,AbstractString})
            name == "*" ? (*) :
            name == "max" ? max :
            name == "min" ? min :
-           error("Unsupported arrayop reduce: $name")
+           throw(ArgumentError("Unsupported arrayop reduce: $name"))
 end
 
 # ========================================
@@ -223,6 +227,23 @@ struct _GatherCtx
     out_order::Vector{String}
 end
 
+# SIDE CHANNEL — read this before touching `dim_dict`.
+#
+# The `_GatherCtx` is smuggled to `_build_index` through `dim_dict::Dict{
+# String,Any}` under this reserved key rather than as an explicit argument.
+# `_esm_to_symbolic` has dozens of call sites (every `_build_*` helper, the
+# System/PDESystem constructors, event and slice-BC lowering), all sharing
+# the `(expr, var_dict, t_sym, dim_dict)` signature; adding a context
+# parameter would touch every one of them for the benefit of exactly one
+# producer (`_build_arrayop_sym`) and one consumer (`_build_index`). Until
+# a second consumer appears, the reserved-key hack is the lesser evil.
+#
+# Invariants that keep it safe:
+# - `_build_arrayop_sym` installs the ctx before evaluating an arrayop body
+#   and restores the previous value in a `finally` (nesting-safe).
+# - `_get_or_make_dim` can never collide: the key is not a valid dimension
+#   name and is only ever written by `_build_arrayop_sym`.
+# - `_build_index` type-checks (`ctx isa _GatherCtx`) before use.
 const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
 
 # Pure-integer evaluation of an ESM index-argument expression given concrete
@@ -323,12 +344,12 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
                              t_sym, dim_dict::Dict{String,Any})
     output_idx = expr.output_idx === nothing ? Any[] : expr.output_idx
     body = expr.expr_body
-    body === nothing && error("arrayop node missing 'expr' body")
+    body === nothing && throw(ArgumentError("arrayop node missing 'expr' body"))
     reduce_fn = _reduce_fn(expr.reduce)
 
-    expr.ranges === nothing && error(
+    expr.ranges === nothing && throw(ArgumentError(
         "arrayop without explicit 'ranges' is not supported — all index " *
-        "variables must declare a concrete range")
+        "variables must declare a concrete range"))
     ranges = Dict{String,UnitRange{Int}}()
     for (name, r) in expr.ranges
         lo, hi = _range_bounds_int(r)
@@ -339,12 +360,12 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     for entry in output_idx
         if entry isa AbstractString
             name = String(entry)
-            haskey(ranges, name) || error("arrayop output index '$name' has no declared range")
+            haskey(ranges, name) || throw(ArgumentError("arrayop output index '$name' has no declared range"))
             push!(output_names, name)
         elseif entry == 1
             # Singleton axis — no iteration variable; shape 1 handled below.
         else
-            error("arrayop output_idx entry must be a string or 1, got $(entry)")
+            throw(ArgumentError("arrayop output_idx entry must be a string or 1, got $(entry)"))
         end
     end
 
@@ -572,14 +593,14 @@ end
 
 # Decode a range field `[lo, hi]` or `[lo, step, hi]` to integer bounds.
 function _range_bounds_int(r::AbstractVector)
-    all(x -> x isa Integer, r) || error(
-        "expression-valued range bounds are not supported by the MTK evaluator path")
+    all(x -> x isa Integer, r) || throw(ArgumentError(
+        "expression-valued range bounds are not supported by the MTK evaluator path"))
     if length(r) == 2
         return Int(r[1]), Int(r[2])
     elseif length(r) == 3
         return Int(r[1]), Int(r[3])
     end
-    error("range must have 2 or 3 entries, got $(length(r))")
+    throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
 end
 
 # Walk an ESM expression tree looking for any spatial differential operator
@@ -624,17 +645,17 @@ end
 # region fills (not used by any fixture) would need additional handling.
 function _build_makearray(expr::OpExpr, var_dict::Dict{String,Any},
                           t_sym, dim_dict::Dict{String,Any})
-    expr.regions === nothing && error("makearray node missing 'regions'")
-    expr.values === nothing && error("makearray node missing 'values'")
+    expr.regions === nothing && throw(ArgumentError("makearray node missing 'regions'"))
+    expr.values === nothing && throw(ArgumentError("makearray node missing 'values'"))
     length(expr.regions) == length(expr.values) ||
-        error("makearray regions and values length mismatch")
+        throw(ArgumentError("makearray regions and values length mismatch"))
 
     nd = length(expr.regions[1])
     sz = fill(0, nd)
     for region in expr.regions
-        length(region) == nd || error("makearray regions must all share ndims")
+        length(region) == nd || throw(ArgumentError("makearray regions must all share ndims"))
         for (axis, pair) in enumerate(region)
-            pair[1] >= 1 || error("makearray regions must be 1-based")
+            pair[1] >= 1 || throw(ArgumentError("makearray regions must be 1-based"))
             sz[axis] = max(sz[axis], pair[2])
         end
     end
@@ -683,6 +704,11 @@ function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
         if a isa IntExpr
             push!(idxs, Int(a.value))
         elseif a isa NumExpr
+            # Fixtures sometimes encode whole-number indices as floats;
+            # anything fractional is a malformed index, so fail with a
+            # descriptive error instead of an InexactError from Int().
+            isinteger(a.value) || throw(ArgumentError(
+                "index argument must be an integer, got $(a.value)"))
             push!(idxs, Int(a.value))
         else
             push!(idxs, _esm_to_symbolic(a, var_dict, t_sym, dim_dict))
@@ -703,7 +729,7 @@ end
 
 function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
                           t_sym, dim_dict::Dict{String,Any})
-    expr.fn === nothing && error("broadcast node missing 'fn'")
+    expr.fn === nothing && throw(ArgumentError("broadcast node missing 'fn'"))
     fn_name = expr.fn
     operands = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     fn = fn_name == "+" ? (+) :
@@ -718,20 +744,20 @@ function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
          fn_name == "cos" ? cos :
          fn_name == "sqrt" ? sqrt :
          fn_name == "abs" ? abs :
-         error("Unsupported broadcast fn: $fn_name")
+         throw(ArgumentError("Unsupported broadcast fn: $fn_name"))
     return Base.materialize(Base.broadcasted(fn, operands...))
 end
 
 function _build_reshape(expr::OpExpr, var_dict::Dict{String,Any},
                         t_sym, dim_dict::Dict{String,Any})
-    expr.shape === nothing && error("reshape node missing 'shape'")
+    expr.shape === nothing && throw(ArgumentError("reshape node missing 'shape'"))
     arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     dims = Int[]
     for entry in expr.shape
         if entry isa Integer
             push!(dims, Int(entry))
         else
-            error("reshape currently only supports integer shape entries, got $(entry)")
+            throw(ArgumentError("reshape currently only supports integer shape entries, got $(entry)"))
         end
     end
     return Symbolics.reshape(arr, dims...)
@@ -750,7 +776,7 @@ end
 
 function _build_concat(expr::OpExpr, var_dict::Dict{String,Any},
                        t_sym, dim_dict::Dict{String,Any})
-    expr.axis === nothing && error("concat node missing 'axis'")
+    expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
     arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     return cat(arrs...; dims=expr.axis + 1)
 end
@@ -813,7 +839,7 @@ function _to_float64_vector(v)::Vector{Float64}
     if v isa AbstractVector
         return Float64[Float64(x) for x in v]
     end
-    error("expected a vector value, got $(typeof(v))")
+    throw(ArgumentError("expected a vector value, got $(typeof(v))"))
 end
 
 function _to_float64_table_2d(v)::Vector{Vector{Float64}}
@@ -825,7 +851,7 @@ function _to_float64_table_2d(v)::Vector{Vector{Float64}}
         end
         return out
     end
-    error("expected a 2-D nested vector, got $(typeof(v))")
+    throw(ArgumentError("expected a 2-D nested vector, got $(typeof(v))"))
 end
 
 # Pull a `const`-op array value out of an AST argument node. Errors give
@@ -835,24 +861,24 @@ function _extract_const_array_node(arg::EsmExpr, fname::String, label::String)
     if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
         return arg.value
     end
-    error("$(fname): `$(label)` argument must be a `const`-op array " *
-          "(esm-spec §9.2); got $(typeof(arg))")
+    throw(ArgumentError("$(fname): `$(label)` argument must be a `const`-op array " *
+          "(esm-spec §9.2); got $(typeof(arg))"))
 end
 
 function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
                    t_sym, dim_dict::Dict{String,Any})
     fname = expr.name
-    fname === nothing && error("`fn` op missing required `name` field (esm-spec §4.4)")
+    fname === nothing && throw(ArgumentError("`fn` op missing required `name` field (esm-spec §4.4)"))
     if fname == "interp.linear"
         length(expr.args) == 3 ||
-            error("interp.linear expects 3 args, got $(length(expr.args))")
+            throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))
         table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table"))
         axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis"))
         x_sym = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
         return _esm_interp_linear(table, axis, x_sym)
     elseif fname == "interp.bilinear"
         length(expr.args) == 5 ||
-            error("interp.bilinear expects 5 args, got $(length(expr.args))")
+            throw(ArgumentError("interp.bilinear expects 5 args, got $(length(expr.args))"))
         table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table"))
         axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x"))
         axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y"))
@@ -864,9 +890,9 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
     # exposed as registered symbolic ops — they're either unused in MTK
     # contexts or whose return shape (integer index) doesn't compose with
     # symbolic arithmetic.
-    error("Unsupported `fn` name in MTK lowering: `$(fname)`. " *
+    throw(ArgumentError("Unsupported `fn` name in MTK lowering: `$(fname)`. " *
           "Only `interp.linear` and `interp.bilinear` are registered as " *
-          "@register_symbolic operators (esm-94w).")
+          "@register_symbolic operators (esm-94w)."))
 end
 
 function _get_or_make_dim(dim_dict::Dict{String,Any}, name::AbstractString)
@@ -991,7 +1017,9 @@ end
 """
 Create Symbolics.jl variable/parameter symbols for every state, parameter, and
 observed variable in a flattened system. Returns `(var_dict, t_sym, dim_dict,
-states, parameters, observed)` where the collections are typed `Vector{Num}`.
+states, parameters, observed, spatial_syms)` where `states`/`parameters`/
+`observed` are typed `Vector{Num}` and `spatial_syms` holds the non-time
+independent-variable symbols (empty for ODE systems).
 
 For ODE systems, state variables are functions of `t` only. For PDE systems,
 state variables are functions of `t` and the spatial dimensions declared in
@@ -1170,8 +1198,15 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
         affects = filter(!isnothing,
                          [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
                           for a in ev.affects])
-        isempty(conds) || isempty(affects) && continue
-        cb = ModelingToolkit.SymbolicContinuousCallback(conds[1], affects)
+        # NOTE: parenthesized guard — the bare `a || b && continue` form
+        # parses as `a || (b && continue)`, letting an event with EMPTY
+        # conditions fall through to `conds[1]` (BoundsError).
+        (isempty(conds) || isempty(affects)) && continue
+        # MTK's SymbolicContinuousCallback accepts a vector of condition
+        # equations (all must root simultaneously); pass the single
+        # condition bare to preserve the long-standing scalar behavior.
+        cb = ModelingToolkit.SymbolicContinuousCallback(
+            length(conds) == 1 ? conds[1] : conds, affects)
         push!(cbs, cb)
     end
     return cbs
@@ -1315,22 +1350,13 @@ function ModelingToolkit.System(flat::FlattenedSystem;
 
     sys_name = name isa Symbol ? name : Symbol(name)
 
-    sys = if !isempty(cont_cbs) && !isempty(disc_cbs)
-        ModelingToolkit.System(eqs, t_sym, dvs, parameters;
-            name=sys_name,
-            continuous_events=cont_cbs,
-            discrete_events=disc_cbs, kwargs...)
-    elseif !isempty(cont_cbs)
-        ModelingToolkit.System(eqs, t_sym, dvs, parameters;
-            name=sys_name, continuous_events=cont_cbs, kwargs...)
-    elseif !isempty(disc_cbs)
-        ModelingToolkit.System(eqs, t_sym, dvs, parameters;
-            name=sys_name, discrete_events=disc_cbs, kwargs...)
-    else
-        ModelingToolkit.System(eqs, t_sym, dvs, parameters;
-            name=sys_name, kwargs...)
-    end
-    return sys
+    # Only pass event kwargs that are non-empty — MTK treats an explicit
+    # empty event list differently from an omitted kwarg on some versions.
+    event_kwargs = Pair{Symbol,Any}[]
+    isempty(cont_cbs) || push!(event_kwargs, :continuous_events => cont_cbs)
+    isempty(disc_cbs) || push!(event_kwargs, :discrete_events => disc_cbs)
+    return ModelingToolkit.System(eqs, t_sym, dvs, parameters;
+        name=sys_name, event_kwargs..., kwargs...)
 end
 
 """
@@ -1610,7 +1636,6 @@ function _is_d2_of(expr::EsmExpr, var_name::String, dim_name::String)
 end
 
 _is_odelhs_for_slice_var(eq::Equation, drop::Set{String}) =
-    _lhs_is_D_of(eq.lhs, "") ? false :
     any(v -> _lhs_is_D_of(eq.lhs, v), drop)
 
 # ------------------------------------------------------------
@@ -1636,6 +1661,15 @@ function _build_domain_spec(domain::Union{Domain,Nothing}, dim_dict,
             push!(specs, dim_dict[name] ∈ Interval(lo, hi))
         end
     end
+    # The ESM `Domain` type carries only temporal bounds at this seam, so
+    # spatial dimensions get the same [0, 1] default as the `domain ===
+    # nothing` branch above. PDESystem consumers (MethodOfLines et al.)
+    # require a domain entry for EVERY independent variable — emitting only
+    # temporal intervals here would leave the spatial dims unbounded and
+    # break discretization downstream.
+    for sym in spatial_syms
+        push!(specs, sym ∈ Interval(0.0, 1.0))
+    end
     return specs
 end
 
@@ -1659,96 +1693,68 @@ end
 
 Convert a ModelingToolkit System back to an ESM `Model`. Supports ODESystems
 and systems that expose `unknowns`, `parameters`, and `equations`.
+
+Defaults come from the system defaults map / per-symbol metadata via
+`_lookup_default`; when no default is recorded the ESM `default` field is
+left as `nothing` (omitted on serialization) rather than fabricated.
+Expressions are serialized with `_symbolic_to_esm_export` so callable
+states `x(t)` become `VarExpr("x")` instead of the schema-invalid
+`OpExpr("x", [VarExpr("t")])` shape.
 """
 function EarthSciSerialization.Model(sys::ModelingToolkit.AbstractSystem)
     variables = Dict{String,ModelVariable}()
 
+    sys_defaults = try
+        ModelingToolkit.defaults(sys)
+    catch e
+        @debug "Model(sys): ModelingToolkit.defaults unavailable" exception=(e, catch_backtrace())
+        Dict()
+    end
+    obs_eqs = try
+        ModelingToolkit.observed(sys)
+    catch e
+        @debug "Model(sys): ModelingToolkit.observed unavailable" exception=(e, catch_backtrace())
+        []
+    end
+
+    # Collect every known variable name up front so the expression walk can
+    # disambiguate callable-symbolic states `x(t)` from operator calls.
+    known_vars = Set{String}()
+    for state in ModelingToolkit.unknowns(sys)
+        push!(known_vars, _strip_time(string(ModelingToolkit.getname(state))))
+    end
+    for param in ModelingToolkit.parameters(sys)
+        push!(known_vars, string(ModelingToolkit.getname(param)))
+    end
+    for obs in obs_eqs
+        push!(known_vars, _strip_time(string(ModelingToolkit.getname(obs.lhs))))
+    end
+
     for state in ModelingToolkit.unknowns(sys)
         var_name = _strip_time(string(ModelingToolkit.getname(state)))
-        default_val = try
-            ModelingToolkit.getdefault(state)
-        catch
-            0.0
-        end
-        variables[var_name] = ModelVariable(StateVariable; default=default_val)
+        variables[var_name] = ModelVariable(StateVariable;
+            default=_lookup_default(state, sys_defaults))
     end
 
     for param in ModelingToolkit.parameters(sys)
         pname = string(ModelingToolkit.getname(param))
-        default_val = try
-            ModelingToolkit.getdefault(param)
-        catch
-            1.0
-        end
-        variables[pname] = ModelVariable(ParameterVariable; default=default_val)
+        variables[pname] = ModelVariable(ParameterVariable;
+            default=_lookup_default(param, sys_defaults))
     end
 
-    try
-        for obs in ModelingToolkit.observed(sys)
-            oname = _strip_time(string(ModelingToolkit.getname(obs.lhs)))
-            variables[oname] = ModelVariable(ObservedVariable;
-                expression=_symbolic_to_esm(obs.rhs))
-        end
-    catch
+    for obs in obs_eqs
+        oname = _strip_time(string(ModelingToolkit.getname(obs.lhs)))
+        variables[oname] = ModelVariable(ObservedVariable;
+            expression=_symbolic_to_esm_export(obs.rhs, known_vars))
     end
 
     equations = Equation[]
     for eq in ModelingToolkit.equations(sys)
-        push!(equations, Equation(_symbolic_to_esm(eq.lhs),
-                                  _symbolic_to_esm(eq.rhs)))
+        push!(equations, Equation(_symbolic_to_esm_export(eq.lhs, known_vars),
+                                  _symbolic_to_esm_export(eq.rhs, known_vars)))
     end
 
     return Model(variables, equations)
-end
-
-_strip_time(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
-
-function _symbolic_to_esm(expr)
-    # Distinguish integer from float at the round-trip boundary (RFC §5.4.1).
-    if expr isa Bool
-        return IntExpr(Int64(expr))  # defensive; shouldn't happen in ESM exprs
-    elseif expr isa Integer
-        return IntExpr(Int64(expr))
-    elseif expr isa AbstractFloat
-        return NumExpr(Float64(expr))
-    elseif expr isa Real
-        return NumExpr(Float64(expr))
-    end
-    raw = Symbolics.unwrap(expr)
-    if Symbolics.issym(raw)
-        name = _strip_time(string(Symbolics.getname(raw)))
-        return VarExpr(name)
-    end
-    is_diff = try
-        Symbolics.is_derivative(raw)
-    catch
-        false
-    end
-    if is_diff
-        inner = _symbolic_to_esm(Symbolics.arguments(raw)[1])
-        return OpExpr("D", EsmExpr[inner], wrt="t")
-    end
-    if Symbolics.iscall(raw)
-        op = Symbolics.operation(raw)
-        args = Symbolics.arguments(raw)
-        esm_args = [_symbolic_to_esm(a) for a in args]
-        if op == (+); return OpExpr("+", esm_args)
-        elseif op == (*); return OpExpr("*", esm_args)
-        elseif op == (-); return OpExpr("-", esm_args)
-        elseif op == (/); return OpExpr("/", esm_args)
-        elseif op == (^); return OpExpr("^", esm_args)
-        elseif op == exp; return OpExpr("exp", esm_args)
-        elseif op == log; return OpExpr("log", esm_args)
-        elseif op == sin; return OpExpr("sin", esm_args)
-        elseif op == cos; return OpExpr("cos", esm_args)
-        elseif op == sqrt; return OpExpr("sqrt", esm_args)
-        elseif op == abs; return OpExpr("abs", esm_args)
-        else
-            opname = string(nameof(op))
-            return OpExpr(opname, esm_args)
-        end
-    end
-    return VarExpr(string(expr))
 end
 
 # ========================================
@@ -1795,8 +1801,9 @@ end
 # Convert a symbolic to ESM expression using a known set of variable names
 # to disambiguate callable-symbolic nodes like `x(t)` from operator calls.
 # MTK states and observed variables appear in the symbolic tree as
-# `Sym{FnType{...}}(t)`, which `_symbolic_to_esm` would otherwise emit as
+# `Sym{FnType{...}}(t)`, which a naive walk would emit as
 # `OpExpr("x", [VarExpr("t")])` — the wrong shape for the ESM schema.
+# `known_vars` lets us recognize those nodes and emit `VarExpr("x")`.
 function _symbolic_to_esm_export(expr, known_vars::Set{String},
                                  strip_ns::Function=identity)
     # Scalar fast-paths
@@ -1905,95 +1912,59 @@ function _symbolic_to_esm_with_gaps(expr, known_vars::Set{String},
     end
 end
 
-"""
-    mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;)) -> Dict
-
-Walk a non-reaction MTK system and emit a schema-valid ESM `Dict` with a
-top-level `models.<name>` entry. Reaction systems are handled in the
-Catalyst extension via a more specific method.
-
-Fields populated from the MTK IR:
-- `variables` (state / parameter / observed / brownian, with units +
-  defaults extracted from symbolic metadata where present)
-- `equations` (D(x)~rhs using the spec's Expression ops)
-- `continuous_events`, `discrete_events` (from MTK callback lists)
-
-Fields left as placeholders (filled in Phase 2 per-model migrations):
-- `description`, `version`, `reference`, `tests`, `examples`
-- `metadata.tags`, `metadata.source_ref` (populated from `metadata` kwarg)
-"""
-function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
-    gaps = GapReport[]
-
-    kind = _sys_kind(sys)
-
-    # Extract the name: caller-supplied `metadata.name` wins; else use
-    # `nameof(sys)` if non-anonymous; else fall back to a literal placeholder
-    # so the output file is still addressable.
-    name_kw = try
-        getproperty(metadata, :name)
-    catch
-        nothing
+# Resolve the exported component name: caller-supplied `metadata.name` wins;
+# else `nameof(sys)` if non-anonymous; else the literal `fallback` placeholder
+# so the output file is still addressable.
+function _resolve_sys_name(sys, metadata, fallback::String)
+    name_kw = _meta_string(metadata, :name, "")
+    isempty(name_kw) || return name_kw
+    try
+        sn = String(nameof(sys))
+        return sn == "" ? fallback : sn
+    catch e
+        @debug "mtk2esm: nameof(sys) unavailable" exception=(e, catch_backtrace())
+        return fallback
     end
-    sys_name = if name_kw !== nothing
-        String(name_kw)
-    else
-        try
-            sn = String(nameof(sys))
-            sn == "" ? "UnnamedSystem" : sn
-        catch
-            "UnnamedSystem"
-        end
-    end
+end
 
-    # 1. Variables -----------------------------------------------------------
-    esm_vars = Dict{String,ModelVariable}()
+# Export states / parameters / observed / brownian variables from `sys` into
+# `esm_vars`, registering every exported name in `known_vars` (used by the
+# expression walk to disambiguate callable-symbolic states from op calls).
+function _export_variables!(esm_vars::Dict{String,ModelVariable},
+                            known_vars::Set{String}, gaps::Vector{GapReport},
+                            sys, strip_ns::Function)
     # System-level defaults dict — variables declared via `defaults=Dict(...)`
     # on System construction surface here rather than on the symbolic
     # metadata. We look up both and prefer the system-level value.
     sys_defaults = try
         ModelingToolkit.defaults(sys)
-    catch
+    catch e
+        @debug "mtk2esm: ModelingToolkit.defaults unavailable" exception=(e, catch_backtrace())
         Dict()
     end
-
-    # When an MTK System was built via our ESM.Model → MTK.System path, the
-    # flatten step sanitizes names as "<SystemName>_<var>" (dots → underscores).
-    # We strip that prefix so the exported ESM names round-trip back to the
-    # same bare names they had in the source Model. Direct-Symbolics-built
-    # systems without the prefix pass through untouched.
-    sys_name_prefix = sys_name * "_"
-    strip_ns = s -> startswith(s, sys_name_prefix) ?
-        s[length(sys_name_prefix)+1:end] : s
-
-    # Collect all known variable names up-front so we can disambiguate
-    # callable-symbolic variables `x(t)` from operator calls inside the
-    # equation walk.
-    known_vars = Set{String}()
 
     for state in ModelingToolkit.unknowns(sys)
         var_name = strip_ns(_strip_time(string(ModelingToolkit.getname(state))))
         push!(known_vars, var_name)
-        default_val = _lookup_default(state, sys_defaults)
-        units_str = _get_units_str(state)
-        desc_str = _get_description_str(state)
         esm_vars[var_name] = ModelVariable(StateVariable;
-            default=default_val, units=units_str, description=desc_str)
+            default=_lookup_default(state, sys_defaults),
+            units=_get_units_str(state),
+            description=_get_description_str(state))
     end
 
     for param in ModelingToolkit.parameters(sys)
         pname = strip_ns(string(ModelingToolkit.getname(param)))
         push!(known_vars, pname)
-        default_val = _lookup_default(param, sys_defaults)
-        units_str = _get_units_str(param)
-        desc_str = _get_description_str(param)
         esm_vars[pname] = ModelVariable(ParameterVariable;
-            default=default_val, units=units_str, description=desc_str)
+            default=_lookup_default(param, sys_defaults),
+            units=_get_units_str(param),
+            description=_get_description_str(param))
     end
 
     obs_exprs = try
         ModelingToolkit.observed(sys)
-    catch
+    catch e
+        @debug "mtk2esm: ModelingToolkit.observed unavailable" exception=(e, catch_backtrace())
         []
     end
     for obs in obs_exprs
@@ -2026,66 +1997,59 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
             "diffusion terms requires gt-kuxo to land first",
             "system.noise_eqs"))
     end
+    return nothing
+end
+
+"""
+    mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;)) -> Dict
+
+Walk a non-reaction MTK system and emit a schema-valid ESM `Dict` with a
+top-level `models.<name>` entry. Reaction systems are handled in the
+Catalyst extension via a more specific method.
+
+Fields populated from the MTK IR:
+- `variables` (state / parameter / observed / brownian, with units +
+  defaults extracted from symbolic metadata where present)
+- `equations` (D(x)~rhs using the spec's Expression ops)
+- `continuous_events`, `discrete_events` (from MTK callback lists)
+
+Fields left as placeholders (filled in Phase 2 per-model migrations):
+- `description`, `version`, `reference`, `tests`, `examples`
+- `metadata.tags`, `metadata.source_ref` (populated from `metadata` kwarg)
+"""
+function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
+    gaps = GapReport[]
+
+    kind = _sys_kind(sys)
+    sys_name = _resolve_sys_name(sys, metadata, "UnnamedSystem")
+
+    # When an MTK System was built via our ESM.Model → MTK.System path, the
+    # flatten step sanitizes names as "<SystemName>_<var>" (dots → underscores).
+    # We strip that prefix so the exported ESM names round-trip back to the
+    # same bare names they had in the source Model. Direct-Symbolics-built
+    # systems without the prefix pass through untouched.
+    sys_name_prefix = sys_name * "_"
+    strip_ns = s -> startswith(s, sys_name_prefix) ?
+        s[length(sys_name_prefix)+1:end] : s
+
+    # 1. Variables -----------------------------------------------------------
+    esm_vars = Dict{String,ModelVariable}()
+    known_vars = Set{String}()
+    _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns)
 
     # 2. Equations -----------------------------------------------------------
-    esm_equations = Equation[]
-    raw_eqs = try
-        ModelingToolkit.equations(sys)
-    catch
-        []
-    end
-    for (i, eq) in enumerate(raw_eqs)
-        lhs_esm = _symbolic_to_esm_with_gaps(eq.lhs, known_vars, gaps,
-            "equations[$i].lhs"; strip_ns=strip_ns)
-        rhs_esm = _symbolic_to_esm_with_gaps(eq.rhs, known_vars, gaps,
-            "equations[$i].rhs"; strip_ns=strip_ns)
-        push!(esm_equations, Equation(lhs_esm, rhs_esm))
-    end
-
-    # init equations (gt-ebuq gate) — present on MTK v11 systems
-    init_eqs = try
-        ModelingToolkit.initialization_equations(sys)
-    catch
-        []
-    end
-    if !isempty(init_eqs)
-        push!(gaps, GapReport("gt-ebuq",
-            "system declares $(length(init_eqs)) init equation(s); " *
-            "serialization of initialization blocks requires gt-ebuq",
-            "system.initialization_equations"))
-    end
+    esm_equations = _export_equations(sys, known_vars, gaps, strip_ns)
 
     # registered symbolic functions (gt-p3ep gate): detected by scanning the
     # symbolic AST for unknown `iscall` operations whose operation has a
-    # non-Base name. Done during the recursive _symbolic_to_esm walk when a
-    # call to a user-registered function produces an OpExpr with a non-
+    # non-Base name. Done during the recursive _symbolic_to_esm_export walk
+    # when a call to a user-registered function produces an OpExpr with a non-
     # standard op name — conservatively report a generic gap note if we saw
     # operator names not in the schema's standard op set.
     _detect_registered_call_gaps!(gaps, esm_equations)
 
     # 3. Events --------------------------------------------------------------
-    cont_events = ContinuousEvent[]
-    disc_events = DiscreteEvent[]
-
-    cont_cbs = try
-        ModelingToolkit.continuous_events(sys)
-    catch
-        []
-    end
-    for (i, cb) in enumerate(cont_cbs)
-        ce = _continuous_cb_to_esm(cb, known_vars, gaps, "continuous_events[$i]")
-        ce !== nothing && push!(cont_events, ce)
-    end
-
-    disc_cbs = try
-        ModelingToolkit.discrete_events(sys)
-    catch
-        []
-    end
-    for (i, cb) in enumerate(disc_cbs)
-        de = _discrete_cb_to_esm(cb, known_vars, gaps, "discrete_events[$i]")
-        de !== nothing && push!(disc_events, de)
-    end
+    cont_events, disc_events = _export_events(sys, known_vars, gaps)
 
     # 4. Domain (PDE only) ---------------------------------------------------
     esm_domain = nothing
@@ -2117,91 +2081,96 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     # source_ref, and TODO_GAP notes into `notes` as a human-readable string
     # so the file stays schema-conformant. Later migration steps overwrite
     # this with a real citation when the source docstring is scraped.
-    ref_notes_lines = String[]
-    source_ref = _meta_string(metadata, :source_ref, "")
-    if !isempty(source_ref)
-        push!(ref_notes_lines, "source_ref: $source_ref")
-    end
-    version_str = _meta_string(metadata, :version, "0.1.0")
-    if version_str != "0.1.0"
-        push!(ref_notes_lines, "version: $version_str")
-    end
-    mod_desc = _meta_string(metadata, :description, "")
-    if !isempty(mod_desc)
-        push!(ref_notes_lines, mod_desc)
-    end
-    if !isempty(gaps)
-        for g in gaps
-            push!(ref_notes_lines, _gap_to_note(g))
-        end
-    end
+    ref_notes_lines = _reference_notes(metadata, gaps)
     if !isempty(ref_notes_lines)
         model_dict["reference"] = Dict{String,Any}(
             "notes" => join(ref_notes_lines, "\n"))
     end
-    # Preserve placeholder tests/examples only when the Model schema actually
-    # requires them (it doesn't — they're optional arrays). Leave them out
-    # when empty so validation doesn't have to iterate empty arrays, but add
-    # them back when callers want a clear signal that content is "to be filled".
+    # Always emit placeholder tests/examples arrays: the schema treats them
+    # as optional, but their empty presence is the downstream migration
+    # tooling's "to be filled in Phase 2" signal.
     model_dict["tests"] = Any[]
     model_dict["examples"] = Any[]
 
     # 6. Wrap in EsmFile-shaped Dict ----------------------------------------
-    file_meta = Dict{String,Any}("name" => sys_name)
-    file_desc = _meta_string(metadata, :description, "")
-    if !isempty(file_desc)
-        file_meta["description"] = file_desc
-    end
-    authors = _meta_vec_string(metadata, :authors)
-    if authors !== nothing
-        file_meta["authors"] = authors
-    end
-    ftags = _meta_vec_string(metadata, :tags)
-    if ftags !== nothing
-        file_meta["tags"] = ftags
-    end
-
     out = Dict{String,Any}(
-        "esm" => "0.1.0",
-        "metadata" => file_meta,
+        "esm" => EarthSciSerialization.ESM_FORMAT_VERSION,
+        "metadata" => _esm_file_metadata(metadata, sys_name),
         "models" => Dict{String,Any}(sys_name => model_dict),
     )
 
     # 7. Emit warnings --------------------------------------------------------
-    if !isempty(gaps)
-        gap_lines = join(["  - [$(g.bead_id)] $(g.description) @ $(g.where)"
-                          for g in gaps], "\n")
-        @warn "mtk2esm: $(length(gaps)) schema-gap construct(s) in " *
-              "$(kind) $(sys_name):\n$(gap_lines)"
-    end
+    _warn_gaps(gaps, "$(kind) $(sys_name)")
 
     return out
 end
 
+# Serialize the system's equations, flagging init equations (gt-ebuq gate).
+function _export_equations(sys, known_vars::Set{String},
+                           gaps::Vector{GapReport}, strip_ns::Function)
+    esm_equations = Equation[]
+    raw_eqs = try
+        ModelingToolkit.equations(sys)
+    catch e
+        @debug "mtk2esm: ModelingToolkit.equations unavailable" exception=(e, catch_backtrace())
+        []
+    end
+    for (i, eq) in enumerate(raw_eqs)
+        lhs_esm = _symbolic_to_esm_with_gaps(eq.lhs, known_vars, gaps,
+            "equations[$i].lhs"; strip_ns=strip_ns)
+        rhs_esm = _symbolic_to_esm_with_gaps(eq.rhs, known_vars, gaps,
+            "equations[$i].rhs"; strip_ns=strip_ns)
+        push!(esm_equations, Equation(lhs_esm, rhs_esm))
+    end
+
+    # init equations (gt-ebuq gate) — present on MTK v11 systems
+    init_eqs = try
+        ModelingToolkit.initialization_equations(sys)
+    catch e
+        @debug "mtk2esm: initialization_equations unavailable" exception=(e, catch_backtrace())
+        []
+    end
+    if !isempty(init_eqs)
+        push!(gaps, GapReport("gt-ebuq",
+            "system declares $(length(init_eqs)) init equation(s); " *
+            "serialization of initialization blocks requires gt-ebuq",
+            "system.initialization_equations"))
+    end
+    return esm_equations
+end
+
+# Serialize the system's continuous/discrete callbacks to ESM event lists.
+function _export_events(sys, known_vars::Set{String}, gaps::Vector{GapReport})
+    cont_events = ContinuousEvent[]
+    disc_events = DiscreteEvent[]
+
+    cont_cbs = try
+        ModelingToolkit.continuous_events(sys)
+    catch e
+        @debug "mtk2esm: continuous_events unavailable" exception=(e, catch_backtrace())
+        []
+    end
+    for (i, cb) in enumerate(cont_cbs)
+        ce = _continuous_cb_to_esm(cb, known_vars, gaps, "continuous_events[$i]")
+        ce !== nothing && push!(cont_events, ce)
+    end
+
+    disc_cbs = try
+        ModelingToolkit.discrete_events(sys)
+    catch e
+        @debug "mtk2esm: discrete_events unavailable" exception=(e, catch_backtrace())
+        []
+    end
+    for (i, cb) in enumerate(disc_cbs)
+        de = _discrete_cb_to_esm(cb, known_vars, gaps, "discrete_events[$i]")
+        de !== nothing && push!(disc_events, de)
+    end
+    return cont_events, disc_events
+end
+
 # --- metadata helpers ---
-
-function _meta_string(metadata, key::Symbol, default::String)
-    try
-        v = getproperty(metadata, key)
-        return v === nothing ? default : String(v)
-    catch
-        return default
-    end
-end
-
-function _meta_vec_string(metadata, key::Symbol)
-    try
-        v = getproperty(metadata, key)
-        v === nothing && return nothing
-        return [String(x) for x in v]
-    catch
-        return nothing
-    end
-end
-
-function _gap_to_note(g::GapReport)
-    "TODO_GAP: $(g.bead_id) - $(g.description) @ $(g.where)"
-end
+# (`_meta_string` / `_meta_vec_string` / `_gap_to_note` are MTK-independent
+# and live in src/mtk_export.jl, shared with the Catalyst extension.)
 
 # --- symbolic metadata extraction ---
 
@@ -2210,7 +2179,10 @@ function _get_default_or(var, default)
         val = ModelingToolkit.getdefault(var)
         val isa Number && return Float64(val)
         return default
-    catch
+    catch e
+        # `getdefault` throws when the symbol carries no default metadata —
+        # an expected miss, but log it so genuine failures stay diagnosable.
+        @debug "mtk2esm: no readable default for $(var)" exception=(e, catch_backtrace())
         return default
     end
 end
@@ -2238,7 +2210,8 @@ function _get_units_str(var)
             m = match(r"\(units=([^)]+)\)", desc)
             m !== nothing && return String(m.captures[1])
         end
-    catch
+    catch e
+        @debug "mtk2esm: units metadata unreadable for $(var)" exception=(e, catch_backtrace())
     end
     return nothing
 end
@@ -2253,7 +2226,8 @@ function _get_description_str(var)
             stripped = replace(desc, r"\s*\(units=[^)]+\)\s*$" => "")
             return isempty(stripped) ? nothing : String(stripped)
         end
-    catch
+    catch e
+        @debug "mtk2esm: description metadata unreadable for $(var)" exception=(e, catch_backtrace())
     end
     return nothing
 end
@@ -2349,10 +2323,11 @@ const _KNOWN_OPS = Set([
     "+", "-", "*", "/", "^",
     "exp", "log", "log10", "sin", "cos", "tan", "sinh", "cosh", "tanh",
     "asin", "acos", "atan", "sqrt", "abs",
+    "min", "max",
     ">", "<", ">=", "<=", "==", "!=",
     "D", "grad", "div", "laplacian",
     "arrayop", "aggregate", "makearray", "index", "broadcast", "reshape", "transpose",
-    "concat", "Pre", "ifelse", "call",
+    "concat", "Pre", "ifelse", "call", "fn", "ic",
 ])
 
 function _detect_registered_call_gaps!(gaps::Vector{GapReport},
@@ -2383,19 +2358,21 @@ end
 """
     mtk2esm_gaps(sys::ModelingToolkit.AbstractSystem) -> Vector{GapReport}
 
-Pre-flight scan: returns any schema-gap constructs in `sys` without
-producing the full ESM export. Use this to decide whether a model is ready
-to migrate before running the full round-trip.
+Cheap pre-flight check that currently detects ONLY brownian variables
+(SDE noise, gt-kuxo). It does NOT replicate the full gap detection
+performed during a `mtk2esm` export (init equations, noise_eqs,
+registered-function calls, PDE domains); run `mtk2esm` itself for the
+complete gap report.
 """
+# TODO(aspiration): grow this into the full pre-flight scan promised by the
+# original design — same gap coverage as mtk2esm without producing the
+# export — so migration tooling can gate models cheaply.
 function mtk2esm_gaps(sys::ModelingToolkit.AbstractSystem)
-    # The simplest implementation runs mtk2esm and discards the output;
-    # gap detection has the same pass structure. We suppress the @warn here
-    # by capturing the logger.
     gaps = GapReport[]
-    append!(gaps, _mtk_brownians(sys) |> b -> isempty(b) ? GapReport[] :
-        [GapReport("gt-kuxo",
-            "system has $(length(b)) brownian variable(s)",
-            "system.brownians")])
+    b = _mtk_brownians(sys)
+    isempty(b) || push!(gaps, GapReport("gt-kuxo",
+        "system has $(length(b)) brownian variable(s)",
+        "system.brownians"))
     return gaps
 end
 end # module EarthSciSerializationMTKExt

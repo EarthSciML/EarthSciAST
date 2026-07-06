@@ -1,22 +1,33 @@
 module EarthSciSerializationCatalystExt
 
 using EarthSciSerialization
-using EarthSciSerialization: Expr, NumExpr, IntExpr, VarExpr, OpExpr, Reaction,
+# Note: we deliberately do NOT import `Expr` from EarthSciSerialization into
+# this extension's namespace — that would shadow Core.Expr and break the
+# runtime `Core.eval`-built macro calls below (`@species` / `@parameters`),
+# whose quoted ASTs are assembled from plain `Expr` nodes. Use the `EsmExpr`
+# alias for the ESM expression type instead (same pattern as MTKExt).
+using EarthSciSerialization: NumExpr, IntExpr, VarExpr, OpExpr, Reaction,
     ReactionSystem, Species, Parameter, Equation, ContinuousEvent,
     DiscreteEvent, AffectEquation, FunctionalAffect, ConditionTrigger,
     PeriodicTrigger, PresetTimesTrigger,
-    GapReport
+    GapReport,
+    # MTK-independent export helpers shared with the MTK extension
+    # (defined next to GapReport in src/mtk_export.jl).
+    _strip_time, _meta_string, _meta_vec_string, _gap_to_note,
+    _reference_notes, _esm_file_metadata, _warn_gaps
 # Explicit import so we can add a method to this generic.
 import EarthSciSerialization: mtk2esm, mtk2esm_gaps
 using ModelingToolkit
 using Symbolics
 using Catalyst
 
+const EsmExpr = EarthSciSerialization.Expr
+
 # ========================================
 # ESM Expr → Symbolics conversion (local copy for rate expressions)
 # ========================================
 
-function _esm_to_symbolic(expr::Expr, var_dict::Dict{String,Any})
+function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any})
     if expr isa IntExpr
         return expr.value
     elseif expr isa NumExpr
@@ -53,11 +64,15 @@ function _esm_to_symbolic(expr::Expr, var_dict::Dict{String,Any})
             fn = getfield(Base, Symbol(op))
             return fn(arg)
         elseif op in ("max", "min")
+            # Same arity rule the MTK extension enforces: the spec defines
+            # min/max as n-ary with n >= 2 (esm-spec §4.2).
+            length(expr.args) < 2 && throw(ArgumentError(
+                "$op requires at least 2 arguments (esm-spec §4.2)"))
             args = [_esm_to_symbolic(a, var_dict) for a in expr.args]
             fn = getfield(Base, Symbol(op))
-            return length(args) == 1 ? args[1] : reduce(fn, args)
+            return reduce(fn, args)
         else
-            error("Unsupported operator in rate expression: $op")
+            throw(ArgumentError("Unsupported operator in rate expression: $op"))
         end
     end
     error("Unknown expression type: $(typeof(expr))")
@@ -67,15 +82,13 @@ end
 # ESM ReactionSystem → Catalyst.ReactionSystem
 # ========================================
 
-"""
-    Catalyst.ReactionSystem(rsys::EarthSciSerialization.ReactionSystem; name=:anonymous, kwargs...)
-
-Build a `Catalyst.ReactionSystem` from an ESM `ReactionSystem`.
-"""
 # Create a Catalyst species using @species so it carries the species
 # metadata Catalyst.Reaction expects — the plain Symbolics.variable path
 # strips it. We invoke @species at runtime via Core.eval because the macro
-# insists on literal identifiers.
+# insists on literal identifiers. Julia ASTs are built with the qualified
+# `Core.Expr` — bare `Expr` is ambiguous here (Base.Expr vs the package's
+# exported ESM `Expr`); the ESM expression type is only ever referenced via
+# the `EsmExpr` alias.
 function _make_species(name::Symbol, t_sym)
     binding = Core.Expr(:(=), :__esm_t, t_sym)
     call = Core.Expr(:call, name, :__esm_t)
@@ -109,6 +122,11 @@ function _make_civ(name::Symbol)
     return vars[1]
 end
 
+"""
+    Catalyst.ReactionSystem(rsys::EarthSciSerialization.ReactionSystem; name=:anonymous, kwargs...)
+
+Build a `Catalyst.ReactionSystem` from an ESM `ReactionSystem`.
+"""
 function Catalyst.ReactionSystem(rsys::EarthSciSerialization.ReactionSystem;
                                  name::Union{Symbol,AbstractString}=:anonymous,
                                  kwargs...)
@@ -141,10 +159,15 @@ function Catalyst.ReactionSystem(rsys::EarthSciSerialization.ReactionSystem;
     for esm_rxn in rsys.reactions
         rate = _esm_to_symbolic(esm_rxn.rate, all_vars)
 
+        # A reactant/product naming a species absent from the declared
+        # species list is a malformed document — silently dropping it would
+        # change the reaction's stoichiometry, so fail loudly instead.
         reactants_syms = Any[]
         reactant_stoich = Real[]
         for (spname, st) in esm_rxn.reactants
-            haskey(species_dict, spname) || continue
+            haskey(species_dict, spname) || throw(ArgumentError(
+                "reaction reactant '$(spname)' is not declared in the " *
+                "reaction system's species list"))
             push!(reactants_syms, species_dict[spname])
             push!(reactant_stoich, st)
         end
@@ -152,7 +175,9 @@ function Catalyst.ReactionSystem(rsys::EarthSciSerialization.ReactionSystem;
         products_syms = Any[]
         product_stoich = Real[]
         for (spname, st) in esm_rxn.products
-            haskey(species_dict, spname) || continue
+            haskey(species_dict, spname) || throw(ArgumentError(
+                "reaction product '$(spname)' is not declared in the " *
+                "reaction system's species list"))
             push!(products_syms, species_dict[spname])
             push!(product_stoich, st)
         end
@@ -184,34 +209,39 @@ end
 Convert a `Catalyst.ReactionSystem` back to an ESM `ReactionSystem`.
 """
 function EarthSciSerialization.ReactionSystem(rs::Catalyst.ReactionSystem)
+    # Read a symbol's default-value metadata, or `nothing` when absent.
+    # No fabrication: an ESM `default` field is omitted rather than invented
+    # (same policy as `_lookup_default` in the MTK extension).
+    _default_or_nothing(sym) = try
+        v = Symbolics.getmetadata(Symbolics.unwrap(sym),
+                                  Symbolics.VariableDefaultValue, nothing)
+        v isa Number ? Float64(v) : nothing
+    catch e
+        @debug "ReactionSystem export: default metadata unreadable for $(sym)" exception=(e, catch_backtrace())
+        nothing
+    end
+
     species = Species[]
     for sp in Catalyst.species(rs)
         name = _strip_time(string(Catalyst.getname(sp)))
-        initial = try
-            Symbolics.getmetadata(Symbolics.unwrap(sp),
-                                  Symbolics.VariableDefaultValue, 0.0)
-        catch
-            0.0
-        end
-        push!(species, Species(name; default=initial))
+        push!(species, Species(name; default=_default_or_nothing(sp)))
     end
 
     parameters = Parameter[]
     for p in Catalyst.parameters(rs)
         pname = string(Catalyst.getname(p))
-        default = try
-            Symbolics.getmetadata(Symbolics.unwrap(p),
-                                  Symbolics.VariableDefaultValue, 1.0)
-        catch
-            1.0
-        end
+        default = _default_or_nothing(p)
         # Reservoir species travel through Catalyst as parameters with
         # isconstantspecies=true metadata; recover them as ESM species with
         # constant=true rather than as ordinary parameters.
         if Catalyst.isconstant(p)
-            push!(species, Species(pname; default=Float64(default), constant=true))
+            push!(species, Species(pname; default=default, constant=true))
         else
-            push!(parameters, Parameter(pname, Float64(default)))
+            # The ESM `Parameter` struct requires a concrete Float64 default
+            # (types.jl), so absence cannot be represented here; 1.0 is the
+            # documented placeholder until the core type grows an optional
+            # default. (Species above CAN omit theirs, and do.)
+            push!(parameters, Parameter(pname, default === nothing ? 1.0 : default))
         end
     end
 
@@ -240,7 +270,7 @@ function EarthSciSerialization.ReactionSystem(rs::Catalyst.ReactionSystem)
     return ReactionSystem(species, reactions; parameters=parameters)
 end
 
-_strip_time(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
+# (`_strip_time` is shared from src/mtk_export.jl.)
 
 function _catalyst_rate_to_esm(expr)
     if expr isa Bool
@@ -315,20 +345,19 @@ Placeholders filled in Phase 2: `description`, `version`, `reference`,
 function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     gaps = GapReport[]
 
-    # Resolve system name
-    name_kw = try
-        getproperty(metadata, :name)
-    catch
-        nothing
-    end
-    sys_name = if name_kw !== nothing
-        String(name_kw)
-    else
-        try
-            sn = String(nameof(rs))
-            sn == "" ? "UnnamedReactionSystem" : sn
-        catch
-            "UnnamedReactionSystem"
+    # Resolve system name: caller-supplied `metadata.name` wins; else
+    # `nameof(rs)` if non-anonymous; else a literal placeholder.
+    sys_name = let name_kw = _meta_string(metadata, :name, "")
+        if !isempty(name_kw)
+            name_kw
+        else
+            try
+                sn = String(nameof(rs))
+                sn == "" ? "UnnamedReactionSystem" : sn
+            catch e
+                @debug "mtk2esm: nameof(rs) unavailable" exception=(e, catch_backtrace())
+                "UnnamedReactionSystem"
+            end
         end
     end
 
@@ -349,24 +378,7 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     # Per-RS reference.notes carries description + source_ref + TODO_GAPs
     # (same convention as the ODE Model branch). Reference is the only
     # schema-sanctioned free-form text slot at the reaction_system level.
-    ref_notes_lines = String[]
-    source_ref = _rmeta_string(metadata, :source_ref, "")
-    if !isempty(source_ref)
-        push!(ref_notes_lines, "source_ref: $source_ref")
-    end
-    version_str = _rmeta_string(metadata, :version, "0.1.0")
-    if version_str != "0.1.0"
-        push!(ref_notes_lines, "version: $version_str")
-    end
-    mod_desc = _rmeta_string(metadata, :description, "")
-    if !isempty(mod_desc)
-        push!(ref_notes_lines, mod_desc)
-    end
-    if !isempty(gaps)
-        for g in gaps
-            push!(ref_notes_lines, "TODO_GAP: $(g.bead_id) - $(g.description) @ $(g.where)")
-        end
-    end
+    ref_notes_lines = _reference_notes(metadata, gaps)
     if !isempty(ref_notes_lines)
         rs_dict["reference"] = Dict{String,Any}("notes" => join(ref_notes_lines, "\n"))
     end
@@ -374,53 +386,15 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     rs_dict["examples"] = Any[]
 
     # Top-level EsmFile-shaped dict
-    file_meta = Dict{String,Any}("name" => sys_name)
-    file_desc = _rmeta_string(metadata, :description, "")
-    if !isempty(file_desc)
-        file_meta["description"] = file_desc
-    end
-    authors = _rmeta_vec_string(metadata, :authors)
-    if authors !== nothing
-        file_meta["authors"] = authors
-    end
-    ftags = _rmeta_vec_string(metadata, :tags)
-    if ftags !== nothing
-        file_meta["tags"] = ftags
-    end
-
     out = Dict{String,Any}(
-        "esm" => "0.1.0",
-        "metadata" => file_meta,
+        "esm" => EarthSciSerialization.ESM_FORMAT_VERSION,
+        "metadata" => _esm_file_metadata(metadata, sys_name),
         "reaction_systems" => Dict{String,Any}(sys_name => rs_dict),
     )
 
-    if !isempty(gaps)
-        gap_lines = join(["  - [$(g.bead_id)] $(g.description) @ $(g.where)"
-                          for g in gaps], "\n")
-        @warn "mtk2esm: $(length(gaps)) schema-gap construct(s) in " *
-              "ReactionSystem $(sys_name):\n$(gap_lines)"
-    end
+    _warn_gaps(gaps, "ReactionSystem $(sys_name)")
 
     return out
-end
-
-function _rmeta_string(metadata, key::Symbol, default::String)
-    try
-        v = getproperty(metadata, key)
-        return v === nothing ? default : String(v)
-    catch
-        return default
-    end
-end
-
-function _rmeta_vec_string(metadata, key::Symbol)
-    try
-        v = getproperty(metadata, key)
-        v === nothing && return nothing
-        return [String(x) for x in v]
-    catch
-        return nothing
-    end
 end
 
 end # module EarthSciSerializationCatalystExt

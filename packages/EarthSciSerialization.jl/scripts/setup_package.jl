@@ -55,16 +55,16 @@ function setup_documentation()
 end
 
 function run_compatibility_tests()
-    println("🧪 Running compatibility tests...")
+    println("🧪 Running package test suite...")
 
     # Activate main environment
     Pkg.activate(".")
 
     try
-        include("test/compat_test.jl")
+        Pkg.test()
         return true
     catch e
-        println("❌ Compatibility tests failed: $e")
+        println("❌ Package tests failed: $e")
         return false
     end
 end

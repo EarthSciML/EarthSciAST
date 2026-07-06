@@ -73,7 +73,7 @@ end
     out = mtk2esm(sys)
 
     @test out isa Dict
-    @test out["esm"] == "0.1.0"
+    @test out["esm"] == ESM.ESM_FORMAT_VERSION
     @test haskey(out, "metadata")
     @test haskey(out, "models")
     @test haskey(out["models"], "ToyDecay")
@@ -135,7 +135,7 @@ end
     # Must round-trip through JSON without errors
     s = JSON3.write(out)
     parsed = JSON3.read(s)
-    @test parsed["esm"] == "0.1.0"
+    @test parsed["esm"] == ESM.ESM_FORMAT_VERSION
     @test haskey(parsed["models"], "ToyDecay")
 end
 
@@ -147,7 +147,7 @@ end
     rs = _toy_catalyst_system()
     out = mtk2esm(rs)
 
-    @test out["esm"] == "0.1.0"
+    @test out["esm"] == ESM.ESM_FORMAT_VERSION
     @test haskey(out, "reaction_systems")
     @test haskey(out["reaction_systems"], "ToyReactions")
 
@@ -223,7 +223,7 @@ end
 
         reloaded = ESM.load(tmpfile)
         @test reloaded isa ESM.EsmFile
-        @test reloaded.esm == "0.1.0"
+        @test reloaded.esm == ESM.ESM_FORMAT_VERSION
         @test reloaded.models !== nothing
         @test haskey(reloaded.models, "RoundTrip")
 
@@ -334,7 +334,7 @@ end
     # Export to ESM
     out = mtk2esm(sys; metadata=(; source_ref="test/minmax"))
 
-    @test out["esm"] == "0.1.0"
+    @test out["esm"] == ESM.ESM_FORMAT_VERSION
     @test haskey(out["models"], "MinMaxClamp")
 
     model_dict = out["models"]["MinMaxClamp"]
@@ -396,7 +396,7 @@ end
     sys = MTK.System(model; name=:NaryMinMax)
 
     out = mtk2esm(sys)
-    @test out["esm"] == "0.1.0"
+    @test out["esm"] == ESM.ESM_FORMAT_VERSION
 
     model_dict = out["models"]["NaryMinMax"]
     eq = model_dict["equations"][1]

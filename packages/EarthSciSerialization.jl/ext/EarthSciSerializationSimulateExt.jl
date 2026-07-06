@@ -26,7 +26,8 @@ import SciMLBase
 
 function ESS._simulate_solve(f!, u0, tspan, p, alg::SciMLBase.AbstractODEAlgorithm,
                              var_map; callback = nothing, tstops = Float64[],
-                             reltol = 1e-4, abstol = 1e-6, saveat = nothing)
+                             reltol = ESS.DEFAULT_SIM_RELTOL,
+                             abstol = ESS.DEFAULT_SIM_ABSTOL, saveat = nothing)
     prob = SciMLBase.ODEProblem(f!, u0, tspan, p)
     kw = Dict{Symbol,Any}(:reltol => reltol, :abstol => abstol)
     callback === nothing || (kw[:callback] = callback)
