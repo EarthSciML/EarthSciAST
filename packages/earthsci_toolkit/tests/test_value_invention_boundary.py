@@ -78,14 +78,14 @@ def test_in_range_gather_unchanged_with_policy(policy: str) -> None:
 
 def test_clamp_low_oob_returns_first_element() -> None:
     ctx = _ctx({"M": _M}, {"M": ["clamp"]})
-    assert _gather(ctx, "M", 0) == 10.0    # clamp 0 -> 1 -> M[1]
-    assert _gather(ctx, "M", -3) == 10.0   # clamp far-low -> M[1]
+    assert _gather(ctx, "M", 0) == 10.0  # clamp 0 -> 1 -> M[1]
+    assert _gather(ctx, "M", -3) == 10.0  # clamp far-low -> M[1]
 
 
 def test_clamp_high_oob_returns_last_element() -> None:
     ctx = _ctx({"M": _M}, {"M": ["clamp"]})
-    assert _gather(ctx, "M", 5) == 40.0    # clamp 5 -> 4 -> M[4] (reference)
-    assert _gather(ctx, "M", 99) == 40.0   # clamp far-high -> M[4]
+    assert _gather(ctx, "M", 5) == 40.0  # clamp 5 -> 4 -> M[4] (reference)
+    assert _gather(ctx, "M", 99) == 40.0  # clamp far-high -> M[4]
 
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +153,7 @@ def test_2d_mixed_policy_resolves_per_dimension() -> None:
     assert _gather(ctx, "A", 2, 3) == 6.0
 
     # dim 0 clamp: row 0 -> 1, row 5 -> 2
-    assert _gather(ctx, "A", 0, 1) == 1.0   # clamp row -> A[1,1]
+    assert _gather(ctx, "A", 0, 1) == 1.0  # clamp row -> A[1,1]
     assert _gather(ctx, "A", 5, 1) == arr[1, 0]  # clamp row -> A[2,1] == 4
 
     # dim 1 periodic (size 3): col 4 -> 1, col 0 -> 3

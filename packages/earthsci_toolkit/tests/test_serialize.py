@@ -3,13 +3,20 @@
 import json
 import tempfile
 import os
-from pathlib import Path
 
 from earthsci_toolkit import save
 from earthsci_toolkit.serialize import _serialize_expression
 from earthsci_toolkit.esm_types import (
-    EsmFile, Metadata, Model, ModelVariable, Equation, ExprNode,
-    ReactionSystem, Species, Parameter, Reaction
+    EsmFile,
+    Metadata,
+    Model,
+    ModelVariable,
+    Equation,
+    ExprNode,
+    ReactionSystem,
+    Species,
+    Parameter,
+    Reaction,
 )
 
 
@@ -23,10 +30,7 @@ def test_serialize_simple_expression():
     # Test expression node
     expr = ExprNode(op="+", args=[1, 2])
     result = _serialize_expression(expr)
-    expected = {
-        "op": "+",
-        "args": [1, 2]
-    }
+    expected = {"op": "+", "args": [1, 2]}
     assert result == expected
 
 
@@ -37,16 +41,7 @@ def test_serialize_nested_expression():
     outer_expr = ExprNode(op="*", args=[inner_expr, 2])
 
     result = _serialize_expression(outer_expr)
-    expected = {
-        "op": "*",
-        "args": [
-            {
-                "op": "+",
-                "args": ["x", 1]
-            },
-            2
-        ]
-    }
+    expected = {"op": "*", "args": [{"op": "+", "args": ["x", 1]}, 2]}
     assert result == expected
 
 
@@ -54,20 +49,12 @@ def test_serialize_expression_with_metadata():
     """Test serialization of expressions with wrt and dim."""
     expr = ExprNode(op="D", args=["x"], wrt="t")
     result = _serialize_expression(expr)
-    expected = {
-        "op": "D",
-        "args": ["x"],
-        "wrt": "t"
-    }
+    expected = {"op": "D", "args": ["x"], "wrt": "t"}
     assert result == expected
 
     expr_with_dim = ExprNode(op="grad", args=["T"], dim="x")
     result = _serialize_expression(expr_with_dim)
-    expected = {
-        "op": "grad",
-        "args": ["T"],
-        "dim": "x"
-    }
+    expected = {"op": "grad", "args": ["T"], "dim": "x"}
     assert result == expected
 
 
@@ -78,11 +65,7 @@ def test_save_minimal_esm():
     equation = Equation(lhs="x", rhs=1)
     model = Model(name="test_model", variables={"x": variable}, equations=[equation])
 
-    esm_file = EsmFile(
-        version="0.1.0",
-        metadata=metadata,
-        models={"test_model": model}
-    )
+    esm_file = EsmFile(version="0.1.0", metadata=metadata, models={"test_model": model})
 
     json_str = save(esm_file)
 
@@ -112,10 +95,7 @@ def test_save_reaction_system():
 
     # Create reaction A + B -> C
     reaction = Reaction(
-        name="R1",
-        reactants={"A": 1.0, "B": 1.0},
-        products={"C": 1.0},
-        rate_constant="k1"
+        name="R1", reactants={"A": 1.0, "B": 1.0}, products={"C": 1.0}, rate_constant="k1"
     )
 
     # Create reaction system
@@ -123,14 +103,10 @@ def test_save_reaction_system():
         name="test_reactions",
         species=[species_a, species_b, species_c],
         parameters=[param_k1],
-        reactions=[reaction]
+        reactions=[reaction],
     )
 
-    esm_file = EsmFile(
-        version="0.1.0",
-        metadata=metadata,
-        reaction_systems={"test_reactions": rs}
-    )
+    esm_file = EsmFile(version="0.1.0", metadata=metadata, reaction_systems={"test_reactions": rs})
 
     json_str = save(esm_file)
 
@@ -165,7 +141,7 @@ def test_save_to_file():
     esm_file = EsmFile(version="0.1.0", metadata=metadata)
 
     # Use temporary file
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp_file:
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as tmp_file:
         tmp_path = tmp_file.name
 
     try:
@@ -175,7 +151,7 @@ def test_save_to_file():
         # Verify file exists and has content
         assert os.path.exists(tmp_path)
 
-        with open(tmp_path, 'r') as f:
+        with open(tmp_path, "r") as f:
             file_content = f.read()
 
         assert file_content == json_str

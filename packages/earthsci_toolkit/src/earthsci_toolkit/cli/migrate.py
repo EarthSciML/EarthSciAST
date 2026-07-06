@@ -47,8 +47,7 @@ def _run_migration(data: Dict[str, Any], from_v: str, to_v: str) -> Dict[str, An
     if fv[0] == 0 and fv[1] == 1 and tv == (0, 2, 0):
         return migrate_file_0_1_to_0_2(data)
     raise MigrationError(
-        f"Unsupported migration path {from_v} -> {to_v}. "
-        f"Supported: 0.1.x -> 0.2.0."
+        f"Unsupported migration path {from_v} -> {to_v}. Supported: 0.1.x -> 0.2.0."
     )
 
 
@@ -61,28 +60,37 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--from", dest="from_version", required=True,
+        "--from",
+        dest="from_version",
+        required=True,
         help="Source spec version (e.g., 0.1.0).",
     )
     p.add_argument(
-        "--to", dest="to_version", required=True,
+        "--to",
+        dest="to_version",
+        required=True,
         help="Target spec version (e.g., 0.2.0).",
     )
     mode = p.add_mutually_exclusive_group()
     mode.add_argument(
-        "--in-place", action="store_true",
+        "--in-place",
+        action="store_true",
         help="Overwrite the input file with the migrated output.",
     )
     mode.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Show a unified diff of the migration without writing.",
     )
     p.add_argument(
-        "-o", "--output", default=None,
+        "-o",
+        "--output",
+        default=None,
         help="Write migrated output to this path instead of stdout.",
     )
     p.add_argument(
-        "input", help="Path to the input .esm file.",
+        "input",
+        help="Path to the input .esm file.",
     )
     return p
 
@@ -112,12 +120,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     migrated_text = _dump(migrated)
 
     if args.dry_run:
-        diff: List[str] = list(difflib.unified_diff(
-            original_text.splitlines(keepends=True),
-            migrated_text.splitlines(keepends=True),
-            fromfile=str(in_path),
-            tofile=str(in_path) + " (migrated)",
-        ))
+        diff: List[str] = list(
+            difflib.unified_diff(
+                original_text.splitlines(keepends=True),
+                migrated_text.splitlines(keepends=True),
+                fromfile=str(in_path),
+                tofile=str(in_path) + " (migrated)",
+            )
+        )
         sys.stdout.writelines(diff)
         return 0
 

@@ -14,11 +14,8 @@ Limitations: 0D box model only, no spatial operators, limited event support.
 This enables atmospheric chemistry simulation in Python.
 """
 
-import datetime as _dt
 import numpy as np
-import sympy as sp
-from typing import Dict, List, Set, Tuple, Optional, Union, Any, Callable
-from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 
 # Optional scipy import - only needed for actual simulation. The guard lives
 # in simulation_common (shared by every pathway); the names are re-exported
@@ -33,34 +30,18 @@ from .simulation_common import (  # noqa: F401
 
 from .esm_types import (
     ReactionSystem,
-    ContinuousEvent, DiscreteEvent, Expr, ExprNode, EsmFile,
-    AffectEquation, FunctionalAffect, is_aggregate_op,
+    ContinuousEvent,
+    EsmFile,
 )
 from .flatten import (
-    FlattenedEquation,
     FlattenedSystem,
-    LoaderField,
     UnsupportedDimensionalityError,
-    _expand_range,
     _has_array_op,
     flatten,
-    infer_variable_shapes,
 )
-from .numpy_interpreter import (
-    EvalContext,
-    NumpyInterpreterError,
-    _RaggedRange,
-    _resolve_range_spec,
-    eval_expr,
-    ragged_factor_scope,
-)
-from .expr_walk import map_children
-from .reactions import lower_reactions_to_equations
 from .sympy_bridge import (
     SimulationError,
-    _LAMBDIFY_MODULES,
     _compile_flat_rhs,
-    _expr_to_sympy,
 )
 
 # ---------------------------------------------------------------------------
@@ -161,10 +142,12 @@ def simulate_legacy(
     initial_conditions: Dict[str, float],
     time_span: Tuple[float, float],
     events: Optional[List[ContinuousEvent]] = None,
-    **solver_options
+    **solver_options,
 ) -> SimulationResult:
     """Legacy simulate function for backward compatibility."""
-    return simulate_reaction_system(reaction_system, initial_conditions, time_span, events, **solver_options)
+    return simulate_reaction_system(
+        reaction_system, initial_conditions, time_span, events, **solver_options
+    )
 
 
 def simulate(
@@ -172,7 +155,7 @@ def simulate(
     tspan: Tuple[float, float],
     parameters: Optional[Dict[str, float]] = None,
     initial_conditions: Optional[Dict[str, float]] = None,
-    method: str = 'LSODA',
+    method: str = "LSODA",
     file: Optional[EsmFile] = None,
     rtol: float = 1e-10,
     atol: float = 1e-14,
@@ -296,10 +279,14 @@ def simulate(
 
     if not SCIPY_AVAILABLE:
         return SimulationResult(
-            t=np.array([]), y=np.array([[]]), vars=[],
+            t=np.array([]),
+            y=np.array([[]]),
+            vars=[],
             success=False,
             message="SciPy is required for simulation but not available.",
-            nfev=0, njev=0, nlu=0,
+            nfev=0,
+            njev=0,
+            nlu=0,
         )
 
     # Provider injection for top-level ``data_loaders`` bound through
@@ -316,8 +303,14 @@ def simulate(
             for name, prov in providers.items()
         }
         return _simulate_with_numpy(
-            flat, tspan, parameters, initial_conditions, method,
-            rtol=rtol, atol=atol, loader_arrays=loaded_arrays,
+            flat,
+            tspan,
+            parameters,
+            initial_conditions,
+            method,
+            rtol=rtol,
+            atol=atol,
+            loader_arrays=loaded_arrays,
             inspect=inspect,
         )
 
@@ -327,22 +320,31 @@ def simulate(
     # Empty loader_fields ⇒ skipped entirely, so existing models are unaffected.
     if flat.loader_fields:
         return _simulate_with_loaders(
-            flat, tspan, parameters, initial_conditions, method,
-            rtol=rtol, atol=atol, loader_provider=loader_provider,
+            flat,
+            tspan,
+            parameters,
+            initial_conditions,
+            method,
+            rtol=rtol,
+            atol=atol,
+            loader_provider=loader_provider,
             provider_factory=provider_factory,
         )
 
     # Array-op detection: if any equation contains an array op, route through
     # the NumPy AST interpreter path. The legacy SymPy path handles scalar-only
     # models and is left untouched.
-    has_array = any(
-        _has_array_op(eq.lhs) or _has_array_op(eq.rhs)
-        for eq in flat.equations
-    )
+    has_array = any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
     if has_array:
         return _simulate_with_numpy(
-            flat, tspan, parameters, initial_conditions, method,
-            rtol=rtol, atol=atol, inspect=inspect,
+            flat,
+            tspan,
+            parameters,
+            initial_conditions,
+            method,
+            rtol=rtol,
+            atol=atol,
+            inspect=inspect,
         )
 
     try:
@@ -414,9 +416,7 @@ def simulate(
         # Override y0 for algebraic states so the t=0 sample is consistent.
         if algebraic_vector_func is not None:
             try:
-                alg_vals_at_0 = np.asarray(
-                    algebraic_vector_func(*y0, *param_values), dtype=float
-                )
+                alg_vals_at_0 = np.asarray(algebraic_vector_func(*y0, *param_values), dtype=float)
                 for i, name in enumerate(algebraic_state_names):
                     idx = state_names.index(name)
                     y0[idx] = float(alg_vals_at_0[i])
@@ -440,9 +440,7 @@ def simulate(
                 y_eval[species_mask] = np.maximum(y_eval[species_mask], 0.0)
             else:
                 y_eval = y
-            dydt = np.asarray(
-                rhs_vector_func(*y_eval, *param_values), dtype=float
-            )
+            dydt = np.asarray(rhs_vector_func(*y_eval, *param_values), dtype=float)
             if not np.all(np.isfinite(dydt)):
                 raise SimulationError("Non-finite derivatives encountered")
             return dydt

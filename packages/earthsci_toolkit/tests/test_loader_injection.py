@@ -34,12 +34,7 @@ from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-_FIXTURE = (
-    Path(__file__).resolve().parent
-    / "fixtures"
-    / "loader_injection"
-    / "loader_consumer.esm"
-)
+_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "loader_injection" / "loader_consumer.esm"
 
 
 def _seg_value(t: float) -> float:
@@ -60,6 +55,7 @@ def _make_provider(calls: Dict[str, List[float]]):
     multi-element array (not a coincidental scalar). ``z0`` is a static 3-element
     roughness array; its middle element is 1.0.
     """
+
     def provider(field: LoaderField, t: float) -> np.ndarray:
         calls.setdefault(field.var, []).append(t)
         if field.var == "u":
@@ -67,6 +63,7 @@ def _make_provider(calls: Dict[str, List[float]]):
         if field.var == "z0":
             return np.array([0.25, 1.0, 0.25])
         raise AssertionError(f"unexpected loader var {field.var!r}")
+
     return provider
 
 
@@ -77,6 +74,7 @@ def _c_at(result, t: float) -> float:
 # --------------------------------------------------------------------------
 # (a) flatten lowers loader subsystems to observed arrays
 # --------------------------------------------------------------------------
+
 
 def test_flatten_lowers_loaders_to_observed_arrays() -> None:
     flat = flatten(load(_FIXTURE))
@@ -98,9 +96,7 @@ def test_flatten_lowers_loaders_to_observed_arrays() -> None:
     # defining equation (their value is injected, not computed).
     assert "Met.pl.u" in flat.observed_variables
     assert "Met.sfc.z0" in flat.observed_variables
-    observed_lhs = {
-        eq.lhs for eq in flat.equations if isinstance(eq.lhs, str)
-    }
+    observed_lhs = {eq.lhs for eq in flat.equations if isinstance(eq.lhs, str)}
     assert "Met.pl.u" not in observed_lhs
     assert "Met.sfc.z0" not in observed_lhs
 
@@ -115,8 +111,10 @@ def test_flatten_without_loaders_has_empty_loader_fields() -> None:
             "M": {
                 "variables": {"x": {"type": "state", "default": 1.0}},
                 "equations": [
-                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                     "rhs": {"op": "-", "args": ["x"]}}
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    }
                 ],
             }
         },
@@ -128,11 +126,14 @@ def test_flatten_without_loaders_has_empty_loader_fields() -> None:
 # (b) simulate injects loader arrays at the right cadence
 # --------------------------------------------------------------------------
 
+
 def test_discrete_and_const_cadence_injection() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         loader_provider=_make_provider(calls),
     )
     assert result.success, result.message
@@ -140,8 +141,8 @@ def test_discrete_and_const_cadence_injection() -> None:
 
     # Analytic piecewise solution of dc/dt = (u[2] + z0[2]) - c, c(0) = 0.
     z0 = 1.0
-    f0 = _seg_value(0.0) + z0   # 11 on [0, 1)
-    f1 = _seg_value(1.0) + z0   # 21 on [1, 2)
+    f0 = _seg_value(0.0) + z0  # 11 on [0, 1)
+    f1 = _seg_value(1.0) + z0  # 21 on [1, 2)
     c1 = f0 * (1.0 - math.exp(-1.0))
     c2 = f1 + (c1 - f1) * math.exp(-1.0)
 
@@ -153,7 +154,9 @@ def test_const_loader_read_once_discrete_per_segment() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         loader_provider=_make_provider(calls),
     )
     assert result.success, result.message
@@ -183,7 +186,10 @@ def test_injected_values_not_constant_defaults() -> None:
         return np.array([0.0, 3.0, 0.0])
 
     result = simulate(
-        esm, tspan=(0.0, 50.0), method="LSODA", loader_provider=steady_provider,
+        esm,
+        tspan=(0.0, 50.0),
+        method="LSODA",
+        loader_provider=steady_provider,
     )
     assert result.success, result.message
     # Steady state F = 7 + 3 = 10, far from the all-defaults value of 0.
@@ -199,7 +205,9 @@ def test_loader_arrays_resolve_via_coupling_edge() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
-        esm, tspan=(0.0, 1.0), method="LSODA",
+        esm,
+        tspan=(0.0, 1.0),
+        method="LSODA",
         loader_provider=_make_provider(calls),
     )
     assert result.success, result.message

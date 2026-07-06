@@ -6,6 +6,7 @@ coupling entry (form B), or a §6.6/§6.7 test/example (form C). Drives the shar
 conformance fixtures under ``tests/conformance/expression_templates/``, mirroring
 the Julia reference testset ``EarthSciSerialization.jl/test/scope_injection_test.jl``.
 """
+
 from __future__ import annotations
 
 import json
@@ -56,8 +57,7 @@ def test_form_a_subsystem_ref_injection():
     assert f.index_sets["lat"]["size"] == 181
     # Round-trip golden: the resolved+lowered assembly; the injection field is
     # gone (form A does not survive parse → emit).
-    assert _serialize_esm_file(f) == _read_json(
-        _conf("inject_subsystem_ref", "expanded.esm"))
+    assert _serialize_esm_file(f) == _read_json(_conf("inject_subsystem_ref", "expanded.esm"))
 
 
 def test_form_a_leaf_loads_standalone_with_d_intact():
@@ -95,12 +95,14 @@ def test_form_b_coupling_entry_injection():
 
 
 def test_form_b_diagnostics():
-    assert _err_code(lambda: load(
-        _conf("inject_coupling_entry", "neg_target_unknown.esm"))) == \
-        "template_inject_target_unknown"
-    assert _err_code(lambda: load(
-        _conf("inject_coupling_entry", "neg_target_is_loader.esm"))) == \
-        "template_inject_target_is_loader"
+    assert (
+        _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_unknown.esm")))
+        == "template_inject_target_unknown"
+    )
+    assert (
+        _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_is_loader.esm")))
+        == "template_inject_target_is_loader"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +118,7 @@ def test_form_c_round_trip_keeps_component_and_test_imports():
     assert adv.equations[0].rhs.args[1].op == "D"
     assert len(adv.tests) == 2
     assert all(t.expression_template_imports for t in adv.tests)
-    assert _serialize_esm_file(f) == _read_json(
-        _conf("inject_test_block", "roundtrip.esm"))
+    assert _serialize_esm_file(f) == _read_json(_conf("inject_test_block", "roundtrip.esm"))
 
 
 def test_form_c_ephemeral_builds_lower_independently():
@@ -127,11 +128,19 @@ def test_form_c_ephemeral_builds_lower_independently():
     # instance with its own grid, with the D lowered in that build only — the
     # persisted component is never mutated.
     e1 = _ephemeral_injected_file(
-        f, _conf("inject_test_block", "fixture.esm"), "Advection",
-        adv.tests[0].expression_template_imports, _conf("inject_test_block"))
+        f,
+        _conf("inject_test_block", "fixture.esm"),
+        "Advection",
+        adv.tests[0].expression_template_imports,
+        _conf("inject_test_block"),
+    )
     e2 = _ephemeral_injected_file(
-        f, _conf("inject_test_block", "fixture.esm"), "Advection",
-        adv.tests[1].expression_template_imports, _conf("inject_test_block"))
+        f,
+        _conf("inject_test_block", "fixture.esm"),
+        "Advection",
+        adv.tests[1].expression_template_imports,
+        _conf("inject_test_block"),
+    )
     assert e1.models["Advection"].equations[0].rhs.args[1].op == "makearray"
     assert e2.models["Advection"].equations[0].rhs.args[1].op == "makearray"
     assert e1.index_sets["lon"]["size"] == 288

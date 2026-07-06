@@ -14,8 +14,6 @@ canonical Python simulation runner must:
 * Leave pure-ODE models numerically identical to the previous behaviour.
 """
 
-import json
-
 import numpy as np
 import pytest
 
@@ -34,8 +32,7 @@ from earthsci_toolkit.esm_types import (
     ReactionSystem,
     Species,
 )
-from earthsci_toolkit.parse import load
-from earthsci_toolkit.simulation import SimulationError, simulate
+from earthsci_toolkit.simulation import simulate
 
 
 def _diameter_growth_model() -> EsmFile:
@@ -105,8 +102,7 @@ def test_simulate_eliminates_algebraic_states_diameter_growth():
     expected = 6.538165842082e-7
     rel_err = abs(final_dp - expected) / expected
     assert rel_err < 0.01, (
-        f"D_p(t=1200) = {final_dp:.6e}, expected {expected:.6e} "
-        f"(rel err {rel_err:.3%})"
+        f"D_p(t=1200) = {final_dp:.6e}, expected {expected:.6e} (rel err {rel_err:.3%})"
     )
 
 
@@ -414,7 +410,9 @@ def test_simulate_observed_referenced_in_diff_rhs_no_namespace_leak():
     j_expected = 2.0 / 300.0
     assert np.isclose(result.y[j_idx, 0], j_expected, rtol=1e-12)
     assert np.isclose(
-        result.y[no2_idx, -1], np.exp(-j_expected * 1.0), rtol=1e-6,
+        result.y[no2_idx, -1],
+        np.exp(-j_expected * 1.0),
+        rtol=1e-6,
     )
 
 

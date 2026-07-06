@@ -14,7 +14,7 @@ import pytest
 from conftest import CONFORMANCE_DIR, REPO_ROOT
 
 from earthsci_toolkit.cli import migrate as cli_migrate
-from earthsci_toolkit.migration import MigrationError, migrate_file_0_1_to_0_2
+from earthsci_toolkit.migration import migrate_file_0_1_to_0_2
 
 
 # --- Helpers -----------------------------------------------------------------
@@ -69,9 +69,7 @@ class TestMigrateFile:
         assert src["esm"] == "0.1.0"
 
     def test_zero_gradient_x_fans_out_to_xmin_and_xmax(self):
-        src = _minimal_v01([
-            {"type": "zero_gradient", "dimensions": ["x"]}
-        ])
+        src = _minimal_v01([{"type": "zero_gradient", "dimensions": ["x"]}])
         out = migrate_file_0_1_to_0_2(src)
         bcs = out["models"]["TestModel"]["boundary_conditions"]
         assert set(bcs.keys()) == {
@@ -79,15 +77,15 @@ class TestMigrateFile:
             "u_zero_gradient_xmax",
         }
         assert bcs["u_zero_gradient_xmin"] == {
-            "variable": "u", "side": "xmin", "kind": "zero_gradient"
+            "variable": "u",
+            "side": "xmin",
+            "kind": "zero_gradient",
         }
         assert bcs["u_zero_gradient_xmax"]["side"] == "xmax"
 
     def test_periodic_emits_only_min_side(self):
         """RFC §9.2.1: declare periodic once on the min side."""
-        src = _minimal_v01([
-            {"type": "periodic", "dimensions": ["lon"]}
-        ])
+        src = _minimal_v01([{"type": "periodic", "dimensions": ["lon"]}])
         out = migrate_file_0_1_to_0_2(src)
         bcs = out["models"]["TestModel"]["boundary_conditions"]
         # lon is not in the closed short-axis set → lon_min/lon_max.
@@ -95,9 +93,7 @@ class TestMigrateFile:
         assert bcs["u_periodic_lon_min"]["side"] == "lon_min"
 
     def test_multiple_dimensions_in_one_entry(self):
-        src = _minimal_v01([
-            {"type": "zero_gradient", "dimensions": ["x", "y"]}
-        ])
+        src = _minimal_v01([{"type": "zero_gradient", "dimensions": ["x", "y"]}])
         out = migrate_file_0_1_to_0_2(src)
         bcs = out["models"]["TestModel"]["boundary_conditions"]
         assert set(bcs.keys()) == {
@@ -108,13 +104,18 @@ class TestMigrateFile:
         }
 
     def test_value_and_robin_fields_preserved(self):
-        src = _minimal_v01([
-            {
-                "type": "robin", "dimensions": ["x"],
-                "robin_alpha": 2.0, "robin_beta": 1.0, "robin_gamma": 3.5,
-            },
-            {"type": "dirichlet", "dimensions": ["y"], "value": 42.0},
-        ])
+        src = _minimal_v01(
+            [
+                {
+                    "type": "robin",
+                    "dimensions": ["x"],
+                    "robin_alpha": 2.0,
+                    "robin_beta": 1.0,
+                    "robin_gamma": 3.5,
+                },
+                {"type": "dirichlet", "dimensions": ["y"], "value": 42.0},
+            ]
+        )
         out = migrate_file_0_1_to_0_2(src)
         bcs = out["models"]["TestModel"]["boundary_conditions"]
         robin_xmin = bcs["u_robin_xmin"]
@@ -170,23 +171,17 @@ class TestMigrateFile:
             "domains": {
                 "atmosphere": {
                     "independent_variable": "t",
-                    "temporal": {"start": "2024-01-01T00:00:00Z",
-                                 "end": "2024-01-01T01:00:00Z"},
+                    "temporal": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z"},
                     "spatial": {"x": {"min": 0.0, "max": 1.0, "units": "m"}},
                     "initial_conditions": {"type": "constant", "value": 0.0},
-                    "boundary_conditions": [
-                        {"type": "zero_gradient", "dimensions": ["x"]}
-                    ],
+                    "boundary_conditions": [{"type": "zero_gradient", "dimensions": ["x"]}],
                 },
                 "ocean": {
                     "independent_variable": "t",
-                    "temporal": {"start": "2024-01-01T00:00:00Z",
-                                 "end": "2024-01-01T01:00:00Z"},
+                    "temporal": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z"},
                     "spatial": {"y": {"min": 0.0, "max": 1.0, "units": "m"}},
                     "initial_conditions": {"type": "constant", "value": 0.0},
-                    "boundary_conditions": [
-                        {"type": "periodic", "dimensions": ["y"]}
-                    ],
+                    "boundary_conditions": [{"type": "periodic", "dimensions": ["y"]}],
                 },
             },
         }
@@ -215,9 +210,7 @@ class TestCli:
         src = _minimal_v01([{"type": "zero_gradient", "dimensions": ["x"]}])
         in_path = tmp_path / "in.esm"
         in_path.write_text(json.dumps(src))
-        rc = cli_migrate.main([
-            "--from", "0.1.0", "--to", "0.2.0", str(in_path)
-        ])
+        rc = cli_migrate.main(["--from", "0.1.0", "--to", "0.2.0", str(in_path)])
         assert rc == 0
         out = capsys.readouterr().out
         parsed = json.loads(out)
@@ -229,9 +222,7 @@ class TestCli:
         src = _minimal_v01([{"type": "zero_gradient", "dimensions": ["x"]}])
         in_path = tmp_path / "in.esm"
         in_path.write_text(json.dumps(src))
-        rc = cli_migrate.main([
-            "--from", "0.1.0", "--to", "0.2.0", "--in-place", str(in_path)
-        ])
+        rc = cli_migrate.main(["--from", "0.1.0", "--to", "0.2.0", "--in-place", str(in_path)])
         assert rc == 0
         parsed = json.loads(in_path.read_text())
         assert parsed["esm"] == "0.2.0"
@@ -241,10 +232,17 @@ class TestCli:
         in_path = tmp_path / "in.esm"
         out_path = tmp_path / "out.esm"
         in_path.write_text(json.dumps(src))
-        rc = cli_migrate.main([
-            "--from", "0.1.0", "--to", "0.2.0",
-            "-o", str(out_path), str(in_path),
-        ])
+        rc = cli_migrate.main(
+            [
+                "--from",
+                "0.1.0",
+                "--to",
+                "0.2.0",
+                "-o",
+                str(out_path),
+                str(in_path),
+            ]
+        )
         assert rc == 0
         # Input untouched, output has migrated version.
         assert json.loads(in_path.read_text())["esm"] == "0.1.0"
@@ -254,9 +252,7 @@ class TestCli:
         src = _minimal_v01([{"type": "zero_gradient", "dimensions": ["x"]}])
         in_path = tmp_path / "in.esm"
         in_path.write_text(json.dumps(src))
-        rc = cli_migrate.main([
-            "--from", "0.1.0", "--to", "0.2.0", "--dry-run", str(in_path)
-        ])
+        rc = cli_migrate.main(["--from", "0.1.0", "--to", "0.2.0", "--dry-run", str(in_path)])
         assert rc == 0
         out = capsys.readouterr().out
         # Input is unchanged on disk.
@@ -269,18 +265,21 @@ class TestCli:
         src = _minimal_v01([])
         in_path = tmp_path / "in.esm"
         in_path.write_text(json.dumps(src))
-        rc = cli_migrate.main([
-            "--from", "0.2.0", "--to", "0.1.0", str(in_path)
-        ])
+        rc = cli_migrate.main(["--from", "0.2.0", "--to", "0.1.0", str(in_path)])
         assert rc == 1
         err = capsys.readouterr().err
         assert "Unsupported migration path" in err
 
     def test_missing_input_returns_error(self, tmp_path, capsys):
-        rc = cli_migrate.main([
-            "--from", "0.1.0", "--to", "0.2.0",
-            str(tmp_path / "nonexistent.esm"),
-        ])
+        rc = cli_migrate.main(
+            [
+                "--from",
+                "0.1.0",
+                "--to",
+                "0.2.0",
+                str(tmp_path / "nonexistent.esm"),
+            ]
+        )
         assert rc == 2
 
 
@@ -308,18 +307,19 @@ class TestConformanceFixtures:
             with fix_path.open() as f:
                 fx = json.load(f)
             got = migrate_file_0_1_to_0_2(fx["input"])
-            assert got == fx["expected"], (
-                f"Fixture {entry['id']!r} output diverged from expected"
-            )
+            assert got == fx["expected"], f"Fixture {entry['id']!r} output diverged from expected"
 
 
-@pytest.mark.parametrize("fixture", [
-    "tests/valid/minimal_chemistry.esm",
-    "tests/valid/full_coupled.esm",
-    "tests/valid/model_only.esm",
-    "tests/end_to_end/land_atmosphere_hydrology.esm",
-    "tests/valid/wildfire_atmosphere_ocean.esm",
-])
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        "tests/valid/minimal_chemistry.esm",
+        "tests/valid/full_coupled.esm",
+        "tests/valid/model_only.esm",
+        "tests/end_to_end/land_atmosphere_hydrology.esm",
+        "tests/valid/wildfire_atmosphere_ocean.esm",
+    ],
+)
 def test_migrated_fixture_validates_under_v02_schema(fixture):
     """Migrated pre-0.2 fixtures must pass JSON-schema validation under 0.2.0.
 
@@ -331,6 +331,7 @@ def test_migrated_fixture_validates_under_v02_schema(fixture):
     v0.2.0 output.
     """
     import jsonschema
+
     path = REPO_ROOT / fixture
     if not path.exists():
         pytest.skip(f"fixture not found: {path}")

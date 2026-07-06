@@ -11,7 +11,6 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit import substitute, substitute_in_model, substitute_in_reaction_system
 from earthsci_toolkit.esm_types import ExprNode
-from earthsci_toolkit.parse import load
 
 
 class TestSubstitutionFixtures:
@@ -39,7 +38,9 @@ class TestSubstitutionFixtures:
 
             if input_expr is not None and expected is not None:
                 result = substitute(input_expr, bindings)
-                assert result == expected, f"For input {input_expr} with bindings {bindings}: got {result}, expected {expected}"
+                assert result == expected, (
+                    f"For input {input_expr} with bindings {bindings}: got {result}, expected {expected}"
+                )
 
     def test_simple_variable_replacement(self, fixtures_dir):
         """Test simple variable replacement using fixture."""
@@ -87,23 +88,11 @@ class TestSubstitutionFunctions:
 
     def test_substitute_nested_expression(self):
         """Test substitution in nested expression."""
-        expr = {
-            "op": "*",
-            "args": [
-                {"op": "+", "args": ["x", "y"]},
-                "z"
-            ]
-        }
+        expr = {"op": "*", "args": [{"op": "+", "args": ["x", "y"]}, "z"]}
         substitutions = {"x": "a", "y": "b", "z": "c"}
         result = substitute(expr, substitutions)
 
-        expected = {
-            "op": "*",
-            "args": [
-                {"op": "+", "args": ["a", "b"]},
-                "c"
-            ]
-        }
+        expected = {"op": "*", "args": [{"op": "+", "args": ["a", "b"]}, "c"]}
         assert result == expected
 
     def test_substitute_partial_replacement(self):
@@ -165,7 +154,9 @@ class TestSubstitutionFunctions:
         failed schema validation)."""
         # fn:interp.linear over a const table axis, indexed by a coupled var.
         expr = ExprNode(
-            op="fn", fn="interp.linear", name="interp.linear",
+            op="fn",
+            fn="interp.linear",
+            name="interp.linear",
             args=[
                 ExprNode(op="const", args=[], value=[10.0, 20.0, 30.0]),
                 ExprNode(op="const", args=[], value=[1.0, 2.0, 3.0]),
@@ -192,8 +183,8 @@ class TestModelSubstitution:
             "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
             "equations": [
                 {"lhs": "x", "rhs": "a"},
-                {"lhs": "y", "rhs": {"op": "+", "args": ["x", "b"]}}
-            ]
+                {"lhs": "y", "rhs": {"op": "+", "args": ["x", "b"]}},
+            ],
         }
 
         substitutions = {"a": "c", "b": "d"}
@@ -201,7 +192,7 @@ class TestModelSubstitution:
 
         expected_equations = [
             {"lhs": "x", "rhs": "c"},
-            {"lhs": "y", "rhs": {"op": "+", "args": ["x", "d"]}}
+            {"lhs": "y", "rhs": {"op": "+", "args": ["x", "d"]}},
         ]
 
         assert result["equations"] == expected_equations
@@ -211,7 +202,7 @@ class TestModelSubstitution:
         model_data = {
             "variables": {"x": {"type": "state", "units": "kg"}},
             "equations": [{"lhs": "x", "rhs": "param"}],
-            "description": "Test model"
+            "description": "Test model",
         }
 
         substitutions = {"param": "0.5"}
@@ -224,10 +215,7 @@ class TestModelSubstitution:
 
     def test_substitute_in_model_no_equations(self):
         """Test substitution in model with no equations."""
-        model_data = {
-            "variables": {"x": {"type": "state"}},
-            "equations": []
-        }
+        model_data = {"variables": {"x": {"type": "state"}}, "equations": []}
 
         result = substitute_in_model(model_data, {"a": "b"})
         assert result == model_data
@@ -241,12 +229,14 @@ class TestReactionSystemSubstitution:
         reaction_system = {
             "species": {"A": {}, "B": {}},
             "parameters": {"k": {"default": "param_value"}},
-            "reactions": [{
-                "id": "R1",
-                "substrates": [{"species": "A", "stoichiometry": 1}],
-                "products": [{"species": "B", "stoichiometry": 1}],
-                "rate": {"op": "*", "args": ["k", "param_rate"]}
-            }]
+            "reactions": [
+                {
+                    "id": "R1",
+                    "substrates": [{"species": "A", "stoichiometry": 1}],
+                    "products": [{"species": "B", "stoichiometry": 1}],
+                    "rate": {"op": "*", "args": ["k", "param_rate"]},
+                }
+            ],
         }
 
         substitutions = {"param_value": 0.1, "param_rate": "A"}
@@ -262,24 +252,20 @@ class TestReactionSystemSubstitution:
         reaction_system = {
             "species": {"A": {}, "B": {}},
             "parameters": {},
-            "reactions": [{
-                "id": "R1",
-                "substrates": None,
-                "products": [{"species": "A", "stoichiometry": 1}],
-                "rate": {
-                    "op": "*",
-                    "args": ["k", {"op": "^", "args": ["temp", "2"]}]
+            "reactions": [
+                {
+                    "id": "R1",
+                    "substrates": None,
+                    "products": [{"species": "A", "stoichiometry": 1}],
+                    "rate": {"op": "*", "args": ["k", {"op": "^", "args": ["temp", "2"]}]},
                 }
-            }]
+            ],
         }
 
         substitutions = {"k": 0.1, "temp": "T"}
         result = substitute_in_reaction_system(reaction_system, substitutions)
 
-        expected_rate = {
-            "op": "*",
-            "args": [0.1, {"op": "^", "args": ["T", "2"]}]
-        }
+        expected_rate = {"op": "*", "args": [0.1, {"op": "^", "args": ["T", "2"]}]}
         assert result["reactions"][0]["rate"] == expected_rate
 
     def test_substitute_preserves_reaction_structure(self):
@@ -287,12 +273,14 @@ class TestReactionSystemSubstitution:
         reaction_system = {
             "species": {"A": {"default": 18.0}},
             "parameters": {"k": {"units": "1/s"}},
-            "reactions": [{
-                "id": "R1",
-                "substrates": None,
-                "products": [{"species": "A", "stoichiometry": 1}],
-                "rate": "param"
-            }]
+            "reactions": [
+                {
+                    "id": "R1",
+                    "substrates": None,
+                    "products": [{"species": "A", "stoichiometry": 1}],
+                    "rate": "param",
+                }
+            ],
         }
 
         substitutions = {"param": "k"}

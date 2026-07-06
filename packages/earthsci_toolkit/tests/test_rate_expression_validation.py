@@ -8,7 +8,13 @@ they only reference declared parameters and species in reaction systems.
 
 import pytest
 from earthsci_toolkit.esm_types import (
-    EsmFile, Metadata, ReactionSystem, Species, Parameter, Reaction, ExprNode
+    EsmFile,
+    Metadata,
+    ReactionSystem,
+    Species,
+    Parameter,
+    Reaction,
+    ExprNode,
 )
 from earthsci_toolkit.validation import validate
 
@@ -30,10 +36,7 @@ class TestRateExpressionValidation:
         species, parameters = self.create_base_reaction_system()
 
         rs = ReactionSystem(
-            name="test_system",
-            species=species,
-            parameters=parameters,
-            reactions=[reaction]
+            name="test_system", species=species, parameters=parameters, reactions=[reaction]
         )
 
         return EsmFile(
@@ -43,7 +46,7 @@ class TestRateExpressionValidation:
             reaction_systems={"test_system": rs},
             operators=[],
             coupling=[],
-            events=[]
+            events=[],
         )
 
     def test_simple_string_rate_constant_valid(self):
@@ -52,13 +55,15 @@ class TestRateExpressionValidation:
             name="test_reaction",
             reactants={"A": 1.0},
             products={"B": 1.0},
-            rate_constant="k1"  # k1 is declared in parameters
+            rate_constant="k1",  # k1 is declared in parameters
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
         result = validate(esm_file)
 
-        assert result.is_valid, f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        assert result.is_valid, (
+            f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        )
         assert len(result.structural_errors) == 0
 
     def test_simple_string_rate_constant_undeclared(self):
@@ -67,7 +72,7 @@ class TestRateExpressionValidation:
             name="test_reaction",
             reactants={"A": 1.0},
             products={"B": 1.0},
-            rate_constant="k_undefined"  # k_undefined is not declared
+            rate_constant="k_undefined",  # k_undefined is not declared
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
@@ -86,7 +91,7 @@ class TestRateExpressionValidation:
             name="test_reaction",
             reactants={"A": 1.0},
             products={"B": 1.0},
-            rate_constant=0.5  # Numeric constant
+            rate_constant=0.5,  # Numeric constant
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
@@ -101,16 +106,15 @@ class TestRateExpressionValidation:
         rate_expr = ExprNode(op="*", args=["k1", "k2"])
 
         reaction = Reaction(
-            name="test_reaction",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=rate_expr
+            name="test_reaction", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=rate_expr
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
         result = validate(esm_file)
 
-        assert result.is_valid, f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        assert result.is_valid, (
+            f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        )
         assert len(result.structural_errors) == 0
 
     def test_complex_expression_with_undeclared_parameter(self):
@@ -119,10 +123,7 @@ class TestRateExpressionValidation:
         rate_expr = ExprNode(op="*", args=["k1", "k_undefined"])
 
         reaction = Reaction(
-            name="test_reaction",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=rate_expr
+            name="test_reaction", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=rate_expr
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
@@ -142,10 +143,7 @@ class TestRateExpressionValidation:
         rate_expr = ExprNode(op="*", args=[inner_expr, "k_bad"])
 
         reaction = Reaction(
-            name="test_reaction",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=rate_expr
+            name="test_reaction", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=rate_expr
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
@@ -163,16 +161,15 @@ class TestRateExpressionValidation:
         rate_expr = ExprNode(op="*", args=["k1", "A"])
 
         reaction = Reaction(
-            name="test_reaction",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=rate_expr
+            name="test_reaction", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=rate_expr
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)
         result = validate(esm_file)
 
-        assert result.is_valid, f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        assert result.is_valid, (
+            f"Expected validation to pass, but got errors: {[e.message for e in result.structural_errors]}"
+        )
         assert len(result.structural_errors) == 0
 
     def test_multiple_reactions_independent_validation(self):
@@ -181,25 +178,19 @@ class TestRateExpressionValidation:
 
         # First reaction: valid
         reaction1 = Reaction(
-            name="reaction1",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant="k1"
+            name="reaction1", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant="k1"
         )
 
         # Second reaction: invalid
         reaction2 = Reaction(
-            name="reaction2",
-            reactants={"B": 1.0},
-            products={"A": 1.0},
-            rate_constant="k_invalid"
+            name="reaction2", reactants={"B": 1.0}, products={"A": 1.0}, rate_constant="k_invalid"
         )
 
         rs = ReactionSystem(
             name="test_system",
             species=species,
             parameters=parameters,
-            reactions=[reaction1, reaction2]
+            reactions=[reaction1, reaction2],
         )
 
         esm_file = EsmFile(
@@ -209,7 +200,7 @@ class TestRateExpressionValidation:
             reaction_systems={"test_system": rs},
             operators=[],
             coupling=[],
-            events=[]
+            events=[],
         )
 
         result = validate(esm_file)
@@ -226,10 +217,7 @@ class TestRateExpressionValidation:
         rate_expr = ExprNode(op="*", args=["k1", "k_missing"])
 
         reaction = Reaction(
-            name="test_reaction",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=rate_expr
+            name="test_reaction", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=rate_expr
         )
 
         esm_file = self.create_esm_file_with_reaction(reaction)

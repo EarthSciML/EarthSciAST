@@ -15,6 +15,7 @@ from dataclasses import dataclass
 # Optional scipy import - only needed for actual simulation
 try:
     from scipy.integrate import solve_ivp
+
     SCIPY_AVAILABLE = True
 except (ImportError, ValueError):
     # ValueError can occur due to numpy/scipy compatibility issues
@@ -32,6 +33,7 @@ DENSE_OUTPUT_MIN_POINTS = 10001
 @dataclass
 class SimulationResult:
     """Result of a simulation run."""
+
     t: np.ndarray
     y: np.ndarray
     vars: List[str]  # Variable names corresponding to y rows
@@ -53,7 +55,9 @@ class SimulationResult:
         try:
             import matplotlib.pyplot as plt
         except ImportError:
-            raise ImportError("matplotlib is required for plotting. Install with: pip install matplotlib")
+            raise ImportError(
+                "matplotlib is required for plotting. Install with: pip install matplotlib"
+            )
 
         if not self.success:
             raise RuntimeError(f"Cannot plot failed simulation: {self.message}")
@@ -76,29 +80,29 @@ class SimulationResult:
             raise ValueError("No valid variables to plot")
 
         # Create the plot
-        fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+        fig, ax = plt.subplots(figsize=kwargs.get("figsize", (10, 6)))
 
         for var, idx in zip(plot_vars, plot_indices):
-            ax.plot(self.t, self.y[idx, :], label=var, linewidth=kwargs.get('linewidth', 2))
+            ax.plot(self.t, self.y[idx, :], label=var, linewidth=kwargs.get("linewidth", 2))
 
-        ax.set_xlabel(kwargs.get('xlabel', 'Time'))
-        ax.set_ylabel(kwargs.get('ylabel', 'Concentration'))
-        ax.set_title(kwargs.get('title', 'Simulation Results'))
+        ax.set_xlabel(kwargs.get("xlabel", "Time"))
+        ax.set_ylabel(kwargs.get("ylabel", "Concentration"))
+        ax.set_title(kwargs.get("title", "Simulation Results"))
         ax.legend()
         ax.grid(True, alpha=0.3)
 
         # Apply any additional formatting
-        if 'xlim' in kwargs:
-            ax.set_xlim(kwargs['xlim'])
-        if 'ylim' in kwargs:
-            ax.set_ylim(kwargs['ylim'])
+        if "xlim" in kwargs:
+            ax.set_xlim(kwargs["xlim"])
+        if "ylim" in kwargs:
+            ax.set_ylim(kwargs["ylim"])
 
         plt.tight_layout()
 
-        if kwargs.get('save_path'):
-            plt.savefig(kwargs['save_path'], dpi=kwargs.get('dpi', 150), bbox_inches='tight')
+        if kwargs.get("save_path"):
+            plt.savefig(kwargs["save_path"], dpi=kwargs.get("dpi", 150), bbox_inches="tight")
 
-        if kwargs.get('show', True):
+        if kwargs.get("show", True):
             plt.show()
 
         return fig, ax

@@ -155,12 +155,9 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(
-                esm_file, tspan=tspan, initial_conditions=ics, parameters=params
-            )
+            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
             assert result.success, (
-                f"{fixture_path.name}::{model_name}::{test_id} "
-                f"simulation failed: {result.message}"
+                f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
             test_tol = test.get("tolerance") or {}
@@ -169,9 +166,7 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
                 var_key = assertion["variable"]
                 time = float(assertion["time"])
                 expected = float(assertion["expected"])
-                rel, ab = _resolve_tolerance(
-                    model_tol, test_tol, assertion.get("tolerance") or {}
-                )
+                rel, ab = _resolve_tolerance(model_tol, test_tol, assertion.get("tolerance") or {})
                 actual = _lookup(result, var_key, time)
                 assert _passes(actual, expected, rel, ab), (
                     f"{fixture_path.name}::{model_name}::{test_id} "
@@ -203,13 +198,18 @@ def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
 # Unit coverage for the driver's observed-scheduling helpers
 # --------------------------------------------------------------------------- #
 
+
 def test_order_observed_equations_is_dependency_sorted() -> None:
     """An observed is ordered after every observed its RHS references."""
-    clip = ExprNode(op="intersect_polygon", id="c", manifold="planar",
-                    args=["src", "tgt"])
-    area = ExprNode(op="aggregate", semiring="sum_product", output_idx=[],
-                    args=["clip"], ranges={"v": {"from": "ring"}},
-                    expr=ExprNode(op="index", args=["clip", "v", 1]))
+    clip = ExprNode(op="intersect_polygon", id="c", manifold="planar", args=["src", "tgt"])
+    area = ExprNode(
+        op="aggregate",
+        semiring="sum_product",
+        output_idx=[],
+        args=["clip"],
+        ranges={"v": {"from": "ring"}},
+        expr=ExprNode(op="index", args=["clip", "v", 1]),
+    )
     src = ExprNode(op="const", args=[], value=[[0.0, 0.0]])
     tgt = ExprNode(op="const", args=[], value=[[1.0, 1.0]])
     # Declared in dependent-first order to prove the sort actually reorders.
@@ -230,8 +230,7 @@ def test_time_varying_observeds_flags_state_t_and_transitive() -> None:
     ramp = ExprNode(op="*", args=["t", 2.0])
     # depends transitively on the state-dependent observed `rate`
     scaled = ExprNode(op="*", args=["rate", 3.0])
-    ordered = [("poly", const_poly), ("rate", rate), ("ramp", ramp),
-               ("scaled", scaled)]
+    ordered = [("poly", const_poly), ("rate", rate), ("ramp", ramp), ("scaled", scaled)]
     varying = _time_varying_observeds(ordered, state_names={"tracer"})
     assert "poly" not in varying
     assert varying == {"rate", "ramp", "scaled"}
@@ -253,8 +252,7 @@ def test_as_ring_dedups_padded_and_closing_vertices() -> None:
     padded = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
     r = _as_ring(padded, who="poly_a")
     assert r.shape[0] == 4
-    padded2 = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5],
-               [1.5, 3.5], [1.5, 3.5]]
+    padded2 = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5], [1.5, 3.5], [1.5, 3.5]]
     assert _as_ring(padded2, who="poly_b").shape[0] == 4
     closed = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]
     assert _as_ring(closed, who="ring").shape[0] == 4
@@ -274,7 +272,6 @@ def test_padded_ring_planar_overlap_area_is_one() -> None:
     from earthsci_toolkit.geometry import intersect_polygon, polygon_area
 
     src = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
-    tgt = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5],
-           [1.5, 3.5], [1.5, 3.5]]
+    tgt = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5], [1.5, 3.5], [1.5, 3.5]]
     overlap = intersect_polygon(src, tgt, "planar")
     assert polygon_area(overlap, "planar") == pytest.approx(1.0, abs=1e-12)

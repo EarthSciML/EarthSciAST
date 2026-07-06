@@ -16,6 +16,7 @@ class ErrorCode(Enum):
     template / closed-function code families): they are part of the
     cross-binding contract and must never change.
     """
+
     SCHEMA_VALIDATION_ERROR = "schema_validation_error"
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch"
     UNDEFINED_VARIABLE = "undefined_variable"
@@ -51,6 +52,7 @@ class ErrorCode(Enum):
 
 class Severity(Enum):
     """Error severity levels."""
+
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
@@ -59,6 +61,7 @@ class Severity(Enum):
 @dataclass
 class ErrorContext:
     """Context information for errors."""
+
     path: Optional[str] = None
     component: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
@@ -67,6 +70,7 @@ class ErrorContext:
 @dataclass
 class FixSuggestion:
     """Suggestion for fixing an error."""
+
     description: str
     action: Optional[str] = None
 
@@ -74,6 +78,7 @@ class FixSuggestion:
 @dataclass
 class ESMError:
     """ESM validation or processing error."""
+
     code: ErrorCode
     message: str
     severity: Severity
@@ -97,7 +102,9 @@ class ESMErrorFactory:
     """Factory for creating ESM errors."""
 
     @staticmethod
-    def create_equation_imbalance_error(model_name: str, num_equations: int, num_unknowns: int, state_vars: list) -> ESMError:
+    def create_equation_imbalance_error(
+        model_name: str, num_equations: int, num_unknowns: int, state_vars: list
+    ) -> ESMError:
         """Create an equation-unknown balance error."""
         return ESMError(
             code=ErrorCode.EQUATION_COUNT_MISMATCH,
@@ -109,23 +116,21 @@ class ESMErrorFactory:
                     "model_name": model_name,
                     "num_equations": num_equations,
                     "num_unknowns": num_unknowns,
-                    "state_variables": state_vars
-                }
-            )
+                    "state_variables": state_vars,
+                },
+            ),
         )
 
     @staticmethod
-    def create_undefined_reference_error(reference: str, available_options: list, path: str) -> ESMError:
+    def create_undefined_reference_error(
+        reference: str, available_options: list, path: str
+    ) -> ESMError:
         """Create an undefined reference error."""
         return ESMError(
             code=ErrorCode.UNDEFINED_VARIABLE,
             message=f"Undefined reference '{reference}'",
             severity=Severity.ERROR,
             context=ErrorContext(
-                path=path,
-                details={
-                    "reference": reference,
-                    "available_options": available_options
-                }
-            )
+                path=path, details={"reference": reference, "available_options": available_options}
+            ),
         )

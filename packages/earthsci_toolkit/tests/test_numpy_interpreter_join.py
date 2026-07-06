@@ -82,10 +82,17 @@ def test_degenerate_join_byte_identical_to_no_join() -> None:
     body = ExprNode(op="*", args=[_index("activity", "src"), _index("base_rate", "src")])
     ranges = {"src": {"from": "sourceType"}}
 
-    no_join = ExprNode(op="aggregate", output_idx=[], semiring="sum_product",
-                       expr=body, ranges=ranges)
-    deg_join = ExprNode(op="aggregate", output_idx=[], semiring="sum_product",
-                        expr=body, ranges=ranges, join=[{"on": [["src", "sourceType"]]}])
+    no_join = ExprNode(
+        op="aggregate", output_idx=[], semiring="sum_product", expr=body, ranges=ranges
+    )
+    deg_join = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=body,
+        ranges=ranges,
+        join=[{"on": [["src", "sourceType"]]}],
+    )
 
     r_no = np.asarray(eval_expr(no_join, ctx))
     r_deg = np.asarray(eval_expr(deg_join, ctx))
@@ -99,9 +106,14 @@ def test_join_key_may_name_the_index_set_or_the_symbol() -> None:
     ctx = _ctx({"w": np.array([[1.0, 2.0], [3.0, 4.0]])}, idx)
     body = _index("w", "i", "j")
     # Naming the symbol "j" and the set "county" (bound only by i) are equivalent.
-    by_sym = ExprNode(op="aggregate", output_idx=[], semiring="sum_product", expr=body,
-                      ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                      join=[{"on": [["i", "j"]]}])
+    by_sym = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=body,
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     assert float(eval_expr(by_sym, ctx)) == pytest.approx(1.0 + 4.0)
 
 
@@ -116,9 +128,14 @@ def test_inner_equijoin_is_diagonal_over_shared_keys() -> None:
     w = np.array([[1.0, 9.0, 9.0], [9.0, 2.0, 9.0], [9.0, 9.0, 3.0]])
     ctx = _ctx({"w": w}, idx)
     body = _index("w", "i", "j")
-    joined = ExprNode(op="aggregate", output_idx=[], semiring="sum_product", expr=body,
-                      ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                      join=[{"on": [["i", "j"]]}])
+    joined = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=body,
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     # Only i==j contributes: w[A,A]+w[B,B]+w[C,C] = 1+2+3.
     assert float(eval_expr(joined, ctx)) == pytest.approx(6.0)
 
@@ -127,13 +144,18 @@ def test_many_to_many_cardinality_is_defined() -> None:
     """A key value occurring m times left and n times right yields m·n terms (§5.3)."""
     idx = {
         "A": {"kind": "categorical", "members": ["x", "y", "y"]},  # 'y' twice
-        "B": {"kind": "categorical", "members": ["y", "y"]},       # 'y' twice
+        "B": {"kind": "categorical", "members": ["y", "y"]},  # 'y' twice
     }
     ctx = _ctx({"one": np.ones((3, 2))}, idx)
     body = _index("one", "i", "j")
-    joined = ExprNode(op="aggregate", output_idx=[], reduce="+", expr=body,
-                      ranges={"i": {"from": "A"}, "j": {"from": "B"}},
-                      join=[{"on": [["i", "j"]]}])
+    joined = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        reduce="+",
+        expr=body,
+        ranges={"i": {"from": "A"}, "j": {"from": "B"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     # 'y' matches 'y': 2 (left) × 2 (right) = 4 unit terms; 'x' matches nothing.
     assert float(eval_expr(joined, ctx)) == pytest.approx(4.0)
 
@@ -145,26 +167,39 @@ def test_multiple_clauses_and_pairs_are_all_anded() -> None:
     body, the admitted tuples are {i==j} ∩ {k==l} = 2·2 = 4 (an OR would admit
     12 of the 16 tuples).
     """
-    idx = {"s": {"kind": "categorical", "members": ["p", "q"]},
-           "f": {"kind": "categorical", "members": ["p", "q"]}}
+    idx = {
+        "s": {"kind": "categorical", "members": ["p", "q"]},
+        "f": {"kind": "categorical", "members": ["p", "q"]},
+    }
     ctx = _ctx({}, idx)
-    joined = ExprNode(op="aggregate", output_idx=[], reduce="+", expr=1.0,
-                      ranges={"i": {"from": "s"}, "j": {"from": "s"},
-                              "k": {"from": "f"}, "l": {"from": "f"}},
-                      join=[{"on": [["i", "j"]]}, {"on": [["k", "l"]]}])
+    joined = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        reduce="+",
+        expr=1.0,
+        ranges={"i": {"from": "s"}, "j": {"from": "s"}, "k": {"from": "f"}, "l": {"from": "f"}},
+        join=[{"on": [["i", "j"]]}, {"on": [["k", "l"]]}],
+    )
     assert float(eval_expr(joined, ctx)) == pytest.approx(4.0)
 
 
 def test_join_across_two_distinct_categorical_sets_matches_by_value() -> None:
     """An inner join over two different sets keeps only shared member values."""
-    idx = {"left": {"kind": "categorical", "members": ["a", "b", "c"]},
-           "right": {"kind": "categorical", "members": ["b", "c", "d"]}}
+    idx = {
+        "left": {"kind": "categorical", "members": ["a", "b", "c"]},
+        "right": {"kind": "categorical", "members": ["b", "c", "d"]},
+    }
     # one[i,j] == 1 everywhere; matches are (b,b) and (c,c) → 2 terms.
     ctx = _ctx({"one": np.ones((3, 3))}, idx)
     body = _index("one", "i", "j")
-    joined = ExprNode(op="aggregate", output_idx=[], reduce="+", expr=body,
-                      ranges={"i": {"from": "left"}, "j": {"from": "right"}},
-                      join=[{"on": [["i", "j"]]}])
+    joined = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        reduce="+",
+        expr=body,
+        ranges={"i": {"from": "left"}, "j": {"from": "right"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     assert float(eval_expr(joined, ctx)) == pytest.approx(2.0)
 
 
@@ -173,34 +208,51 @@ def test_join_across_two_distinct_categorical_sets_matches_by_value() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("semiring,expected", [
-    ("sum_product", 0.0),
-    ("max_product", -np.inf),
-    ("min_sum", np.inf),
-    ("max_sum", -np.inf),
-])
+@pytest.mark.parametrize(
+    "semiring,expected",
+    [
+        ("sum_product", 0.0),
+        ("max_product", -np.inf),
+        ("min_sum", np.inf),
+        ("max_sum", -np.inf),
+    ],
+)
 def test_no_match_contributes_semiring_identity(semiring, expected) -> None:
     """A join with no matching tuples reduces to the semiring's 0̄ (§5.1/§5.3)."""
-    idx = {"A": {"kind": "categorical", "members": ["x"]},
-           "B": {"kind": "categorical", "members": ["y"]}}
+    idx = {
+        "A": {"kind": "categorical", "members": ["x"]},
+        "B": {"kind": "categorical", "members": ["y"]},
+    }
     ctx = _ctx({"one": np.ones((1, 1))}, idx)
     body = _index("one", "i", "j")
-    joined = ExprNode(op="aggregate", output_idx=[], semiring=semiring, expr=body,
-                      ranges={"i": {"from": "A"}, "j": {"from": "B"}},
-                      join=[{"on": [["i", "j"]]}])
+    joined = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring=semiring,
+        expr=body,
+        ranges={"i": {"from": "A"}, "j": {"from": "B"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     assert float(eval_expr(joined, ctx)) == expected
 
 
 def test_partial_match_leaves_unmatched_output_cells_at_identity() -> None:
     """Per output cell, an unmatched contraction stays at 0̄ (array output)."""
-    idx = {"out": {"kind": "categorical", "members": ["A", "B"]},
-           "k": {"kind": "categorical", "members": ["A", "C"]}}
+    idx = {
+        "out": {"kind": "categorical", "members": ["A", "B"]},
+        "k": {"kind": "categorical", "members": ["A", "C"]},
+    }
     # out[i] = Σ_k v[i,k] where member(i)==member(k). i=A matches k=A; i=B matches none.
     ctx = _ctx({"v": np.array([[5.0, 7.0], [8.0, 9.0]])}, idx)
     body = _index("v", "i", "k")
-    node = ExprNode(op="aggregate", output_idx=["i"], semiring="sum_product", expr=body,
-                    ranges={"i": {"from": "out"}, "k": {"from": "k"}},
-                    join=[{"on": [["i", "k"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=["i"],
+        semiring="sum_product",
+        expr=body,
+        ranges={"i": {"from": "out"}, "k": {"from": "k"}},
+        join=[{"on": [["i", "k"]]}],
+    )
     np.testing.assert_array_equal(eval_expr(node, ctx), np.array([5.0, 0.0]))
 
 
@@ -213,9 +265,13 @@ def test_float_join_key_rejected() -> None:
     """Floating-point join keys are forbidden — not portable across bindings (§5.3)."""
     idx = {"A": {"kind": "categorical", "members": [1.5, 2.5]}}
     ctx = _ctx({"a": np.array([1.0, 2.0])}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], expr=_index("a", "i"),
-                    ranges={"i": {"from": "A"}, "j": {"from": "A"}},
-                    join=[{"on": [["i", "j"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        expr=_index("a", "i"),
+        ranges={"i": {"from": "A"}, "j": {"from": "A"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     with pytest.raises(NumpyInterpreterError, match="float join keys are forbidden"):
         eval_expr(node, ctx)
 
@@ -224,21 +280,31 @@ def test_null_in_key_column_rejected() -> None:
     """A null member in a join key column is a build-time error (§5.3)."""
     idx = {"A": {"kind": "categorical", "members": ["x", None]}}
     ctx = _ctx({"a": np.array([1.0, 2.0])}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], expr=_index("a", "i"),
-                    ranges={"i": {"from": "A"}, "j": {"from": "A"}},
-                    join=[{"on": [["i", "j"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        expr=_index("a", "i"),
+        ranges={"i": {"from": "A"}, "j": {"from": "A"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     with pytest.raises(NumpyInterpreterError, match="null member in join key"):
         eval_expr(node, ctx)
 
 
 def test_incompatible_key_types_rejected() -> None:
     """Joining an integer key column to a string key column is a key-type error."""
-    idx = {"ints": {"kind": "interval", "size": 2},
-           "strs": {"kind": "categorical", "members": ["a", "b"]}}
+    idx = {
+        "ints": {"kind": "interval", "size": 2},
+        "strs": {"kind": "categorical", "members": ["a", "b"]},
+    }
     ctx = _ctx({"one": np.ones((2, 2))}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], expr=_index("one", "i", "j"),
-                    ranges={"i": {"from": "ints"}, "j": {"from": "strs"}},
-                    join=[{"on": [["i", "j"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        expr=_index("one", "i", "j"),
+        ranges={"i": {"from": "ints"}, "j": {"from": "strs"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     with pytest.raises(NumpyInterpreterError, match="incompatible key types"):
         eval_expr(node, ctx)
 
@@ -247,9 +313,13 @@ def test_ambiguous_index_set_key_rejected() -> None:
     """A join key naming a set bound by >1 symbol is ambiguous (§5.3)."""
     idx = {"county": {"kind": "categorical", "members": ["A", "B"]}}
     ctx = _ctx({"w": np.ones((2, 2))}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], expr=_index("w", "i", "j"),
-                    ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                    join=[{"on": [["county", "i"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        expr=_index("w", "i", "j"),
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+        join=[{"on": [["county", "i"]]}],
+    )
     with pytest.raises(NumpyInterpreterError, match="multiple range symbols"):
         eval_expr(node, ctx)
 
@@ -258,9 +328,13 @@ def test_unknown_join_key_rejected() -> None:
     """A join key that is neither a range symbol nor a bound set errors (§5.3)."""
     idx = {"county": {"kind": "categorical", "members": ["A", "B"]}}
     ctx = _ctx({"w": np.ones((2, 2))}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], expr=_index("w", "i", "j"),
-                    ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                    join=[{"on": [["i", "nope"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        expr=_index("w", "i", "j"),
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+        join=[{"on": [["i", "nope"]]}],
+    )
     with pytest.raises(NumpyInterpreterError, match="neither a declared range symbol"):
         eval_expr(node, ctx)
 
@@ -283,10 +357,14 @@ def test_join_output_is_independent_of_declared_member_order() -> None:
         for p, m in enumerate(order):
             w[p, p] = diag[m]
         ctx = _ctx({"w": w}, {"county": {"kind": "categorical", "members": order}})
-        node = ExprNode(op="aggregate", output_idx=[], semiring="sum_product",
-                        expr=_index("w", "i", "j"),
-                        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                        join=[{"on": [["i", "j"]]}])
+        node = ExprNode(
+            op="aggregate",
+            output_idx=[],
+            semiring="sum_product",
+            expr=_index("w", "i", "j"),
+            ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+            join=[{"on": [["i", "j"]]}],
+        )
         return float(eval_expr(node, ctx))
 
     base = diagonal_sum(members)
@@ -299,13 +377,21 @@ def test_cross_set_join_value_is_permutation_invariant() -> None:
     """An inner join over two sets is invariant to each set's declared order."""
 
     def matched_count(left: list[str], right: list[str]) -> float:
-        ctx = _ctx({"one": np.ones((len(left), len(right)))},
-                   {"L": {"kind": "categorical", "members": left},
-                    "R": {"kind": "categorical", "members": right}})
-        node = ExprNode(op="aggregate", output_idx=[], reduce="+",
-                        expr=_index("one", "i", "j"),
-                        ranges={"i": {"from": "L"}, "j": {"from": "R"}},
-                        join=[{"on": [["i", "j"]]}])
+        ctx = _ctx(
+            {"one": np.ones((len(left), len(right)))},
+            {
+                "L": {"kind": "categorical", "members": left},
+                "R": {"kind": "categorical", "members": right},
+            },
+        )
+        node = ExprNode(
+            op="aggregate",
+            output_idx=[],
+            reduce="+",
+            expr=_index("one", "i", "j"),
+            ranges={"i": {"from": "L"}, "j": {"from": "R"}},
+            join=[{"on": [["i", "j"]]}],
+        )
         return float(eval_expr(node, ctx))
 
     base = matched_count(["a", "b", "c"], ["b", "c", "d"])  # matches b,c → 2
@@ -325,8 +411,14 @@ def test_filter_drops_combinations_where_predicate_false() -> None:
     ctx = _ctx({"activity": np.array([10.0, 20.0]), "base_rate": np.array([3.0, -1.0])}, idx)
     body = ExprNode(op="*", args=[_index("activity", "src"), _index("base_rate", "src")])
     filt = ExprNode(op=">", args=[_index("base_rate", "src"), 0])
-    node = ExprNode(op="aggregate", output_idx=[], semiring="sum_product", expr=body,
-                    ranges={"src": {"from": "sourceType"}}, filter=filt)
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=body,
+        ranges={"src": {"from": "sourceType"}},
+        filter=filt,
+    )
     # src=2 (base_rate<0) is dropped → only 10·3 contributes.
     assert float(eval_expr(node, ctx)) == pytest.approx(30.0)
 
@@ -336,8 +428,14 @@ def test_filter_all_false_returns_identity() -> None:
     idx = {"c": {"kind": "interval", "size": 3}}
     ctx = _ctx({"a": np.array([1.0, 2.0, 3.0])}, idx)
     filt = ExprNode(op=">", args=[_index("a", "i"), 100])
-    node = ExprNode(op="aggregate", output_idx=[], semiring="sum_product",
-                    expr=_index("a", "i"), ranges={"i": {"from": "c"}}, filter=filt)
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=_index("a", "i"),
+        ranges={"i": {"from": "c"}},
+        filter=filt,
+    )
     assert float(eval_expr(node, ctx)) == pytest.approx(0.0)
 
 
@@ -348,9 +446,15 @@ def test_join_and_filter_compose() -> None:
     ctx = _ctx({"w": np.array([[1.0, 0.0], [0.0, 5.0]])}, idx)
     body = _index("w", "i", "j")
     filt = ExprNode(op=">", args=[body, 1])
-    node = ExprNode(op="aggregate", output_idx=[], semiring="sum_product", expr=body,
-                    ranges={"i": {"from": "county"}, "j": {"from": "county"}},
-                    join=[{"on": [["i", "j"]]}], filter=filt)
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=body,
+        ranges={"i": {"from": "county"}, "j": {"from": "county"}},
+        join=[{"on": [["i", "j"]]}],
+        filter=filt,
+    )
     # diagonal = {1, 5}; filter>1 keeps only 5.
     assert float(eval_expr(node, ctx)) == pytest.approx(5.0)
 
@@ -387,10 +491,14 @@ def test_interval_keys_join_on_integer_id() -> None:
     """Interval index sets equi-join on their integer index value (§5.3)."""
     idx = {"n": {"kind": "interval", "size": 3}}
     ctx = _ctx({"w": np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]])}, idx)
-    node = ExprNode(op="aggregate", output_idx=[], semiring="sum_product",
-                    expr=_index("w", "i", "j"),
-                    ranges={"i": {"from": "n"}, "j": {"from": "n"}},
-                    join=[{"on": [["i", "j"]]}])
+    node = ExprNode(
+        op="aggregate",
+        output_idx=[],
+        semiring="sum_product",
+        expr=_index("w", "i", "j"),
+        ranges={"i": {"from": "n"}, "j": {"from": "n"}},
+        join=[{"on": [["i", "j"]]}],
+    )
     assert float(eval_expr(node, ctx)) == pytest.approx(6.0)
 
 
@@ -406,9 +514,12 @@ def _join_count_model(with_join: bool) -> dict:
     the diagonal join (i==j) only 2 combinations contribute; without it all 4 do.
     """
     rhs: dict = {
-        "op": "aggregate", "reduce": "+", "output_idx": [],
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": [],
         "ranges": {"i": {"from": "county"}, "j": {"from": "county"}},
-        "expr": 1.0, "args": [],
+        "expr": 1.0,
+        "args": [],
     }
     if with_join:
         rhs["join"] = [{"on": [["i", "j"]]}]
@@ -416,23 +527,29 @@ def _join_count_model(with_join: bool) -> dict:
         "esm": "0.6.0",
         "metadata": {"name": "join_e2e"},
         "index_sets": {"county": {"kind": "categorical", "members": ["A", "B"]}},
-        "models": {"M": {
-            "variables": {"u": {"type": "state", "default": 0.0}},
-            "equations": [{
-                "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                "rhs": rhs,
-            }],
-        }},
+        "models": {
+            "M": {
+                "variables": {"u": {"type": "state", "default": 0.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                        "rhs": rhs,
+                    }
+                ],
+            }
+        },
     }
 
 
 def test_join_resolved_through_simulate_pipeline() -> None:
     """A join aggregate RHS keeps its join semantics through ``simulate`` — the
     diagonal join yields du/dt=2, vs du/dt=4 with the join removed."""
-    res_join = simulate(load(_join_count_model(with_join=True)), (0.0, 1.0),
-                        initial_conditions={"u": 0.0})
-    res_full = simulate(load(_join_count_model(with_join=False)), (0.0, 1.0),
-                        initial_conditions={"u": 0.0})
+    res_join = simulate(
+        load(_join_count_model(with_join=True)), (0.0, 1.0), initial_conditions={"u": 0.0}
+    )
+    res_full = simulate(
+        load(_join_count_model(with_join=False)), (0.0, 1.0), initial_conditions={"u": 0.0}
+    )
 
     def final_u(res) -> float:
         # The state may be namespaced (e.g. "M.u"); match by bare name.

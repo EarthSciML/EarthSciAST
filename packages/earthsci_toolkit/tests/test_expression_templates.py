@@ -1,6 +1,7 @@
 """Unit tests for expression_templates / apply_expression_template
 (esm-spec §9.6, docs/rfcs/ast-expression-templates.md, esm-giy).
 """
+
 from __future__ import annotations
 
 import copy
@@ -95,9 +96,7 @@ def _inline_arrhenius(A: float, Ea: float) -> dict:
             A,
             {
                 "op": "exp",
-                "args": [
-                    {"op": "/", "args": [{"op": "-", "args": [Ea]}, "T"]}
-                ],
+                "args": [{"op": "/", "args": [{"op": "-", "args": [Ea]}, "T"]}],
             },
             "num_density",
         ],
@@ -343,8 +342,12 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
     # (b) Reaching evaluation surfaces `unlowered_operator` (the fixture's RHS is a
     # spatial D(u, wrt=x)); mirrors Julia tree_walk_test.jl.
     ctx = EvalContext(
-        state_layout={"u": slice(0, 1)}, state_shapes={"u": ()},
-        param_values={}, observed_values={}, y=np.array([1.0]), t=0.0,
+        state_layout={"u": slice(0, 1)},
+        state_shapes={"u": ()},
+        param_values={},
+        observed_values={},
+        y=np.array([1.0]),
+        t=0.0,
     )
     with pytest.raises(UnreachableSpatialOperatorError) as excinfo:
         eval_expr(ExprNode(op="D", args=["u"], wrt="x"), ctx)
@@ -369,17 +372,20 @@ def test_attrs_match_binds_scalar_metavariable():
                 "variables": {
                     "u": {"type": "state", "units": "1", "default": 0.0},
                     "y": {
-                        "type": "observed", "units": "1",
-                        "expression": {"op": "custom_scheme", "args": ["u"],
-                                       "attrs": {"gamma": 1.4}},
+                        "type": "observed",
+                        "units": "1",
+                        "expression": {
+                            "op": "custom_scheme",
+                            "args": ["u"],
+                            "attrs": {"gamma": 1.4},
+                        },
                     },
                 },
                 "equations": [],
                 "expression_templates": {
                     "lower_custom": {
                         "params": ["f", "g"],
-                        "match": {"op": "custom_scheme", "args": ["f"],
-                                  "attrs": {"gamma": "g"}},
+                        "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},
                         "body": {"op": "*", "args": ["g", "f"]},
                     }
                 },
@@ -388,7 +394,8 @@ def test_attrs_match_binds_scalar_metavariable():
     }
     out = lower_expression_templates(src)
     assert out["models"]["m"]["variables"]["y"]["expression"] == {
-        "op": "*", "args": [1.4, "u"],
+        "op": "*",
+        "args": [1.4, "u"],
     }
 
 
@@ -396,6 +403,7 @@ def test_attrs_match_binds_scalar_metavariable():
 # Scalar-field template-parameter substitution
 # (esm-spec §9.6.1 / §9.6.3 constraint 5; mirrors the Julia testset 1:1)
 # ---------------------------------------------------------------------------
+
 
 def _scalar_field_doc(templates: dict, bindings: dict, name: str = "overlap_area") -> dict:
     return {
@@ -431,8 +439,11 @@ def test_scalar_field_substitution_happy_path():
         {
             "overlap_area": {
                 "params": ["K_manifold", "a", "b"],
-                "body": {"op": "polygon_intersection_area",
-                         "manifold": "K_manifold", "args": ["a", "b"]},
+                "body": {
+                    "op": "polygon_intersection_area",
+                    "manifold": "K_manifold",
+                    "args": ["a", "b"],
+                },
             }
         },
         {"K_manifold": "planar", "a": "pa", "b": "pb"},
@@ -453,17 +464,22 @@ def test_scalar_field_param_threads_through_body_composition():
         {
             "inner": {
                 "params": ["m", "x", "y"],
-                "body": {"op": "polygon_intersection_area", "manifold": "m",
-                         "args": ["x", "y"]},
+                "body": {"op": "polygon_intersection_area", "manifold": "m", "args": ["x", "y"]},
             },
             "outer": {
                 "params": ["K", "p", "q"],
-                "body": {"op": "*", "args": [
-                    {"op": "apply_expression_template", "args": [],
-                     "name": "inner",
-                     "bindings": {"m": "K", "x": "p", "y": "q"}},
-                    2.0,
-                ]},
+                "body": {
+                    "op": "*",
+                    "args": [
+                        {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": "inner",
+                            "bindings": {"m": "K", "x": "p", "y": "q"},
+                        },
+                        2.0,
+                    ],
+                },
             },
         },
         {"K": "spherical", "p": "pa", "q": "pb"},
@@ -473,8 +489,7 @@ def test_scalar_field_param_threads_through_body_composition():
     assert out["models"]["M"]["variables"]["area"]["expression"] == {
         "op": "*",
         "args": [
-            {"op": "polygon_intersection_area", "manifold": "spherical",
-             "args": ["pa", "pb"]},
+            {"op": "polygon_intersection_area", "manifold": "spherical", "args": ["pa", "pb"]},
             2.0,
         ],
     }
@@ -488,8 +503,11 @@ def test_invalid_substituted_manifold_rejected_post_expansion():
         {
             "overlap_area": {
                 "params": ["K_manifold", "a", "b"],
-                "body": {"op": "polygon_intersection_area",
-                         "manifold": "K_manifold", "args": ["a", "b"]},
+                "body": {
+                    "op": "polygon_intersection_area",
+                    "manifold": "K_manifold",
+                    "args": ["a", "b"],
+                },
             }
         },
         {"K_manifold": "bogus", "a": "pa", "b": "pb"},
@@ -507,8 +525,11 @@ def test_params_shadow_literals_in_scalar_fields():
         {
             "shadowed": {
                 "params": ["planar", "x", "y"],
-                "body": {"op": "polygon_intersection_area",
-                         "manifold": "planar", "args": ["x", "y"]},
+                "body": {
+                    "op": "polygon_intersection_area",
+                    "manifold": "planar",
+                    "args": ["x", "y"],
+                },
             }
         },
         {"planar": "spherical", "x": "pa", "y": "pb"},
@@ -546,8 +567,8 @@ def _expand_conf(fix: str) -> dict:
 
 
 @pytest.mark.parametrize(
-    "fix", ["constrained_match_scope", "per_variable_scheme_literal_args",
-            "two_div_two_meshes"],
+    "fix",
+    ["constrained_match_scope", "per_variable_scheme_literal_args", "two_div_two_meshes"],
 )
 def test_where_constraint_conformance_matches_golden(fix):
     """The three §9.6.1 `where` goldens: substantive tree (models / index_sets /
@@ -579,8 +600,7 @@ def test_where_unknown_index_set_rejected_at_registration():
     raw = _conf_fixture("constraint_unknown_index_set")
     want = _conf_fixture("constraint_unknown_index_set", "error.json")["code"]
     with pytest.raises(ExpressionTemplateError) as exc:
-        resolved = resolve_template_machinery(
-            raw, _conf_dir("constraint_unknown_index_set"))
+        resolved = resolve_template_machinery(raw, _conf_dir("constraint_unknown_index_set"))
         lower_expression_templates(resolved if resolved is not None else raw)
     assert exc.value.code == want == "template_constraint_unknown_index_set"
 
@@ -593,11 +613,14 @@ def _where_pin_doc(templates: dict) -> dict:
         "models": {
             "m": {
                 "variables": {
-                    "Fe": {"type": "state", "units": "1", "default": 1.0,
-                           "shape": ["edges"]},
+                    "Fe": {"type": "state", "units": "1", "default": 1.0, "shape": ["edges"]},
                     "k": {"type": "parameter", "units": "1", "default": 2.0},
-                    "d": {"type": "observed", "units": "1", "shape": ["edges"],
-                          "expression": {"op": "div", "args": ["Fe"]}},
+                    "d": {
+                        "type": "observed",
+                        "units": "1",
+                        "shape": ["edges"],
+                        "expression": {"op": "div", "args": ["Fe"]},
+                    },
                 },
                 "equations": [],
                 "expression_templates": templates,
@@ -612,18 +635,26 @@ def test_where_constraint_filters_before_priority():
     high-priority rule whose `where` excludes the node does NOT shadow a
     lower-priority rule that legitimately fires — the scan proceeds past the
     excluded candidate."""
-    doc = _where_pin_doc({
-        # Higher priority but constrained to a shape 'Fe' does NOT have.
-        "hi": {"params": ["X"], "priority": 10,
-               "match": {"op": "div", "args": ["X"]},
-               "where": {"X": {"shape": ["cells_nope_unused"]}},
-               "body": {"op": "*", "args": [999, "X"]}},
-        # Lower priority, constrained to the actual shape → this one fires.
-        "lo": {"params": ["X"], "priority": 0,
-               "match": {"op": "div", "args": ["X"]},
-               "where": {"X": {"shape": ["edges"]}},
-               "body": {"op": "*", "args": ["k", "X"]}},
-    })
+    doc = _where_pin_doc(
+        {
+            # Higher priority but constrained to a shape 'Fe' does NOT have.
+            "hi": {
+                "params": ["X"],
+                "priority": 10,
+                "match": {"op": "div", "args": ["X"]},
+                "where": {"X": {"shape": ["cells_nope_unused"]}},
+                "body": {"op": "*", "args": [999, "X"]},
+            },
+            # Lower priority, constrained to the actual shape → this one fires.
+            "lo": {
+                "params": ["X"],
+                "priority": 0,
+                "match": {"op": "div", "args": ["X"]},
+                "where": {"X": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": ["k", "X"]},
+            },
+        }
+    )
     # 'cells_nope_unused' must exist in the registry so registration passes;
     # it simply never matches a variable's declared shape.
     doc["index_sets"]["cells_nope_unused"] = {"kind": "interval", "size": 1}
@@ -637,41 +668,78 @@ def test_where_constraint_compound_argument_fails_conservatively():
     """§9.6.1 non-fixture pin: the judgment is bare-variable-only. A `div` of a
     COMPOUND expression (not a bare declared variable) fails the constraint —
     no error, no rewrite (conservative)."""
-    doc = _where_pin_doc({
-        "r": {"params": ["X"],
-              "match": {"op": "div", "args": ["X"]},
-              "where": {"X": {"shape": ["edges"]}},
-              "body": {"op": "*", "args": ["k", "X"]}},
-    })
+    doc = _where_pin_doc(
+        {
+            "r": {
+                "params": ["X"],
+                "match": {"op": "div", "args": ["X"]},
+                "where": {"X": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": ["k", "X"]},
+            },
+        }
+    )
     # div of a compound (Fe + Fe), not a bare variable reference.
     doc["models"]["m"]["variables"]["d"]["expression"] = {
-        "op": "div", "args": [{"op": "+", "args": ["Fe", "Fe"]}]}
+        "op": "div",
+        "args": [{"op": "+", "args": ["Fe", "Fe"]}],
+    }
     out = lower_expression_templates(doc)
     expr = out["models"]["m"]["variables"]["d"]["expression"]
     assert expr["op"] == "div"  # unchanged: constraint not satisfied
 
 
-@pytest.mark.parametrize("bad,code", [
-    # `where` without `match`
-    ({"t": {"params": ["X"], "where": {"X": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": ["k", "X"]}}},
-     "apply_expression_template_invalid_declaration"),
-    # `where` constrains a non-declared param
-    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
-            "where": {"Y": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": ["k", "X"]}}},
-     "apply_expression_template_invalid_declaration"),
-    # constraint kind other than `shape`
-    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
-            "where": {"X": {"rank": 1}},
-            "body": {"op": "*", "args": ["k", "X"]}}},
-     "apply_expression_template_invalid_declaration"),
-    # empty shape list
-    ({"t": {"params": ["X"], "match": {"op": "div", "args": ["X"]},
-            "where": {"X": {"shape": []}},
-            "body": {"op": "*", "args": ["k", "X"]}}},
-     "apply_expression_template_invalid_declaration"),
-])
+@pytest.mark.parametrize(
+    "bad,code",
+    [
+        # `where` without `match`
+        (
+            {
+                "t": {
+                    "params": ["X"],
+                    "where": {"X": {"shape": ["edges"]}},
+                    "body": {"op": "*", "args": ["k", "X"]},
+                }
+            },
+            "apply_expression_template_invalid_declaration",
+        ),
+        # `where` constrains a non-declared param
+        (
+            {
+                "t": {
+                    "params": ["X"],
+                    "match": {"op": "div", "args": ["X"]},
+                    "where": {"Y": {"shape": ["edges"]}},
+                    "body": {"op": "*", "args": ["k", "X"]},
+                }
+            },
+            "apply_expression_template_invalid_declaration",
+        ),
+        # constraint kind other than `shape`
+        (
+            {
+                "t": {
+                    "params": ["X"],
+                    "match": {"op": "div", "args": ["X"]},
+                    "where": {"X": {"rank": 1}},
+                    "body": {"op": "*", "args": ["k", "X"]},
+                }
+            },
+            "apply_expression_template_invalid_declaration",
+        ),
+        # empty shape list
+        (
+            {
+                "t": {
+                    "params": ["X"],
+                    "match": {"op": "div", "args": ["X"]},
+                    "where": {"X": {"shape": []}},
+                    "body": {"op": "*", "args": ["k", "X"]},
+                }
+            },
+            "apply_expression_template_invalid_declaration",
+        ),
+    ],
+)
 def test_where_structural_validation(bad, code):
     """§9.6.1 structural validation of the `where` block at registration."""
     doc = _where_pin_doc(bad)

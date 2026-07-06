@@ -11,26 +11,47 @@ from copy import deepcopy
 
 try:
     from .esm_types import (
-        EsmFile, Model, ReactionSystem, ModelVariable, Species, Parameter,
-        Reaction, Equation, Expr, ExprNode, AffectEquation, ContinuousEvent,
-        DiscreteEvent, CouplingEntry, Metadata
+        EsmFile,
+        Model,
+        ReactionSystem,
+        ModelVariable,
+        Species,
+        Reaction,
+        Equation,
+        Expr,
+        ExprNode,
+        ContinuousEvent,
+        DiscreteEvent,
+        CouplingEntry,
+        Metadata,
     )
     from .validation import validate, ValidationResult
 except ImportError:
     # For direct imports when testing
     from esm_types import (
-        EsmFile, Model, ReactionSystem, ModelVariable, Species, Parameter,
-        Reaction, Equation, Expr, ExprNode, AffectEquation, ContinuousEvent,
-        DiscreteEvent, CouplingEntry, Metadata
+        EsmFile,
+        Model,
+        ReactionSystem,
+        ModelVariable,
+        Species,
+        Reaction,
+        Equation,
+        Expr,
+        ExprNode,
+        ContinuousEvent,
+        DiscreteEvent,
+        CouplingEntry,
+        Metadata,
     )
 
 
 @dataclass
 class EditOperation:
     """Represents an editing operation that can be applied to an ESM structure."""
+
     operation_type: str  # 'add', 'remove', 'modify', 'rename'
-    target_type: str     # 'model', 'reaction_system', 'variable', 'equation', etc.
-    target_id: str       # identifier for the target
+    target_type: str  # 'model', 'reaction_system', 'variable', 'equation', etc.
+    target_id: str  # identifier for the target
     data: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -38,6 +59,7 @@ class EditOperation:
 @dataclass
 class EditResult:
     """Result of an editing operation."""
+
     success: bool
     modified_object: Any = None
     errors: List[str] = field(default_factory=list)
@@ -57,8 +79,9 @@ class ESMEditor:
         """
         self.validate_after_edit = validate_after_edit
 
-    def apply_operation(self, target: Union[EsmFile, Model, ReactionSystem],
-                       operation: EditOperation) -> EditResult:
+    def apply_operation(
+        self, target: Union[EsmFile, Model, ReactionSystem], operation: EditOperation
+    ) -> EditResult:
         """
         Apply an editing operation to a target structure.
 
@@ -81,8 +104,7 @@ class ESMEditor:
                 result = self._apply_reaction_system_operation(modified, operation)
             else:
                 return EditResult(
-                    success=False,
-                    errors=[f"Unsupported target type: {type(target)}"]
+                    success=False, errors=[f"Unsupported target type: {type(target)}"]
                 )
 
             if result.success and self.validate_after_edit:
@@ -97,17 +119,12 @@ class ESMEditor:
             return result
 
         except Exception as e:
-            return EditResult(
-                success=False,
-                errors=[f"Edit operation failed: {e}"]
-            )
+            return EditResult(success=False, errors=[f"Edit operation failed: {e}"])
 
     def remove_variable(self, model: Model, var_name: str) -> EditResult:
         """Remove a variable from a model."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="variable",
-            target_id=var_name
+            operation_type="remove", target_type="variable", target_id=var_name
         )
         return self.apply_operation(model, operation)
 
@@ -117,17 +134,14 @@ class ESMEditor:
             operation_type="add",
             target_type="variable",
             target_id=var_name,
-            data={"variable": var_info}
+            data={"variable": var_info},
         )
         return self.apply_operation(model, operation)
 
     def modify_variable(self, model: Model, var_name: str, **updates) -> EditResult:
         """Modify a variable in a model."""
         operation = EditOperation(
-            operation_type="modify",
-            target_type="variable",
-            target_id=var_name,
-            data=updates
+            operation_type="modify", target_type="variable", target_id=var_name, data=updates
         )
         return self.apply_operation(model, operation)
 
@@ -137,16 +151,14 @@ class ESMEditor:
             operation_type="add",
             target_type="equation",
             target_id=f"eq_{len(model.equations) if model.equations else 0}",
-            data={"equation": equation}
+            data={"equation": equation},
         )
         return self.apply_operation(model, operation)
 
     def remove_equation(self, model: Model, index: int) -> EditResult:
         """Remove an equation from a model by index."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="equation",
-            target_id=str(index)
+            operation_type="remove", target_type="equation", target_id=str(index)
         )
         return self.apply_operation(model, operation)
 
@@ -156,7 +168,7 @@ class ESMEditor:
             operation_type="add",
             target_type="species",
             target_id=species.name,
-            data={"species": species}
+            data={"species": species},
         )
         return self.apply_operation(reaction_system, operation)
 
@@ -166,25 +178,21 @@ class ESMEditor:
             operation_type="add",
             target_type="reaction",
             target_id=reaction.name,
-            data={"reaction": reaction}
+            data={"reaction": reaction},
         )
         return self.apply_operation(reaction_system, operation)
 
     def remove_reaction(self, reaction_system: ReactionSystem, reaction_name: str) -> EditResult:
         """Remove a reaction from a reaction system."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="reaction",
-            target_id=reaction_name
+            operation_type="remove", target_type="reaction", target_id=reaction_name
         )
         return self.apply_operation(reaction_system, operation)
 
     def remove_species(self, reaction_system: ReactionSystem, species_name: str) -> EditResult:
         """Remove a species from a reaction system."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="species",
-            target_id=species_name
+            operation_type="remove", target_type="species", target_id=species_name
         )
         return self.apply_operation(reaction_system, operation)
 
@@ -194,7 +202,7 @@ class ESMEditor:
             operation_type="add",
             target_type="continuous_event",
             target_id=event.name,
-            data={"event": event}
+            data={"event": event},
         )
         return self.apply_operation(model, operation)
 
@@ -204,16 +212,14 @@ class ESMEditor:
             operation_type="add",
             target_type="discrete_event",
             target_id=event.name,
-            data={"event": event}
+            data={"event": event},
         )
         return self.apply_operation(model, operation)
 
     def remove_event(self, model: Model, event_name: str) -> EditResult:
         """Remove an event from a model (searches both continuous and discrete events)."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="event",
-            target_id=event_name
+            operation_type="remove", target_type="event", target_id=event_name
         )
         return self.apply_operation(model, operation)
 
@@ -223,16 +229,14 @@ class ESMEditor:
             operation_type="add",
             target_type="coupling",
             target_id=f"coupling_{len(esm_file.coupling) if esm_file.coupling else 0}",
-            data={"coupling": coupling}
+            data={"coupling": coupling},
         )
         return self.apply_operation(esm_file, operation)
 
     def remove_coupling(self, esm_file: EsmFile, index: int) -> EditResult:
         """Remove a coupling entry from an ESM file by index."""
         operation = EditOperation(
-            operation_type="remove",
-            target_type="coupling",
-            target_id=str(index)
+            operation_type="remove", target_type="coupling", target_id=str(index)
         )
         return self.apply_operation(esm_file, operation)
 
@@ -260,7 +264,9 @@ class ESMEditor:
 
         return expr
 
-    def rename_variable(self, target: Union[Model, ReactionSystem], old_name: str, new_name: str) -> EditResult:
+    def rename_variable(
+        self, target: Union[Model, ReactionSystem], old_name: str, new_name: str
+    ) -> EditResult:
         """
         Rename a variable throughout a model or reaction system.
 
@@ -276,7 +282,7 @@ class ESMEditor:
             operation_type="rename",
             target_type="variable",
             target_id=old_name,
-            data={"new_name": new_name}
+            data={"new_name": new_name},
         )
         return self.apply_operation(target, operation)
 
@@ -332,9 +338,9 @@ class ESMEditor:
                 merged_file.coupling.extend(file_b.coupling)
 
             # Other fields from file_b take precedence
-            if hasattr(file_b, 'metadata') and file_b.metadata:
+            if hasattr(file_b, "metadata") and file_b.metadata:
                 merged_file.metadata = file_b.metadata
-            if getattr(file_b, 'domain', None) is not None:
+            if getattr(file_b, "domain", None) is not None:
                 merged_file.domain = file_b.domain
 
             return EditResult(success=True, modified_object=merged_file)
@@ -358,7 +364,7 @@ class ESMEditor:
             # Use minimal metadata for the extracted file
             extracted_metadata = Metadata(
                 title=f"Extracted: {component_name}",
-                description=f"Component '{component_name}' extracted from {esm_file.metadata.title if esm_file.metadata else 'source file'}"
+                description=f"Component '{component_name}' extracted from {esm_file.metadata.title if esm_file.metadata else 'source file'}",
             )
 
             extracted_file = EsmFile(
@@ -366,7 +372,7 @@ class ESMEditor:
                 metadata=extracted_metadata,
                 models={},
                 reaction_systems={},
-                coupling=[]
+                coupling=[],
             )
 
             found_component = False
@@ -378,7 +384,9 @@ class ESMEditor:
 
             # Find and extract the component from reaction systems
             if esm_file.reaction_systems and component_name in esm_file.reaction_systems:
-                extracted_file.reaction_systems[component_name] = deepcopy(esm_file.reaction_systems[component_name])
+                extracted_file.reaction_systems[component_name] = deepcopy(
+                    esm_file.reaction_systems[component_name]
+                )
                 found_component = True
 
             # Find relevant coupling entries that involve the extracted component
@@ -414,7 +422,7 @@ class ESMEditor:
             if not found_component:
                 return EditResult(
                     success=False,
-                    errors=[f"Component '{component_name}' not found in the ESM file"]
+                    errors=[f"Component '{component_name}' not found in the ESM file"],
                 )
 
             return EditResult(success=True, modified_object=extracted_file)
@@ -440,14 +448,21 @@ class ESMEditor:
                 try:
                     index = int(operation.target_id)
                     if not esm_file.coupling or index < 0 or index >= len(esm_file.coupling):
-                        return EditResult(success=False, errors=[f"Coupling index {index} out of bounds"])
+                        return EditResult(
+                            success=False, errors=[f"Coupling index {index} out of bounds"]
+                        )
 
                     del esm_file.coupling[index]
                     return EditResult(success=True, modified_object=esm_file)
                 except ValueError:
                     return EditResult(success=False, errors=["Invalid coupling index"])
 
-        return EditResult(success=False, errors=[f"Unsupported operation: {operation.operation_type} on {operation.target_type}"])
+        return EditResult(
+            success=False,
+            errors=[
+                f"Unsupported operation: {operation.operation_type} on {operation.target_type}"
+            ],
+        )
 
     def _apply_model_operation(self, model: Model, operation: EditOperation) -> EditResult:
         """Apply an operation to a model."""
@@ -461,21 +476,27 @@ class ESMEditor:
                     model.variables = {}
 
                 if operation.target_id in model.variables:
-                    return EditResult(success=False, errors=[f"Variable '{operation.target_id}' already exists"])
+                    return EditResult(
+                        success=False, errors=[f"Variable '{operation.target_id}' already exists"]
+                    )
 
                 model.variables[operation.target_id] = variable
                 return EditResult(success=True, modified_object=model)
 
             elif operation.operation_type == "remove":
                 if not model.variables or operation.target_id not in model.variables:
-                    return EditResult(success=False, errors=[f"Variable '{operation.target_id}' not found"])
+                    return EditResult(
+                        success=False, errors=[f"Variable '{operation.target_id}' not found"]
+                    )
 
                 del model.variables[operation.target_id]
                 return EditResult(success=True, modified_object=model)
 
             elif operation.operation_type == "modify":
                 if not model.variables or operation.target_id not in model.variables:
-                    return EditResult(success=False, errors=[f"Variable '{operation.target_id}' not found"])
+                    return EditResult(
+                        success=False, errors=[f"Variable '{operation.target_id}' not found"]
+                    )
 
                 # Apply updates to the variable
                 current_var = model.variables[operation.target_id]
@@ -491,10 +512,14 @@ class ESMEditor:
                     return EditResult(success=False, errors=["No new name provided"])
 
                 if not model.variables or operation.target_id not in model.variables:
-                    return EditResult(success=False, errors=[f"Variable '{operation.target_id}' not found"])
+                    return EditResult(
+                        success=False, errors=[f"Variable '{operation.target_id}' not found"]
+                    )
 
                 if new_name in model.variables:
-                    return EditResult(success=False, errors=[f"Variable '{new_name}' already exists"])
+                    return EditResult(
+                        success=False, errors=[f"Variable '{new_name}' already exists"]
+                    )
 
                 # Rename the variable
                 var_info = model.variables.pop(operation.target_id)
@@ -526,7 +551,9 @@ class ESMEditor:
                 try:
                     index = int(operation.target_id)
                     if not model.equations or index < 0 or index >= len(model.equations):
-                        return EditResult(success=False, errors=[f"Equation index {index} out of bounds"])
+                        return EditResult(
+                            success=False, errors=[f"Equation index {index} out of bounds"]
+                        )
 
                     del model.equations[index]
                     return EditResult(success=True, modified_object=model)
@@ -539,7 +566,7 @@ class ESMEditor:
                 if not event:
                     return EditResult(success=False, errors=["No event data provided"])
 
-                if not hasattr(model, 'continuous_events') or not model.continuous_events:
+                if not hasattr(model, "continuous_events") or not model.continuous_events:
                     model.continuous_events = []
 
                 model.continuous_events.append(event)
@@ -551,7 +578,7 @@ class ESMEditor:
                 if not event:
                     return EditResult(success=False, errors=["No event data provided"])
 
-                if not hasattr(model, 'discrete_events') or not model.discrete_events:
+                if not hasattr(model, "discrete_events") or not model.discrete_events:
                     model.discrete_events = []
 
                 model.discrete_events.append(event)
@@ -563,15 +590,19 @@ class ESMEditor:
                 removed = False
 
                 # Remove from continuous events
-                if hasattr(model, 'continuous_events') and model.continuous_events:
+                if hasattr(model, "continuous_events") and model.continuous_events:
                     original_count = len(model.continuous_events)
-                    model.continuous_events = [e for e in model.continuous_events if e.name != event_name]
+                    model.continuous_events = [
+                        e for e in model.continuous_events if e.name != event_name
+                    ]
                     removed = removed or len(model.continuous_events) < original_count
 
                 # Remove from discrete events
-                if hasattr(model, 'discrete_events') and model.discrete_events:
+                if hasattr(model, "discrete_events") and model.discrete_events:
                     original_count = len(model.discrete_events)
-                    model.discrete_events = [e for e in model.discrete_events if e.name != event_name]
+                    model.discrete_events = [
+                        e for e in model.discrete_events if e.name != event_name
+                    ]
                     removed = removed or len(model.discrete_events) < original_count
 
                 if not removed:
@@ -579,9 +610,16 @@ class ESMEditor:
 
                 return EditResult(success=True, modified_object=model)
 
-        return EditResult(success=False, errors=[f"Unsupported operation: {operation.operation_type} on {operation.target_type}"])
+        return EditResult(
+            success=False,
+            errors=[
+                f"Unsupported operation: {operation.operation_type} on {operation.target_type}"
+            ],
+        )
 
-    def _apply_reaction_system_operation(self, rs: ReactionSystem, operation: EditOperation) -> EditResult:
+    def _apply_reaction_system_operation(
+        self, rs: ReactionSystem, operation: EditOperation
+    ) -> EditResult:
         """Apply an operation to a reaction system."""
         if operation.target_type == "species":
             if operation.operation_type == "add":
@@ -594,7 +632,9 @@ class ESMEditor:
 
                 # Check for duplicate names
                 if any(s.name == species.name for s in rs.species):
-                    return EditResult(success=False, errors=[f"Species '{species.name}' already exists"])
+                    return EditResult(
+                        success=False, errors=[f"Species '{species.name}' already exists"]
+                    )
 
                 rs.species.append(species)
                 return EditResult(success=True, modified_object=rs)
@@ -623,7 +663,9 @@ class ESMEditor:
 
                 # Check for duplicate names
                 if any(r.name == reaction.name for r in rs.reactions):
-                    return EditResult(success=False, errors=[f"Reaction '{reaction.name}' already exists"])
+                    return EditResult(
+                        success=False, errors=[f"Reaction '{reaction.name}' already exists"]
+                    )
 
                 rs.reactions.append(reaction)
                 return EditResult(success=True, modified_object=rs)
@@ -637,7 +679,9 @@ class ESMEditor:
                 rs.reactions = [r for r in rs.reactions if r.name != reaction_name]
 
                 if len(rs.reactions) == original_count:
-                    return EditResult(success=False, errors=[f"Reaction '{reaction_name}' not found"])
+                    return EditResult(
+                        success=False, errors=[f"Reaction '{reaction_name}' not found"]
+                    )
 
                 return EditResult(success=True, modified_object=rs)
 
@@ -652,22 +696,33 @@ class ESMEditor:
 
                 # Check for duplicate names
                 if any(p.name == parameter.name for p in rs.parameters):
-                    return EditResult(success=False, errors=[f"Parameter '{parameter.name}' already exists"])
+                    return EditResult(
+                        success=False, errors=[f"Parameter '{parameter.name}' already exists"]
+                    )
 
                 rs.parameters.append(parameter)
                 return EditResult(success=True, modified_object=rs)
 
-        return EditResult(success=False, errors=[f"Unsupported operation: {operation.operation_type} on {operation.target_type}"])
+        return EditResult(
+            success=False,
+            errors=[
+                f"Unsupported operation: {operation.operation_type} on {operation.target_type}"
+            ],
+        )
 
 
 # Convenience functions
-def add_variable_to_model(model: Model, var_name: str, var_info: ModelVariable, validate: bool = True) -> EditResult:
+def add_variable_to_model(
+    model: Model, var_name: str, var_info: ModelVariable, validate: bool = True
+) -> EditResult:
     """Add a variable to a model."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_variable(model, var_name, var_info)
 
 
-def rename_variable_in_model(model: Model, old_name: str, new_name: str, validate: bool = True) -> EditResult:
+def rename_variable_in_model(
+    model: Model, old_name: str, new_name: str, validate: bool = True
+) -> EditResult:
     """Rename a variable in a model."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.rename_variable(model, old_name, new_name)
@@ -691,37 +746,49 @@ def remove_equation_from_model(model: Model, index: int, validate: bool = True) 
     return editor.remove_equation(model, index)
 
 
-def add_reaction_to_system(reaction_system: ReactionSystem, reaction: Reaction, validate: bool = True) -> EditResult:
+def add_reaction_to_system(
+    reaction_system: ReactionSystem, reaction: Reaction, validate: bool = True
+) -> EditResult:
     """Add a reaction to a reaction system."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_reaction(reaction_system, reaction)
 
 
-def remove_reaction_from_system(reaction_system: ReactionSystem, reaction_name: str, validate: bool = True) -> EditResult:
+def remove_reaction_from_system(
+    reaction_system: ReactionSystem, reaction_name: str, validate: bool = True
+) -> EditResult:
     """Remove a reaction from a reaction system."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.remove_reaction(reaction_system, reaction_name)
 
 
-def add_species_to_system(reaction_system: ReactionSystem, species: Species, validate: bool = True) -> EditResult:
+def add_species_to_system(
+    reaction_system: ReactionSystem, species: Species, validate: bool = True
+) -> EditResult:
     """Add a species to a reaction system."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_species(reaction_system, species)
 
 
-def remove_species_from_system(reaction_system: ReactionSystem, species_name: str, validate: bool = True) -> EditResult:
+def remove_species_from_system(
+    reaction_system: ReactionSystem, species_name: str, validate: bool = True
+) -> EditResult:
     """Remove a species from a reaction system."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.remove_species(reaction_system, species_name)
 
 
-def add_continuous_event_to_model(model: Model, event: ContinuousEvent, validate: bool = True) -> EditResult:
+def add_continuous_event_to_model(
+    model: Model, event: ContinuousEvent, validate: bool = True
+) -> EditResult:
     """Add a continuous event to a model."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_continuous_event(model, event)
 
 
-def add_discrete_event_to_model(model: Model, event: DiscreteEvent, validate: bool = True) -> EditResult:
+def add_discrete_event_to_model(
+    model: Model, event: DiscreteEvent, validate: bool = True
+) -> EditResult:
     """Add a discrete event to a model."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_discrete_event(model, event)
@@ -733,7 +800,9 @@ def remove_event_from_model(model: Model, event_name: str, validate: bool = True
     return editor.remove_event(model, event_name)
 
 
-def add_coupling_to_file(esm_file: EsmFile, coupling: CouplingEntry, validate: bool = True) -> EditResult:
+def add_coupling_to_file(
+    esm_file: EsmFile, coupling: CouplingEntry, validate: bool = True
+) -> EditResult:
     """Add a coupling entry to an ESM file."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.add_coupling(esm_file, coupling)
@@ -751,7 +820,9 @@ def merge_esm_files(file_a: EsmFile, file_b: EsmFile, validate: bool = True) -> 
     return editor.merge(file_a, file_b)
 
 
-def extract_component_from_file(esm_file: EsmFile, component_name: str, validate: bool = True) -> EditResult:
+def extract_component_from_file(
+    esm_file: EsmFile, component_name: str, validate: bool = True
+) -> EditResult:
     """Extract a single component into a standalone ESM file."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.extract(esm_file, component_name)

@@ -47,8 +47,11 @@ def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
     provider both fit (DESIGN pde_simulation_pipeline §2): a plain callable
     ``(t) -> array_like``; an object exposing ``sample(t)``; or one exposing
     ``provider_sample(t)`` (the Julia-parity name)."""
-    if callable(provider) and not hasattr(provider, "sample") \
-            and not hasattr(provider, "provider_sample"):
+    if (
+        callable(provider)
+        and not hasattr(provider, "sample")
+        and not hasattr(provider, "provider_sample")
+    ):
         return provider(t)
     if hasattr(provider, "sample"):
         return provider.sample(t)
@@ -354,23 +357,16 @@ def _simulate_with_loaders(
             # boundaries from local frequency arithmetic.
             def _seed() -> None:
                 for f in const_fields:
-                    loader_arrays[f.name] = np.asarray(
-                        loader_provider(f, t0), dtype=float
-                    )
+                    loader_arrays[f.name] = np.asarray(loader_provider(f, t0), dtype=float)
                 for f in discrete_fields:
-                    loader_arrays[f.name] = np.asarray(
-                        loader_provider(f, t0), dtype=float
-                    )
+                    loader_arrays[f.name] = np.asarray(loader_provider(f, t0), dtype=float)
 
             def _refresh_discrete(when: float) -> None:
                 for f in discrete_fields:
-                    loader_arrays[f.name] = np.asarray(
-                        loader_provider(f, when), dtype=float
-                    )
+                    loader_arrays[f.name] = np.asarray(loader_provider(f, when), dtype=float)
 
             seg_ends = [
-                b for b in _loader_cadence_boundaries(discrete_fields, t0, t1)
-                if t0 < b < t1
+                b for b in _loader_cadence_boundaries(discrete_fields, t0, t1) if t0 < b < t1
             ] + [t1]
         else:
             # Provider-object path (default): build one Provider per loader field
@@ -390,13 +386,16 @@ def _simulate_with_loaders(
             # CDS area) we thread the same target through.
             if provider_factory is not None:
                 if _factory_accepts_target(provider_factory):
+
                     def factory(f, w):
                         return provider_factory(f, w, target=target)
                 else:
                     factory = provider_factory
             else:
+
                 def factory(f, w):
                     return build_default_provider(f, w, target=target)
+
             # Sim-clock 0 is the run domain's reference_time (shared by all
             # loaders); only when the domain carries no temporal anchor do we
             # fall back to each loader's own temporal.start (its availability
@@ -416,9 +415,7 @@ def _simulate_with_loaders(
                     epoch + _dt.timedelta(seconds=t1),
                 )
 
-            providers = {
-                f.name: factory(f, _window(f)) for f in flat.loader_fields
-            }
+            providers = {f.name: factory(f, _window(f)) for f in flat.loader_fields}
 
             def _abs(f: LoaderField, when: float):
                 epoch = epochs[f.name]
@@ -442,17 +439,15 @@ def _simulate_with_loaders(
                         f, providers[f.name].refresh(_abs(f, when)), target
                     )
 
-            seg_ends = _provider_segment_boundaries(
-                discrete_fields, providers, epochs, t0, t1
-            ) + [t1]
+            seg_ends = _provider_segment_boundaries(discrete_fields, providers, epochs, t0, t1) + [
+                t1
+            ]
 
         # CONST loaders: execute ONCE before integration. DISCRETE loaders: seed
         # the first segment's value (refreshed at boundaries below).
         _seed()
 
-        build = _build_numpy_rhs(
-            flat, parameters, initial_conditions, loader_arrays=loader_arrays
-        )
+        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
         rhs_function = build.rhs_function
         elem_names = _element_names(build.state_names, build.shapes)
 
@@ -483,16 +478,19 @@ def _simulate_with_loaders(
             last_message = sol.message
             if not sol.success:
                 return SimulationResult(
-                    t=np.array([]), y=np.array([[]]), vars=[], success=False,
+                    t=np.array([]),
+                    y=np.array([[]]),
+                    vars=[],
+                    success=False,
                     message=(
                         f"Simulation failed in cadence segment "
                         f"[{t_current}, {seg_end}]: {sol.message}"
                     ),
-                    nfev=nfev, njev=njev, nlu=nlu,
+                    nfev=nfev,
+                    njev=njev,
+                    nlu=nlu,
                 )
-            seg_t, seg_y = _densify_solution(
-                sol, (t_current, seg_end), min_points=per_seg_pts
-            )
+            seg_t, seg_y = _densify_solution(sol, (t_current, seg_end), min_points=per_seg_pts)
             # Drop the seam node (shared with the previous segment's end; the
             # state is continuous across a loader refresh, only the forcing
             # jumps) so the stitched trajectory has no duplicated time point.
@@ -511,14 +509,26 @@ def _simulate_with_loaders(
         t_out = np.concatenate(t_chunks)
         y_out = np.concatenate(y_chunks, axis=1)
         return SimulationResult(
-            t=t_out, y=y_out, vars=list(elem_names), success=True,
-            message=last_message, nfev=nfev, njev=njev, nlu=nlu,
+            t=t_out,
+            y=y_out,
+            vars=list(elem_names),
+            success=True,
+            message=last_message,
+            nfev=nfev,
+            njev=njev,
+            nlu=nlu,
         )
 
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
         return SimulationResult(
-            t=np.array([]), y=np.array([[]]), vars=[], success=False,
-            message=f"Simulation failed: {e}", nfev=0, njev=0, nlu=0,
+            t=np.array([]),
+            y=np.array([[]]),
+            vars=[],
+            success=False,
+            message=f"Simulation failed: {e}",
+            nfev=0,
+            njev=0,
+            nlu=0,
         )

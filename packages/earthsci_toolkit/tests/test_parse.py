@@ -2,11 +2,9 @@
 
 import json
 import pytest
-import jsonschema
 
 from earthsci_toolkit import load
 from earthsci_toolkit.parse import _parse_expression, SchemaValidationError
-from earthsci_toolkit.serialize import _serialize_expression
 from earthsci_toolkit.esm_types import ExprNode, EsmFile
 
 
@@ -34,10 +32,7 @@ def test_parse_simple_expression():
     assert _parse_expression("x") == "x"
 
     # Test expression node
-    expr_data = {
-        "op": "+",
-        "args": [1, 2]
-    }
+    expr_data = {"op": "+", "args": [1, 2]}
     expr = _parse_expression(expr_data)
     assert isinstance(expr, ExprNode)
     assert expr.op == "+"
@@ -46,16 +41,7 @@ def test_parse_simple_expression():
 
 def test_parse_nested_expression():
     """Test parsing of nested expressions."""
-    expr_data = {
-        "op": "*",
-        "args": [
-            {
-                "op": "+",
-                "args": ["x", 1]
-            },
-            2
-        ]
-    }
+    expr_data = {"op": "*", "args": [{"op": "+", "args": ["x", 1]}, 2]}
     expr = _parse_expression(expr_data)
     assert isinstance(expr, ExprNode)
     assert expr.op == "*"
@@ -72,24 +58,13 @@ def test_load_minimal_valid_esm():
     """Test loading a minimal valid ESM file."""
     minimal_esm = {
         "esm": "0.1.0",
-        "metadata": {
-            "name": "Test Model"
-        },
+        "metadata": {"name": "Test Model"},
         "models": {
             "test_model": {
-                "variables": {
-                    "x": {
-                        "type": "state"
-                    }
-                },
-                "equations": [
-                    {
-                        "lhs": "x",
-                        "rhs": 1
-                    }
-                ]
+                "variables": {"x": {"type": "state"}},
+                "equations": [{"lhs": "x", "rhs": 1}],
             }
-        }
+        },
     }
 
     json_str = json.dumps(minimal_esm)
@@ -112,35 +87,25 @@ def test_load_reaction_system():
     """Test loading an ESM file with reaction system."""
     rs_esm = {
         "esm": "0.1.0",
-        "metadata": {
-            "name": "Reaction Test"
-        },
+        "metadata": {"name": "Reaction Test"},
         "reaction_systems": {
             "test_reactions": {
-                "species": {
-                    "A": {"units": "mol"},
-                    "B": {"units": "mol"},
-                    "C": {"units": "mol"}
-                },
-                "parameters": {
-                    "k1": {"units": "1/(mol*s)", "default": 0.1}
-                },
+                "species": {"A": {"units": "mol"}, "B": {"units": "mol"}, "C": {"units": "mol"}},
+                "parameters": {"k1": {"units": "1/(mol*s)", "default": 0.1}},
                 "reactions": [
                     {
                         "id": "R1",
                         "name": "A + B -> C",
                         "substrates": [
                             {"species": "A", "stoichiometry": 1},
-                            {"species": "B", "stoichiometry": 1}
+                            {"species": "B", "stoichiometry": 1},
                         ],
-                        "products": [
-                            {"species": "C", "stoichiometry": 1}
-                        ],
-                        "rate": "k1"
+                        "products": [{"species": "C", "stoichiometry": 1}],
+                        "rate": "k1",
                     }
-                ]
+                ],
             }
-        }
+        },
     }
 
     json_str = json.dumps(rs_esm)
@@ -174,11 +139,7 @@ def test_load_reaction_system():
 
 def test_expression_with_metadata():
     """Test parsing expressions with wrt and dim metadata."""
-    expr_data = {
-        "op": "D",
-        "args": ["x"],
-        "wrt": "t"
-    }
+    expr_data = {"op": "D", "args": ["x"], "wrt": "t"}
     expr = _parse_expression(expr_data)
     assert isinstance(expr, ExprNode)
     assert expr.op == "D"
@@ -186,11 +147,7 @@ def test_expression_with_metadata():
     assert expr.wrt == "t"
     assert expr.dim is None
 
-    expr_data_with_dim = {
-        "op": "grad",
-        "args": ["T"],
-        "dim": "x"
-    }
+    expr_data_with_dim = {"op": "grad", "args": ["T"], "dim": "x"}
     expr = _parse_expression(expr_data_with_dim)
     assert expr.dim == "x"
 
@@ -200,7 +157,7 @@ def test_operator_field_requirements():
     # Test that D operator requires wrt field
     expr_data_d_no_wrt = {
         "op": "D",
-        "args": ["x"]
+        "args": ["x"],
         # Missing wrt field
     }
     with pytest.raises(ValueError, match="Operator 'D' requires 'wrt' field to be specified"):
@@ -209,17 +166,14 @@ def test_operator_field_requirements():
     # Test that grad operator requires dim field
     expr_data_grad_no_dim = {
         "op": "grad",
-        "args": ["T"]
+        "args": ["T"],
         # Missing dim field
     }
     with pytest.raises(ValueError, match="Operator 'grad' requires 'dim' field to be specified"):
         _parse_expression(expr_data_grad_no_dim)
 
     # Test that other operators work without these fields
-    expr_data_other = {
-        "op": "+",
-        "args": [1, 2]
-    }
+    expr_data_other = {"op": "+", "args": [1, 2]}
     expr = _parse_expression(expr_data_other)
     assert isinstance(expr, ExprNode)
     assert expr.op == "+"
@@ -240,16 +194,16 @@ def test_load_comprehensive_fields():
                     {
                         "name": "reset_event",
                         "trigger": {"type": "periodic", "interval": 100},
-                        "affects": [{"lhs": "x", "rhs": 0}]
+                        "affects": [{"lhs": "x", "rhs": 0}],
                     }
                 ],
                 "continuous_events": [
                     {
                         "name": "threshold_event",
                         "conditions": [{"op": ">", "args": ["x", 10]}],
-                        "affects": [{"lhs": "x", "rhs": 5}]
+                        "affects": [{"lhs": "x", "rhs": 5}],
                     }
-                ]
+                ],
             }
         },
         "data_loaders": {
@@ -260,30 +214,30 @@ def test_load_comprehensive_fields():
                     "temperature": {
                         "file_variable": "t",
                         "units": "K",
-                        "description": "Air temperature"
+                        "description": "Air temperature",
                     },
                     "pressure": {
                         "file_variable": "p",
                         "units": "Pa",
-                        "description": "Air pressure"
-                    }
-                }
+                        "description": "Air pressure",
+                    },
+                },
             }
         },
         "coupling": [
             {
                 "type": "operator_compose",
                 "systems": ["model1", "model2"],
-                "description": "Compose two models"
+                "description": "Compose two models",
             },
             {
                 "type": "variable_map",
                 "from": "weather.temperature",
                 "to": "test_model.T",
                 "transform": "param_to_var",
-                "description": "Map temperature"
-            }
-        ]
+                "description": "Map temperature",
+            },
+        ],
     }
 
     json_str = json.dumps(comprehensive_esm)

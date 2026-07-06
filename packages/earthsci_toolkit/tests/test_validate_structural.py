@@ -45,9 +45,11 @@ class TestStructuralValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": "undefined_var"}]  # Reference to undefined variable
+                    "equations": [
+                        {"lhs": "x", "rhs": "undefined_var"}
+                    ],  # Reference to undefined variable
                 }
-            }
+            },
         }
 
         # This should be caught by structural validation
@@ -55,8 +57,11 @@ class TestStructuralValidation:
         if not result.is_valid:
             # Validation found errors - that's what we expect
             all_errors = result.schema_errors + result.structural_errors
-            error_text = ' '.join(str(e) for e in all_errors).lower()
-            assert any(keyword in error_text for keyword in ["undefined", "reference", "variable", "unknown"])
+            error_text = " ".join(str(e) for e in all_errors).lower()
+            assert any(
+                keyword in error_text
+                for keyword in ["undefined", "reference", "variable", "unknown"]
+            )
 
     def test_var_placeholder_tolerated_in_nested_operator(self, fixtures_dir):
         """`_var` (the reserved operator placeholder, spec §6.4) must be accepted
@@ -77,10 +82,13 @@ class TestStructuralValidation:
                     "equations": [
                         {
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [
-                                {"op": "-", "args": ["u"]},
-                                {"op": "grad", "args": ["_var"], "dim": "lon"},
-                            ]},
+                            "rhs": {
+                                "op": "*",
+                                "args": [
+                                    {"op": "-", "args": ["u"]},
+                                    {"op": "grad", "args": ["_var"], "dim": "lon"},
+                                ],
+                            },
                         }
                     ],
                 }
@@ -92,7 +100,8 @@ class TestStructuralValidation:
         # And validate() must not surface an undefined-reference error for `_var`.
         result = validate(advection)
         ref_errors = [
-            e for e in (result.schema_errors + result.structural_errors)
+            e
+            for e in (result.schema_errors + result.structural_errors)
             if "undefined variable reference" in e.message and "_var" in e.message
         ]
         assert ref_errors == [], (
@@ -116,12 +125,15 @@ class TestStructuralValidation:
                     "equations": [
                         {
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [
-                                {"op": "-", "args": ["u"]},
-                                # `typo_missing` is not a declared variable and
-                                # is not the reserved `_var` placeholder.
-                                {"op": "grad", "args": ["typo_missing"], "dim": "lon"},
-                            ]},
+                            "rhs": {
+                                "op": "*",
+                                "args": [
+                                    {"op": "-", "args": ["u"]},
+                                    # `typo_missing` is not a declared variable and
+                                    # is not the reserved `_var` placeholder.
+                                    {"op": "grad", "args": ["typo_missing"], "dim": "lon"},
+                                ],
+                            },
                         }
                     ],
                 }
@@ -140,20 +152,20 @@ class TestStructuralValidation:
                 "test_model": {
                     "variables": {
                         "x": {"type": "state", "units": "kg"},
-                        "y": {"type": "state", "units": "m"}
+                        "y": {"type": "state", "units": "m"},
                     },
                     "equations": [
                         {"lhs": "x", "rhs": {"op": "+", "args": ["x", "y"]}}  # Unit mismatch
-                    ]
+                    ],
                 }
-            }
+            },
         }
 
         # Unit validation might catch this
         try:
             result = validate(json.dumps(invalid_esm))
             # Some implementations might allow this at parse time but flag in validation
-            if hasattr(result, 'warnings') and result.unit_warnings:
+            if hasattr(result, "warnings") and result.unit_warnings:
                 assert any("unit" in str(w).lower() for w in result.unit_warnings)
         except Exception as e:
             # If an exception is raised, it should mention units or type mismatch
@@ -171,7 +183,9 @@ class TestStructuralValidation:
                 load(content)
 
             error = str(exc_info.value).lower()
-            assert any(keyword in error for keyword in ["coupling", "resolution", "consistency", "connect"])
+            assert any(
+                keyword in error for keyword in ["coupling", "resolution", "consistency", "connect"]
+            )
 
     def test_reaction_system_mass_balance(self, fixtures_dir):
         """Test reaction system mass balance validation."""
@@ -183,22 +197,30 @@ class TestStructuralValidation:
                 "test_rs": {
                     "species": {"A": {}, "B": {}, "C": {}},
                     "parameters": {"k": {"default": 0.1}},
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": [{"species": "A", "stoichiometry": 1}],
-                        "products": [{"species": "B", "stoichiometry": 2}],  # Mass imbalance: 1 -> 2
-                        "rate": "k"
-                    }]
+                    "reactions": [
+                        {
+                            "id": "R1",
+                            "substrates": [{"species": "A", "stoichiometry": 1}],
+                            "products": [
+                                {"species": "B", "stoichiometry": 2}
+                            ],  # Mass imbalance: 1 -> 2
+                            "rate": "k",
+                        }
+                    ],
                 }
-            }
+            },
         }
 
         # This might be caught by chemical validation
         result = validate(json.dumps(invalid_esm))
         # Mass balance issues might be warnings rather than errors
-        if hasattr(result, 'warnings'):
-            warnings_text = ' '.join(str(w) for w in result.unit_warnings).lower()
-            if "mass" in warnings_text or "balance" in warnings_text or "conservation" in warnings_text:
+        if hasattr(result, "warnings"):
+            warnings_text = " ".join(str(w) for w in result.unit_warnings).lower()
+            if (
+                "mass" in warnings_text
+                or "balance" in warnings_text
+                or "conservation" in warnings_text
+            ):
                 assert True  # Found expected warning
 
         # Or it might be valid from schema perspective but flagged elsewhere
@@ -210,25 +232,34 @@ class TestStructuralValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "domains": {"default": {
-                "spatial": {"x": {"min": 0, "max": 10}},
-                "boundary_conditions": [{
-                    "type": "constant",
-                    "dimensions": ["y"],  # Reference to non-existent dimension
-                    "value": 0
-                }]
-            }}
+            "domains": {
+                "default": {
+                    "spatial": {"x": {"min": 0, "max": 10}},
+                    "boundary_conditions": [
+                        {
+                            "type": "constant",
+                            "dimensions": ["y"],  # Reference to non-existent dimension
+                            "value": 0,
+                        }
+                    ],
+                }
+            },
         }
 
         result = validate(json.dumps(invalid_esm))
         if not result.is_valid:
             all_errors = result.schema_errors + result.structural_errors
-            errors_text = ' '.join(str(e) for e in all_errors).lower()
-            assert any(keyword in errors_text for keyword in ["dimension", "boundary", "domain", "reference"])
+            errors_text = " ".join(str(e) for e in all_errors).lower()
+            assert any(
+                keyword in errors_text
+                for keyword in ["dimension", "boundary", "domain", "reference"]
+            )
 
     def test_data_loader_configuration_errors(self, fixtures_dir):
         """Test data loader configuration validation."""
-        data_loader_error_file = fixtures_dir / "invalid" / "data_loader_config_schema_violation.esm"
+        data_loader_error_file = (
+            fixtures_dir / "invalid" / "data_loader_config_schema_violation.esm"
+        )
 
         if data_loader_error_file.exists():
             with open(data_loader_error_file) as f:
@@ -247,15 +278,12 @@ class TestStructuralValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {
-                "model1": {
-                    "variables": {"x": {"type": "state"}},
-                    "equations": []
-                },
+                "model1": {"variables": {"x": {"type": "state"}}, "equations": []},
                 "model2": {
                     "variables": {"x": {"type": "state"}},  # Same name as model1.x
-                    "equations": [{"lhs": "x", "rhs": "model1.x"}]  # Reference should be clear
-                }
-            }
+                    "equations": [{"lhs": "x", "rhs": "model1.x"}],  # Reference should be clear
+                },
+            },
         }
 
         # Scope resolution should handle this correctly or flag ambiguity
@@ -271,15 +299,17 @@ class TestStructuralValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": {
-                            "op": "+",
-                            "args": [1]  # Invalid: + operator requires at least 2 arguments
+                    "equations": [
+                        {
+                            "lhs": "x",
+                            "rhs": {
+                                "op": "+",
+                                "args": [1],  # Invalid: + operator requires at least 2 arguments
+                            },
                         }
-                    }]
+                    ],
                 }
-            }
+            },
         }
 
         with pytest.raises((SchemaValidationError, ValueError)) as exc_info:
@@ -296,20 +326,26 @@ class TestStructuralValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": "${undefined_placeholder}"  # Reference to undefined placeholder
-                    }]
+                    "equations": [
+                        {
+                            "lhs": "x",
+                            "rhs": "${undefined_placeholder}",  # Reference to undefined placeholder
+                        }
+                    ],
                 }
-            }
+            },
         }
 
         # This might be caught during substitution or validation
         try:
             result = validate(json.dumps(invalid_esm))
             if not result.is_valid:
-                errors_text = ' '.join(str(e) for e in result.schema_errors + result.structural_errors).lower()
-                assert any(keyword in errors_text for keyword in ["placeholder", "undefined", "reference"])
+                errors_text = " ".join(
+                    str(e) for e in result.schema_errors + result.structural_errors
+                ).lower()
+                assert any(
+                    keyword in errors_text for keyword in ["placeholder", "undefined", "reference"]
+                )
         except Exception as e:
             error = str(e).lower()
             assert any(keyword in error for keyword in ["placeholder", "undefined", "substitution"])
@@ -326,7 +362,10 @@ class TestErrorCodeSpecificity:
             # Wrong type
             ('{"esm": 123, "metadata": {"name": "Test"}}', "type"),
             # Invalid enum value
-            ('{"esm": "0.1.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}', "enum"),
+            (
+                '{"esm": "0.1.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}',
+                "enum",
+            ),
         ]
 
         for invalid_json, expected_error_type in invalid_cases:
@@ -345,15 +384,17 @@ class TestErrorCodeSpecificity:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": {
-                            "op": "unknown op",  # Malformed operator (embedded space) — rejected by the op pattern
-                            "args": ["x", "y"]
+                    "equations": [
+                        {
+                            "lhs": "x",
+                            "rhs": {
+                                "op": "unknown op",  # Malformed operator (embedded space) — rejected by the op pattern
+                                "args": ["x", "y"],
+                            },
                         }
-                    }]
+                    ],
                 }
-            }
+            },
         }
 
         with pytest.raises((SchemaValidationError, Exception)) as exc_info:
@@ -361,7 +402,9 @@ class TestErrorCodeSpecificity:
 
         error_msg = str(exc_info.value)
         # Should include location information
-        assert any(keyword in error_msg for keyword in ["test_model", "equations", "op", "unknown_op"])
+        assert any(
+            keyword in error_msg for keyword in ["test_model", "equations", "op", "unknown_op"]
+        )
 
 
 class TestValidationWithFixtures:
@@ -442,7 +485,8 @@ class TestValidationWithFixtures:
         result = validate(content)
         assert not result.is_valid
         matches = [
-            e for e in result.structural_errors
+            e
+            for e in result.structural_errors
             if e.code == "unit_inconsistency"
             and e.path == "/reaction_systems/BadReactions/reactions/0"
         ]
@@ -477,10 +521,7 @@ class TestValidationWithFixtures:
         result = validate(content)
         assert not result.is_valid
         assert result.schema_errors == []
-        matches = [
-            e for e in result.structural_errors
-            if e.code == "ic_in_reaction_system"
-        ]
+        matches = [e for e in result.structural_errors if e.code == "ic_in_reaction_system"]
         assert len(matches) == 1, (
             f"expected one ic_in_reaction_system error, got "
             f"{[(e.code, e.path) for e in result.structural_errors]}"
@@ -496,29 +537,32 @@ class TestValidationWithFixtures:
     def test_normal_reaction_system_no_ic_false_positive(self, fixtures_dir):
         """A reaction system without an `ic` in its constraint_equations must not
         trip the ic_in_reaction_system diagnostic (no false positives)."""
-        content = json.dumps({
-            "esm": "0.8.0",
-            "metadata": {"name": "ok", "authors": ["t"],
-                         "created": "2026-07-01T00:00:00Z"},
-            "reaction_systems": {
-                "Chemistry": {
-                    "species": {"O3": {"units": "mol/mol", "default": 4.0e-8}},
-                    "parameters": {"k": {"units": "1/s", "default": 1.0e-3}},
-                    "reactions": [{
-                        "id": "R1", "name": "O3_loss",
-                        "substrates": [{"species": "O3", "stoichiometry": 1}],
-                        "products": None, "rate": "k",
-                    }],
-                    "constraint_equations": [
-                        {"lhs": "O3", "rhs": 4.0e-8},
-                    ],
-                }
-            },
-        })
-        result = validate(content)
-        assert not any(
-            e.code == "ic_in_reaction_system" for e in result.structural_errors
+        content = json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "ok", "authors": ["t"], "created": "2026-07-01T00:00:00Z"},
+                "reaction_systems": {
+                    "Chemistry": {
+                        "species": {"O3": {"units": "mol/mol", "default": 4.0e-8}},
+                        "parameters": {"k": {"units": "1/s", "default": 1.0e-3}},
+                        "reactions": [
+                            {
+                                "id": "R1",
+                                "name": "O3_loss",
+                                "substrates": [{"species": "O3", "stoichiometry": 1}],
+                                "products": None,
+                                "rate": "k",
+                            }
+                        ],
+                        "constraint_equations": [
+                            {"lhs": "O3", "rhs": 4.0e-8},
+                        ],
+                    }
+                },
+            }
         )
+        result = validate(content)
+        assert not any(e.code == "ic_in_reaction_system" for e in result.structural_errors)
 
     def test_all_valid_fixtures_pass_validation(self, fixtures_dir):
         """Test that all files in valid/ directory pass validation."""
@@ -543,4 +587,4 @@ class TestValidationWithFixtures:
 
         if failed_files:
             errors = [f"{file}: {error}" for file, error in failed_files]
-            pytest.fail(f"These valid files failed validation:\n" + "\n".join(errors))
+            pytest.fail("These valid files failed validation:\n" + "\n".join(errors))

@@ -17,6 +17,7 @@ The runner discovers it via ``$EARTHSCI_PDE_SIM_ADAPTER_PYTHON`` or on PATH:
 Emits ``{"binding":"python","fixtures":{<id>:{"rhs":{<probe>:{name:val}},
 "trajectory":{<tstr>:{name:val}}}}}`` with bare ``u[i]`` element names.
 """
+
 from __future__ import annotations
 
 import sys
@@ -75,7 +76,8 @@ def run_fixture(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
     result = simulate(
-        esm, tspan,
+        esm,
+        tspan,
         initial_conditions=dict(tr["initial_conditions"]),
         method=integ.get("method", "RK45"),
         rtol=float(integ.get("rtol", 1e-10)),
@@ -98,8 +100,7 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
 
     # Every loaded field enters through the provider seam, keyed by its declared
     # loader name; materialized ONCE at build time (t0) into loader_arrays (R2).
-    providers = {name: _StubLoaderProvider(field)
-                 for name, field in fixture["inputs"].items()}
+    providers = {name: _StubLoaderProvider(field) for name, field in fixture["inputs"].items()}
     checkpoints = [float(c) for c in fixture["trajectory"]["checkpoints"]]
     t0 = checkpoints[0]
     loaded_arrays = {
@@ -113,16 +114,15 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     # loaded wind/inflow forcing reaches the stencil through loader_arrays.
     rhs: Dict[str, Dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
-        build = _build_numpy_rhs(flat, {}, dict(probe["state"]),
-                                 loader_arrays=loaded_arrays)
+        build = _build_numpy_rhs(flat, {}, dict(probe["state"]), loader_arrays=loaded_arrays)
         dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
-        rhs[probe["id"]] = {_bare(n): float(v)
-                            for n, v in zip(build.elem_names, dy)}
+        rhs[probe["id"]] = {_bare(n): float(v) for n, v in zip(build.elem_names, dy)}
 
     # --- Trajectory via the sanctioned provider-injected simulate path --------
     tspan = (checkpoints[0], checkpoints[-1])
     result = simulate(
-        esm, tspan,
+        esm,
+        tspan,
         providers=providers,
         method=integ.get("method", "RK45"),
         rtol=float(integ.get("rtol", 1e-10)),
@@ -134,18 +134,19 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     return {"rhs": rhs, "trajectory": traj}
 
 
-def _run_fixture(fixture: Dict[str, Any], manifest: Dict[str, Any],
-                 manifest_path: Path) -> Dict[str, Any]:
+def _run_fixture(
+    fixture: Dict[str, Any], manifest: Dict[str, Any], manifest_path: Path
+) -> Dict[str, Any]:
     integ = manifest.get("integrators", {}).get("python", {})
     base = manifest_path.parent
-    runner = (run_fixture_full if fixture.get("pipeline") == "full"
-              else run_fixture)
+    runner = run_fixture_full if fixture.get("pipeline") == "full" else run_fixture
     return runner(fixture, base, integ)
 
 
 def main(argv=None) -> int:
-    return adapter_main(argv, description="Python PDE-simulation conformance adapter",
-                        run_fixture=_run_fixture)
+    return adapter_main(
+        argv, description="Python PDE-simulation conformance adapter", run_fixture=_run_fixture
+    )
 
 
 if __name__ == "__main__":

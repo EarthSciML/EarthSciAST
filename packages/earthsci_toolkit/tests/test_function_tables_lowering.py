@@ -13,6 +13,7 @@ catches lowering-side mistakes (wrong output slice, swapped axis order,
 dropped input expression) by computing the reference value from the raw
 ``function_tables`` block independently of the parsed ``table_lookup`` node.
 """
+
 from __future__ import annotations
 
 import struct
@@ -45,9 +46,7 @@ def _resolve_axis_value(expr: Any, vars: Dict[str, ModelVariable]) -> float:
         var = vars[expr]
         assert var.default is not None, f"variable {expr!r} has no default"
         return float(var.default)
-    raise AssertionError(
-        f"complex axis input expression not exercised by fixtures: {expr!r}"
-    )
+    raise AssertionError(f"complex axis input expression not exercised by fixtures: {expr!r}")
 
 
 def _resolve_output_index(node: ExprNode, outputs: Optional[List[str]]) -> int:
@@ -68,9 +67,7 @@ def _slice_2d(data: Any, idx: int, has_outputs: bool) -> List[List[float]]:
     return [list(map(float, r)) for r in rows]
 
 
-def _lower_and_evaluate(
-    node: ExprNode, file: EsmFile, vars: Dict[str, ModelVariable]
-) -> float:
+def _lower_and_evaluate(node: ExprNode, file: EsmFile, vars: Dict[str, ModelVariable]) -> float:
     """Lower a parsed table_lookup → interp.* inline-const invocation, evaluate."""
     assert node.op == "table_lookup"
     assert not node.args, "table_lookup.args MUST be empty"

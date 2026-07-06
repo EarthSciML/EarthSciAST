@@ -27,9 +27,7 @@ FIXTURE = {
     "function_tables": {
         "sigma_O3": {
             "description": "1-D linear table",
-            "axes": [
-                {"name": "lambda_idx", "values": [1, 2, 3, 4]}
-            ],
+            "axes": [{"name": "lambda_idx", "values": [1, 2, 3, 4]}],
             "interpolation": "linear",
             "out_of_bounds": "clamp",
             "data": [1.1e-17, 1.0e-17, 9.5e-18, 8.7e-18],

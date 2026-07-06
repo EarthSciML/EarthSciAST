@@ -97,7 +97,9 @@ def _esm_file(transform) -> EsmFile:
         ],
     )
     vm = VariableMapCoupling(
-        from_var="Src.F", to_var="Sink.F_in", transform=transform,
+        from_var="Src.F",
+        to_var="Sink.F_in",
+        transform=transform,
     )
     return EsmFile(
         version="0.8.0",
@@ -206,9 +208,9 @@ def test_flatten_expression_transform_promotes_target_to_observed():
 
     # The consumer ODE still references Sink.F_in (no substitution).
     u_eqs = [
-        e for e in flat.equations
-        if isinstance(e.lhs, ExprNode) and e.lhs.op == "D"
-        and e.lhs.args == ["Sink.u"]
+        e
+        for e in flat.equations
+        if isinstance(e.lhs, ExprNode) and e.lhs.op == "D" and e.lhs.args == ["Sink.u"]
     ]
     assert len(u_eqs) == 1
     assert u_eqs[0].rhs == "Sink.F_in"

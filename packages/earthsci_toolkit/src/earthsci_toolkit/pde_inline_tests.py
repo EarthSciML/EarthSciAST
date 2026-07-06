@@ -114,8 +114,7 @@ def evaluate_cellwise(
     :attr:`BuildInspection.params`) and a parameter-dependent expression
     resolves (esm-spec §6.6.5). A scalar (const-folded) result broadcasts.
     """
-    value = _eval_buildtime_field(expr, index_sets=index_sets,
-                                  param_values=params)
+    value = _eval_buildtime_field(expr, index_sets=index_sets, param_values=params)
     if np.ndim(value) == 0:
         return [float(value)] * len(cells)
     arr = np.asarray(value, dtype=float)
@@ -157,9 +156,7 @@ def field_reduce(
             raise ValueError(f"field_reduce: `{k}` requires a reference field")
         r = np.asarray(reference, dtype=float)
         if r.shape != a.shape:
-            raise ValueError(
-                f"field_reduce: actual has {a.size} cells but reference has {r.size}"
-            )
+            raise ValueError(f"field_reduce: actual has {a.size} cells but reference has {r.size}")
         diff = a - r
         if k == "L2_error":
             refnorm = float(np.sqrt(np.sum(r * r)))
@@ -292,12 +289,9 @@ def _variable_shape(file: EsmFile, mname: str, variable: str) -> List[str]:
         raise RuntimeError(f"model '{mname}' not found")
     v = (model.variables or {}).get(str(variable))
     if v is None:
-        raise RuntimeError(
-            f"variable '{variable}' is not declared in model '{mname}'")
+        raise RuntimeError(f"variable '{variable}' is not declared in model '{mname}'")
     if not v.shape:
-        raise RuntimeError(
-            f"`coords` requires a spatially-shaped variable; "
-            f"'{variable}' is scalar")
+        raise RuntimeError(f"`coords` requires a spatially-shaped variable; '{variable}' is scalar")
     return [str(s) for s in v.shape]
 
 
@@ -317,33 +311,38 @@ def _coords_cell(
     for k in coords:
         if str(k) not in shape:
             raise RuntimeError(
-                f"`coords` names unknown dimension '{k}' "
-                f"(field dimensions: {', '.join(shape)})")
+                f"`coords` names unknown dimension '{k}' (field dimensions: {', '.join(shape)})"
+            )
     index_sets = index_sets or {}
     cell: List[int] = []
     for s in shape:
         entry = index_sets.get(s)
-        size = entry.get("size") if isinstance(entry, dict) and \
-            entry.get("kind") == "interval" else None
+        size = (
+            entry.get("size")
+            if isinstance(entry, dict) and entry.get("kind") == "interval"
+            else None
+        )
         if not isinstance(size, int) or isinstance(size, bool):
             raise RuntimeError(
                 f"`coords` sampling requires interval index sets with a "
-                f"declared size; '{s}' is not one")
+                f"declared size; '{s}' is not one"
+            )
         n = int(size)
         if s in coords:
             c = float(coords[s])
             idx = math.ceil(c - 0.5)  # nearest index; exact ties round DOWN
             if not 1 <= idx <= n:
                 raise RuntimeError(
-                    f"`coords` position {c} along '{s}' resolves to index "
-                    f"{idx}, outside 1..{n}")
+                    f"`coords` position {c} along '{s}' resolves to index {idx}, outside 1..{n}"
+                )
             cell.append(int(idx))
         else:
             if n != 1:
                 raise RuntimeError(
                     f"`coords` leaves dimension '{s}' unpinned with {n} "
                     f"samples; a strict subset pins only when every "
-                    f"remaining dimension is singleton")
+                    f"remaining dimension is singleton"
+                )
             cell.append(1)
     return cell
 
@@ -358,16 +357,19 @@ def _nested_at(data: Any, cell: List[int], exts: List[int]) -> float:
         if not isinstance(node, list):
             raise RuntimeError(
                 f"from_file reference shape mismatch along dimension {d}: "
-                f"expected a nested array of length {exts[d - 1]}")
+                f"expected a nested array of length {exts[d - 1]}"
+            )
         if len(node) != exts[d - 1]:
             raise RuntimeError(
                 f"from_file reference shape mismatch along dimension {d}: "
-                f"expected length {exts[d - 1]}, found {len(node)}")
+                f"expected length {exts[d - 1]}, found {len(node)}"
+            )
         node = node[i - 1]
     if not isinstance(node, (int, float)) or isinstance(node, bool):
         raise RuntimeError(
             f"from_file reference shape mismatch at cell "
-            f"[{','.join(str(c) for c in cell)}]: expected a number")
+            f"[{','.join(str(c) for c in cell)}]: expected a number"
+        )
     return float(node)
 
 
@@ -387,8 +389,8 @@ def _from_file_reference(
     fmt = "json" if fmt_raw is None else str(fmt_raw).lower()
     if fmt != "json":
         raise RuntimeError(
-            f"from_file reference format '{fmt}' is not supported "
-            f'(v1 supports "json" only)')
+            f"from_file reference format '{fmt}' is not supported (v1 supports \"json\" only)"
+        )
     path_raw = ref.get("path")
     if path_raw is None:
         raise RuntimeError("from_file reference is missing `path`")
@@ -439,10 +441,13 @@ def simulate_states(
     pathway fills with the build-time setup arrays / observed map (results
     are identical with or without it)."""
     result = simulate(
-        file, tspan,
+        file,
+        tspan,
         parameters=dict(parameters or {}),
         initial_conditions=dict(initial_conditions or {}),
-        method=method, rtol=rtol, atol=atol,
+        method=method,
+        rtol=rtol,
+        atol=atol,
         inspect=inspect,
     )
     if not result.success:
@@ -453,9 +458,7 @@ def simulate_states(
     for t in saveat:
         ti = int(np.argmin(np.abs(result.t - float(t))))
         if abs(float(result.t[ti]) - float(t)) > 1e-9 * max(1.0, abs(float(t))):
-            raise RuntimeError(
-                f"no saved state at t={t} (nearest {float(result.t[ti])})"
-            )
+            raise RuntimeError(f"no saved state at t={t} (nearest {float(result.t[ti])})")
         times.append(float(result.t[ti]))
         states.append(np.asarray(result.y[:, ti], dtype=float))
     return SimulatedStates(times=times, states=states, var_map=var_map)
@@ -530,9 +533,7 @@ def _ephemeral_injected_file(
         injected = True
         break
     if not injected:
-        raise ValueError(
-            f"component '{mname}' not found for per-test injection "
-            "(esm-spec §9.7.10)")
+        raise ValueError(f"component '{mname}' not found for per-test injection (esm-spec §9.7.10)")
     return load(json.dumps(raw), base_path=str(base_dir))
 
 
@@ -596,20 +597,16 @@ def run_pde_tests(
             run_model = model
             if t.expression_template_imports:
                 try:
-                    src = input if (isinstance(input, str)
-                                    and os.path.isfile(input)) else None
+                    src = input if (isinstance(input, str) and os.path.isfile(input)) else None
                     run_file = _ephemeral_injected_file(
-                        file, src, str(mname),
-                        t.expression_template_imports, resolved_base)
+                        file, src, str(mname), t.expression_template_imports, resolved_base
+                    )
                     rm = (run_file.models or {}).get(str(mname))
                     if rm is None:
-                        raise RuntimeError(
-                            f"component '{mname}' vanished from the ephemeral "
-                            "build")
+                        raise RuntimeError(f"component '{mname}' vanished from the ephemeral build")
                     run_model = rm
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
-                    sim_err = ("per-test discretization injection failed: "
-                               f"{err}")
+                    sim_err = f"per-test discretization injection failed: {err}"
                     run_file = None
             # Build inspection sink: a §6.6.5 assertion may target a
             # state-free ARRAY OBSERVED (the observed-assertion form); its
@@ -618,8 +615,12 @@ def run_pde_tests(
             if run_file is not None:
                 try:
                     sim = simulate_states(
-                        run_file, (t.time_span.start, t.time_span.end),
-                        method=method, rtol=rtol, atol=atol, saveat=times,
+                        run_file,
+                        (t.time_span.start, t.time_span.end),
+                        method=method,
+                        rtol=rtol,
+                        atol=atol,
+                        saveat=times,
                         parameters=t.parameter_overrides,
                         initial_conditions=t.initial_conditions,
                         inspect=insp,
@@ -629,12 +630,24 @@ def run_pde_tests(
                     sim = None
             eval_file = file if run_file is None else run_file
             for i, a in enumerate(t.assertions, start=1):
-                a_rtol, a_atol = _resolve_tolerance(run_model.tolerance,
-                                                    t.tolerance, a.tolerance)
+                a_rtol, a_atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
                 if sim is None:
-                    results.append(PdeAssertionResult(
-                        str(mname), t.id, i, a.variable, a.time, a.reduce,
-                        a.expected, None, a_rtol, a_atol, False, sim_err))
+                    results.append(
+                        PdeAssertionResult(
+                            str(mname),
+                            t.id,
+                            i,
+                            a.variable,
+                            a.time,
+                            a.reduce,
+                            a.expected,
+                            None,
+                            a_rtol,
+                            a_atol,
+                            False,
+                            sim_err,
+                        )
+                    )
                     continue
                 actual: Optional[float] = None
                 msg = ""
@@ -642,13 +655,11 @@ def run_pde_tests(
                     ti = times.index(float(a.time))
                     state = sim.states[ti]
                     if a.coords is not None and a.reduce is not None:
-                        raise RuntimeError(
-                            "`coords` and `reduce` are mutually exclusive")
+                        raise RuntimeError("`coords` and `reduce` are mutually exclusive")
                     if a.coords is None and a.reduce is None:
                         slot = _scalar_slot(sim.var_map, a.variable, str(mname))
                         if slot is None:
-                            raise RuntimeError(
-                                f"scalar state '{a.variable}' not found")
+                            raise RuntimeError(f"scalar state '{a.variable}' not found")
                         actual = float(state[slot])
                     else:
                         # `coords` validation runs BEFORE field
@@ -657,10 +668,8 @@ def run_pde_tests(
                         # message (identical to the Julia reference).
                         coords_target: Optional[List[int]] = None
                         if a.coords is not None:
-                            shape = _variable_shape(eval_file, str(mname),
-                                                    str(a.variable))
-                            coords_target = _coords_cell(a.coords, shape,
-                                                         eval_file.index_sets)
+                            shape = _variable_shape(eval_file, str(mname), str(a.variable))
+                            coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
                         cells = state_cells(sim.var_map, a.variable, str(mname))
                         if cells:
                             cell_tuples = [c for c, _ in cells]
@@ -676,10 +685,10 @@ def run_pde_tests(
                                     f"array state '{a.variable}' has no cells "
                                     f"in var_map, and no state-free array "
                                     f"observed of that name is exposed by the "
-                                    f"build inspection")
+                                    f"build inspection"
+                                )
                             idxs = list(np.ndindex(*obs.shape))
-                            cell_tuples = [[int(i) + 1 for i in idx]
-                                           for idx in idxs]
+                            cell_tuples = [[int(i) + 1 for i in idx] for idx in idxs]
                             field = [float(obs[idx]) for idx in idxs]
                         if coords_target is not None:
                             try:
@@ -688,44 +697,76 @@ def run_pde_tests(
                                 raise RuntimeError(
                                     f"no grid sample at cell "
                                     f"[{','.join(str(c) for c in coords_target)}]"
-                                    f" of '{a.variable}'") from None
+                                    f" of '{a.variable}'"
+                                ) from None
                             actual = float(field[pos])
                         else:
                             ref = None
                             if a.reference is not None:
-                                if isinstance(a.reference, dict) and \
-                                        a.reference.get("type") == "from_file":
+                                if (
+                                    isinstance(a.reference, dict)
+                                    and a.reference.get("type") == "from_file"
+                                ):
                                     ref = _from_file_reference(
-                                        a.reference, resolved_base, cell_tuples)
-                                elif isinstance(a.reference,
-                                                (ExprNode, int, float, str)):
+                                        a.reference, resolved_base, cell_tuples
+                                    )
+                                elif isinstance(a.reference, (ExprNode, int, float, str)):
                                     # Model parameters (load-time constants) are
                                     # in scope for a §6.6.5 analytic reference;
                                     # state is not. `insp.params` carries the
                                     # build's resolved scalar params.
                                     ref = evaluate_cellwise(
-                                        a.reference, cell_tuples,
+                                        a.reference,
+                                        cell_tuples,
                                         index_sets=eval_file.index_sets,
-                                        params=_param_scope_with_aliases(insp.params))
+                                        params=_param_scope_with_aliases(insp.params),
+                                    )
                                 else:
                                     raise RuntimeError(
-                                        "unsupported `reference` shape "
-                                        f"{type(a.reference)}")
+                                        f"unsupported `reference` shape {type(a.reference)}"
+                                    )
                             actual = field_reduce(a.reduce, field, reference=ref)
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
                     msg = f"assertion evaluation failed: {err}"
                 if actual is None:
-                    results.append(PdeAssertionResult(
-                        str(mname), t.id, i, a.variable, a.time, a.reduce,
-                        a.expected, None, a_rtol, a_atol, False, msg))
+                    results.append(
+                        PdeAssertionResult(
+                            str(mname),
+                            t.id,
+                            i,
+                            a.variable,
+                            a.time,
+                            a.reduce,
+                            a.expected,
+                            None,
+                            a_rtol,
+                            a_atol,
+                            False,
+                            msg,
+                        )
+                    )
                 else:
                     ok = _check_assertion(actual, a.expected, a_rtol, a_atol)
                     if not ok:
-                        msg = (f"actual={actual} expected={a.expected} "
-                               f"(rtol={a_rtol}, atol={a_atol})")
-                    results.append(PdeAssertionResult(
-                        str(mname), t.id, i, a.variable, a.time, a.reduce,
-                        a.expected, actual, a_rtol, a_atol, ok, msg))
+                        msg = (
+                            f"actual={actual} expected={a.expected} (rtol={a_rtol}, atol={a_atol})"
+                        )
+                    results.append(
+                        PdeAssertionResult(
+                            str(mname),
+                            t.id,
+                            i,
+                            a.variable,
+                            a.time,
+                            a.reduce,
+                            a.expected,
+                            actual,
+                            a_rtol,
+                            a_atol,
+                            ok,
+                            msg,
+                        )
+                    )
     return results
 
 

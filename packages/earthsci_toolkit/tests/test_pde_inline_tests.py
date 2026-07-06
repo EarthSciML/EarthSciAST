@@ -4,6 +4,7 @@ its supporting load/simulate capabilities: ``Assertion`` ``coords`` /
 ``ic`` seeding through the NumPy interpreter, ``evaluate_cellwise``,
 ``field_reduce``, ``state_cells``, and ``run_pde_tests`` — the Python mirror
 of the Julia reference's ``pde_inline_tests.jl``."""
+
 from __future__ import annotations
 
 import json
@@ -31,17 +32,16 @@ def _x_coord_aggregate() -> dict:
     """Cell-center coordinates x_i = (i - 1/2)/N over the ``x`` index set —
     the §9.7 grid-geometry aggregate shape (post-import expansion)."""
     return {
-        "op": "aggregate", "args": [], "output_idx": ["i"],
+        "op": "aggregate",
+        "args": [],
+        "output_idx": ["i"],
         "ranges": {"i": {"from": "x"}},
-        "expr": {"op": "*",
-                 "args": [{"op": "-", "args": ["i", 0.5]},
-                          {"op": "/", "args": [1, N]}]},
+        "expr": {"op": "*", "args": [{"op": "-", "args": ["i", 0.5]}, {"op": "/", "args": [1, N]}]},
     }
 
 
 def _cos_pi_x() -> dict:
-    return {"op": "cos",
-            "args": [{"op": "*", "args": [math.pi, _x_coord_aggregate()]}]}
+    return {"op": "cos", "args": [{"op": "*", "args": [math.pi, _x_coord_aggregate()]}]}
 
 
 def _decay_doc() -> dict:
@@ -52,39 +52,69 @@ def _decay_doc() -> dict:
         "esm": "0.8.0",
         "metadata": {"name": "pde_inline_decay"},
         "index_sets": {"x": {"kind": "interval", "size": N}},
-        "models": {"M": {
-            "variables": {
-                "u": {"type": "state", "units": "1", "shape": ["x"]},
-            },
-            "equations": [
-                {"lhs": {"op": "ic", "args": ["u"]}, "rhs": _cos_pi_x()},
-                {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                         "ranges": {"i": [1, N]},
-                         "expr": {"op": "D", "args": [idx], "wrt": "t"}},
-                 "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                         "ranges": {"i": [1, N]},
-                         "expr": {"op": "*", "args": [-1, idx]}}},
-            ],
-            "tests": [{
-                "id": "decay",
-                "time_span": {"start": 0.0, "end": 1.0},
-                "assertions": [
-                    # t=0 pins the coordinate-expression ic wiring exactly.
-                    {"variable": "u", "time": 0.0, "expected": 0.0,
-                     "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
-                     "reference": _cos_pi_x()},
-                    # t=1: pure integrator error against e^{-1} cos(pi x).
-                    {"variable": "u", "time": 1.0, "expected": 0.0,
-                     "tolerance": {"abs": 1e-8}, "reduce": "L2_error",
-                     "reference": {"op": "*",
-                                   "args": [{"op": "exp", "args": [-1]},
-                                            _cos_pi_x()]}},
-                    # Pure collapser: the symmetric cosine field has zero mean.
-                    {"variable": "u", "time": 1.0, "expected": 0.0,
-                     "tolerance": {"abs": 1e-9}, "reduce": "mean"},
+        "models": {
+            "M": {
+                "variables": {
+                    "u": {"type": "state", "units": "1", "shape": ["x"]},
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": _cos_pi_x()},
+                    {
+                        "lhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i"],
+                            "ranges": {"i": [1, N]},
+                            "expr": {"op": "D", "args": [idx], "wrt": "t"},
+                        },
+                        "rhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i"],
+                            "ranges": {"i": [1, N]},
+                            "expr": {"op": "*", "args": [-1, idx]},
+                        },
+                    },
                 ],
-            }],
-        }},
+                "tests": [
+                    {
+                        "id": "decay",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [
+                            # t=0 pins the coordinate-expression ic wiring exactly.
+                            {
+                                "variable": "u",
+                                "time": 0.0,
+                                "expected": 0.0,
+                                "tolerance": {"abs": 1e-12},
+                                "reduce": "L2_error",
+                                "reference": _cos_pi_x(),
+                            },
+                            # t=1: pure integrator error against e^{-1} cos(pi x).
+                            {
+                                "variable": "u",
+                                "time": 1.0,
+                                "expected": 0.0,
+                                "tolerance": {"abs": 1e-8},
+                                "reduce": "L2_error",
+                                "reference": {
+                                    "op": "*",
+                                    "args": [{"op": "exp", "args": [-1]}, _cos_pi_x()],
+                                },
+                            },
+                            # Pure collapser: the symmetric cosine field has zero mean.
+                            {
+                                "variable": "u",
+                                "time": 1.0,
+                                "expected": 0.0,
+                                "tolerance": {"abs": 1e-9},
+                                "reduce": "mean",
+                            },
+                        ],
+                    }
+                ],
+            }
+        },
     }
 
 
@@ -112,14 +142,15 @@ def test_assertion_reduce_reference_parse_and_roundtrip():
 def test_assertion_from_file_reference_roundtrips_verbatim():
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"][0]["reference"] = {
-        "type": "from_file", "path": "ref.nc", "format": "netcdf"}
+        "type": "from_file",
+        "path": "ref.nc",
+        "format": "netcdf",
+    }
     f = load(json.dumps(doc))
     a = f.models["M"].tests[0].assertions[0]
-    assert a.reference == {"type": "from_file", "path": "ref.nc",
-                           "format": "netcdf"}
+    assert a.reference == {"type": "from_file", "path": "ref.nc", "format": "netcdf"}
     ser = _serialize_esm_file(f)["models"]["M"]["tests"][0]["assertions"][0]
-    assert ser["reference"] == {"type": "from_file", "path": "ref.nc",
-                                "format": "netcdf"}
+    assert ser["reference"] == {"type": "from_file", "path": "ref.nc", "format": "netcdf"}
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +173,7 @@ def test_evaluate_cellwise_grid_geometry():
 def test_field_reduce_semantics():
     actual = [1.0, 2.0, 3.0]
     ref = [1.0, 2.0, 5.0]
-    assert field_reduce("L2_error", actual, reference=ref) == pytest.approx(
-        2.0 / math.sqrt(30.0))
+    assert field_reduce("L2_error", actual, reference=ref) == pytest.approx(2.0 / math.sqrt(30.0))
     assert field_reduce("Linf_error", actual, reference=ref) == 2.0
     assert field_reduce("mean", actual) == 2.0
     assert field_reduce("max", actual) == 3.0
@@ -200,8 +230,7 @@ def test_tolerance_precedence_and_isapprox_semantics():
 
 def test_run_pde_tests_decay_field():
     f = load(json.dumps(_decay_doc()))
-    results = run_pde_tests(f, model_name="M", method="LSODA",
-                            rtol=1e-12, atol=1e-14)
+    results = run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert [r.assertion_idx for r in results] == [1, 2, 3]
     by_idx = {r.assertion_idx: r for r in results}
     # t=0: the ic seeding IS the reference — zero up to the dense-output
@@ -219,12 +248,18 @@ def test_run_pde_tests_reports_failing_assertion_with_actual():
     # An impossible expectation: the decayed field cannot still match its
     # initial state at t=1 to 1e-12.
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        {"variable": "u", "time": 1.0, "expected": 0.0,
-         "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
-         "reference": _cos_pi_x()},
+        {
+            "variable": "u",
+            "time": 1.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "L2_error",
+            "reference": _cos_pi_x(),
+        },
     ]
-    results = run_pde_tests(load(json.dumps(doc)), model_name="M",
-                            method="LSODA", rtol=1e-12, atol=1e-14)
+    results = run_pde_tests(
+        load(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
+    )
     assert len(results) == 1
     r = results[0]
     assert not r.passed
@@ -237,8 +272,7 @@ def test_coordinate_expression_ic_seeds_grid(tmp_path):
     from earthsci_toolkit.pde_inline_tests import simulate_states
 
     f = load(json.dumps(_decay_doc()))
-    sim = simulate_states(f, (0.0, 1.0), method="LSODA", rtol=1e-12,
-                          atol=1e-14, saveat=[0.0])
+    sim = simulate_states(f, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
     cells = state_cells(sim.var_map, "u", "M")
     got = [sim.states[0][slot] for _, slot in cells]
     want = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
@@ -252,15 +286,18 @@ def test_coordinate_expression_ic_seeds_grid(tmp_path):
 
 
 def _coords_assert(coords, *, time=0.0, expected=0.0, abs_tol=1e-9, var="u"):
-    return {"variable": var, "time": time, "expected": expected,
-            "tolerance": {"abs": abs_tol}, "coords": dict(coords)}
+    return {
+        "variable": var,
+        "time": time,
+        "expected": expected,
+        "tolerance": {"abs": abs_tol},
+        "coords": dict(coords),
+    }
 
 
 def _run(doc_or_file, **kwargs):
-    f = load(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) \
-        else doc_or_file
-    return run_pde_tests(f, model_name="M", method="LSODA",
-                         rtol=1e-12, atol=1e-14, **kwargs)
+    f = load(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) else doc_or_file
+    return run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, **kwargs)
 
 
 def test_run_pde_tests_coords_sampling_nearest_ties_down():
@@ -270,17 +307,15 @@ def test_run_pde_tests_coords_sampling_nearest_ties_down():
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
         _coords_assert({"x": 3}, expected=u3),
-        _coords_assert({"x": 3.5}, expected=u3),   # tie → lower index 3
+        _coords_assert({"x": 3.5}, expected=u3),  # tie → lower index 3
         _coords_assert({"x": 2.5}, expected=math.cos(math.pi * 1.5 / N)),  # tie → 2
-        _coords_assert({"x": 5.6}, expected=u6),   # nearest → 6
-        _coords_assert({"x": 8.5}, expected=u8),   # tie at top edge → 8
-        _coords_assert({"x": 3}, time=1.0, expected=math.exp(-1.0) * u3,
-                       abs_tol=1e-8),
+        _coords_assert({"x": 5.6}, expected=u6),  # nearest → 6
+        _coords_assert({"x": 8.5}, expected=u8),  # tie at top edge → 8
+        _coords_assert({"x": 3}, time=1.0, expected=math.exp(-1.0) * u3, abs_tol=1e-8),
     ]
     results = _run(doc)
     assert len(results) == 6
-    assert all(r.passed for r in results), \
-        [(r.assertion_idx, r.message) for r in results]
+    assert all(r.passed for r in results), [(r.assertion_idx, r.message) for r in results]
     assert all(r.reduce is None for r in results)
     assert results[0].actual == results[1].actual
 
@@ -289,8 +324,8 @@ def test_run_pde_tests_coords_validation_rejections():
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
         _coords_assert({"y": 1.0}),
-        _coords_assert({"x": 0.4}),   # → index 0
-        _coords_assert({"x": 8.6}),   # → index 9
+        _coords_assert({"x": 0.4}),  # → index 0
+        _coords_assert({"x": 8.6}),  # → index 9
     ]
     results = _run(doc)
     assert len(results) == 3
@@ -306,16 +341,19 @@ def test_run_pde_tests_coords_on_scalar_variable_rejected():
     doc = {
         "esm": "0.8.0",
         "metadata": {"name": "scalar_coords"},
-        "models": {"M": {
-            "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
-            "equations": [
-                {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
-            "tests": [{
-                "id": "scalar",
-                "time_span": {"start": 0.0, "end": 1.0},
-                "assertions": [_coords_assert({"x": 1.0}, time=1.0, var="z")],
-            }],
-        }},
+        "models": {
+            "M": {
+                "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
+                "tests": [
+                    {
+                        "id": "scalar",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [_coords_assert({"x": 1.0}, time=1.0, var="z")],
+                    }
+                ],
+            }
+        },
     }
     results = _run(doc)
     assert len(results) == 1
@@ -328,8 +366,7 @@ def test_coords_and_reduce_are_mutually_exclusive_at_load():
 
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        {"variable": "u", "time": 0.0, "expected": 0.0,
-         "coords": {"x": 1}, "reduce": "mean"},
+        {"variable": "u", "time": 0.0, "expected": 0.0, "coords": {"x": 1}, "reduce": "mean"},
     ]
     with pytest.raises(SchemaValidationError):
         load(json.dumps(doc))
@@ -343,27 +380,40 @@ def _doc_2d(ny):
     return {
         "esm": "0.8.0",
         "metadata": {"name": "pde_inline_2d"},
-        "index_sets": {"x": {"kind": "interval", "size": 4},
-                       "y": {"kind": "interval", "size": ny}},
-        "models": {"M": {
-            "variables": {"u": {"type": "state", "units": "1",
-                                "shape": ["x", "y"]}},
-            "equations": [
-                {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
-                {"lhs": {"op": "aggregate", "args": [],
-                         "output_idx": ["i", "j"], "ranges": ranges,
-                         "expr": {"op": "D", "args": [idx], "wrt": "t"}},
-                 "rhs": {"op": "aggregate", "args": [],
-                         "output_idx": ["i", "j"], "ranges": ranges,
-                         "expr": 1.0}},
-            ],
-            "tests": [{
-                "id": "subset",
-                "time_span": {"start": 0.0, "end": 1.0},
-                "assertions": [_coords_assert({"x": 2}, time=1.0,
-                                              expected=1.0, abs_tol=1e-8)],
-            }],
-        }},
+        "index_sets": {"x": {"kind": "interval", "size": 4}, "y": {"kind": "interval", "size": ny}},
+        "models": {
+            "M": {
+                "variables": {"u": {"type": "state", "units": "1", "shape": ["x", "y"]}},
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                    {
+                        "lhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i", "j"],
+                            "ranges": ranges,
+                            "expr": {"op": "D", "args": [idx], "wrt": "t"},
+                        },
+                        "rhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i", "j"],
+                            "ranges": ranges,
+                            "expr": 1.0,
+                        },
+                    },
+                ],
+                "tests": [
+                    {
+                        "id": "subset",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [
+                            _coords_assert({"x": 2}, time=1.0, expected=1.0, abs_tol=1e-8)
+                        ],
+                    }
+                ],
+            }
+        },
     }
 
 
@@ -386,8 +436,14 @@ def test_coords_strict_subset_requires_singleton_remainder():
 
 
 def _from_file_assert(ref, *, reduce="L2_error", abs_tol=1e-12):
-    return {"variable": "u", "time": 0.0, "expected": 0.0,
-            "tolerance": {"abs": abs_tol}, "reduce": reduce, "reference": ref}
+    return {
+        "variable": "u",
+        "time": 0.0,
+        "expected": 0.0,
+        "tolerance": {"abs": abs_tol},
+        "reduce": reduce,
+        "reference": ref,
+    }
 
 
 def test_from_file_reference_happy_path(tmp_path):
@@ -396,23 +452,21 @@ def test_from_file_reference_happy_path(tmp_path):
     # The binding's own evaluated ic field, so the diff is exactly 0 (the
     # loaded array is used exactly like an evaluated reference field).
     f0 = load(json.dumps(_decay_doc()))
-    sim0 = simulate_states(f0, (0.0, 1.0), method="LSODA", rtol=1e-12,
-                           atol=1e-14, saveat=[0.0])
-    vals = [float(sim0.states[0][slot])
-            for _, slot in state_cells(sim0.var_map, "u", "M")]
+    sim0 = simulate_states(f0, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
+    vals = [float(sim0.states[0][slot]) for _, slot in state_cells(sim0.var_map, "u", "M")]
     (tmp_path / "ref.json").write_text(json.dumps(vals))
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
         _from_file_assert({"type": "from_file", "path": "ref.json"}),
-        _from_file_assert({"type": "from_file", "path": "ref.json",
-                           "format": "json"}, reduce="Linf_error"),
+        _from_file_assert(
+            {"type": "from_file", "path": "ref.json", "format": "json"}, reduce="Linf_error"
+        ),
     ]
     prob = tmp_path / "prob.esm"
     prob.write_text(json.dumps(doc))
 
     # Path input: base_dir defaults to the .esm file's directory.
-    results = run_pde_tests(str(prob), model_name="M", method="LSODA",
-                            rtol=1e-12, atol=1e-14)
+    results = run_pde_tests(str(prob), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 2
     for r in results:
         assert r.passed, r.message
@@ -428,16 +482,17 @@ def test_from_file_reference_shape_mismatch(tmp_path):
     (tmp_path / "short.json").write_text(json.dumps(vals[:7]))
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        _from_file_assert({"type": "from_file", "path": "short.json"})]
+        _from_file_assert({"type": "from_file", "path": "short.json"})
+    ]
     r = _run(doc, base_dir=str(tmp_path))[0]
     assert not r.passed
-    assert ("shape mismatch along dimension 1: expected length 8, found 7"
-            in r.message)
+    assert "shape mismatch along dimension 1: expected length 8, found 7" in r.message
 
     # Deeper nesting than the field's rank.
     (tmp_path / "deep.json").write_text(json.dumps([[v] for v in vals]))
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        _from_file_assert({"type": "from_file", "path": "deep.json"})]
+        _from_file_assert({"type": "from_file", "path": "deep.json"})
+    ]
     r = _run(doc, base_dir=str(tmp_path))[0]
     assert not r.passed
     assert "expected a number" in r.message
@@ -446,15 +501,16 @@ def test_from_file_reference_shape_mismatch(tmp_path):
 def test_from_file_reference_missing_file_and_format(tmp_path):
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        _from_file_assert({"type": "from_file", "path": "nope.json"})]
+        _from_file_assert({"type": "from_file", "path": "nope.json"})
+    ]
     r = _run(doc, base_dir=str(tmp_path))[0]
     assert not r.passed
     assert "file not found" in r.message
 
     (tmp_path / "ref.json").write_text("[1, 2, 3, 4, 5, 6, 7, 8]")
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        _from_file_assert({"type": "from_file", "path": "ref.json",
-                           "format": "netcdf"})]
+        _from_file_assert({"type": "from_file", "path": "ref.json", "format": "netcdf"})
+    ]
     r = _run(doc, base_dir=str(tmp_path))[0]
     assert not r.passed
     assert "format 'netcdf' is not supported" in r.message
@@ -468,11 +524,9 @@ def test_from_file_reference_missing_file_and_format(tmp_path):
 def test_shared_fixture_pde_inline_assertions_exec():
     fixture = FIXTURES_ROOT / "spatial" / "pde_inline_assertions_exec.esm"
     assert fixture.is_file()
-    results = run_pde_tests(str(fixture), model_name="M", method="LSODA",
-                            rtol=1e-12, atol=1e-14)
+    results = run_pde_tests(str(fixture), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert len(results) == 7
-    assert all(r.passed for r in results), \
-        [(r.assertion_idx, r.message) for r in results]
+    assert all(r.passed for r in results), [(r.assertion_idx, r.message) for r in results]
     # The two tie-sampling coords assertions hit the SAME cell.
     assert results[0].actual == results[1].actual
     # integral == mean == 0 for the symmetric cosine field.
@@ -503,8 +557,11 @@ def _scalar_observed_doc() -> dict:
                 "T": {"type": "parameter", "units": "K", "default": 10.0},
                 "a": {"type": "parameter", "units": "1", "default": a},
                 "x": {"type": "state", "units": "1", "default": 1.0},
-                "k": {"type": "observed", "units": "1",
-                      "expression": {"op": "*", "args": ["a", "T"]}},
+                "k": {
+                    "type": "observed",
+                    "units": "1",
+                    "expression": {"op": "*", "args": ["a", "T"]},
+                },
             },
             "equations": [
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0},
@@ -519,26 +576,44 @@ def _scalar_observed_doc() -> dict:
             # M1 (a=2) is laid out first, so its `k` shadows M2's under a
             # bare-name-only slot match — the exact bug this guards.
             "M1": component(2.0, []),
-            "M2": component(5.0, [
-                {"id": "t_lo", "time_span": {"start": 0.0, "end": 1.0},
-                 "parameter_overrides": {"T": 10.0},
-                 "assertions": [{"variable": "k", "time": 1.0,
-                                 "expected": 50.0,
-                                 "tolerance": {"rel": 1e-9}}]},
-                {"id": "t_hi", "time_span": {"start": 0.0, "end": 1.0},
-                 "parameter_overrides": {"T": 20.0},
-                 "assertions": [{"variable": "k", "time": 1.0,
-                                 "expected": 100.0,
-                                 "tolerance": {"rel": 1e-9}}]},
-            ]),
+            "M2": component(
+                5.0,
+                [
+                    {
+                        "id": "t_lo",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "parameter_overrides": {"T": 10.0},
+                        "assertions": [
+                            {
+                                "variable": "k",
+                                "time": 1.0,
+                                "expected": 50.0,
+                                "tolerance": {"rel": 1e-9},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "t_hi",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "parameter_overrides": {"T": 20.0},
+                        "assertions": [
+                            {
+                                "variable": "k",
+                                "time": 1.0,
+                                "expected": 100.0,
+                                "tolerance": {"rel": 1e-9},
+                            }
+                        ],
+                    },
+                ],
+            ),
         },
     }
 
 
 def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
     f = load(json.dumps(_scalar_observed_doc()))
-    results = run_pde_tests(f, model_name="M2", method="LSODA",
-                            rtol=1e-12, atol=1e-14)
+    results = run_pde_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
     by_id = {r.test_id: r for r in results}
     assert set(by_id) == {"t_lo", "t_hi"}
     # Each test's override must flow through: M2.k = 5·T, distinct per test —
@@ -546,5 +621,4 @@ def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
     assert by_id["t_lo"].actual == pytest.approx(50.0, rel=1e-9)
     assert by_id["t_hi"].actual == pytest.approx(100.0, rel=1e-9)
     assert by_id["t_lo"].actual != by_id["t_hi"].actual
-    assert all(r.passed for r in results), \
-        [(r.test_id, r.message) for r in results]
+    assert all(r.passed for r in results), [(r.test_id, r.message) for r in results]

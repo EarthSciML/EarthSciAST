@@ -95,7 +95,7 @@ from .expression import (
     simplify,
     to_sympy,
     from_sympy,
-    symbolic_jacobian as jacobian
+    symbolic_jacobian as jacobian,
 )
 
 # Scalar expression evaluator — the official ESS Python runner entry point
@@ -133,6 +133,7 @@ from .reference_resolution import (
     VertexKind,
     EdgeKind,
 )
+
 # Build-time relational engine — value-invention primitives (RFC
 # semiring-faq-unified-ir §5.5; CONFORMANCE_SPEC.md §5.5)
 from .relational import (
@@ -222,7 +223,7 @@ from .edit import (
 # Simulation tier - box model simulation (optional - requires scipy)
 _has_simulation = False
 try:
-    from .simulation import (
+    from .simulation import (  # noqa: F401 — re-exported via __all__ below
         simulate,
         simulate_with_discrete_events,
         evaluate_rhs,
@@ -230,6 +231,7 @@ try:
         SimulationResult,
         SimulationError,
     )
+
     _has_simulation = True
 except ImportError:
     # scipy not available, skip simulation functionality
@@ -323,13 +325,11 @@ __all__ = [
     "EsmFile",
     "FunctionTable",
     "FunctionTableAxis",
-
     # Core parsing and serialization
     "load",
     "save",
     "resolve_subsystem_refs",
     "resolve_model_refs",
-
     # Expression templates (esm-spec §9.6) + template-library imports and
     # load-time metaparameters (esm-spec §9.7)
     "ExpressionTemplateError",
@@ -338,7 +338,6 @@ __all__ = [
     "MAX_TEMPLATE_EXPANSION_DEPTH",
     "reject_template_imports_pre_v08",
     "resolve_template_machinery",
-
     # Validation
     "validate",
     "ValidationResult",
@@ -347,7 +346,6 @@ __all__ = [
     "UnsupportedVersionError",
     "CircularReferenceError",
     "SubsystemRefError",
-
     # Coupled system flattening (spec §4.7.5 + §4.7.6)
     "flatten",
     "FlattenedSystem",
@@ -365,7 +363,6 @@ __all__ = [
     "SliceOutOfDomainError",
     "CyclicPromotionError",
     "UnsupportedDimensionalityError",
-
     # Expression engine
     "free_variables",
     "free_parameters",
@@ -375,7 +372,6 @@ __all__ = [
     "from_sympy",
     "jacobian",
     "evaluate",
-
     # Substitution
     "substitute",
     "substitute_in_model",
@@ -386,13 +382,11 @@ __all__ = [
     "get_state_variables",
     "expand_model_placeholders",
     "process_operator_compose_placeholders",
-
     # Reaction system analysis
     "derive_odes",
     "stoichiometric_matrix",
     "substrate_matrix",
     "product_matrix",
-
     # Reference resolution (semiring-FAQ node addressing, RFC §6.1)
     "build_reference_graph",
     "resolve_references",
@@ -431,14 +425,12 @@ __all__ = [
     "ValueInventionError",
     "ValueInventionResult",
     "materialize_value_invention",
-
     # Unit validation
     "validate_units",
     "convert_units",
     "UnitValidator",
     "UnitValidationResult",
     "UnitConversionResult",
-
     # Editing operations
     "ESMEditor",
     "EditOperation",
@@ -459,20 +451,16 @@ __all__ = [
     "remove_coupling_from_file",
     "merge_esm_files",
     "extract_component_from_file",
-
     # Display and pretty-printing
     "to_unicode",
     "to_latex",
     "to_ascii",
-
     # Code generation
     "to_julia_code",
     "to_python_code",
-
     # Migration functionality
     "migrate_file_0_1_to_0_2",
     "MigrationError",
-
     # Runtime data loaders
     "UrlTemplateError",
     "expand_url_template",
@@ -509,11 +497,13 @@ __all__ = [
 
 # Add simulation components if scipy is available
 if _has_simulation:
-    __all__.extend([
-        "simulate",
-        "simulate_with_discrete_events",
-        "evaluate_rhs",
-        "BuildInspection",
-        "SimulationResult",
-        "SimulationError",
-    ])
+    __all__.extend(
+        [
+            "simulate",
+            "simulate_with_discrete_events",
+            "evaluate_rhs",
+            "BuildInspection",
+            "SimulationResult",
+            "SimulationError",
+        ]
+    )

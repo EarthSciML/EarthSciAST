@@ -11,16 +11,17 @@ import os
 import re
 from pathlib import Path
 from typing import Union, Dict, Any, List, Optional, TYPE_CHECKING
-from dataclasses import fields
-from enum import Enum
+
 try:
     # Python 3.9+
     from importlib.resources import files
+
     _RESOURCES_AVAILABLE = True
 except ImportError:
     try:
         # Python 3.7-3.8 fallback
         from importlib_resources import files
+
         _RESOURCES_AVAILABLE = True
     except ImportError:
         # No importlib resources available, will use fallback
@@ -35,40 +36,80 @@ from jsonschema import validate
 
 from .diagnostics import SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY
 from .esm_types import (
-    EsmFile, Metadata, Model, ReactionSystem, ModelVariable, Equation,
-    Species, Parameter, Reaction, ExprNode, Expr, AffectEquation,
-    ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, FunctionalAffect,
-    DataLoader, DataLoaderKind, DataLoaderSource, DataLoaderTemporal,
+    EsmFile,
+    Metadata,
+    Model,
+    ReactionSystem,
+    ModelVariable,
+    Equation,
+    Species,
+    Parameter,
+    Reaction,
+    ExprNode,
+    Expr,
+    AffectEquation,
+    ContinuousEvent,
+    DiscreteEvent,
+    DiscreteEventTrigger,
+    FunctionalAffect,
+    DataLoader,
+    DataLoaderKind,
+    DataLoaderSource,
+    DataLoaderTemporal,
     DataLoaderVariable,
-    DataLoaderDeterminism, Operator,
-    CouplingEntry, CouplingType, ConnectorEquation, Connector, Domain,
-    OperatorComposeCoupling, CouplingCouple, VariableMapCoupling,
-    OperatorApplyCoupling, CallbackCoupling, EventCoupling,
-    Reference, TemporalDomain,
-    Tolerance, TimeSpan, Assertion, Test,
-    PlotAxis, PlotValue, PlotSeries, Plot,
-    SweepRange, SweepDimension, ParameterSweep, Example,
-    FunctionTable, FunctionTableAxis,
+    DataLoaderDeterminism,
+    Operator,
+    CouplingEntry,
+    CouplingType,
+    ConnectorEquation,
+    Connector,
+    Domain,
+    OperatorComposeCoupling,
+    CouplingCouple,
+    VariableMapCoupling,
+    OperatorApplyCoupling,
+    CallbackCoupling,
+    EventCoupling,
+    Reference,
+    TemporalDomain,
+    Tolerance,
+    TimeSpan,
+    Assertion,
+    Test,
+    PlotAxis,
+    PlotValue,
+    PlotSeries,
+    Plot,
+    SweepRange,
+    SweepDimension,
+    ParameterSweep,
+    Example,
+    FunctionTable,
+    FunctionTableAxis,
 )
 
 
 class SchemaValidationError(Exception):
     """Exception raised when schema validation fails."""
+
     pass
 
 
 class UnsupportedVersionError(Exception):
     """Exception raised when ESM version is not supported."""
+
     pass
 
 
 class CircularReferenceError(Exception):
     """Exception raised when circular subsystem references are detected."""
+
     pass
 
 
 class SubsystemRefError(Exception):
     """Exception raised when a subsystem reference cannot be resolved."""
+
     pass
 
 
@@ -86,7 +127,7 @@ def _check_version_compatibility(version_string: str) -> None:
     import re
     import warnings
 
-    match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', version_string)
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version_string)
     if not match:
         return  # Schema validation should catch invalid formats
 
@@ -107,7 +148,7 @@ def _check_version_compatibility(version_string: str) -> None:
             f"{'.'.join(str(v) for v in _CURRENT_VERSION)}. "
             f"Some features may not be supported.",
             UserWarning,
-            stacklevel=3
+            stacklevel=3,
         )
 
 
@@ -120,9 +161,9 @@ def _get_schema() -> Dict[str, Any]:
             schema_path = schema_files / "esm-schema.json"
 
             # Read the schema content using the modern resource API
-            with schema_path.open('r', encoding='utf-8') as f:
+            with schema_path.open("r", encoding="utf-8") as f:
                 return json.load(f)
-        except (FileNotFoundError, AttributeError, TypeError) as e:
+        except (FileNotFoundError, AttributeError, TypeError):
             # Fall through to the legacy path approach
             pass
 
@@ -131,7 +172,7 @@ def _get_schema() -> Dict[str, Any]:
     if not schema_path.exists():
         raise FileNotFoundError(f"ESM schema not found at {schema_path}")
 
-    with open(schema_path, 'r') as f:
+    with open(schema_path, "r") as f:
         return json.load(f)
 
 
@@ -148,9 +189,9 @@ def _parse_expression(expr_data: Union[int, float, str, Dict[str, Any]]) -> Expr
 
         # Validate operator-specific field requirements
         if op == "D" and wrt is None:
-            raise ValueError(f"Operator 'D' requires 'wrt' field to be specified")
+            raise ValueError("Operator 'D' requires 'wrt' field to be specified")
         if op == "grad" and dim is None:
-            raise ValueError(f"Operator 'grad' requires 'dim' field to be specified")
+            raise ValueError("Operator 'grad' requires 'dim' field to be specified")
 
         # Array-op fields (schema §ExpressionNode).
         output_idx = expr_data.get("output_idx")
@@ -206,10 +247,14 @@ def _parse_expression(expr_data: Union[int, float, str, Dict[str, Any]]) -> Expr
             if table is None:
                 raise ValueError("Operator 'table_lookup' requires 'table' field to be specified")
             if not isinstance(table_axes_raw, dict):
-                raise ValueError("Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions")
+                raise ValueError(
+                    "Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions"
+                )
             table_axes = {k: _parse_expression(v) for k, v in table_axes_raw.items()}
             if args:
-                raise ValueError("Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')")
+                raise ValueError(
+                    "Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')"
+                )
         output = expr_data.get("output")
 
         return ExprNode(
@@ -273,7 +318,7 @@ def _parse_functional_affect(functional_affect_data: Dict[str, Any]) -> Function
         read_vars=read_vars,
         read_params=read_params,
         modified_params=modified_params,
-        config=config
+        config=config,
     )
 
 
@@ -371,7 +416,7 @@ def _parse_continuous_event(event_data: Dict[str, Any]) -> ContinuousEvent:
         root_find=root_find,
         reinitialize=reinitialize,
         priority=priority,
-        description=description
+        description=description,
     )
 
 
@@ -452,7 +497,8 @@ def _parse_test(data: Dict[str, Any]) -> Test:
         # so the PDE runner can build a per-test ephemeral instance and so the
         # field survives round-trip.
         expression_template_imports=copy.deepcopy(
-            data.get("expression_template_imports", []) or []),
+            data.get("expression_template_imports", []) or []
+        ),
     )
 
 
@@ -479,8 +525,7 @@ def _parse_plot(data: Dict[str, Any]) -> Plot:
         axes = [_parse_plot_axis(item) for item in raw_y]
         y_axis = axes[0]
         inline_series = [
-            PlotSeries(name=axis.label or axis.variable, variable=axis.variable)
-            for axis in axes
+            PlotSeries(name=axis.label or axis.variable, variable=axis.variable) for axis in axes
         ]
         series = explicit_series or inline_series
     else:
@@ -542,7 +587,8 @@ def _parse_example(data: Dict[str, Any]) -> Example:
         # discretization this example runs under. Retained (not consumed at load)
         # so the field survives round-trip, mirroring _parse_test above.
         expression_template_imports=copy.deepcopy(
-            data.get("expression_template_imports", []) or []),
+            data.get("expression_template_imports", []) or []
+        ),
     )
 
 
@@ -584,8 +630,7 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     # `boundary_conditions` field); they are baked into discretization rewrite
     # rules (esm-spec §9.6.8). Nothing to parse here.
 
-    model = Model(name="", variables=variables, equations=equations,
-                  subsystems=subsystems)
+    model = Model(name="", variables=variables, equations=equations, subsystems=subsystems)
 
     if "tolerance" in model_data:
         model.tolerance = _parse_tolerance(model_data["tolerance"])
@@ -594,7 +639,10 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     if "examples" in model_data:
         model.examples = [_parse_example(e) for e in model_data["examples"]]
 
-    if "initialization_equations" in model_data and model_data["initialization_equations"] is not None:
+    if (
+        "initialization_equations" in model_data
+        and model_data["initialization_equations"] is not None
+    ):
         model.initialization_equations = [
             _parse_equation(eq) for eq in model_data["initialization_equations"]
         ]
@@ -617,13 +665,9 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
             _parse_continuous_event(ev) for ev in model_data["continuous_events"]
         ]
     if "discrete_events" in model_data:
-        model.discrete_events = [
-            _parse_discrete_event(ev) for ev in model_data["discrete_events"]
-        ]
+        model.discrete_events = [_parse_discrete_event(ev) for ev in model_data["discrete_events"]]
 
     return model
-
-
 
 
 def _parse_species(species_data: Dict[str, Any]) -> Species:
@@ -650,7 +694,7 @@ def _parse_parameter(param_data: Dict[str, Any]) -> Parameter:
         value=value,
         units=param_data.get("units"),
         default_units=param_data.get("default_units"),
-        description=param_data.get("description")
+        description=param_data.get("description"),
     )
 
 
@@ -679,11 +723,7 @@ def _parse_reaction(reaction_data: Dict[str, Any]) -> Reaction:
         rate_constant = _parse_expression(reaction_data["rate"])
 
     return Reaction(
-        name=name,
-        id=rxn_id,
-        reactants=reactants,
-        products=products,
-        rate_constant=rate_constant
+        name=name, id=rxn_id, reactants=reactants, products=products, rate_constant=rate_constant
     )
 
 
@@ -747,13 +787,9 @@ def _parse_reaction_system(rs_data: Dict[str, Any]) -> ReactionSystem:
 
     # Events are owned by the component that declares them; see _parse_model.
     if "continuous_events" in rs_data:
-        rs.continuous_events = [
-            _parse_continuous_event(ev) for ev in rs_data["continuous_events"]
-        ]
+        rs.continuous_events = [_parse_continuous_event(ev) for ev in rs_data["continuous_events"]]
     if "discrete_events" in rs_data:
-        rs.discrete_events = [
-            _parse_discrete_event(ev) for ev in rs_data["discrete_events"]
-        ]
+        rs.discrete_events = [_parse_discrete_event(ev) for ev in rs_data["discrete_events"]]
 
     return rs
 
@@ -766,7 +802,7 @@ def _parse_reference(ref_data: Dict[str, Any]) -> Reference:
         journal=None,
         year=None,
         doi=ref_data.get("doi"),
-        url=ref_data.get("url")
+        url=ref_data.get("url"),
     )
 
 
@@ -785,7 +821,7 @@ def _parse_metadata(metadata_data: Dict[str, Any]) -> Metadata:
         modified=metadata_data.get("modified"),
         version="1.0",  # Default version
         references=references,
-        keywords=metadata_data.get("tags", [])  # Schema uses "tags" not "keywords"
+        keywords=metadata_data.get("tags", []),  # Schema uses "tags" not "keywords"
     )
 
 
@@ -838,8 +874,7 @@ def _parse_data_loader(loader_data: Dict[str, Any]) -> DataLoader:
     source = _parse_data_loader_source(loader_data["source"])
 
     variables = {
-        vname: _parse_data_loader_variable(vdef)
-        for vname, vdef in loader_data["variables"].items()
+        vname: _parse_data_loader_variable(vdef) for vname, vdef in loader_data["variables"].items()
     }
 
     temporal = None
@@ -886,11 +921,11 @@ def _parse_operator(operator_data: Dict[str, Any]) -> Operator:
         modifies=modifies,
         reference=reference,
         config=config,
-        description=description
+        description=description,
     )
 
 
-def _parse_registered_function(rf_data: Dict[str, Any]) -> 'RegisteredFunction':
+def _parse_registered_function(rf_data: Dict[str, Any]) -> "RegisteredFunction":
     """Parse a registered_functions entry from JSON data (esm-spec §9.2)."""
     from .esm_types import RegisteredFunction, RegisteredFunctionSignature
 
@@ -957,15 +992,15 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
                     from_var=eq_data["from"],
                     to_var=eq_data["to"],
                     transform=eq_data["transform"],
-                    expression=_parse_expression(eq_data["expression"]) if "expression" in eq_data else None
+                    expression=_parse_expression(eq_data["expression"])
+                    if "expression" in eq_data
+                    else None,
                 )
                 equations.append(equation)
             connector = Connector(equations=equations)
 
         return CouplingCouple(
-            description=description,
-            systems=coupling_data.get("systems", []),
-            connector=connector
+            description=description, systems=coupling_data.get("systems", []), connector=connector
         )
 
     elif coupling_type == CouplingType.VARIABLE_MAP:
@@ -988,20 +1023,19 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             from_var=coupling_data.get("from"),
             to_var=coupling_data.get("to"),
             transform=transform,
-            factor=coupling_data.get("factor")
+            factor=coupling_data.get("factor"),
         )
 
     elif coupling_type == CouplingType.OPERATOR_APPLY:
         return OperatorApplyCoupling(
-            description=description,
-            operator=coupling_data.get("operator")
+            description=description, operator=coupling_data.get("operator")
         )
 
     elif coupling_type == CouplingType.CALLBACK:
         return CallbackCoupling(
             description=description,
             callback_id=coupling_data.get("callback_id"),
-            config=coupling_data.get("config", {})
+            config=coupling_data.get("config", {}),
         )
 
     elif coupling_type == CouplingType.EVENT:
@@ -1039,7 +1073,7 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             affect_neg=affect_neg,
             discrete_parameters=coupling_data.get("discrete_parameters", []),
             root_find=coupling_data.get("root_find"),
-            reinitialize=coupling_data.get("reinitialize")
+            reinitialize=coupling_data.get("reinitialize"),
         )
 
     else:
@@ -1059,7 +1093,7 @@ def _parse_domain(domain_data: Dict[str, Any]) -> Domain:
         domain.temporal = TemporalDomain(
             start=temporal_data.get("start"),
             end=temporal_data.get("end"),
-            reference_time=temporal_data.get("reference_time")
+            reference_time=temporal_data.get("reference_time"),
         )
 
     # Initial conditions are no longer a domain-level concept (v0.8.0): they are
@@ -1076,21 +1110,28 @@ def _validate_domain(domain: Domain) -> None:
     if domain.temporal and domain.temporal.start is not None and domain.temporal.end is not None:
         try:
             from datetime import datetime
-            start_dt = datetime.fromisoformat(domain.temporal.start.replace('Z', '+00:00'))
-            end_dt = datetime.fromisoformat(domain.temporal.end.replace('Z', '+00:00'))
+
+            start_dt = datetime.fromisoformat(domain.temporal.start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(domain.temporal.end.replace("Z", "+00:00"))
 
             if start_dt >= end_dt:
                 errors.append("Temporal domain: start time must be before end time")
 
             if domain.temporal.reference_time:
-                ref_dt = datetime.fromisoformat(domain.temporal.reference_time.replace('Z', '+00:00'))
+                ref_dt = datetime.fromisoformat(
+                    domain.temporal.reference_time.replace("Z", "+00:00")
+                )
                 if ref_dt < start_dt or ref_dt > end_dt:
-                    errors.append("Temporal domain: reference time must be within start and end times")
+                    errors.append(
+                        "Temporal domain: reference time must be within start and end times"
+                    )
         except ValueError as e:
             errors.append(f"Temporal domain: invalid datetime format - {e}")
 
     if errors:
-        raise ValueError("Domain validation failed:\n" + "\n".join(f"  - {error}" for error in errors))
+        raise ValueError(
+            "Domain validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
+        )
 
 
 def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
@@ -1176,8 +1217,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
             for sym, val in mapping.items():
                 if not isinstance(val, int) or isinstance(val, bool) or val < 1:
                     raise ValueError(
-                        f"enums/{enum_name}/{sym}: value must be a positive "
-                        f"integer (got {val!r})"
+                        f"enums/{enum_name}/{sym}: value must be a positive integer (got {val!r})"
                     )
                 if val in seen_values:
                     raise ValueError(
@@ -1210,8 +1250,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
             axes_raw = ft_data.get("axes")
             if not isinstance(axes_raw, list):
                 raise ValueError(
-                    f"function_tables['{ft_name}']: 'axes' must be a list "
-                    f"(esm-spec §9.5)"
+                    f"function_tables['{ft_name}']: 'axes' must be a list (esm-spec §9.5)"
                 )
             axes = [
                 FunctionTableAxis(
@@ -1223,8 +1262,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
             ]
             if "data" not in ft_data:
                 raise ValueError(
-                    f"function_tables['{ft_name}']: 'data' is required "
-                    f"(esm-spec §9.5)"
+                    f"function_tables['{ft_name}']: 'data' is required (esm-spec §9.5)"
                 )
             function_tables[ft_name] = FunctionTable(
                 axes=axes,
@@ -1296,13 +1334,12 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     if ref.startswith("http://") or ref.startswith("https://"):
         import urllib.request
         import urllib.error
+
         try:
             with urllib.request.urlopen(ref) as response:
                 return response.read().decode("utf-8")
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
-            raise SubsystemRefError(
-                f"Failed to fetch subsystem ref URL '{ref}': {e}"
-            )
+            raise SubsystemRefError(f"Failed to fetch subsystem ref URL '{ref}': {e}")
     else:
         resolved = os.path.normpath(os.path.join(base_path, ref))
         if not os.path.exists(resolved):
@@ -1326,8 +1363,7 @@ def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, 
             if not isinstance(bv, int) or isinstance(bv, bool):
                 raise ExpressionTemplateError(
                     "metaparameter_type_error",
-                    f"{where}: binding '{bk}' is not an integer "
-                    "(esm-spec §9.7.6)",
+                    f"{where}: binding '{bk}' is not an integer (esm-spec §9.7.6)",
                 )
             bindings[str(bk)] = bv
     return bindings
@@ -1346,7 +1382,8 @@ def _subsystem_ref_injected_imports(sub_value: Dict[str, Any]) -> List[Any]:
 
 
 def _absolutize_injected_imports(
-    injected_imports: Optional[List[Any]], mount_base: str,
+    injected_imports: Optional[List[Any]],
+    mount_base: str,
 ) -> List[Any]:
     """Rewrite each §9.7.10 form-A injected import entry's relative ``ref`` to an
     absolute path anchored at the MOUNTING document's directory (``mount_base``).
@@ -1370,9 +1407,12 @@ def _absolutize_injected_imports(
         e = copy.deepcopy(entry)
         if isinstance(e, dict):
             ref = e.get("ref")
-            if (isinstance(ref, str) and ref
-                    and not ref.startswith(("http://", "https://"))
-                    and not os.path.isabs(ref)):
+            if (
+                isinstance(ref, str)
+                and ref
+                and not ref.startswith(("http://", "https://"))
+                and not os.path.isabs(ref)
+            ):
                 e["ref"] = os.path.abspath(os.path.join(mount_base, ref))
         out.append(e)
     return out
@@ -1454,9 +1494,7 @@ def _load_ref_data(
     try:
         validate(ref_data, schema)
     except jsonschema.ValidationError as e:
-        raise SubsystemRefError(
-            f"Schema validation failed for {kind} ref '{ref_str}': {e.message}"
-        )
+        raise SubsystemRefError(f"Schema validation failed for {kind} ref '{ref_str}': {e.message}")
 
     # esm-spec §9.7.10 form A: fold the ref edge's injected imports into the
     # referenced document's single component's own `expression_template_imports`
@@ -1476,16 +1514,14 @@ def _load_ref_data(
     # own defaults. Names the leaf does not declare are never forwarded.
     leaf_decls = set((ref_data.get("metaparameters") or {}).keys())
     effective_bindings: Dict[str, int] = {
-        k: v for k, v in (loader_metaparameters or {}).items()
-        if k in leaf_decls
+        k: v for k, v in (loader_metaparameters or {}).items() if k in leaf_decls
     }
     effective_bindings.update(bindings or {})
 
     # Resolve the referenced document's §9.7 machinery under the effective
     # metaparameter close, then run the §9.6.3 rewrite fixpoint so the inlined
     # component carries only normal Expression ASTs (Option A round-trip).
-    resolved = resolve_template_machinery(
-        ref_data, new_base, metaparameters=effective_bindings)
+    resolved = resolve_template_machinery(ref_data, new_base, metaparameters=effective_bindings)
     if resolved is not None:
         ref_data = resolved
     ref_data = lower_expression_templates(ref_data)
@@ -1497,7 +1533,13 @@ def _load_ref_data(
 # (the semantic shape of an axis; description / metadata are ignored, mirroring
 # the Julia reference's field-wise `_index_set_deep_equal`).
 _ISET_SEMANTIC_KEYS = (
-    "kind", "size", "members", "of", "offsets", "values", "from_faq",
+    "kind",
+    "size",
+    "members",
+    "of",
+    "offsets",
+    "values",
+    "from_faq",
 )
 
 
@@ -1522,7 +1564,9 @@ def _index_set_show(s: Any) -> str:
 
 
 def _merge_subsystem_index_sets(
-    registry: Dict[str, Any], loaded_index_sets: Dict[str, Any], ref: str,
+    registry: Dict[str, Any],
+    loaded_index_sets: Dict[str, Any],
+    ref: str,
 ) -> None:
     """Merge a referenced subsystem file's top-level ``index_sets`` into the
     importing document's registry (esm-spec §4.7, mirroring the §9.7.5
@@ -1581,8 +1625,11 @@ def _resolve_model_subsystems(
             ref_str = sub_value["ref"]
 
             # Circular reference detection
-            canonical = os.path.normpath(os.path.join(base_path, ref_str)) \
-                if not ref_str.startswith("http") else ref_str
+            canonical = (
+                os.path.normpath(os.path.join(base_path, ref_str))
+                if not ref_str.startswith("http")
+                else ref_str
+            )
             if canonical in seen_refs:
                 raise CircularReferenceError(
                     f"Circular subsystem reference detected: '{ref_str}' "
@@ -1596,8 +1643,7 @@ def _resolve_model_subsystems(
             # into the referenced component's scope (esm-spec §9.7.10 form A).
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
-            ref_data, new_base = _load_ref_data(
-                ref_str, base_path, bindings, "subsystem", injected)
+            ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "subsystem", injected)
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1631,8 +1677,7 @@ def _resolve_model_subsystems(
         else:
             # Already a Model object, just recurse into it
             if isinstance(sub_value, Model):
-                _resolve_model_subsystems(sub_value, base_path, seen_refs,
-                                          registry)
+                _resolve_model_subsystems(sub_value, base_path, seen_refs, registry)
             resolved_subsystems[sub_name] = sub_value
 
     model.subsystems = resolved_subsystems
@@ -1658,8 +1703,11 @@ def _resolve_reaction_system_subsystems(
         if isinstance(sub_value, dict) and "ref" in sub_value:
             ref_str = sub_value["ref"]
 
-            canonical = os.path.normpath(os.path.join(base_path, ref_str)) \
-                if not ref_str.startswith("http") else ref_str
+            canonical = (
+                os.path.normpath(os.path.join(base_path, ref_str))
+                if not ref_str.startswith("http")
+                else ref_str
+            )
             if canonical in seen_refs:
                 raise CircularReferenceError(
                     f"Circular subsystem reference detected: '{ref_str}' "
@@ -1669,8 +1717,7 @@ def _resolve_reaction_system_subsystems(
 
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
-            ref_data, new_base = _load_ref_data(
-                ref_str, base_path, bindings, "subsystem", injected)
+            ref_data, new_base = _load_ref_data(ref_str, base_path, bindings, "subsystem", injected)
 
             parsed = _parse_esm_data(ref_data)
 
@@ -1791,15 +1838,23 @@ def resolve_model_refs(
 
         # Circular reference detection. Seed the chain with this ref so a
         # subsystem inside the referenced file that points back is caught.
-        canonical = os.path.normpath(os.path.join(base_path, ref_str)) \
-            if not ref_str.startswith("http") else ref_str
+        canonical = (
+            os.path.normpath(os.path.join(base_path, ref_str))
+            if not ref_str.startswith("http")
+            else ref_str
+        )
         seen = {canonical}
 
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
         injected = _subsystem_ref_injected_imports(model_value)
         ref_data, new_base = _load_ref_data(
-            ref_str, base_path, bindings, "model", injected,
-            loader_metaparameters=loader_metaparameters)
+            ref_str,
+            base_path,
+            bindings,
+            "model",
+            injected,
+            loader_metaparameters=loader_metaparameters,
+        )
 
         parsed = _parse_esm_data(ref_data)
 
@@ -1819,9 +1874,7 @@ def resolve_model_refs(
         # subsystem ref, a data loader or reaction system is not a valid
         # top-level model component.
         if not parsed.models:
-            raise SubsystemRefError(
-                f"Model ref '{ref_str}' does not contain a top-level model"
-            )
+            raise SubsystemRefError(f"Model ref '{ref_str}' does not contain a top-level model")
 
         sub_model = next(iter(parsed.models.values()))
         sub_model.name = model_name
@@ -1841,8 +1894,6 @@ def resolve_model_refs(
 # and the other _check_* passes) lives in structural_checks.py.
 # ---------------------------------------------------------------------------
 from .structural_checks import (  # noqa: E402
-    _BUILTIN_SYMBOLS,  # re-exported for compatibility
-    _normalize_unit,  # re-exported for compatibility
     _validate_structural,  # used by load(); re-exported for compatibility
 )
 
@@ -1881,12 +1932,14 @@ def load(
     file_path = None
     if isinstance(path_or_string, dict):
         data = path_or_string
-    elif isinstance(path_or_string, Path) or (isinstance(path_or_string, str) and os.path.exists(path_or_string)):
+    elif isinstance(path_or_string, Path) or (
+        isinstance(path_or_string, str) and os.path.exists(path_or_string)
+    ):
         # It's a file path
         file_path = Path(path_or_string)
         if base_path is None:
             resolved_base = str(file_path.parent.resolve())
-        with open(path_or_string, 'r') as f:
+        with open(path_or_string, "r") as f:
             data = json.load(f)
     else:
         # It's a JSON string
@@ -1910,6 +1963,7 @@ def load(
         reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
+
     reject_expression_templates_pre_v04(data)
 
     # v0.8.0 §9.7 constructs (expression_template_imports, top-level
@@ -1944,8 +1998,7 @@ def load(
     # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
     # §9.7: "All resolution happens at load, before validation and before the
     # §9.6.3 fixpoint"). Returns None for documents without §9.7 machinery.
-    resolved = resolve_template_machinery(
-        data, base_path, metaparameters=metaparameters)
+    resolved = resolve_template_machinery(data, base_path, metaparameters=metaparameters)
     if resolved is not None:
         data = resolved
 
@@ -1971,8 +2024,7 @@ def load(
     # resolves its leaf's discretization under the loader's grid (NX/NY) even
     # when the edge carries no explicit `bindings` — matching the Julia/Rust
     # single-root-resolve semantics so the SAME file runs identically.
-    resolve_model_refs(esm_file, base_path,
-                       loader_metaparameters=metaparameters)
+    resolve_model_refs(esm_file, base_path, loader_metaparameters=metaparameters)
 
     # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the
@@ -1983,6 +2035,7 @@ def load(
     # (esm-spec §9.3). Runs after subsystem resolution so every expression
     # tree — including those in resolved subsystems — sees the integer values.
     from .registered_functions import lower_enums
+
     lower_enums(esm_file)
 
     # Append top-level events that were stripped earlier
@@ -1994,5 +2047,3 @@ def load(
             esm_file.events.append(_parse_discrete_event(ev))
 
     return esm_file
-
-

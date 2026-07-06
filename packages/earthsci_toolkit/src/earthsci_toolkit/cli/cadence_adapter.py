@@ -68,8 +68,9 @@ def _compute_fixture(fixture: Dict[str, Any], repo_root: Path) -> Dict[str, Any]
     }
 
 
-def _run_fixture(fixture: Dict[str, Any], _manifest: Dict[str, Any],
-                 manifest_path: Path) -> Dict[str, Any]:
+def _run_fixture(
+    fixture: Dict[str, Any], _manifest: Dict[str, Any], manifest_path: Path
+) -> Dict[str, Any]:
     # Fixtures are repo-root-relative; resolve them relative to the manifest's
     # repo root (tests/conformance/cadence/manifest.json → parents[3]) so the
     # adapter works regardless of the invoking cwd.

@@ -7,6 +7,7 @@ Drives the shared conformance fixtures under
 fixtures under ``tests/invalid/template_imports/``, mirroring the Julia
 reference testset ``EarthSciSerialization.jl/test/template_imports_test.jl``.
 """
+
 from __future__ import annotations
 
 import copy
@@ -64,10 +65,12 @@ def _err_code(fn) -> str | None:
     [
         ("import_smoke", "fixture.esm", "expanded.esm"),
         ("import_diamond", "fixture.esm", "expanded.esm"),
-        ("import_order_determinism", "fixture_import_order.esm",
-         "expanded_import_order.esm"),
-        ("import_order_determinism", "fixture_priority_override.esm",
-         "expanded_priority_override.esm"),
+        ("import_order_determinism", "fixture_import_order.esm", "expanded_import_order.esm"),
+        (
+            "import_order_determinism",
+            "fixture_priority_override.esm",
+            "expanded_priority_override.esm",
+        ),
         # §5.5.3.1 rule 1: integer ratio {op:/,args:[1,N]} inside a nested
         # aggregate expr stays integer on the AST-golden pathway.
         ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
@@ -105,11 +108,11 @@ def test_import_diamond_dedups_at_first_occurrence():
 def test_effective_order_pins_tie_break_and_priority_flips_it():
     """Winner sanity, independent of the goldens: earlier import wins the
     equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x)."""
-    d1 = _expand_raw(os.path.join(CONF, "import_order_determinism",
-                                  "fixture_import_order.esm"))
+    d1 = _expand_raw(os.path.join(CONF, "import_order_determinism", "fixture_import_order.esm"))
     assert d1["models"]["M"]["variables"]["y"]["expression"]["args"][0] == 2
-    d2 = _expand_raw(os.path.join(CONF, "import_order_determinism",
-                                  "fixture_priority_override.esm"))
+    d2 = _expand_raw(
+        os.path.join(CONF, "import_order_determinism", "fixture_priority_override.esm")
+    )
     assert d2["models"]["M"]["variables"]["y"]["expression"]["args"][0] == 5
 
 
@@ -125,8 +128,7 @@ def test_valid_suite_library_file_loads_clean():
     assert not lib.models
     assert lib.index_sets["cells"]["size"] == 8  # size "N" folded by default
     # Loader-API binding overrides the default on the library itself.
-    lib12 = load(os.path.join(VALID_DIR, "template_import_lib.esm"),
-                 metaparameters={"N": 12})
+    lib12 = load(os.path.join(VALID_DIR, "template_import_lib.esm"), metaparameters={"N": 12})
     assert lib12.index_sets["cells"]["size"] == 12
 
 
@@ -145,8 +147,7 @@ def test_valid_suite_minimal_consumer():
 
 @pytest.mark.parametrize(
     "wrapper,golden,n",
-    [("wrapper_n4.esm", "expanded_n4.esm", 4),
-     ("wrapper_n8.esm", "expanded_n8.esm", 8)],
+    [("wrapper_n4.esm", "expanded_n4.esm", 4), ("wrapper_n8.esm", "expanded_n8.esm", 8)],
 )
 def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
     f = load(os.path.join(CONF, "metaparameter_resolutions", wrapper))
@@ -176,8 +177,9 @@ def test_loader_api_bindings_and_defaults():
     assert fapi.models["Problem"].variables["npts"].expression == 6  # API > default
     assert fapi.models["Problem"].variables["ramp"].expression.ranges == {"i": [1, 3]}
     # Binding a name the document does not declare is an error.
-    assert _err_code(lambda: load(problem, metaparameters={"Q": 1})) == \
-        "template_import_unknown_name"
+    assert (
+        _err_code(lambda: load(problem, metaparameters={"Q": 1})) == "template_import_unknown_name"
+    )
 
 
 def test_round_trip_emits_expanded_folded_form():
@@ -198,11 +200,10 @@ def test_import_where_rename_carries_where_shape():
     each instance's ``where.F.shape`` from x to meshA.x / meshB.x in lockstep
     with the index set, so each rule registers and fires ONLY on its own field.
     Without the rewrite this raised template_constraint_unknown_index_set."""
-    d = _expand_raw(os.path.join(CONF, "import_where_rename_two_instances",
-                                 "fixture.esm"))
+    d = _expand_raw(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
     va = d["models"]["TwoGrids"]["variables"]["div_A"]["expression"]
     vb = d["models"]["TwoGrids"]["variables"]["div_B"]["expression"]
-    assert va["op"] == "*" and vb["op"] == "*"          # both div nodes lowered
+    assert va["op"] == "*" and vb["op"] == "*"  # both div nodes lowered
     assert va["args"][0]["op"] == "/" and va["args"][0]["args"][1] == 16
     assert vb["args"][0]["op"] == "/" and vb["args"][0]["args"][1] == 8
     assert va["args"][1] == "F_A" and vb["args"][1] == "F_B"
@@ -214,9 +215,12 @@ def test_import_where_rename_carries_where_shape():
 def test_import_where_rename_unknown_index_set_rejected():
     """A `where` shape naming a set the library never declares survives the
     rename as spelled and is rejected at rule registration (esm-spec §9.6.6)."""
-    assert _err_code(lambda: load(os.path.join(
-        CONF, "import_where_rename_unknown_index_set", "fixture.esm"))) == \
-        "template_constraint_unknown_index_set"
+    assert (
+        _err_code(
+            lambda: load(os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm"))
+        )
+        == "template_constraint_unknown_index_set"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -246,13 +250,18 @@ def test_invalid_fixture_set_covers_all_12_codes():
     expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     seen = {expected[f]["resolver_error_code"] for f in _invalid_fixture_names()}
     for code in [
-        "template_import_version_too_old", "template_import_not_library",
-        "subsystem_ref_is_template_library", "template_import_cycle",
-        "template_import_name_conflict", "template_import_unknown_name",
+        "template_import_version_too_old",
+        "template_import_not_library",
+        "subsystem_ref_is_template_library",
+        "template_import_cycle",
+        "template_import_name_conflict",
+        "template_import_unknown_name",
         "template_import_index_set_conflict",
         "apply_expression_template_recursive_body",
-        "template_body_expansion_too_deep", "metaparameter_unbound",
-        "metaparameter_type_error", "metaparameter_name_conflict",
+        "template_body_expansion_too_deep",
+        "metaparameter_unbound",
+        "metaparameter_type_error",
+        "metaparameter_name_conflict",
         # §9.7.7 import renaming / namespacing / free-name rebinding
         "template_import_rename_unknown_name",
         "template_import_rebind_unknown_name",
@@ -285,32 +294,47 @@ def _model_json(extra_model_fields: str = "", top_fields: str = "") -> str:
 
 def test_template_import_unresolved_missing_and_unparsable_ref(tmp_path):
     p = tmp_path / "m.esm"
-    p.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./nope.esm"}],'))
+    p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./nope.esm"}],'))
     assert _err_code(lambda: load(str(p))) == "template_import_unresolved"
     (tmp_path / "junk.esm").write_text("{not json")
-    p.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./junk.esm"}],'))
+    p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./junk.esm"}],'))
     assert _err_code(lambda: load(str(p))) == "template_import_unresolved"
 
 
 def test_only_filters_visibility_not_internal_wiring(tmp_path):
-    (tmp_path / "lib.esm").write_text(json.dumps({
-        "esm": "0.8.0",
-        "metadata": {"name": "lib"},
-        "expression_templates": {
-            "t_inner": {"params": [], "body": 7},
-            "t_keep": {"params": [], "body": {"op": "*", "args": [2,
-                {"op": "apply_expression_template", "args": [],
-                 "name": "t_inner", "bindings": {}}]}},
-            "t_drop": {"params": [], "body": 9},
-        },
-    }))
+    (tmp_path / "lib.esm").write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "lib"},
+                "expression_templates": {
+                    "t_inner": {"params": [], "body": 7},
+                    "t_keep": {
+                        "params": [],
+                        "body": {
+                            "op": "*",
+                            "args": [
+                                2,
+                                {
+                                    "op": "apply_expression_template",
+                                    "args": [],
+                                    "name": "t_inner",
+                                    "bindings": {},
+                                },
+                            ],
+                        },
+                    },
+                    "t_drop": {"params": [], "body": 9},
+                },
+            }
+        )
+    )
     # t_keep's body reference to t_inner resolved in the LIBRARY's own scope,
     # so importing only t_keep still yields 2 * 7.
     p = tmp_path / "m.esm"
-    p.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],'))
+    p.write_text(
+        _model_json('\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],')
+    )
     raw = json.loads(p.read_text())
     resolved = resolve_template_machinery(raw, str(tmp_path))
     tpl = resolved["models"]["M"]["expression_templates"]
@@ -318,87 +342,136 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     assert tpl["t_keep"]["body"] == {"op": "*", "args": [2, 7]}
     # Referencing a filtered-out name from an expression position fails.
     p2 = tmp_path / "m2.esm"
-    p2.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],\n'
-        '"expression_templates": {"local_uses_drop": {"params": [],\n'
-        '  "body": {"op": "apply_expression_template", "args": [], '
-        '"name": "t_drop", "bindings": {}}}},'))
-    assert _err_code(lambda: load(str(p2))) == \
-        "apply_expression_template_unknown_template"
+    p2.write_text(
+        _model_json(
+            '\n"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],\n'
+            '"expression_templates": {"local_uses_drop": {"params": [],\n'
+            '  "body": {"op": "apply_expression_template", "args": [], '
+            '"name": "t_drop", "bindings": {}}}},'
+        )
+    )
+    assert _err_code(lambda: load(str(p2))) == "apply_expression_template_unknown_template"
 
 
 def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
-    (tmp_path / "grid.esm").write_text(json.dumps({
-        "esm": "0.8.0", "metadata": {"name": "grid"},
-        "metaparameters": {"NC": {"type": "integer"}},
-        "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-        "expression_templates": {"nc": {"params": [], "body": "NC"}},
-    }))
+    (tmp_path / "grid.esm").write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "grid"},
+                "metaparameters": {"NC": {"type": "integer"}},
+                "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
+                "expression_templates": {"nc": {"params": [], "body": "NC"}},
+            }
+        )
+    )
     p = tmp_path / "m.esm"
-    p.write_text(_model_json(
-        '\n"expression_template_imports": ['
-        '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
-        '{"ref": "./grid.esm", "bindings": {"NC": 8}}],'))
+    p.write_text(
+        _model_json(
+            '\n"expression_template_imports": ['
+            '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
+            '{"ref": "./grid.esm", "bindings": {"NC": 8}}],'
+        )
+    )
     assert _err_code(lambda: load(str(p))) in (
-        "template_import_name_conflict", "template_import_index_set_conflict")
+        "template_import_name_conflict",
+        "template_import_index_set_conflict",
+    )
     # Equal instantiation on both edges dedups cleanly.
-    p.write_text(_model_json(
-        '\n"expression_template_imports": ['
-        '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
-        '{"ref": "./grid.esm", "bindings": {"NC": 4}}],'))
+    p.write_text(
+        _model_json(
+            '\n"expression_template_imports": ['
+            '{"ref": "./grid.esm", "bindings": {"NC": 4}},'
+            '{"ref": "./grid.esm", "bindings": {"NC": 4}}],'
+        )
+    )
     f = load(str(p))
     assert f.index_sets["cells"]["size"] == 4
 
 
 def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
-    (tmp_path / "lib.esm").write_text(json.dumps({
-        "esm": "0.8.0", "metadata": {"name": "lib"},
-        "metaparameters": {"N": {"type": "integer", "default": 8}},
-        "expression_templates": {"n": {"params": [], "body": "N"}},
-    }))
+    (tmp_path / "lib.esm").write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "lib"},
+                "metaparameters": {"N": {"type": "integer", "default": 8}},
+                "expression_templates": {"n": {"params": [], "body": "N"}},
+            }
+        )
+    )
     p = tmp_path / "m.esm"
-    p.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'))
+    p.write_text(
+        _model_json(
+            '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'
+        )
+    )
     assert _err_code(lambda: load(str(p))) == "template_import_unknown_name"
     # A non-integer binding is schema-invalid (TemplateImport.bindings is
     # integer-typed), so `load` rejects at schema validation; the
     # resolver-level backstop still reports metaparameter_type_error.
-    p.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],'))
+    p.write_text(
+        _model_json(
+            '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],'
+        )
+    )
     with pytest.raises(SchemaValidationError):
         load(str(p))
     raw = json.loads(p.read_text())
-    assert _err_code(lambda: resolve_template_machinery(raw, str(tmp_path))) == \
-        "metaparameter_type_error"
+    assert (
+        _err_code(lambda: resolve_template_machinery(raw, str(tmp_path)))
+        == "metaparameter_type_error"
+    )
 
 
 def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
     p = tmp_path / "m.esm"
-    p.write_text(json.dumps({
-        "esm": "0.8.0",
-        "metadata": {"name": "fold"},
-        "metaparameters": {"N": {"type": "integer", "default": 6}},
-        "index_sets": {"cells": {"kind": "interval",
-                                 "size": {"op": "*", "args": ["N", 2]}}},
-        "models": {
-            "M": {
-                "variables": {
-                    "x": {"type": "state", "units": "1", "default": 0.5},
-                    "agg": {"type": "observed", "units": "1",
-                            "expression": {"op": "aggregate",
-                                           "output_idx": ["i"], "args": ["x"],
-                                           "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                                           "expr": {"op": "*", "args": ["x", "i"]}}},
-                    "ma": {"type": "observed", "units": "1",
-                           "expression": {"op": "makearray", "args": [],
-                                          "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                                          "values": [1.5]}},
+    p.write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "fold"},
+                "metaparameters": {"N": {"type": "integer", "default": 6}},
+                "index_sets": {
+                    "cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}
                 },
-                "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                               "rhs": {"op": "-", "args": ["x"]}}],
+                "models": {
+                    "M": {
+                        "variables": {
+                            "x": {"type": "state", "units": "1", "default": 0.5},
+                            "agg": {
+                                "type": "observed",
+                                "units": "1",
+                                "expression": {
+                                    "op": "aggregate",
+                                    "output_idx": ["i"],
+                                    "args": ["x"],
+                                    "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+                                    "expr": {"op": "*", "args": ["x", "i"]},
+                                },
+                            },
+                            "ma": {
+                                "type": "observed",
+                                "units": "1",
+                                "expression": {
+                                    "op": "makearray",
+                                    "args": [],
+                                    "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+                                    "values": [1.5],
+                                },
+                            },
+                        },
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]},
+                            }
+                        ],
+                    }
+                },
             }
-        },
-    }))
+        )
+    )
     f = load(str(p))
     assert f.index_sets["cells"]["size"] == 12
     m = f.models["M"]
@@ -408,22 +481,33 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
 
 def test_expression_position_substitution_never_folds(tmp_path):
     p = tmp_path / "m.esm"
-    p.write_text(json.dumps({
-        "esm": "0.8.0",
-        "metadata": {"name": "subst"},
-        "metaparameters": {"N": {"type": "integer", "default": 144}},
-        "models": {
-            "M": {
-                "variables": {
-                    "x": {"type": "state", "units": "1", "default": 0.5},
-                    "dlon": {"type": "observed", "units": "1",
-                             "expression": {"op": "/", "args": [360, "N"]}},
+    p.write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "subst"},
+                "metaparameters": {"N": {"type": "integer", "default": 144}},
+                "models": {
+                    "M": {
+                        "variables": {
+                            "x": {"type": "state", "units": "1", "default": 0.5},
+                            "dlon": {
+                                "type": "observed",
+                                "units": "1",
+                                "expression": {"op": "/", "args": [360, "N"]},
+                            },
+                        },
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]},
+                            }
+                        ],
+                    }
                 },
-                "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                               "rhs": {"op": "-", "args": ["x"]}}],
             }
-        },
-    }))
+        )
+    )
     f = load(str(p))
     dlon = f.models["M"].variables["dlon"].expression
     assert dlon.op == "/"
@@ -438,18 +522,30 @@ def _chain_doc(n: int) -> dict:
         if i == n:
             tpl[name] = {"params": [], "body": 1}
         else:
-            tpl[name] = {"params": [],
-                         "body": {"op": "apply_expression_template",
-                                  "args": [], "name": f"c_{i + 1:02d}",
-                                  "bindings": {}}}
+            tpl[name] = {
+                "params": [],
+                "body": {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": f"c_{i + 1:02d}",
+                    "bindings": {},
+                },
+            }
     return {
-        "esm": "0.8.0", "metadata": {"name": "chain"},
-        "models": {"M": {
-            "expression_templates": tpl,
-            "variables": {"x": {"type": "state", "default": 0.5}},
-            "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                           "rhs": {"op": "-", "args": ["x"]}}],
-        }},
+        "esm": "0.8.0",
+        "metadata": {"name": "chain"},
+        "models": {
+            "M": {
+                "expression_templates": tpl,
+                "variables": {"x": {"type": "state", "default": 0.5}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    }
+                ],
+            }
+        },
     }
 
 
@@ -461,37 +557,75 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
         "models": {
             "M": {
                 "expression_templates": {
-                    "c1": {"params": [], "body": {"op": "+", "args": [1,
-                        {"op": "apply_expression_template", "args": [],
-                         "name": "c2", "bindings": {}}]}},
-                    "c2": {"params": [], "body": {"op": "+", "args": [2,
-                        {"op": "apply_expression_template", "args": [],
-                         "name": "c3", "bindings": {}}]}},
+                    "c1": {
+                        "params": [],
+                        "body": {
+                            "op": "+",
+                            "args": [
+                                1,
+                                {
+                                    "op": "apply_expression_template",
+                                    "args": [],
+                                    "name": "c2",
+                                    "bindings": {},
+                                },
+                            ],
+                        },
+                    },
+                    "c2": {
+                        "params": [],
+                        "body": {
+                            "op": "+",
+                            "args": [
+                                2,
+                                {
+                                    "op": "apply_expression_template",
+                                    "args": [],
+                                    "name": "c3",
+                                    "bindings": {},
+                                },
+                            ],
+                        },
+                    },
                     "c3": {"params": [], "body": 3},
                 },
-                "variables": {"x": {"type": "state", "units": "1", "default": 0.5},
-                              "y": {"type": "observed", "units": "1",
-                                    "expression": {"op": "apply_expression_template",
-                                                   "args": [], "name": "c1",
-                                                   "bindings": {}}}},
-                "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                               "rhs": {"op": "-", "args": ["x"]}}],
+                "variables": {
+                    "x": {"type": "state", "units": "1", "default": 0.5},
+                    "y": {
+                        "type": "observed",
+                        "units": "1",
+                        "expression": {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": "c1",
+                            "bindings": {},
+                        },
+                    },
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    }
+                ],
             }
         },
     }
     out = lower_expression_templates(copy.deepcopy(doc))
-    assert out["models"]["M"]["variables"]["y"]["expression"] == \
-        {"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]}
+    assert out["models"]["M"]["variables"]["y"]["expression"] == {
+        "op": "+",
+        "args": [1, {"op": "+", "args": [2, 3]}],
+    }
 
     # Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted; one
     # more: template_body_expansion_too_deep. The depth counts TEMPLATES on
     # the longest chain — a 33-template chain is rejected, 32 accepted (the
     # shared generated fixture pins the reject side; this pins the boundary).
-    assert lower_expression_templates(
-        _chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) is not None
-    assert _err_code(lambda: lower_expression_templates(
-        _chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))) == \
-        "template_body_expansion_too_deep"
+    assert lower_expression_templates(_chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) is not None
+    assert (
+        _err_code(lambda: lower_expression_templates(_chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1)))
+        == "template_body_expansion_too_deep"
+    )
 
 
 def test_cross_file_chains_do_not_accumulate_depth(tmp_path):
@@ -502,16 +636,20 @@ def test_cross_file_chains_do_not_accumulate_depth(tmp_path):
     is legal, not a 33-deep chain."""
     lib = _chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)
     lib_doc = {
-        "esm": "0.8.0", "metadata": {"name": "chainlib"},
+        "esm": "0.8.0",
+        "metadata": {"name": "chainlib"},
         "expression_templates": lib["models"]["M"]["expression_templates"],
     }
     (tmp_path / "chainlib.esm").write_text(json.dumps(lib_doc))
     consumer = tmp_path / "m.esm"
-    consumer.write_text(_model_json(
-        '\n"expression_template_imports": [{"ref": "./chainlib.esm"}],\n'
-        '"expression_templates": {"uses_head": {"params": [],\n'
-        '  "body": {"op": "apply_expression_template", "args": [], '
-        '"name": "c_01", "bindings": {}}}},'))
+    consumer.write_text(
+        _model_json(
+            '\n"expression_template_imports": [{"ref": "./chainlib.esm"}],\n'
+            '"expression_templates": {"uses_head": {"params": [],\n'
+            '  "body": {"op": "apply_expression_template", "args": [], '
+            '"name": "c_01", "bindings": {}}}},'
+        )
+    )
     f = load(str(consumer))  # must not raise template_body_expansion_too_deep
     assert "M" in f.models
 
@@ -521,31 +659,67 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
     locals — NOT sorted template names. The first import's rule name sorts
     AFTER the second's, so a name-sorted tie-break would pick the wrong
     winner; the effective sequence must pin z_rule (2*x)."""
-    (tmp_path / "lib_first.esm").write_text(json.dumps({
-        "esm": "0.8.0", "metadata": {"name": "lib_first"},
-        "expression_templates": {
-            "z_rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
-                       "body": {"op": "*", "args": [2, "f"]}}},
-    }))
-    (tmp_path / "lib_second.esm").write_text(json.dumps({
-        "esm": "0.8.0", "metadata": {"name": "lib_second"},
-        "expression_templates": {
-            "a_rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
-                       "body": {"op": "*", "args": [3, "f"]}}},
-    }))
+    (tmp_path / "lib_first.esm").write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "lib_first"},
+                "expression_templates": {
+                    "z_rule": {
+                        "params": ["f"],
+                        "match": {"op": "lowerme", "args": ["f"]},
+                        "body": {"op": "*", "args": [2, "f"]},
+                    }
+                },
+            }
+        )
+    )
+    (tmp_path / "lib_second.esm").write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "lib_second"},
+                "expression_templates": {
+                    "a_rule": {
+                        "params": ["f"],
+                        "match": {"op": "lowerme", "args": ["f"]},
+                        "body": {"op": "*", "args": [3, "f"]},
+                    }
+                },
+            }
+        )
+    )
     p = tmp_path / "m.esm"
-    p.write_text(json.dumps({
-        "esm": "0.8.0", "metadata": {"name": "order"},
-        "models": {"M": {
-            "expression_template_imports": [
-                {"ref": "./lib_first.esm"}, {"ref": "./lib_second.esm"}],
-            "variables": {"x": {"type": "state", "units": "1", "default": 1.5},
-                          "y": {"type": "observed", "units": "1",
-                                "expression": {"op": "lowerme", "args": ["x"]}}},
-            "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                           "rhs": {"op": "-", "args": ["x"]}}],
-        }},
-    }))
+    p.write_text(
+        json.dumps(
+            {
+                "esm": "0.8.0",
+                "metadata": {"name": "order"},
+                "models": {
+                    "M": {
+                        "expression_template_imports": [
+                            {"ref": "./lib_first.esm"},
+                            {"ref": "./lib_second.esm"},
+                        ],
+                        "variables": {
+                            "x": {"type": "state", "units": "1", "default": 1.5},
+                            "y": {
+                                "type": "observed",
+                                "units": "1",
+                                "expression": {"op": "lowerme", "args": ["x"]},
+                            },
+                        },
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]},
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+    )
     f = load(str(p))
     y = f.models["M"].variables["y"].expression
     assert y.op == "*"
@@ -553,28 +727,38 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
 
 
 def test_body_may_not_reference_match_rule():
-    doc = json.loads(_model_json(
-        '\n"expression_templates": {'
-        '"rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},'
-        ' "body": {"op": "*", "args": [2, "f"]}},'
-        '"uses_rule": {"params": [], "body": {"op": "apply_expression_template",'
-        ' "args": [], "name": "rule", "bindings": {"f": 1}}}},'))
-    assert _err_code(lambda: lower_expression_templates(doc)) == \
-        "apply_expression_template_unknown_template"
+    doc = json.loads(
+        _model_json(
+            '\n"expression_templates": {'
+            '"rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},'
+            ' "body": {"op": "*", "args": [2, "f"]}},'
+            '"uses_rule": {"params": [], "body": {"op": "apply_expression_template",'
+            ' "args": [], "name": "rule", "bindings": {"f": 1}}}},'
+        )
+    )
+    assert (
+        _err_code(lambda: lower_expression_templates(doc))
+        == "apply_expression_template_unknown_template"
+    )
 
 
 def test_match_pattern_may_not_contain_apply_node():
     """esm-spec §9.7.3: match patterns MUST NOT reference templates — the
     match-with-apply rejection is now apply_expression_template_invalid_declaration."""
-    doc = json.loads(_model_json(
-        '\n"expression_templates": {'
-        '"frag": {"params": [], "body": 1},'
-        '"rule": {"params": ["f"],'
-        ' "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",'
-        ' "args": [], "name": "frag", "bindings": {}}]},'
-        ' "body": {"op": "*", "args": [2, "f"]}}},'))
-    assert _err_code(lambda: lower_expression_templates(doc)) == \
-        "apply_expression_template_invalid_declaration"
+    doc = json.loads(
+        _model_json(
+            '\n"expression_templates": {'
+            '"frag": {"params": [], "body": 1},'
+            '"rule": {"params": ["f"],'
+            ' "match": {"op": "lowerme", "args": [{"op": "apply_expression_template",'
+            ' "args": [], "name": "frag", "bindings": {}}]},'
+            ' "body": {"op": "*", "args": [2, "f"]}}},'
+        )
+    )
+    assert (
+        _err_code(lambda: lower_expression_templates(doc))
+        == "apply_expression_template_invalid_declaration"
+    )
 
 
 def test_version_gate_flags_every_v097_construct():
@@ -586,8 +770,10 @@ def test_version_gate_flags_every_v097_construct():
         {{"esm": "0.7.0", "metadata": {{"name": "old"}},{snippet}
          "models": {{"M": {{"variables": {{"x": {{"type": "state", "default": 0.5}}}},
                           "equations": []}}}}}}""")
-        assert _err_code(lambda: reject_template_imports_pre_v08(doc)) == \
-            "template_import_version_too_old"
+        assert (
+            _err_code(lambda: reject_template_imports_pre_v08(doc))
+            == "template_import_version_too_old"
+        )
     # 0.8.0 files pass the gate.
     ok = json.loads("""
     {"esm": "0.8.0", "metadata": {"name": "new"},
@@ -599,13 +785,21 @@ def test_version_gate_flags_every_v097_construct():
 def test_zero_parameter_templates_are_legal():
     """esm-spec §9.6.1 (0.8.0): params MAY be empty — a zero-parameter
     template is a named constant fragment."""
-    doc = json.loads(_model_json(
-        '\n"expression_templates": {"two": {"params": [], "body": 2}},'
-        '"initialization_equations": [],'))
+    doc = json.loads(
+        _model_json(
+            '\n"expression_templates": {"two": {"params": [], "body": 2}},'
+            '"initialization_equations": [],'
+        )
+    )
     doc["models"]["M"]["variables"]["y"] = {
-        "type": "observed", "units": "1",
-        "expression": {"op": "apply_expression_template", "args": [],
-                       "name": "two", "bindings": {}},
+        "type": "observed",
+        "units": "1",
+        "expression": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "two",
+            "bindings": {},
+        },
     }
     out = lower_expression_templates(doc)
     assert out["models"]["M"]["variables"]["y"]["expression"] == 2

@@ -26,6 +26,7 @@ import numpy as np
 import sympy as sp
 
 from .esm_types import ExprNode
+
 # _ess_numeric_abs is re-exported for existing importers (tests, simulation
 # diagnostics) even though this module only references it by name inside
 # _LAMBDIFY_MODULES.
@@ -53,11 +54,8 @@ def _topo_sort(names: List[str], deps: Dict[str, List[str]], label: str) -> List
         if name in visited:
             return
         if name in in_progress:
-            cycle = path[path.index(name):] + [name]
-            raise SimulationError(
-                f"Cyclic {label} equations detected: "
-                + " -> ".join(cycle)
-            )
+            cycle = path[path.index(name) :] + [name]
+            raise SimulationError(f"Cyclic {label} equations detected: " + " -> ".join(cycle))
         in_progress.add(name)
         for dep in deps[name]:
             _visit(dep, path + [name])
@@ -160,12 +158,16 @@ def _flat_to_sympy_rhs(
             inner = lhs.args[0]
             if isinstance(inner, str) and inner in flat.state_variables:
                 diff_rhs[inner] = _expr_to_sympy(
-                    eq.rhs, dict(symbol_map), fn_callable_map,
+                    eq.rhs,
+                    dict(symbol_map),
+                    fn_callable_map,
                 )
                 continue
         if isinstance(lhs, str) and lhs in flat.state_variables:
             rhs_sym = _expr_to_sympy(
-                eq.rhs, dict(symbol_map), fn_callable_map,
+                eq.rhs,
+                dict(symbol_map),
+                fn_callable_map,
             )
             if lhs in alg_rhs:
                 # Same-system DAE: a previous equation already defines this
@@ -192,7 +194,8 @@ def _flat_to_sympy_rhs(
                     target_name = str(target)
                     try:
                         solutions = sp.solve(
-                            sp.Eq(symbol_map[lhs], rhs_sym), target,
+                            sp.Eq(symbol_map[lhs], rhs_sym),
+                            target,
                         )
                     except Exception:
                         solutions = []
@@ -311,7 +314,9 @@ def _observed_to_sympy_value_exprs(
         lhs = eq.lhs
         if isinstance(lhs, str) and lhs in flat.observed_variables:
             obs_rhs[lhs] = _expr_to_sympy(
-                eq.rhs, dict(sym_map), fn_callable_map,
+                eq.rhs,
+                dict(sym_map),
+                fn_callable_map,
             )
 
     observed_with_eq = [n for n in observed_names_all if n in obs_rhs]
@@ -442,19 +447,12 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     # observed bodies still reference algebraic-state symbols — that is
     # intentional; alg values are resolved at runtime before each rhs/obs call.
     if observed_names:
-        observed_subs = {
-            sp.Symbol(name): observed_value_exprs[name]
-            for name in observed_names
-        }
-        rhs_exprs = [
-            expr.subs(observed_subs, simultaneous=False)
-            for expr in rhs_exprs
-        ]
+        observed_subs = {sp.Symbol(name): observed_value_exprs[name] for name in observed_names}
+        rhs_exprs = [expr.subs(observed_subs, simultaneous=False) for expr in rhs_exprs]
         # Also substitute into alg bodies to handle the rare case where an
         # algebraic state references an observed variable by its dotted name.
         algebraic_value_exprs = {
-            k: v.subs(observed_subs, simultaneous=False)
-            for k, v in algebraic_value_exprs.items()
+            k: v.subs(observed_subs, simultaneous=False) for k, v in algebraic_value_exprs.items()
         }
 
     state_symbols = [symbol_map[name] for name in state_names]
@@ -489,7 +487,8 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
             alg_funcs[n] = sp.lambdify(
                 all_args,
                 algebraic_value_exprs[n],
-                modules=modules, cse=cse,
+                modules=modules,
+                cse=cse,
             )
 
         def algebraic_vector_func(
@@ -511,10 +510,9 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     # Differential RHS — compact core function + sequential-alg wrapper.
     # -------------------------------------------------------------------------
     if state_names:
-        rhs_core_func = sp.lambdify(
-            all_args, rhs_exprs, modules=modules, cse=cse
-        )
+        rhs_core_func = sp.lambdify(all_args, rhs_exprs, modules=modules, cse=cse)
         if algebraic_state_names:
+
             def rhs_vector_func(
                 *all_state_and_params: Any,
                 _core: Callable = rhs_core_func,
@@ -547,10 +545,13 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
         # without per-equation dispatch.
         t_symbol = sp.Symbol("t")
         obs_core_func = sp.lambdify(
-            [t_symbol, *all_args], obs_value_list,
-            modules=modules, cse=cse,
+            [t_symbol, *all_args],
+            obs_value_list,
+            modules=modules,
+            cse=cse,
         )
         if algebraic_state_names:
+
             def observed_vector_func(
                 t: Any,
                 *all_state_and_params: Any,

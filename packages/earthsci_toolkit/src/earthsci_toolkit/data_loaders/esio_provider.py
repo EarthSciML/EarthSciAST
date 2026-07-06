@@ -31,7 +31,7 @@ def _esio_format(dl: Any) -> str:
     meta = getattr(dl, "metadata", None) or {}
     if meta.get("esio_format"):
         return str(meta["esio_format"])
-    url = (getattr(getattr(dl, "source", None), "url_template", "") or "")
+    url = getattr(getattr(dl, "source", None), "url_template", "") or ""
     path = url.split("?", 1)[0].lower()
     if path.endswith((".nc", ".nc4", ".netcdf", ".cdf")):
         return "netcdf"
@@ -66,8 +66,9 @@ def _to_esio_temporal(temporal: Any) -> Any:
         return None  # no anchor ⇒ treat as CONST
 
     def _dur(spec):
-        return (_dt.timedelta(seconds=parse_iso_duration(spec).approximate_seconds())
-                if spec else None)
+        return (
+            _dt.timedelta(seconds=parse_iso_duration(spec).approximate_seconds()) if spec else None
+        )
 
     freq = _dur(getattr(temporal, "frequency", None))
     file_period = _dur(getattr(temporal, "file_period", None)) or freq
@@ -169,8 +170,7 @@ def _to_esio_cds_loader(field: Any, target: Any, window: Any = None) -> Any:
 
     min_lon, min_lat, max_lon, max_lat = _bbox_from_target(target)
     area = esio_era5.era5_area_from_bbox(min_lon, min_lat, max_lon, max_lat)
-    levels = [int(p) for p in (cds.get("pressure_levels")
-                               or esio_era5.ERA5_PRESSURE_LEVELS_HPA)]
+    levels = [int(p) for p in (cds.get("pressure_levels") or esio_era5.ERA5_PRESSURE_LEVELS_HPA)]
 
     # Calendar-correct months + day-trim from the simulation WINDOW when it is
     # available. This both (a) trims the request to the days actually simulated —
@@ -182,8 +182,11 @@ def _to_esio_cds_loader(field: Any, target: Any, window: Any = None) -> Any:
     # the window by the calendar, ±3 h buffer. Without a window we fall back to
     # the anchor's whole month (the legacy path; used by unit tests).
     w_start, w_end = _window_bounds(window)
-    months = (esio_era5.era5_months_in_span(w_start, w_end)
-              if (w_start is not None and w_end is not None) else None)
+    months = (
+        esio_era5.era5_months_in_span(w_start, w_end)
+        if (w_start is not None and w_end is not None)
+        else None
+    )
 
     def url(anchor: _dt.datetime) -> str:
         # ERA5 files are monthly (one cds:// per (year, month) → one CDS job +
@@ -239,8 +242,9 @@ def to_esio_loader(field: Any, target: Any = None, window: Any = None) -> Any:
     def url(anchor: _dt.datetime) -> str:
         return expand_with_mirrors(template, mirrors, date=anchor, variables=consts)[0]
 
-    variables = [v.file_variable for v in dl.variables.values()
-                 if getattr(v, "file_variable", None)]
+    variables = [
+        v.file_variable for v in dl.variables.values() if getattr(v, "file_variable", None)
+    ]
     return esio.DataLoader(
         name=getattr(dl, "name", field.name),
         format=_esio_format(dl),
@@ -264,6 +268,4 @@ def esio_provider_factory(
     import earthsciio as esio
 
     esio.register_format_readers()  # idempotent; netcdf/csv/geotiff available
-    return esio.Provider(
-        to_esio_loader(field, target=target, window=window), esio.Cache(), window
-    )
+    return esio.Provider(to_esio_loader(field, target=target, window=window), esio.Cache(), window)

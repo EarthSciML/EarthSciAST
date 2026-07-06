@@ -9,20 +9,19 @@ Comprehensive documentation generator that:
 4. Sets up automated documentation building infrastructure
 """
 
-import os
 import json
 import re
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Tuple
+from typing import Dict, List, Any, Tuple
 from dataclasses import dataclass, asdict
 from collections import defaultdict
-import subprocess
-import shutil
+
 
 @dataclass
 class APIFunction:
     """Represents a documented API function."""
+
     name: str
     language: str
     file_path: str
@@ -35,9 +34,11 @@ class APIFunction:
     see_also: List[str]
     tags: List[str]
 
+
 @dataclass
 class APIType:
     """Represents a documented type/struct/class."""
+
     name: str
     language: str
     file_path: str
@@ -48,6 +49,7 @@ class APIType:
     methods: List[str]
     examples: List[str]
     tags: List[str]
+
 
 class DocumentationExtractor:
     """Extracts documentation from source code across multiple languages."""
@@ -64,7 +66,7 @@ class DocumentationExtractor:
             "types": [],
             "languages": [],
             "cross_references": {},
-            "examples": []
+            "examples": [],
         }
 
         # Extract from each language package
@@ -83,9 +85,7 @@ class DocumentationExtractor:
             docs["examples"].extend(lang_docs.get("examples", []))
 
         # Build cross-references between languages
-        docs["cross_references"] = self._build_cross_references(
-            docs["functions"], docs["types"]
-        )
+        docs["cross_references"] = self._build_cross_references(docs["functions"], docs["types"])
 
         return docs
 
@@ -127,30 +127,34 @@ class DocumentationExtractor:
             content = file_path.read_text()
 
             # Find export block
-            export_match = re.search(r'export\s+(.*?)(?=\n\n|\nend|\ninclude|\Z)', content, re.DOTALL)
+            export_match = re.search(
+                r"export\s+(.*?)(?=\n\n|\nend|\ninclude|\Z)", content, re.DOTALL
+            )
             if not export_match:
                 return functions
 
             exports_text = export_match.group(1)
 
             # Extract individual exports
-            export_items = re.findall(r'([a-zA-Z_][a-zA-Z0-9_!]*)', exports_text)
+            export_items = re.findall(r"([a-zA-Z_][a-zA-Z0-9_!]*)", exports_text)
 
             for item in export_items:
                 # Create basic function entry for exported items
-                functions.append(APIFunction(
-                    name=item,
-                    language="julia",
-                    file_path=str(file_path),
-                    line_number=0,
-                    signature=f"{item}(...)",
-                    docstring="",
-                    parameters=[],
-                    return_type="",
-                    examples=[],
-                    see_also=[],
-                    tags=["exported"]
-                ))
+                functions.append(
+                    APIFunction(
+                        name=item,
+                        language="julia",
+                        file_path=str(file_path),
+                        line_number=0,
+                        signature=f"{item}(...)",
+                        docstring="",
+                        parameters=[],
+                        return_type="",
+                        examples=[],
+                        see_also=[],
+                        tags=["exported"],
+                    )
+                )
 
         except Exception as e:
             print(f"Warning: Could not parse Julia exports from {file_path}: {e}")
@@ -164,7 +168,7 @@ class DocumentationExtractor:
 
         try:
             content = file_path.read_text()
-            lines = content.split('\n')
+            lines = content.split("\n")
 
             i = 0
             while i < len(lines):
@@ -172,7 +176,6 @@ class DocumentationExtractor:
 
                 # Look for docstrings (triple quotes)
                 if line.startswith('"""'):
-                    doc_start = i
                     doc_lines = []
                     i += 1
 
@@ -182,10 +185,10 @@ class DocumentationExtractor:
                         i += 1
 
                     if i < len(lines):
-                        doc_lines.append(lines[i].replace('"""', ''))
+                        doc_lines.append(lines[i].replace('"""', ""))
                         i += 1
 
-                    docstring = '\n'.join(doc_lines).strip()
+                    docstring = "\n".join(doc_lines).strip()
 
                     # Look for function or type definition after docstring
                     while i < len(lines) and not lines[i].strip():
@@ -195,37 +198,43 @@ class DocumentationExtractor:
                         def_line = lines[i].strip()
 
                         # Function definition
-                        func_match = re.match(r'function\s+([a-zA-Z_][a-zA-Z0-9_!]*)', def_line)
+                        func_match = re.match(r"function\s+([a-zA-Z_][a-zA-Z0-9_!]*)", def_line)
                         if func_match:
-                            functions.append(APIFunction(
-                                name=func_match.group(1),
-                                language="julia",
-                                file_path=str(file_path),
-                                line_number=i + 1,
-                                signature=def_line,
-                                docstring=docstring,
-                                parameters=[],
-                                return_type="",
-                                examples=[],
-                                see_also=[],
-                                tags=["documented"]
-                            ))
+                            functions.append(
+                                APIFunction(
+                                    name=func_match.group(1),
+                                    language="julia",
+                                    file_path=str(file_path),
+                                    line_number=i + 1,
+                                    signature=def_line,
+                                    docstring=docstring,
+                                    parameters=[],
+                                    return_type="",
+                                    examples=[],
+                                    see_also=[],
+                                    tags=["documented"],
+                                )
+                            )
 
                         # Type definition
-                        type_match = re.match(r'(?:struct|mutable struct)\s+([a-zA-Z_][a-zA-Z0-9_]*)', def_line)
+                        type_match = re.match(
+                            r"(?:struct|mutable struct)\s+([a-zA-Z_][a-zA-Z0-9_]*)", def_line
+                        )
                         if type_match:
-                            types.append(APIType(
-                                name=type_match.group(1),
-                                language="julia",
-                                file_path=str(file_path),
-                                line_number=i + 1,
-                                definition=def_line,
-                                docstring=docstring,
-                                fields=[],
-                                methods=[],
-                                examples=[],
-                                tags=["documented"]
-                            ))
+                            types.append(
+                                APIType(
+                                    name=type_match.group(1),
+                                    language="julia",
+                                    file_path=str(file_path),
+                                    line_number=i + 1,
+                                    definition=def_line,
+                                    docstring=docstring,
+                                    fields=[],
+                                    methods=[],
+                                    examples=[],
+                                    tags=["documented"],
+                                )
+                            )
 
                 i += 1
 
@@ -243,19 +252,23 @@ class DocumentationExtractor:
                 content = test_file.read_text()
 
                 # Look for @testset blocks
-                testset_matches = re.finditer(r'@testset\s+"([^"]+)"\s+begin(.*?)end', content, re.DOTALL)
+                testset_matches = re.finditer(
+                    r'@testset\s+"([^"]+)"\s+begin(.*?)end', content, re.DOTALL
+                )
 
                 for match in testset_matches:
                     test_name = match.group(1)
                     test_code = match.group(2).strip()
 
-                    examples.append({
-                        "name": test_name,
-                        "language": "julia",
-                        "code": test_code,
-                        "file": str(test_file),
-                        "type": "test"
-                    })
+                    examples.append(
+                        {
+                            "name": test_name,
+                            "language": "julia",
+                            "code": test_code,
+                            "file": str(test_file),
+                            "type": "test",
+                        }
+                    )
 
             except Exception as e:
                 print(f"Warning: Could not extract examples from {test_file}: {e}")
@@ -291,14 +304,14 @@ class DocumentationExtractor:
 
         try:
             content = file_path.read_text()
-            lines = content.split('\n')
+            lines = content.split("\n")
 
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
 
                 # Function definition
-                func_match = re.match(r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\((.*?)\):', line)
+                func_match = re.match(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\((.*?)\):", line)
                 if func_match:
                     func_name = func_match.group(1)
                     params = func_match.group(2)
@@ -312,34 +325,36 @@ class DocumentationExtractor:
 
                         if lines[i].strip().count(quote_char) == 2:
                             # Single line docstring
-                            docstring = lines[i].strip().replace(quote_char, '')
+                            docstring = lines[i].strip().replace(quote_char, "")
                         else:
                             # Multi-line docstring
-                            doc_lines.append(lines[i].replace(quote_char, ''))
+                            doc_lines.append(lines[i].replace(quote_char, ""))
                             i += 1
                             while i < len(lines) and quote_char not in lines[i]:
                                 doc_lines.append(lines[i])
                                 i += 1
                             if i < len(lines):
-                                doc_lines.append(lines[i].replace(quote_char, ''))
-                            docstring = '\n'.join(doc_lines).strip()
+                                doc_lines.append(lines[i].replace(quote_char, ""))
+                            docstring = "\n".join(doc_lines).strip()
 
-                    functions.append(APIFunction(
-                        name=func_name,
-                        language="python",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        signature=f"def {func_name}({params}):",
-                        docstring=docstring,
-                        parameters=[],
-                        return_type="",
-                        examples=[],
-                        see_also=[],
-                        tags=[]
-                    ))
+                    functions.append(
+                        APIFunction(
+                            name=func_name,
+                            language="python",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            signature=f"def {func_name}({params}):",
+                            docstring=docstring,
+                            parameters=[],
+                            return_type="",
+                            examples=[],
+                            see_also=[],
+                            tags=[],
+                        )
+                    )
 
                 # Class definition
-                class_match = re.match(r'class\s+([a-zA-Z_][a-zA-Z0-9_]*)', line)
+                class_match = re.match(r"class\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
                 if class_match:
                     class_name = class_match.group(1)
 
@@ -351,29 +366,31 @@ class DocumentationExtractor:
                         doc_lines = []
 
                         if lines[i].strip().count(quote_char) == 2:
-                            docstring = lines[i].strip().replace(quote_char, '')
+                            docstring = lines[i].strip().replace(quote_char, "")
                         else:
-                            doc_lines.append(lines[i].replace(quote_char, ''))
+                            doc_lines.append(lines[i].replace(quote_char, ""))
                             i += 1
                             while i < len(lines) and quote_char not in lines[i]:
                                 doc_lines.append(lines[i])
                                 i += 1
                             if i < len(lines):
-                                doc_lines.append(lines[i].replace(quote_char, ''))
-                            docstring = '\n'.join(doc_lines).strip()
+                                doc_lines.append(lines[i].replace(quote_char, ""))
+                            docstring = "\n".join(doc_lines).strip()
 
-                    types.append(APIType(
-                        name=class_name,
-                        language="python",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        definition=f"class {class_name}:",
-                        docstring=docstring,
-                        fields=[],
-                        methods=[],
-                        examples=[],
-                        tags=[]
-                    ))
+                    types.append(
+                        APIType(
+                            name=class_name,
+                            language="python",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            definition=f"class {class_name}:",
+                            docstring=docstring,
+                            fields=[],
+                            methods=[],
+                            examples=[],
+                            tags=[],
+                        )
+                    )
 
                 i += 1
 
@@ -384,10 +401,7 @@ class DocumentationExtractor:
 
     def _extract_typescript_docs(self) -> Dict[str, Any]:
         """Extract documentation from TypeScript package."""
-        ts_dirs = [
-            self.packages_dir / "earthsci-toolkit",
-            self.packages_dir / "esm-editor"
-        ]
+        ts_dirs = [self.packages_dir / "earthsci-toolkit", self.packages_dir / "esm-editor"]
 
         functions = []
         types = []
@@ -415,14 +429,16 @@ class DocumentationExtractor:
 
         try:
             content = file_path.read_text()
-            lines = content.split('\n')
+            lines = content.split("\n")
 
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
 
                 # Function definition
-                func_match = re.match(r'export\s+(?:function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', line)
+                func_match = re.match(
+                    r"export\s+(?:function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line
+                )
                 if func_match:
                     func_name = func_match.group(1)
 
@@ -437,24 +453,26 @@ class DocumentationExtractor:
                             j -= 1
                         if j >= 0 and lines[j].strip().startswith("/**"):
                             doc_lines.insert(0, lines[j].strip()[3:].strip())
-                        docstring = '\n'.join(doc_lines).strip()
+                        docstring = "\n".join(doc_lines).strip()
 
-                    functions.append(APIFunction(
-                        name=func_name,
-                        language="typescript",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        signature=line,
-                        docstring=docstring,
-                        parameters=[],
-                        return_type="",
-                        examples=[],
-                        see_also=[],
-                        tags=["exported"] if "export" in line else []
-                    ))
+                    functions.append(
+                        APIFunction(
+                            name=func_name,
+                            language="typescript",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            signature=line,
+                            docstring=docstring,
+                            parameters=[],
+                            return_type="",
+                            examples=[],
+                            see_also=[],
+                            tags=["exported"] if "export" in line else [],
+                        )
+                    )
 
                 # Interface definition
-                interface_match = re.match(r'export\s+interface\s+([a-zA-Z_][a-zA-Z0-9_]*)', line)
+                interface_match = re.match(r"export\s+interface\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
                 if interface_match:
                     interface_name = interface_match.group(1)
 
@@ -469,20 +487,22 @@ class DocumentationExtractor:
                             j -= 1
                         if j >= 0 and lines[j].strip().startswith("/**"):
                             doc_lines.insert(0, lines[j].strip()[3:].strip())
-                        docstring = '\n'.join(doc_lines).strip()
+                        docstring = "\n".join(doc_lines).strip()
 
-                    types.append(APIType(
-                        name=interface_name,
-                        language="typescript",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        definition=line,
-                        docstring=docstring,
-                        fields=[],
-                        methods=[],
-                        examples=[],
-                        tags=["exported"]
-                    ))
+                    types.append(
+                        APIType(
+                            name=interface_name,
+                            language="typescript",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            definition=line,
+                            docstring=docstring,
+                            fields=[],
+                            methods=[],
+                            examples=[],
+                            tags=["exported"],
+                        )
+                    )
 
                 i += 1
 
@@ -518,7 +538,7 @@ class DocumentationExtractor:
 
         try:
             content = file_path.read_text()
-            lines = content.split('\n')
+            lines = content.split("\n")
 
             i = 0
             while i < len(lines):
@@ -533,45 +553,49 @@ class DocumentationExtractor:
                 if i >= len(lines):
                     break
 
-                docstring = '\n'.join(doc_lines).strip()
+                docstring = "\n".join(doc_lines).strip()
                 line = lines[i].strip()
 
                 # Function definition
-                func_match = re.match(r'pub\s+fn\s+([a-zA-Z_][a-zA-Z0-9_]*)', line)
+                func_match = re.match(r"pub\s+fn\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
                 if func_match:
                     func_name = func_match.group(1)
 
-                    functions.append(APIFunction(
-                        name=func_name,
-                        language="rust",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        signature=line,
-                        docstring=docstring,
-                        parameters=[],
-                        return_type="",
-                        examples=[],
-                        see_also=[],
-                        tags=["public"]
-                    ))
+                    functions.append(
+                        APIFunction(
+                            name=func_name,
+                            language="rust",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            signature=line,
+                            docstring=docstring,
+                            parameters=[],
+                            return_type="",
+                            examples=[],
+                            see_also=[],
+                            tags=["public"],
+                        )
+                    )
 
                 # Struct definition
-                struct_match = re.match(r'pub\s+struct\s+([a-zA-Z_][a-zA-Z0-9_]*)', line)
+                struct_match = re.match(r"pub\s+struct\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
                 if struct_match:
                     struct_name = struct_match.group(1)
 
-                    types.append(APIType(
-                        name=struct_name,
-                        language="rust",
-                        file_path=str(file_path),
-                        line_number=i + 1,
-                        definition=line,
-                        docstring=docstring,
-                        fields=[],
-                        methods=[],
-                        examples=[],
-                        tags=["public"]
-                    ))
+                    types.append(
+                        APIType(
+                            name=struct_name,
+                            language="rust",
+                            file_path=str(file_path),
+                            line_number=i + 1,
+                            definition=line,
+                            docstring=docstring,
+                            fields=[],
+                            methods=[],
+                            examples=[],
+                            tags=["public"],
+                        )
+                    )
 
                 i += 1
 
@@ -580,7 +604,9 @@ class DocumentationExtractor:
 
         return functions, types
 
-    def _build_cross_references(self, functions: List[APIFunction], types: List[APIType]) -> Dict[str, Dict[str, List[str]]]:
+    def _build_cross_references(
+        self, functions: List[APIFunction], types: List[APIType]
+    ) -> Dict[str, Dict[str, List[str]]]:
         """Build cross-references between functions and types across languages."""
         cross_refs = defaultdict(lambda: defaultdict(list))
 
@@ -610,6 +636,7 @@ class DocumentationExtractor:
                     cross_refs[typ.language][name].extend(other_langs)
 
         return dict(cross_refs)
+
 
 class DocumentationGenerator:
     """Generates comprehensive documentation from extracted API information."""
@@ -672,7 +699,7 @@ class DocumentationGenerator:
         for lang in self.api_docs["languages"]:
             lang_file = api_dir / f"{lang}.md"
 
-            with open(lang_file, 'w') as f:
+            with open(lang_file, "w") as f:
                 f.write(f"# {lang.title()} API Reference\n\n")
                 f.write(f"Complete API reference for the ESM Format {lang.title()} library.\n\n")
 
@@ -687,14 +714,20 @@ class DocumentationGenerator:
                         f.write(f"**Signature:**\n```{lang}\n{func.signature}\n```\n\n")
 
                         if func.docstring:
-                            f.write(f"**Description:**\n{self._sanitize_docstring(func.docstring)}\n\n")
+                            f.write(
+                                f"**Description:**\n{self._sanitize_docstring(func.docstring)}\n\n"
+                            )
 
                         # Cross-language references
-                        cross_refs = self.api_docs["cross_references"].get(lang, {}).get(func.name, [])
+                        cross_refs = (
+                            self.api_docs["cross_references"].get(lang, {}).get(func.name, [])
+                        )
                         if cross_refs:
                             f.write("**Available in other languages:**\n")
                             for other_lang in cross_refs:
-                                f.write(f"- [{other_lang.title()}]({other_lang}.md#{func.name.lower()})\n")
+                                f.write(
+                                    f"- [{other_lang.title()}]({other_lang}.md#{func.name.lower()})\n"
+                                )
                             f.write("\n")
 
                         f.write("---\n\n")
@@ -710,14 +743,20 @@ class DocumentationGenerator:
                         f.write(f"**Definition:**\n```{lang}\n{typ.definition}\n```\n\n")
 
                         if typ.docstring:
-                            f.write(f"**Description:**\n{self._sanitize_docstring(typ.docstring)}\n\n")
+                            f.write(
+                                f"**Description:**\n{self._sanitize_docstring(typ.docstring)}\n\n"
+                            )
 
                         # Cross-language references
-                        cross_refs = self.api_docs["cross_references"].get(lang, {}).get(typ.name, [])
+                        cross_refs = (
+                            self.api_docs["cross_references"].get(lang, {}).get(typ.name, [])
+                        )
                         if cross_refs:
                             f.write("**Available in other languages:**\n")
                             for other_lang in cross_refs:
-                                f.write(f"- [{other_lang.title()}]({other_lang}.md#{typ.name.lower()})\n")
+                                f.write(
+                                    f"- [{other_lang.title()}]({other_lang}.md#{typ.name.lower()})\n"
+                                )
                             f.write("\n")
 
                         f.write("---\n\n")
@@ -726,9 +765,11 @@ class DocumentationGenerator:
         """Generate cross-language comparison documentation."""
         comparison_file = self.output_dir / "generated" / "cross-language-comparison.md"
 
-        with open(comparison_file, 'w') as f:
+        with open(comparison_file, "w") as f:
             f.write("# Cross-Language API Comparison\n\n")
-            f.write("This document shows equivalent functionality across different ESM Format language implementations.\n\n")
+            f.write(
+                "This document shows equivalent functionality across different ESM Format language implementations.\n\n"
+            )
 
             # Find common function names
             func_names = defaultdict(list)
@@ -748,7 +789,9 @@ class DocumentationGenerator:
                         f.write(f"**{func.language.title()}:**\n")
                         f.write(f"```{func.language}\n{func.signature}\n```\n\n")
                         if func.docstring:
-                            f.write(f"> {self._sanitize_docstring(func.docstring).split('.')[0]}.\n\n")
+                            f.write(
+                                f"> {self._sanitize_docstring(func.docstring).split('.')[0]}.\n\n"
+                            )
 
                     f.write("---\n\n")
 
@@ -770,7 +813,9 @@ class DocumentationGenerator:
                         f.write(f"**{typ.language.title()}:**\n")
                         f.write(f"```{typ.language}\n{typ.definition}\n```\n\n")
                         if typ.docstring:
-                            f.write(f"> {self._sanitize_docstring(typ.docstring).split('.')[0]}.\n\n")
+                            f.write(
+                                f"> {self._sanitize_docstring(typ.docstring).split('.')[0]}.\n\n"
+                            )
 
                     f.write("---\n\n")
 
@@ -784,7 +829,7 @@ class DocumentationGenerator:
         # page resources rather than rendered pages — leaving every link from
         # this index a 404 on the live site.
         index_file = examples_dir / "_index.md"
-        with open(index_file, 'w') as f:
+        with open(index_file, "w") as f:
             f.write("# Examples Index\n\n")
             f.write("Collection of examples showing how to use the ESM Format libraries.\n\n")
 
@@ -802,17 +847,21 @@ class DocumentationGenerator:
 
                     for example in examples_by_lang[lang]:
                         example_name = example["name"]
-                        safe_name = re.sub(r'[^a-zA-Z0-9\-_]', '-', example_name.lower().replace(' ', '-'))
+                        safe_name = re.sub(
+                            r"[^a-zA-Z0-9\-_]", "-", example_name.lower().replace(" ", "-")
+                        )
                         f.write(f"- [{example_name}]({lang}-{safe_name}.md)\n")
                     f.write("\n")
 
                     # Generate individual example files
                     for example in examples_by_lang[lang]:
                         # Clean filename to avoid filesystem issues
-                        safe_name = re.sub(r'[^a-zA-Z0-9\-_]', '-', example['name'].lower().replace(' ', '-'))
+                        safe_name = re.sub(
+                            r"[^a-zA-Z0-9\-_]", "-", example["name"].lower().replace(" ", "-")
+                        )
                         example_file = examples_dir / f"{lang}-{safe_name}.md"
 
-                        with open(example_file, 'w') as ef:
+                        with open(example_file, "w") as ef:
                             ef.write(f"# {example['name']} ({lang.title()})\n\n")
                             ef.write(f"**Source:** `{example['file']}`\n\n")
                             ef.write(f"```{lang}\n{example['code']}\n```\n\n")
@@ -823,7 +872,7 @@ class DocumentationGenerator:
         # Generate API index — branch bundle (`_index.md`), not a leaf bundle.
         # See note in `_generate_examples_documentation`.
         api_index = self.output_dir / "api" / "_index.md"
-        with open(api_index, 'w') as f:
+        with open(api_index, "w") as f:
             f.write("# API Reference Index\n\n")
             f.write("Complete API documentation for all ESM Format language implementations.\n\n")
 
@@ -839,6 +888,7 @@ class DocumentationGenerator:
             f.write("- [Cross-Language Comparison](../generated/cross-language-comparison.md)\n")
             f.write("- [Examples Index](../examples/)\n\n")
 
+
 def setup_documentation_infrastructure(project_root: Path):
     """Set up automated documentation building infrastructure."""
 
@@ -848,7 +898,7 @@ def setup_documentation_infrastructure(project_root: Path):
 
     docs_workflow = workflows_dir / "docs.yml"
 
-    with open(docs_workflow, 'w') as f:
+    with open(docs_workflow, "w") as f:
         f.write("""name: Generate Documentation
 
 on:
@@ -914,7 +964,7 @@ jobs:
     # Create documentation configuration
     docs_config = project_root / "docs" / "_config.yml"
 
-    with open(docs_config, 'w') as f:
+    with open(docs_config, "w") as f:
         f.write("""# ESM Format Documentation Configuration
 
 # Site settings
@@ -958,15 +1008,24 @@ kramdown:
     line_numbers: true
 """)
 
+
 def main():
     """Main entry point for documentation generation."""
     parser = argparse.ArgumentParser(description="Generate ESM Format documentation")
-    parser.add_argument("--project-root", type=Path, default=Path.cwd(),
-                       help="Path to project root directory")
-    parser.add_argument("--output", type=Path, default=None,
-                       help="Output directory for generated docs (default: docs/generated)")
-    parser.add_argument("--setup-infrastructure", action="store_true",
-                       help="Set up automated documentation infrastructure")
+    parser.add_argument(
+        "--project-root", type=Path, default=Path.cwd(), help="Path to project root directory"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output directory for generated docs (default: docs/generated)",
+    )
+    parser.add_argument(
+        "--setup-infrastructure",
+        action="store_true",
+        help="Set up automated documentation infrastructure",
+    )
 
     args = parser.parse_args()
 
@@ -997,19 +1056,20 @@ def main():
     docs_json = output_dir / "generated" / "api-data.json"
     docs_json.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(docs_json, 'w') as f:
+    with open(docs_json, "w") as f:
         # Convert dataclasses to dictionaries for JSON serialization
         serializable_data = {
             "functions": [asdict(func) for func in docs_data["functions"]],
             "types": [asdict(typ) for typ in docs_data["types"]],
             "languages": docs_data["languages"],
             "cross_references": docs_data["cross_references"],
-            "examples": docs_data["examples"]
+            "examples": docs_data["examples"],
         }
         json.dump(serializable_data, f, indent=2, default=str)
 
     print(f"Raw documentation data saved to: {docs_json}")
     print("Documentation generation complete!")
+
 
 if __name__ == "__main__":
     main()

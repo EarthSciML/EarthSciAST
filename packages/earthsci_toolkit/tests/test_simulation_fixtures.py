@@ -13,8 +13,16 @@ only the ESM-format integration tests remain.
 """
 
 from earthsci_toolkit.esm_types import (
-    Model, ModelVariable, Equation, ExprNode, EsmFile, Metadata,
-    ReactionSystem, Species, Parameter, Reaction
+    Model,
+    ModelVariable,
+    Equation,
+    ExprNode,
+    EsmFile,
+    Metadata,
+    ReactionSystem,
+    Species,
+    Parameter,
+    Reaction,
 )
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.serialize import save
@@ -31,24 +39,21 @@ class TestEarthSciSerializationIntegration:
             variables={
                 "x": ModelVariable(type="state", units="concentration", default=1.0),
                 "k": ModelVariable(type="parameter", units="1/time", default=0.1),
-                "t": ModelVariable(type="parameter", units="time", default=0.0)
+                "t": ModelVariable(type="parameter", units="time", default=0.0),
             },
             equations=[
                 Equation(
                     lhs=ExprNode(op="D", args=["x"], wrt="t"),
-                    rhs=ExprNode(op="*", args=[
-                        ExprNode(op="-", args=["k"]),
-                        "x"
-                    ])
+                    rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["k"]), "x"]),
                 )
-            ]
+            ],
         )
 
         # Create ESM file
         esm_file = EsmFile(
             version="0.1.0",
             metadata=Metadata(title="Exponential Decay Simulation"),
-            models={"exponential_decay": model}
+            models={"exponential_decay": model},
         )
 
         # Serialize and deserialize
@@ -69,28 +74,20 @@ class TestEarthSciSerializationIntegration:
         # Create a simple reaction system: A -> B
         reaction_system = ReactionSystem(
             name="simple_decay",
-            species=[
-                Species(name="A", units="mol/L"),
-                Species(name="B", units="mol/L")
-            ],
-            parameters=[
-                Parameter(name="k1", value=0.5, units="1/s")
-            ],
+            species=[Species(name="A", units="mol/L"), Species(name="B", units="mol/L")],
+            parameters=[Parameter(name="k1", value=0.5, units="1/s")],
             reactions=[
                 Reaction(
-                    name="A_to_B",
-                    reactants={"A": 1.0},
-                    products={"B": 1.0},
-                    rate_constant="k1"
+                    name="A_to_B", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant="k1"
                 )
-            ]
+            ],
         )
 
         # Create ESM file with reaction system
         esm_file = EsmFile(
             version="0.1.0",
             metadata=Metadata(title="Reaction System Simulation"),
-            reaction_systems={"simple_decay": reaction_system}
+            reaction_systems={"simple_decay": reaction_system},
         )
 
         # Test serialization

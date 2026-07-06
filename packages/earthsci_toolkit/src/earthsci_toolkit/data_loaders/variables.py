@@ -21,9 +21,7 @@ class UnitConversionError(ValueError):
     """Raised when unit_conversion cannot be applied."""
 
 
-def _scale_factor(
-    conversion: Any, *, variable_name: str
-) -> Optional[float]:
+def _scale_factor(conversion: Any, *, variable_name: str) -> Optional[float]:
     """Return a constant scale if the conversion reduces to ``k * x``."""
     if conversion is None:
         return 1.0
@@ -46,9 +44,7 @@ def _scale_factor(
     )
 
 
-def apply_unit_conversion(
-    values: Any, conversion: Any, *, variable_name: str
-) -> Any:
+def apply_unit_conversion(values: Any, conversion: Any, *, variable_name: str) -> Any:
     """Apply ``conversion`` to ``values``.
 
     Accepts Python scalars, numpy arrays, xarray DataArrays, or anything

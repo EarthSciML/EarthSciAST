@@ -9,8 +9,7 @@ require xarray/netCDF installs to pass.
 from __future__ import annotations
 
 import datetime as dt
-import math
-from typing import Any, Dict, List
+from typing import List
 
 import pytest
 
@@ -27,7 +26,6 @@ from earthsci_toolkit import (
     PointsLoader,
     StaticLoader,
     TimeResolutionError,
-    UnitConversionError,
     UrlTemplateError,
     apply_unit_conversion,
     apply_variable_mapping,
@@ -61,9 +59,7 @@ class TestUrlTemplate:
 
     def test_named_substitutions(self):
         tpl = "emissions/{species}/{sector}/{var}.nc"
-        url = expand_url_template(
-            tpl, variables={"species": "SO2"}, sector="ENE", var="emi"
-        )
+        url = expand_url_template(tpl, variables={"species": "SO2"}, sector="ENE", var="emi")
         assert url == "emissions/SO2/ENE/emi.nc"
 
     def test_missing_placeholder_raises(self):
@@ -296,7 +292,8 @@ def _make_grid_loader(
         name="fake",
         kind=DataLoaderKind.GRID,
         source=DataLoaderSource(url_template=tpl),
-        variables=variables or {
+        variables=variables
+        or {
             "u": DataLoaderVariable(file_variable="U", units="m/s"),
         },
         temporal=temporal or DataLoaderTemporal(file_period="P1D"),
@@ -309,9 +306,7 @@ class TestGridLoader:
 
         dl = _make_grid_loader(
             variables={
-                "u": DataLoaderVariable(
-                    file_variable="U", units="m/s", unit_conversion=2.0
-                ),
+                "u": DataLoaderVariable(file_variable="U", units="m/s", unit_conversion=2.0),
             },
         )
         ds = FakeDataset(
@@ -404,9 +399,7 @@ class TestPointsLoader:
             species="o3",
             fetcher=lambda _url: body,
         )
-        assert result.urls_tried == [
-            "mem://points?species=o3&date=2024-03-05"
-        ]
+        assert result.urls_tried == ["mem://points?species=o3&date=2024-03-05"]
         assert result.variables["value"] == [1.0, 2.0]
 
     def test_csv_payload(self):
@@ -454,9 +447,7 @@ class TestStaticLoader:
         )
         result = StaticLoader(dl).load(opener=lambda _url: ds)
         assert result.urls_tried == ["mem://elevation.tif"]
-        assert np.allclose(
-            result.variables["elevation"].values, [[100.0, 110.0]]
-        )
+        assert np.allclose(result.variables["elevation"].values, [[100.0, 110.0]])
 
 
 # ---------------------------------------------------------------------------
@@ -473,9 +464,7 @@ class TestDispatch:
             data_vars={"U": np.array([1.0])},
             coords={"lon": [0.0], "lat": [0.0]},
         )
-        result = load_data(
-            dl, time=dt.datetime(2024, 3, 5), opener=lambda _u: ds
-        )
+        result = load_data(dl, time=dt.datetime(2024, 3, 5), opener=lambda _u: ds)
         assert result.variables["u"] is not None
 
     def test_resolve_files_daily(self):
@@ -496,12 +485,7 @@ class TestDispatch:
         from pathlib import Path
         from earthsci_toolkit import load
 
-        fixture = (
-            Path(__file__).parent
-            / "fixtures"
-            / "data_loaders"
-            / "geosfp.esm"
-        )
+        fixture = Path(__file__).parent / "fixtures" / "data_loaders" / "geosfp.esm"
         raw = json.loads(fixture.read_text())
         raw.pop("_comment", None)
         esm = load(json.dumps(raw))

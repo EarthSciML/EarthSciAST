@@ -63,9 +63,7 @@ def _compute_payload(fixture: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         elif "tuples" in payload:
             edges = [tuple(t) for t in payload["tuples"]]
         else:
-            raise ValueError(
-                f"fixture {fixture['id']}: input needs 'faces' or 'tuples'"
-            )
+            raise ValueError(f"fixture {fixture['id']}: input needs 'faces' or 'tuples'")
 
         if mode == "undirected":
             keys = [skolem_edge(a, b) for (a, b) in edges]
@@ -100,8 +98,9 @@ def _compute_payload(fixture: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     }
 
 
-def _run_fixture(fixture: Dict[str, Any], _manifest: Dict[str, Any],
-                 _manifest_path: Path) -> Dict[str, Any]:
+def _run_fixture(
+    fixture: Dict[str, Any], _manifest: Dict[str, Any], _manifest_path: Path
+) -> Dict[str, Any]:
     record = _compute_fixture(fixture)
     # Run the adversarial variants through the SAME real producers and emit
     # each — the runner asserts they collapse to the golden, proving order-,

@@ -46,15 +46,22 @@ def _doc(dead_body):
                 "equations": [
                     {
                         "lhs": {
-                            "op": "aggregate", "args": [], "output_idx": ["i"],
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i"],
                             "ranges": {"i": {"from": "cells"}},
-                            "expr": {"op": "D",
-                                     "args": [{"op": "index", "args": ["u", "i"]}],
-                                     "wrt": "t"},
+                            "expr": {
+                                "op": "D",
+                                "args": [{"op": "index", "args": ["u", "i"]}],
+                                "wrt": "t",
+                            },
                         },
                         "rhs": {
-                            "op": "aggregate", "args": [], "output_idx": ["i"],
-                            "ranges": {"i": {"from": "cells"}}, "expr": "live",
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["i"],
+                            "ranges": {"i": {"from": "cells"}},
+                            "expr": "live",
                         },
                     }
                 ],
@@ -71,8 +78,9 @@ _DEAD_BODY = {"op": "/", "args": [1.0, "NY"]}
 def test_dead_unresolvable_observed_does_not_break_array_rhs() -> None:
     """The per-step RHS driver skips the dead ``dead = 1/NY`` and integrates the
     live dynamics (``D(u) = k = 3`` from u(0)=0 gives u(1)=3 in every cell)."""
-    result = simulate(load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0),
-                      method="LSODA", rtol=1e-10, atol=1e-12)
+    result = simulate(
+        load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
+    )
     assert result.success, result.message
     final = result.y[:, -1]
     np.testing.assert_allclose(final[:3], [3.0, 3.0, 3.0], rtol=1e-6)
@@ -83,21 +91,32 @@ def test_dead_unresolvable_observed_tolerated_by_build_inspection() -> None:
     must not abort on the dead observed either; it records only array observeds,
     so the unevaluable scalar simply never lands in ``setup_arrays``."""
     insp = BuildInspection()
-    result = simulate(load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0),
-                      method="LSODA", rtol=1e-10, atol=1e-12, inspect=insp)
+    result = simulate(
+        load(json.dumps(_doc(_DEAD_BODY))),
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
+        inspect=insp,
+    )
     assert result.success, result.message
-    assert not any(name.endswith("dead") for name in insp.setup_arrays), \
-        sorted(insp.setup_arrays)
+    assert not any(name.endswith("dead") for name in insp.setup_arrays), sorted(insp.setup_arrays)
 
 
 def test_inspect_never_changes_the_trajectory_with_a_dead_observed() -> None:
     """The returned trajectory is identical with and without ``inspect`` even
     when a dead unresolvable observed is present (the skip is lossless)."""
-    plain = simulate(load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0),
-                     method="LSODA", rtol=1e-10, atol=1e-12)
-    inspected = simulate(load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0),
-                         method="LSODA", rtol=1e-10, atol=1e-12,
-                         inspect=BuildInspection())
+    plain = simulate(
+        load(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
+    )
+    inspected = simulate(
+        load(json.dumps(_doc(_DEAD_BODY))),
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
+        inspect=BuildInspection(),
+    )
     assert plain.success and inspected.success
     assert plain.vars == inspected.vars
     np.testing.assert_array_equal(plain.y, inspected.y)
@@ -110,11 +129,8 @@ def test_needed_broken_observed_still_errors() -> None:
     silently producing a wrong trajectory."""
     doc = _doc(_DEAD_BODY)
     # Break the LIVE observed the ODE actually reads.
-    doc["models"]["M"]["variables"]["live"]["expression"] = {
-        "op": "/", "args": [1.0, "Z"]
-    }
-    result = simulate(load(json.dumps(doc)), (0.0, 1.0),
-                      method="LSODA", rtol=1e-10, atol=1e-12)
+    doc["models"]["M"]["variables"]["live"]["expression"] = {"op": "/", "args": [1.0, "Z"]}
+    result = simulate(load(json.dumps(doc)), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12)
     assert not result.success
     assert "Unresolved symbol" in (result.message or "")
     assert "live" in (result.message or "")

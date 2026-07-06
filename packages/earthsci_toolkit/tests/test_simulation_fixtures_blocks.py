@@ -102,9 +102,7 @@ COMPONENT_SKIP: Dict[Tuple[str, str, str], str] = {
 def _list_simulation_fixtures() -> list[str]:
     if not os.path.isdir(SIMULATION_DIR):
         return []
-    return sorted(
-        fn for fn in os.listdir(SIMULATION_DIR) if fn.endswith(".esm")
-    )
+    return sorted(fn for fn in os.listdir(SIMULATION_DIR) if fn.endswith(".esm"))
 
 
 def _resolve_tol(
@@ -155,10 +153,7 @@ def _resolve_var_index(result_vars: list, component: str, local: str) -> int:
         return result_vars.index(namespaced)
     if local in result_vars:
         return result_vars.index(local)
-    raise AssertionError(
-        f"variable {local!r} not in result vars ({result_vars}) for "
-        f"{component!r}"
-    )
+    raise AssertionError(f"variable {local!r} not in result vars ({result_vars}) for {component!r}")
 
 
 def _execute_component_tests(
@@ -172,13 +167,8 @@ def _execute_component_tests(
     for test in tests:
         ts = test["time_span"]
         tspan = (float(ts["start"]), float(ts["end"]))
-        params = {
-            k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()
-        }
-        ics = {
-            k: float(v)
-            for k, v in (test.get("initial_conditions") or {}).items()
-        }
+        params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
+        ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
 
         result = simulate(
             file_subset,
@@ -186,15 +176,11 @@ def _execute_component_tests(
             parameters=params,
             initial_conditions=ics,
         )
-        assert result.success, (
-            f"{label}/{test['id']}: simulate() failed: {result.message}"
-        )
+        assert result.success, f"{label}/{test['id']}: simulate() failed: {result.message}"
 
         test_tol = test.get("tolerance")
         for a in test["assertions"]:
-            idx = _resolve_var_index(
-                list(result.vars), component_name, a["variable"]
-            )
+            idx = _resolve_var_index(list(result.vars), component_name, a["variable"])
             t_eval = float(a["time"])
             expected = float(a["expected"])
             # np.interp requires a sorted x array; solve_ivp returns t sorted.
@@ -203,9 +189,7 @@ def _execute_component_tests(
             diff = abs(actual - expected)
             bound = abs_
             if rel > 0:
-                bound = max(
-                    bound, rel * max(abs(expected), np.finfo(float).tiny)
-                )
+                bound = max(bound, rel * max(abs(expected), np.finfo(float).tiny))
             if rel == 0.0 and abs_ == 0.0:
                 # Default rtol=1e-6, matching the Julia runner.
                 bound = 1e-6 * max(abs(expected), np.finfo(float).tiny)
@@ -225,10 +209,7 @@ def test_simulation_fixture_tests_blocks(fixture: str) -> None:
     value identifies the blocker.
     """
     if fixture in SIMULATION_SKIP:
-        pytest.xfail(
-            f"{fixture}: blocked by {SIMULATION_SKIP[fixture]} "
-            f"(Python binding gap)"
-        )
+        pytest.xfail(f"{fixture}: blocked by {SIMULATION_SKIP[fixture]} (Python binding gap)")
 
     path = os.path.join(SIMULATION_DIR, fixture)
     with open(path) as fp:
@@ -280,9 +261,7 @@ def test_simulation_fixture_tests_blocks(fixture: str) -> None:
             stacklevel=1,
         )
     if xfail_reasons and not any_executed:
-        pytest.xfail(
-            f"{fixture}: all components blocked — " + "; ".join(xfail_reasons)
-        )
+        pytest.xfail(f"{fixture}: all components blocked — " + "; ".join(xfail_reasons))
     if not any_executed:
         pytest.skip(f"{fixture}: no inline tests blocks to execute")
 

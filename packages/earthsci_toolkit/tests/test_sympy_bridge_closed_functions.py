@@ -93,8 +93,8 @@ def test_interp_bilinear_in_ode_rhs_runs_via_sympy_bridge():
         name="interp.bilinear",
         args=[
             _const([[0.0, 0.0], [0.0, 1.0], [0.0, 2.0]]),  # 3x2 table
-            _const([0.0, 1.0, 2.0]),                       # axis_x
-            _const([0.0, 1.0]),                            # axis_y
+            _const([0.0, 1.0, 2.0]),  # axis_x
+            _const([0.0, 1.0]),  # axis_y
             "p_x",
             "p_y",
         ],

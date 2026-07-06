@@ -1,12 +1,18 @@
 """Test for round-trip preservation of previously missing fields: events, data_loaders, operators, couplings, solvers."""
 
 import json
-import pytest
 
 from earthsci_toolkit.esm_types import (
-    EsmFile, Metadata, DataLoader, DataLoaderKind, DataLoaderSource,
-    DataLoaderVariable, DataLoaderTemporal, Operator,
-    VariableMapCoupling, CouplingType, ContinuousEvent, AffectEquation
+    EsmFile,
+    Metadata,
+    DataLoader,
+    DataLoaderKind,
+    DataLoaderSource,
+    DataLoaderVariable,
+    Operator,
+    VariableMapCoupling,
+    ContinuousEvent,
+    AffectEquation,
 )
 from earthsci_toolkit.serialize import save
 
@@ -22,7 +28,7 @@ def test_roundtrip_preserves_data_loaders():
         modified=None,
         version="1.0",
         references=[],
-        keywords=[]
+        keywords=[],
     )
 
     # Create data loader
@@ -78,7 +84,7 @@ def test_roundtrip_preserves_operators():
         modified=None,
         version="1.0",
         references=[],
-        keywords=[]
+        keywords=[],
     )
 
     # Create operator
@@ -86,7 +92,7 @@ def test_roundtrip_preserves_operators():
         operator_id="test_operator",
         needed_vars=["x", "y"],
         modifies=["z"],
-        config={"param1": "value1", "param2": 42}
+        config={"param1": "value1", "param2": 42},
     )
 
     # Create ESM file
@@ -127,7 +133,7 @@ def test_roundtrip_preserves_couplings():
         modified=None,
         version="1.0",
         references=[],
-        keywords=[]
+        keywords=[],
     )
 
     # Create coupling entry
@@ -172,7 +178,7 @@ def test_roundtrip_preserves_events():
         modified=None,
         version="1.0",
         references=[],
-        keywords=[]
+        keywords=[],
     )
 
     # Create continuous event
@@ -180,7 +186,7 @@ def test_roundtrip_preserves_events():
         name="test_event",
         conditions=["x > 5.0"],  # Changed to array
         affects=[AffectEquation(lhs="y", rhs="0.0")],
-        priority=1
+        priority=1,
     )
 
     # Create ESM file
@@ -220,7 +226,7 @@ def test_roundtrip_preserves_all_missing_fields():
         modified=None,
         version="1.0",
         references=[],
-        keywords=[]
+        keywords=[],
     )
 
     # Create all components
@@ -234,10 +240,7 @@ def test_roundtrip_preserves_all_missing_fields():
     )
 
     operator = Operator(
-        operator_id="operator",
-        needed_vars=["temp"],
-        modifies=["processed_temp"],
-        config={}
+        operator_id="operator", needed_vars=["temp"], modifies=["processed_temp"], config={}
     )
 
     coupling = VariableMapCoupling(
@@ -249,7 +252,7 @@ def test_roundtrip_preserves_all_missing_fields():
         name="event",
         conditions=["t > 10"],  # Changed to array
         affects=[AffectEquation(lhs="x", rhs="1.0")],
-        priority=0
+        priority=0,
     )
 
     # Create ESM file with all components
@@ -321,20 +324,23 @@ def test_roundtrip_preserves_example_expression_template_imports():
     from earthsci_toolkit.serialize import _serialize_esm_file
 
     imports = [{"ref": "./upwind1.esm", "bindings": {"N": 100}}]
-    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-             "rhs": {"op": "*", "args": [-1, "u"]}}
+    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1, "u"]}}
     doc = {
         "esm": "0.8.0",
         "metadata": {"name": "example_import_roundtrip"},
-        "models": {"M": {
-            "variables": {"u": {"type": "state", "units": "1"}},
-            "equations": [decay],
-            "examples": [{
-                "id": "run_under_discretization",
-                "time_span": {"start": 0.0, "end": 1.0},
-                "expression_template_imports": imports,
-            }],
-        }},
+        "models": {
+            "M": {
+                "variables": {"u": {"type": "state", "units": "1"}},
+                "equations": [decay],
+                "examples": [
+                    {
+                        "id": "run_under_discretization",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "expression_template_imports": imports,
+                    }
+                ],
+            }
+        },
     }
 
     f = load(json.dumps(doc))
@@ -354,19 +360,22 @@ def test_example_without_imports_omits_key():
     from earthsci_toolkit.parse import load
     from earthsci_toolkit.serialize import _serialize_esm_file
 
-    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-             "rhs": {"op": "*", "args": [-1, "u"]}}
+    decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1, "u"]}}
     doc = {
         "esm": "0.8.0",
         "metadata": {"name": "example_no_import"},
-        "models": {"M": {
-            "variables": {"u": {"type": "state", "units": "1"}},
-            "equations": [decay],
-            "examples": [{
-                "id": "plain",
-                "time_span": {"start": 0.0, "end": 1.0},
-            }],
-        }},
+        "models": {
+            "M": {
+                "variables": {"u": {"type": "state", "units": "1"}},
+                "equations": [decay],
+                "examples": [
+                    {
+                        "id": "plain",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                    }
+                ],
+            }
+        },
     }
 
     f = load(json.dumps(doc))

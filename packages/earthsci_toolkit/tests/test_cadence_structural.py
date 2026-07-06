@@ -77,9 +77,7 @@ def test_cadence_fixture_has_expect_cadence(fixture_path: Path) -> None:
     """Each fixture must carry at least one `expect_cadence` assertion, with only
     the closed enum values — the partition pass's checked author hint (§5.7)."""
     text = fixture_path.read_text()
-    assert '"expect_cadence"' in text, (
-        f"{fixture_path.name}: carries no expect_cadence assertion"
-    )
+    assert '"expect_cadence"' in text, f"{fixture_path.name}: carries no expect_cadence assertion"
     doc = json.loads(text)
     seen: List[str] = []
 

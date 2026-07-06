@@ -5,12 +5,12 @@ Provides unit validation functionality using the pint library to ensure
 dimensional consistency across models, reaction systems, and expressions.
 """
 
-from typing import Dict, List, Optional, Union, Any, Set
+from typing import Dict, List, Optional, Union, Any
 from dataclasses import dataclass, field
-import re
 
 try:
     import pint
+
     PINT_AVAILABLE = True
     ureg = pint.UnitRegistry()
     UnitsContainer = pint.util.UnitsContainer
@@ -24,15 +24,15 @@ try:
     # pure scaling of the empty dimension — this avoids a pint bug where
     # `name = <scale> * dimensionless` stores `dimensionless` as a reference
     # name and then fails conversion with KeyError: ''.
-    ureg.define('ppm = 1e-6 = ppmv')
-    ureg.define('ppb = 1e-9 = ppbv')
-    ureg.define('ppt = 1e-12 = pptv')
+    ureg.define("ppm = 1e-6 = ppmv")
+    ureg.define("ppb = 1e-9 = ppbv")
+    ureg.define("ppt = 1e-12 = pptv")
     # `molec` is the schema-doc spelling of pint's predefined `molecule`.
-    ureg.define('@alias molecule = molec')
-    ureg.define('molecule_cm3 = 1 / cm**3')
+    ureg.define("@alias molecule = molec")
+    ureg.define("molecule_cm3 = 1 / cm**3")
     # Dobson unit: areal number density of ozone molecules.
     # 1 Dobson = 2.6867e20 molec/m^2 = 2.6867e16 molec/cm^2 (per standard).
-    ureg.define('Dobson = 2.6867e16 * molecule * cm**(-2)')
+    ureg.define("Dobson = 2.6867e16 * molecule * cm**(-2)")
 
 except ImportError:
     PINT_AVAILABLE = False
@@ -40,15 +40,16 @@ except ImportError:
     UnitsContainer = Any
 
 try:
-    from .esm_types import EsmFile, Model, ReactionSystem, ModelVariable, Species, Parameter, Expr, ExprNode
+    from .esm_types import EsmFile, Model, ReactionSystem, Expr, ExprNode
 except ImportError:
     # For direct imports when testing
-    from esm_types import EsmFile, Model, ReactionSystem, ModelVariable, Species, Parameter, Expr, ExprNode
+    from esm_types import EsmFile, Model, ReactionSystem, Expr, ExprNode
 
 
 @dataclass
 class UnitValidationResult:
     """Result of unit validation check."""
+
     is_valid: bool
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -59,6 +60,7 @@ class UnitValidationResult:
 @dataclass
 class UnitConversionResult:
     """Result of unit conversion operation."""
+
     success: bool
     converted_value: Optional[float] = None
     conversion_factor: Optional[float] = None
@@ -71,7 +73,9 @@ class UnitValidator:
     def __init__(self):
         """Initialize the unit validator."""
         if not PINT_AVAILABLE:
-            raise ImportError("pint library is required for unit validation. Install with: pip install pint")
+            raise ImportError(
+                "pint library is required for unit validation. Install with: pip install pint"
+            )
 
         self.ureg = ureg
         self.known_units: Dict[str, pint.Quantity] = {}
@@ -139,7 +143,9 @@ class UnitValidator:
                     result.unit_registry[var_name] = var_info.units
                     self.known_units[var_name] = unit
                 except Exception as e:
-                    result.errors.append(f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}")
+                    result.errors.append(
+                        f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
+                    )
 
         # Validate equations
         if model.equations:
@@ -150,7 +156,7 @@ class UnitValidator:
 
         # Validate variable expressions
         for var_name, var_info in model.variables.items():
-            if hasattr(var_info, 'expression') and var_info.expression:
+            if hasattr(var_info, "expression") and var_info.expression:
                 expr_result = self.validate_expression(var_info.expression, var_name)
                 if expr_result.errors:
                     result.errors.extend([f"Variable {var_name}: {e}" for e in expr_result.errors])
@@ -179,7 +185,9 @@ class UnitValidator:
                         result.unit_registry[species.name] = species.units
                         self.known_units[species.name] = unit
                     except Exception as e:
-                        result.errors.append(f"Invalid unit '{species.units}' for species '{species.name}': {e}")
+                        result.errors.append(
+                            f"Invalid unit '{species.units}' for species '{species.name}': {e}"
+                        )
 
         # Register parameter units
         if rs.parameters:
@@ -190,7 +198,9 @@ class UnitValidator:
                         result.unit_registry[param.name] = param.units
                         self.known_units[param.name] = unit
                     except Exception as e:
-                        result.errors.append(f"Invalid unit '{param.units}' for parameter '{param.name}': {e}")
+                        result.errors.append(
+                            f"Invalid unit '{param.units}' for parameter '{param.name}': {e}"
+                        )
 
         # Validate reactions
         if rs.reactions:
@@ -273,13 +283,10 @@ class UnitValidator:
             return UnitConversionResult(
                 success=True,
                 converted_value=float(to_quantity.magnitude),
-                conversion_factor=float(to_quantity.magnitude) / value if value != 0 else None
+                conversion_factor=float(to_quantity.magnitude) / value if value != 0 else None,
             )
         except Exception as e:
-            return UnitConversionResult(
-                success=False,
-                error_message=str(e)
-            )
+            return UnitConversionResult(success=False, error_message=str(e))
 
     def _get_expression_dimension(self, expr: Expr) -> Optional[UnitsContainer]:
         """Get the dimensional analysis of an expression."""
@@ -313,7 +320,7 @@ class UnitValidator:
             return None
 
         # Handle different operators
-        if node.op in ['+', '-']:
+        if node.op in ["+", "-"]:
             # Addition/subtraction: all operands must have same dimension
             first_dim = valid_dims[0]
             for dim in valid_dims[1:]:
@@ -321,14 +328,14 @@ class UnitValidator:
                     raise ValueError(f"Incompatible dimensions in {node.op}: {first_dim} vs {dim}")
             return first_dim
 
-        elif node.op == '*':
+        elif node.op == "*":
             # Multiplication: multiply dimensions
             result_dim = self.ureg.dimensionless.dimensionality
             for dim in valid_dims:
                 result_dim = result_dim * dim
             return result_dim
 
-        elif node.op == '/':
+        elif node.op == "/":
             # Division: divide dimensions
             if len(valid_dims) >= 2:
                 result_dim = valid_dims[0]
@@ -337,13 +344,13 @@ class UnitValidator:
                 return result_dim
             return valid_dims[0] if valid_dims else None
 
-        elif node.op == '^':
+        elif node.op == "^":
             # Power: first argument's dimension raised to power
             if len(valid_dims) >= 1:
                 base_dim = valid_dims[0]
                 if len(node.args) > 1 and isinstance(node.args[1], (int, float)):
                     exponent = node.args[1]
-                    return base_dim ** exponent
+                    return base_dim**exponent
                 return base_dim
             return None
 
@@ -369,13 +376,17 @@ class UnitValidator:
         result = UnitValidationResult(is_valid=True)
 
         # Check that rate constant has appropriate units
-        if hasattr(reaction, 'rate_constant') and reaction.rate_constant:
+        if hasattr(reaction, "rate_constant") and reaction.rate_constant:
             if isinstance(reaction.rate_constant, (int, float, str)):
                 # For now, just warn if no units specified
-                result.warnings.append(f"Reaction {reaction.name}: Rate constant has no explicit units")
+                result.warnings.append(
+                    f"Reaction {reaction.name}: Rate constant has no explicit units"
+                )
             elif isinstance(reaction.rate_constant, ExprNode):
                 # Validate the rate constant expression
-                expr_result = self.validate_expression(reaction.rate_constant, f"rate_constant_{reaction.name}")
+                expr_result = self.validate_expression(
+                    reaction.rate_constant, f"rate_constant_{reaction.name}"
+                )
                 result.errors.extend(expr_result.errors)
                 result.warnings.extend(expr_result.warnings)
 

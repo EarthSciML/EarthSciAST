@@ -39,11 +39,12 @@ evaluation position is caught later by the ``unlowered_operator`` gate, not here
 Operates on the pre-coercion JSON dict view, so it must run after
 schema validation but before ``_parse_esm_data``.
 """
+
 from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Iterable
+from typing import Any
 
 from .diagnostics import (
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
@@ -141,8 +142,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
         if not _is_object(decl):
             raise ExpressionTemplateError(
                 APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"{scope}.expression_templates.{name}: entry must be an object "
-                "with params + body",
+                f"{scope}.expression_templates.{name}: entry must be an object with params + body",
             )
         # ``params`` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
         # template is a named constant fragment (common in library files).
@@ -150,22 +150,19 @@ def _validate_templates(templates: dict, scope: str) -> None:
         if not isinstance(params, list):
             raise ExpressionTemplateError(
                 APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                f"{scope}.expression_templates.{name}: 'params' must be an "
-                "array of strings",
+                f"{scope}.expression_templates.{name}: 'params' must be an array of strings",
             )
         seen: set[str] = set()
         for p in params:
             if not isinstance(p, str) or not p:
                 raise ExpressionTemplateError(
                     APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: param names must "
-                    "be non-empty strings",
+                    f"{scope}.expression_templates.{name}: param names must be non-empty strings",
                 )
             if p in seen:
                 raise ExpressionTemplateError(
                     APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    f"{scope}.expression_templates.{name}: param '{p}' is "
-                    "declared twice",
+                    f"{scope}.expression_templates.{name}: param '{p}' is declared twice",
                 )
             seen.add(p)
         if "body" not in decl:
@@ -307,8 +304,9 @@ def _component_shape_env(comp: dict) -> "dict[str, list]":
     return env
 
 
-def _where_satisfied(where_c: "dict[str, list] | None", bindings: dict,
-                     shape_env: "dict[str, list]") -> bool:
+def _where_satisfied(
+    where_c: "dict[str, list] | None", bindings: dict, shape_env: "dict[str, list]"
+) -> bool:
     """Evaluate a registered ``where`` constraint map (param -> required shape)
     against the bindings produced by a successful structural match (esm-spec
     §9.6.1). A constraint on param ``p`` holds iff ``bindings[p]`` is a BARE
@@ -333,8 +331,9 @@ def _where_satisfied(where_c: "dict[str, list] | None", bindings: dict,
     return True
 
 
-def _registered_where(decl: dict, iset_names: set, scope: str,
-                      tname: str) -> "dict[str, list] | None":
+def _registered_where(
+    decl: dict, iset_names: set, scope: str, tname: str
+) -> "dict[str, list] | None":
     """Normalize a template's ``where`` block into the registered constraint map
     (param -> required shape list), checking every referenced index-set name
     against the CONSUMING document's merged ``index_sets`` registry
@@ -373,13 +372,20 @@ def _registered_where(decl: dict, iset_names: set, scope: str,
 # selection precedence when several rules match one node; ``decl_index`` is the
 # 0-based declaration order used to break priority ties (earliest wins).
 
-class MatchRule:
-    __slots__ = ("name", "pattern", "params", "body", "priority", "decl_index",
-                 "where_c")
 
-    def __init__(self, name: str, pattern: Any, params: set, body: Any,
-                 priority: int, decl_index: int,
-                 where_c: "dict[str, list] | None" = None) -> None:
+class MatchRule:
+    __slots__ = ("name", "pattern", "params", "body", "priority", "decl_index", "where_c")
+
+    def __init__(
+        self,
+        name: str,
+        pattern: Any,
+        params: set,
+        body: Any,
+        priority: int,
+        decl_index: int,
+        where_c: "dict[str, list] | None" = None,
+    ) -> None:
         self.name = name
         self.pattern = pattern
         self.params = params
@@ -473,10 +479,17 @@ def _build_match_rules(templates: dict, scope: str, iset_names: set) -> list:
         if "match" not in decl:
             continue
         where_c = _registered_where(decl, iset_names, scope, name)
-        rules.append(MatchRule(
-            name, decl["match"], set(decl["params"]), decl["body"],
-            _rule_priority(decl), decl_index, where_c,
-        ))
+        rules.append(
+            MatchRule(
+                name,
+                decl["match"],
+                set(decl["params"]),
+                decl["body"],
+                _rule_priority(decl),
+                decl_index,
+                where_c,
+            )
+        )
     rules.sort(key=lambda r: (-r.priority, r.decl_index))
     return rules
 
@@ -492,15 +505,13 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     if decl is None:
         raise ExpressionTemplateError(
             APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            f"{scope}: apply_expression_template references undeclared "
-            f"template '{name}'",
+            f"{scope}: apply_expression_template references undeclared template '{name}'",
         )
     bindings = node.get("bindings")
     if not _is_object(bindings):
         raise ExpressionTemplateError(
             APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-            f"{scope}: apply_expression_template '{name}' missing 'bindings' "
-            "object",
+            f"{scope}: apply_expression_template '{name}' missing 'bindings' object",
         )
     declared = set(decl["params"])
     provided = set(bindings.keys())
@@ -508,15 +519,13 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
         if p not in provided:
             raise ExpressionTemplateError(
                 APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' missing binding "
-                f"for param '{p}'",
+                f"{scope}: apply_expression_template '{name}' missing binding for param '{p}'",
             )
     for p in provided:
         if p not in declared:
             raise ExpressionTemplateError(
                 APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-                f"{scope}: apply_expression_template '{name}' supplies unknown "
-                f"param '{p}'",
+                f"{scope}: apply_expression_template '{name}' supplies unknown param '{p}'",
             )
     # Outermost-first (esm-spec §9.6.3): the template ``body`` is instantiated by
     # pure structural substitution with the bindings' sub-ASTs spliced in as-is.
@@ -534,8 +543,14 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
 MAX_REWRITE_PASSES = 64
 
 
-def _rewrite_pass(node: Any, templates: dict, sorted_rules: list, scope: str,
-                  last: list, shape_env: "dict[str, list]") -> tuple:
+def _rewrite_pass(
+    node: Any,
+    templates: dict,
+    sorted_rules: list,
+    scope: str,
+    last: list,
+    shape_env: "dict[str, list]",
+) -> tuple:
     """One pre-order (outermost-first) rewrite pass over ``node`` (esm-spec
     §9.6.3). At each object node the engine first tries to fire a rule AT the
     node before descending:
@@ -561,8 +576,7 @@ def _rewrite_pass(node: Any, templates: dict, sorted_rules: list, scope: str,
         changed = False
         out = []
         for c in node:
-            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last,
-                                   shape_env)
+            nc, ch = _rewrite_pass(c, templates, sorted_rules, scope, last, shape_env)
             out.append(nc)
             changed = changed or ch
         return out, changed
@@ -582,16 +596,19 @@ def _rewrite_pass(node: Any, templates: dict, sorted_rules: list, scope: str,
     changed = False
     out = {}
     for k, v in node.items():
-        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last,
-                               shape_env)
+        nv, ch = _rewrite_pass(v, templates, sorted_rules, scope, last, shape_env)
         out[k] = nv
         changed = changed or ch
     return out, changed
 
 
-def _rewrite_to_fixpoint(node: Any, templates: dict, sorted_rules: list,
-                         scope: str,
-                         shape_env: "dict[str, list] | None" = None) -> Any:
+def _rewrite_to_fixpoint(
+    node: Any,
+    templates: dict,
+    sorted_rules: list,
+    scope: str,
+    shape_env: "dict[str, list] | None" = None,
+) -> Any:
     """Drive :func:`_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat
     pre-order passes until a pass performs zero rewrites, or reject the file with
     ``rewrite_rule_nonterminating`` once ``MAX_REWRITE_PASSES`` productive passes
@@ -605,8 +622,7 @@ def _rewrite_to_fixpoint(node: Any, templates: dict, sorted_rules: list,
     last = [""]
     current = node
     for _pass in range(MAX_REWRITE_PASSES):
-        current, changed = _rewrite_pass(current, templates, sorted_rules,
-                                         scope, last, shape_env)
+        current, changed = _rewrite_pass(current, templates, sorted_rules, scope, last, shape_env)
         if not changed:
             return current  # fixpoint reached
     raise ExpressionTemplateError(
@@ -690,8 +706,7 @@ def _has_template_machinery(file: dict) -> bool:
     return bool(_find_apply_paths(file))
 
 
-def _component_registry(comp: dict, scope: str,
-                        iset_names: set) -> tuple[dict, list, dict]:
+def _component_registry(comp: dict, scope: str, iset_names: set) -> tuple[dict, list, dict]:
     """Build one component's rewrite registry from its ``expression_templates``
     block: the validated + body-composed named-template dict, the pre-sorted
     ``match``-rule list (with registered ``where`` constraints resolved against
@@ -712,13 +727,15 @@ def _component_registry(comp: dict, scope: str,
         # fixpoint sees is a closed AST. Lazy import: template_imports
         # imports from this module at module level.
         from .template_imports import _compose_template_bodies
+
         _compose_template_bodies(templates, scope)
         match_rules = _build_match_rules(templates, scope, iset_names)
     return templates, match_rules, shape_env
 
 
 def _rewrite_coupling_transforms(
-    out: dict, registries: dict[str, dict[str, tuple[dict, list, dict]]],
+    out: dict,
+    registries: dict[str, dict[str, tuple[dict, list, dict]]],
 ) -> None:
     """Rewrite dict-valued ``variable_map`` coupling transforms to fixpoint.
 
@@ -755,7 +772,10 @@ def _rewrite_coupling_transforms(
         if not templates:
             continue
         entry["transform"] = _rewrite_to_fixpoint(
-            transform, templates, match_rules, f"coupling[{idx}].transform",
+            transform,
+            templates,
+            match_rules,
+            f"coupling[{idx}].transform",
             shape_env,
         )
 
@@ -828,8 +848,12 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
                     if not (_is_array(bounds) and len(bounds) == 2):
                         continue
                     lo, hi = bounds[0], bounds[1]
-                    if not (isinstance(lo, int) and not isinstance(lo, bool)
-                            and isinstance(hi, int) and not isinstance(hi, bool)):
+                    if not (
+                        isinstance(lo, int)
+                        and not isinstance(lo, bool)
+                        and isinstance(hi, int)
+                        and not isinstance(hi, bool)
+                    ):
                         continue
                     if hi < lo - 1:
                         raise ExpressionTemplateError(
@@ -896,7 +920,8 @@ def lower_expression_templates(file: dict) -> dict:
     # (see below). Keyed compkind -> component name; lookup order is "models"
     # then "reaction_systems".
     registries: dict[str, dict[str, tuple[dict, list, dict]]] = {
-        "models": {}, "reaction_systems": {},
+        "models": {},
+        "reaction_systems": {},
     }
     for compkind in ("models", "reaction_systems"):
         comps = out.get(compkind)
@@ -906,13 +931,17 @@ def lower_expression_templates(file: dict) -> dict:
             if not _is_object(comp):
                 continue
             templates, match_rules, shape_env = _component_registry(
-                comp, f"{compkind}.{cname}", iset_names)
+                comp, f"{compkind}.{cname}", iset_names
+            )
             registries[compkind][cname] = (templates, match_rules, shape_env)
             for k in list(comp.keys()):
                 if k == "expression_templates":
                     continue
                 comp[k] = _rewrite_to_fixpoint(
-                    comp[k], templates, match_rules, f"{compkind}.{cname}.{k}",
+                    comp[k],
+                    templates,
+                    match_rules,
+                    f"{compkind}.{cname}.{k}",
                     shape_env,
                 )
             comp.pop("expression_templates", None)

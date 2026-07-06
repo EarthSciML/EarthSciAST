@@ -40,9 +40,7 @@ class GridLoader:
 
     def __init__(self, data_loader: DataLoader) -> None:
         if data_loader.kind != DataLoaderKind.GRID:
-            raise GridLoaderError(
-                f"GridLoader requires kind=grid; got {data_loader.kind}"
-            )
+            raise GridLoaderError(f"GridLoader requires kind=grid; got {data_loader.kind}")
         self.dl = data_loader
 
     def _resolve_urls(
@@ -98,9 +96,7 @@ class GridLoader:
             opener = _default_xarray_opener()
         ds = open_with_fallback(urls, opener)
         raw_vars = _ds_to_mapping(ds)
-        remapped = apply_variable_mapping(
-            raw_vars, self.dl.variables, strict=True
-        )
+        remapped = apply_variable_mapping(raw_vars, self.dl.variables, strict=True)
         return GridLoadResult(urls_tried=urls, dataset=ds, variables=remapped)
 
 

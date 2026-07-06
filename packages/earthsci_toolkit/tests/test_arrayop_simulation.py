@@ -14,9 +14,8 @@ Python binding's trajectories match the Julia binding within tolerance.
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -80,9 +79,7 @@ def _lookup_element(
     return float(np.interp(time, result_t, y_row))
 
 
-def _assertion_passes(
-    actual: float, expected: float, rel: float, ab: float
-) -> bool:
+def _assertion_passes(actual: float, expected: float, rel: float, ab: float) -> bool:
     """Apply the OR-of-two-bounds tolerance check from the schema."""
     diff = abs(actual - expected)
     if ab > 0 and diff <= ab:
@@ -131,8 +128,7 @@ def test_arrayop_fixture_conformance(fixture_path: Path) -> None:
                 parameters=params,
             )
             assert result.success, (
-                f"{fixture_path.name}::{model_name}::{test_id} "
-                f"simulation failed: {result.message}"
+                f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
             test_tolerance = test.get("tolerance") or {}
@@ -146,9 +142,7 @@ def test_arrayop_fixture_conformance(fixture_path: Path) -> None:
                     test_tolerance,
                     assertion.get("tolerance") or {},
                 )
-                actual = _lookup_element(
-                    result.vars, result.y, result.t, var_key, time
-                )
+                actual = _lookup_element(result.vars, result.y, result.t, var_key, time)
                 assert _assertion_passes(actual, expected, rel, ab), (
                     f"{fixture_path.name}::{model_name}::{test_id} "
                     f"assertion {var_key}@t={time} expected={expected} "

@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List
 
 import numpy as np
 import pytest
@@ -66,6 +66,7 @@ except ImportError:
 # --------------------------------------------------------------------------- #
 # 1. Structural parity with the Go / TS geometry suites
 # --------------------------------------------------------------------------- #
+
 
 def _valid_fixtures() -> List[Path]:
     return sorted(_VALID_GEOM.glob("*.esm")) if _VALID_GEOM.is_dir() else []
@@ -112,6 +113,7 @@ def test_invalid_geometry_fixture_is_rejected(fixture: Path) -> None:
 # 2a. intersect_polygon leaf — planar clip
 # --------------------------------------------------------------------------- #
 
+
 def test_planar_clip_overlapping_squares() -> None:
     ring = geom.intersect_polygon(_SQUARE_A, _SQUARE_B, "planar")
     # Distinct overlap vertices are the unit square (1,1)-(2,1)-(2,2)-(1,2) in
@@ -142,8 +144,10 @@ def test_intersect_polygon_via_eval_expr_registers_derived_ring() -> None:
         op="intersect_polygon",
         id="clip0",
         manifold="planar",
-        args=[ExprNode(op="const", value=_SQUARE_A.tolist()),
-              ExprNode(op="const", value=_SQUARE_B.tolist())],
+        args=[
+            ExprNode(op="const", value=_SQUARE_A.tolist()),
+            ExprNode(op="const", value=_SQUARE_B.tolist()),
+        ],
     )
     closed = eval_expr(node, ctx)
     # The interpreter returns a CLOSED ring (first vertex repeated) and registers
@@ -166,7 +170,8 @@ def test_intersect_polygon_requires_manifold() -> None:
 
 def test_intersect_polygon_is_strictly_binary() -> None:
     node = ExprNode(
-        op="intersect_polygon", manifold="planar",
+        op="intersect_polygon",
+        manifold="planar",
         args=[ExprNode(op="const", value=_SQUARE_A.tolist())],  # one operand
     )
     with pytest.raises(NumpyInterpreterError, match="binary"):
@@ -177,13 +182,15 @@ def test_intersect_polygon_is_strictly_binary() -> None:
 # 2b. polygon_area as a sum_product FAQ over the derived clip ring
 # --------------------------------------------------------------------------- #
 
+
 def test_polygon_area_faq_over_derived_clip_ring() -> None:
     """polygon_area is an ordinary sum_product FAQ over the clip-ring index set."""
     ctx = _ctx_with_polys()
     ctx.index_sets = {"clip_ring": {"kind": "derived", "from_faq": "overlap_clip"}}
 
-    clip = ExprNode(op="intersect_polygon", id="overlap_clip", manifold="planar",
-                    args=["src_poly", "tgt_poly"])
+    clip = ExprNode(
+        op="intersect_polygon", id="overlap_clip", manifold="planar", args=["src_poly", "tgt_poly"]
+    )
     eval_expr(clip, ctx)  # materializes the derived ring under "overlap_clip"
 
     area = _shoelace_faq(clip_symbol="overlap_clip", ring_set="clip_ring")
@@ -217,11 +224,15 @@ def test_planar_fixture_clip_and_area_evaluate() -> None:
 # 2b′. polygon_intersection_area — the fused scalar clip+area leaf (§8.6.1)
 # --------------------------------------------------------------------------- #
 
+
 def _polygon_intersection_area_node(manifold: str = "planar") -> ExprNode:
     return ExprNode(
-        op="polygon_intersection_area", manifold=manifold,
-        args=[ExprNode(op="const", value=_SQUARE_A.tolist()),
-              ExprNode(op="const", value=_SQUARE_B.tolist())],
+        op="polygon_intersection_area",
+        manifold=manifold,
+        args=[
+            ExprNode(op="const", value=_SQUARE_A.tolist()),
+            ExprNode(op="const", value=_SQUARE_B.tolist()),
+        ],
     )
 
 
@@ -240,18 +251,19 @@ def test_polygon_intersection_area_equals_clip_then_area() -> None:
     ring = geom.intersect_polygon(_SQUARE_A, _SQUARE_B, "planar")
     fused = float(eval_expr(_polygon_intersection_area_node("planar"), _empty_ctx()))
     assert math.isclose(fused, geom.polygon_area(ring, "planar"), abs_tol=1e-12)
-    assert math.isclose(
-        fused, area_faq.polygon_area_via_faq(ring, "planar"), abs_tol=1e-12
-    )
+    assert math.isclose(fused, area_faq.polygon_area_via_faq(ring, "planar"), abs_tol=1e-12)
 
 
 def test_polygon_intersection_area_disjoint_is_zero() -> None:
     """Non-overlapping operands give a zero fused area (empty clip)."""
     far = np.array([[5.0, 5.0], [6.0, 5.0], [6.0, 6.0], [5.0, 6.0]])
     node = ExprNode(
-        op="polygon_intersection_area", manifold="planar",
-        args=[ExprNode(op="const", value=_SQUARE_A.tolist()),
-              ExprNode(op="const", value=far.tolist())],
+        op="polygon_intersection_area",
+        manifold="planar",
+        args=[
+            ExprNode(op="const", value=_SQUARE_A.tolist()),
+            ExprNode(op="const", value=far.tolist()),
+        ],
     )
     assert float(eval_expr(node, _empty_ctx())) == 0.0
 
@@ -259,8 +271,12 @@ def test_polygon_intersection_area_disjoint_is_zero() -> None:
 def test_polygon_intersection_area_inside_aggregate_body() -> None:
     """As a scalar leaf it evaluates inside an aggregate body (a 1-term sum)."""
     agg = ExprNode(
-        op="aggregate", semiring="sum_product", output_idx=[], args=[],
-        ranges={"k": [1, 1]}, expr=_polygon_intersection_area_node("planar"),
+        op="aggregate",
+        semiring="sum_product",
+        output_idx=[],
+        args=[],
+        ranges={"k": [1, 1]},
+        expr=_polygon_intersection_area_node("planar"),
     )
     assert math.isclose(float(eval_expr(agg, _empty_ctx())), 1.0, abs_tol=1e-9)
 
@@ -273,7 +289,8 @@ def test_polygon_intersection_area_requires_manifold() -> None:
 
 def test_polygon_intersection_area_is_strictly_binary() -> None:
     node = ExprNode(
-        op="polygon_intersection_area", manifold="planar",
+        op="polygon_intersection_area",
+        manifold="planar",
         args=[ExprNode(op="const", value=_SQUARE_A.tolist())],  # one operand
     )
     with pytest.raises(NumpyInterpreterError, match="binary"):
@@ -288,6 +305,7 @@ def test_expr_contains_array_op_flags_polygon_intersection_area() -> None:
 # --------------------------------------------------------------------------- #
 # 2c. Spherical / geodesic — area always; clip when spherely is present
 # --------------------------------------------------------------------------- #
+
 
 def test_spherical_area_octant_is_pi_over_two() -> None:
     """A spherical octant triangle has area π/2 on the unit sphere (R=1)."""
@@ -316,6 +334,7 @@ def test_geodesic_uses_same_great_circle_area_as_spherical() -> None:
 #         its cross-check oracle.
 # --------------------------------------------------------------------------- #
 
+
 def _spherical_faq_area(ring: np.ndarray) -> float:
     """Evaluate the production spherical-area FAQ over ``ring`` through eval_expr
     (the :func:`area_faq.polygon_area_via_faq` entry point; no spherely needed —
@@ -338,7 +357,9 @@ def test_spherical_area_faq_matches_imperative_oracle(manifold: str) -> None:
     oracle is now only the cross-check, the FAQ is the production path."""
     ring = np.array([[10.0, 20.0], [30.0, 22.0], [28.0, 40.0], [8.0, 38.0]])
     assert math.isclose(
-        _spherical_faq_area(ring), geom.polygon_area(ring, manifold), rel_tol=1e-12,
+        _spherical_faq_area(ring),
+        geom.polygon_area(ring, manifold),
+        rel_tol=1e-12,
     )
 
 
@@ -350,7 +371,9 @@ def test_spherical_clip_area_via_faq_matches_oracle() -> None:
         pytest.skip("spherely (S2) not installed; the spherical clip cannot run")
     clipped = geom.intersect_polygon(_SQUARE_A, _SQUARE_B, "spherical")
     assert math.isclose(
-        _spherical_faq_area(clipped), geom.polygon_area(clipped, "spherical"), rel_tol=1e-9,
+        _spherical_faq_area(clipped),
+        geom.polygon_area(clipped, "spherical"),
+        rel_tol=1e-9,
     )
 
 
@@ -377,15 +400,14 @@ def test_spherical_clip_overlapping_squares_with_spherely() -> None:
 # 2d. Polar-edge densification — great-circle-edge accuracy (ess-my4.4.9)
 # --------------------------------------------------------------------------- #
 
+
 def _true_cell_area(lon1: float, lon2: float, lat1: float, lat2: float) -> float:
     """Exact area of a lon-lat cell on the unit sphere: ``Δλ·(sin φ₂ − sin φ₁)``.
 
     The small-circle (true parallel-edge) area — the ground truth the
     great-circle-edge ``polygon_area`` is compared against (RFC §B.4).
     """
-    return math.radians(lon2 - lon1) * (
-        math.sin(math.radians(lat2)) - math.sin(math.radians(lat1))
-    )
+    return math.radians(lon2 - lon1) * (math.sin(math.radians(lat2)) - math.sin(math.radians(lat1)))
 
 
 def test_densification_reduces_coarse_polar_cell_area_error() -> None:
@@ -440,6 +462,7 @@ def test_densified_vertices_stay_on_the_parallel() -> None:
 # 3. B.5 / §5.8.2 area-tolerance gate
 # --------------------------------------------------------------------------- #
 
+
 def test_tolerance_exact_match_passes() -> None:
     assert geom.area_tolerance_ok(1.0, 1.0, rtol=1e-12)
 
@@ -463,6 +486,7 @@ def test_tolerance_relative_band_scales_with_reference() -> None:
 # --------------------------------------------------------------------------- #
 # 4. manifold / id round-trip + parser contract
 # --------------------------------------------------------------------------- #
+
 
 def test_manifold_and_id_survive_typed_round_trip() -> None:
     fixture = _VALID_GEOM / "intersect_polygon_clip_area.esm"
@@ -492,10 +516,15 @@ def test_parser_rejects_polygon_intersection_area_without_manifold() -> None:
 # helpers
 # --------------------------------------------------------------------------- #
 
+
 def _empty_ctx() -> EvalContext:
     return EvalContext(
-        state_layout={}, state_shapes={}, param_values={}, observed_values={},
-        y=np.empty(0, dtype=float), t=0.0,
+        state_layout={},
+        state_shapes={},
+        param_values={},
+        observed_values={},
+        y=np.empty(0, dtype=float),
+        t=0.0,
     )
 
 
@@ -504,23 +533,33 @@ def _ctx_with_polys() -> EvalContext:
     return EvalContext(
         state_layout={"src_poly": slice(0, 8), "tgt_poly": slice(8, 16)},
         state_shapes={"src_poly": (4, 2), "tgt_poly": (4, 2)},
-        param_values={}, observed_values={},
-        y=np.concatenate([_SQUARE_A.ravel(), _SQUARE_B.ravel()]), t=0.0,
+        param_values={},
+        observed_values={},
+        y=np.concatenate([_SQUARE_A.ravel(), _SQUARE_B.ravel()]),
+        t=0.0,
     )
 
 
 def _shoelace_faq(clip_symbol: str, ring_set: str) -> ExprNode:
     """The planar polygon_area FAQ: 0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v)."""
+
     def col(idx_expr, c: int) -> ExprNode:
         return ExprNode(op="index", args=[clip_symbol, idx_expr, c])
 
     v_next = ExprNode(op="+", args=["v", 1])
-    cross = ExprNode(op="-", args=[
-        ExprNode(op="*", args=[col("v", 1), col(v_next, 2)]),
-        ExprNode(op="*", args=[col(v_next, 1), col("v", 2)]),
-    ])
+    cross = ExprNode(
+        op="-",
+        args=[
+            ExprNode(op="*", args=[col("v", 1), col(v_next, 2)]),
+            ExprNode(op="*", args=[col(v_next, 1), col("v", 2)]),
+        ],
+    )
     body = ExprNode(op="*", args=[0.5, cross])
     return ExprNode(
-        op="aggregate", semiring="sum_product", output_idx=[], args=[clip_symbol],
-        ranges={"v": {"from": ring_set}}, expr=body,
+        op="aggregate",
+        semiring="sum_product",
+        output_idx=[],
+        args=[clip_symbol],
+        ranges={"v": {"from": ring_set}},
+        expr=body,
     )

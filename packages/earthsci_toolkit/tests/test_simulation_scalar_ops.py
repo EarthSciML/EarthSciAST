@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
 import pytest
 import sympy as sp
 
@@ -49,6 +48,7 @@ class TestAbs:
         # numerically on literal numbers, so substitution-based checks
         # behave identically to ``sp.Abs``.
         from earthsci_toolkit.sympy_bridge import _ess_numeric_abs
+
         result = _expr_to_sympy(_node("abs", "x"), symbol_map)
         assert result.func is _ess_numeric_abs
         assert result.args == (x_sym,)
@@ -175,16 +175,12 @@ class TestIfElseAndBool:
         assert float(result.subs(x_sym, -3)) == pytest.approx(3.0)
 
     def test_and(self, symbol_map, x_sym, y_sym):
-        result = _expr_to_sympy(
-            _node("and", _node(">", "x", 0), _node(">", "y", 0)), symbol_map
-        )
+        result = _expr_to_sympy(_node("and", _node(">", "x", 0), _node(">", "y", 0)), symbol_map)
         assert bool(result.subs([(x_sym, 1), (y_sym, 1)])) is True
         assert bool(result.subs([(x_sym, 1), (y_sym, -1)])) is False
 
     def test_or(self, symbol_map, x_sym, y_sym):
-        result = _expr_to_sympy(
-            _node("or", _node(">", "x", 0), _node(">", "y", 0)), symbol_map
-        )
+        result = _expr_to_sympy(_node("or", _node(">", "x", 0), _node(">", "y", 0)), symbol_map)
         assert bool(result.subs([(x_sym, -1), (y_sym, 1)])) is True
         assert bool(result.subs([(x_sym, -1), (y_sym, -1)])) is False
 

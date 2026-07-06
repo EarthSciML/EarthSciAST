@@ -11,6 +11,7 @@ public hook in the normal pytest suite; the cross-binding Julia/Rust comparison
 lives in ``scripts/run-pde-simulation-conformance.py`` (run from
 ``scripts/test-conformance.sh``).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -47,14 +48,14 @@ def test_pde_rhs_matches_analytic(fixture):
     esm = et.load(str(_MANIFEST.parent / fixture["path"]))
     rtol, atol = _TOL["rhs_rtol"], _TOL["rhs_atol"]
     for probe in fixture["rhs_probes"]:
-        got = {_bare(k): v
-               for k, v in evaluate_rhs(esm, dict(probe["state"]),
-                                        t=float(probe["t"])).items()}
+        got = {
+            _bare(k): v
+            for k, v in evaluate_rhs(esm, dict(probe["state"]), t=float(probe["t"])).items()
+        }
         for name, expected in probe["analytic_rhs"].items():
             actual = got[name]
             assert abs(actual - expected) <= atol + rtol * abs(expected), (
-                f"{fixture['id']} probe {probe['id']} {name}: "
-                f"{actual!r} != {expected!r}"
+                f"{fixture['id']} probe {probe['id']} {name}: {actual!r} != {expected!r}"
             )
 
 
@@ -66,9 +67,11 @@ def test_pde_trajectory_matches_analytic(fixture):
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
     result = simulate(
-        esm, tspan,
+        esm,
+        tspan,
         initial_conditions=dict(tr["initial_conditions"]),
-        method=_INTEG["method"], rtol=float(_INTEG["rtol"]),
+        method=_INTEG["method"],
+        rtol=float(_INTEG["rtol"]),
         atol=float(_INTEG["atol"]),
     )
     assert result.success

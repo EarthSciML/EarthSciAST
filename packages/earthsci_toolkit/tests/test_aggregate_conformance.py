@@ -129,12 +129,9 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(
-                esm_file, tspan=tspan, initial_conditions=ics, parameters=params
-            )
+            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
             assert result.success, (
-                f"{fixture_path.name}::{model_name}::{test_id} "
-                f"simulation failed: {result.message}"
+                f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
             test_tolerance = test.get("tolerance") or {}
@@ -146,9 +143,7 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
                 rel, ab = _resolve_expected_tolerance(
                     model_tolerance, test_tolerance, assertion.get("tolerance") or {}
                 )
-                actual = _lookup_element(
-                    result.vars, result.y, result.t, var_key, time
-                )
+                actual = _lookup_element(result.vars, result.y, result.t, var_key, time)
                 assert _assertion_passes(actual, expected, rel, ab), (
                     f"{fixture_path.name}::{model_name}::{test_id} "
                     f"assertion {var_key}@t={time} expected={expected} "
@@ -207,9 +202,7 @@ def test_build_time_invalid_fixtures_present() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "fixture_path", _build_time_invalid_fixtures(), ids=lambda p: p.name
-)
+@pytest.mark.parametrize("fixture_path", _build_time_invalid_fixtures(), ids=lambda p: p.name)
 def test_build_time_invalid_join_key_rejected(fixture_path: Path) -> None:
     """A float or null member in a join key column is schema-valid but a
     build-time error (RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1): equality
@@ -222,9 +215,7 @@ def test_build_time_invalid_join_key_rejected(fixture_path: Path) -> None:
     esm_file = load(fixture_path)
     rejected = False
     try:
-        result = simulate(
-            esm_file, tspan=(0.0, 1.0), initial_conditions={"count": 0.0}
-        )
+        result = simulate(esm_file, tspan=(0.0, 1.0), initial_conditions={"count": 0.0})
         rejected = not result.success
     except Exception:
         # A raised interpreter/simulation error is an equally valid rejection.

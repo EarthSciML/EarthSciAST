@@ -403,9 +403,7 @@ def _resolve_const_index(ctx: _ViCtx, name: str, d: int, i: int, n: int) -> int:
             return ((i - 1) % n) + 1  # 1-based modulo == Julia mod1(i, n)
         if pol == "clamp":
             return min(max(i, 1), n)
-    raise ValueInventionError(
-        f"const array '{name}' index {i} out of range 1..{n} in dim {d}"
-    )
+    raise ValueInventionError(f"const array '{name}' index {i} out of range 1..{n} in dim {d}")
 
 
 def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -> float:
@@ -525,9 +523,7 @@ def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, A
     frm = spec.get("from")
     iset = ctx.index_sets.get(frm)
     if iset is None:
-        raise ValueInventionError(
-            f"value-invention range references undeclared index set {frm!r}"
-        )
+        raise ValueInventionError(f"value-invention range references undeclared index set {frm!r}")
     kind = iset.get("kind")
     if kind == "interval":
         return list(range(1, int(iset["size"]) + 1))
@@ -536,17 +532,13 @@ def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, A
     if kind == "ragged":
         of = spec.get("of") or []
         if not of:
-            raise ValueInventionError(
-                f"ragged value-invention range {frm!r} needs an `of` parent"
-            )
+            raise ValueInventionError(f"ragged value-invention range {frm!r} needs an `of` parent")
         parent = int(bindings[of[0]])
         offs = _vi_keyed_factor(ctx, iset["offsets"])
         vals = _vi_keyed_factor(ctx, iset["values"])
         nmem = int(offs[parent - 1])
-        return [_vi_key_int(vals[parent - 1, l - 1]) for l in range(1, nmem + 1)]
-    raise ValueInventionError(
-        f"value-invention range over index set kind {kind!r} is unsupported"
-    )
+        return [_vi_key_int(vals[parent - 1, m - 1]) for m in range(1, nmem + 1)]
+    raise ValueInventionError(f"value-invention range over index set kind {kind!r} is unsupported")
 
 
 def _vi_enumerate(ranges: Mapping[str, Any], ctx: _ViCtx, cb) -> None:
@@ -594,13 +586,14 @@ def _vi_join_index_sym(vname: str, producer_ranges: Mapping[str, Any], ctx: _ViC
     )
 
 
-def _vi_join_ok(join: Sequence[Any], producer_ranges: Mapping[str, Any],
-                ctx: _ViCtx, bindings: Dict[str, Any]) -> bool:
+def _vi_join_ok(
+    join: Sequence[Any], producer_ranges: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]
+) -> bool:
     """True iff every ``join.on`` key-column pair compares equal at this binding
     (the value-equality equi-join gate, §5.3); each key is a materialised map
     buffer."""
     for clause in join:
-        for pair in (clause.get("on") or []):
+        for pair in clause.get("on") or []:
             lname, rname = pair[0], pair[1]
             ls = _vi_join_index_sym(lname, producer_ranges, ctx)
             rs = _vi_join_index_sym(rname, producer_ranges, ctx)
@@ -611,8 +604,12 @@ def _vi_join_ok(join: Sequence[Any], producer_ranges: Mapping[str, Any],
     return True
 
 
-def _vi_argreduce(node: Mapping[str, Any], ctx: _ViCtx,
-                  outer_bindings: Dict[str, Any], outer_ranges: Mapping[str, Any]) -> int:
+def _vi_argreduce(
+    node: Mapping[str, Any],
+    ctx: _ViCtx,
+    outer_bindings: Dict[str, Any],
+    outer_ranges: Mapping[str, Any],
+) -> int:
     """Arg-witness reducer (RFC §5.7 rule 6). Over the inner contracted ``ranges``
     (which EXTEND the outer map binding so ``expr`` may read both the point and
     the candidate), evaluate the scalar ``expr`` body at each candidate and return
@@ -641,9 +638,7 @@ def _vi_argreduce(node: Mapping[str, Any], ctx: _ViCtx,
             f"arg-witness `arg`={arg_sym!r} must name one of the contracted `ranges` symbols"
         )
     if arg_sym in outer_bindings:
-        raise ValueInventionError(
-            f"arg-witness `arg`={arg_sym!r} shadows an outer index symbol"
-        )
+        raise ValueInventionError(f"arg-witness `arg`={arg_sym!r} shadows an outer index symbol")
     filt = node.get("filter")
     join = node.get("join")
     # Combined ranges so a ``join`` column over an OUTER-indexed map buffer (the
@@ -658,7 +653,9 @@ def _vi_argreduce(node: Mapping[str, Any], ctx: _ViCtx,
         nonlocal best
         if filt is not None:
             fv = _vi_eval(filt, ctx, bindings)
-            if not (fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)):
+            if not (
+                fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)
+            ):
                 return
         if join is not None and not _vi_join_ok(join, combined, ctx, bindings):
             return
@@ -711,7 +708,8 @@ def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dic
         # An arg-witness body runs the inner reduction (with the outer point bound)
         # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.
         out[bindings[sym]] = (
-            _vi_argreduce(body, ctx, bindings, outer_ranges) if is_arg
+            _vi_argreduce(body, ctx, bindings, outer_ranges)
+            if is_arg
             else _vi_eval(body, ctx, bindings)
         )
 
@@ -726,9 +724,7 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> List[Any]:
     list."""
     key = node.get("key")
     if key is None:
-        raise ValueInventionError(
-            "value-invention producer aggregate requires a `key` (§5.5)"
-        )
+        raise ValueInventionError("value-invention producer aggregate requires a `key` (§5.5)")
     ranges = node.get("ranges") or {}
     filt = node.get("filter")
     join = node.get("join")
@@ -737,7 +733,9 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> List[Any]:
     def visit(bindings: Dict[str, Any]) -> None:
         if filt is not None:
             fv = _vi_eval(filt, ctx, bindings)
-            if not (fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)):
+            if not (
+                fv is True or (isinstance(fv, (int, float)) and not isinstance(fv, bool) and fv > 0)
+            ):
                 return
         if join is not None and not _vi_join_ok(join, ranges, ctx, bindings):
             return
@@ -792,8 +790,9 @@ def _vi_oplus(node: Mapping[str, Any]):
     return op, zerobar
 
 
-def _vi_assert_buildtime(ctx: _ViCtx, vname: str, node: Mapping[str, Any],
-                         vi_var_names: Set[str]) -> None:
+def _vi_assert_buildtime(
+    ctx: _ViCtx, vname: str, node: Mapping[str, Any], vi_var_names: Set[str]
+) -> None:
     """§5.7 guard 2 for grouped / derived buffers: a build-time reduction may read
     only build-time data — const-array factors and already-materialised VI
     buffers. Reading a live ODE ``state`` variable would make it a per-step
@@ -900,8 +899,9 @@ def _vi_materialize_derived(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
     return out
 
 
-def _vi_classification_model(model_json: Mapping[str, Any],
-                             maps: Sequence[Tuple[str, Any]]) -> Mapping[str, Any]:
+def _vi_classification_model(
+    model_json: Mapping[str, Any], maps: Sequence[Tuple[str, Any]]
+) -> Mapping[str, Any]:
     """A model copy whose value-invention MAP vars are re-typed to their body's
     cadence class (``const``→parameter, ``discrete``→discrete), so a producer
     joining on a map buffer classifies by the buffer's true (input-derived)

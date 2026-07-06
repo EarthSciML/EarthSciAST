@@ -43,16 +43,12 @@ from .simulation_common import (
 def _linear_pos(shape: Tuple[int, ...], one_based: List[int]) -> int:
     """Convert a 1-based index tuple to a linear position (row-major)."""
     if len(shape) != len(one_based):
-        raise SimulationError(
-            f"index rank mismatch: shape={shape} idx={one_based}"
-        )
+        raise SimulationError(f"index rank mismatch: shape={shape} idx={one_based}")
     lin = 0
     for d, i in enumerate(one_based):
         zero = int(i) - 1
         if zero < 0 or zero >= shape[d]:
-            raise SimulationError(
-                f"index {i} out of range for dim {d} of shape {shape}"
-            )
+            raise SimulationError(f"index {i} out of range for dim {d} of shape {shape}")
         lin = lin * shape[d] + zero
     return lin
 
@@ -81,9 +77,7 @@ def _densify_solution(
     return t_out, y_out
 
 
-def _element_names(
-    state_names: List[str], shapes: Dict[str, Tuple[int, ...]]
-) -> List[str]:
+def _element_names(state_names: List[str], shapes: Dict[str, Tuple[int, ...]]) -> List[str]:
     """Return a flat list of namespaced element names in layout order.
 
     Scalar variables appear as the namespaced name. Array variables are
@@ -253,9 +247,7 @@ def _substitute_algebraic(
     return node
 
 
-def _rebind_index_syms(
-    expr: Expr, bindings: Dict[str, Expr]
-) -> Expr:
+def _rebind_index_syms(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
     """Replace bare string references to index symbols with their target expressions."""
     if isinstance(expr, str):
         return bindings.get(expr, expr)
@@ -264,9 +256,7 @@ def _rebind_index_syms(
     return expr
 
 
-def _iter_arrayop_points(
-    lhs: ExprNode, ctx: EvalContext
-) -> Tuple[List[str], List[List[int]]]:
+def _iter_arrayop_points(lhs: ExprNode, ctx: EvalContext) -> Tuple[List[str], List[List[int]]]:
     """Return ``(output_idx_symbols, expanded_ranges)`` for an aggregate LHS.
 
     Output ranges may be dense ``[lo, hi]`` tuples or ``{"from": <name>}``
@@ -376,9 +366,9 @@ def _apply_equation_to_dy(
                 start = state_layout[inner].start
                 arr = np.asarray(eval_expr(rhs, ctx), dtype=float).reshape(-1)
                 if arr.size == 1:
-                    dy[start:start + n] = float(arr[0])
+                    dy[start : start + n] = float(arr[0])
                 elif arr.size == n:
-                    dy[start:start + n] = arr
+                    dy[start : start + n] = arr
                 else:
                     raise SimulationError(
                         f"D({inner}): RHS produced {arr.size} elements for a "
@@ -410,11 +400,16 @@ def _apply_equation_to_dy(
                     # evaluated through the full interpreter (which carries those
                     # semantics) and scattered into dy; the dense sum-product fast
                     # path below is preserved byte-for-byte for existing fixtures.
-                    if (_aggregate_needs_interpreter(rhs)
-                            or _aggregate_needs_interpreter(lhs)):
+                    if _aggregate_needs_interpreter(rhs) or _aggregate_needs_interpreter(lhs):
                         _scatter_arrayop_rhs(
-                            lhs, rhs, inner.args[1:], head, ctx, shapes,
-                            state_layout, dy,
+                            lhs,
+                            rhs,
+                            inner.args[1:],
+                            head,
+                            ctx,
+                            shapes,
+                            state_layout,
+                            dy,
                         )
                         return
                     syms, ranges = _iter_arrayop_points(lhs, ctx)
@@ -431,9 +426,7 @@ def _apply_equation_to_dy(
                     if isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op):
                         rhs_body = rhs.expr
                         rhs_reduce = rhs.reduce if rhs.reduce is not None else "+"
-                        rhs_out_syms = {
-                            s for s in (rhs.output_idx or []) if isinstance(s, str)
-                        }
+                        rhs_out_syms = {s for s in (rhs.output_idx or []) if isinstance(s, str)}
                         for k_sym, k_rng in sorted((rhs.ranges or {}).items()):
                             if k_sym not in rhs_out_syms:
                                 rhs_contract_syms.append(k_sym)
@@ -451,14 +444,17 @@ def _apply_equation_to_dy(
                     # rather than rebuilding the region-wise makearray once per
                     # grid point. The materialized array is then scattered into dy.
                     # Falls through to the per-point loop on any shape mismatch.
-                    if (not rhs_contract_syms
-                            and isinstance(rhs, ExprNode) and is_aggregate_op(rhs.op)):
+                    if (
+                        not rhs_contract_syms
+                        and isinstance(rhs, ExprNode)
+                        and is_aggregate_op(rhs.op)
+                    ):
                         full = np.asarray(eval_expr(rhs, ctx), dtype=float)
                         exp_shape = tuple(len(r) for r in ranges)
                         if full.shape == exp_shape:
                             prev_locals = dict(ctx.locals)
                             try:
-                                for multi in (np.ndindex(*exp_shape) if exp_shape else [()]):
+                                for multi in np.ndindex(*exp_shape) if exp_shape else [()]:
                                     for s, pos in zip(syms, multi):
                                         ctx.locals[s] = ranges[sym_pos[s]][pos]
                                     idx_vals = [
@@ -475,17 +471,17 @@ def _apply_equation_to_dy(
                         for multi in it:
                             for s, pos in zip(syms, multi):
                                 ctx.locals[s] = ranges[sym_pos[s]][pos]
-                            idx_vals = [
-                                int(round(float(eval_expr(e, ctx)))) for e in idx_exprs
-                            ]
+                            idx_vals = [int(round(float(eval_expr(e, ctx)))) for e in idx_exprs]
                             flat_pos = layout_start + _linear_pos(shape, idx_vals)
                             if not rhs_contract_syms:
                                 val = float(eval_expr(rhs_body, ctx))
                             else:
                                 # Unroll contracted indices and combine with reduce op.
                                 _REDUCE_INIT = {
-                                    "+": 0.0, "*": 1.0,
-                                    "max": float("-inf"), "min": float("inf"),
+                                    "+": 0.0,
+                                    "*": 1.0,
+                                    "max": float("-inf"),
+                                    "min": float("inf"),
                                 }
                                 acc = _REDUCE_INIT.get(rhs_reduce, 0.0)
                                 k_it = np.ndindex(*(len(r) for r in rhs_contract_ranges))
@@ -694,6 +690,7 @@ class _NumpyRhsBuild:
     """Everything needed to evaluate (and integrate) a discretized array/PDE
     RHS: the ``rhs_function(t, y)`` closure plus the layout metadata its callers
     need after the fact (state names, shapes, layout, params, observeds)."""
+
     rhs_function: Callable[[float, Any], Any]
     y0: Any
     total_size: int
@@ -755,8 +752,7 @@ def _resolve_field_ic(
         return float(rhs)
     if isinstance(rhs, ExprNode):
         try:
-            value = _eval_buildtime_field(rhs, index_sets=index_sets,
-                                          param_values=param_values)
+            value = _eval_buildtime_field(rhs, index_sets=index_sets, param_values=param_values)
         except Exception:
             value = None
         if value is not None:
@@ -770,8 +766,7 @@ def _resolve_field_ic(
                 f"{arr.ndim}, which does not match the {len(cell)}-D lifted "
                 f"target grid"
             )
-    detail = (f" (no loader_arrays entry named {rhs!r})"
-              if isinstance(rhs, str) else "")
+    detail = f" (no loader_arrays entry named {rhs!r})" if isinstance(rhs, str) else ""
     raise SimulationError(
         f"ic({target}): RHS is neither a loaded const-array field, a constant, "
         f"nor a per-cell coordinate expression{detail}; supply the initial "
@@ -838,7 +833,11 @@ def _fold_field_ics(
         for multi in np.ndindex(*shape):
             cell = tuple(int(i) + 1 for i in multi)
             y0[start + _linear_pos(shape, list(cell))] = _resolve_field_ic(
-                target, rhs, cell, loader_arrays, index_sets=index_sets,
+                target,
+                rhs,
+                cell,
+                loader_arrays,
+                index_sets=index_sets,
                 param_values=param_values,
             )
 
@@ -966,7 +965,8 @@ def _materialize_join_key_buffers(
     # bin-setup time. Materialize ONLY the join-free observeds the bins
     # transitively depend on — the binning coordinates and their own inputs.
     join_free = [
-        (name, rhs) for name, rhs in ordered_observed
+        (name, rhs)
+        for name, rhs in ordered_observed
         if not (isinstance(rhs, ExprNode) and getattr(rhs, "join", None))
     ]
     join_free_names = {name for name, _ in join_free}
@@ -986,8 +986,7 @@ def _materialize_join_key_buffers(
                 needed.add(r)
                 frontier.append(r)
     # Preserve the dependency-sorted order of `ordered_observed`.
-    _materialize_observeds(
-        [(name, rhs) for name, rhs in join_free if name in needed], ctx)
+    _materialize_observeds([(name, rhs) for name, rhs in join_free if name in needed], ctx)
     for name, node, idx_set in bin_specs:
         buffers[name] = np.asarray(eval_expr(node, ctx), dtype=float).reshape(-1)
         if idx_set is not None:
@@ -1029,8 +1028,7 @@ def _fill_build_inspection(
     # the observed-assertion form (materialized below with these values).
     for k, v in build.param_values.items():
         sink.params[str(k)] = float(v)
-    varying = _time_varying_observeds(build.ordered_observed,
-                                      set(build.state_names))
+    varying = _time_varying_observeds(build.ordered_observed, set(build.state_names))
     static_obs = [(n, r) for n, r in build.ordered_observed if n not in varying]
     if not static_obs:
         return
@@ -1101,9 +1099,7 @@ def _build_numpy_rhs(
     total_size = offset
 
     if total_size == 0:
-        raise SimulationError(
-            "Flattened system has no state variables to integrate"
-        )
+        raise SimulationError("Flattened system has no state variables to integrate")
 
     # Partition equations: an observed assignment is ``name = <body>`` whose
     # LHS is an observed variable name (flatten lowers each observed's
@@ -1127,9 +1123,13 @@ def _build_numpy_rhs(
         _base = _vi_lhs_base(eq.lhs)
         if _base is not None and _base in vi_var_names:
             continue
-        if (isinstance(eq.lhs, ExprNode) and eq.lhs.op == "ic"
-                and eq.lhs.args and isinstance(eq.lhs.args[0], str)
-                and shapes.get(eq.lhs.args[0])):
+        if (
+            isinstance(eq.lhs, ExprNode)
+            and eq.lhs.op == "ic"
+            and eq.lhs.args
+            and isinstance(eq.lhs.args[0], str)
+            and shapes.get(eq.lhs.args[0])
+        ):
             field_ic_eqs.append((eq.lhs.args[0], eq.rhs))
         elif isinstance(eq.lhs, str) and eq.lhs in observed_names:
             observed_eqs.append((eq.lhs, eq.rhs))
@@ -1138,9 +1138,7 @@ def _build_numpy_rhs(
     ordered_observed = _order_observed_equations(observed_eqs, observed_names)
 
     # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
-    working_equations, _eliminated = _collect_algebraic_substitutions(
-        driver_equations
-    )
+    working_equations, _eliminated = _collect_algebraic_substitutions(driver_equations)
     if _eliminated:
         working_equations = [
             FlattenedEquation(
@@ -1177,16 +1175,21 @@ def _build_numpy_rhs(
     # `_factor_scope`. Empty (byte-identical) without ragged index sets.
     factor_scope = ragged_factor_scope(
         flat.index_sets,
-        list(flat.state_variables) + list(flat.observed_variables)
-        + list(flat.parameters),
+        list(flat.state_variables) + list(flat.observed_variables) + list(flat.parameters),
     )
 
     # Value-invention bin buffers (RFC §5.3): materialize the broad-phase bins
     # (``rg_src_bin`` / ``rg_tgt_bin``) once, from constant geometry + params, so
     # a downstream ``join.on [[rg_src_bin, rg_tgt_bin]]`` can gate the regrid.
     join_key_buffers, join_key_index_sets = _materialize_join_key_buffers(
-        ordered_observed, bin_specs, flat.index_sets, param_values, shapes,
-        state_layout, total_size, factor_scope=factor_scope,
+        ordered_observed,
+        bin_specs,
+        flat.index_sets,
+        param_values,
+        shapes,
+        state_layout,
+        total_size,
+        factor_scope=factor_scope,
     )
 
     # Initial conditions.
@@ -1202,11 +1205,16 @@ def _build_numpy_rhs(
     # provider-seeded at build time, DESIGN §2 R2) supplying the initial field
     # over the lifted grid, or a broadcast constant. Runs before the explicit
     # per-element overrides so those still win.
-    _fold_field_ics(y0, field_ic_eqs, shapes, state_layout, loader_arrays,
-                    index_sets=flat.index_sets, param_values=param_values)
-    _apply_initial_conditions(
-        y0, state_layout, shapes, state_names, initial_conditions
+    _fold_field_ics(
+        y0,
+        field_ic_eqs,
+        shapes,
+        state_layout,
+        loader_arrays,
+        index_sets=flat.index_sets,
+        param_values=param_values,
     )
+    _apply_initial_conditions(y0, state_layout, shapes, state_names, initial_conditions)
 
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
@@ -1271,6 +1279,7 @@ def _build_numpy_rhs(
         if not _finite_mask.all():
             raise SimulationError("Non-finite derivatives encountered")
         return dy
+
     elem_names = _element_names(state_names, shapes)
     return _NumpyRhsBuild(
         rhs_function=rhs_function,
@@ -1337,18 +1346,16 @@ def _simulate_with_numpy(
     filled right after the RHS build (see :func:`_fill_build_inspection`);
     nothing downstream consults it, so results are identical either way."""
     try:
-        build = _build_numpy_rhs(
-            flat, parameters, initial_conditions, loader_arrays=loader_arrays
-        )
+        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
         if inspect is not None:
-            _fill_build_inspection(inspect, flat, build, float(tspan[0]),
-                                   loader_arrays=loader_arrays)
+            _fill_build_inspection(
+                inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
+            )
         shapes = build.shapes
         state_names = build.state_names
         state_layout = build.state_layout
         param_values = build.param_values
         ordered_observed = build.ordered_observed
-        total_size = build.total_size
         y0 = build.y0
         rhs_function = build.rhs_function
 
@@ -1391,24 +1398,21 @@ def _simulate_with_numpy(
                         factor_scope=build.factor_scope,
                     )
                     _materialize_observeds(ordered_observed, ctx)
-                    scalar_obs = [
-                        n for n, _ in ordered_observed if n in ctx.observed_values
-                    ]
+                    scalar_obs = [n for n, _ in ordered_observed if n in ctx.observed_values]
                     if scalar_obs:
-                        obs_block = np.vstack([
-                            np.full(t_out.size, ctx.observed_values[n], dtype=float)
-                            for n in scalar_obs
-                        ])
+                        obs_block = np.vstack(
+                            [
+                                np.full(t_out.size, ctx.observed_values[n], dtype=float)
+                                for n in scalar_obs
+                            ]
+                        )
                         y_out = np.vstack([y_out, obs_block])
                         out_vars.extend(scalar_obs)
                 else:
                     obs_rows: Dict[str, np.ndarray] = {
-                        name: np.empty(t_out.size, dtype=float)
-                        for name, _ in ordered_observed
+                        name: np.empty(t_out.size, dtype=float) for name, _ in ordered_observed
                     }
-                    obs_is_scalar: Dict[str, bool] = {
-                        name: True for name, _ in ordered_observed
-                    }
+                    obs_is_scalar: Dict[str, bool] = {name: True for name, _ in ordered_observed}
                     for j in range(t_out.size):
                         ctx = EvalContext(
                             state_layout=state_layout,

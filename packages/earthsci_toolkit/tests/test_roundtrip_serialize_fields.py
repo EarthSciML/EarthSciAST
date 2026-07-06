@@ -46,9 +46,7 @@ def _find_nodes(node, predicate, found=None):
     return found
 
 
-@pytest.mark.parametrize(
-    "fixture_name", ["join_filter.esm", "join_disaggregation_m2m.esm"]
-)
+@pytest.mark.parametrize("fixture_name", ["join_filter.esm", "join_disaggregation_m2m.esm"])
 def test_roundtrip_preserves_join_and_filter(fixture_name):
     fixture = _VALID / "aggregate" / fixture_name
     original = json.loads(fixture.read_text())
@@ -68,15 +66,11 @@ def test_roundtrip_preserves_distinct_and_key():
     """distinct/key survive a load→save cycle on a real fixture."""
     fixture = _VALID / "aggregate" / "skolem_distinct_rank.esm"
     original = json.loads(fixture.read_text())
-    orig_nodes = _find_nodes(
-        original, lambda n: "op" in n and ("distinct" in n or "key" in n)
-    )
+    orig_nodes = _find_nodes(original, lambda n: "op" in n and ("distinct" in n or "key" in n))
     assert orig_nodes, "fixture carries no distinct/key nodes; bad fixture pick"
 
     data = _roundtrip(fixture)
-    saved_nodes = _find_nodes(
-        data, lambda n: "op" in n and ("distinct" in n or "key" in n)
-    )
+    saved_nodes = _find_nodes(data, lambda n: "op" in n and ("distinct" in n or "key" in n))
     assert len(saved_nodes) == len(orig_nodes)
     for orig, new in zip(orig_nodes, saved_nodes):
         assert new.get("distinct") == orig.get("distinct")
@@ -99,17 +93,13 @@ def test_roundtrip_preserves_constraint_equations():
                         "rate": "k",
                     }
                 ],
-                "constraint_equations": [
-                    {"lhs": "A", "rhs": {"op": "*", "args": [2, "k"]}}
-                ],
+                "constraint_equations": [{"lhs": "A", "rhs": {"op": "*", "args": [2, "k"]}}],
             }
         },
     }
     data = json.loads(save(load(json.dumps(doc))))
     rs = data["reaction_systems"]["rs"]
-    assert rs["constraint_equations"] == [
-        {"lhs": "A", "rhs": {"op": "*", "args": [2, "k"]}}
-    ]
+    assert rs["constraint_equations"] == [{"lhs": "A", "rhs": {"op": "*", "args": [2, "k"]}}]
 
 
 def test_roundtrip_keeps_events_nested_in_owner():
@@ -127,6 +117,5 @@ def test_roundtrip_keeps_events_nested_in_owner():
                 if comp.get(key):
                     saved_events = data[kind][name].get(key) or []
                     assert len(saved_events) == len(comp[key]), (
-                        f"{kind}/{name}/{key}: {len(comp[key])} events in, "
-                        f"{len(saved_events)} out"
+                        f"{kind}/{name}/{key}: {len(comp[key])} events in, {len(saved_events)} out"
                     )

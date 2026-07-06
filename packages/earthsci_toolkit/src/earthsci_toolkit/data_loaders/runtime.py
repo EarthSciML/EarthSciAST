@@ -49,12 +49,8 @@ def load_data(
             time=time, fetcher=fetcher, parser=parser, **substitutions
         )
     if kind == DataLoaderKind.STATIC:
-        return StaticLoader(data_loader).load(
-            opener=opener, **substitutions
-        )
-    raise DataLoaderDispatchError(
-        f"no runtime loader registered for kind {kind!r}"
-    )
+        return StaticLoader(data_loader).load(opener=opener, **substitutions)
+    raise DataLoaderDispatchError(f"no runtime loader registered for kind {kind!r}")
 
 
 def resolve_files(
@@ -72,9 +68,7 @@ def resolve_files(
     lists are needed.
     """
     if data_loader.temporal is None or not data_loader.temporal.file_period:
-        raise DataLoaderDispatchError(
-            "resolve_files requires temporal.file_period to be set"
-        )
+        raise DataLoaderDispatchError("resolve_files requires temporal.file_period to be set")
     anchors = file_anchors_in_range(
         start,
         end,

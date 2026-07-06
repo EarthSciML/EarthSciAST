@@ -88,9 +88,14 @@ def load_manifest(
             manifest = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise ManifestError(f"failed to load manifest {path}: {e}") from e
-    _validate_shape(manifest, path, categories=categories,
-                    fixture_fields=fixture_fields, check_version=check_version,
-                    validate_fixture=validate_fixture)
+    _validate_shape(
+        manifest,
+        path,
+        categories=categories,
+        fixture_fields=fixture_fields,
+        check_version=check_version,
+        validate_fixture=validate_fixture,
+    )
     return manifest
 
 
@@ -107,10 +112,7 @@ def _validate_shape(
         raise ManifestError(f"{path}: top-level must be a JSON object")
     if manifest.get("category") not in categories:
         wanted = " or ".join(f"'{c}'" for c in categories)
-        raise ManifestError(
-            f"{path}: category must be {wanted}, "
-            f"got {manifest.get('category')!r}"
-        )
+        raise ManifestError(f"{path}: category must be {wanted}, got {manifest.get('category')!r}")
     if check_version and not isinstance(manifest.get("version"), str):
         raise ManifestError(f"{path}: version must be a string")
     fixtures = manifest.get("fixtures")
@@ -153,8 +155,9 @@ class AdapterHarness:
     than raising — the caller decides whether a broken adapter fails the run
     (required binding) or skips (optional)."""
 
-    def __init__(self, slug: str, *, stderr_tail: int = 2000,
-                 stderr_on_invalid_json: bool = False) -> None:
+    def __init__(
+        self, slug: str, *, stderr_tail: int = 2000, stderr_on_invalid_json: bool = False
+    ) -> None:
         self.slug = slug
         self.env_prefix = f"EARTHSCI_{slug.upper().replace('-', '_')}_ADAPTER_"
         self.path_prefix = f"earthsci-{slug}-adapter-"
@@ -171,14 +174,20 @@ class AdapterHarness:
         return None
 
     def missing_record(self, binding: str) -> dict:
-        return {"binding": binding, "adapter_status": "missing",
-                "error": (f"adapter not found; expected on PATH as "
-                          f"{self.path_prefix}{binding} or via "
-                          f"${self.env_prefix}{binding.upper()}"),
-                "fixtures": {}}
+        return {
+            "binding": binding,
+            "adapter_status": "missing",
+            "error": (
+                f"adapter not found; expected on PATH as "
+                f"{self.path_prefix}{binding} or via "
+                f"${self.env_prefix}{binding.upper()}"
+            ),
+            "fixtures": {},
+        }
 
-    def run(self, binding: str, argv: list[str], manifest_path: Path,
-            timeout: float | None) -> dict:
+    def run(
+        self, binding: str, argv: list[str], manifest_path: Path, timeout: float | None
+    ) -> dict:
         with tempfile.NamedTemporaryFile(
             "r", suffix=".json", prefix=f"{self.slug}-{binding}-", delete=False
         ) as tmp:
@@ -186,32 +195,52 @@ class AdapterHarness:
         try:
             cmd = [*argv, "--manifest", str(manifest_path), "--output", str(out_path)]
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      timeout=timeout, check=False)
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=timeout, check=False
+                )
             except FileNotFoundError as e:
-                return {"binding": binding, "adapter_status": "missing",
-                        "error": str(e), "fixtures": {}}
+                return {
+                    "binding": binding,
+                    "adapter_status": "missing",
+                    "error": str(e),
+                    "fixtures": {},
+                }
             except subprocess.TimeoutExpired:
-                return {"binding": binding, "adapter_status": "timeout",
-                        "error": f"adapter timed out after {timeout}s", "fixtures": {}}
+                return {
+                    "binding": binding,
+                    "adapter_status": "timeout",
+                    "error": f"adapter timed out after {timeout}s",
+                    "fixtures": {},
+                }
             if not out_path.exists() or out_path.stat().st_size == 0:
-                return {"binding": binding, "adapter_status": "no_output",
-                        "error": "adapter wrote no output", "exit_code": proc.returncode,
-                        "stderr": (proc.stderr or "").strip()[-self.stderr_tail:],
-                        "fixtures": {}}
+                return {
+                    "binding": binding,
+                    "adapter_status": "no_output",
+                    "error": "adapter wrote no output",
+                    "exit_code": proc.returncode,
+                    "stderr": (proc.stderr or "").strip()[-self.stderr_tail :],
+                    "fixtures": {},
+                }
             try:
                 with out_path.open() as f:
                     payload = json.load(f)
             except json.JSONDecodeError as e:
-                record = {"binding": binding, "adapter_status": "invalid_output",
-                          "error": f"adapter output not valid JSON: {e}",
-                          "fixtures": {}}
+                record = {
+                    "binding": binding,
+                    "adapter_status": "invalid_output",
+                    "error": f"adapter output not valid JSON: {e}",
+                    "fixtures": {},
+                }
                 if self.stderr_on_invalid_json:
-                    record["stderr"] = (proc.stderr or "").strip()[-self.stderr_tail:]
+                    record["stderr"] = (proc.stderr or "").strip()[-self.stderr_tail :]
                 return record
             if not isinstance(payload, dict) or "fixtures" not in payload:
-                return {"binding": binding, "adapter_status": "invalid_output",
-                        "error": "adapter output missing 'fixtures'", "fixtures": {}}
+                return {
+                    "binding": binding,
+                    "adapter_status": "invalid_output",
+                    "error": "adapter output missing 'fixtures'",
+                    "fixtures": {},
+                }
             payload.setdefault("binding", binding)
             payload["adapter_status"] = "ok"
             return payload
@@ -221,15 +250,19 @@ class AdapterHarness:
             except OSError:
                 pass
 
-    def collect(self, bindings: list[str], manifest_path: Path,
-                timeout: float | None) -> dict[str, dict]:
+    def collect(
+        self, bindings: list[str], manifest_path: Path, timeout: float | None
+    ) -> dict[str, dict]:
         """Discover + run the adapter for every requested binding, mapping each
         to its payload (or a ``missing`` record when no adapter is registered)."""
         adapters: dict[str, dict] = {}
         for b in bindings:
             argv = self.discover(b)
-            adapters[b] = (self.missing_record(b) if argv is None
-                           else self.run(b, argv, manifest_path, timeout))
+            adapters[b] = (
+                self.missing_record(b)
+                if argv is None
+                else self.run(b, argv, manifest_path, timeout)
+            )
         return adapters
 
 
@@ -266,8 +299,7 @@ def build_parser(
     default_output: Path,
     manifest_help: str | None = None,
     output_help: str | None = "Where to write the aggregated report.",
-    bindings_help: str | None = ("Comma-separated bindings "
-                                 "(default: manifest required+optional)."),
+    bindings_help: str | None = ("Comma-separated bindings (default: manifest required+optional)."),
     timeout_help: str | None = "Per-adapter timeout in seconds.",
     self_test_help: str | None = None,
 ) -> argparse.ArgumentParser:
@@ -276,11 +308,10 @@ def build_parser(
     ``--help`` epilogue. Runners with extra modes (e.g. ``--write-golden``)
     add their own arguments to the returned parser before parsing."""
     p = argparse.ArgumentParser(
-        description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--manifest", type=Path, default=default_manifest,
-                   help=manifest_help)
-    p.add_argument("--output", type=Path, default=default_output,
-                   help=output_help)
+        description=doc, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument("--manifest", type=Path, default=default_manifest, help=manifest_help)
+    p.add_argument("--output", type=Path, default=default_output, help=output_help)
     p.add_argument("--bindings", default="", help=bindings_help)
     p.add_argument("--timeout", type=float, default=None, help=timeout_help)
     p.add_argument("--self-test", action="store_true", help=self_test_help)

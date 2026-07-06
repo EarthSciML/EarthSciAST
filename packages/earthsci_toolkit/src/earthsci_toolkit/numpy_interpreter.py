@@ -277,11 +277,11 @@ def _broadcast_fn(fn: str) -> Callable:
 # table, never from the file. Adding a semiring is a spec change, not a per-file
 # extension, so this registry is closed and exhaustive.
 _SEMIRINGS: Dict[str, Dict[str, Any]] = {
-    "sum_product": {"oplus": "+",   "zero": 0.0,      "otimes": "*",   "one": 1.0},
-    "max_product": {"oplus": "max", "zero": -np.inf,  "otimes": "*",   "one": 1.0},
-    "min_sum":     {"oplus": "min", "zero": np.inf,   "otimes": "+",   "one": 0.0},
-    "max_sum":     {"oplus": "max", "zero": -np.inf,  "otimes": "+",   "one": 0.0},
-    "bool_and_or": {"oplus": "or",  "zero": 0.0,      "otimes": "and", "one": 1.0},
+    "sum_product": {"oplus": "+", "zero": 0.0, "otimes": "*", "one": 1.0},
+    "max_product": {"oplus": "max", "zero": -np.inf, "otimes": "*", "one": 1.0},
+    "min_sum": {"oplus": "min", "zero": np.inf, "otimes": "+", "one": 0.0},
+    "max_sum": {"oplus": "max", "zero": -np.inf, "otimes": "+", "one": 0.0},
+    "bool_and_or": {"oplus": "or", "zero": 0.0, "otimes": "and", "one": 1.0},
 }
 
 
@@ -357,8 +357,10 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
     if kind == "ragged":
         of = list(spec.get("of") or entry.get("of") or [])
         return _RaggedRange(
-            name=name, of=of,
-            offsets=entry["offsets"], values=entry.get("values"),
+            name=name,
+            of=of,
+            offsets=entry["offsets"],
+            values=entry.get("values"),
         )
     if kind == "derived":
         # A data-derived index set (RFC §5.5 / §8.1) resolves its extent from a
@@ -389,9 +391,7 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
             )
         n_vertices = max(int(ring.shape[0]) - 1, 0)  # closed ring has n+1 rows
         return [1, n_vertices]
-    raise NumpyInterpreterError(
-        f"index set {name!r} has unknown kind {kind!r}"
-    )
+    raise NumpyInterpreterError(f"index set {name!r} has unknown kind {kind!r}")
 
 
 def _resolve_keyed_factor(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
@@ -500,17 +500,14 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
             f"`const` op value must be a number or nested array, got {type(v).__name__}"
         )
     if op == "fn":
-        from .registered_functions import evaluate_closed_function, extract_const_array
+        from .registered_functions import extract_const_array
+
         if expr.name is None:
             raise NumpyInterpreterError("`fn` op requires a `name` field")
         evaluated_args = []
         const_arg_positions = _INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
         for i, a in enumerate(expr.args):
-            if (
-                i in const_arg_positions
-                and isinstance(a, ExprNode)
-                and a.op == "const"
-            ):
+            if i in const_arg_positions and isinstance(a, ExprNode) and a.op == "const":
                 evaluated_args.append(extract_const_array(a))
             else:
                 evaluated_args.append(eval_expr(a, ctx))
@@ -557,7 +554,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
             raise NumpyInterpreterError(f"{op} expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        return a ** b
+        return a**b
     if op == "atan2":
         if len(expr.args) != 2:
             raise NumpyInterpreterError("atan2 expects 2 args")
@@ -857,7 +854,8 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
 
 
 def _decompose_body_as_scaled_product(
-    body: Expr, all_syms: frozenset,
+    body: Expr,
+    all_syms: frozenset,
 ) -> Optional[Tuple[float, List[Tuple[str, List[str]]]]]:
     """Try to decompose body as (scalar_coeff, [(var, [sym, ...]), ...]).
 
@@ -932,7 +930,7 @@ def _eval_arrayop_vectorized(
         if reducer == "+":
             val = coeff * n_red
         elif reducer == "*":
-            val = coeff ** n_red
+            val = coeff**n_red
         else:
             val = coeff
         return np.full(out_shape, val, dtype=float) if out_shape else np.float64(val)
@@ -971,8 +969,7 @@ def _eval_arrayop_vectorized(
         if arr.ndim != len(var_syms):
             return None
         idx_cols = [np.asarray(sym_0based[s], dtype=int) for s in var_syms]
-        arr_slice = (arr[idx_cols[0]] if len(idx_cols) == 1
-                     else arr[np.ix_(*idx_cols)])
+        arr_slice = arr[idx_cols[0]] if len(idx_cols) == 1 else arr[np.ix_(*idx_cols)]
         sliced.append(np.asarray(arr_slice, dtype=float))
         term_specs.append("".join(sym_letter[s] for s in var_syms))
 
@@ -1019,8 +1016,9 @@ def _eval_arrayop_vectorized(
     return None
 
 
-def _bind_broadcast_range(ctx: EvalContext, sym: str, values: np.ndarray,
-                          axis: int, ndim: int) -> None:
+def _bind_broadcast_range(
+    ctx: EvalContext, sym: str, values: np.ndarray, axis: int, ndim: int
+) -> None:
     """Bind ``sym`` to ``values`` reshaped to broadcast on ``axis`` of an
     ``ndim``-D output box (so an N-D region body evaluates in one pass)."""
     shp = [1] * ndim
@@ -1029,7 +1027,10 @@ def _bind_broadcast_range(ctx: EvalContext, sym: str, values: np.ndarray,
 
 
 def _materialize_makearray_vectorized(
-    ma: ExprNode, ctx: EvalContext, out_syms: List[str], out_shape: Tuple[int, ...],
+    ma: ExprNode,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_shape: Tuple[int, ...],
 ) -> np.ndarray:
     """Materialize a ``makearray`` in one pass per region (no per-cell loop).
 
@@ -1054,8 +1055,8 @@ def _materialize_makearray_vectorized(
             for axis, (lo, hi) in enumerate(region):
                 lo_i, hi_i = int(lo), int(hi)
                 _bind_broadcast_range(
-                    ctx, out_syms[axis],
-                    np.arange(lo_i, hi_i + 1, dtype=float), axis, ndim)
+                    ctx, out_syms[axis], np.arange(lo_i, hi_i + 1, dtype=float), axis, ndim
+                )
                 slicer.append(slice(lo_i - 1, hi_i))
             out[tuple(slicer)] = eval_expr(val_expr, ctx)
     finally:
@@ -1064,8 +1065,11 @@ def _materialize_makearray_vectorized(
 
 
 def _materialize_map(
-    body: Expr, ctx: EvalContext, out_syms: List[str],
-    out_ranges_exp: List[List[int]], out_shape: Tuple[int, ...],
+    body: Expr,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
 ) -> Optional[np.ndarray]:
     """Vectorized fast path for a pure (non-reducing) arrayop map — the shape
     finite-difference / level-set stencils take.
@@ -1085,19 +1089,22 @@ def _materialize_map(
     if not out_syms or not out_shape:
         return None
     try:
-        if (isinstance(body, ExprNode) and body.op == "index" and body.args
-                and isinstance(body.args[0], ExprNode)
-                and body.args[0].op == "makearray"
-                and list(body.args[1:]) == list(out_syms)):
-            return _materialize_makearray_vectorized(
-                body.args[0], ctx, out_syms, out_shape)
+        if (
+            isinstance(body, ExprNode)
+            and body.op == "index"
+            and body.args
+            and isinstance(body.args[0], ExprNode)
+            and body.args[0].op == "makearray"
+            and list(body.args[1:]) == list(out_syms)
+        ):
+            return _materialize_makearray_vectorized(body.args[0], ctx, out_syms, out_shape)
 
         prev = dict(ctx.locals)
         try:
             for axis, s in enumerate(out_syms):
                 _bind_broadcast_range(
-                    ctx, s, np.asarray(out_ranges_exp[axis], dtype=float),
-                    axis, len(out_syms))
+                    ctx, s, np.asarray(out_ranges_exp[axis], dtype=float), axis, len(out_syms)
+                )
             val = eval_expr(body, ctx)
         finally:
             ctx.locals = prev
@@ -1139,9 +1146,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
     # pass through unchanged, so existing arrayop fixtures are byte-for-byte
     # identical; ragged sets become per-parent dynamic bounds.
-    resolved: Dict[str, Any] = {
-        s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges
-    }
+    resolved: Dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
 
     from .flatten import _expand_range  # local import to avoid cycle
 
@@ -1174,14 +1179,30 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 "sets (RFC semiring-faq-unified-ir §5.3)"
             )
         return _eval_arrayop_joined(
-            expr, ctx, out_syms, out_ranges_exp, out_shape,
-            reduce_syms, resolved, raw_ranges, reducer, empty_zero, filter_expr,
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
         )
 
     if ragged_reduce:
         return _eval_arrayop_ragged(
-            expr, ctx, out_syms, out_ranges_exp, out_shape,
-            reduce_syms, resolved, reducer, empty_zero,
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
         )
 
     red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
@@ -1231,8 +1252,13 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 ctx.locals = prev
         else:
             out[multi_idx] = _reduce_over(
-                expr.expr, ctx, local_binding, reduce_syms, cartesian_red,
-                reducer, empty_zero,
+                expr.expr,
+                ctx,
+                local_binding,
+                reduce_syms,
+                cartesian_red,
+                reducer,
+                empty_zero,
             )
     return out
 
@@ -1302,8 +1328,13 @@ def _eval_arrayop_ragged(
                 red_ranges.append(_expand_range(rs))
         cartesian_red = _cartesian(red_ranges)
         out[multi_idx] = _reduce_over(
-            expr.expr, ctx, local_binding, reduce_syms, cartesian_red,
-            reducer, empty_zero,
+            expr.expr,
+            ctx,
+            local_binding,
+            reduce_syms,
+            cartesian_red,
+            reducer,
+            empty_zero,
         )
     return out
 
@@ -1351,8 +1382,7 @@ def _reduce_step(op: str, acc: Optional[float], val: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _join_sym_for_key(key: str, raw_ranges: Dict[str, Any],
-                      sym_to_set: Dict[str, str]) -> str:
+def _join_sym_for_key(key: str, raw_ranges: Dict[str, Any], sym_to_set: Dict[str, str]) -> str:
     """Resolve a join-key name to the range symbol it denotes.
 
     A key is either a declared range symbol directly, or the name of an index
@@ -1408,8 +1438,9 @@ def _validated_key_member(m: Any, set_name: str) -> Any:
     return m
 
 
-def _key_member_values(sym: str, raw_ranges: Dict[str, Any],
-                       positions: List[int], ctx: EvalContext) -> List[Any]:
+def _key_member_values(
+    sym: str, raw_ranges: Dict[str, Any], positions: List[int], ctx: EvalContext
+) -> List[Any]:
     """Key-column values for ``sym`` at each 1-based ``positions`` entry.
 
     A categorical range yields its declared members (validated as exact-equality
@@ -1464,9 +1495,12 @@ def _encode_join_keys(vals_a: List[Any], vals_b: List[Any]) -> Tuple[List[int], 
     return codes(vals_a), codes(vals_b)
 
 
-def _resolve_join(expr: ExprNode, raw_ranges: Dict[str, Any],
-                  sym_positions: Dict[str, List[int]],
-                  ctx: EvalContext) -> List[Tuple[str, str, Dict[int, int], Dict[int, int]]]:
+def _resolve_join(
+    expr: ExprNode,
+    raw_ranges: Dict[str, Any],
+    sym_positions: Dict[str, List[int]],
+    ctx: EvalContext,
+) -> List[Tuple[str, str, Dict[int, int], Dict[int, int]]]:
     """Resolve every join clause into coded key-pair gates (RFC §5.3).
 
     Returns a list of ``(symL, symR, codesL, codesR)`` where ``codesX`` maps a
@@ -1476,7 +1510,8 @@ def _resolve_join(expr: ExprNode, raw_ranges: Dict[str, Any],
     """
     clauses = getattr(expr, "join", None) or []
     sym_to_set = {
-        s: spec["from"] for s, spec in raw_ranges.items()
+        s: spec["from"]
+        for s, spec in raw_ranges.items()
         if isinstance(spec, dict) and "from" in spec
     }
     gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]] = []
@@ -1490,8 +1525,7 @@ def _resolve_join(expr: ExprNode, raw_ranges: Dict[str, Any],
         for pair in on:
             if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
                 raise NumpyInterpreterError(
-                    f"join 'on' entry {pair!r} must be a [left, right] key-column "
-                    f"pair (RFC §5.3)"
+                    f"join 'on' entry {pair!r} must be a [left, right] key-column pair (RFC §5.3)"
                 )
             sym_l, vals_l = _resolve_join_key_column(
                 pair[0], raw_ranges, sym_to_set, sym_positions, ctx
@@ -1500,11 +1534,14 @@ def _resolve_join(expr: ExprNode, raw_ranges: Dict[str, Any],
                 pair[1], raw_ranges, sym_to_set, sym_positions, ctx
             )
             codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
-            gates.append((
-                sym_l, sym_r,
-                dict(zip(sym_positions[sym_l], codes_l)),
-                dict(zip(sym_positions[sym_r], codes_r)),
-            ))
+            gates.append(
+                (
+                    sym_l,
+                    sym_r,
+                    dict(zip(sym_positions[sym_l], codes_l)),
+                    dict(zip(sym_positions[sym_r], codes_r)),
+                )
+            )
     return gates
 
 
@@ -1544,9 +1581,9 @@ def _resolve_join_key_column(
         key = buf_key
         set_name = ctx.join_key_index_sets.get(key)
         candidates = [
-            s for s in sym_positions
-            if isinstance(raw_ranges.get(s), dict)
-            and raw_ranges[s].get("from") == set_name
+            s
+            for s in sym_positions
+            if isinstance(raw_ranges.get(s), dict) and raw_ranges[s].get("from") == set_name
         ]
         if len(candidates) != 1:
             raise NumpyInterpreterError(
@@ -1567,8 +1604,9 @@ def _resolve_join_key_column(
     return sym, _key_member_values(sym, raw_ranges, sym_positions[sym], ctx)
 
 
-def _join_admits(gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]],
-                 binding: Dict[str, int]) -> bool:
+def _join_admits(
+    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]], binding: Dict[str, int]
+) -> bool:
     """True iff every join pair's key columns are equal under ``binding``."""
     for sym_l, sym_r, codes_l, codes_r in gates:
         if codes_l[binding[sym_l]] != codes_r[binding[sym_r]]:
@@ -1626,8 +1664,15 @@ def _eval_arrayop_joined(
         for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
             local_binding[s] = r[pos]
         out[multi_idx] = _reduce_over_gated(
-            expr.expr, ctx, local_binding, reduce_syms, cartesian_red,
-            reducer, empty_zero, gates, filter_expr,
+            expr.expr,
+            ctx,
+            local_binding,
+            reduce_syms,
+            cartesian_red,
+            reducer,
+            empty_zero,
+            gates,
+            filter_expr,
         )
     return out
 
@@ -1702,9 +1747,7 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     if expr.output_idx:
         out_syms = [s for s in expr.output_idx if isinstance(s, str)]
         if len(out_syms) == ndim:
-            return _materialize_makearray_vectorized(
-                expr, ctx, out_syms, tuple(shape)
-            )
+            return _materialize_makearray_vectorized(expr, ctx, out_syms, tuple(shape))
 
     out = np.zeros(tuple(shape), dtype=float)
     for region, value_expr in zip(regions, values):
@@ -1785,9 +1828,7 @@ def _eval_concat(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     return np.concatenate(arrs, axis=axis)
 
 
-def fold_constant_expr(
-    expr: Expr, bindings: Optional[Dict[str, float]] = None
-) -> float:
+def fold_constant_expr(expr: Expr, bindings: Optional[Dict[str, float]] = None) -> float:
     """Evaluate a scalar AST expression with optional named scalar bindings.
 
     Wraps :func:`eval_expr` with an empty-state ``EvalContext`` so callers can

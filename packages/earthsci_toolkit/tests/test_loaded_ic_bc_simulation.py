@@ -79,8 +79,7 @@ def _resolve_tol(
             continue
         rel = cand.get("rel")
         abs_ = cand.get("abs")
-        return (float(rel) if rel is not None else 0.0,
-                float(abs_) if abs_ is not None else 0.0)
+        return (float(rel) if rel is not None else 0.0, float(abs_) if abs_ is not None else 0.0)
     return (1e-6, 0.0)
 
 
@@ -132,9 +131,7 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
             # element is namespaced under the Chemistry reaction system.
             local = a["variable"]
             key = f"Chemistry.{local}"
-            assert key in result.vars, (
-                f"element {key!r} not in result vars ({result.vars})"
-            )
+            assert key in result.vars, f"element {key!r} not in result vars ({result.vars})"
             idx = result.vars.index(key)
             t_eval = float(a["time"])
             expected = float(a["expected"])

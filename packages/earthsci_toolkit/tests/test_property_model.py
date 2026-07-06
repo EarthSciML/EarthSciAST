@@ -33,7 +33,7 @@ import copy
 import json
 import math
 from collections import OrderedDict
-from typing import List, Optional
+from typing import List
 
 import pytest
 
@@ -65,9 +65,7 @@ from earthsci_toolkit.simulation import simulate
 # Identifier strategy for local variable names. We exclude ``t`` (reserved as
 # the independent variable) and keep names short so they stay readable in any
 # failing Hypothesis example.
-_ident = st.from_regex(r"\A[a-z][a-z0-9]{0,3}\Z", fullmatch=True).filter(
-    lambda s: s != "t"
-)
+_ident = st.from_regex(r"\A[a-z][a-z0-9]{0,3}\Z", fullmatch=True).filter(lambda s: s != "t")
 
 # Model names use a single capital-prefixed identifier. Kept separate from the
 # variable space so we never accidentally alias a variable and its parent model.
@@ -78,8 +76,11 @@ _model_name = st.from_regex(r"\A[A-Z][a-z]{1,4}\Z", fullmatch=True)
 # parse/serialize round-trips, but larger magnitudes invite overflow once the
 # expression is fed to a stiff solver.
 _literal_float = st.floats(
-    min_value=-4.0, max_value=4.0,
-    allow_nan=False, allow_infinity=False, width=64,
+    min_value=-4.0,
+    max_value=4.0,
+    allow_nan=False,
+    allow_infinity=False,
+    width=64,
 )
 _literal_int = st.integers(min_value=-4, max_value=4)
 _literal = st.one_of(_literal_int, _literal_float)
@@ -114,17 +115,11 @@ def _safe_rhs_strategy(names: List[str]) -> st.SearchStrategy:
 
     def _extend(child: st.SearchStrategy) -> st.SearchStrategy:
         return st.one_of(
-            st.lists(child, min_size=2, max_size=3).map(
-                lambda args: ExprNode(op="+", args=args)
-            ),
-            st.lists(child, min_size=2, max_size=3).map(
-                lambda args: ExprNode(op="*", args=args)
-            ),
+            st.lists(child, min_size=2, max_size=3).map(lambda args: ExprNode(op="+", args=args)),
+            st.lists(child, min_size=2, max_size=3).map(lambda args: ExprNode(op="*", args=args)),
             # unary and binary minus
             child.map(lambda a: ExprNode(op="-", args=[a])),
-            st.tuples(child, child).map(
-                lambda ab: ExprNode(op="-", args=list(ab))
-            ),
+            st.tuples(child, child).map(lambda ab: ExprNode(op="-", args=list(ab))),
             # globally bounded transcendentals
             child.map(lambda a: ExprNode(op="sin", args=[a])),
             child.map(lambda a: ExprNode(op="cos", args=[a])),
@@ -152,8 +147,7 @@ def _scalar_model_file(draw) -> EsmFile:
     # Draw names with uniqueness to avoid collisions in the model's variable
     # dictionary.
     all_names = draw(
-        st.lists(_ident, min_size=n_states + n_params,
-                 max_size=n_states + n_params, unique=True)
+        st.lists(_ident, min_size=n_states + n_params, max_size=n_states + n_params, unique=True)
     )
     state_names = all_names[:n_states]
     param_names = all_names[n_states:]
@@ -162,28 +156,40 @@ def _scalar_model_file(draw) -> EsmFile:
     for name in state_names:
         variables[name] = ModelVariable(
             type="state",
-            default=draw(st.floats(
-                min_value=0.1, max_value=2.0,
-                allow_nan=False, allow_infinity=False, width=64,
-            )),
+            default=draw(
+                st.floats(
+                    min_value=0.1,
+                    max_value=2.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                    width=64,
+                )
+            ),
         )
     for name in param_names:
         variables[name] = ModelVariable(
             type="parameter",
-            default=draw(st.floats(
-                min_value=-1.0, max_value=1.0,
-                allow_nan=False, allow_infinity=False, width=64,
-            )),
+            default=draw(
+                st.floats(
+                    min_value=-1.0,
+                    max_value=1.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                    width=64,
+                )
+            ),
         )
 
     rhs_strategy = _safe_rhs_strategy(list(variables.keys()))
     equations: List[Equation] = []
     for sname in state_names:
         rhs = draw(rhs_strategy)
-        equations.append(Equation(
-            lhs=ExprNode(op="D", args=[sname], wrt="t"),
-            rhs=rhs,
-        ))
+        equations.append(
+            Equation(
+                lhs=ExprNode(op="D", args=[sname], wrt="t"),
+                rhs=rhs,
+            )
+        )
 
     model_name = draw(_model_name)
     model = Model(name=model_name, variables=dict(variables), equations=equations)
@@ -207,6 +213,7 @@ def _flat_signature(flat: FlattenedSystem) -> dict:
     dicts of type labels (values are metadata that we don't want to enforce
     here — names + types + equations are the structural invariant).
     """
+
     def _eqn_sig(eq) -> dict:
         return {
             "lhs": _serialize_expression(eq.lhs),
@@ -248,7 +255,7 @@ def _strip_namespace(expr: Expr, prefix: str) -> Expr:
     if expr is None or _is_number(expr):
         return expr
     if isinstance(expr, str):
-        return expr[len(prefix):] if expr.startswith(prefix) else expr
+        return expr[len(prefix) :] if expr.startswith(prefix) else expr
     if isinstance(expr, ExprNode):
         return ExprNode(
             op=expr.op,
@@ -262,7 +269,8 @@ def _strip_namespace(expr: Expr, prefix: str) -> Expr:
             regions=expr.regions,
             values=(
                 [_strip_namespace(v, prefix) for v in expr.values]
-                if expr.values is not None else None
+                if expr.values is not None
+                else None
             ),
             shape=expr.shape,
             perm=expr.perm,
@@ -292,7 +300,7 @@ def _flat_to_esm(flat: FlattenedSystem) -> EsmFile:
 
     def _collect(name: str, fv, vtype: str) -> None:
         sys = fv.source_system or name.split(".", 1)[0]
-        local = name[len(sys) + 1:] if name.startswith(sys + ".") else name
+        local = name[len(sys) + 1 :] if name.startswith(sys + ".") else name
         systems_vars.setdefault(sys, OrderedDict())[local] = ModelVariable(
             type=vtype,
             units=fv.units,
@@ -419,8 +427,7 @@ def test_simulate_matches_simulate_via_flatten(esm_file: EsmFile) -> None:
     }
 
     via_file = simulate(esm_file, tspan=tspan, initial_conditions=initial, method="RK45")
-    via_flat = simulate(flatten(esm_file), tspan=tspan,
-                         initial_conditions=initial, method="RK45")
+    via_flat = simulate(flatten(esm_file), tspan=tspan, initial_conditions=initial, method="RK45")
 
     # Both paths must agree on success. If simulate() fails on one side it
     # must fail on the other — divergent success would be a real bug.
@@ -499,10 +506,12 @@ def test_simulate_matches_simulate_via_flatten_linear_decay() -> None:
         models={"Decay": model},
     )
 
-    via_file = simulate(esm_file, tspan=(0.0, 2.0),
-                        initial_conditions={"Decay.x": 1.0}, method="RK45")
-    via_flat = simulate(flatten(esm_file), tspan=(0.0, 2.0),
-                         initial_conditions={"Decay.x": 1.0}, method="RK45")
+    via_file = simulate(
+        esm_file, tspan=(0.0, 2.0), initial_conditions={"Decay.x": 1.0}, method="RK45"
+    )
+    via_flat = simulate(
+        flatten(esm_file), tspan=(0.0, 2.0), initial_conditions={"Decay.x": 1.0}, method="RK45"
+    )
 
     assert via_file.success and via_flat.success
     idx = via_file.vars.index("Decay.x")

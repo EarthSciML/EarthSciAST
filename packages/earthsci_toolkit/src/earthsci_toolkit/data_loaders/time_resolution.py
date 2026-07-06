@@ -62,15 +62,8 @@ def parse_iso_duration(duration: str) -> Duration:
     minutes = int(m.group("minutes") or 0)
     seconds = float(m.group("seconds") or 0.0)
     total_seconds = hours * 3600 + minutes * 60 + seconds
-    if (
-        years == 0
-        and months == 0
-        and days == 0
-        and total_seconds == 0.0
-    ):
-        raise TimeResolutionError(
-            f"duration {duration!r} has no nonzero components"
-        )
+    if years == 0 and months == 0 and days == 0 and total_seconds == 0.0:
+        raise TimeResolutionError(f"duration {duration!r} has no nonzero components")
     return Duration(years=years, months=months, days=days, seconds=total_seconds)
 
 
@@ -94,13 +87,9 @@ def _coerce_datetime(value: Union[_dt.datetime, _dt.date, str]) -> _dt.datetime:
         try:
             dt = _dt.datetime.fromisoformat(value)
         except ValueError as exc:
-            raise TimeResolutionError(
-                f"cannot parse {value!r} as ISO-8601 datetime"
-            ) from exc
+            raise TimeResolutionError(f"cannot parse {value!r} as ISO-8601 datetime") from exc
     else:
-        raise TimeResolutionError(
-            f"expected datetime/date/str, got {type(value).__name__}"
-        )
+        raise TimeResolutionError(f"expected datetime/date/str, got {type(value).__name__}")
     if dt.tzinfo is not None:
         dt = dt.astimezone(_dt.timezone.utc).replace(tzinfo=None)
     return dt
@@ -136,9 +125,7 @@ def add_duration(start: _dt.datetime, duration: Duration) -> _dt.datetime:
     return out
 
 
-def _snap_to_period(
-    target: _dt.datetime, anchor: _dt.datetime, period: Duration
-) -> _dt.datetime:
+def _snap_to_period(target: _dt.datetime, anchor: _dt.datetime, period: Duration) -> _dt.datetime:
     """Find the greatest anchor+k*period <= target, for ``period > 0``."""
     if anchor > target:
         raise TimeResolutionError(

@@ -47,9 +47,7 @@ def _load_manifest():
     [f["id"] for f in _load_manifest()["fixtures"]],
 )
 def test_canonical_conformance(fixture_id):
-    fixture_meta = next(
-        f for f in _load_manifest()["fixtures"] if f["id"] == fixture_id
-    )
+    fixture_meta = next(f for f in _load_manifest()["fixtures"] if f["id"] == fixture_id)
     fixture_path = FIXTURES_DIR / fixture_meta["path"]
     with fixture_path.open() as fh:
         fixture = json.load(fh)

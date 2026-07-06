@@ -8,11 +8,18 @@ This module provides functions to:
 """
 
 import numpy as np
-import sympy as sp
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List
 
-from .esm_types import ReactionSystem, Reaction, Species, Model, ModelVariable, Equation, Expr, ExprNode
-from .expression import to_sympy, from_sympy
+from .esm_types import (
+    ReactionSystem,
+    Reaction,
+    Species,
+    Model,
+    ModelVariable,
+    Equation,
+    Expr,
+    ExprNode,
+)
 
 
 def lower_reactions_to_equations(
@@ -119,14 +126,14 @@ def derive_odes(system: ReactionSystem) -> Model:
 
     for species in system.species:
         variables[species.name] = ModelVariable(
-            type='state',
+            type="state",
             units=species.units,
             description=f"Concentration of {species.name}",
         )
 
     for param in system.parameters:
         variables[param.name] = ModelVariable(
-            type='parameter',
+            type="parameter",
             units=param.units,
             description=param.description,
             default=param.value if isinstance(param.value, (int, float)) else None,
@@ -139,10 +146,7 @@ def derive_odes(system: ReactionSystem) -> Model:
         name=f"{system.name}_odes",
         variables=variables,
         equations=equations,
-        metadata={
-            "derived_from": system.name,
-            "generation_method": "mass_action_kinetics"
-        }
+        metadata={"derived_from": system.name, "generation_method": "mass_action_kinetics"},
     )
 
 
@@ -186,7 +190,7 @@ def stoichiometric_matrix(system: ReactionSystem) -> np.ndarray:
     """
     return _build_stoich_matrix(
         system,
-        lambda r, sp: r.products.get(sp, 0) - r.reactants.get(sp, 0),
+        lambda r, s: r.products.get(s, 0) - r.reactants.get(s, 0),
     )
 
 
@@ -205,7 +209,7 @@ def substrate_matrix(system: ReactionSystem) -> np.ndarray:
         np.ndarray: Substrate matrix with shape (n_species, n_reactions)
                    where S[i,j] = reactant coefficient of species i in reaction j
     """
-    return _build_stoich_matrix(system, lambda r, sp: r.reactants.get(sp, 0))
+    return _build_stoich_matrix(system, lambda r, s: r.reactants.get(s, 0))
 
 
 def product_matrix(system: ReactionSystem) -> np.ndarray:
@@ -223,10 +227,11 @@ def product_matrix(system: ReactionSystem) -> np.ndarray:
         np.ndarray: Product matrix with shape (n_species, n_reactions)
                    where P[i,j] = product coefficient of species i in reaction j
     """
-    return _build_stoich_matrix(system, lambda r, sp: r.products.get(sp, 0))
+    return _build_stoich_matrix(system, lambda r, s: r.products.get(s, 0))
 
 
 # Helper functions for expression manipulation
+
 
 def _multiply_expressions(expr1: Expr, expr2: Expr) -> Expr:
     """Multiply two expressions."""

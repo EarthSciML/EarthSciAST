@@ -60,24 +60,17 @@ class TestRequiredFieldValidation:
         schema = _get_schema()
 
         # Missing esm field
-        invalid_data = {
-            "metadata": {"name": "Test"}
-        }
+        invalid_data = {"metadata": {"name": "Test"}}
         with pytest.raises(ValidationError, match="'esm' is a required property"):
             jsonschema.validate(invalid_data, schema)
 
         # Missing metadata field
-        invalid_data = {
-            "esm": "0.1.0"
-        }
+        invalid_data = {"esm": "0.1.0"}
         with pytest.raises(ValidationError, match="'metadata' is a required property"):
             jsonschema.validate(invalid_data, schema)
 
         # Missing both models and reaction_systems (violates anyOf)
-        invalid_data = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test"}
-        }
+        invalid_data = {"esm": "0.1.0", "metadata": {"name": "Test"}}
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
 
@@ -89,7 +82,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="'name' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -104,11 +97,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "equations": []
-                }
-            }
+            "models": {"test_model": {"equations": []}},
         }
         _assert_rejected_with(schema, invalid_data, "'variables' is a required property")
 
@@ -116,11 +105,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "variables": {}
-                }
-            }
+            "models": {"test_model": {"variables": {}}},
         }
         _assert_rejected_with(schema, invalid_data, "'equations' is a required property")
 
@@ -132,12 +117,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "reaction_systems": {
-                "test_rs": {
-                    "parameters": {},
-                    "reactions": []
-                }
-            }
+            "reaction_systems": {"test_rs": {"parameters": {}, "reactions": []}},
         }
         with pytest.raises(ValidationError, match="'species' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -146,12 +126,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "reaction_systems": {
-                "test_rs": {
-                    "species": {},
-                    "reactions": []
-                }
-            }
+            "reaction_systems": {"test_rs": {"species": {}, "reactions": []}},
         }
         with pytest.raises(ValidationError, match="'parameters' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -160,12 +135,7 @@ class TestRequiredFieldValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "reaction_systems": {
-                "test_rs": {
-                    "species": {},
-                    "parameters": {}
-                }
-            }
+            "reaction_systems": {"test_rs": {"species": {}, "parameters": {}}},
         }
         with pytest.raises(ValidationError, match="'reactions' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -179,11 +149,8 @@ class TestRequiredFieldValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {
-                "test_model": {
-                    "variables": {"x": {"type": "state"}},
-                    "equations": [{"rhs": 1}]
-                }
-            }
+                "test_model": {"variables": {"x": {"type": "state"}}, "equations": [{"rhs": 1}]}
+            },
         }
         with pytest.raises(ValidationError, match="'lhs' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -193,11 +160,8 @@ class TestRequiredFieldValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {
-                "test_model": {
-                    "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x"}]
-                }
-            }
+                "test_model": {"variables": {"x": {"type": "state"}}, "equations": [{"lhs": "x"}]}
+            },
         }
         with pytest.raises(ValidationError, match="'rhs' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -214,7 +178,7 @@ class TestTypeValidation:
         invalid_data = {
             "esm": 0.1,
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="0.1 is not of type 'string'"):
             jsonschema.validate(invalid_data, schema)
@@ -223,17 +187,13 @@ class TestTypeValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": "not an object",
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="'not an object' is not of type 'object'"):
             jsonschema.validate(invalid_data, schema)
 
         # models should be object, not array
-        invalid_data = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test"},
-            "models": []
-        }
+        invalid_data = {"esm": "0.1.0", "metadata": {"name": "Test"}, "models": []}
         with pytest.raises(ValidationError, match="\\[\\] is not of type 'object'"):
             jsonschema.validate(invalid_data, schema)
 
@@ -248,9 +208,9 @@ class TestTypeValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": []}]  # Array is invalid
+                    "equations": [{"lhs": "x", "rhs": []}],  # Array is invalid
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
@@ -265,12 +225,7 @@ class TestTypeValidation:
         invalid_data = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "variables": {"x": {"type": 123}},
-                    "equations": []
-                }
-            }
+            "models": {"test_model": {"variables": {"x": {"type": 123}}, "equations": []}},
         }
         _assert_rejected_with(schema, invalid_data, "123 is not of type 'string'")
 
@@ -281,9 +236,9 @@ class TestTypeValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state", "units": True}},
-                    "equations": []
+                    "equations": [],
                 }
-            }
+            },
         }
         _assert_rejected_with(schema, invalid_data, "True is not of type 'string'")
 
@@ -294,9 +249,9 @@ class TestTypeValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state", "default": "not a number"}},
-                    "equations": []
+                    "equations": [],
                 }
-            }
+            },
         }
         _assert_rejected_with(schema, invalid_data, "'not a number' is not of type 'number'")
 
@@ -312,14 +267,11 @@ class TestTypeValidation:
                 "test_rs": {
                     "species": {"A": {}},
                     "parameters": {},
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": "invalid",
-                        "products": None,
-                        "rate": "k1"
-                    }]
+                    "reactions": [
+                        {"id": "R1", "substrates": "invalid", "products": None, "rate": "k1"}
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
@@ -336,11 +288,8 @@ class TestEnumValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {
-                "test_model": {
-                    "variables": {"x": {"type": "invalid_type"}},
-                    "equations": []
-                }
-            }
+                "test_model": {"variables": {"x": {"type": "invalid_type"}}, "equations": []}
+            },
         }
         with pytest.raises(ValidationError, match="'invalid_type' is not one of"):
             jsonschema.validate(invalid_data, schema)
@@ -363,9 +312,9 @@ class TestEnumValidation:
                 "models": {
                     "test_model": {
                         "variables": {"x": {"type": "state"}},
-                        "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1, 2]}}]
+                        "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1, 2]}}],
                     }
-                }
+                },
             }
 
         # Malformed (embedded space) → rejected by the `op` pattern.
@@ -383,10 +332,7 @@ class TestEnumValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "coupling": [{
-                "type": "invalid_coupling_type",
-                "systems": ["sys1", "sys2"]
-            }]
+            "coupling": [{"type": "invalid_coupling_type", "systems": ["sys1", "sys2"]}],
         }
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
@@ -403,9 +349,9 @@ class TestEnumValidation:
                 "test_loader": {
                     "kind": "invalid_kind",
                     "source": {"url_template": "file:///data/test.nc"},
-                    "variables": {"x": {"file_variable": "x", "units": "1"}}
+                    "variables": {"x": {"file_variable": "x", "units": "1"}},
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="'invalid_kind' is not one of"):
             jsonschema.validate(invalid_data, schema)
@@ -422,7 +368,7 @@ class TestPatternValidation:
         invalid_data = {
             "esm": "0.1",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="does not match"):
             jsonschema.validate(invalid_data, schema)
@@ -431,7 +377,7 @@ class TestPatternValidation:
         invalid_data = {
             "esm": "v0.1.0",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="does not match"):
             jsonschema.validate(invalid_data, schema)
@@ -440,7 +386,7 @@ class TestPatternValidation:
         invalid_data = {
             "esm": "0.1.0-beta",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="does not match"):
             jsonschema.validate(invalid_data, schema)
@@ -458,17 +404,13 @@ class TestFormatValidation:
         # cannot reject bad timestamps. Skip rather than silently pass.
         if format_checker.conforms("invalid-datetime", "date-time"):
             pytest.skip(
-                "jsonschema 'date-time' format assertion unavailable "
-                "(install rfc3339-validator)"
+                "jsonschema 'date-time' format assertion unavailable (install rfc3339-validator)"
             )
 
         invalid_data = {
             "esm": "0.1.0",
-            "metadata": {
-                "name": "Test",
-                "created": "invalid-datetime"
-            },
-            "models": {"test": {"variables": {}, "equations": []}}
+            "metadata": {"name": "Test", "created": "invalid-datetime"},
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="date-time|format"):
             jsonschema.validate(invalid_data, schema, format_checker=format_checker)
@@ -478,9 +420,9 @@ class TestFormatValidation:
             "esm": "0.1.0",
             "metadata": {
                 "name": "Test",
-                "modified": "2023-13-01T25:00:00Z"  # Invalid month and hour
+                "modified": "2023-13-01T25:00:00Z",  # Invalid month and hour
             },
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="date-time|format"):
             jsonschema.validate(invalid_data, schema, format_checker=format_checker)
@@ -492,19 +434,12 @@ class TestFormatValidation:
         # `uri` format assertion needs an optional backend (e.g. rfc3987);
         # without it FormatChecker is a no-op and cannot reject bad URIs.
         if format_checker.conforms("not-a-valid-uri", "uri"):
-            pytest.skip(
-                "jsonschema 'uri' format assertion unavailable (install rfc3987)"
-            )
+            pytest.skip("jsonschema 'uri' format assertion unavailable (install rfc3987)")
 
         invalid_data = {
             "esm": "0.1.0",
-            "metadata": {
-                "name": "Test",
-                "references": [{
-                    "url": "not-a-valid-uri"
-                }]
-            },
-            "models": {"test": {"variables": {}, "equations": []}}
+            "metadata": {"name": "Test", "references": [{"url": "not-a-valid-uri"}]},
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="uri|format"):
             jsonschema.validate(invalid_data, schema, format_checker=format_checker)
@@ -525,12 +460,14 @@ class TestConstraintValidation:
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
                     "equations": [],
-                    "continuous_events": [{
-                        "conditions": [],  # Empty array violates minItems: 1
-                        "affects": []
-                    }]
+                    "continuous_events": [
+                        {
+                            "conditions": [],  # Empty array violates minItems: 1
+                            "affects": [],
+                        }
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="should be non-empty|is too short"):
             jsonschema.validate(invalid_data, schema)
@@ -547,17 +484,21 @@ class TestConstraintValidation:
                 "test_rs": {
                     "species": {"A": {}},
                     "parameters": {},
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": [{
-                            "species": "A",
-                            "stoichiometry": 0  # Violates minimum: 1
-                        }],
-                        "products": None,
-                        "rate": "k1"
-                    }]
+                    "reactions": [
+                        {
+                            "id": "R1",
+                            "substrates": [
+                                {
+                                    "species": "A",
+                                    "stoichiometry": 0,  # Violates minimum: 1
+                                }
+                            ],
+                            "products": None,
+                            "rate": "k1",
+                        }
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(
             ValidationError,
@@ -573,17 +514,21 @@ class TestConstraintValidation:
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
                     "equations": [],
-                    "discrete_events": [{
-                        "trigger": {
-                            "type": "periodic",
-                            "interval": 0  # Violates exclusiveMinimum: 0
-                        },
-                        "affects": []
-                    }]
+                    "discrete_events": [
+                        {
+                            "trigger": {
+                                "type": "periodic",
+                                "interval": 0,  # Violates exclusiveMinimum: 0
+                            },
+                            "affects": [],
+                        }
+                    ],
                 }
-            }
+            },
         }
-        with pytest.raises(ValidationError, match="is less than or equal to the minimum|not greater than"):
+        with pytest.raises(
+            ValidationError, match="is less than or equal to the minimum|not greater than"
+        ):
             jsonschema.validate(invalid_data, schema)
 
 
@@ -606,9 +551,9 @@ class TestConditionalValidation:
                             # Missing required "expression" field for observed type
                         }
                     },
-                    "equations": []
+                    "equations": [],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="'expression' is a required property"):
             jsonschema.validate(invalid_data, schema)
@@ -625,15 +570,14 @@ class TestConditionalValidation:
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
                     "equations": [],
-                    "discrete_events": [{
-                        "trigger": {
-                            "type": "condition",
-                            "expression": "x > 1"
+                    "discrete_events": [
+                        {
+                            "trigger": {"type": "condition", "expression": "x > 1"}
+                            # Missing both "affects" and "functional_affect"
                         }
-                        # Missing both "affects" and "functional_affect"
-                    }]
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
@@ -647,14 +591,19 @@ class TestConditionalValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "coupling": [{
-                "type": "event",
-                "event_type": "continuous",
-                "affects": []
-                # Missing required "conditions" for continuous events
-            }]
+            "coupling": [
+                {
+                    "type": "event",
+                    "event_type": "continuous",
+                    "affects": [],
+                    # Missing required "conditions" for continuous events
+                }
+            ],
         }
-        with pytest.raises(ValidationError, match="is not valid under any of the given schemas|'conditions' is a required property"):
+        with pytest.raises(
+            ValidationError,
+            match="is not valid under any of the given schemas|'conditions' is a required property",
+        ):
             jsonschema.validate(invalid_data, schema)
 
         # Discrete coupling event without trigger should fail
@@ -662,14 +611,19 @@ class TestConditionalValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "coupling": [{
-                "type": "event",
-                "event_type": "discrete",
-                "affects": []
-                # Missing required "trigger" for discrete events
-            }]
+            "coupling": [
+                {
+                    "type": "event",
+                    "event_type": "discrete",
+                    "affects": [],
+                    # Missing required "trigger" for discrete events
+                }
+            ],
         }
-        with pytest.raises(ValidationError, match="is not valid under any of the given schemas|'trigger' is a required property"):
+        with pytest.raises(
+            ValidationError,
+            match="is not valid under any of the given schemas|'trigger' is a required property",
+        ):
             jsonschema.validate(invalid_data, schema)
 
 
@@ -684,7 +638,7 @@ class TestAdditionalPropertiesValidation:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "unexpected_field": "should not be allowed"
+            "unexpected_field": "should not be allowed",
         }
         with pytest.raises(ValidationError, match="Additional properties are not allowed"):
             jsonschema.validate(invalid_data, schema)
@@ -699,15 +653,10 @@ class TestAdditionalPropertiesValidation:
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {
-                        "x": {
-                            "type": "state",
-                            "unexpected_field": "not allowed"
-                        }
-                    },
-                    "equations": []
+                    "variables": {"x": {"type": "state", "unexpected_field": "not allowed"}},
+                    "equations": [],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="Additional properties are not allowed"):
             jsonschema.validate(invalid_data, schema)
@@ -719,13 +668,9 @@ class TestAdditionalPropertiesValidation:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": 1,
-                        "unexpected_field": "not allowed"
-                    }]
+                    "equations": [{"lhs": "x", "rhs": 1, "unexpected_field": "not allowed"}],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="Additional properties are not allowed"):
             jsonschema.validate(invalid_data, schema)
@@ -745,21 +690,23 @@ class TestComplexValidationScenarios:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": {
-                            "op": "+",
-                            "args": [
-                                {
-                                    "op": "invalid nested op",  # Malformed (embedded space) — rejected by the op pattern
-                                    "args": ["y"]
-                                },
-                                1
-                            ]
+                    "equations": [
+                        {
+                            "lhs": "x",
+                            "rhs": {
+                                "op": "+",
+                                "args": [
+                                    {
+                                        "op": "invalid nested op",  # Malformed (embedded space) — rejected by the op pattern
+                                        "args": ["y"],
+                                    },
+                                    1,
+                                ],
+                            },
                         }
-                    }]
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="does not match"):
             jsonschema.validate(invalid_data, schema)
@@ -773,12 +720,17 @@ class TestComplexValidationScenarios:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "coupling": [{
-                "type": "operator_compose",
-                "systems": ["sys1"]  # Should have exactly 2 systems (minItems: 2, maxItems: 2)
-            }]
+            "coupling": [
+                {
+                    "type": "operator_compose",
+                    "systems": ["sys1"],  # Should have exactly 2 systems (minItems: 2, maxItems: 2)
+                }
+            ],
         }
-        with pytest.raises(ValidationError, match="is not valid under any of the given schemas|should be non-empty|is too short|should not be longer than|is too long"):
+        with pytest.raises(
+            ValidationError,
+            match="is not valid under any of the given schemas|should be non-empty|is too short|should not be longer than|is too long",
+        ):
             jsonschema.validate(invalid_data, schema)
 
         # couple missing required connector
@@ -786,13 +738,18 @@ class TestComplexValidationScenarios:
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "coupling": [{
-                "type": "couple",
-                "systems": ["sys1", "sys2"]
-                # Missing required "connector" field
-            }]
+            "coupling": [
+                {
+                    "type": "couple",
+                    "systems": ["sys1", "sys2"],
+                    # Missing required "connector" field
+                }
+            ],
         }
-        with pytest.raises(ValidationError, match="is not valid under any of the given schemas|'connector' is a required property"):
+        with pytest.raises(
+            ValidationError,
+            match="is not valid under any of the given schemas|'connector' is a required property",
+        ):
             jsonschema.validate(invalid_data, schema)
 
     def test_reaction_system_complex_validation_errors(self):
@@ -807,12 +764,13 @@ class TestComplexValidationScenarios:
                 "test_rs": {
                     "species": {"A": {}},
                     "parameters": {},
-                    "reactions": []  # Violates minItems: 1
+                    "reactions": [],  # Violates minItems: 1
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="should be non-empty|is too short"):
             jsonschema.validate(invalid_data, schema)
+
 
 class TestVersionConstraintValidation:
     """Test validation of version constraint violations."""
@@ -825,17 +783,18 @@ class TestVersionConstraintValidation:
         invalid_data = {
             "esm": "invalid",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="pattern"):
             jsonschema.validate(invalid_data, schema)
 
         # Incompatible major version - rejected by library
         from earthsci_toolkit.parse import UnsupportedVersionError, load
+
         invalid_data = {
             "esm": "1.0.0",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(UnsupportedVersionError):
             load(invalid_data)
@@ -856,15 +815,17 @@ class TestEdgeCaseValidation:
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
                     "equations": [],
-                    "discrete_events": [{
-                        "trigger": {
-                            "type": "preset_times",
-                            "times": []  # Empty array violates minItems: 1
-                        },
-                        "affects": []
-                    }]
+                    "discrete_events": [
+                        {
+                            "trigger": {
+                                "type": "preset_times",
+                                "times": [],  # Empty array violates minItems: 1
+                            },
+                            "affects": [],
+                        }
+                    ],
                 }
-            }
+            },
         }
         with pytest.raises(ValidationError, match="should be non-empty|is too short"):
             jsonschema.validate(invalid_data, schema)
@@ -877,7 +838,7 @@ class TestEdgeCaseValidation:
         invalid_data = {
             "esm": None,  # Should be string
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
         with pytest.raises(ValidationError, match="None is not of type 'string'"):
             jsonschema.validate(invalid_data, schema)
@@ -894,15 +855,17 @@ class TestEdgeCaseValidation:
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
                     "equations": [],
-                    "discrete_events": [{
-                        "trigger": {"type": "condition", "expression": "x > 1"},
-                        "functional_affect": {
-                            "handler_id": "test_handler"
-                            # Missing required "read_vars" and "read_params"
+                    "discrete_events": [
+                        {
+                            "trigger": {"type": "condition", "expression": "x > 1"},
+                            "functional_affect": {
+                                "handler_id": "test_handler"
+                                # Missing required "read_vars" and "read_params"
+                            },
                         }
-                    }]
+                    ],
                 }
-            }
+            },
         }
         # The concrete cause is nested under the top-level `models`
         # oneOf[Model, SubsystemRef] umbrella error.
@@ -925,10 +888,10 @@ class TestIntegrationValidationScenarios:
                 "invalid_rs": {
                     "species": "not an object",  # Wrong type
                     "parameters": [],  # Wrong type
-                    "reactions": "not an array"  # Wrong type
+                    "reactions": "not an array",  # Wrong type
                 }
             },
-            "unexpected_field": "not allowed"  # Additional property
+            "unexpected_field": "not allowed",  # Additional property
         }
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
@@ -946,11 +909,13 @@ class TestIntegrationValidationScenarios:
             load('{"wrong": "structure"}')
 
         # Test specific schema violations through the load function
-        invalid_esm_json = json.dumps({
-            "esm": "wrong-version",
-            "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
-        })
+        invalid_esm_json = json.dumps(
+            {
+                "esm": "wrong-version",
+                "metadata": {"name": "Test"},
+                "models": {"test": {"variables": {}, "equations": []}},
+            }
+        )
         with pytest.raises(SchemaValidationError):
             load(invalid_esm_json)
 
@@ -965,9 +930,9 @@ class TestIntegrationValidationScenarios:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": 1}]
+                    "equations": [{"lhs": "x", "rhs": 1}],
                 }
-            }
+            },
         }
         jsonschema.validate(valid_data, schema)  # Should not raise
 
@@ -979,14 +944,16 @@ class TestIntegrationValidationScenarios:
                 "test_rs": {
                     "species": {"A": {}},
                     "parameters": {},
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": None,
-                        "products": [{"species": "A", "stoichiometry": 1}],
-                        "rate": 1.0
-                    }]
+                    "reactions": [
+                        {
+                            "id": "R1",
+                            "substrates": None,
+                            "products": [{"species": "A", "stoichiometry": 1}],
+                            "rate": 1.0,
+                        }
+                    ],
                 }
-            }
+            },
         }
         jsonschema.validate(valid_data, schema)  # Should not raise
 
@@ -1003,10 +970,7 @@ class TestValidationPerformance:
         def create_nested_expr(depth):
             if depth == 0:
                 return "x"
-            return {
-                "op": "+",
-                "args": [create_nested_expr(depth - 1), 1]
-            }
+            return {"op": "+", "args": [create_nested_expr(depth - 1), 1]}
 
         valid_data = {
             "esm": "0.1.0",
@@ -1014,12 +978,14 @@ class TestValidationPerformance:
             "models": {
                 "test_model": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{
-                        "lhs": "x",
-                        "rhs": create_nested_expr(10)  # Deeply nested
-                    }]
+                    "equations": [
+                        {
+                            "lhs": "x",
+                            "rhs": create_nested_expr(10),  # Deeply nested
+                        }
+                    ],
                 }
-            }
+            },
         }
 
         # Should validate without issues
@@ -1034,12 +1000,14 @@ class TestValidationPerformance:
         parameters = {f"k{i}": {"default": 0.1} for i in range(20)}
         reactions = []
         for i in range(30):
-            reactions.append({
-                "id": f"R{i}",
-                "substrates": [{"species": f"S{i % 50}", "stoichiometry": 1}],
-                "products": [{"species": f"S{(i+1) % 50}", "stoichiometry": 1}],
-                "rate": f"k{i % 20}"
-            })
+            reactions.append(
+                {
+                    "id": f"R{i}",
+                    "substrates": [{"species": f"S{i % 50}", "stoichiometry": 1}],
+                    "products": [{"species": f"S{(i + 1) % 50}", "stoichiometry": 1}],
+                    "rate": f"k{i % 20}",
+                }
+            )
 
         valid_data = {
             "esm": "0.1.0",
@@ -1048,9 +1016,9 @@ class TestValidationPerformance:
                 "large_system": {
                     "species": species,
                     "parameters": parameters,
-                    "reactions": reactions
+                    "reactions": reactions,
                 }
-            }
+            },
         }
 
         # Should validate without issues

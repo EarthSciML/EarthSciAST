@@ -95,9 +95,7 @@ def _evaluate(expr: Any, bindings: Mapping[str, float]) -> float:
     raise TypeError(f"unsupported expression node: {type(expr).__name__}")
 
 
-def _resolve_tol(
-    model_tol: Any, test_tol: Any, assertion_tol: Any
-) -> Tuple[float, float]:
+def _resolve_tol(model_tol: Any, test_tol: Any, assertion_tol: Any) -> Tuple[float, float]:
     for cand in (assertion_tol, test_tol, model_tol):
         if cand is None:
             continue
@@ -137,7 +135,10 @@ def _collect_tests():
             for t in model.get("tests") or []:
                 cases.append(
                     pytest.param(
-                        fname, mname, model, t,
+                        fname,
+                        mname,
+                        model,
+                        t,
                         id=f"{fname}::{mname}::{t['id']}",
                     )
                 )

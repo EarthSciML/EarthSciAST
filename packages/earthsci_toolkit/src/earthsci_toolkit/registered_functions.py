@@ -95,20 +95,22 @@ class ClosedFunctionError(Exception):
 # ============================================================
 
 
-_CLOSED_FUNCTION_NAMES: frozenset = frozenset({
-    "datetime.year",
-    "datetime.month",
-    "datetime.day",
-    "datetime.hour",
-    "datetime.minute",
-    "datetime.second",
-    "datetime.day_of_year",
-    "datetime.julian_day",
-    "datetime.is_leap_year",
-    "interp.searchsorted",
-    "interp.linear",
-    "interp.bilinear",
-})
+_CLOSED_FUNCTION_NAMES: frozenset = frozenset(
+    {
+        "datetime.year",
+        "datetime.month",
+        "datetime.day",
+        "datetime.hour",
+        "datetime.minute",
+        "datetime.second",
+        "datetime.day_of_year",
+        "datetime.julian_day",
+        "datetime.is_leap_year",
+        "interp.searchsorted",
+        "interp.linear",
+        "interp.bilinear",
+    }
+)
 
 
 # Argument positions that MUST be inline `const` arrays (table / axis data) for
@@ -282,8 +284,7 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> Li
     if not isinstance(axis, (list, tuple)):
         raise ClosedFunctionError(
             CLOSED_FUNCTION_ARITY,
-            f"{name}: {axis_label} must be an inline `const` array (got "
-            f"{type(axis).__name__})",
+            f"{name}: {axis_label} must be an inline `const` array (got {type(axis).__name__})",
         )
     n = len(axis)
     if n < 2:
@@ -298,8 +299,7 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> Li
         if math.isnan(v):
             raise ClosedFunctionError(
                 INTERP_NAN_IN_AXIS,
-                f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes "
-                f"are forbidden",
+                f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
             )
         if i > 0 and v <= prev:
             raise ClosedFunctionError(
@@ -320,8 +320,7 @@ def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
             CLOSED_FUNCTION_ARITY,
-            f"{name}: table must be an inline `const` array (got "
-            f"{type(table).__name__})",
+            f"{name}: table must be an inline `const` array (got {type(table).__name__})",
         )
     axis_vals = _validate_interp_axis(name, axis, "axis")
     n = len(axis_vals)
@@ -369,8 +368,7 @@ def _interp_bilinear(
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
             CLOSED_FUNCTION_ARITY,
-            f"{name}: table must be an inline `const` 2-D array (got "
-            f"{type(table).__name__})",
+            f"{name}: table must be an inline `const` 2-D array (got {type(table).__name__})",
         )
     ax = _validate_interp_axis(name, axis_x, "axis_x")
     ay = _validate_interp_axis(name, axis_y, "axis_y")
@@ -385,14 +383,12 @@ def _interp_bilinear(
         if not isinstance(row, (list, tuple)):
             raise ClosedFunctionError(
                 INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} is not an array (got "
-                f"{type(row).__name__})",
+                f"{name}: table row {i + 1} is not an array (got {type(row).__name__})",
             )
         if len(row) != ny:
             raise ClosedFunctionError(
                 INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} has length {len(row)} != "
-                f"len(axis_y)={ny}",
+                f"{name}: table row {i + 1} has length {len(row)} != len(axis_y)={ny}",
             )
         table_rows.append([float(v) for v in row])
     if math.isnan(x) or math.isnan(y):
@@ -482,9 +478,7 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> Union[int, float
         return _interp_linear(name, args[0], args[1], float(args[2]))
     if name == "interp.bilinear":
         _expect_arity(name, args, 5)
-        return _interp_bilinear(
-            name, args[0], args[1], args[2], float(args[3]), float(args[4])
-        )
+        return _interp_bilinear(name, args[0], args[1], args[2], float(args[3]), float(args[4]))
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
     raise ClosedFunctionError(
         UNKNOWN_CLOSED_FUNCTION,
@@ -555,19 +549,23 @@ def _lower_model(model: Model, enums: Dict[str, Dict[str, int]]) -> None:
                 model.variables[vname] = replace(var, expression=new_expr)
     new_eqs: List[Equation] = []
     for eq in model.equations:
-        new_eqs.append(Equation(
-            lhs=_lower_expr(eq.lhs, enums),
-            rhs=_lower_expr(eq.rhs, enums),
-            _comment=eq._comment,
-        ))
+        new_eqs.append(
+            Equation(
+                lhs=_lower_expr(eq.lhs, enums),
+                rhs=_lower_expr(eq.rhs, enums),
+                _comment=eq._comment,
+            )
+        )
     model.equations[:] = new_eqs
     new_init: List[Equation] = []
     for eq in model.initialization_equations:
-        new_init.append(Equation(
-            lhs=_lower_expr(eq.lhs, enums),
-            rhs=_lower_expr(eq.rhs, enums),
-            _comment=eq._comment,
-        ))
+        new_init.append(
+            Equation(
+                lhs=_lower_expr(eq.lhs, enums),
+                rhs=_lower_expr(eq.rhs, enums),
+                _comment=eq._comment,
+            )
+        )
     model.initialization_equations[:] = new_init
     for sub in model.subsystems.values():
         # Data-loader subsystems carry no equations/enums to lower.
@@ -596,8 +594,7 @@ def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
         enum_name, symbol_name = node.args[0], node.args[1]
         if enum_name not in enums:
             raise ValueError(
-                f"{UNKNOWN_ENUM}: enum `{enum_name}` is not declared in the file's "
-                f"`enums` block"
+                f"{UNKNOWN_ENUM}: enum `{enum_name}` is not declared in the file's `enums` block"
             )
         mapping = enums[enum_name]
         if symbol_name not in mapping:
@@ -609,11 +606,7 @@ def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
     # Recurse — rebuild only if a child changed.
     new_args = [_lower_expr(a, enums) for a in node.args]
     body = _lower_expr(node.expr, enums) if node.expr is not None else None
-    new_values = (
-        [_lower_expr(v, enums) for v in node.values]
-        if node.values is not None
-        else None
-    )
+    new_values = [_lower_expr(v, enums) for v in node.values] if node.values is not None else None
     # Recurse into table_lookup.axes (per-axis input expression map).
     new_table_axes = (
         {k: _lower_expr(v, enums) for k, v in node.table_axes.items()}
@@ -623,16 +616,18 @@ def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
     changed = (
         any(a is not b for a, b in zip(new_args, node.args))
         or body is not node.expr
-        or (new_values is not None and any(
-            a is not b for a, b in zip(new_values, node.values)
-        ))
-        or (new_table_axes is not None and any(
-            new_table_axes[k] is not v for k, v in node.table_axes.items()
-        ))
+        or (new_values is not None and any(a is not b for a, b in zip(new_values, node.values)))
+        or (
+            new_table_axes is not None
+            and any(new_table_axes[k] is not v for k, v in node.table_axes.items())
+        )
     )
     if not changed:
         return node
     return replace(
-        node, args=new_args, expr=body, values=new_values,
+        node,
+        args=new_args,
+        expr=body,
+        values=new_values,
         table_axes=new_table_axes,
     )

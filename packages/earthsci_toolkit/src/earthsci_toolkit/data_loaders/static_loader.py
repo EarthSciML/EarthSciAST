@@ -35,9 +35,7 @@ class StaticLoader:
 
     def __init__(self, data_loader: DataLoader) -> None:
         if data_loader.kind != DataLoaderKind.STATIC:
-            raise StaticLoaderError(
-                f"StaticLoader requires kind=static; got {data_loader.kind}"
-            )
+            raise StaticLoaderError(f"StaticLoader requires kind=static; got {data_loader.kind}")
         self.dl = data_loader
 
     def load(

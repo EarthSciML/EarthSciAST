@@ -13,12 +13,8 @@ class MirrorFallbackError(RuntimeError):
     def __init__(self, urls: List[str], errors: List[BaseException]) -> None:
         self.urls = urls
         self.errors = errors
-        joined = "; ".join(
-            f"{u}: {type(e).__name__}: {e}" for u, e in zip(urls, errors)
-        )
-        super().__init__(
-            f"all {len(urls)} source URLs failed ({joined})"
-        )
+        joined = "; ".join(f"{u}: {type(e).__name__}: {e}" for u, e in zip(urls, errors))
+        super().__init__(f"all {len(urls)} source URLs failed ({joined})")
 
 
 def open_with_fallback(

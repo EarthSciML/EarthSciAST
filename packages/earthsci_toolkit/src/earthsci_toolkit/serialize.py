@@ -10,6 +10,51 @@ import math
 from pathlib import Path
 from typing import Union, Dict, Any, Optional
 
+from .esm_types import (
+    EsmFile,
+    Metadata,
+    Model,
+    ReactionSystem,
+    ModelVariable,
+    Equation,
+    Species,
+    Parameter,
+    Reaction,
+    ExprNode,
+    Expr,
+    ContinuousEvent,
+    DiscreteEvent,
+    DiscreteEventTrigger,
+    FunctionalAffect,
+    DataLoader,
+    DataLoaderDeterminism,
+    DataLoaderSource,
+    DataLoaderTemporal,
+    DataLoaderVariable,
+    Operator,
+    CouplingEntry,
+    Domain,
+    OperatorComposeCoupling,
+    CouplingCouple,
+    VariableMapCoupling,
+    OperatorApplyCoupling,
+    CallbackCoupling,
+    EventCoupling,
+    Reference,
+    Tolerance,
+    TimeSpan,
+    Assertion,
+    Test,
+    PlotAxis,
+    PlotValue,
+    PlotSeries,
+    Plot,
+    SweepRange,
+    SweepDimension,
+    ParameterSweep,
+    Example,
+)
+
 
 def _emit_stoich(coeff: Union[int, float]) -> Union[int, float]:
     """Emit a stoichiometric coefficient preserving integer-vs-float distinction.
@@ -26,32 +71,13 @@ def _emit_stoich(coeff: Union[int, float]) -> Union[int, float]:
         return int(coeff)
     return float(coeff)
 
-from .esm_types import (
-    EsmFile, Metadata, Model, ReactionSystem, ModelVariable, Equation,
-    Species, Parameter, Reaction, ExprNode, Expr, AffectEquation,
-    ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, FunctionalAffect,
-    DataLoader, DataLoaderKind,
-    DataLoaderDeterminism, DataLoaderSource, DataLoaderTemporal,
-    DataLoaderVariable, Operator,
-    CouplingEntry, CouplingType, Domain,
-    OperatorComposeCoupling, CouplingCouple, VariableMapCoupling,
-    OperatorApplyCoupling, CallbackCoupling, EventCoupling,
-    Reference, TemporalDomain,
-    Tolerance, TimeSpan, Assertion, Test,
-    PlotAxis, PlotValue, PlotSeries, Plot,
-    SweepRange, SweepDimension, ParameterSweep, Example,
-)
-
 
 def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
     """Serialize an expression to JSON-compatible format."""
     if isinstance(expr, (int, float, str)):
         return expr
     elif isinstance(expr, ExprNode):
-        result = {
-            "op": expr.op,
-            "args": [_serialize_expression(arg) for arg in expr.args]
-        }
+        result = {"op": expr.op, "args": [_serialize_expression(arg) for arg in expr.args]}
         if expr.wrt is not None:
             result["wrt"] = expr.wrt
         if expr.dim is not None:
@@ -108,9 +134,7 @@ def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
         if expr.table is not None:
             result["table"] = expr.table
         if expr.table_axes is not None:
-            result["axes"] = {
-                k: _serialize_expression(v) for k, v in expr.table_axes.items()
-            }
+            result["axes"] = {k: _serialize_expression(v) for k, v in expr.table_axes.items()}
         if expr.output is not None:
             result["output"] = expr.output
         return result
@@ -122,7 +146,7 @@ def _serialize_equation(equation: Equation) -> Dict[str, Any]:
     """Serialize an equation to JSON-compatible format."""
     result = {
         "lhs": _serialize_expression(equation.lhs),
-        "rhs": _serialize_expression(equation.rhs)
+        "rhs": _serialize_expression(equation.rhs),
     }
     if equation._comment is not None:
         result["_comment"] = equation._comment
@@ -142,17 +166,12 @@ def _serialize_affect_equation(affect) -> Dict[str, Any]:
         if affect.config:
             result["config"] = affect.config
         return result
-    return {
-        "lhs": affect.lhs,
-        "rhs": _serialize_expression(affect.rhs)
-    }
+    return {"lhs": affect.lhs, "rhs": _serialize_expression(affect.rhs)}
 
 
 def _serialize_model_variable(variable: ModelVariable) -> Dict[str, Any]:
     """Serialize a model variable to JSON-compatible format."""
-    result = {
-        "type": variable.type
-    }
+    result = {"type": variable.type}
     if variable.units is not None:
         result["units"] = variable.units
     if variable.default is not None:
@@ -217,7 +236,7 @@ def _serialize_continuous_event(event: ContinuousEvent) -> Dict[str, Any]:
 
     if event.affect_neg is not None:
         result["affect_neg"] = [_serialize_affect_equation(affect) for affect in event.affect_neg]
-    if event.root_find and event.root_find != 'left':  # Only include if not default
+    if event.root_find and event.root_find != "left":  # Only include if not default
         result["root_find"] = event.root_find
     if event.reinitialize:  # Only include if True (not default False)
         result["reinitialize"] = event.reinitialize
@@ -302,7 +321,8 @@ def _serialize_test(t: Test) -> Dict[str, Any]:
     # which are consumed by the fixpoint at load).
     if t.expression_template_imports:
         result["expression_template_imports"] = json.loads(
-            json.dumps(t.expression_template_imports))
+            json.dumps(t.expression_template_imports)
+        )
     result["assertions"] = [_serialize_assertion(a) for a in t.assertions]
     return result
 
@@ -385,7 +405,8 @@ def _serialize_example(e: Example) -> Dict[str, Any]:
     # which are consumed by the fixpoint at load). Mirrors _serialize_test.
     if e.expression_template_imports:
         result["expression_template_imports"] = json.loads(
-            json.dumps(e.expression_template_imports))
+            json.dumps(e.expression_template_imports)
+        )
     return result
 
 
@@ -397,8 +418,7 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     result["variables"] = {}
     if model.variables:
         result["variables"] = {
-            name: _serialize_model_variable(var)
-            for name, var in model.variables.items()
+            name: _serialize_model_variable(var) for name, var in model.variables.items()
         }
 
     # Serialize equations (required by schema)
@@ -442,9 +462,7 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
             _serialize_continuous_event(ev) for ev in model.continuous_events
         ]
     if model.discrete_events:
-        result["discrete_events"] = [
-            _serialize_discrete_event(ev) for ev in model.discrete_events
-        ]
+        result["discrete_events"] = [_serialize_discrete_event(ev) for ev in model.discrete_events]
 
     # Subsystems (esm-spec §4.7). A resolved subsystem round-trips as the
     # instantiated inline component; an unresolved `{ref, bindings?}` dict
@@ -452,8 +470,7 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     # (esm-spec §9.7.6 site 3) survive only while the ref is unresolved.
     if model.subsystems:
         result["subsystems"] = {
-            name: _serialize_subsystem(sub)
-            for name, sub in model.subsystems.items()
+            name: _serialize_subsystem(sub) for name, sub in model.subsystems.items()
         }
 
     return result
@@ -506,9 +523,7 @@ def _serialize_parameter(parameter: Parameter) -> Dict[str, Any]:
 
 def _serialize_reaction(reaction: Reaction) -> Dict[str, Any]:
     """Serialize a reaction to JSON-compatible format."""
-    result = {
-        "id": reaction.id if reaction.id is not None else reaction.name
-    }
+    result = {"id": reaction.id if reaction.id is not None else reaction.name}
 
     if reaction.name:
         result["name"] = reaction.name
@@ -546,19 +561,13 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
 
     # Serialize species
     if rs.species:
-        result["species"] = {
-            sp.name: _serialize_species(sp)
-            for sp in rs.species
-        }
+        result["species"] = {sp.name: _serialize_species(sp) for sp in rs.species}
     else:
         result["species"] = {}
 
     # Serialize parameters
     if rs.parameters:
-        result["parameters"] = {
-            param.name: _serialize_parameter(param)
-            for param in rs.parameters
-        }
+        result["parameters"] = {param.name: _serialize_parameter(param) for param in rs.parameters}
     else:
         result["parameters"] = {}
 
@@ -570,9 +579,7 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
 
     # Constraint equations (esm-spec §11.4) — mirrors _parse_reaction_system.
     if rs.constraint_equations:
-        result["constraint_equations"] = [
-            _serialize_equation(eq) for eq in rs.constraint_equations
-        ]
+        result["constraint_equations"] = [_serialize_equation(eq) for eq in rs.constraint_equations]
 
     # Inline tests, examples, and component-level tolerance (esm-spec §6.6 / §6.7).
     if rs.tolerance is not None:
@@ -590,15 +597,12 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
             _serialize_continuous_event(ev) for ev in rs.continuous_events
         ]
     if rs.discrete_events:
-        result["discrete_events"] = [
-            _serialize_discrete_event(ev) for ev in rs.discrete_events
-        ]
+        result["discrete_events"] = [_serialize_discrete_event(ev) for ev in rs.discrete_events]
 
     # Subsystems (esm-spec §4.7) — see _serialize_subsystem.
     if rs.subsystems:
         result["subsystems"] = {
-            name: _serialize_subsystem(sub)
-            for name, sub in rs.subsystems.items()
+            name: _serialize_subsystem(sub) for name, sub in rs.subsystems.items()
         }
 
     return result
@@ -618,9 +622,7 @@ def _serialize_reference(reference: Reference) -> Dict[str, Any]:
 
 def _serialize_metadata(metadata: Metadata) -> Dict[str, Any]:
     """Serialize metadata to JSON-compatible format."""
-    result = {
-        "name": metadata.title
-    }
+    result = {"name": metadata.title}
 
     if metadata.description is not None:
         result["description"] = metadata.description
@@ -721,8 +723,7 @@ def _serialize_data_loader(loader: DataLoader) -> Dict[str, Any]:
         "kind": loader.kind.value,
         "source": _serialize_data_loader_source(loader.source),
         "variables": {
-            vname: _serialize_data_loader_variable(vdef)
-            for vname, vdef in loader.variables.items()
+            vname: _serialize_data_loader_variable(vdef) for vname, vdef in loader.variables.items()
         },
     }
     if loader.temporal is not None:
@@ -821,7 +822,11 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
                         "from": eq.from_var,
                         "to": eq.to_var,
                         "transform": eq.transform,
-                        **({"expression": _serialize_expression(eq.expression)} if eq.expression else {})
+                        **(
+                            {"expression": _serialize_expression(eq.expression)}
+                            if eq.expression
+                            else {}
+                        ),
                     }
                     for eq in coupling.connector.equations
                 ]
@@ -866,7 +871,9 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
         if coupling.affects:
             result["affects"] = [_serialize_affect_equation(affect) for affect in coupling.affects]
         if coupling.affect_neg:
-            result["affect_neg"] = [_serialize_affect_equation(affect) for affect in coupling.affect_neg]
+            result["affect_neg"] = [
+                _serialize_affect_equation(affect) for affect in coupling.affect_neg
+            ]
         if coupling.discrete_parameters:
             result["discrete_parameters"] = coupling.discrete_parameters
         if coupling.root_find:
@@ -879,23 +886,16 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
 
 def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     """Serialize an ESM file to JSON-compatible format."""
-    result = {
-        "esm": esm_file.version,
-        "metadata": _serialize_metadata(esm_file.metadata)
-    }
+    result = {"esm": esm_file.version, "metadata": _serialize_metadata(esm_file.metadata)}
 
     # Serialize models
     if esm_file.models:
         if isinstance(esm_file.models, dict):
             result["models"] = {
-                model_name: _serialize_model(model)
-                for model_name, model in esm_file.models.items()
+                model_name: _serialize_model(model) for model_name, model in esm_file.models.items()
             }
         elif isinstance(esm_file.models, list):
-            result["models"] = {
-                model.name: _serialize_model(model)
-                for model in esm_file.models
-            }
+            result["models"] = {model.name: _serialize_model(model) for model in esm_file.models}
 
     # Serialize reaction systems
     if esm_file.reaction_systems:
@@ -906,8 +906,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
             }
         elif isinstance(esm_file.reaction_systems, list):
             result["reaction_systems"] = {
-                rs.name: _serialize_reaction_system(rs)
-                for rs in esm_file.reaction_systems
+                rs.name: _serialize_reaction_system(rs) for rs in esm_file.reaction_systems
             }
 
     # Serialize the single shared domain (v0.8.0).
@@ -922,14 +921,13 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     # Serialize data loaders
     if esm_file.data_loaders:
         result["data_loaders"] = {
-            name: _serialize_data_loader(loader)
-            for name, loader in esm_file.data_loaders.items()
+            name: _serialize_data_loader(loader) for name, loader in esm_file.data_loaders.items()
         }
 
     # Serialize operators
     if esm_file.operators:
         result["operators"] = {
-            getattr(operator, 'name', operator.operator_id): _serialize_operator(operator)
+            getattr(operator, "name", operator.operator_id): _serialize_operator(operator)
             for operator in esm_file.operators
         }
 
@@ -943,8 +941,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     # Serialize top-level enums block (esm-spec §9.3).
     if getattr(esm_file, "enums", None):
         result["enums"] = {
-            enum_name: dict(mapping)
-            for enum_name, mapping in esm_file.enums.items()
+            enum_name: dict(mapping) for enum_name, mapping in esm_file.enums.items()
         }
 
     # Serialize top-level function_tables block (esm-spec §9.5, v0.4.0).
@@ -952,6 +949,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     # the authored form (no auto-promotion of inline-const lookups).
     if getattr(esm_file, "function_tables", None):
         import copy as _copy_ft
+
         ft_out = {}
         for ft_name, ft in esm_file.function_tables.items():
             entry: Dict[str, Any] = {
@@ -982,10 +980,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
 
     # Serialize coupling
     if esm_file.coupling:
-        result["coupling"] = [
-            _serialize_coupling_entry(coupling)
-            for coupling in esm_file.coupling
-        ]
+        result["coupling"] = [_serialize_coupling_entry(coupling) for coupling in esm_file.coupling]
 
     # Component-owned events serialize inside their model/reaction system
     # (see _serialize_model/_serialize_reaction_system); EsmFile.events holds
@@ -994,9 +989,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     # from a schema-valid file — fall back to the top-level keys the schema
     # forbids; load() strips and reattaches them on round-trip.
     owned = set()
-    for component in list(esm_file.models.values()) + list(
-        esm_file.reaction_systems.values()
-    ):
+    for component in list(esm_file.models.values()) + list(esm_file.reaction_systems.values()):
         owned.update(id(ev) for ev in component.continuous_events)
         owned.update(id(ev) for ev in component.discrete_events)
     orphan_events = [ev for ev in esm_file.events if id(ev) not in owned]
@@ -1038,7 +1031,7 @@ def save(esm_file: EsmFile, path: Optional[Union[str, Path]] = None) -> str:
 
     # Write to file if path provided
     if path is not None:
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(json_str)
 
     return json_str

@@ -114,6 +114,7 @@ class UnsupportedDimensionalityError(FlattenError):
 @dataclass
 class FlattenedVariable:
     """A single variable in the flattened system."""
+
     name: str  # dot-namespaced
     type: str  # "state" | "parameter" | "observed" | "species"
     units: Optional[str] = None
@@ -148,12 +149,13 @@ class LoaderField:
     in a discrete solver callback at its cadence); a loader WITHOUT ``temporal``
     is static → ``"const"`` (loaded once before integration).
     """
-    name: str                            # "ERA5.pl.u" — the observed-array symbol
-    owner: str                           # "ERA5" — the owning model's namespaced prefix
-    subkey: str                          # "pl" — the subsystem key the loader mounts under
-    var: str                             # "u" — the loader variable name
-    loader: DataLoader                   # the source loader (carries source/temporal)
-    cadence: str                         # "const" | "discrete"
+
+    name: str  # "ERA5.pl.u" — the observed-array symbol
+    owner: str  # "ERA5" — the owning model's namespaced prefix
+    subkey: str  # "pl" — the subsystem key the loader mounts under
+    var: str  # "u" — the loader variable name
+    loader: DataLoader  # the source loader (carries source/temporal)
+    cadence: str  # "const" | "discrete"
 
 
 @dataclass
@@ -164,6 +166,7 @@ class FlattenedEquation:
     (the canonical form), and ``lhs_str`` / ``rhs_str`` provide pretty-printed
     versions for tests and display.
     """
+
     lhs: Expr
     rhs: Expr
     source_system: str
@@ -180,6 +183,7 @@ class FlattenedEquation:
 @dataclass
 class FlattenMetadata:
     """Provenance metadata for a FlattenedSystem."""
+
     source_systems: List[str] = field(default_factory=list)
     coupling_rules: List[str] = field(default_factory=list)
     operator_applies: List[str] = field(default_factory=list)
@@ -219,6 +223,7 @@ class FlattenedSystem:
     Backwards-compatibility helpers (``variables`` dict and string-keyed
     helpers) are exposed via properties so existing call sites continue to work.
     """
+
     independent_variables: List[str] = field(default_factory=lambda: ["t"])
     state_variables: "OrderedDict[str, FlattenedVariable]" = field(default_factory=OrderedDict)
     parameters: "OrderedDict[str, FlattenedVariable]" = field(default_factory=OrderedDict)
@@ -331,8 +336,12 @@ def _expr_to_string(expr: Expr) -> str:
     return str(expr)
 
 
-def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = None,
-                    subsystem_keys: Optional[Set[str]] = None) -> Expr:
+def _namespace_expr(
+    expr: Expr,
+    prefix: str,
+    leave_alone: Optional[Set[str]] = None,
+    subsystem_keys: Optional[Set[str]] = None,
+) -> Expr:
     """Recursively prefix every variable reference in ``expr`` with ``prefix.``.
 
     A bare reference (no dot) is prefixed. A dotted reference is normally left
@@ -355,7 +364,7 @@ def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = N
             head = expr.split(".", 1)[0]
             if head not in leave_alone and subsystem_keys and head in subsystem_keys:
                 return f"{prefix}.{expr}"  # subsystem-local reference -> qualify
-            return expr                    # already fully namespaced -> leave alone
+            return expr  # already fully namespaced -> leave alone
         return f"{prefix}.{expr}"
     if isinstance(expr, ExprNode):
         # For aggregate / arrayop, index symbols (output_idx and ranges keys) are
@@ -496,7 +505,9 @@ def _describe_coupling(entry: CouplingEntry) -> str:
         systems = " + ".join(entry.systems)
         rule = f"operator_compose({systems})"
         if entry.translate:
-            rule += " [translate: " + ", ".join(f"{k}->{v}" for k, v in entry.translate.items()) + "]"
+            rule += (
+                " [translate: " + ", ".join(f"{k}->{v}" for k, v in entry.translate.items()) + "]"
+            )
         return rule
     if isinstance(entry, CouplingCouple):
         systems = " <-> ".join(entry.systems)
@@ -521,6 +532,7 @@ def _describe_coupling(entry: CouplingEntry) -> str:
 @dataclass
 class _ComponentSystem:
     """Internal representation of one system before merging."""
+
     name: str
     state_vars: "OrderedDict[str, FlattenedVariable]" = field(default_factory=OrderedDict)
     parameters: "OrderedDict[str, FlattenedVariable]" = field(default_factory=OrderedDict)
@@ -568,19 +580,30 @@ def _collect_model(name: str, model: Model, prefix: Optional[str] = None) -> _Co
         if var.type != "observed" or var.expression is None:
             continue
         namespaced = f"{full_prefix}.{var_name}"
-        ns_rhs = _namespace_expr(var.expression, full_prefix, leave_alone=leave_alone,
-                                 subsystem_keys=sub_keys)
-        component.equations.append(FlattenedEquation(
-            lhs=namespaced, rhs=ns_rhs, source_system=full_prefix,
-        ))
+        ns_rhs = _namespace_expr(
+            var.expression, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
+        )
+        component.equations.append(
+            FlattenedEquation(
+                lhs=namespaced,
+                rhs=ns_rhs,
+                source_system=full_prefix,
+            )
+        )
     for eq in model.equations:
-        ns_lhs = _namespace_expr(eq.lhs, full_prefix, leave_alone=leave_alone,
-                                 subsystem_keys=sub_keys)
-        ns_rhs = _namespace_expr(eq.rhs, full_prefix, leave_alone=leave_alone,
-                                 subsystem_keys=sub_keys)
-        component.equations.append(FlattenedEquation(
-            lhs=ns_lhs, rhs=ns_rhs, source_system=full_prefix,
-        ))
+        ns_lhs = _namespace_expr(
+            eq.lhs, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
+        )
+        ns_rhs = _namespace_expr(
+            eq.rhs, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
+        )
+        component.equations.append(
+            FlattenedEquation(
+                lhs=ns_lhs,
+                rhs=ns_rhs,
+                source_system=full_prefix,
+            )
+        )
 
     for sub_name, sub_model in model.subsystems.items():
         # A data-loader subsystem (RFC pure-io-data-loaders §4.3) exposes its
@@ -604,14 +627,16 @@ def _collect_model(name: str, model: Model, prefix: Optional[str] = None) -> _Co
                     description=loader_var.description,
                     source_system=f"{full_prefix}.{sub_name}",
                 )
-                component.loader_fields.append(LoaderField(
-                    name=namespaced,
-                    owner=full_prefix,
-                    subkey=sub_name,
-                    var=var_name,
-                    loader=sub_model,
-                    cadence=cadence,
-                ))
+                component.loader_fields.append(
+                    LoaderField(
+                        name=namespaced,
+                        owner=full_prefix,
+                        subkey=sub_name,
+                        var=var_name,
+                        loader=sub_model,
+                        cadence=cadence,
+                    )
+                )
             continue
         sub_prefix = f"{full_prefix}.{sub_name}"
         sub_component = _collect_model(sub_name, sub_model, sub_prefix)
@@ -624,7 +649,9 @@ def _collect_model(name: str, model: Model, prefix: Optional[str] = None) -> _Co
     return component
 
 
-def _collect_reaction_system(name: str, rs: ReactionSystem, prefix: Optional[str] = None) -> _ComponentSystem:
+def _collect_reaction_system(
+    name: str, rs: ReactionSystem, prefix: Optional[str] = None
+) -> _ComponentSystem:
     """Collect a ReactionSystem (lowered through derive_odes) into a _ComponentSystem.
 
     Species become state variables; reaction parameters become parameters;
@@ -670,16 +697,24 @@ def _collect_reaction_system(name: str, rs: ReactionSystem, prefix: Optional[str
         for eq in derived.equations:
             ns_lhs = _namespace_expr(eq.lhs, full_prefix, leave_alone=leave_alone)
             ns_rhs = _namespace_expr(eq.rhs, full_prefix, leave_alone=leave_alone)
-            component.equations.append(FlattenedEquation(
-                lhs=ns_lhs, rhs=ns_rhs, source_system=full_prefix,
-            ))
+            component.equations.append(
+                FlattenedEquation(
+                    lhs=ns_lhs,
+                    rhs=ns_rhs,
+                    source_system=full_prefix,
+                )
+            )
 
     for eq in rs.constraint_equations:
         ns_lhs = _namespace_expr(eq.lhs, full_prefix, leave_alone=leave_alone)
         ns_rhs = _namespace_expr(eq.rhs, full_prefix, leave_alone=leave_alone)
-        component.equations.append(FlattenedEquation(
-            lhs=ns_lhs, rhs=ns_rhs, source_system=full_prefix,
-        ))
+        component.equations.append(
+            FlattenedEquation(
+                lhs=ns_lhs,
+                rhs=ns_rhs,
+                source_system=full_prefix,
+            )
+        )
 
     for sub_name, sub_rs in rs.subsystems.items():
         sub_prefix = f"{full_prefix}.{sub_name}"
@@ -890,11 +925,13 @@ def _apply_variable_map(
     for comp in components.values():
         new_eqs: List[FlattenedEquation] = []
         for eq in comp.equations:
-            new_eqs.append(FlattenedEquation(
-                lhs=substitute(eq.lhs, bindings),
-                rhs=substitute(eq.rhs, bindings),
-                source_system=eq.source_system,
-            ))
+            new_eqs.append(
+                FlattenedEquation(
+                    lhs=substitute(eq.lhs, bindings),
+                    rhs=substitute(eq.rhs, bindings),
+                    source_system=eq.source_system,
+                )
+            )
         comp.equations = new_eqs
 
     # Guard the string comparison: an ExprNode transform never reaches here
@@ -913,8 +950,11 @@ def _apply_variable_map(
             # variable (guards against binding a model STATE) and the producer is
             # not already a known variable.
             from_owner = entry.from_var.split(".", 1)[0]
-            if (to_var.shape and from_owner in loader_names
-                    and entry.from_var not in comp.parameters):
+            if (
+                to_var.shape
+                and from_owner in loader_names
+                and entry.from_var not in comp.parameters
+            ):
                 comp.parameters[entry.from_var] = FlattenedVariable(
                     name=entry.from_var,
                     type="parameter",
@@ -995,11 +1035,13 @@ def _apply_variable_map_expression(
         source_system=removed.source_system if removed else target_comp.name,
         shape=list(removed.shape) if removed and removed.shape else None,
     )
-    target_comp.equations.append(FlattenedEquation(
-        lhs=entry.to_var,
-        rhs=entry.transform,
-        source_system=target_comp.name,
-    ))
+    target_comp.equations.append(
+        FlattenedEquation(
+            lhs=entry.to_var,
+            rhs=entry.transform,
+            source_system=target_comp.name,
+        )
+    )
 
 
 # ============================================================================
@@ -1007,9 +1049,7 @@ def _apply_variable_map_expression(
 # ============================================================================
 
 
-def _namespace_event_affects(
-    affects: List, system_var_names: Dict[str, str]
-) -> List:
+def _namespace_event_affects(affects: List, system_var_names: Dict[str, str]) -> List:
     """Rewrite AffectEquation.lhs/rhs to dot-namespaced form when possible."""
     out = []
     for affect in affects:
@@ -1036,9 +1076,7 @@ def _namespace_event_expr(expr: Expr, system_var_names: Dict[str, str]) -> Expr:
         # preserve closed-function metadata that hand-listing fields would
         # silently drop (esm-6ka), and covers every child slot (aggregate
         # bodies, bounds, values, filter/key, table axes), not just ``args``.
-        return map_children(
-            expr, lambda c: _namespace_event_expr(c, system_var_names)
-        )
+        return map_children(expr, lambda c: _namespace_event_expr(c, system_var_names))
     return expr
 
 
@@ -1063,9 +1101,7 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
         dependent variable.
     """
     if not esm_file.models and not esm_file.reaction_systems:
-        raise ValueError(
-            "Cannot flatten an EsmFile with no models or reaction systems"
-        )
+        raise ValueError("Cannot flatten an EsmFile with no models or reaction systems")
 
     # Step 1: collect every component system into a per-system bag of variables
     # and (already-namespaced) equations.
@@ -1151,12 +1187,8 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
                         # Cross-system conflicts (typically introduced by
                         # variable_map coupling that unifies two state vars
                         # without operator_compose merging) remain errors.
-                        if (
-                            existing.source_system != eq.source_system
-                            and not (
-                                _has_array_op(existing.lhs)
-                                or _has_array_op(existing.rhs)
-                            )
+                        if existing.source_system != eq.source_system and not (
+                            _has_array_op(existing.lhs) or _has_array_op(existing.rhs)
                         ):
                             raise ConflictingDerivativeError(
                                 f"Two systems define non-additive equations for "
@@ -1183,26 +1215,31 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
             new_affects = _namespace_event_affects(event.affects, var_to_namespaced)
             new_affect_neg = (
                 _namespace_event_affects(event.affect_neg, var_to_namespaced)
-                if event.affect_neg is not None else None
+                if event.affect_neg is not None
+                else None
             )
-            flat.continuous_events.append(ContinuousEvent(
-                name=event.name,
-                conditions=new_conditions,
-                affects=new_affects,
-                affect_neg=new_affect_neg,
-                root_find=event.root_find,
-                reinitialize=event.reinitialize,
-                priority=event.priority,
-                description=event.description,
-            ))
+            flat.continuous_events.append(
+                ContinuousEvent(
+                    name=event.name,
+                    conditions=new_conditions,
+                    affects=new_affects,
+                    affect_neg=new_affect_neg,
+                    root_find=event.root_find,
+                    reinitialize=event.reinitialize,
+                    priority=event.priority,
+                    description=event.description,
+                )
+            )
         elif isinstance(event, DiscreteEvent):
             new_affects = _namespace_event_affects(event.affects, var_to_namespaced)
-            flat.discrete_events.append(DiscreteEvent(
-                name=event.name,
-                trigger=event.trigger,
-                affects=new_affects,
-                priority=event.priority,
-            ))
+            flat.discrete_events.append(
+                DiscreteEvent(
+                    name=event.name,
+                    trigger=event.trigger,
+                    affects=new_affects,
+                    priority=event.priority,
+                )
+            )
 
     # Step 4b: Pointwise spatial lift (esm-spec §10.5). ``operator_compose`` has
     # merged each reaction/model state ODE with the spatial operator's advection
@@ -1261,11 +1298,13 @@ def _expand_operator_compose_placeholders(
         if has_var_placeholder(eq.lhs) or has_var_placeholder(eq.rhs):
             for var_name in a_state_names:
                 bindings = {"_var": var_name}
-                new_equations.append(FlattenedEquation(
-                    lhs=substitute(eq.lhs, bindings),
-                    rhs=substitute(eq.rhs, bindings),
-                    source_system=eq.source_system,
-                ))
+                new_equations.append(
+                    FlattenedEquation(
+                        lhs=substitute(eq.lhs, bindings),
+                        rhs=substitute(eq.rhs, bindings),
+                        source_system=eq.source_system,
+                    )
+                )
         else:
             new_equations.append(eq)
     b.equations = new_equations
@@ -1291,10 +1330,7 @@ def _expand_operator_compose_placeholders(
 
 def _collect_makearrays(expr: Expr, acc: List[ExprNode]) -> List[ExprNode]:
     """Collect every ``makearray`` node reachable from ``expr`` (pre-order)."""
-    acc.extend(
-        node for node in walk(expr)
-        if isinstance(node, ExprNode) and node.op == "makearray"
-    )
+    acc.extend(node for node in walk(expr) if isinstance(node, ExprNode) and node.op == "makearray")
     return acc
 
 
@@ -1311,17 +1347,20 @@ def _index_arg_loop(expr: Expr) -> Optional[str]:
     return None
 
 
-def _detect_lift_loops(
-    ma: ExprNode, lifted: Set[str], rank: int
-) -> Optional[List[str]]:
+def _detect_lift_loops(ma: ExprNode, lifted: Set[str], rank: int) -> Optional[List[str]]:
     """Ordered spatial loop variables of a lowered operator makearray, read from
     an ``index(<lifted species>, a1, …, aRank)`` gather whose every position
     carries a loop variable (the interior stencil). Returns the loop names in
     index-position order, or ``None`` if none is found."""
     for e in walk(ma):
-        if (isinstance(e, ExprNode) and e.op == "index" and e.args
-                and isinstance(e.args[0], str)
-                and e.args[0] in lifted and len(e.args) - 1 == rank):
+        if (
+            isinstance(e, ExprNode)
+            and e.op == "index"
+            and e.args
+            and isinstance(e.args[0], str)
+            and e.args[0] in lifted
+            and len(e.args) - 1 == rank
+        ):
             loops: List[str] = []
             ok = True
             for k in range(1, len(e.args)):
@@ -1351,9 +1390,7 @@ def _makearray_extents(ma: ExprNode) -> List[int]:
     return ext
 
 
-def _lift_rhs_to_cell(
-    expr: Expr, arrayvars: Set[str], loops: List[str]
-) -> Expr:
+def _lift_rhs_to_cell(expr: Expr, arrayvars: Set[str], loops: List[str]) -> Expr:
     """Rewrite a scalar (merged reaction + operator) RHS into its per-cell form
     over the spatial ``loops``: a bare reference to an array variable becomes
     ``index(var, loops…)``, and each spatial-operator ``makearray`` becomes
@@ -1378,9 +1415,7 @@ def _lift_rhs_to_cell(
     return expr
 
 
-def _apply_pointwise_lift(
-    flat: FlattenedSystem, coupling: List[CouplingEntry]
-) -> None:
+def _apply_pointwise_lift(flat: FlattenedSystem, coupling: List[CouplingEntry]) -> None:
     """Pointwise spatial lift (esm-spec §10.5) for ``operator_compose`` couplings
     that declare ``lifting: "pointwise"``. Promotes every state ODE that
     operator_compose merged with a spatial operator (its merged RHS carries an
@@ -1389,14 +1424,17 @@ def _apply_pointwise_lift(
     coupling requests pointwise lifting, or no merged equation carries a
     spatial-operator makearray."""
     if not any(
-        isinstance(c, OperatorComposeCoupling) and c.lifting == "pointwise"
-        for c in coupling
+        isinstance(c, OperatorComposeCoupling) and c.lifting == "pointwise" for c in coupling
     ):
         return
 
     def _d_target(lhs: Expr) -> Optional[str]:
-        if (isinstance(lhs, ExprNode) and lhs.op == "D" and lhs.args
-                and isinstance(lhs.args[0], str)):
+        if (
+            isinstance(lhs, ExprNode)
+            and lhs.op == "D"
+            and lhs.args
+            and isinstance(lhs.args[0], str)
+        ):
             return lhs.args[0]
         return None
 
@@ -1451,16 +1489,24 @@ def _apply_pointwise_lift(
 
         idx_species = ExprNode(op="index", args=[target, *loops])
         new_lhs = ExprNode(
-            op="aggregate", output_idx=output_idx, ranges=ranges,
+            op="aggregate",
+            output_idx=output_idx,
+            ranges=ranges,
             expr=ExprNode(op="D", args=[idx_species], wrt="t"),
         )
         new_rhs = ExprNode(
-            op="aggregate", output_idx=output_idx, ranges=ranges,
+            op="aggregate",
+            output_idx=output_idx,
+            ranges=ranges,
             expr=_lift_rhs_to_cell(eq.rhs, arrayvars, loops),
         )
-        new_equations.append(FlattenedEquation(
-            lhs=new_lhs, rhs=new_rhs, source_system=eq.source_system,
-        ))
+        new_equations.append(
+            FlattenedEquation(
+                lhs=new_lhs,
+                rhs=new_rhs,
+                source_system=eq.source_system,
+            )
+        )
 
     flat.equations = new_equations
 
@@ -1470,9 +1516,7 @@ def _apply_pointwise_lift(
 # ============================================================================
 
 
-def _eval_index_expr(
-    expr: Expr, index_vals: Dict[str, int]
-) -> Optional[int]:
+def _eval_index_expr(expr: Expr, index_vals: Dict[str, int]) -> Optional[int]:
     """Evaluate a small integer expression used as an array index.
 
     Supports literals, index symbols (bound via ``index_vals``), and the
@@ -1586,24 +1630,22 @@ def _collect_index_uses(
             # range. Index-set references ({"from": ...}, RFC §5.2) are resolved
             # by the evaluator against the registry, not here; fall back to a
             # plain child walk so this collector never chokes on them.
-            dense_ranges = all(
-                isinstance(ranges.get(s), (list, tuple)) for s in idx_syms
-            )
+            dense_ranges = all(isinstance(ranges.get(s), (list, tuple)) for s in idx_syms)
             if idx_syms and all(s in ranges for s in idx_syms) and dense_ranges:
                 # Enumerate Cartesian product of index ranges.
                 value_lists = [_expand_range(ranges[s]) for s in idx_syms]
+
                 def rec(pos: int, current: Dict[str, int]) -> None:
                     if pos == len(idx_syms):
                         for child in iter_children(expr):
-                            _collect_index_uses(
-                                child, state_vars, out, current
-                            )
+                            _collect_index_uses(child, state_vars, out, current)
                         return
                     sym = idx_syms[pos]
                     for v in value_lists[pos]:
                         current[sym] = v
                         rec(pos + 1, current)
                         del current[sym]
+
                 rec(0, dict(bound_indices))
             else:
                 # Fall back: just walk children without bound indices.
@@ -1646,12 +1688,11 @@ def infer_variable_shapes(flat: FlattenedSystem) -> Dict[str, Tuple[int, ...]]:
         ndim_set = {len(t) for t in tups}
         if len(ndim_set) != 1:
             raise FlattenError(
-                f"Variable {name!r} is indexed with conflicting dimensionality: "
-                f"{sorted(ndim_set)}"
+                f"Variable {name!r} is indexed with conflicting dimensionality: {sorted(ndim_set)}"
             )
         ndim = next(iter(ndim_set))
         per_dim_max: List[int] = [0] * ndim
-        per_dim_min: List[int] = [10 ** 9] * ndim
+        per_dim_min: List[int] = [10**9] * ndim
         for tup in tups:
             for d, v in enumerate(tup):
                 if v > per_dim_max[d]:

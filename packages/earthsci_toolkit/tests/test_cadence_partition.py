@@ -212,16 +212,21 @@ def test_guard_continuous_relational_rejected():
     bad_model = {
         "variables": {"u": {"type": "state"}, "lo": {"type": "parameter"}},
         "index_sets": {"faces": {"kind": "interval", "size": 4}},
-        "equations": [{
-            "lhs": {"op": "index", "args": ["edge_exists", "e"]},
-            "rhs": {
-                "op": "aggregate", "distinct": True, "semiring": "bool_and_or",
-                "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
-                # the key reads state u → the distinct node classifies CONTINUOUS
-                "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
-                "expr": {"op": "true", "args": []},
-            },
-        }],
+        "equations": [
+            {
+                "lhs": {"op": "index", "args": ["edge_exists", "e"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["e"],
+                    "ranges": {"f": {"from": "faces"}},
+                    # the key reads state u → the distinct node classifies CONTINUOUS
+                    "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
+                    "expr": {"op": "true", "args": []},
+                },
+            }
+        ],
     }
     with pytest.raises(CadenceError, match="CONTINUOUS"):
         partition(bad_model)
@@ -249,16 +254,30 @@ def test_guard_from_faq_cycle_rejected():
             "setB": {"kind": "derived", "from_faq": "nodeB"},
         },
         "equations": [
-            {"lhs": {"op": "index", "args": ["a", "x"]},
-             "rhs": {"op": "aggregate", "id": "nodeA", "distinct": True,
-                     "semiring": "bool_and_or", "output_idx": ["x"],
-                     "ranges": {"y": {"from": "setB"}},
-                     "expr": {"op": "true", "args": []}}},
-            {"lhs": {"op": "index", "args": ["b", "x"]},
-             "rhs": {"op": "aggregate", "id": "nodeB", "distinct": True,
-                     "semiring": "bool_and_or", "output_idx": ["x"],
-                     "ranges": {"y": {"from": "setA"}},
-                     "expr": {"op": "true", "args": []}}},
+            {
+                "lhs": {"op": "index", "args": ["a", "x"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "id": "nodeA",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["x"],
+                    "ranges": {"y": {"from": "setB"}},
+                    "expr": {"op": "true", "args": []},
+                },
+            },
+            {
+                "lhs": {"op": "index", "args": ["b", "x"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "id": "nodeB",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["x"],
+                    "ranges": {"y": {"from": "setA"}},
+                    "expr": {"op": "true", "args": []},
+                },
+            },
         ],
     }
     with pytest.raises(CadenceError, match="cycle"):
@@ -321,13 +340,16 @@ def test_cadence_runner_accepts_python_adapter(tmp_path):
     env["EARTHSCI_CADENCE_ADAPTER_PYTHON"] = (
         f"{sys.executable} -m earthsci_toolkit.cli.cadence_adapter"
     )
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(SRC_DIR), env.get("PYTHONPATH", "")]
-    ).rstrip(os.pathsep)
+    env["PYTHONPATH"] = os.pathsep.join([str(SRC_DIR), env.get("PYTHONPATH", "")]).rstrip(
+        os.pathsep
+    )
     report = tmp_path / "report.json"
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--bindings", "python", "--output", str(report)],
-        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, f"runner failed:\n{proc.stdout}\n{proc.stderr}"
     data = json.loads(report.read_text())
@@ -343,6 +365,8 @@ def test_cadence_self_test_still_green():
     (the additive Python producer does not perturb the static contract)."""
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--self-test"],
-        cwd=str(REPO_ROOT), capture_output=True, text=True,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, f"self-test failed:\n{proc.stdout}\n{proc.stderr}"

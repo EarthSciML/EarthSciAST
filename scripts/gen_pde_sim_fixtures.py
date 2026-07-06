@@ -24,6 +24,7 @@ proves the fixtures were authored correctly.
 
 Run:  python3 scripts/gen_pde_sim_fixtures.py
 """
+
 from __future__ import annotations
 
 import json
@@ -94,7 +95,7 @@ def makearray(regions, values):
 # Boundary cells replace the out-of-range ghost with a BC-specific expression.
 # ---------------------------------------------------------------------------
 
-I = "i"
+I = "i"  # noqa: E741 — index-symbol literal used throughout the stencils
 IM1 = isub("i", 1)
 IP1 = iadd("i", 1)
 
@@ -114,27 +115,27 @@ def diff_right(kappa, ghost):
 
 
 # BC ghost expressions (functions of the interior trace u[i] / literal cells).
-def ghost_dirichlet():               # u_ghost = 0
+def ghost_dirichlet():  # u_ghost = 0
     return 0
 
 
-def ghost_zero_gradient():           # u_ghost = u[boundary]  (mirror, du/dn = 0)
+def ghost_zero_gradient():  # u_ghost = u[boundary]  (mirror, du/dn = 0)
     return idx("u", I)
 
 
-def ghost_neumann(b_flux):           # u_ghost = u[boundary] + b_flux   (const flux)
+def ghost_neumann(b_flux):  # u_ghost = u[boundary] + b_flux   (const flux)
     return add(idx("u", I), b_flux)
 
 
-def ghost_robin(r_a, r_b):           # u_ghost = r_a * u[boundary] + r_b
+def ghost_robin(r_a, r_b):  # u_ghost = r_a * u[boundary] + r_b
     return add(mul(r_a, idx("u", I)), r_b)
 
 
-def ghost_periodic_left(n):          # u_ghost = u[N]  (literal index N)
+def ghost_periodic_left(n):  # u_ghost = u[N]  (literal index N)
     return idx("u", n)
 
 
-def ghost_periodic_right():          # u_ghost = u[1]  (literal index 1)
+def ghost_periodic_right():  # u_ghost = u[1]  (literal index 1)
     return idx("u", 1)
 
 
@@ -158,10 +159,10 @@ def diffusion_matrix(n, kappa, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3)):
         # boundary cell: -2 u[k] + (the in-range neighbour) + ghost
         L[k, k] += -2 * kappa
         if left_bc:
-            L[k, k + 1] += kappa            # u[i+1] in range
+            L[k, k + 1] += kappa  # u[i+1] in range
             _ghost_into(L, b, k, k, "left", kappa, n, bc, neumann, robin)
         if right_bc:
-            L[k, k - 1] += kappa            # u[i-1] in range
+            L[k, k - 1] += kappa  # u[i-1] in range
             _ghost_into(L, b, k, k, "right", kappa, n, bc, neumann, robin)
     return L, b
 
@@ -172,17 +173,17 @@ def _ghost_into(L, b, row, cell, side, kappa, n, bc, neumann, robin):
     if bc == "dirichlet":
         pass  # ghost = 0
     elif bc == "zero_gradient":
-        L[row, cell] += kappa            # ghost = u[cell]
+        L[row, cell] += kappa  # ghost = u[cell]
     elif bc == "neumann":
-        L[row, cell] += kappa            # ghost = u[cell] + b_flux
+        L[row, cell] += kappa  # ghost = u[cell] + b_flux
         b_flux = neumann[0] if side == "left" else neumann[1]
         b[row] += kappa * b_flux
     elif bc == "robin":
         r_a, r_b = robin
-        L[row, cell] += kappa * r_a      # ghost = r_a u[cell] + r_b
+        L[row, cell] += kappa * r_a  # ghost = r_a u[cell] + r_b
         b[row] += kappa * r_b
     elif bc == "periodic":
-        wrap = n - 1 if side == "left" else 0   # u[N] for left, u[1] for right
+        wrap = n - 1 if side == "left" else 0  # u[N] for left, u[1] for right
         L[row, wrap] += kappa
     else:
         raise ValueError(bc)
@@ -193,7 +194,7 @@ def advection_matrix(n, nu):
     L = np.zeros((n, n))
     for k in range(n):
         L[k, k] += -nu
-        L[k, (k - 1) % n] += nu          # periodic wrap on the left
+        L[k, (k - 1) % n] += nu  # periodic wrap on the left
     return L, np.zeros(n)
 
 
@@ -210,9 +211,9 @@ def diffusion_2d_matrix(n, kappa):
         for j in range(1, n + 1):
             r = pos(i, j)
             L[r, r] += -4 * kappa
-            for (ii, jj) in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
+            for ii, jj in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
                 if 1 <= ii <= n and 1 <= jj <= n:
-                    L[r, pos(ii, jj)] += kappa     # else ghost = 0
+                    L[r, pos(ii, jj)] += kappa  # else ghost = 0
     return L, np.zeros(size)
 
 
@@ -255,8 +256,7 @@ def analytic_traj(L, b, order, u0_dict, t):
     return {name: float(ut[k]) for k, name in enumerate(order)}
 
 
-def build_1d_diffusion(fid, n, dx, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3),
-                       t_end=0.05):
+def build_1d_diffusion(fid, n, dx, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3), t_end=0.05):
     kappa = 1.0 / (dx * dx)
     rng = {"i": [1, n]}
     # makearray regions: full-interior, then single-cell left & right overrides.
@@ -278,77 +278,92 @@ def build_1d_diffusion(fid, n, dx, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3),
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
         "variables": {"u": {"type": "state", "shape": ["i"]}},
-        "equations": [{
-            "lhs": arrayop_lhs(["i"], "u", rng),
-            "rhs": arrayop_rhs(["i"], ma, rng),
-        }],
+        "equations": [
+            {
+                "lhs": arrayop_lhs(["i"], "u", rng),
+                "rhs": arrayop_rhs(["i"], ma, rng),
+            }
+        ],
     }
     L, b = diffusion_matrix(n, kappa, bc, neumann=neumann, robin=robin)
     order = names_1d(n)
-    return _finish(fid, "Diff1D", model, L, b, order, n, dx, bc, t_end,
-                   ic_kind="diffusion")
+    return _finish(fid, "Diff1D", model, L, b, order, n, dx, bc, t_end, ic_kind="diffusion")
 
 
 def build_advection(fid, n, dx, a=1.0, t_end=0.1):
     nu = a / dx
     rng = {"i": [1, n]}
     interior = mul(-nu, isub(idx("u", I), idx("u", IM1)))
-    left = mul(-nu, isub(idx("u", I), idx("u", n)))   # wrap u[0] -> u[N]
+    left = mul(-nu, isub(idx("u", I), idx("u", n)))  # wrap u[0] -> u[N]
     regions = [[[1, n]], [[1, 1]]]
     values = [interior, left]
     ma = makearray(regions, values)
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
         "variables": {"u": {"type": "state", "shape": ["i"]}},
-        "equations": [{
-            "lhs": arrayop_lhs(["i"], "u", rng),
-            "rhs": arrayop_rhs(["i"], ma, rng),
-        }],
+        "equations": [
+            {
+                "lhs": arrayop_lhs(["i"], "u", rng),
+                "rhs": arrayop_rhs(["i"], ma, rng),
+            }
+        ],
     }
     L, b = advection_matrix(n, nu)
     order = names_1d(n)
-    return _finish(fid, "Advect1D", model, L, b, order, n, dx, "periodic", t_end,
-                   ic_kind="advection")
+    return _finish(
+        fid, "Advect1D", model, L, b, order, n, dx, "periodic", t_end, ic_kind="advection"
+    )
 
 
 def build_2d_diffusion(fid, n, h, t_end=0.03):
     kappa = 1.0 / (h * h)
     rng = {"i": [1, n], "j": [1, n]}
     # single arrayop, implicit zero ghost on out-of-bounds (fixture-16 style)
-    body = mul(kappa, add(
-        idx("u", isub("i", 1), "j"),
-        idx("u", iadd("i", 1), "j"),
-        idx("u", "i", isub("j", 1)),
-        idx("u", "i", iadd("j", 1)),
-        mul(-4, idx("u", "i", "j")),
-    ))
+    body = mul(
+        kappa,
+        add(
+            idx("u", isub("i", 1), "j"),
+            idx("u", iadd("i", 1), "j"),
+            idx("u", "i", isub("j", 1)),
+            idx("u", "i", iadd("j", 1)),
+            mul(-4, idx("u", "i", "j")),
+        ),
+    )
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
         "variables": {"u": {"type": "state", "shape": ["i", "j"]}},
-        "equations": [{
-            "lhs": arrayop_lhs(["i", "j"], "u", rng),
-            "rhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
-                    "expr": body, "ranges": rng},
-        }],
+        "equations": [
+            {
+                "lhs": arrayop_lhs(["i", "j"], "u", rng),
+                "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": ["i", "j"],
+                    "expr": body,
+                    "ranges": rng,
+                },
+            }
+        ],
     }
     L, b = diffusion_2d_matrix(n, kappa)
     order = names_2d(n)
-    return _finish(fid, "Diff2D", model, L, b, order, n, h, "dirichlet", t_end,
-                   ic_kind="diffusion2d")
+    return _finish(
+        fid, "Diff2D", model, L, b, order, n, h, "dirichlet", t_end, ic_kind="diffusion2d"
+    )
 
 
 def _initial_conditions(order, n, ic_kind):
     """Smooth, fixture-specific IC dict keyed by element name."""
-    if ic_kind == "diffusion":          # 1-D: half-sine bump (non-zero interior)
-        return {f"u[{k}]": math.sin(math.pi * k / (n + 1)) + 0.25
-                for k in range(1, n + 1)}
-    if ic_kind == "advection":          # 1-D periodic: shifted cosine wave
-        return {f"u[{k}]": 1.0 + 0.5 * math.cos(2 * math.pi * (k - 1) / n)
-                for k in range(1, n + 1)}
-    if ic_kind == "diffusion2d":        # 2-D: product sine mode
-        return {f"u[{i},{j}]": math.sin(i * math.pi / (n + 1))
-                * math.sin(j * math.pi / (n + 1))
-                for i in range(1, n + 1) for j in range(1, n + 1)}
+    if ic_kind == "diffusion":  # 1-D: half-sine bump (non-zero interior)
+        return {f"u[{k}]": math.sin(math.pi * k / (n + 1)) + 0.25 for k in range(1, n + 1)}
+    if ic_kind == "advection":  # 1-D periodic: shifted cosine wave
+        return {f"u[{k}]": 1.0 + 0.5 * math.cos(2 * math.pi * (k - 1) / n) for k in range(1, n + 1)}
+    if ic_kind == "diffusion2d":  # 2-D: product sine mode
+        return {
+            f"u[{i},{j}]": math.sin(i * math.pi / (n + 1)) * math.sin(j * math.pi / (n + 1))
+            for i in range(1, n + 1)
+            for j in range(1, n + 1)
+        }
     raise ValueError(ic_kind)
 
 
@@ -371,8 +386,9 @@ def _rhs_probes(order, n, L, b, ic_kind):
     probes["ic"] = _initial_conditions(order, n, ic_kind)
     out = []
     for pid, state in probes.items():
-        out.append({"id": pid, "t": 0.0, "state": state,
-                    "analytic_rhs": analytic_rhs(L, b, order, state)})
+        out.append(
+            {"id": pid, "t": 0.0, "state": state, "analytic_rhs": analytic_rhs(L, b, order, state)}
+        )
     return out
 
 
@@ -412,23 +428,30 @@ def _finish(fid, model_name, model, L, b, order, n, spacing, bc, t_end, ic_kind)
 
 def _describe(fid, n, spacing, bc, ic_kind):
     if ic_kind == "advection":
-        return (f"Discretized 1-D linear advection (upwind, a=1, dx={spacing}, "
-                f"nu={1.0/spacing:g}) on {n} cells, periodic. First-derivative "
-                "stencil with a single-cell left makearray region wrapping "
-                "u[0]->u[N]. du[i]/dt = -nu (u[i]-u[i-1]).")
+        return (
+            f"Discretized 1-D linear advection (upwind, a=1, dx={spacing}, "
+            f"nu={1.0 / spacing:g}) on {n} cells, periodic. First-derivative "
+            "stencil with a single-cell left makearray region wrapping "
+            "u[0]->u[N]. du[i]/dt = -nu (u[i]-u[i-1])."
+        )
     if ic_kind == "diffusion2d":
-        return (f"Discretized 2-D heat equation on a {n}x{n} interior grid "
-                f"(h={spacing}, kappa={1.0/(spacing*spacing):g}) with homogeneous "
-                "Dirichlet BCs (implicit zero ghost on out-of-bounds neighbours).")
-    return (f"Discretized 1-D heat equation on {n} cells (dx={spacing}, "
-            f"kappa={1.0/(spacing*spacing):g}) with {bc} boundary conditions. "
-            "Full-grid arrayop; boundary cells use single-cell makearray regions "
-            f"with the {bc} ghost expression.")
+        return (
+            f"Discretized 2-D heat equation on a {n}x{n} interior grid "
+            f"(h={spacing}, kappa={1.0 / (spacing * spacing):g}) with homogeneous "
+            "Dirichlet BCs (implicit zero ghost on out-of-bounds neighbours)."
+        )
+    return (
+        f"Discretized 1-D heat equation on {n} cells (dx={spacing}, "
+        f"kappa={1.0 / (spacing * spacing):g}) with {bc} boundary conditions. "
+        "Full-grid arrayop; boundary cells use single-cell makearray regions "
+        f"with the {bc} ghost expression."
+    )
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     FIXTURES.mkdir(parents=True, exist_ok=True)
@@ -469,9 +492,12 @@ def main():
             "typescript": "rewrite-only port; no makearray lowering / simulator",
         },
         "tolerances": {
-            "rhs_rtol": 1e-9, "rhs_atol": 1e-11,
-            "traj_golden_rtol": 1e-6, "traj_golden_atol": 1e-9,
-            "traj_analytic_rtol": 1e-4, "traj_analytic_atol": 1e-6,
+            "rhs_rtol": 1e-9,
+            "rhs_atol": 1e-11,
+            "traj_golden_rtol": 1e-6,
+            "traj_golden_atol": 1e-9,
+            "traj_analytic_rtol": 1e-4,
+            "traj_analytic_atol": 1e-6,
         },
         "integrators": {
             "julia": {"algorithm": "Tsit5", "reltol": 1e-10, "abstol": 1e-12},
@@ -481,8 +507,7 @@ def main():
         "fixtures": fixtures_meta,
     }
     (TIER / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"wrote {(TIER / 'manifest.json').relative_to(REPO)}  "
-          f"({len(fixtures_meta)} fixtures)")
+    print(f"wrote {(TIER / 'manifest.json').relative_to(REPO)}  ({len(fixtures_meta)} fixtures)")
 
 
 if __name__ == "__main__":

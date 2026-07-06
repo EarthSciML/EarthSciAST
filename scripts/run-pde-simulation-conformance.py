@@ -91,8 +91,7 @@ DEFAULT_TOLERANCES = {
 # earthsci-pde-sim-adapter-<binding> on PATH. Simulator adapters emit long
 # solver diagnostics, so keep a longer stderr tail and preserve it even when
 # the output file is unparseable JSON.
-_ADAPTERS = AdapterHarness("pde-sim", stderr_tail=3000,
-                           stderr_on_invalid_json=True)
+_ADAPTERS = AdapterHarness("pde-sim", stderr_tail=3000, stderr_on_invalid_json=True)
 
 
 # === Manifest loading =====================================================
@@ -121,6 +120,7 @@ def _close(a: float, b: float, rtol: float, atol: float) -> bool:
     """|a - b| <= atol + rtol*|b|, with both-non-finite treated as equal so an
     intentional +/-inf identity in a fixture does not spuriously fail."""
     import math
+
     if math.isnan(a) or math.isnan(b):
         return math.isnan(a) and math.isnan(b)
     if math.isinf(a) or math.isinf(b):
@@ -144,8 +144,9 @@ def _time_key(t: Any) -> str:
     return f"{float(t):g}"
 
 
-def compare_state(ref: dict, got: dict, rtol: float, atol: float,
-                  label: str) -> tuple[float, list[str]]:
+def compare_state(
+    ref: dict, got: dict, rtol: float, atol: float, label: str
+) -> tuple[float, list[str]]:
     """Compare two ``{element_name: value}`` maps. Returns (max_tol_frac,
     problems). Every reference element must be present and within tolerance."""
     ref_n = _norm_map(ref)
@@ -167,13 +168,13 @@ def compare_state(ref: dict, got: dict, rtol: float, atol: float,
         elif gv != rv:
             worst = float("inf")
         if not _close(gv, rv, rtol, atol):
-            problems.append(
-                f"{label}: {name} = {gv!r} != {rv!r} (atol={atol:g} rtol={rtol:g})")
+            problems.append(f"{label}: {name} = {gv!r} != {rv!r} (atol={atol:g} rtol={rtol:g})")
     return worst, problems
 
 
-def compare_against(fixture: dict, produced: dict, reference: dict,
-                    tol: dict, *, kind: str) -> dict:
+def compare_against(
+    fixture: dict, produced: dict, reference: dict, tol: dict, *, kind: str
+) -> dict:
     """Compare one binding's produced {rhs, trajectory} for a fixture against a
     reference (the Julia golden, or the analytic anchors). ``kind`` selects the
     trajectory tolerance band ('golden' or 'analytic')."""
@@ -186,8 +187,9 @@ def compare_against(fixture: dict, produced: dict, reference: dict,
         if probe_id not in got_rhs:
             problems.append(f"rhs: missing probe {probe_id!r}")
             continue
-        w, p = compare_state(ref_vec, got_rhs[probe_id], tol["rhs_rtol"],
-                             tol["rhs_atol"], f"rhs[{probe_id}]")
+        w, p = compare_state(
+            ref_vec, got_rhs[probe_id], tol["rhs_rtol"], tol["rhs_atol"], f"rhs[{probe_id}]"
+        )
         worst = max(worst, w)
         problems += p
     # --- Trajectory ---
@@ -201,8 +203,7 @@ def compare_against(fixture: dict, produced: dict, reference: dict,
         if tkey not in got_tr:
             problems.append(f"trajectory: missing output time {tkey!r}")
             continue
-        w, p = compare_state(ref_vec, got_tr[tkey], tr_rtol, tr_atol,
-                             f"traj[t={tkey}]")
+        w, p = compare_state(ref_vec, got_tr[tkey], tr_rtol, tr_atol, f"traj[t={tkey}]")
         worst = max(worst, w)
         problems += p
     return {"match": not problems, "problems": problems, "max_tol_frac": worst}
@@ -233,8 +234,7 @@ def _analytic_reference(fixture: dict, manifest_path: Path) -> dict:
             with ref_path.open() as f:
                 ref_doc = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            raise ManifestError(
-                f"trajectory.reference {ref_ptr!r} could not be loaded: {e}") from e
+            raise ManifestError(f"trajectory.reference {ref_ptr!r} could not be loaded: {e}") from e
         raw_traj = ref_doc.get("trajectory", {}).get("reference", {})
         traj = {_time_key(k): v for k, v in raw_traj.items()}
     else:
@@ -272,20 +272,26 @@ def self_test(manifest_path: Path) -> int:
         golden = load_golden(fx, manifest_path)
         if golden is None:
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}]: golden missing "
-                    f"({fx['golden']}); run --write-golden first")
+            _eprint(
+                f"self-test FAIL [{fx['id']}]: golden missing "
+                f"({fx['golden']}); run --write-golden first"
+            )
             continue
         analytic = _analytic_reference(fx, manifest_path)
         verdict = compare_against(fx, golden, analytic, tol, kind="analytic")
         if not verdict["match"]:
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}]: Julia golden disagrees with "
-                    "independent analytic anchors")
+            _eprint(
+                f"self-test FAIL [{fx['id']}]: Julia golden disagrees with "
+                "independent analytic anchors"
+            )
             for p in verdict["problems"][:12]:
                 _eprint(f"    {p}")
         else:
-            print(f"self-test OK   [{fx['id']}]: golden == analytic "
-                  f"(tol-frac {verdict['max_tol_frac']:.2f}x)")
+            print(
+                f"self-test OK   [{fx['id']}]: golden == analytic "
+                f"(tol-frac {verdict['max_tol_frac']:.2f}x)"
+            )
 
     # Negative controls — the harness MUST reject perturbed output.
     ref_fx = fixtures[0]
@@ -299,8 +305,10 @@ def self_test(manifest_path: Path) -> int:
         bad["rhs"][probe0][any_el] = float(bad["rhs"][probe0][any_el]) + 1.0
         if compare_against(ref_fx, bad, analytic, tol, kind="analytic")["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/rhs_off]: harness accepted an RHS "
-                    "element 1.0 out of tolerance (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/rhs_off]: harness accepted an RHS "
+                "element 1.0 out of tolerance (it must reject)"
+            )
         else:
             print("self-test OK   [neg/rhs_off]: out-of-tolerance RHS rejected")
         # NC2: perturb one trajectory element past the analytic band.
@@ -310,8 +318,10 @@ def self_test(manifest_path: Path) -> int:
         bad2["trajectory"][tkey][el] = float(bad2["trajectory"][tkey][el]) + 1.0
         if compare_against(ref_fx, bad2, analytic, tol, kind="analytic")["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/traj_off]: harness accepted a trajectory "
-                    "element 1.0 out of tolerance (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/traj_off]: harness accepted a trajectory "
+                "element 1.0 out of tolerance (it must reject)"
+            )
         else:
             print("self-test OK   [neg/traj_off]: out-of-tolerance trajectory rejected")
         # NC3: a missing element must be rejected.
@@ -319,8 +329,10 @@ def self_test(manifest_path: Path) -> int:
         bad3["rhs"][probe0].pop(any_el)
         if compare_against(ref_fx, bad3, analytic, tol, kind="analytic")["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/missing]: harness accepted output missing "
-                    "an element (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/missing]: harness accepted output missing "
+                "an element (it must reject)"
+            )
         else:
             print("self-test OK   [neg/missing]: missing element rejected")
 
@@ -336,13 +348,17 @@ def write_golden(manifest_path: Path, timeout: float | None) -> int:
     ref = manifest.get("reference_binding", "julia")
     argv = _ADAPTERS.discover(ref)
     if argv is None:
-        _eprint(f"--write-golden: reference adapter for {ref!r} not registered "
-                f"(set $EARTHSCI_PDE_SIM_ADAPTER_{ref.upper()})")
+        _eprint(
+            f"--write-golden: reference adapter for {ref!r} not registered "
+            f"(set $EARTHSCI_PDE_SIM_ADAPTER_{ref.upper()})"
+        )
         return 2
     payload = _ADAPTERS.run(ref, argv, manifest_path, timeout)
     if payload.get("adapter_status") != "ok":
-        _eprint(f"--write-golden: reference adapter failed: "
-                f"{payload.get('adapter_status')} {payload.get('error')}")
+        _eprint(
+            f"--write-golden: reference adapter failed: "
+            f"{payload.get('adapter_status')} {payload.get('error')}"
+        )
         if payload.get("stderr"):
             _eprint(payload["stderr"])
         return 1
@@ -357,8 +373,9 @@ def write_golden(manifest_path: Path, timeout: float | None) -> int:
             "fixture": fx["id"],
             "reference_binding": ref,
             "rhs": {pid: _norm_map(vec) for pid, vec in produced.get("rhs", {}).items()},
-            "trajectory": {_time_key(k): _norm_map(v)
-                           for k, v in produced.get("trajectory", {}).items()},
+            "trajectory": {
+                _time_key(k): _norm_map(v) for k, v in produced.get("trajectory", {}).items()
+            },
         }
         gpath = manifest_path.parent / fx["golden"]
         gpath.parent.mkdir(parents=True, exist_ok=True)
@@ -372,8 +389,9 @@ def write_golden(manifest_path: Path, timeout: float | None) -> int:
 # === Producer run mode ====================================================
 
 
-def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
-              timeout: float | None) -> int:
+def run_suite(
+    manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
+) -> int:
     manifest = load_manifest(manifest_path)
     tol = {**DEFAULT_TOLERANCES, **manifest.get("tolerances", {})}
     reference_binding = manifest.get("reference_binding", "julia")
@@ -395,14 +413,16 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
 
     adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
-    report: dict[str, Any] = {"manifest_path": str(manifest_path),
-                              "status": "ok", "bindings": {}}
+    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
 
     for b in bindings:
         ar = adapters[b]
-        b_report: dict[str, Any] = {"adapter_status": ar.get("adapter_status"),
-                                    "error": ar.get("error"), "fixtures": {}}
+        b_report: dict[str, Any] = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
         if ar.get("adapter_status") != "ok":
             if ar.get("stderr"):
                 b_report["stderr"] = ar["stderr"]
@@ -420,11 +440,10 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
                 b_report["fixtures"][fx["id"]] = {"status": "missing"}
                 b_ok = False
                 continue
-            v_golden = compare_against(fx, produced, goldens[fx["id"]], tol,
-                                       kind="golden")
-            v_analytic = compare_against(fx, produced,
-                                         _analytic_reference(fx, manifest_path),
-                                         tol, kind="analytic")
+            v_golden = compare_against(fx, produced, goldens[fx["id"]], tol, kind="golden")
+            v_analytic = compare_against(
+                fx, produced, _analytic_reference(fx, manifest_path), tol, kind="analytic"
+            )
             match = v_golden["match"] and v_analytic["match"]
             b_report["fixtures"][fx["id"]] = {
                 "status": "ok" if match else "mismatch",
@@ -455,10 +474,12 @@ def _print_summary(report: dict, reference_binding: str) -> None:
         for fid, fr in br.get("fixtures", {}).items():
             st = fr.get("status")
             if st == "ok":
-                print(f"      ok   {fid:30s} "
-                      f"golden={fr.get('tol_frac_vs_golden', 0):.2f}x "
-                      f"analytic={fr.get('tol_frac_vs_analytic', 0):.2f}x "
-                      f"(tol-frac, <1=pass)")
+                print(
+                    f"      ok   {fid:30s} "
+                    f"golden={fr.get('tol_frac_vs_golden', 0):.2f}x "
+                    f"analytic={fr.get('tol_frac_vs_analytic', 0):.2f}x "
+                    f"(tol-frac, <1=pass)"
+                )
             else:
                 print(f"      FAIL {fid}: {st}")
                 for p in (fr.get("problems") or [])[:6]:
@@ -482,19 +503,26 @@ def parse_args(argv: list[str]):
         timeout_help=None,
         self_test_help="Assert the golden reproduces the analytic anchors, then exit.",
     )
-    p.add_argument("--write-golden", action="store_true",
-                   help="Run only the reference adapter and (re)write golden/*.json.")
+    p.add_argument(
+        "--write-golden",
+        action="store_true",
+        help="Run only the reference adapter and (re)write golden/*.json.",
+    )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     return cli_main(
-        argv, parse_args=parse_args, self_test=self_test, run_suite=run_suite,
+        argv,
+        parse_args=parse_args,
+        self_test=self_test,
+        run_suite=run_suite,
         # Historical dispatch order: manifest existence is checked before
         # --self-test / --write-golden, so a missing manifest always exits 2.
         manifest_check_first=True,
-        extra_mode=lambda args: (write_golden(args.manifest, args.timeout)
-                                 if args.write_golden else None),
+        extra_mode=lambda args: (
+            write_golden(args.manifest, args.timeout) if args.write_golden else None
+        ),
     )
 
 

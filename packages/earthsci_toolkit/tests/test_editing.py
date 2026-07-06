@@ -41,9 +41,7 @@ def test_add_variable_duplicate_fails():
     model = _make_model()
     editor = ESMEditor(validate_after_edit=False)
 
-    result = editor.add_variable(
-        model, "x", ModelVariable(type="state", units="m", default=0.0)
-    )
+    result = editor.add_variable(model, "x", ModelVariable(type="state", units="m", default=0.0))
 
     assert not result.success
     assert any("already exists" in e for e in result.errors)

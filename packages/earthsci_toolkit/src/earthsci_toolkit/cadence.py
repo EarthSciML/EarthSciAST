@@ -305,9 +305,7 @@ def materialization_frontier(
         cc = classify(c, model)
         if _CLASS_RANK[cc] < _CLASS_RANK[parent]:
             out.append(
-                MaterializationPoint(
-                    threshold=f"{cc}->{parent}", kind="expr_edge", op=c.get("op")
-                )
+                MaterializationPoint(threshold=f"{cc}->{parent}", kind="expr_edge", op=c.get("op"))
             )
         else:
             materialization_frontier(c, model, out)
@@ -386,7 +384,7 @@ def assert_acyclic_index_sets(model: Mapping[str, Any]) -> None:
             if nxt not in set_to_node:
                 continue  # only derived sets participate in the topology DAG
             if color.get(nxt, WHITE) == GRAY:
-                cyc = stack[stack.index(nxt):] + [nxt]
+                cyc = stack[stack.index(nxt) :] + [nxt]
                 raise CadenceError(
                     "cycle in the ≤DISCRETE index-set dependency graph "
                     "(implicit solve, out of scope — §5.7 guard 1): "
@@ -477,9 +475,7 @@ def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any])
             inputs["face_lo"], inputs["face_hi"], inputs.get("skolem", "undirected")
         )
     if kind == "rank":
-        return fold_rank(
-            inputs["face_lo"], inputs["face_hi"], inputs.get("skolem", "undirected")
-        )
+        return fold_rank(inputs["face_lo"], inputs["face_hi"], inputs.get("skolem", "undirected"))
     raise CadenceError(f"buffer {label!r}: unknown fold kind {kind!r}")
 
 
@@ -623,9 +619,7 @@ def partition(model: Mapping[str, Any]) -> Partition:
     if problems:
         raise CadenceError("; ".join(problems))
 
-    event_handler_empty = not any(
-        mp.threshold.startswith("discrete") for mp in points
-    )
+    event_handler_empty = not any(mp.threshold.startswith("discrete") for mp in points)
 
     return Partition(
         class_summary=counts,

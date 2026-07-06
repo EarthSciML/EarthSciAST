@@ -38,7 +38,7 @@ MANIFEST = CONFORMANCE_DIR / "determinism" / "manifest.json"
 RUNNER = REPO_ROOT / "scripts" / "run-determinism-conformance.py"
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 
-_first = operator.itemgetter(0)   # key   = row[0]
+_first = operator.itemgetter(0)  # key   = row[0]
 _second = operator.itemgetter(1)  # value = row[1]
 
 
@@ -132,8 +132,10 @@ def test_equijoin_order_independent():
     got = equijoin(edges, cells, on_left=lambda e: e[1], on_right=lambda c: c[0])
     # permute both sides → identical result
     got2 = equijoin(
-        list(reversed(edges)), list(reversed(cells)),
-        on_left=lambda e: e[1], on_right=lambda c: c[0],
+        list(reversed(edges)),
+        list(reversed(cells)),
+        on_left=lambda e: e[1],
+        on_right=lambda c: c[0],
     )
     assert got2 == got
 
@@ -152,18 +154,28 @@ def _rows_symbolic():
 
 def test_group_aggregate_sum_max_min():
     rows = _rows_symbolic()
-    assert group_aggregate(rows, key=_first, value=_second, op=operator.add) == \
-        [("a", 11), ("b", 7), ("c", 5)]
-    assert group_aggregate(rows, key=_first, value=_second, op=max) == \
-        [("a", 10), ("b", 4), ("c", 5)]
-    assert group_aggregate(rows, key=_first, value=_second, op=min) == \
-        [("a", 1), ("b", 3), ("c", 5)]
+    assert group_aggregate(rows, key=_first, value=_second, op=operator.add) == [
+        ("a", 11),
+        ("b", 7),
+        ("c", 5),
+    ]
+    assert group_aggregate(rows, key=_first, value=_second, op=max) == [
+        ("a", 10),
+        ("b", 4),
+        ("c", 5),
+    ]
+    assert group_aggregate(rows, key=_first, value=_second, op=min) == [
+        ("a", 1),
+        ("b", 3),
+        ("c", 5),
+    ]
 
 
 def test_group_aggregate_order_independent():
     rows = _rows_symbolic()
-    assert group_aggregate(list(reversed(rows)), key=_first, value=_second, op=operator.add) == \
-        group_aggregate(rows, key=_first, value=_second, op=operator.add)
+    assert group_aggregate(
+        list(reversed(rows)), key=_first, value=_second, op=operator.add
+    ) == group_aggregate(rows, key=_first, value=_second, op=operator.add)
 
 
 def test_group_aggregate_float_values_canonical_order():
@@ -263,7 +275,9 @@ def test_bool_keys_allowed():
     # sorted({False, True}) == [False, True].
     got = group_aggregate(
         [(True, 1), (False, 2), (True, 3)],
-        key=lambda r: r[0], value=lambda r: r[1], op=operator.add,
+        key=lambda r: r[0],
+        value=lambda r: r[1],
+        op=operator.add,
     )
     assert got == [(False, 2), (True, 4)]
 
@@ -316,13 +330,16 @@ def test_determinism_runner_accepts_python_adapter(tmp_path):
     env["EARTHSCI_DETERMINISM_ADAPTER_PYTHON"] = (
         f"{sys.executable} -m earthsci_toolkit.cli.determinism_adapter"
     )
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(SRC_DIR), env.get("PYTHONPATH", "")]
-    ).rstrip(os.pathsep)
+    env["PYTHONPATH"] = os.pathsep.join([str(SRC_DIR), env.get("PYTHONPATH", "")]).rstrip(
+        os.pathsep
+    )
     report = tmp_path / "report.json"
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--bindings", "python", "--output", str(report)],
-        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, f"runner failed:\n{proc.stdout}\n{proc.stderr}"
     data = json.loads(report.read_text())

@@ -6,9 +6,15 @@ import pytest
 import numpy as np
 
 from earthsci_toolkit import (
-    ReactionSystem, Reaction, Species, Parameter,
-    derive_odes, stoichiometric_matrix, substrate_matrix, product_matrix,
-    ExprNode
+    ReactionSystem,
+    Reaction,
+    Species,
+    Parameter,
+    derive_odes,
+    stoichiometric_matrix,
+    substrate_matrix,
+    product_matrix,
+    ExprNode,
 )
 
 
@@ -26,17 +32,9 @@ class TestStoichiometricMatrix:
         species_A = Species(name="A")
         species_B = Species(name="B")
 
-        reaction = Reaction(
-            name="A_to_B",
-            reactants={"A": 1.0},
-            products={"B": 1.0}
-        )
+        reaction = Reaction(name="A_to_B", reactants={"A": 1.0}, products={"B": 1.0})
 
-        system = ReactionSystem(
-            name="simple",
-            species=[species_A, species_B],
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="simple", species=[species_A, species_B], reactions=[reaction])
 
         matrix = stoichiometric_matrix(system)
         expected = np.array([[-1.0], [1.0]])
@@ -48,21 +46,19 @@ class TestStoichiometricMatrix:
 
         reactions = [
             Reaction(name="r1", reactants={"A": 1.0}, products={"B": 1.0}),
-            Reaction(name="r2", reactants={"B": 1.0}, products={"C": 1.0})
+            Reaction(name="r2", reactants={"B": 1.0}, products={"C": 1.0}),
         ]
 
-        system = ReactionSystem(
-            name="sequential",
-            species=species,
-            reactions=reactions
-        )
+        system = ReactionSystem(name="sequential", species=species, reactions=reactions)
 
         matrix = stoichiometric_matrix(system)
-        expected = np.array([
-            [-1.0,  0.0],  # A
-            [ 1.0, -1.0],  # B
-            [ 0.0,  1.0]   # C
-        ])
+        expected = np.array(
+            [
+                [-1.0, 0.0],  # A
+                [1.0, -1.0],  # B
+                [0.0, 1.0],  # C
+            ]
+        )
         np.testing.assert_allclose(matrix, expected)
 
     def test_reaction_with_coefficients(self):
@@ -70,17 +66,9 @@ class TestStoichiometricMatrix:
         species = [Species(name=name) for name in ["A", "B", "C"]]
 
         # 2A + B -> 3C
-        reaction = Reaction(
-            name="complex",
-            reactants={"A": 2.0, "B": 1.0},
-            products={"C": 3.0}
-        )
+        reaction = Reaction(name="complex", reactants={"A": 2.0, "B": 1.0}, products={"C": 3.0})
 
-        system = ReactionSystem(
-            name="complex_stoich",
-            species=species,
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="complex_stoich", species=species, reactions=[reaction])
 
         matrix = stoichiometric_matrix(system)
         expected = np.array([[-2.0], [-1.0], [3.0]])
@@ -94,17 +82,9 @@ class TestSubstrateProductMatrices:
         """Test substrate matrix computation."""
         species = [Species(name=name) for name in ["A", "B", "C"]]
 
-        reaction = Reaction(
-            name="r1",
-            reactants={"A": 2.0, "B": 1.0},
-            products={"C": 1.0}
-        )
+        reaction = Reaction(name="r1", reactants={"A": 2.0, "B": 1.0}, products={"C": 1.0})
 
-        system = ReactionSystem(
-            name="test",
-            species=species,
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="test", species=species, reactions=[reaction])
 
         matrix = substrate_matrix(system)
         expected = np.array([[2.0], [1.0], [0.0]])
@@ -114,17 +94,9 @@ class TestSubstrateProductMatrices:
         """Test product matrix computation."""
         species = [Species(name=name) for name in ["A", "B", "C"]]
 
-        reaction = Reaction(
-            name="r1",
-            reactants={"A": 2.0, "B": 1.0},
-            products={"C": 3.0}
-        )
+        reaction = Reaction(name="r1", reactants={"A": 2.0, "B": 1.0}, products={"C": 3.0})
 
-        system = ReactionSystem(
-            name="test",
-            species=species,
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="test", species=species, reactions=[reaction])
 
         matrix = product_matrix(system)
         expected = np.array([[0.0], [0.0], [3.0]])
@@ -136,14 +108,10 @@ class TestSubstrateProductMatrices:
 
         reactions = [
             Reaction(name="r1", reactants={"A": 1.0}, products={"B": 1.0}),
-            Reaction(name="r2", reactants={"B": 2.0}, products={"C": 1.0})
+            Reaction(name="r2", reactants={"B": 2.0}, products={"C": 1.0}),
         ]
 
-        system = ReactionSystem(
-            name="test",
-            species=species,
-            reactions=reactions
-        )
+        system = ReactionSystem(name="test", species=species, reactions=reactions)
 
         stoich = stoichiometric_matrix(system)
         substrate = substrate_matrix(system)
@@ -171,10 +139,7 @@ class TestDeriveODEs:
         """Test that reactions without rate constants raise errors."""
         species = [Species(name="A"), Species(name="B")]
         reaction = Reaction(
-            name="r1",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=None
+            name="r1", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=None
         )
         system = ReactionSystem(name="test", species=species, reactions=[reaction])
 
@@ -188,17 +153,11 @@ class TestDeriveODEs:
         k1 = Parameter(name="k1", value=0.1, units="1/s")
 
         reaction = Reaction(
-            name="A_to_B",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant="k1"
+            name="A_to_B", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant="k1"
         )
 
         system = ReactionSystem(
-            name="simple",
-            species=[species_A, species_B],
-            parameters=[k1],
-            reactions=[reaction]
+            name="simple", species=[species_A, species_B], parameters=[k1], reactions=[reaction]
         )
 
         model = derive_odes(system)
@@ -229,14 +188,11 @@ class TestDeriveODEs:
             name="invalid",
             reactants={"B": 1.0},  # "B" not in species list
             products={"A": 1.0},
-            rate_constant="k1"
+            rate_constant="k1",
         )
 
         system = ReactionSystem(
-            name="invalid",
-            species=[species_A],
-            parameters=[k1],
-            reactions=[reaction]
+            name="invalid", species=[species_A], parameters=[k1], reactions=[reaction]
         )
 
         with pytest.raises(ValueError, match="not found in species list"):
@@ -247,19 +203,16 @@ class TestDeriveODEs:
         species = [Species(name=name, units="mol/L") for name in ["A", "B", "C"]]
         parameters = [
             Parameter(name="k1", value=0.1, units="1/s"),
-            Parameter(name="k2", value=0.05, units="1/s")
+            Parameter(name="k2", value=0.05, units="1/s"),
         ]
 
         reactions = [
             Reaction(name="r1", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant="k1"),
-            Reaction(name="r2", reactants={"B": 1.0}, products={"C": 1.0}, rate_constant="k2")
+            Reaction(name="r2", reactants={"B": 1.0}, products={"C": 1.0}, rate_constant="k2"),
         ]
 
         system = ReactionSystem(
-            name="sequential",
-            species=species,
-            parameters=parameters,
-            reactions=reactions
+            name="sequential", species=species, parameters=parameters, reactions=reactions
         )
 
         model = derive_odes(system)
@@ -275,23 +228,17 @@ class TestDeriveODEs:
     def test_source_and_sink_reactions(self):
         """Test reactions with no reactants (source) or no products (sink)."""
         species = [Species(name=name) for name in ["A", "B"]]
-        parameters = [
-            Parameter(name="k_source", value=1.0),
-            Parameter(name="k_sink", value=0.1)
-        ]
+        parameters = [Parameter(name="k_source", value=1.0), Parameter(name="k_sink", value=0.1)]
 
         reactions = [
             # Source reaction: -> A (no reactants)
             Reaction(name="source", reactants={}, products={"A": 1.0}, rate_constant="k_source"),
             # Sink reaction: B -> (no products)
-            Reaction(name="sink", reactants={"B": 1.0}, products={}, rate_constant="k_sink")
+            Reaction(name="sink", reactants={"B": 1.0}, products={}, rate_constant="k_sink"),
         ]
 
         system = ReactionSystem(
-            name="source_sink",
-            species=species,
-            parameters=parameters,
-            reactions=reactions
+            name="source_sink", species=species, parameters=parameters, reactions=reactions
         )
 
         model = derive_odes(system)
@@ -329,7 +276,8 @@ class TestDeriveODEs:
         model = derive_odes(system)
 
         da_eq = next(
-            eq for eq in model.equations
+            eq
+            for eq in model.equations
             if isinstance(eq.lhs, ExprNode) and eq.lhs.op == "D" and eq.lhs.args[0] == "A"
         )
 

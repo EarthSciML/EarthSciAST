@@ -109,9 +109,7 @@ class TestResolveDataDir:
 
 class TestCachedOpenerOffline:
     def test_offline_miss_raises_cachemiss_which_is_oserror(self, tmp_path):
-        opener = cached_opener(
-            opener=lambda p: ("opened", p), data_dir=tmp_path, offline=True
-        )
+        opener = cached_opener(opener=lambda p: ("opened", p), data_dir=tmp_path, offline=True)
         with pytest.raises(CacheMiss) as exc:
             opener("https://h/missing.nc")
         assert isinstance(exc.value, OSError), "CacheMiss must be an OSError"
@@ -119,9 +117,7 @@ class TestCachedOpenerOffline:
 
     def test_offline_hit_reads_cache_without_fetch(self, tmp_path):
         url = "https://h/data.nc"
-        cache_path_for_url(url, data_dir=tmp_path).parent.mkdir(
-            parents=True, exist_ok=True
-        )
+        cache_path_for_url(url, data_dir=tmp_path).parent.mkdir(parents=True, exist_ok=True)
         cache_path_for_url(url, data_dir=tmp_path).write_bytes(b"NETCDFBYTES")
 
         seen: List[str] = []
@@ -289,11 +285,7 @@ _LOADER_CASES = [
 
 def _strip_comments(data):
     if isinstance(data, dict):
-        return {
-            k: _strip_comments(v)
-            for k, v in data.items()
-            if not k.startswith("_comment")
-        }
+        return {k: _strip_comments(v) for k, v in data.items() if not k.startswith("_comment")}
     if isinstance(data, list):
         return [_strip_comments(v) for v in data]
     return data

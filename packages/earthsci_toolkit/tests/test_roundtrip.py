@@ -2,33 +2,20 @@
 
 import json
 
-import pytest
 from conftest import FIXTURES_ROOT, VALID_DIR
 
 from earthsci_toolkit import load, save
-from earthsci_toolkit.esm_types import (
-    EsmFile, Metadata, Model, ModelVariable, Equation, ExprNode,
-    ReactionSystem, Species, Parameter, Reaction
-)
+from earthsci_toolkit.esm_types import EsmFile, Metadata, Model, ModelVariable, Equation
 
 
 def test_roundtrip_minimal():
     """Test round-trip with minimal ESM file."""
     original_json = {
         "esm": "0.1.0",
-        "metadata": {
-            "name": "Minimal Test"
-        },
+        "metadata": {"name": "Minimal Test"},
         "models": {
-            "simple": {
-                "variables": {
-                    "x": {"type": "state"}
-                },
-                "equations": [
-                    {"lhs": "x", "rhs": 1}
-                ]
-            }
-        }
+            "simple": {"variables": {"x": {"type": "state"}}, "equations": [{"lhs": "x", "rhs": 1}]}
+        },
     }
 
     # Convert to JSON string
@@ -59,18 +46,18 @@ def test_roundtrip_reaction_system():
         "esm": "0.1.0",
         "metadata": {
             "name": "Reaction Round-trip Test",
-            "description": "Test reaction system round-trip"
+            "description": "Test reaction system round-trip",
         },
         "reaction_systems": {
             "simple_reaction": {
                 "species": {
                     "A": {"units": "mol", "description": "Species A"},
                     "B": {"units": "mol", "description": "Species B"},
-                    "C": {"units": "mol", "description": "Product C"}
+                    "C": {"units": "mol", "description": "Product C"},
                 },
                 "parameters": {
                     "k1": {"units": "1/(mol*s)", "default": 0.1, "description": "Rate constant"},
-                    "k2": {"units": "1/s", "default": 0.05}
+                    "k2": {"units": "1/s", "default": 0.05},
                 },
                 "reactions": [
                     {
@@ -78,28 +65,24 @@ def test_roundtrip_reaction_system():
                         "name": "Forward reaction",
                         "substrates": [
                             {"species": "A", "stoichiometry": 1},
-                            {"species": "B", "stoichiometry": 1}
+                            {"species": "B", "stoichiometry": 1},
                         ],
-                        "products": [
-                            {"species": "C", "stoichiometry": 1}
-                        ],
-                        "rate": "k1"
+                        "products": [{"species": "C", "stoichiometry": 1}],
+                        "rate": "k1",
                     },
                     {
                         "id": "R2",
                         "name": "Reverse reaction",
-                        "substrates": [
-                            {"species": "C", "stoichiometry": 1}
-                        ],
+                        "substrates": [{"species": "C", "stoichiometry": 1}],
                         "products": [
                             {"species": "A", "stoichiometry": 1},
-                            {"species": "B", "stoichiometry": 1}
+                            {"species": "B", "stoichiometry": 1},
                         ],
-                        "rate": "k2"
-                    }
-                ]
+                        "rate": "k2",
+                    },
+                ],
             }
-        }
+        },
     }
 
     json_str = json.dumps(original_json)
@@ -131,57 +114,29 @@ def test_roundtrip_complex_expression():
     """Test round-trip with complex nested expressions."""
     original_json = {
         "esm": "0.1.0",
-        "metadata": {
-            "name": "Expression Test"
-        },
+        "metadata": {"name": "Expression Test"},
         "models": {
             "complex_model": {
                 "variables": {
                     "x": {"type": "state"},
                     "y": {"type": "state"},
-                    "z": {"type": "observed", "expression": {
-                        "op": "*",
-                        "args": [
-                            {
-                                "op": "+",
-                                "args": ["x", "y"]
-                            },
-                            2.5
-                        ]
-                    }}
+                    "z": {
+                        "type": "observed",
+                        "expression": {"op": "*", "args": [{"op": "+", "args": ["x", "y"]}, 2.5]},
+                    },
                 },
                 "equations": [
                     {
-                        "lhs": {
-                            "op": "D",
-                            "args": ["x"],
-                            "wrt": "t"
-                        },
-                        "rhs": {
-                            "op": "sin",
-                            "args": ["y"]
-                        }
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "sin", "args": ["y"]},
                     },
                     {
-                        "lhs": {
-                            "op": "D",
-                            "args": ["y"],
-                            "wrt": "t"
-                        },
-                        "rhs": {
-                            "op": "-",
-                            "args": [
-                                "x",
-                                {
-                                    "op": "^",
-                                    "args": ["y", 2]
-                                }
-                            ]
-                        }
-                    }
-                ]
+                        "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x", {"op": "^", "args": ["y", 2]}]},
+                    },
+                ],
             }
-        }
+        },
     }
 
     json_str = json.dumps(original_json)
@@ -232,20 +187,16 @@ def test_roundtrip_preserves_metadata():
                 {
                     "citation": "Smith et al. (2024)",
                     "doi": "10.1000/test.doi",
-                    "url": "https://example.com/paper"
+                    "url": "https://example.com/paper",
                 }
-            ]
+            ],
         },
         "models": {
             "meta_model": {
-                "variables": {
-                    "x": {"type": "state"}
-                },
-                "equations": [
-                    {"lhs": "x", "rhs": 0}
-                ]
+                "variables": {"x": {"type": "state"}},
+                "equations": [{"lhs": "x", "rhs": 0}],
             }
-        }
+        },
     }
 
     json_str = json.dumps(original_json)
@@ -321,8 +272,8 @@ def test_roundtrip_preserves_int_float_distinction():
                     "y": {"type": "state"},
                 },
                 "equations": [
-                    {"lhs": "x", "rhs": 1},        # integer literal
-                    {"lhs": "y", "rhs": 1.0},      # float literal
+                    {"lhs": "x", "rhs": 1},  # integer literal
+                    {"lhs": "y", "rhs": 1.0},  # float literal
                     {"lhs": "x", "rhs": {"op": "+", "args": [1, 2.5]}},
                     {"lhs": "y", "rhs": {"op": "+", "args": [1.0, 2.5]}},
                 ],
@@ -352,6 +303,7 @@ def test_roundtrip_preserves_int_float_distinction():
     assert type(eqs[3]["rhs"]["args"][0]) is float
     assert type(eqs[3]["rhs"]["args"][1]) is float
 
+
 def test_roundtrip_tests_and_examples_fixture():
     """Round-trip the tests_examples_comprehensive fixture: inline Test/Assertion/
     Example/Plot/ParameterSweep blocks must survive parse -> serialize (gt-krpg)."""
@@ -380,8 +332,7 @@ def test_roundtrip_tests_and_examples_fixture():
 
     # Spot-check full structure: heatmap-over-sweep assertion values.
     sweep_example = next(
-        e for e in out["models"]["LogisticGrowth"]["examples"]
-        if e["id"] == "rK_heatmap_sweep"
+        e for e in out["models"]["LogisticGrowth"]["examples"] if e["id"] == "rK_heatmap_sweep"
     )
     assert len(sweep_example["parameter_sweep"]["dimensions"]) == 2
     assert sweep_example["plots"][0]["value"] == {"variable": "N", "reduce": "final"}
@@ -394,8 +345,7 @@ def test_roundtrip_tests_and_examples_fixture():
 
     # Inline array-form y (v0.5.0) is parsed and normalized to canonical form.
     multi_y_example = next(
-        e for e in out["reaction_systems"]["SimpleDecay"]["examples"]
-        if e["id"] == "multi_y_trace"
+        e for e in out["reaction_systems"]["SimpleDecay"]["examples"] if e["id"] == "multi_y_trace"
     )
     multi_plot = multi_y_example["plots"][0]
     # After normalization, y is the canonical single PlotAxis (first entry).
@@ -450,8 +400,10 @@ def test_inline_multi_y_explicit_series_wins():
 def test_roundtrip_typed_test_assertion():
     """Construct Test/Assertion directly and ensure they round-trip to the wire."""
     from earthsci_toolkit.esm_types import (
-        EsmFile, Metadata, Model, ModelVariable, Equation,
-        Tolerance, TimeSpan, Assertion, Test,
+        Tolerance,
+        TimeSpan,
+        Assertion,
+        Test,
     )
 
     esm = EsmFile(
@@ -469,8 +421,9 @@ def test_roundtrip_typed_test_assertion():
                         time_span=TimeSpan(start=0.0, end=10.0),
                         tolerance=Tolerance(abs=1e-4),
                         assertions=[
-                            Assertion(variable="x", time=10.0, expected=1.0,
-                                      tolerance=Tolerance(abs=1e-8)),
+                            Assertion(
+                                variable="x", time=10.0, expected=1.0, tolerance=Tolerance(abs=1e-8)
+                            ),
                         ],
                     ),
                 ],

@@ -333,9 +333,7 @@ def build_reference_graph(
                 )
             id_to_addr[nid] = addr
         graph._ensure_vertex(
-            ReferenceVertex(
-                key=key, kind=VertexKind.NODE, name=addr, op=op, node_id=nid, path=path
-            )
+            ReferenceVertex(key=key, kind=VertexKind.NODE, name=addr, op=op, node_id=nid, path=path)
         )
         return key
 
@@ -388,9 +386,7 @@ def build_reference_graph(
                             f"(model '{model_name}', at {path})",
                         )
                     graph._ensure_vertex(
-                        ReferenceVertex(
-                            key=_factor_key(ref), kind=VertexKind.FACTOR, name=ref
-                        )
+                        ReferenceVertex(key=_factor_key(ref), kind=VertexKind.FACTOR, name=ref)
                     )
                     graph._add_edge(key, _factor_key(ref), EdgeKind.JOIN_FACTOR)
 
@@ -429,9 +425,7 @@ def build_reference_graph(
                     f"which is not the id of any expression node in model "
                     f"'{model_name}'",
                 )
-            graph._add_edge(
-                _index_set_key(name), _node_key(id_to_addr[faq]), EdgeKind.FROM_FAQ
-            )
+            graph._add_edge(_index_set_key(name), _node_key(id_to_addr[faq]), EdgeKind.FROM_FAQ)
 
     return graph
 

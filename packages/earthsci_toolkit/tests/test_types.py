@@ -1,14 +1,27 @@
 """Test the type definitions in earthsci_toolkit.types."""
 
-import pytest
 from earthsci_toolkit.esm_types import (
-    ExprNode, Expr, Equation, AffectEquation, ModelVariable, Model,
-    Species, Parameter, Reaction, ReactionSystem,
-    ContinuousEvent, DiscreteEvent, FunctionalAffect, DiscreteEventTrigger,
-    DataLoader, DataLoaderKind, DataLoaderSource, DataLoaderVariable, Operator,
-    CouplingEntry, CouplingType, VariableMapCoupling, OperatorComposeCoupling,
+    ExprNode,
+    Equation,
+    AffectEquation,
+    ModelVariable,
+    Model,
+    Species,
+    Parameter,
+    Reaction,
+    ReactionSystem,
+    DataLoader,
+    DataLoaderKind,
+    DataLoaderSource,
+    DataLoaderVariable,
+    Operator,
+    CouplingType,
+    VariableMapCoupling,
+    OperatorComposeCoupling,
     Domain,
-    Reference, Metadata, EsmFile
+    Reference,
+    Metadata,
+    EsmFile,
 )
 
 
@@ -37,12 +50,7 @@ def test_affect_equation():
 
 def test_model_variable():
     """Test ModelVariable creation."""
-    var = ModelVariable(
-        type="state",
-        units="kg/m^3",
-        default=0.0,
-        description="Concentration"
-    )
+    var = ModelVariable(type="state", units="kg/m^3", default=0.0, description="Concentration")
     assert var.type == "state"
     assert var.units == "kg/m^3"
     assert var.default == 0.0
@@ -76,12 +84,7 @@ def test_parameter():
 
 def test_reaction():
     """Test Reaction creation."""
-    reaction = Reaction(
-        name="R1",
-        reactants={"A": 1, "B": 1},
-        products={"C": 1},
-        rate_constant=0.1
-    )
+    reaction = Reaction(name="R1", reactants={"A": 1, "B": 1}, products={"C": 1}, rate_constant=0.1)
     assert reaction.name == "R1"
     assert reaction.reactants == {"A": 1, "B": 1}
     assert reaction.products == {"C": 1}
@@ -130,7 +133,7 @@ def test_coupling_entry():
         to_var="Model2.y",
         transform="identity",
         factor=1.0,
-        description="Test variable mapping"
+        description="Test variable mapping",
     )
     assert coupling.from_var == "Model1.x"
     assert coupling.to_var == "Model2.y"
@@ -140,9 +143,7 @@ def test_coupling_entry():
 
     # Test OperatorComposeCoupling
     op_coupling = OperatorComposeCoupling(
-        systems=["model1", "model2"],
-        translate={"var1": "var2"},
-        description="Operator composition"
+        systems=["model1", "model2"], translate={"var1": "var2"}, description="Operator composition"
     )
     assert op_coupling.systems == ["model1", "model2"]
     assert op_coupling.translate == {"var1": "var2"}

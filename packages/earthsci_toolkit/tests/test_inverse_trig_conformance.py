@@ -120,12 +120,9 @@ def test_inverse_trig_fixture_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(
-                esm_file, tspan=tspan, initial_conditions=ics, parameters=params
-            )
+            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
             assert result.success, (
-                f"{fixture_path.name}::{model_name}::{test_id} "
-                f"simulation failed: {result.message}"
+                f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
             test_tolerance = test.get("tolerance") or {}
@@ -137,9 +134,7 @@ def test_inverse_trig_fixture_conformance(fixture_path: Path) -> None:
                 rel, ab = _resolve_expected_tolerance(
                     model_tolerance, test_tolerance, assertion.get("tolerance") or {}
                 )
-                actual = _lookup_element(
-                    result.vars, result.y, result.t, var_key, time
-                )
+                actual = _lookup_element(result.vars, result.y, result.t, var_key, time)
                 assert _assertion_passes(actual, expected, rel, ab), (
                     f"{fixture_path.name}::{model_name}::{test_id} "
                     f"assertion {var_key}@t={time} expected={expected} "

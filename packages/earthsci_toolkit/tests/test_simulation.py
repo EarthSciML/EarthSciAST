@@ -11,12 +11,16 @@ This module tests the core simulation functionality including:
 
 import pytest
 import numpy as np
-from earthsci_toolkit.simulation import simulate_reaction_system as simulate, SimulationResult, SimulationError
+from earthsci_toolkit.simulation import simulate_reaction_system as simulate, SimulationResult
 from earthsci_toolkit.sympy_bridge import _expr_to_sympy
 from earthsci_toolkit.numpy_interpreter import UnreachableSpatialOperatorError
 from earthsci_toolkit.esm_types import (
-    ReactionSystem, Species, Parameter, Reaction,
-    ContinuousEvent, ExprNode
+    ReactionSystem,
+    Species,
+    Parameter,
+    Reaction,
+    ContinuousEvent,
+    ExprNode,
 )
 import sympy as sp
 
@@ -120,15 +124,12 @@ class TestSimpleReactionSystems:
             name="decay",
             reactants={"A": 1.0},
             products={},  # Products are removed from system
-            rate_constant=0.1
+            rate_constant=0.1,
         )
 
         # Create reaction system
         system = ReactionSystem(
-            name="decay_system",
-            species=[species_A],
-            parameters=[k],
-            reactions=[reaction]
+            name="decay_system", species=[species_A], parameters=[k], reactions=[reaction]
         )
 
         # Initial conditions
@@ -156,25 +157,19 @@ class TestSimpleReactionSystems:
 
         # Forward reaction: A -> B
         reaction_fwd = Reaction(
-            name="forward",
-            reactants={"A": 1.0},
-            products={"B": 1.0},
-            rate_constant=0.5
+            name="forward", reactants={"A": 1.0}, products={"B": 1.0}, rate_constant=0.5
         )
 
         # Reverse reaction: B -> A
         reaction_rev = Reaction(
-            name="reverse",
-            reactants={"B": 1.0},
-            products={"A": 1.0},
-            rate_constant=0.2
+            name="reverse", reactants={"B": 1.0}, products={"A": 1.0}, rate_constant=0.2
         )
 
         # Create system
         system = ReactionSystem(
             name="reversible",
             species=[species_A, species_B],
-            reactions=[reaction_fwd, reaction_rev]
+            reactions=[reaction_fwd, reaction_rev],
         )
 
         # Initial conditions: only A present
@@ -195,11 +190,7 @@ class TestSimpleReactionSystems:
 
     def test_empty_system(self):
         """Test handling of empty reaction system."""
-        system = ReactionSystem(
-            name="empty",
-            species=[],
-            reactions=[]
-        )
+        system = ReactionSystem(name="empty", species=[], reactions=[])
 
         initial = {}
         result = simulate(system, initial, (0, 1))
@@ -212,25 +203,16 @@ class TestSimpleReactionSystems:
         # Simple decay system
         species_A = Species(name="A")
 
-        reaction = Reaction(
-            name="decay",
-            reactants={"A": 1.0},
-            products={},
-            rate_constant=0.1
-        )
+        reaction = Reaction(name="decay", reactants={"A": 1.0}, products={}, rate_constant=0.1)
 
-        system = ReactionSystem(
-            name="decay_with_event",
-            species=[species_A],
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="decay_with_event", species=[species_A], reactions=[reaction])
 
         # Event: stop when A drops below 0.5
         event_condition = ExprNode(op="-", args=["A", 0.5])  # A - 0.5
         event = ContinuousEvent(
             name="threshold",
             conditions=[event_condition],  # Changed to array
-            affects=[]
+            affects=[],
         )
 
         initial = {"A": 1.0}
@@ -250,14 +232,10 @@ class TestSimulationErrors:
         species_A = Species(name="A")
         reaction = Reaction(name="r1", rate_constant=0.1)
 
-        system = ReactionSystem(
-            name="test",
-            species=[species_A],
-            reactions=[reaction]
-        )
+        system = ReactionSystem(name="test", species=[species_A], reactions=[reaction])
 
         # Missing initial condition should default to 0
-        result = simulate(system, {}, (0, 1))
+        simulate(system, {}, (0, 1))
         # This should still work, just with zero initial conditions
 
     def test_invalid_time_span(self):

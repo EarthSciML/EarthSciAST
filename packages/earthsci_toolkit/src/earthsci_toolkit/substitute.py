@@ -5,8 +5,13 @@ Expression substitution and variable replacement functions.
 from dataclasses import replace
 from typing import Dict, List
 from .esm_types import (
-    Expr, ExprNode, Model, Equation,
-    EsmFile, CouplingType, OperatorComposeCoupling
+    Expr,
+    ExprNode,
+    Model,
+    Equation,
+    EsmFile,
+    CouplingType,
+    OperatorComposeCoupling,
 )
 from .expr_walk import any_child, map_children
 
@@ -57,10 +62,7 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
                 if k in result and isinstance(result[k], list):
                     result[k] = [substitute(v, bindings) for v in result[k]]
             if "axes" in result and isinstance(result["axes"], dict):
-                result["axes"] = {
-                    ak: substitute(av, bindings)
-                    for ak, av in result["axes"].items()
-                }
+                result["axes"] = {ak: substitute(av, bindings) for ak, av in result["axes"].items()}
             return result
         # For other dicts, return unchanged
         return expr
@@ -83,6 +85,7 @@ def substitute_in_model(model, bindings: Dict[str, Expr]):
     # Handle dict-form models
     if isinstance(model, dict):
         import copy
+
         result = copy.deepcopy(model)
         # Substitute in equations
         if "equations" in result:
@@ -131,6 +134,7 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
     # Handle dict-form reaction systems
     if isinstance(system, dict):
         import copy
+
         result = copy.deepcopy(system)
         # Substitute in parameters
         if "parameters" in result:
@@ -159,17 +163,21 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
     new_reactions = []
     for reaction in system.reactions:
         new_rate_constant = reaction.rate_constant
-        if reaction.rate_constant is not None and not isinstance(reaction.rate_constant, (int, float)):
+        if reaction.rate_constant is not None and not isinstance(
+            reaction.rate_constant, (int, float)
+        ):
             # Rate constant is an expression
             new_rate_constant = substitute(reaction.rate_constant, bindings)
 
-        new_reactions.append(replace(
-            reaction,
-            reactants=reaction.reactants.copy(),
-            products=reaction.products.copy(),
-            rate_constant=new_rate_constant,
-            conditions=reaction.conditions.copy(),
-        ))
+        new_reactions.append(
+            replace(
+                reaction,
+                reactants=reaction.reactants.copy(),
+                products=reaction.products.copy(),
+                rate_constant=new_rate_constant,
+                conditions=reaction.conditions.copy(),
+            )
+        )
 
     # ``replace`` carries constraint_equations, subsystems, tolerance, tests,
     # examples, continuous_events/discrete_events (and any future field) —
@@ -328,9 +336,10 @@ def process_operator_compose_placeholders(esm_file: EsmFile) -> EsmFile:
 
     # Find all operator_compose couplings
     for coupling in esm_file.coupling:
-        if (isinstance(coupling, OperatorComposeCoupling) or
-            (hasattr(coupling, 'coupling_type') and coupling.coupling_type == CouplingType.OPERATOR_COMPOSE)):
-
+        if isinstance(coupling, OperatorComposeCoupling) or (
+            hasattr(coupling, "coupling_type")
+            and coupling.coupling_type == CouplingType.OPERATOR_COMPOSE
+        ):
             if not coupling.systems or len(coupling.systems) < 2:
                 continue
 

@@ -200,9 +200,7 @@ def _compute(fixture: dict, payload: dict) -> dict:
         elif "tuples" in payload:
             tuples = [tuple(t) for t in payload["tuples"]]
         else:
-            raise DeterminismError(
-                f"fixture {fixture['id']}: input needs 'faces' or 'tuples'"
-            )
+            raise DeterminismError(f"fixture {fixture['id']}: input needs 'faces' or 'tuples'")
         keys = skolem(tuples, fixture["skolem"])
         index_set = distinct_sorted(keys)
     elif primitive == "group_by_sum":
@@ -240,9 +238,7 @@ def _validate_fixture(fx: dict, fid: str, path: Path) -> None:
     exp = fx["expected"]
     for field in ("index_set", "serialized", "dense_ids_canonical"):
         if field not in exp:
-            raise ManifestError(
-                f"{path}: fixtures[{fid}].expected missing '{field}'"
-            )
+            raise ManifestError(f"{path}: fixtures[{fid}].expected missing '{field}'")
 
 
 # === Comparison ===========================================================
@@ -264,9 +260,7 @@ def compare_to_golden(fixture: dict, produced: dict, emission_base: int) -> dict
 
     got_set = produced.get("index_set")
     if got_set != exp["index_set"]:
-        problems.append(
-            f"index_set differs: golden={exp['index_set']!r} got={got_set!r}"
-        )
+        problems.append(f"index_set differs: golden={exp['index_set']!r} got={got_set!r}")
 
     raw_ids = produced.get("dense_ids_canonical")
     if raw_ids is not None and emission_base:
@@ -354,8 +348,7 @@ def self_test(manifest_path: Path) -> int:
             for p in result["problems"]:
                 _eprint(f"  {p}")
         else:
-            print(f"self-test OK   [{fx['id']}]: reference == golden "
-                  f"({produced['serialized']})")
+            print(f"self-test OK   [{fx['id']}]: reference == golden ({produced['serialized']})")
 
     # --- Check B: every adversarial variant collapses to the golden. -------
     for fx in fixtures:
@@ -381,8 +374,10 @@ def self_test(manifest_path: Path) -> int:
             rc = 1
             _eprint(f"self-test FAIL [{fx['id']}]: base-pin round-trip broke")
         else:
-            print(f"self-test OK   [{fx['id']}]: rank base-pin round-trips "
-                  f"(julia {julia_emission} -> canonical {canonical})")
+            print(
+                f"self-test OK   [{fx['id']}]: rank base-pin round-trips "
+                f"(julia {julia_emission} -> canonical {canonical})"
+            )
 
     # --- Check D: negative controls — the harness must REJECT bad output. --
     # D1: first-seen / unsorted order must be flagged, not accepted.
@@ -398,8 +393,10 @@ def self_test(manifest_path: Path) -> int:
         verdict = compare_to_golden(ref_fx, bad, emission_base=0)
         if verdict["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/first_seen_order]: harness accepted "
-                    "unsorted index set (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/first_seen_order]: harness accepted "
+                "unsorted index set (it must reject)"
+            )
         else:
             print("self-test OK   [neg/first_seen_order]: unsorted output rejected")
 
@@ -419,15 +416,15 @@ def self_test(manifest_path: Path) -> int:
 # === Default run mode (producers, M2/M3) ==================================
 
 
-def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
-              timeout: float | None) -> int:
+def run_suite(
+    manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
+) -> int:
     manifest = load_manifest(manifest_path)
     pin = manifest.get("rank_base_pin", {})
 
     if not bindings:
         bindings = list(manifest.get("bindings_required") or [])
-        bindings.extend(b for b in (manifest.get("bindings_optional") or [])
-                        if b not in bindings)
+        bindings.extend(b for b in (manifest.get("bindings_optional") or []) if b not in bindings)
     for b in bindings:
         if b not in KNOWN_BINDINGS:
             _eprint(f"error: unknown binding {b!r}; known: {KNOWN_BINDINGS}")
@@ -438,15 +435,17 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
 
     adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
-    report: dict[str, Any] = {"manifest_path": str(manifest_path),
-                              "status": "ok", "bindings": {}}
+    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
 
     for b in bindings:
         ar = adapters[b]
         b_base = pin.get(b, 0)
-        b_report: dict[str, Any] = {"adapter_status": ar.get("adapter_status"),
-                                    "error": ar.get("error"), "fixtures": {}}
+        b_report: dict[str, Any] = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
         if ar.get("adapter_status") != "ok":
             if b in required:
                 overall_ok = False
@@ -486,8 +485,10 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
         # failure. (Once a binding is in `bindings_required`, a missing producer
         # below fails instead of silently passing here.)
         report["status"] = "no_producers"
-        print("No determinism adapters registered for any requested binding, and "
-              "none are required. The contract is gated by --self-test here.")
+        print(
+            "No determinism adapters registered for any requested binding, and "
+            "none are required. The contract is gated by --self-test here."
+        )
     else:
         report["status"] = "ok" if overall_ok else "fail"
 
@@ -508,13 +509,12 @@ def parse_args(argv: list[str]):
         default_output=Path("conformance-results/determinism/report.json"),
         manifest_help="Path to the determinism manifest.json.",
         self_test_help="Assert the contract against the embedded reference "
-                       "implementation and golden example, then exit.",
+        "implementation and golden example, then exit.",
     ).parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    return cli_main(argv, parse_args=parse_args, self_test=self_test,
-                    run_suite=run_suite)
+    return cli_main(argv, parse_args=parse_args, self_test=self_test, run_suite=run_suite)
 
 
 if __name__ == "__main__":

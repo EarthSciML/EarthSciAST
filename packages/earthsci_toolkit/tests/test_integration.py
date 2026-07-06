@@ -9,12 +9,9 @@ import pytest
 import json
 from conftest import FIXTURES_ROOT
 
-from earthsci_toolkit import (
-    load, save, validate, substitute
-)
+from earthsci_toolkit import load, save, validate, substitute
 from earthsci_toolkit.display import to_unicode, to_latex
 from earthsci_toolkit.parse import SchemaValidationError
-from earthsci_toolkit.validation import ValidationError
 
 
 class TestFullWorkflowIntegration:
@@ -35,13 +32,14 @@ class TestFullWorkflowIntegration:
                 "simple": {
                     "variables": {
                         "x": {"type": "state", "units": "kg"},
-                        "y": {"type": "observed", "expression": {"op": "+", "args": ["x", "param2"]}}
+                        "y": {
+                            "type": "observed",
+                            "expression": {"op": "+", "args": ["x", "param2"]},
+                        },
                     },
-                    "equations": [
-                        {"lhs": "x", "rhs": "param1"}
-                    ]
+                    "equations": [{"lhs": "x", "rhs": "param1"}],
                 }
-            }
+            },
         }
 
         # 2. Load and validate initial model
@@ -88,28 +86,27 @@ class TestFullWorkflowIntegration:
             "metadata": {"name": "Reaction Integration Test"},
             "reaction_systems": {
                 "simple_chemistry": {
-                    "species": {
-                        "A": {},
-                        "B": {},
-                        "C": {}
-                    },
+                    "species": {"A": {}, "B": {}, "C": {}},
                     "parameters": {
                         "k1": {"default": 0.1, "units": "1/s"},
-                        "k2": {"default": 0.2, "units": "1/s"}
+                        "k2": {"default": 0.2, "units": "1/s"},
                     },
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": [{"species": "A", "stoichiometry": 1}],
-                        "products": [{"species": "B", "stoichiometry": 1}],
-                        "rate": "k1"
-                    }, {
-                        "id": "R2",
-                        "substrates": [{"species": "B", "stoichiometry": 1}],
-                        "products": [{"species": "C", "stoichiometry": 1}],
-                        "rate": {"op": "*", "args": ["k2", "B"]}
-                    }]
+                    "reactions": [
+                        {
+                            "id": "R1",
+                            "substrates": [{"species": "A", "stoichiometry": 1}],
+                            "products": [{"species": "B", "stoichiometry": 1}],
+                            "rate": "k1",
+                        },
+                        {
+                            "id": "R2",
+                            "substrates": [{"species": "B", "stoichiometry": 1}],
+                            "products": [{"species": "C", "stoichiometry": 1}],
+                            "rate": {"op": "*", "args": ["k2", "B"]},
+                        },
+                    ],
                 }
-            }
+            },
         }
 
         # 2. Load and validate
@@ -141,19 +138,21 @@ class TestFullWorkflowIntegration:
             "models": {
                 "physics": {
                     "variables": {"T": {"type": "state", "units": "K"}},
-                    "equations": [{"lhs": "T", "rhs": "heat_param"}]
+                    "equations": [{"lhs": "T", "rhs": "heat_param"}],
                 },
                 "chemistry": {
                     "variables": {"conc": {"type": "state", "units": "mol/L"}},
-                    "equations": [{"lhs": "conc", "rhs": {"op": "*", "args": ["rate_const", "T"]}}]
-                }
+                    "equations": [{"lhs": "conc", "rhs": {"op": "*", "args": ["rate_const", "T"]}}],
+                },
             },
-            "coupling": [{
-                "type": "variable_map",
-                "from": "physics.T",
-                "to": "chemistry.T",
-                "transform": "identity"
-            }]
+            "coupling": [
+                {
+                    "type": "variable_map",
+                    "from": "physics.T",
+                    "to": "chemistry.T",
+                    "transform": "identity",
+                }
+            ],
         }
 
         # Full workflow test
@@ -211,9 +210,9 @@ class TestFullWorkflowIntegration:
             "models": {
                 "broken": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": "undefined_var"}]
+                    "equations": [{"lhs": "x", "rhs": "undefined_var"}],
                 }
-            }
+            },
         }
 
         # This should parse and then we validate
@@ -231,11 +230,7 @@ class TestWorkflowRobustness:
 
     def test_empty_model_workflow(self):
         """Test workflow with minimal/empty model."""
-        minimal_esm = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Minimal Test"},
-            "models": {}
-        }
+        minimal_esm = {"esm": "0.1.0", "metadata": {"name": "Minimal Test"}, "models": {}}
 
         esm_json = json.dumps(minimal_esm)
         loaded_model = load(esm_json)
@@ -258,11 +253,14 @@ class TestWorkflowRobustness:
                 "large_system": {
                     "variables": {f"x{i}": {"type": "state"} for i in range(20)},
                     "equations": [
-                        {"lhs": f"x{i}", "rhs": {"op": "+", "args": [f"x{(i+1)%20}", f"param{i}"]}}
+                        {
+                            "lhs": f"x{i}",
+                            "rhs": {"op": "+", "args": [f"x{(i + 1) % 20}", f"param{i}"]},
+                        }
                         for i in range(20)
-                    ]
+                    ],
                 }
-            }
+            },
         }
 
         # Test workflow
@@ -290,9 +288,9 @@ class TestWorkflowRobustness:
             "models": {
                 "nested": {
                     "variables": {"result": {"type": "state"}},
-                    "equations": [{"lhs": "result", "rhs": nested_expr}]
+                    "equations": [{"lhs": "result", "rhs": nested_expr}],
                 }
-            }
+            },
         }
 
         # Full workflow
@@ -316,10 +314,12 @@ class TestWorkflowRobustness:
             "metadata": {"name": "Unicode Test", "authors": ["François Müller"]},
             "models": {
                 "chemistry": {
-                    "variables": {"CO₂": {"type": "state", "description": "Carbon dioxide concentration"}},
-                    "equations": [{"lhs": "CO₂", "rhs": 0.0}]
+                    "variables": {
+                        "CO₂": {"type": "state", "description": "Carbon dioxide concentration"}
+                    },
+                    "equations": [{"lhs": "CO₂", "rhs": 0.0}],
                 }
-            }
+            },
         }
 
         # Should handle Unicode gracefully
@@ -348,7 +348,7 @@ class TestWorkflowErrorHandling:
         schema_violation = {
             "esm": "invalid-version",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}}
+            "models": {"test": {"variables": {}, "equations": []}},
         }
 
         with pytest.raises((SchemaValidationError, Exception)):
@@ -362,9 +362,9 @@ class TestWorkflowErrorHandling:
             "models": {
                 "test": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": "param"}]
+                    "equations": [{"lhs": "x", "rhs": "param"}],
                 }
-            }
+            },
         }
 
         loaded_model = load(json.dumps(esm_data))
@@ -372,7 +372,7 @@ class TestWorkflowErrorHandling:
         # Try substitution with invalid value
         try:
             # This might work or might fail depending on validation strictness
-            bad_substitutions = {"param": float('inf')}  # Infinity
+            bad_substitutions = {"param": float("inf")}  # Infinity
             substituted_model = substitute(loaded_model, bad_substitutions)
 
             # If substitution succeeds, validation might catch it
@@ -411,9 +411,9 @@ class TestWorkflowErrorHandling:
             "models": {
                 "test": {
                     "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}]
+                    "equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}],
                 }
-            }
+            },
         }
 
         # Roundtrip test

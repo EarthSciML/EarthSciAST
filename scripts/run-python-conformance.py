@@ -8,11 +8,10 @@ and generates standardized outputs for comparison with other language implementa
 """
 
 import sys
-import os
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 import traceback
 
 # Add the Python package to the path
@@ -29,6 +28,7 @@ except ImportError as e:
     print(f"Failed to import earthsci_toolkit Python library: {e}")
     print("Make sure the Python package is properly installed")
     sys.exit(1)
+
 
 class ConformanceResults:
     def __init__(self):
@@ -50,8 +50,9 @@ class ConformanceResults:
             "substitution_results": self.substitution_results,
             "graph_results": self.graph_results,
             "mathematical_correctness_results": self.mathematical_correctness_results,
-            "errors": self.errors
+            "errors": self.errors,
         }
+
 
 def _json_default(obj):
     # ValidationError (and similar binding error dataclasses) carry path/message/
@@ -64,15 +65,17 @@ def _json_default(obj):
             return d
     return repr(obj)
 
+
 def write_results(output_dir: Path, results: ConformanceResults):
     """Write conformance results to JSON file."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results_file = output_dir / "results.json"
-    with open(results_file, 'w') as f:
+    with open(results_file, "w") as f:
         json.dump(results.to_dict(), f, indent=2, default=_json_default)
 
     print(f"Python conformance results written to: {results_file}")
+
 
 def run_validation_tests(tests_dir: Path) -> Dict[str, Any]:
     """Test schema and structural validation on valid and invalid ESM files."""
@@ -94,13 +97,13 @@ def run_validation_tests(tests_dir: Path) -> Dict[str, Any]:
                     "is_valid": result.is_valid,
                     "schema_errors": result.schema_errors,
                     "structural_errors": result.structural_errors,
-                    "parsed_successfully": True
+                    "parsed_successfully": True,
                 }
             except Exception as e:
                 valid_results[filepath.name] = {
                     "parsed_successfully": False,
                     "error": str(e),
-                    "error_type": type(e).__name__
+                    "error_type": type(e).__name__,
                 }
         validation_results["valid"] = valid_results
 
@@ -119,18 +122,19 @@ def run_validation_tests(tests_dir: Path) -> Dict[str, Any]:
                     "is_valid": result.is_valid,
                     "schema_errors": result.schema_errors,
                     "structural_errors": result.structural_errors,
-                    "parsed_successfully": True
+                    "parsed_successfully": True,
                 }
             except Exception as e:
                 invalid_results[filepath.name] = {
                     "parsed_successfully": False,
                     "error": str(e),
                     "error_type": type(e).__name__,
-                    "is_expected_error": True  # Invalid files should error
+                    "is_expected_error": True,  # Invalid files should error
                 }
         validation_results["invalid"] = invalid_results
 
     return validation_results
+
 
 def run_display_tests(tests_dir: Path) -> Dict[str, Any]:
     """Test pretty-printing and display format generation."""
@@ -143,7 +147,7 @@ def run_display_tests(tests_dir: Path) -> Dict[str, Any]:
 
         for filepath in display_files:
             try:
-                with open(filepath, 'r') as f:
+                with open(filepath, "r") as f:
                     test_data = json.load(f)
                 test_results = {}
 
@@ -154,21 +158,23 @@ def run_display_tests(tests_dir: Path) -> Dict[str, Any]:
                         if "input" in formula_test:
                             input_formula = formula_test["input"]
                             try:
-                                unicode_result = earthsci_toolkit.render_chemical_formula(input_formula)
+                                unicode_result = earthsci_toolkit.render_chemical_formula(
+                                    input_formula
+                                )
 
-                                formula_results.append({
-                                    "input": input_formula,
-                                    "output_unicode": unicode_result,
-                                    "output_latex": formula_test.get("expected_latex", ""),
-                                    "output_ascii": input_formula,  # Fallback
-                                    "success": True
-                                })
+                                formula_results.append(
+                                    {
+                                        "input": input_formula,
+                                        "output_unicode": unicode_result,
+                                        "output_latex": formula_test.get("expected_latex", ""),
+                                        "output_ascii": input_formula,  # Fallback
+                                        "success": True,
+                                    }
+                                )
                             except Exception as e:
-                                formula_results.append({
-                                    "input": input_formula,
-                                    "error": str(e),
-                                    "success": False
-                                })
+                                formula_results.append(
+                                    {"input": input_formula, "error": str(e), "success": False}
+                                )
                     test_results["chemical_formulas"] = formula_results
 
                 # Test expression rendering
@@ -179,34 +185,34 @@ def run_display_tests(tests_dir: Path) -> Dict[str, Any]:
                             input_expr = expr_test["input"]
                             try:
                                 expr = earthsci_toolkit.parse_expression(input_expr)
-                                unicode_result = earthsci_toolkit.pretty_print(expr, format="unicode")
+                                unicode_result = earthsci_toolkit.pretty_print(
+                                    expr, format="unicode"
+                                )
                                 latex_result = earthsci_toolkit.pretty_print(expr, format="latex")
                                 ascii_result = earthsci_toolkit.pretty_print(expr, format="ascii")
 
-                                expression_results.append({
-                                    "input": input_expr,
-                                    "output_unicode": unicode_result,
-                                    "output_latex": latex_result,
-                                    "output_ascii": ascii_result,
-                                    "success": True
-                                })
+                                expression_results.append(
+                                    {
+                                        "input": input_expr,
+                                        "output_unicode": unicode_result,
+                                        "output_latex": latex_result,
+                                        "output_ascii": ascii_result,
+                                        "success": True,
+                                    }
+                                )
                             except Exception as e:
-                                expression_results.append({
-                                    "input": input_expr,
-                                    "error": str(e),
-                                    "success": False
-                                })
+                                expression_results.append(
+                                    {"input": input_expr, "error": str(e), "success": False}
+                                )
                     test_results["expressions"] = expression_results
 
                 display_results[filepath.name] = test_results
 
             except Exception as e:
-                display_results[filepath.name] = {
-                    "error": str(e),
-                    "success": False
-                }
+                display_results[filepath.name] = {"error": str(e), "success": False}
 
     return display_results
+
 
 def run_substitution_tests(tests_dir: Path) -> Dict[str, Any]:
     """Test expression substitution functionality."""
@@ -219,7 +225,7 @@ def run_substitution_tests(tests_dir: Path) -> Dict[str, Any]:
 
         for filepath in substitution_files:
             try:
-                with open(filepath, 'r') as f:
+                with open(filepath, "r") as f:
                     test_data = json.load(f)
                 test_results = []
 
@@ -236,28 +242,30 @@ def run_substitution_tests(tests_dir: Path) -> Dict[str, Any]:
                                 result_expr = earthsci_toolkit.substitute(expr, substitutions)
                                 result_str = earthsci_toolkit.pretty_print(result_expr)
 
-                                test_results.append({
-                                    "input": test_case["expression"],
-                                    "substitutions": test_case["substitutions"],
-                                    "result": result_str,
-                                    "success": True
-                                })
+                                test_results.append(
+                                    {
+                                        "input": test_case["expression"],
+                                        "substitutions": test_case["substitutions"],
+                                        "result": result_str,
+                                        "success": True,
+                                    }
+                                )
                             except Exception as e:
-                                test_results.append({
-                                    "input": test_case.get("expression", ""),
-                                    "error": str(e),
-                                    "success": False
-                                })
+                                test_results.append(
+                                    {
+                                        "input": test_case.get("expression", ""),
+                                        "error": str(e),
+                                        "success": False,
+                                    }
+                                )
 
                 substitution_results[filepath.name] = test_results
 
             except Exception as e:
-                substitution_results[filepath.name] = {
-                    "error": str(e),
-                    "success": False
-                }
+                substitution_results[filepath.name] = {"error": str(e), "success": False}
 
     return substitution_results
+
 
 def _resolve_graph_input_file(tests_dir: Path, fixture_path: Path, ref: str):
     """Tests/graphs fixtures reference ESM files by bare filename — they
@@ -271,6 +279,7 @@ def _resolve_graph_input_file(tests_dir: Path, fixture_path: Path, ref: str):
             return candidate
     return None
 
+
 def _load_esm_source(tests_dir: Path, fixture_path: Path, source):
     """Source may be a bare filename (string) or an inline ESM dict (the
     comprehensive_graph_generation_fixtures family inlines documents)."""
@@ -280,6 +289,7 @@ def _load_esm_source(tests_dir: Path, fixture_path: Path, source):
             raise FileNotFoundError(f"ESM file not found: {source}")
         return earthsci_toolkit.load(path)
     return earthsci_toolkit.load(source)
+
 
 def _exercise_graph_fixture(esm_data) -> Dict[str, Any]:
     """Drive an ESM doc through validate + component_graph + expression_graph
@@ -317,6 +327,7 @@ def _exercise_graph_fixture(esm_data) -> Dict[str, Any]:
 
     return record
 
+
 def run_graph_tests(tests_dir: Path) -> Dict[str, Any]:
     """Drive each tests/graphs fixture through the load + validate +
     component_graph + expression_graph pipeline. Captures node/edge counts
@@ -338,7 +349,7 @@ def run_graph_tests(tests_dir: Path) -> Dict[str, Any]:
         if filepath.suffix != ".json":
             continue
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, "r") as f:
                 test_data = json.load(f)
 
             if isinstance(test_data, list):
@@ -379,6 +390,7 @@ def run_graph_tests(tests_dir: Path) -> Dict[str, Any]:
 
     return graph_results
 
+
 def run_mathematical_correctness_tests(tests_dir: Path) -> Dict[str, Any]:
     """Drive each .esm file under tests/mathematical_correctness/ through
     load + validate. Catches schema/structural drift in the conservation
@@ -414,6 +426,7 @@ def run_mathematical_correctness_tests(tests_dir: Path) -> Dict[str, Any]:
             }
 
     return results
+
 
 def main():
     if len(sys.argv) != 2:
@@ -480,6 +493,7 @@ def main():
     else:
         print(f"Python conformance testing completed with {len(results.errors)} errors")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

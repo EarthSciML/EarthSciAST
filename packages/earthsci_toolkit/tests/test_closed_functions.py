@@ -145,9 +145,7 @@ def test_closed_function_fixture(fixture_dir: Path):
         # binding's implementation lands. Skip rather than fail; the
         # per-language [Impl] bead adds the function to the registry, at
         # which point this skip turns into a real run automatically.
-        pytest.skip(
-            f"fixture function {fn_name!r} not yet implemented in this binding"
-        )
+        pytest.skip(f"fixture function {fn_name!r} not yet implemented in this binding")
     tol = spec.get("tolerance") or {}
     abs_tol = float(tol.get("abs", 0.0))
     rel_tol = float(tol.get("rel", 0.0))
@@ -162,9 +160,7 @@ def test_closed_function_fixture(fixture_dir: Path):
             failures.append(f"{sname}: raised unexpectedly: {e!r}")
             continue
         if not _within_tol(actual, scenario["expected"], abs_tol, rel_tol):
-            failures.append(
-                f"{sname}: got={actual!r}, expected={scenario['expected']!r}"
-            )
+            failures.append(f"{sname}: got={actual!r}, expected={scenario['expected']!r}")
 
     for err in spec.get("error_scenarios", []) or []:
         ename = err["name"]
@@ -175,9 +171,7 @@ def test_closed_function_fixture(fixture_dir: Path):
             failures.append(f"error_{ename}: expected {expected_code} but no error raised")
         except ClosedFunctionError as e:
             if e.code != expected_code:
-                failures.append(
-                    f"error_{ename}: got code={e.code!r}, expected {expected_code!r}"
-                )
+                failures.append(f"error_{ename}: got code={e.code!r}, expected {expected_code!r}")
 
     assert not failures, "Fixture mismatches:\n  " + "\n  ".join(failures)
 
@@ -267,6 +261,7 @@ def test_serializer_roundtrip_fn_op():
     on the salient fields.
     """
     from earthsci_toolkit import save
+
     fixture = FIXTURES_ROOT / "datetime" / "year" / "canonical.esm"
     file = load(fixture)
     out = save(file)
@@ -282,6 +277,7 @@ def test_serializer_roundtrip_const_array():
     serialize → reload round-trip.
     """
     from earthsci_toolkit import save
+
     fixture = FIXTURES_ROOT / "interp" / "searchsorted" / "canonical.esm"
     file = load(fixture)
     out = save(file)
@@ -296,6 +292,7 @@ def test_serializer_roundtrip_const_array():
 def test_serializer_roundtrip_enums_block():
     """The top-level ``enums`` block round-trips through serialize → reload."""
     from earthsci_toolkit import save
+
     fixture = VALID_DIR / "enums_categorical_lookup.esm"
     file = load(fixture)
     out = save(file)

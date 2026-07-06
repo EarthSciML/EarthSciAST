@@ -44,17 +44,25 @@ def _shoelace_area_faq() -> ExprNode:
     """The planar ``polygon_area`` FAQ over the derived clip ring:
     ``0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v)`` — an ordinary ``sum_product``
     aggregate (§8.1), the same AST baked into the planar geometry fixture."""
+
     def col(idx: object, c: int) -> ExprNode:
         return ExprNode(op="index", args=["overlap_clip", idx, c])
 
     v_next = ExprNode(op="+", args=["v", 1])
-    cross = ExprNode(op="-", args=[
-        ExprNode(op="*", args=[col("v", 1), col(v_next, 2)]),
-        ExprNode(op="*", args=[col(v_next, 1), col("v", 2)]),
-    ])
+    cross = ExprNode(
+        op="-",
+        args=[
+            ExprNode(op="*", args=[col("v", 1), col(v_next, 2)]),
+            ExprNode(op="*", args=[col(v_next, 1), col("v", 2)]),
+        ],
+    )
     return ExprNode(
-        op="aggregate", semiring="sum_product", output_idx=[], args=["overlap_clip"],
-        ranges={"v": {"from": "clip_ring"}}, expr=ExprNode(op="*", args=[0.5, cross]),
+        op="aggregate",
+        semiring="sum_product",
+        output_idx=[],
+        args=["overlap_clip"],
+        ranges={"v": {"from": "clip_ring"}},
+        expr=ExprNode(op="*", args=[0.5, cross]),
     )
 
 
@@ -68,6 +76,7 @@ def _clip_unit_vec(idx: object) -> Tuple[ExprNode, ExprNode, ExprNode]:
     col 2, degrees): ``(cosφ·cosλ, cosφ·sinλ, sinφ)`` — the same lon-lat→sphere map
     the oracle :func:`geometry._lonlat_to_unit` uses, built from the ``sin`` / ``cos``
     scalar leaves so the per-triangle excess is a closed-form AST (no new op)."""
+
     def col(c: int) -> ExprNode:
         return ExprNode(op="index", args=["overlap_clip", idx, c])
 
@@ -83,19 +92,30 @@ def _clip_unit_vec(idx: object) -> Tuple[ExprNode, ExprNode, ExprNode]:
 
 def _dot3(u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]) -> ExprNode:
     """AST for the 3-vector dot product ``u·v``."""
-    return ExprNode(op="+", args=[
-        ExprNode(op="*", args=[u[0], v[0]]),
-        ExprNode(op="*", args=[u[1], v[1]]),
-        ExprNode(op="*", args=[u[2], v[2]]),
-    ])
+    return ExprNode(
+        op="+",
+        args=[
+            ExprNode(op="*", args=[u[0], v[0]]),
+            ExprNode(op="*", args=[u[1], v[1]]),
+            ExprNode(op="*", args=[u[2], v[2]]),
+        ],
+    )
 
 
-def _cross3(u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]) -> Tuple[ExprNode, ExprNode, ExprNode]:
+def _cross3(
+    u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]
+) -> Tuple[ExprNode, ExprNode, ExprNode]:
     """AST for the 3-vector cross product ``u×v``."""
     return (
-        ExprNode(op="-", args=[ExprNode(op="*", args=[u[1], v[2]]), ExprNode(op="*", args=[u[2], v[1]])]),
-        ExprNode(op="-", args=[ExprNode(op="*", args=[u[2], v[0]]), ExprNode(op="*", args=[u[0], v[2]])]),
-        ExprNode(op="-", args=[ExprNode(op="*", args=[u[0], v[1]]), ExprNode(op="*", args=[u[1], v[0]])]),
+        ExprNode(
+            op="-", args=[ExprNode(op="*", args=[u[1], v[2]]), ExprNode(op="*", args=[u[2], v[1]])]
+        ),
+        ExprNode(
+            op="-", args=[ExprNode(op="*", args=[u[2], v[0]]), ExprNode(op="*", args=[u[0], v[2]])]
+        ),
+        ExprNode(
+            op="-", args=[ExprNode(op="*", args=[u[0], v[1]]), ExprNode(op="*", args=[u[1], v[0]])]
+        ),
     )
 
 
@@ -125,10 +145,15 @@ def _spherical_area_faq() -> ExprNode:
     matching the ``polygon_area`` default."""
     v_next = ExprNode(op="+", args=["v", 1])
     return ExprNode(
-        op="aggregate", semiring="sum_product", output_idx=[], args=["overlap_clip"],
+        op="aggregate",
+        semiring="sum_product",
+        output_idx=[],
+        args=["overlap_clip"],
         ranges={"v": {"from": "clip_ring"}},
         expr=_spherical_excess(
-            _clip_unit_vec(1), _clip_unit_vec("v"), _clip_unit_vec(v_next),
+            _clip_unit_vec(1),
+            _clip_unit_vec("v"),
+            _clip_unit_vec(v_next),
         ),
     )
 
@@ -151,8 +176,12 @@ def polygon_area_via_faq(ring: np.ndarray, manifold: str) -> float:
     if closed.shape[0] - 1 < 3:  # n distinct vertices = rows − 1
         return 0.0
     ctx = EvalContext(
-        state_layout={}, state_shapes={}, param_values={}, observed_values={},
-        y=np.zeros(0), t=0.0,
+        state_layout={},
+        state_shapes={},
+        param_values={},
+        observed_values={},
+        y=np.zeros(0),
+        t=0.0,
         index_sets={"clip_ring": {"kind": "derived", "from_faq": "overlap_clip"}},
     )
     ctx.derived_rings["overlap_clip"] = closed

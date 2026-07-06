@@ -10,7 +10,6 @@ import json
 from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit.display import to_unicode, to_latex
-from earthsci_toolkit.parse import load
 
 
 class TestDisplayFixtures:
@@ -49,13 +48,15 @@ class TestDisplayFixtures:
 
             if input_expr and expected_unicode:
                 result_unicode = to_unicode(input_expr)
-                assert result_unicode == expected_unicode, \
+                assert result_unicode == expected_unicode, (
                     f"Unicode formatting failed for {input_expr}: got {result_unicode}, expected {expected_unicode}"
+                )
 
             if input_expr and expected_latex:
                 result_latex = to_latex(input_expr)
-                assert result_latex == expected_latex, \
+                assert result_latex == expected_latex, (
                     f"LaTeX formatting failed for {input_expr}: got {result_latex}, expected {expected_latex}"
+                )
 
     def test_chemical_subscripts_comprehensive(self, fixtures_dir):
         """Test comprehensive chemical subscripts formatting."""
@@ -218,14 +219,14 @@ class TestDisplayFunctions:
         assert to_unicode(42) == "42"
         assert to_unicode(3.14) == "3.14"
         assert to_unicode(1.5e-12) == "1.5×10⁻¹²"
-        assert to_unicode(2.0e+05) == "2.0×10⁵"
+        assert to_unicode(2.0e05) == "2.0×10⁵"
 
     def test_to_latex_numbers(self):
         """Test LaTeX formatting of numbers."""
         assert to_latex(42) == "42"
         assert to_latex(3.14) == "3.14"
         assert to_latex(1.5e-12) == "1.5 \\times 10^{-12}"
-        assert to_latex(2.0e+05) == "2.0 \\times 10^{5}"
+        assert to_latex(2.0e05) == "2.0 \\times 10^{5}"
 
     def test_to_unicode_expressions(self):
         """Test Unicode formatting of expressions."""
@@ -250,13 +251,7 @@ class TestDisplayFunctions:
 
     def test_to_unicode_nested_expressions(self):
         """Test Unicode formatting of nested expressions."""
-        expr = {
-            "op": "+",
-            "args": [
-                {"op": "*", "args": ["a", "b"]},
-                "c"
-            ]
-        }
+        expr = {"op": "+", "args": [{"op": "*", "args": ["a", "b"]}, "c"]}
         result = to_unicode(expr)
         assert all(var in result for var in ["a", "b", "c"])
 
@@ -264,10 +259,7 @@ class TestDisplayFunctions:
         """Test LaTeX formatting of nested expressions."""
         expr = {
             "op": "/",
-            "args": [
-                {"op": "+", "args": ["x", "y"]},
-                {"op": "-", "args": ["a", "b"]}
-            ]
+            "args": [{"op": "+", "args": ["x", "y"]}, {"op": "-", "args": ["a", "b"]}],
         }
         result = to_latex(expr)
         assert "\\frac" in result or "/" in result
@@ -285,10 +277,7 @@ class TestDisplayFunctions:
 
     def test_display_functions_with_derivatives(self):
         """Test display of derivative expressions."""
-        expr = {
-            "op": "d/dt",
-            "args": ["x"]
-        }
+        expr = {"op": "d/dt", "args": ["x"]}
 
         unicode_result = to_unicode(expr)
         assert "x" in unicode_result

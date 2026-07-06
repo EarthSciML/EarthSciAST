@@ -123,7 +123,8 @@ def migrate_file_0_1_to_0_2(data: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             # Collect matching models.
             matched_models = [
-                (mname, m) for mname, m in models.items()
+                (mname, m)
+                for mname, m in models.items()
                 if isinstance(m, dict) and _model_matches_domain(m, domain_name)
             ]
             for bc_entry in dom_bcs:
@@ -141,9 +142,7 @@ def migrate_file_0_1_to_0_2(data: Dict[str, Any]) -> Dict[str, Any]:
                         for mname, model in matched_models:
                             for vname in _iter_state_variable_names(model):
                                 bc_key = f"{vname}_{kind}_{side}"
-                                model_bcs = model.setdefault(
-                                    "boundary_conditions", {}
-                                )
+                                model_bcs = model.setdefault("boundary_conditions", {})
                                 # Avoid overwriting if an author already
                                 # authored a colliding key (rare but possible).
                                 final_key = bc_key
@@ -186,4 +185,3 @@ def migrate_file_0_1_to_0_2(data: Dict[str, Any]) -> Dict[str, Any]:
                 metadata["description"] = note
 
     return out
-

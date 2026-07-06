@@ -86,21 +86,15 @@ def _op_unary_or_binary(op: str, child: st.SearchStrategy):
 
 
 def _op_derivative(child: st.SearchStrategy):
-    return st.tuples(child, _var_names).map(
-        lambda av: ExprNode(op="D", args=[av[0]], wrt=av[1])
-    )
+    return st.tuples(child, _var_names).map(lambda av: ExprNode(op="D", args=[av[0]], wrt=av[1]))
 
 
 def _op_grad(child: st.SearchStrategy):
-    return st.tuples(child, _var_names).map(
-        lambda av: ExprNode(op="grad", args=[av[0]], dim=av[1])
-    )
+    return st.tuples(child, _var_names).map(lambda av: ExprNode(op="grad", args=[av[0]], dim=av[1]))
 
 
 def _op_ifelse(child: st.SearchStrategy):
-    return st.tuples(child, child, child).map(
-        lambda abc: ExprNode(op="ifelse", args=list(abc))
-    )
+    return st.tuples(child, child, child).map(lambda abc: ExprNode(op="ifelse", args=list(abc)))
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +149,11 @@ def _op_broadcast(child: st.SearchStrategy):
 def _op_index(child: st.SearchStrategy):
     # The 'index' op has no required auxiliary fields in the schema; treat it
     # as a plain n-ary op over its args.
-    return st.lists(child, min_size=1, max_size=3).map(
-        lambda args: ExprNode(op="index", args=args)
-    )
+    return st.lists(child, min_size=1, max_size=3).map(lambda args: ExprNode(op="index", args=args))
 
 
 def _op_aggregate(child: st.SearchStrategy):
-    output_idx_strategy = st.lists(
-        st.one_of(_index_names, st.just(1)), min_size=1, max_size=3
-    )
+    output_idx_strategy = st.lists(st.one_of(_index_names, st.just(1)), min_size=1, max_size=3)
     reduce_strategy = st.sampled_from(["+", "*", "max", "min"])
     range_strategy = st.one_of(
         st.lists(_small_int, min_size=2, max_size=2),

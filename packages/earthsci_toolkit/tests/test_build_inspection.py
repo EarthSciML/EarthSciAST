@@ -45,15 +45,13 @@ from earthsci_toolkit.simulation import BuildInspection, simulate
 
 _RAGGED_SETS = {
     "cells": {"kind": "interval", "size": 2},
-    "edges_of_cell": {"kind": "ragged", "of": ["cells"],
-                      "offsets": "nedges", "values": "edges"},
+    "edges_of_cell": {"kind": "ragged", "of": ["cells"], "offsets": "nedges", "values": "edges"},
 }
 
 
 def test_factor_scope_exact_name_wins() -> None:
     """An exact-name variable wins: no map entry (bare already resolves)."""
-    scope = ragged_factor_scope(
-        _RAGGED_SETS, ["nedges", "edges", "M.nedges", "M.edges"])
+    scope = ragged_factor_scope(_RAGGED_SETS, ["nedges", "edges", "M.nedges", "M.edges"])
     assert scope == {}
 
 
@@ -61,8 +59,8 @@ def test_factor_scope_unique_shallowest_suffix() -> None:
     """The dot-suffix match at the SHALLOWEST depth binds — the model's own
     re-exposed alias, not the mounted subsystem's original."""
     scope = ragged_factor_scope(
-        _RAGGED_SETS,
-        ["M.nedges", "M.mesh.nedges", "M.edges", "M.mesh.edges", "M.u"])
+        _RAGGED_SETS, ["M.nedges", "M.mesh.nedges", "M.edges", "M.mesh.edges", "M.u"]
+    )
     assert scope == {"nedges": "M.nedges", "edges": "M.edges"}
 
 
@@ -70,15 +68,13 @@ def test_factor_scope_ambiguity_leaves_bare() -> None:
     """Two candidates at the same shallowest depth: no binding (the standard
     unresolved-symbol error then surfaces) — same semantics as the Julia
     tree-walk ``_factor_scope``."""
-    scope = ragged_factor_scope(
-        _RAGGED_SETS, ["A.nedges", "B.nedges", "A.edges"])
+    scope = ragged_factor_scope(_RAGGED_SETS, ["A.nedges", "B.nedges", "A.edges"])
     assert "nedges" not in scope
     assert scope == {"edges": "A.edges"}
 
 
 def test_factor_scope_empty_without_ragged_sets() -> None:
-    scope = ragged_factor_scope(
-        {"cells": {"kind": "interval", "size": 3}}, ["M.nedges"])
+    scope = ragged_factor_scope({"cells": {"kind": "interval", "size": 3}}, ["M.nedges"])
     assert scope == {}
 
 
@@ -96,9 +92,13 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
         factor_scope={"nedges": "M.nedges"},
     )
     # out[i] = sum_{k=1..nedges[i]} k  ->  [1+2, 1+2+3] = [3, 6]
-    node = ExprNode(op="aggregate", args=[], output_idx=["i"], expr="k",
-                    ranges={"i": {"from": "cells"},
-                            "k": {"from": "edges_of_cell", "of": ["i"]}})
+    node = ExprNode(
+        op="aggregate",
+        args=[],
+        output_idx=["i"],
+        expr="k",
+        ranges={"i": {"from": "cells"}, "k": {"from": "edges_of_cell", "of": ["i"]}},
+    )
     np.testing.assert_allclose(eval_expr(node, ctx), [3.0, 6.0])
     # Without the scope entry the bare name misses — the standard error.
     ctx.factor_scope = {}
@@ -115,68 +115,107 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
 # gathered[i] = sum_{k<=nedges[i]} w[edges[i,k]] -> [10+20, 30+40+50] = [30, 120].
 _RAGGED_DOC = {
     "esm": "0.8.0",
-    "metadata": {"name": "ragged_csr_miniature",
-                 "description": "2-cell ragged CSR keyed-factor miniature."},
+    "metadata": {
+        "name": "ragged_csr_miniature",
+        "description": "2-cell ragged CSR keyed-factor miniature.",
+    },
     "index_sets": {
         "cells": {"kind": "interval", "size": 2},
         "edges": {"kind": "interval", "size": 5},
         "maxe": {"kind": "interval", "size": 3},
-        "edges_of_cell": {"kind": "ragged", "of": ["cells"],
-                          "offsets": "nedges", "values": "edges_on_cell"},
+        "edges_of_cell": {
+            "kind": "ragged",
+            "of": ["cells"],
+            "offsets": "nedges",
+            "values": "edges_on_cell",
+        },
     },
     "models": {
         "Rag": {
             "variables": {
-                "u": {"type": "state", "units": "1", "shape": ["cells"],
-                      "default": 0.0},
-                "nedges": {"type": "observed", "shape": ["cells"],
-                           "expression": {"op": "const", "args": [], "value": [2, 3]}},
+                "u": {"type": "state", "units": "1", "shape": ["cells"], "default": 0.0},
+                "nedges": {
+                    "type": "observed",
+                    "shape": ["cells"],
+                    "expression": {"op": "const", "args": [], "value": [2, 3]},
+                },
                 "edges_on_cell": {
-                    "type": "observed", "shape": ["cells", "maxe"],
-                    "expression": {"op": "const", "args": [],
-                                   "value": [[1, 2, 0], [3, 4, 5]]}},
-                "w": {"type": "observed", "shape": ["edges"],
-                      "expression": {"op": "const", "args": [],
-                                     "value": [10, 20, 30, 40, 50]}},
+                    "type": "observed",
+                    "shape": ["cells", "maxe"],
+                    "expression": {"op": "const", "args": [], "value": [[1, 2, 0], [3, 4, 5]]},
+                },
+                "w": {
+                    "type": "observed",
+                    "shape": ["edges"],
+                    "expression": {"op": "const", "args": [], "value": [10, 20, 30, 40, 50]},
+                },
                 "gathered": {
-                    "type": "observed", "shape": ["cells"],
+                    "type": "observed",
+                    "shape": ["cells"],
                     "expression": {
-                        "op": "aggregate", "args": ["w", "edges_on_cell"],
+                        "op": "aggregate",
+                        "args": ["w", "edges_on_cell"],
                         "output_idx": ["i"],
-                        "ranges": {"i": {"from": "cells"},
-                                   "k": {"from": "edges_of_cell",
-                                         "of": ["i"]}},
-                        "expr": {"op": "index", "args": [
-                            "w", {"op": "index",
-                                  "args": ["edges_on_cell", "i", "k"]}]},
-                    }},
+                        "ranges": {
+                            "i": {"from": "cells"},
+                            "k": {"from": "edges_of_cell", "of": ["i"]},
+                        },
+                        "expr": {
+                            "op": "index",
+                            "args": ["w", {"op": "index", "args": ["edges_on_cell", "i", "k"]}],
+                        },
+                    },
+                },
             },
             "equations": [
-                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                 "rhs": {
-                     "op": "aggregate", "args": ["w", "edges_on_cell"],
-                     "output_idx": ["i"],
-                     "ranges": {"i": {"from": "cells"},
-                                "k": {"from": "edges_of_cell", "of": ["i"]}},
-                     "expr": {"op": "index", "args": [
-                         "w", {"op": "index",
-                               "args": ["edges_on_cell", "i", "k"]}]},
-                 }},
+                {
+                    "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": ["w", "edges_on_cell"],
+                        "output_idx": ["i"],
+                        "ranges": {
+                            "i": {"from": "cells"},
+                            "k": {"from": "edges_of_cell", "of": ["i"]},
+                        },
+                        "expr": {
+                            "op": "index",
+                            "args": ["w", {"op": "index", "args": ["edges_on_cell", "i", "k"]}],
+                        },
+                    },
+                },
             ],
             "tests": [
-                {"id": "ragged_gather",
-                 "time_span": {"start": 0.0, "end": 1.0},
-                 "assertions": [
-                     # u(1) = gathered * 1 (constant RHS integrated from 0);
-                     # mean([30, 120]) = 75.
-                     {"variable": "u", "time": 1.0, "expected": 75.0,
-                      "tolerance": {"abs": 1e-8}, "reduce": "mean"},
-                     # Observed-assertion form: state-free ARRAY OBSERVED.
-                     {"variable": "gathered", "time": 1.0, "expected": 120.0,
-                      "tolerance": {"abs": 1e-9}, "reduce": "max"},
-                     {"variable": "gathered", "time": 1.0, "expected": 30.0,
-                      "tolerance": {"abs": 1e-9}, "reduce": "min"},
-                 ]},
+                {
+                    "id": "ragged_gather",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        # u(1) = gathered * 1 (constant RHS integrated from 0);
+                        # mean([30, 120]) = 75.
+                        {
+                            "variable": "u",
+                            "time": 1.0,
+                            "expected": 75.0,
+                            "tolerance": {"abs": 1e-8},
+                            "reduce": "mean",
+                        },
+                        # Observed-assertion form: state-free ARRAY OBSERVED.
+                        {
+                            "variable": "gathered",
+                            "time": 1.0,
+                            "expected": 120.0,
+                            "tolerance": {"abs": 1e-9},
+                            "reduce": "max",
+                        },
+                        {
+                            "variable": "gathered",
+                            "time": 1.0,
+                            "expected": 30.0,
+                            "tolerance": {"abs": 1e-9},
+                            "reduce": "min",
+                        },
+                    ],
+                },
             ],
         }
     },
@@ -187,8 +226,7 @@ def test_ragged_csr_simulation_namespaced_factors() -> None:
     """The flattened doc namespaces nedges -> Rag.nedges; the ragged bound and
     the values gather still evaluate (keyed factors bind by bare name)."""
     file = load(json.dumps(_RAGGED_DOC))
-    sim = simulate_states(file, (0.0, 1.0), method="LSODA",
-                          rtol=1e-10, atol=1e-12, saveat=[1.0])
+    sim = simulate_states(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12, saveat=[1.0])
     u = [sim.states[-1][sim.var_map[f"Rag.u[{i}]"]] for i in (1, 2)]
     np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
 
@@ -197,8 +235,7 @@ def test_run_pde_tests_observed_array_assertions() -> None:
     """§6.6.5 assertions on a state-free ARRAY OBSERVED evaluate through the
     build-inspection setup arrays (max/min of `gathered`)."""
     file = load(json.dumps(_RAGGED_DOC))
-    results = run_pde_tests(file, model_name="Rag",
-                            method="LSODA", rtol=1e-10, atol=1e-12)
+    results = run_pde_tests(file, model_name="Rag", method="LSODA", rtol=1e-10, atol=1e-12)
     assert len(results) == 3
     for r in results:
         assert r.passed, f"{r.variable} {r.reduce}: {r.message}"
@@ -215,28 +252,29 @@ def test_run_pde_tests_observed_array_assertions() -> None:
 def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
     file = load(json.dumps(_RAGGED_DOC))
     insp = BuildInspection()
-    result = simulate(file, (0.0, 1.0), method="LSODA",
-                      rtol=1e-10, atol=1e-12, inspect=insp)
+    result = simulate(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12, inspect=insp)
     assert result.success
     # Every state-free array observed is exposed under its flattened name.
     for name in ("Rag.nedges", "Rag.edges_on_cell", "Rag.w", "Rag.gathered"):
         assert name in insp.setup_arrays, sorted(insp.setup_arrays)
-    np.testing.assert_allclose(insp.setup_arrays["Rag.gathered"],
-                               [30.0, 120.0])
+    np.testing.assert_allclose(insp.setup_arrays["Rag.gathered"], [30.0, 120.0])
     np.testing.assert_allclose(insp.setup_arrays["Rag.nedges"], [2.0, 3.0])
     # The observed substitution map covers every observed equation.
-    assert set(insp.observed_exprs) >= {"Rag.nedges", "Rag.edges_on_cell",
-                                        "Rag.w", "Rag.gathered"}
+    assert set(insp.observed_exprs) >= {"Rag.nedges", "Rag.edges_on_cell", "Rag.w", "Rag.gathered"}
 
 
 def test_build_inspection_never_changes_the_simulation() -> None:
     """The returned trajectory is bit-identical with and without `inspect`."""
     file = load(json.dumps(_RAGGED_DOC))
-    plain = simulate(file, (0.0, 1.0), method="LSODA",
-                     rtol=1e-10, atol=1e-12)
-    inspected = simulate(load(json.dumps(_RAGGED_DOC)), (0.0, 1.0),
-                         method="LSODA", rtol=1e-10, atol=1e-12,
-                         inspect=BuildInspection())
+    plain = simulate(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12)
+    inspected = simulate(
+        load(json.dumps(_RAGGED_DOC)),
+        (0.0, 1.0),
+        method="LSODA",
+        rtol=1e-10,
+        atol=1e-12,
+        inspect=BuildInspection(),
+    )
     assert plain.success and inspected.success
     assert plain.vars == inspected.vars
     np.testing.assert_array_equal(plain.t, inspected.t)

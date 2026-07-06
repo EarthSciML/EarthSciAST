@@ -22,7 +22,6 @@ from earthsci_toolkit.esm_types import (
     Species,
 )
 from earthsci_toolkit.flatten import (
-    FlattenedSystem,
     UnsupportedDimensionalityError,
     flatten,
 )
@@ -89,10 +88,12 @@ def test_simulate_flatten_round_trip_matches_esm_file_path():
     file = _decay_file()
     initial = {"A": 1.0, "B": 0.0}
 
-    via_file = simulate(file, tspan=(0.0, 5.0), parameters={},
-                        initial_conditions=initial, method="RK45")
-    via_flat = simulate(flatten(file), tspan=(0.0, 5.0), parameters={},
-                        initial_conditions=initial, method="RK45")
+    via_file = simulate(
+        file, tspan=(0.0, 5.0), parameters={}, initial_conditions=initial, method="RK45"
+    )
+    via_flat = simulate(
+        flatten(file), tspan=(0.0, 5.0), parameters={}, initial_conditions=initial, method="RK45"
+    )
 
     assert via_file.success and via_flat.success
     assert via_file.vars == via_flat.vars
@@ -192,15 +193,13 @@ def test_simulate_cache_survives_parameter_overrides():
     flat = flatten(file)
 
     # Prime the cache with one set of parameters.
-    r1 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 0.5},
-                  initial_conditions={"x": 1.0})
+    r1 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 0.5}, initial_conditions={"x": 1.0})
     compile1 = flat._simulate_compile_cache
     assert r1.success and compile1 is not None
 
     # A different parameter override must not invalidate the compiled RHS:
     # parameter values are passed as runtime arguments, not inlined.
-    r2 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 2.0},
-                  initial_conditions={"x": 1.0})
+    r2 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 2.0}, initial_conditions={"x": 1.0})
     assert r2.success
     assert flat._simulate_compile_cache is compile1
 
@@ -237,11 +236,11 @@ def test_compile_flat_rhs_returns_parametric_form():
 def test_simulate_accepts_cse_kwarg_and_matches_default():
     """simulate(..., cse=False) produces the same trajectory as the default."""
     flat = flatten(_decay_file())
-    r_default = simulate(
-        flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0}
-    )
+    r_default = simulate(flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0})
     r_no_cse = simulate(
-        flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0},
+        flat,
+        tspan=(0.0, 1.0),
+        initial_conditions={"A": 1.0, "B": 0.0},
         cse=False,
     )
     assert r_default.success and r_no_cse.success
@@ -259,7 +258,9 @@ def test_simulate_caches_cse_true_and_false_independently():
     assert getattr(flat, "_simulate_compile_cache_no_cse", None) is None
 
     simulate(
-        flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0},
+        flat,
+        tspan=(0.0, 1.0),
+        initial_conditions={"A": 1.0, "B": 0.0},
         cse=False,
     )
     cse_false_cache = flat._simulate_compile_cache_no_cse

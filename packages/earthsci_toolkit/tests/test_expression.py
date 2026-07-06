@@ -10,8 +10,14 @@ tests.
 import pytest
 import sympy as sp
 from earthsci_toolkit.expression import (
-    free_variables, free_parameters, contains, simplify,
-    to_sympy, from_sympy, symbolic_jacobian, SimulationError
+    free_variables,
+    free_parameters,
+    contains,
+    simplify,
+    to_sympy,
+    from_sympy,
+    symbolic_jacobian,
+    SimulationError,
 )
 from earthsci_toolkit.numpy_interpreter import fold_constant_expr
 from earthsci_toolkit.esm_types import ExprNode, Model, ModelVariable, Equation
@@ -57,18 +63,18 @@ class TestBasicExpressionFunctions:
                 "y": ModelVariable(type="state"),
                 "k": ModelVariable(type="parameter"),
                 "alpha": ModelVariable(type="parameter"),
-                "z": ModelVariable(type="observed")
-            }
+                "z": ModelVariable(type="observed"),
+            },
         )
 
         # Test expression: k * x + alpha * y + z
-        expr = ExprNode(op="+", args=[
-            ExprNode(op="*", args=["k", "x"]),
-            ExprNode(op="+", args=[
-                ExprNode(op="*", args=["alpha", "y"]),
-                "z"
-            ])
-        ])
+        expr = ExprNode(
+            op="+",
+            args=[
+                ExprNode(op="*", args=["k", "x"]),
+                ExprNode(op="+", args=[ExprNode(op="*", args=["alpha", "y"]), "z"]),
+            ],
+        )
 
         parameters = free_parameters(expr, model)
         assert parameters == {"k", "alpha"}
@@ -77,10 +83,7 @@ class TestBasicExpressionFunctions:
         """Test free_parameters with no parameters in expression."""
         model = Model(
             name="test_model",
-            variables={
-                "x": ModelVariable(type="state"),
-                "y": ModelVariable(type="observed")
-            }
+            variables={"x": ModelVariable(type="state"), "y": ModelVariable(type="observed")},
         )
 
         expr = ExprNode(op="+", args=["x", "y"])
@@ -89,12 +92,7 @@ class TestBasicExpressionFunctions:
 
     def test_free_parameters_undefined_variables(self):
         """Test free_parameters with variables not in model."""
-        model = Model(
-            name="test_model",
-            variables={
-                "k": ModelVariable(type="parameter")
-            }
-        )
+        model = Model(name="test_model", variables={"k": ModelVariable(type="parameter")})
 
         # Expression contains both defined and undefined variables
         expr = ExprNode(op="*", args=["k", "undefined_var"])
@@ -188,11 +186,6 @@ class TestSymPyBridge:
 
     def test_to_sympy_ifelse(self):
         """Test to_sympy with conditional expressions."""
-        condition = ExprNode(op=">", args=["x", 0])  # This won't convert perfectly, but test the structure
-        expr = ExprNode(op="ifelse", args=[condition, 1, 0])
-
-        # For this test, we'll make a simpler conditional
-        x = sp.Symbol("x")
         expr_simple = ExprNode(op="ifelse", args=["x", 1, 0])
         result = to_sympy(expr_simple)
         assert isinstance(result, sp.Piecewise)
@@ -280,24 +273,27 @@ class TestSymbolicJacobian:
                 "a": ModelVariable(type="parameter"),
                 "b": ModelVariable(type="parameter"),
                 "c": ModelVariable(type="parameter"),
-                "d": ModelVariable(type="parameter")
+                "d": ModelVariable(type="parameter"),
             },
             equations=[
                 Equation(
                     lhs=ExprNode(op="D", args=["x"], wrt="t"),
-                    rhs=ExprNode(op="+", args=[
-                        ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "a"]), "x"]),
-                        ExprNode(op="*", args=["b", "y"])
-                    ])
+                    rhs=ExprNode(
+                        op="+",
+                        args=[
+                            ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "a"]), "x"]),
+                            ExprNode(op="*", args=["b", "y"]),
+                        ],
+                    ),
                 ),
                 Equation(
                     lhs=ExprNode(op="D", args=["y"], wrt="t"),
-                    rhs=ExprNode(op="-", args=[
-                        ExprNode(op="*", args=["c", "x"]),
-                        ExprNode(op="*", args=["d", "y"])
-                    ])
-                )
-            ]
+                    rhs=ExprNode(
+                        op="-",
+                        args=[ExprNode(op="*", args=["c", "x"]), ExprNode(op="*", args=["d", "y"])],
+                    ),
+                ),
+            ],
         )
 
         jacobian = symbolic_jacobian(model)
@@ -311,17 +307,15 @@ class TestSymbolicJacobian:
         j_11 = jacobian[1, 1]
 
         # Convert to string to check content
-        assert 'a' in str(j_00)
-        assert 'b' in str(j_01)
-        assert 'c' in str(j_10)
-        assert 'd' in str(j_11)
+        assert "a" in str(j_00)
+        assert "b" in str(j_01)
+        assert "c" in str(j_10)
+        assert "d" in str(j_11)
 
     def test_no_state_variables_error(self):
         """Test error when model has no state variables."""
         model = Model(
-            name="no_states",
-            variables={"p": ModelVariable(type="parameter")},
-            equations=[]
+            name="no_states", variables={"p": ModelVariable(type="parameter")}, equations=[]
         )
         with pytest.raises(ValueError, match="Model has no state variables"):
             symbolic_jacobian(model)
@@ -329,9 +323,7 @@ class TestSymbolicJacobian:
     def test_no_equations_error(self):
         """Test error when model has no equations."""
         model = Model(
-            name="no_equations",
-            variables={"x": ModelVariable(type="state")},
-            equations=[]
+            name="no_equations", variables={"x": ModelVariable(type="state")}, equations=[]
         )
         with pytest.raises(ValueError, match="Model has no equations"):
             symbolic_jacobian(model)
@@ -341,21 +333,18 @@ class TestSymbolicJacobian:
         # dx/dt = -kx
         model = Model(
             name="single_state",
-            variables={
-                "x": ModelVariable(type="state"),
-                "k": ModelVariable(type="parameter")
-            },
+            variables={"x": ModelVariable(type="state"), "k": ModelVariable(type="parameter")},
             equations=[
                 Equation(
                     lhs=ExprNode(op="D", args=["x"], wrt="t"),
-                    rhs=ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "k"]), "x"])
+                    rhs=ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "k"]), "x"]),
                 )
-            ]
+            ],
         )
 
         jacobian = symbolic_jacobian(model)
         assert jacobian.shape == (1, 1)
-        assert 'k' in str(jacobian[0, 0])
+        assert "k" in str(jacobian[0, 0])
 
     def test_algebraic_equations(self):
         """Test Jacobian with algebraic equations (non-differential)."""
@@ -366,15 +355,15 @@ class TestSymbolicJacobian:
             variables={
                 "x": ModelVariable(type="state"),
                 "y": ModelVariable(type="state"),
-                "k": ModelVariable(type="parameter")
+                "k": ModelVariable(type="parameter"),
             },
             equations=[
                 Equation(lhs="x", rhs=ExprNode(op="*", args=[2, "y"])),
                 Equation(
                     lhs=ExprNode(op="D", args=["y"], wrt="t"),
-                    rhs=ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "k"]), "y"])
-                )
-            ]
+                    rhs=ExprNode(op="*", args=[ExprNode(op="*", args=[-1, "k"]), "y"]),
+                ),
+            ],
         )
 
         jacobian = symbolic_jacobian(model)
@@ -409,6 +398,7 @@ class TestNAryMinMax:
 
     def test_to_sympy_min_max(self):
         import sympy as sp
+
         s = to_sympy(ExprNode(op="min", args=["x", "y"]))
         assert s == sp.Min(sp.Symbol("x"), sp.Symbol("y"))
         s = to_sympy(ExprNode(op="max", args=["x", "y", "z"]))
@@ -434,35 +424,42 @@ class TestPublicEvaluate:
 
     def test_import_from_package(self):
         from earthsci_toolkit import evaluate
+
         assert callable(evaluate)
 
     def test_scalar_literal(self):
         from earthsci_toolkit import evaluate
+
         assert evaluate(42, {}) == 42.0
         assert evaluate(3.14, {}) == pytest.approx(3.14)
 
     def test_variable_lookup(self):
         from earthsci_toolkit import evaluate
+
         assert evaluate("x", {"x": 7.0}) == pytest.approx(7.0)
 
     def test_arithmetic_expression(self):
         from earthsci_toolkit import evaluate
+
         # (x + 2) * y  with x=3, y=4 → 20
         expr = ExprNode(op="*", args=[ExprNode(op="+", args=["x", 2]), "y"])
         assert evaluate(expr, {"x": 3.0, "y": 4.0}) == pytest.approx(20.0)
 
     def test_t_binding_respected(self):
         from earthsci_toolkit import evaluate
+
         # expression is just the symbol "t"
         assert evaluate("t", {"t": 5.0}) == pytest.approx(5.0)
 
     def test_t_defaults_to_zero(self):
         from earthsci_toolkit import evaluate
+
         # "t" resolves to ctx.t which defaults to 0.0 when absent from bindings
         assert evaluate("t", {}) == pytest.approx(0.0)
 
     def test_unbound_variable_raises(self):
         from earthsci_toolkit import evaluate
         from earthsci_toolkit.numpy_interpreter import NumpyInterpreterError
+
         with pytest.raises(NumpyInterpreterError):
             evaluate("z", {})

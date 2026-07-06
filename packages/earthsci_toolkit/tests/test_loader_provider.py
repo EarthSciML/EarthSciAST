@@ -39,12 +39,7 @@ from earthsci_toolkit.data_loaders.provider import (
     build_default_provider,
 )
 
-_FIXTURE = (
-    Path(__file__).resolve().parent
-    / "fixtures"
-    / "loader_injection"
-    / "loader_consumer.esm"
-)
+_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "loader_injection" / "loader_consumer.esm"
 
 _EPOCH = _dt.datetime(2018, 1, 1)  # the fixture loader's temporal.start
 
@@ -84,9 +79,7 @@ def _seg_value(t: float) -> float:
 # --------------------------------------------------------------------------
 
 
-def _make_factory(
-    calls: Dict[str, List], *, anchors_seconds: Optional[List[float]] = None
-):
+def _make_factory(calls: Dict[str, List], *, anchors_seconds: Optional[List[float]] = None):
     """Provider factory returning native-dataset-shaped records and logging calls.
 
     ``anchors_seconds`` overrides the discrete loader's ``refresh_times`` (as
@@ -135,7 +128,9 @@ def test_provider_object_path_refreshes_at_cadence() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         provider_factory=_make_factory(calls),
     )
     assert result.success, result.message
@@ -155,7 +150,9 @@ def test_const_materialized_once_discrete_refreshed_per_boundary() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         provider_factory=_make_factory(calls),
     )
     assert result.success, result.message
@@ -179,7 +176,9 @@ def test_boundaries_come_from_refresh_times_not_frequency() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         provider_factory=_make_factory(calls, anchors_seconds=[0.0, 0.5, 1.5]),
     )
     assert result.success, result.message
@@ -200,7 +199,9 @@ def test_provider_factory_ignored_when_callable_given() -> None:
         return np.array([0.25, 1.0, 0.25])
 
     result = simulate(
-        esm, tspan=(0.0, 2.0), method="LSODA",
+        esm,
+        tspan=(0.0, 2.0),
+        method="LSODA",
         loader_provider=_legacy,
         provider_factory=_make_factory(factory_calls),
     )
@@ -261,8 +262,12 @@ def _campfire_surface_domain():
 
 def _loader_field(var, method=None):
     return LoaderField(
-        name=f"ERA5.pl.{var}", owner="ERA5", subkey="pl", var=var,
-        loader=SimpleNamespace(temporal=None), cadence="discrete",
+        name=f"ERA5.pl.{var}",
+        owner="ERA5",
+        subkey="pl",
+        var=var,
+        loader=SimpleNamespace(temporal=None),
+        cadence="discrete",
     )
 
 
@@ -288,8 +293,12 @@ def test_provider_array_resolves_file_variable_band_name() -> None:
         variables={"fuel_model": SimpleNamespace(file_variable="Band1")},
     )
     field = LoaderField(
-        name="LANDFIRE.raw.fuel_model", owner="LANDFIRE", subkey="raw",
-        var="fuel_model", loader=loader, cadence="const",
+        name="LANDFIRE.raw.fuel_model",
+        owner="LANDFIRE",
+        subkey="raw",
+        var="fuel_model",
+        loader=loader,
+        cadence="const",
     )
     native = _NativeDataset({"Band1": _NativeField([[7.0, 8.0], [9.0, 10.0]], ("y", "x"))})
     # No target → raw flatten, but the fuel_model → Band1 remap must still apply.
@@ -302,16 +311,19 @@ def test_provider_array_file_variable_matching_name_and_stub() -> None:
     variables mapping (a stub provider), extraction falls back to the semantic
     ``var`` unchanged — the remap is a no-op."""
     # Matching name: file_variable == var.
-    loader = SimpleNamespace(
-        temporal=None, variables={"t": SimpleNamespace(file_variable="t")}
-    )
+    loader = SimpleNamespace(temporal=None, variables={"t": SimpleNamespace(file_variable="t")})
     field = LoaderField(
-        name="ERA5.pl.t", owner="ERA5", subkey="pl", var="t",
-        loader=loader, cadence="discrete",
+        name="ERA5.pl.t",
+        owner="ERA5",
+        subkey="pl",
+        var="t",
+        loader=loader,
+        cadence="discrete",
     )
     native = _NativeDataset({"t": _NativeField([[1.0, 2.0]], ("y", "x"))})
     assert np.array_equal(_provider_array(field, native, None), np.array([1.0, 2.0]))
     # Stub loader (no .variables) → index by the semantic var.
     native2 = _NativeDataset({"u": _NativeField([[5.0, 6.0]], ("y", "x"))})
-    assert np.array_equal(_provider_array(_loader_field("u", None), native2, None),
-                          np.array([5.0, 6.0]))
+    assert np.array_equal(
+        _provider_array(_loader_field("u", None), native2, None), np.array([5.0, 6.0])
+    )

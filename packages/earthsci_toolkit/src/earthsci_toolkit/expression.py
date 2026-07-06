@@ -76,7 +76,7 @@ def free_parameters(expr: Expr, model: Model) -> Set[str]:
     for var_name in free_vars:
         if var_name in model.variables:
             var = model.variables[var_name]
-            if var.type == 'parameter':
+            if var.type == "parameter":
                 parameters.add(var_name)
 
     return parameters
@@ -215,6 +215,7 @@ class SimulationError(Exception):
     equations) and ``simulation.py`` re-export the name to keep the public
     ``earthsci_toolkit.simulation.SimulationError`` symbol stable.
     """
+
     pass
 
 
@@ -376,25 +377,22 @@ def _expr_to_sympy(
         # `unlowered_operator` diagnostic instead of letting SymPy invent a
         # symbolic placeholder. Under ``structural_ops=True`` these ops are
         # instead converted symbolically (public ``to_sympy`` contract).
-        if expr.op in ('grad', 'div', 'laplacian', 'D'):
+        if expr.op in ("grad", "div", "laplacian", "D"):
             if not structural_ops:
                 raise UnreachableSpatialOperatorError(expr.op)
             sympy_args = [
-                _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops)
-                for a in expr.args
+                _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops) for a in expr.args
             ]
             if len(sympy_args) != 1:
                 raise SimulationError(
                     f"{expr.op} requires exactly 1 argument, got {len(sympy_args)}"
                 )
-            if expr.op == 'D':
+            if expr.op == "D":
                 if not expr.wrt:
                     raise SimulationError("D operator requires a `wrt` field")
-                wrt_symbol = _expr_to_sympy(
-                    expr.wrt, symbol_map, fn_callable_map, structural_ops
-                )
+                wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, fn_callable_map, structural_ops)
                 return sp.Derivative(sympy_args[0], wrt_symbol)
-            if expr.op == 'grad':
+            if expr.op == "grad":
                 # Gradient - represent as a derivative over the dimension when
                 # one is declared; otherwise pass the operand through.
                 if expr.dim:
@@ -412,7 +410,7 @@ def _expr_to_sympy(
         # positions (table / axis data) that have no sensible SymPy
         # representation, and the bare ``const`` op carries the value in
         # ``expr.value`` rather than ``expr.args``. (esm-6ka)
-        if expr.op == 'const':
+        if expr.op == "const":
             v = expr.value
             if isinstance(v, bool):
                 # bool subclasses int — treat as numeric scalar (0 or 1) only
@@ -431,7 +429,7 @@ def _expr_to_sympy(
                 f"{type(v).__name__}) cannot appear outside of a closed-"
                 f"function `fn` argument slot in the SymPy simulator path"
             )
-        if expr.op == 'fn':
+        if expr.op == "fn":
             if expr.name is None:
                 raise SimulationError("`fn` op requires a `name` field")
             if expr.name not in closed_function_names():
@@ -451,7 +449,7 @@ def _expr_to_sympy(
             dynamic_sympy_args: List[sp.Expr] = []
             for i, a in enumerate(expr.args):
                 if i in const_positions:
-                    if not (isinstance(a, ExprNode) and a.op == 'const'):
+                    if not (isinstance(a, ExprNode) and a.op == "const"):
                         raise SimulationError(
                             f"`{expr.name}` argument {i} must be an inline "
                             f"`const` array (esm-spec §9.2 ``interp.*``)"
@@ -459,16 +457,17 @@ def _expr_to_sympy(
                     const_args_by_position[i] = extract_const_array(a)
                 else:
                     dynamic_sympy_args.append(
-                        _expr_to_sympy(a, symbol_map, fn_callable_map,
-                                       structural_ops)
+                        _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops)
                     )
             synthetic_name = f"_ess_fn_{len(fn_callable_map)}"
             fn_callable_map[synthetic_name] = _make_fn_callable(
-                expr.name, len(expr.args), const_args_by_position,
+                expr.name,
+                len(expr.args),
+                const_args_by_position,
             )
             placeholder = sp.Function(synthetic_name)
             return placeholder(*dynamic_sympy_args)
-        if expr.op == 'enum':
+        if expr.op == "enum":
             raise SimulationError(
                 "`enum` op encountered in SymPy bridge — `lower_enums(file)` "
                 "should have run during load (esm-spec §9.3)"
@@ -476,30 +475,33 @@ def _expr_to_sympy(
 
         # Convert arguments recursively
         sympy_args = [
-            _expr_to_sympy(arg, symbol_map, fn_callable_map, structural_ops)
-            for arg in expr.args
+            _expr_to_sympy(arg, symbol_map, fn_callable_map, structural_ops) for arg in expr.args
         ]
 
         # Handle different operations
-        if expr.op == '+':
+        if expr.op == "+":
             return sum(sympy_args) if sympy_args else 0
-        elif expr.op == '-':
+        elif expr.op == "-":
             if len(sympy_args) == 1:
                 return -sympy_args[0]
             elif len(sympy_args) == 2:
                 return sympy_args[0] - sympy_args[1]
             else:
-                raise SimulationError(f"Invalid number of arguments for subtraction: {len(sympy_args)}")
-        elif expr.op == '*':
+                raise SimulationError(
+                    f"Invalid number of arguments for subtraction: {len(sympy_args)}"
+                )
+        elif expr.op == "*":
             result = 1
             for arg in sympy_args:
                 result *= arg
             return result
-        elif expr.op == '/':
+        elif expr.op == "/":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Division requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Division requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sympy_args[0] / sympy_args[1]
-        elif expr.op in ('^', '**', 'pow'):
+        elif expr.op in ("^", "**", "pow"):
             if len(sympy_args) != 2:
                 raise SimulationError(f"Power requires exactly 2 arguments, got {len(sympy_args)}")
             base, exp_arg = sympy_args
@@ -518,149 +520,167 @@ def _expr_to_sympy(
                 and float(exp_arg) == int(exp_arg)
             ):
                 exp_arg = sp.Integer(int(exp_arg))
-            return base ** exp_arg
-        elif expr.op == 'exp':
+            return base**exp_arg
+        elif expr.op == "exp":
             if len(sympy_args) != 1:
-                raise SimulationError(f"Exponential requires exactly 1 argument, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Exponential requires exactly 1 argument, got {len(sympy_args)}"
+                )
             return sp.exp(sympy_args[0])
-        elif expr.op == 'log':
+        elif expr.op == "log":
             if len(sympy_args) != 1:
-                raise SimulationError(f"Logarithm requires exactly 1 argument, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Logarithm requires exactly 1 argument, got {len(sympy_args)}"
+                )
             return sp.log(sympy_args[0])
-        elif expr.op == 'log10':
+        elif expr.op == "log10":
             if len(sympy_args) != 1:
                 raise SimulationError(f"log10 requires exactly 1 argument, got {len(sympy_args)}")
             return sp.log(sympy_args[0], 10)
-        elif expr.op == 'sqrt':
+        elif expr.op == "sqrt":
             if len(sympy_args) != 1:
                 raise SimulationError(f"sqrt requires exactly 1 argument, got {len(sympy_args)}")
             return sp.sqrt(sympy_args[0])
-        elif expr.op == 'abs':
+        elif expr.op == "abs":
             if len(sympy_args) != 1:
                 raise SimulationError(f"abs requires exactly 1 argument, got {len(sympy_args)}")
             # See ``_ess_numeric_abs`` definition — using ``sp.Abs`` here
             # would trigger the construction-time decomposition that
             # esm-5gk fixes.
             return _ess_numeric_abs(sympy_args[0])
-        elif expr.op == 'sign':
+        elif expr.op == "sign":
             if len(sympy_args) != 1:
                 raise SimulationError(f"sign requires exactly 1 argument, got {len(sympy_args)}")
             return sp.sign(sympy_args[0])
-        elif expr.op == 'floor':
+        elif expr.op == "floor":
             if len(sympy_args) != 1:
                 raise SimulationError(f"floor requires exactly 1 argument, got {len(sympy_args)}")
             return sp.floor(sympy_args[0])
-        elif expr.op == 'ceil':
+        elif expr.op == "ceil":
             if len(sympy_args) != 1:
                 raise SimulationError(f"ceil requires exactly 1 argument, got {len(sympy_args)}")
             return sp.ceiling(sympy_args[0])
-        elif expr.op == 'min':
+        elif expr.op == "min":
             if not sympy_args:
                 raise SimulationError("min requires at least 1 argument")
             return sp.Min(*sympy_args)
-        elif expr.op == 'max':
+        elif expr.op == "max":
             if not sympy_args:
                 raise SimulationError("max requires at least 1 argument")
             return sp.Max(*sympy_args)
-        elif expr.op == 'sin':
+        elif expr.op == "sin":
             if len(sympy_args) != 1:
                 raise SimulationError(f"Sine requires exactly 1 argument, got {len(sympy_args)}")
             return sp.sin(sympy_args[0])
-        elif expr.op == 'cos':
+        elif expr.op == "cos":
             if len(sympy_args) != 1:
                 raise SimulationError(f"Cosine requires exactly 1 argument, got {len(sympy_args)}")
             return sp.cos(sympy_args[0])
-        elif expr.op == 'tan':
+        elif expr.op == "tan":
             if len(sympy_args) != 1:
                 raise SimulationError(f"tan requires exactly 1 argument, got {len(sympy_args)}")
             return sp.tan(sympy_args[0])
-        elif expr.op == 'asin':
+        elif expr.op == "asin":
             if len(sympy_args) != 1:
                 raise SimulationError(f"asin requires exactly 1 argument, got {len(sympy_args)}")
             return sp.asin(sympy_args[0])
-        elif expr.op == 'acos':
+        elif expr.op == "acos":
             if len(sympy_args) != 1:
                 raise SimulationError(f"acos requires exactly 1 argument, got {len(sympy_args)}")
             return sp.acos(sympy_args[0])
-        elif expr.op == 'atan':
+        elif expr.op == "atan":
             if len(sympy_args) != 1:
                 raise SimulationError(f"atan requires exactly 1 argument, got {len(sympy_args)}")
             return sp.atan(sympy_args[0])
-        elif expr.op == 'atan2':
+        elif expr.op == "atan2":
             if len(sympy_args) != 2:
                 raise SimulationError(f"atan2 requires exactly 2 arguments, got {len(sympy_args)}")
             return sp.atan2(sympy_args[0], sympy_args[1])
-        elif expr.op == 'sinh':
+        elif expr.op == "sinh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"sinh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.sinh(sympy_args[0])
-        elif expr.op == 'cosh':
+        elif expr.op == "cosh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"cosh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.cosh(sympy_args[0])
-        elif expr.op == 'tanh':
+        elif expr.op == "tanh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"tanh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.tanh(sympy_args[0])
-        elif expr.op == 'asinh':
+        elif expr.op == "asinh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"asinh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.asinh(sympy_args[0])
-        elif expr.op == 'acosh':
+        elif expr.op == "acosh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"acosh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.acosh(sympy_args[0])
-        elif expr.op == 'atanh':
+        elif expr.op == "atanh":
             if len(sympy_args) != 1:
                 raise SimulationError(f"atanh requires exactly 1 argument, got {len(sympy_args)}")
             return sp.atanh(sympy_args[0])
-        elif expr.op == 'ifelse':
+        elif expr.op == "ifelse":
             if len(sympy_args) != 3:
                 raise SimulationError(f"ifelse requires exactly 3 arguments, got {len(sympy_args)}")
             return sp.Piecewise((sympy_args[1], sympy_args[0]), (sympy_args[2], True))
-        elif expr.op == 'and':
+        elif expr.op == "and":
             if len(sympy_args) < 2:
                 raise SimulationError(f"and requires at least 2 arguments, got {len(sympy_args)}")
             return sp.And(*sympy_args)
-        elif expr.op == 'or':
+        elif expr.op == "or":
             if len(sympy_args) < 2:
                 raise SimulationError(f"or requires at least 2 arguments, got {len(sympy_args)}")
             return sp.Or(*sympy_args)
-        elif expr.op == 'not':
+        elif expr.op == "not":
             if len(sympy_args) != 1:
                 raise SimulationError(f"not requires exactly 1 argument, got {len(sympy_args)}")
             return sp.Not(sympy_args[0])
-        elif expr.op == '>':
+        elif expr.op == ">":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Greater than requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Greater than requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.StrictGreaterThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '<':
+        elif expr.op == "<":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Less than requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Less than requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.StrictLessThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '>=':
+        elif expr.op == ">=":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Greater than or equal requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Greater than or equal requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.GreaterThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '<=':
+        elif expr.op == "<=":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Less than or equal requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Less than or equal requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.LessThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '==':
+        elif expr.op == "==":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Equality requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Equality requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.Eq(sympy_args[0], sympy_args[1])
-        elif expr.op == '!=':
+        elif expr.op == "!=":
             if len(sympy_args) != 2:
-                raise SimulationError(f"Inequality requires exactly 2 arguments, got {len(sympy_args)}")
+                raise SimulationError(
+                    f"Inequality requires exactly 2 arguments, got {len(sympy_args)}"
+                )
             return sp.Ne(sympy_args[0], sympy_args[1])
-        elif structural_ops and expr.op == 'Pre':
+        elif structural_ops and expr.op == "Pre":
             # Previous value operator - represent as an opaque function
             # (public ``to_sympy`` contract only; the simulation path handles
             # Pre in event affects structurally, never through lambdify).
             if len(sympy_args) != 1:
-                raise SimulationError(f"Pre operator requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.Function('Pre')(sympy_args[0])
+                raise SimulationError(
+                    f"Pre operator requires exactly 1 argument, got {len(sympy_args)}"
+                )
+            return sp.Function("Pre")(sympy_args[0])
         else:
             raise SimulationError(f"Unsupported operation: {expr.op}")
     else:
@@ -743,65 +763,65 @@ def from_sympy(sympy_expr: sp.Expr) -> Expr:
     elif isinstance(sympy_expr, sp.cos):
         # Cosine
         return ExprNode(op="cos", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'tan':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "tan":
         # Tangent
         return ExprNode(op="tan", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'asin':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "asin":
         # Arcsine
         return ExprNode(op="asin", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'acos':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "acos":
         # Arccosine
         return ExprNode(op="acos", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'atan':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "atan":
         # Arctangent
         return ExprNode(op="atan", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'atan2':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "atan2":
         # Arctangent2
         return ExprNode(op="atan2", args=[from_sympy(arg) for arg in sympy_expr.args])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'sinh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "sinh":
         # Hyperbolic sine
         return ExprNode(op="sinh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'cosh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "cosh":
         # Hyperbolic cosine
         return ExprNode(op="cosh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'tanh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "tanh":
         # Hyperbolic tangent
         return ExprNode(op="tanh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'asinh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "asinh":
         # Inverse hyperbolic sine
         return ExprNode(op="asinh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'acosh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "acosh":
         # Inverse hyperbolic cosine
         return ExprNode(op="acosh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'atanh':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "atanh":
         # Inverse hyperbolic tangent
         return ExprNode(op="atanh", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ in ('Abs', '_ess_numeric_abs'):
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ in ("Abs", "_ess_numeric_abs"):
         # Absolute value — either sympy.Abs or the NaN-safe placeholder that
         # ``to_sympy``/``_expr_to_sympy`` emit for the ``abs`` op (esm-5gk).
         return ExprNode(op="abs", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'sign':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "sign":
         # Sign function
         return ExprNode(op="sign", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'floor':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "floor":
         # Floor
         return ExprNode(op="floor", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'ceiling':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "ceiling":
         # Ceiling
         return ExprNode(op="ceil", args=[from_sympy(sympy_expr.args[0])])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'Min':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "Min":
         # Min
         return ExprNode(op="min", args=[from_sympy(arg) for arg in sympy_expr.args])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'Max':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "Max":
         # Max
         return ExprNode(op="max", args=[from_sympy(arg) for arg in sympy_expr.args])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'And':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "And":
         # Logical AND
         return ExprNode(op="and", args=[from_sympy(arg) for arg in sympy_expr.args])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'Or':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "Or":
         # Logical OR
         return ExprNode(op="or", args=[from_sympy(arg) for arg in sympy_expr.args])
-    elif hasattr(sympy_expr, 'func') and sympy_expr.func.__name__ == 'Not':
+    elif hasattr(sympy_expr, "func") and sympy_expr.func.__name__ == "Not":
         # Logical NOT
         return ExprNode(op="not", args=[from_sympy(sympy_expr.args[0])])
     elif isinstance(sympy_expr, sp.Derivative):
@@ -813,11 +833,17 @@ def from_sympy(sympy_expr: sp.Expr) -> Expr:
         pieces = sympy_expr.args
         if len(pieces) == 2:
             (true_val, condition), (false_val, _) = pieces
-            return ExprNode(op="ifelse", args=[from_sympy(condition), from_sympy(true_val), from_sympy(false_val)])
+            return ExprNode(
+                op="ifelse",
+                args=[from_sympy(condition), from_sympy(true_val), from_sympy(false_val)],
+            )
         else:
             # For more complex piecewise, just return the first expression for now
             return from_sympy(pieces[0][0])
-    elif hasattr(sympy_expr, '__class__') and sympy_expr.__class__.__name__ in ['BooleanTrue', 'BooleanFalse']:
+    elif hasattr(sympy_expr, "__class__") and sympy_expr.__class__.__name__ in [
+        "BooleanTrue",
+        "BooleanFalse",
+    ]:
         # Boolean constants - just return as number
         return float(sympy_expr)
     elif isinstance(sympy_expr, sp.Function):
@@ -848,7 +874,7 @@ def symbolic_jacobian(model: Model) -> sp.Matrix:
     # Get all state variables
     state_vars = []
     for name, var in model.variables.items():
-        if var.type == 'state':
+        if var.type == "state":
             state_vars.append(name)
 
     if not state_vars:
@@ -895,7 +921,7 @@ def symbolic_jacobian(model: Model) -> sp.Matrix:
         rhs_expressions.append(sp.sympify(0))
 
     # Take only the first n expressions where n = number of state variables
-    rhs_expressions = rhs_expressions[:len(state_vars)]
+    rhs_expressions = rhs_expressions[: len(state_vars)]
 
     # Compute Jacobian: J[i,j] = ∂(rhs_i)/∂(state_var_j)
     jacobian_elements = []

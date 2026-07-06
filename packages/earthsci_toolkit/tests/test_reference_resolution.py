@@ -107,8 +107,7 @@ def test_range_from_resolves_to_index_set():
 
 def test_range_from_undeclared_index_set_errors():
     node = _agg(output_idx=["i"], ranges={"i": {"from": "nope"}})
-    model = {"index_sets": {"cells": {"kind": "interval", "size": 4}},
-             "equations": [_eqn(node, 0)]}
+    model = {"index_sets": {"cells": {"kind": "interval", "size": 4}}, "equations": [_eqn(node, 0)]}
     with pytest.raises(ReferenceResolutionError) as exc:
         build_reference_graph(model, "M")
     assert exc.value.code == E_REF_UNDECLARED_INDEX_SET
@@ -179,8 +178,7 @@ def test_join_factor_unresolved_errors():
         join=[{"on": [["ghost", "col"]]}],
         args=["activity"],
     )
-    model = {"index_sets": {"cells": {"kind": "interval", "size": 2}},
-             "equations": [_eqn(node, 0)]}
+    model = {"index_sets": {"cells": {"kind": "interval", "size": 2}}, "equations": [_eqn(node, 0)]}
     with pytest.raises(ReferenceResolutionError) as exc:
         build_reference_graph(model, "M")
     assert exc.value.code == E_REF_UNRESOLVED_JOIN_FACTOR
@@ -256,10 +254,12 @@ def test_resolve_references_multi_model():
         "equations": [_eqn(_agg(output_idx=["i"], ranges={"i": {"from": "cells"}}), 0)],
     }
     m2 = {"equations": [_eqn({"op": "D", "args": ["u"], "wrt": "t"}, 0)]}
-    graphs = resolve_references({
-        "index_sets": {"cells": {"kind": "interval", "size": 4}},
-        "models": {"A": m1, "B": m2},
-    })
+    graphs = resolve_references(
+        {
+            "index_sets": {"cells": {"kind": "interval", "size": 4}},
+            "models": {"A": m1, "B": m2},
+        }
+    )
     assert set(graphs) == {"A", "B"}
     assert len(graphs["A"].edges_of_kind(EdgeKind.RANGE_FROM)) == 1
     assert graphs["B"].edges == []

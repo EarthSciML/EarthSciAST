@@ -35,9 +35,7 @@ def _format_date(value: Union[_dt.datetime, _dt.date, str], fmt: Optional[str]) 
     if isinstance(value, str):
         parsed = _parse_iso_datetime(value)
         if parsed is None:
-            raise UrlTemplateError(
-                f"date value {value!r} is not a valid ISO-8601 datetime"
-            )
+            raise UrlTemplateError(f"date value {value!r} is not a valid ISO-8601 datetime")
         value = parsed
     if isinstance(value, _dt.datetime):
         dt = value
@@ -93,9 +91,7 @@ def expand_url_template(
             if fmt:
                 return format(value, fmt)
             return str(value)
-        raise UrlTemplateError(
-            f"template {template!r} has unfilled placeholder {{{name}}}"
-        )
+        raise UrlTemplateError(f"template {template!r} has unfilled placeholder {{{name}}}")
 
     return _TOKEN_RE.sub(_sub, template)
 
@@ -113,18 +109,10 @@ def expand_with_mirrors(
     Mirrors that fail expansion (e.g. missing placeholder) are skipped so that
     a misconfigured mirror cannot break the primary URL.
     """
-    out: List[str] = [
-        expand_url_template(
-            url_template, date=date, variables=variables, **kwargs
-        )
-    ]
+    out: List[str] = [expand_url_template(url_template, date=date, variables=variables, **kwargs)]
     for mirror in mirrors or ():
         try:
-            out.append(
-                expand_url_template(
-                    mirror, date=date, variables=variables, **kwargs
-                )
-            )
+            out.append(expand_url_template(mirror, date=date, variables=variables, **kwargs))
         except UrlTemplateError:
             continue
     return out

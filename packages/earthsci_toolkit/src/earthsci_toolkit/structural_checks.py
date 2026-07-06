@@ -33,28 +33,60 @@ def _get_unit_registry():
     global _UREG
     if _UREG is None:
         import pint
+
         _UREG = pint.UnitRegistry()
     return _UREG
 
 
 _OPERATOR_ARITY = {
-    "+": (2, None), "-": (1, None), "*": (2, None), "/": (2, 2),
+    "+": (2, None),
+    "-": (1, None),
+    "*": (2, None),
+    "/": (2, 2),
     # `grad`/`div` accept an optional second operand: a per-field boundary
     # (Dirichlet inflow) metavariable bound by a two-arg `grad(f, inflow, dim)`
     # expression-template `match` (esm-spec §9.6; the schema does not constrain
     # grad/div arity — the second arg supplies that field's own loaded BC).
-    "^": (2, 2), "D": (1, 1), "ic": (1, 1), "grad": (1, 2), "div": (1, 2),
-    "laplacian": (1, 1), "exp": (1, 1), "log": (1, 1), "log10": (1, 1),
-    "sqrt": (1, 1), "abs": (1, 1), "sin": (1, 1), "cos": (1, 1),
-    "tan": (1, 1), "asin": (1, 1), "acos": (1, 1), "atan": (1, 1),
+    "^": (2, 2),
+    "D": (1, 1),
+    "ic": (1, 1),
+    "grad": (1, 2),
+    "div": (1, 2),
+    "laplacian": (1, 1),
+    "exp": (1, 1),
+    "log": (1, 1),
+    "log10": (1, 1),
+    "sqrt": (1, 1),
+    "abs": (1, 1),
+    "sin": (1, 1),
+    "cos": (1, 1),
+    "tan": (1, 1),
+    "asin": (1, 1),
+    "acos": (1, 1),
+    "atan": (1, 1),
     "atan2": (2, 2),
-    "sinh": (1, 1), "cosh": (1, 1), "tanh": (1, 1),
-    "asinh": (1, 1), "acosh": (1, 1), "atanh": (1, 1),
-    "min": (2, None), "max": (2, None),
-    "floor": (1, 1), "ceil": (1, 1), "ifelse": (3, 3),
-    ">": (2, 2), "<": (2, 2), ">=": (2, 2), "<=": (2, 2),
-    "==": (2, 2), "!=": (2, 2), "and": (2, None), "or": (2, None),
-    "not": (1, 1), "Pre": (1, 1), "sign": (1, 1),
+    "sinh": (1, 1),
+    "cosh": (1, 1),
+    "tanh": (1, 1),
+    "asinh": (1, 1),
+    "acosh": (1, 1),
+    "atanh": (1, 1),
+    "min": (2, None),
+    "max": (2, None),
+    "floor": (1, 1),
+    "ceil": (1, 1),
+    "ifelse": (3, 3),
+    ">": (2, 2),
+    "<": (2, 2),
+    ">=": (2, 2),
+    "<=": (2, 2),
+    "==": (2, 2),
+    "!=": (2, 2),
+    "and": (2, None),
+    "or": (2, None),
+    "not": (1, 1),
+    "Pre": (1, 1),
+    "sign": (1, 1),
     # Closed function registry (esm-spec §9.2 / §9.3). `fn` arity is checked
     # by the dispatcher (1 for datetime.*, 2 for interp.searchsorted).
     "enum": (2, 2),
@@ -62,14 +94,30 @@ _OPERATOR_ARITY = {
 }
 
 # Built-in symbols always available in expressions
-_BUILTIN_SYMBOLS = frozenset({
-    "t", "pi", "e", "true", "false",
-    "x", "y", "z", "lon", "lat", "lev", "longitude", "latitude", "level",
-})
+_BUILTIN_SYMBOLS = frozenset(
+    {
+        "t",
+        "pi",
+        "e",
+        "true",
+        "false",
+        "x",
+        "y",
+        "z",
+        "lon",
+        "lat",
+        "lev",
+        "longitude",
+        "latitude",
+        "level",
+    }
+)
 
 # Pint-compatible unit aliases for normalizing
 _UNIT_ALIASES = {
-    "1": "dimensionless", "": "dimensionless", "dimensionless": "dimensionless",
+    "1": "dimensionless",
+    "": "dimensionless",
+    "dimensionless": "dimensionless",
 }
 
 
@@ -94,13 +142,9 @@ def _check_expression_arity(expr, errors: List[str], path: str) -> None:
             min_args, max_args = _OPERATOR_ARITY[op]
             n = len(args)
             if n < min_args:
-                errors.append(
-                    f"{path}: operator '{op}' requires at least {min_args} args, got {n}"
-                )
+                errors.append(f"{path}: operator '{op}' requires at least {min_args} args, got {n}")
             elif max_args is not None and n > max_args:
-                errors.append(
-                    f"{path}: operator '{op}' accepts at most {max_args} args, got {n}"
-                )
+                errors.append(f"{path}: operator '{op}' accepts at most {max_args} args, got {n}")
         for i, arg in enumerate(args):
             _check_expression_arity(arg, errors, f"{path}/args[{i}]")
 
@@ -222,7 +266,9 @@ def _resolve_scoped_ref(ref: str, tables: Dict[str, Any]) -> tuple:
     return (system, var, "no_var")
 
 
-def _check_variable_references(data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]) -> None:
+def _check_variable_references(
+    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+) -> None:
     """
     Check variable references in equations.
 
@@ -236,9 +282,7 @@ def _check_variable_references(data: Dict[str, Any], tables: Dict[str, Any], err
     global_symbols = tables["global_symbols"]
     for mname, m in data.get("models", {}).items():
         for i, eq in enumerate(m.get("equations", [])):
-            lhs_is_derivative = (
-                isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
-            )
+            lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
             for side in ("lhs", "rhs"):
                 if side not in eq:
                     continue
@@ -282,7 +326,9 @@ def _check_variable_references(data: Dict[str, Any], tables: Dict[str, Any], err
                                 )
 
 
-def _check_coupling_references(data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]) -> None:
+def _check_coupling_references(
+    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+) -> None:
     """Check that coupling 'from' references resolve to valid scoped refs.
     'to' is intentionally lenient since variable_map can introduce new target vars."""
     for i, c in enumerate(data.get("coupling", [])):
@@ -299,16 +345,16 @@ def _check_coupling_references(data: Dict[str, Any], tables: Dict[str, Any], err
             continue
         system, var, status = _resolve_scoped_ref(ref, tables)
         if status == "no_system":
-            errors.append(
-                f"coupling[{i}]/from: reference '{ref}' to undefined system '{system}'"
-            )
+            errors.append(f"coupling[{i}]/from: reference '{ref}' to undefined system '{system}'")
         elif status == "no_var":
             errors.append(
                 f"coupling[{i}]/from: reference '{ref}' — variable '{var}' not provided by '{system}'"
             )
 
 
-def _check_circular_references(data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]) -> None:
+def _check_circular_references(
+    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+) -> None:
     """Detect cycles in cross-system dependencies introduced by equation references."""
     # Build system -> set of systems it depends on
     deps = {name: set() for name in data.get("models", {})}
@@ -382,13 +428,11 @@ def _check_discrete_parameters(data: Dict[str, Any], errors: List[str]) -> None:
                     )
 
 
-_DATE_RE = re.compile(
-    r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$'
-)
-_URL_RE = re.compile(r'^https?://[^\s/$.?#].[^\s]*$')
-_DOI_RE = re.compile(r'^10\.\d{4,9}/[^\s]+$')
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$")
+_URL_RE = re.compile(r"^https?://[^\s/$.?#].[^\s]*$")
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s]+$")
 _DURATION_RE = re.compile(
-    r'^P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$'
+    r"^P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
 )
 
 
@@ -569,9 +613,7 @@ def _walk_expression_for_spatial_operator_checks(
                         f"has no declared units (unit_inconsistency)"
                     )
     for i, arg in enumerate(args):
-        _walk_expression_for_spatial_operator_checks(
-            arg, coord_units, f"{path}/args[{i}]", errors
-        )
+        _walk_expression_for_spatial_operator_checks(arg, coord_units, f"{path}/args[{i}]", errors)
     if "expr" in expr:
         _walk_expression_for_spatial_operator_checks(
             expr["expr"], coord_units, f"{path}/expr", errors
@@ -697,10 +739,7 @@ def _check_conversion_factor_consistency(data: Dict[str, Any], errors: List[str]
         return q1
 
     for mname, m in data.get("models", {}).items():
-        var_units_map = {
-            vname: vdef.get("units")
-            for vname, vdef in m.get("variables", {}).items()
-        }
+        var_units_map = {vname: vdef.get("units") for vname, vdef in m.get("variables", {}).items()}
         for vname, vdef in m.get("variables", {}).items():
             if vdef.get("type") != "observed":
                 continue
@@ -821,7 +860,9 @@ def _check_physical_constant_units(data: Dict[str, Any], errors: List[str]) -> N
             )
 
 
-def _check_unit_consistency(data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]) -> None:
+def _check_unit_consistency(
+    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+) -> None:
     """
     Check unit compatibility in equations.
 
@@ -917,7 +958,9 @@ def _check_equation_balance(data: Dict[str, Any], errors: List[str]) -> None:
 
     for mname, m in data.get("models", {}).items():
         state_vars = {n for n, v in m.get("variables", {}).items() if v.get("type") == "state"}
-        observed_vars = {n for n, v in m.get("variables", {}).items() if v.get("type") == "observed"}
+        observed_vars = {
+            n for n, v in m.get("variables", {}).items() if v.get("type") == "observed"
+        }
         eqs = m.get("equations", [])
         ode_lhs_vars = []
         for eq in eqs:
@@ -932,9 +975,7 @@ def _check_equation_balance(data: Dict[str, Any], errors: List[str]) -> None:
 
         # Case 1: state vars but zero equations
         if state_vars and not eqs:
-            errors.append(
-                f"models/{mname}: has {len(state_vars)} state variables but no equations"
-            )
+            errors.append(f"models/{mname}: has {len(state_vars)} state variables but no equations")
             continue
 
         # Case 2: more ODE equations than state variables (over-determined)
@@ -990,8 +1031,12 @@ def _check_reaction_systems(data: Dict[str, Any], errors: List[str]) -> None:
             substrates = reaction.get("substrates")
             products = reaction.get("products")
             # Reaction has both substrates and products explicitly null is invalid
-            if "substrates" in reaction and "products" in reaction \
-                    and substrates is None and products is None:
+            if (
+                "substrates" in reaction
+                and "products" in reaction
+                and substrates is None
+                and products is None
+            ):
                 errors.append(
                     f"reaction_systems/{rsname}/reactions[{ri}]: reaction has both substrates and products as null"
                 )
@@ -1028,7 +1073,9 @@ def _check_reaction_systems(data: Dict[str, Any], errors: List[str]) -> None:
                         )
 
 
-def _check_event_references(data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]) -> None:
+def _check_event_references(
+    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+) -> None:
     """Check that event affects/conditions reference declared variables."""
     for mname, m in data.get("models", {}).items():
         local_vars = set(m.get("variables", {}).keys())

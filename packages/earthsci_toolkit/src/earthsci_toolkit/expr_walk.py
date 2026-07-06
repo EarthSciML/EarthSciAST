@@ -72,9 +72,7 @@ def map_children(node: ExprNode, fn: Callable[[Expr], Expr]) -> ExprNode:
     if node.values is not None:
         updates["values"] = [fn(v) for v in node.values]
     if node.table_axes is not None:
-        updates["table_axes"] = {
-            k: fn(v) for k, v in node.table_axes.items()
-        }
+        updates["table_axes"] = {k: fn(v) for k, v in node.table_axes.items()}
     return replace(node, **updates)
 
 

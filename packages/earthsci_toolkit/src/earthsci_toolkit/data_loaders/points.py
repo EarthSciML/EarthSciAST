@@ -40,9 +40,7 @@ class PointsLoader:
 
     def __init__(self, data_loader: DataLoader) -> None:
         if data_loader.kind != DataLoaderKind.POINTS:
-            raise PointsLoaderError(
-                f"PointsLoader requires kind=points; got {data_loader.kind}"
-            )
+            raise PointsLoaderError(f"PointsLoader requires kind=points; got {data_loader.kind}")
         self.dl = data_loader
 
     def _resolve_urls(
@@ -98,9 +96,7 @@ class PointsLoader:
         records = parser(body)
         raw = _records_to_columns(records)
         mapped = apply_variable_mapping(raw, self.dl.variables, strict=False)
-        return PointsLoadResult(
-            urls_tried=urls, records=records, variables=mapped
-        )
+        return PointsLoadResult(urls_tried=urls, records=records, variables=mapped)
 
 
 def load_points(

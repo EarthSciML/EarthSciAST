@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-from earthsci_toolkit import DataLoader, flatten, load
+from earthsci_toolkit import flatten, load
 from earthsci_toolkit.parse import (
     CircularReferenceError,
     SubsystemRefError,
@@ -84,13 +84,16 @@ def test_load_resolves_top_level_model_ref():
         _write(os.path.join(tmp, "producer.esm.json"), _producer())
 
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "main"},
-            "models": {
-                "Producer": {"ref": "./producer.esm.json"},
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "main"},
+                "models": {
+                    "Producer": {"ref": "./producer.esm.json"},
+                },
             },
-        })
+        )
 
         loaded = load(main_path)
         producer = loaded.models["Producer"]
@@ -111,24 +114,27 @@ def test_coupled_model_refs_resolve_zero_rewrite():
         _write(os.path.join(tmp, "consumer.esm.json"), _consumer())
 
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "coupled"},
-            "models": {
-                "Producer": {"ref": "./producer.esm.json"},
-                "Consumer": {"ref": "./consumer.esm.json"},
-            },
-            # Edge endpoints are byte-identical to the spliced flat names —
-            # no rewrite of `from`/`to` is needed for the edge to resolve.
-            "coupling": [
-                {
-                    "type": "variable_map",
-                    "from": "Producer.out",
-                    "to": "Consumer.p",
-                    "transform": "param_to_var",
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "coupled"},
+                "models": {
+                    "Producer": {"ref": "./producer.esm.json"},
+                    "Consumer": {"ref": "./consumer.esm.json"},
                 },
-            ],
-        })
+                # Edge endpoints are byte-identical to the spliced flat names —
+                # no rewrite of `from`/`to` is needed for the edge to resolve.
+                "coupling": [
+                    {
+                        "type": "variable_map",
+                        "from": "Producer.out",
+                        "to": "Consumer.p",
+                        "transform": "param_to_var",
+                    },
+                ],
+            },
+        )
 
         loaded = load(main_path)
         assert set(loaded.models) == {"Producer", "Consumer"}
@@ -152,19 +158,22 @@ def test_model_ref_mixes_with_inline_model():
         _write(os.path.join(tmp, "producer.esm.json"), _producer())
 
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "mixed"},
-            "models": {
-                "Producer": {"ref": "./producer.esm.json"},
-                "Inline": {
-                    "variables": {"w": {"type": "state", "default": 2.0}},
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
-                    ],
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "mixed"},
+                "models": {
+                    "Producer": {"ref": "./producer.esm.json"},
+                    "Inline": {
+                        "variables": {"w": {"type": "state", "default": 2.0}},
+                        "equations": [
+                            {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
+                        ],
+                    },
                 },
             },
-        })
+        )
 
         loaded = load(main_path)
         assert "y" in loaded.models["Producer"].variables
@@ -175,13 +184,16 @@ def test_model_ref_missing_file_raises():
     """A dangling top-level model ref raises SubsystemRefError."""
     with tempfile.TemporaryDirectory() as tmp:
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "main"},
-            "models": {
-                "Missing": {"ref": "./does-not-exist.esm.json"},
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "main"},
+                "models": {
+                    "Missing": {"ref": "./does-not-exist.esm.json"},
+                },
             },
-        })
+        )
 
         with pytest.raises(SubsystemRefError):
             load(main_path)
@@ -191,20 +203,26 @@ def test_model_ref_to_loader_only_file_raises():
     """A top-level model ref must resolve to a model — a data-loader-only file
     is not a valid top-level model component (unlike a subsystem ref)."""
     with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "loader_only.esm.json"), {
-            "esm": "0.1.0",
-            "metadata": {"name": "loader_only"},
-            "data_loaders": {"Met": _LOADER},
-        })
+        _write(
+            os.path.join(tmp, "loader_only.esm.json"),
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "loader_only"},
+                "data_loaders": {"Met": _LOADER},
+            },
+        )
 
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "main"},
-            "models": {
-                "Met": {"ref": "./loader_only.esm.json"},
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "main"},
+                "models": {
+                    "Met": {"ref": "./loader_only.esm.json"},
+                },
             },
-        })
+        )
 
         with pytest.raises(SubsystemRefError):
             load(main_path)
@@ -215,26 +233,32 @@ def test_circular_model_ref_detection():
     itself is a cycle — the chain is seeded with the top-level ref."""
     with tempfile.TemporaryDirectory() as tmp:
         # self_ref.esm: its model has a subsystem ref to self_ref.esm.
-        _write(os.path.join(tmp, "self_ref.esm.json"), {
-            "esm": "0.1.0",
-            "metadata": {"name": "self_ref"},
-            "models": {
-                "SelfRef": {
-                    "variables": {},
-                    "equations": [],
-                    "subsystems": {"Cycle": {"ref": "./self_ref.esm.json"}},
+        _write(
+            os.path.join(tmp, "self_ref.esm.json"),
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "self_ref"},
+                "models": {
+                    "SelfRef": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"Cycle": {"ref": "./self_ref.esm.json"}},
+                    },
                 },
             },
-        })
+        )
 
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "main"},
-            "models": {
-                "SelfRef": {"ref": "./self_ref.esm.json"},
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "main"},
+                "models": {
+                    "SelfRef": {"ref": "./self_ref.esm.json"},
+                },
             },
-        })
+        )
 
         with pytest.raises(CircularReferenceError):
             load(main_path)
@@ -244,18 +268,21 @@ def test_resolve_model_refs_is_idempotent_on_inline_models():
     """resolve_model_refs leaves an already-parsed (inline) model untouched."""
     with tempfile.TemporaryDirectory() as tmp:
         main_path = os.path.join(tmp, "main.esm.json")
-        _write(main_path, {
-            "esm": "0.1.0",
-            "metadata": {"name": "main"},
-            "models": {
-                "Inline": {
-                    "variables": {"w": {"type": "state", "default": 2.0}},
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
-                    ],
+        _write(
+            main_path,
+            {
+                "esm": "0.1.0",
+                "metadata": {"name": "main"},
+                "models": {
+                    "Inline": {
+                        "variables": {"w": {"type": "state", "default": 2.0}},
+                        "equations": [
+                            {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
+                        ],
+                    },
                 },
             },
-        })
+        )
 
         loaded = load(main_path)
         before = loaded.models["Inline"]

@@ -75,6 +75,7 @@ class GeometryBackendUnavailable(GeometryError):
 # Operand coercion
 # --------------------------------------------------------------------------- #
 
+
 def _as_ring(poly: object, *, who: str) -> np.ndarray:
     """Coerce a clip operand to an ``[n, 2]`` float array of *distinct* lon-lat
     vertices.
@@ -113,6 +114,7 @@ def _as_ring(poly: object, *, who: str) -> np.ndarray:
 # Planar clip — Sutherland–Hodgman (convex clip polygon)
 # --------------------------------------------------------------------------- #
 
+
 def _cross(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
     """Signed area of the ``o→a``, ``o→b`` parallelogram (z of the cross product).
 
@@ -122,9 +124,7 @@ def _cross(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
     return float((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]))
 
 
-def _segment_intersection(
-    a: np.ndarray, b: np.ndarray, p: np.ndarray, q: np.ndarray
-) -> np.ndarray:
+def _segment_intersection(a: np.ndarray, b: np.ndarray, p: np.ndarray, q: np.ndarray) -> np.ndarray:
     """Intersection of the infinite clip line ``a→b`` with subject segment ``p→q``."""
     r = b - a
     s = q - p
@@ -193,6 +193,7 @@ def _dedup_consecutive(ring: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Spherical clip — spherely (S2 / s2geography), pinned + lazy
 # --------------------------------------------------------------------------- #
+
 
 def _spherical_clip(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
     """Clip two lon-lat rings on the sphere via `spherely` (S2 / s2geography).
@@ -295,6 +296,7 @@ def _coords_from_geojson(geo: dict) -> np.ndarray:
 # Public clip entry point
 # --------------------------------------------------------------------------- #
 
+
 def intersect_polygon(poly_a: object, poly_b: object, manifold: str) -> np.ndarray:
     """Clip two lon-lat polygon rings; return the overlap ring (RFC §8.1).
 
@@ -311,9 +313,7 @@ def intersect_polygon(poly_a: object, poly_b: object, manifold: str) -> np.ndarr
             "geodesic); it carries no default (CONFORMANCE_SPEC.md §5.8.4)."
         )
     if manifold not in MANIFOLDS:
-        raise GeometryError(
-            f"unknown manifold {manifold!r}; the closed set is {list(MANIFOLDS)}"
-        )
+        raise GeometryError(f"unknown manifold {manifold!r}; the closed set is {list(MANIFOLDS)}")
     a = _as_ring(poly_a, who="poly_a")
     b = _as_ring(poly_b, who="poly_b")
     if manifold == "planar":
@@ -337,6 +337,7 @@ def close_ring(ring: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Polar-edge densification — great-circle-edge accuracy (RFC §B.4 / §5.8.4)
 # --------------------------------------------------------------------------- #
+
 
 def densify_parallel_edges(
     ring: object, max_segment_deg: float, *, lat_atol: float = 1e-9
@@ -391,6 +392,7 @@ def densify_parallel_edges(
 # --------------------------------------------------------------------------- #
 # Reference area (the same formula the polygon_area FAQ body encodes)
 # --------------------------------------------------------------------------- #
+
 
 def _signed_area(ring: np.ndarray) -> float:
     """Planar shoelace signed area of an ``[n, 2]`` ring (implicit closure)."""
@@ -476,14 +478,13 @@ def polygon_area(ring: np.ndarray, manifold: str, radius: float = 1.0) -> float:
         return abs(_signed_area(ring))
     if manifold in ("spherical", "geodesic"):
         return abs(_spherical_signed_area(ring, radius))
-    raise GeometryError(
-        f"unknown manifold {manifold!r}; the closed set is {list(MANIFOLDS)}"
-    )
+    raise GeometryError(f"unknown manifold {manifold!r}; the closed set is {list(MANIFOLDS)}")
 
 
 # --------------------------------------------------------------------------- #
 # B.5 / §5.8.2 tolerance gate
 # --------------------------------------------------------------------------- #
+
 
 def area_tolerance_ok(
     area_x: float,

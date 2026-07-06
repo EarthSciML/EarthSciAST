@@ -17,21 +17,11 @@ it without creating import cycles.
 # ``ExpressionTemplateError`` from ``lower_expression_templates.py``.
 # ---------------------------------------------------------------------------
 
-APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = (
-    "apply_expression_template_invalid_declaration"
-)
-APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = (
-    "apply_expression_template_unknown_template"
-)
-APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = (
-    "apply_expression_template_bindings_mismatch"
-)
-APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = (
-    "apply_expression_template_recursive_body"
-)
-APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = (
-    "apply_expression_template_version_too_old"
-)
+APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "apply_expression_template_invalid_declaration"
+APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template"
+APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch"
+APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_body"
+APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD = "apply_expression_template_version_too_old"
 REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating"
 TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set"
 GEOMETRY_MANIFOLD_INVALID = "geometry_manifold_invalid"

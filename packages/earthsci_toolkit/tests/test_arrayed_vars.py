@@ -90,7 +90,9 @@ def test_roundtrip_preserves_shape_and_location(fixture: str):
         rt = second.models[mname].variables
         assert set(orig.keys()) == set(rt.keys())
         for name, v in orig.items():
-            assert bool(v.shape) == bool(rt[name].shape), f"{mname}.{name}: shape truthiness changed"
+            assert bool(v.shape) == bool(rt[name].shape), (
+                f"{mname}.{name}: shape truthiness changed"
+            )
             if v.shape:
                 assert v.shape == rt[name].shape, f"{mname}.{name}: shape list changed"
             assert v.location == rt[name].location, f"{mname}.{name}: location changed"

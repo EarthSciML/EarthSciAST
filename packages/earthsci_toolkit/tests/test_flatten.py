@@ -4,8 +4,6 @@ import pytest
 
 from earthsci_toolkit.flatten import (
     ConflictingDerivativeError,
-    FlattenedSystem,
-    UnsupportedDimensionalityError,
     _namespace_expr,
     flatten,
 )
@@ -42,16 +40,13 @@ def test_flatten_empty_raises():
 
 
 def test_flatten_single_model_namespaces_variables():
-    var_T = ModelVariable(type="state", units="K", default=300.0,
-                          description="Temperature")
+    var_T = ModelVariable(type="state", units="K", default=300.0, description="Temperature")
     var_k = ModelVariable(type="parameter", default=0.1)
     eq = Equation(
         lhs=ExprNode(op="D", args=["T"], wrt="t"),
         rhs=ExprNode(op="*", args=["k", "T"]),
     )
-    model = Model(name="Atmos",
-                  variables={"T": var_T, "k": var_k},
-                  equations=[eq])
+    model = Model(name="Atmos", variables={"T": var_T, "k": var_k}, equations=[eq])
 
     file = _empty_file(models={"Atmos": model})
 
@@ -91,11 +86,12 @@ def test_flatten_records_coupling_rules():
     model_b = Model(name="B", variables={"y": var_y})
 
     coupling = VariableMapCoupling(
-        from_var="A.x", to_var="B.y", transform="identity",
+        from_var="A.x",
+        to_var="B.y",
+        transform="identity",
     )
 
-    file = _empty_file(models={"A": model_a, "B": model_b},
-                       coupling=[coupling])
+    file = _empty_file(models={"A": model_a, "B": model_b}, coupling=[coupling])
 
     flat = flatten(file)
     assert any("variable_map" in r for r in flat.metadata.coupling_rules)
@@ -105,9 +101,7 @@ def test_flatten_recurses_into_subsystems():
     inner_var = ModelVariable(type="state")
     inner = Model(name="Inner", variables={"x": inner_var})
     outer_var = ModelVariable(type="state")
-    outer = Model(name="Outer",
-                  variables={"y": outer_var},
-                  subsystems={"Inner": inner})
+    outer = Model(name="Outer", variables={"y": outer_var}, subsystems={"Inner": inner})
 
     file = _empty_file(models={"Outer": outer})
 
@@ -121,12 +115,16 @@ def test_namespace_expr_qualifies_subsystem_local_refs():
     subsystem-local and must be qualified with the owner; a genuinely absolute
     reference (head not a local subsystem) is left alone. Regression for the
     camp_fire 'Unresolved symbol raw.fuel_model'."""
-    assert _namespace_expr("u", "M") == "M.u"                       # bare -> prefixed
+    assert _namespace_expr("u", "M") == "M.u"  # bare -> prefixed
     assert _namespace_expr("Other.x", "M", subsystem_keys={"raw"}) == "Other.x"  # absolute
-    assert (_namespace_expr("raw.fuel_model", "LANDFIRE", subsystem_keys={"raw"})
-            == "LANDFIRE.raw.fuel_model")                          # subsystem-local -> qualified
+    assert (
+        _namespace_expr("raw.fuel_model", "LANDFIRE", subsystem_keys={"raw"})
+        == "LANDFIRE.raw.fuel_model"
+    )  # subsystem-local -> qualified
     assert _namespace_expr("raw.fuel_model", "LANDFIRE") == "raw.fuel_model"  # legacy: no keys
-    assert _namespace_expr("t", "M", leave_alone={"t"}, subsystem_keys={"t"}) == "t"  # leave_alone wins
+    assert (
+        _namespace_expr("t", "M", leave_alone={"t"}, subsystem_keys={"t"}) == "t"
+    )  # leave_alone wins
 
 
 def test_flatten_qualifies_subsystem_local_expression_refs():
@@ -142,7 +140,7 @@ def test_flatten_qualifies_subsystem_local_expression_refs():
     )
     flat = flatten(_empty_file(models={"Outer": outer}))
     eq = next(e for e in flat.equations if e.lhs == "Outer.out")
-    assert eq.rhs == "Outer.sub.v"               # subsystem-local ref qualified
+    assert eq.rhs == "Outer.sub.v"  # subsystem-local ref qualified
     assert "Outer.sub.v" in flat.state_variables  # matches the lowered subsystem var
 
 
@@ -254,9 +252,9 @@ def test_flatten_operator_compose_var_placeholder_expansion():
     chem_b = ModelVariable(type="state")
     chem_eq_a = Equation(lhs=ExprNode(op="D", args=["A"], wrt="t"), rhs=0)
     chem_eq_b = Equation(lhs=ExprNode(op="D", args=["B"], wrt="t"), rhs=0)
-    chem = Model(name="Chem",
-                 variables={"A": chem_a, "B": chem_b},
-                 equations=[chem_eq_a, chem_eq_b])
+    chem = Model(
+        name="Chem", variables={"A": chem_a, "B": chem_b}, equations=[chem_eq_a, chem_eq_b]
+    )
 
     adv_eq = Equation(
         lhs=ExprNode(op="D", args=["_var"], wrt="t"),
@@ -299,7 +297,9 @@ def test_flatten_variable_map_param_to_var():
     geos = Model(name="GEOSFP", variables={"T": geos_T})
 
     coupling = VariableMapCoupling(
-        from_var="GEOSFP.T", to_var="Chem.T", transform="param_to_var",
+        from_var="GEOSFP.T",
+        to_var="Chem.T",
+        transform="param_to_var",
     )
     file = _empty_file(models={"Chem": chem, "GEOSFP": geos}, coupling=[coupling])
 
@@ -335,7 +335,9 @@ def test_flatten_conflicting_derivatives_raise():
     # resulting flat system would then have two distinct equations for the
     # same dependent variable.
     vm = VariableMapCoupling(
-        from_var="A.x", to_var="B.x", transform="param_to_var",
+        from_var="A.x",
+        to_var="B.x",
+        transform="param_to_var",
     )
     file = _empty_file(models={"A": a, "B": b}, coupling=[vm])
 
