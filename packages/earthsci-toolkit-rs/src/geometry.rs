@@ -36,6 +36,86 @@
 #[cfg(not(target_arch = "wasm32"))]
 use s2bindings::SphericalPolygon;
 
+/// Bridge to the s2geometry **Emscripten** module (s2bindings.rs `wasm/dist`) on
+/// wasm. The native `s2bindings` crate compiles vendored abseil + s2geometry C++
+/// and cannot target `wasm32-unknown-unknown`; the s2 wasm build is instead a
+/// separate Emscripten ES module exposing a JS API. So on wasm the spherical
+/// clip/area are delegated to that module through a small synchronous interface
+/// the host installs on `globalThis.__earthsci_s2` (see `js/s2_interop.mjs`):
+///
+/// * `clip(a, b)` — flat `[lon,lat,…]` shells → flat `[lon,lat,…]` overlap-shell
+///   vertices (holes dropped, empty for disjoint), degrees.
+/// * `area(ring)` — flat `[lon,lat,…]` shell → steradians.
+///
+/// Going through `globalThis` keeps this crate free of any bundler/module-path
+/// coupling (identical in node and the browser) and lets a missing module
+/// surface as a clean [`GeometryError`] rather than a wasm instantiation
+/// failure. The host awaits s2's async `load()` once and installs these sync
+/// wrappers before running any spherical model.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+mod s2_wasm {
+    use super::GeometryError;
+    use js_sys::{Float64Array, Function, Reflect};
+    use wasm_bindgen::{JsCast, JsValue};
+
+    fn flatten(v: &[(f64, f64)]) -> Vec<f64> {
+        let mut out = Vec::with_capacity(v.len() * 2);
+        for &(lon, lat) in v {
+            out.push(lon);
+            out.push(lat);
+        }
+        out
+    }
+
+    /// Resolve `globalThis.__earthsci_s2[name]` to a callable, plus the object to
+    /// bind as `this`. A missing/undefined interface is the "s2 not wired" case.
+    fn method(name: &str) -> Result<(JsValue, Function), GeometryError> {
+        let global: JsValue = js_sys::global().into();
+        let obj = Reflect::get(&global, &JsValue::from_str("__earthsci_s2"))
+            .map_err(|_| GeometryError::new("globalThis lookup failed"))?;
+        if obj.is_undefined() || obj.is_null() {
+            return Err(GeometryError::new(
+                "spherical/geodesic geometry on wasm needs the s2bindings module; \
+                 call installS2() from js/s2_interop.mjs to set globalThis.__earthsci_s2",
+            ));
+        }
+        let f = Reflect::get(&obj, &JsValue::from_str(name))
+            .map_err(|_| GeometryError::new("s2 method lookup failed"))?
+            .dyn_into::<Function>()
+            .map_err(|_| {
+                GeometryError::new(format!("globalThis.__earthsci_s2.{name} is not a function"))
+            })?;
+        Ok((obj, f))
+    }
+
+    pub(super) fn clip(
+        a: &[(f64, f64)],
+        b: &[(f64, f64)],
+    ) -> Result<Vec<(f64, f64)>, GeometryError> {
+        let (this, f) = method("clip")?;
+        let fa = Float64Array::from(flatten(a).as_slice());
+        let fb = Float64Array::from(flatten(b).as_slice());
+        let res = f
+            .call2(&this, fa.as_ref(), fb.as_ref())
+            .map_err(|e| GeometryError::new(format!("s2 clip threw: {e:?}")))?;
+        let flat = res
+            .dyn_into::<Float64Array>()
+            .map_err(|_| GeometryError::new("s2 clip did not return a Float64Array"))?
+            .to_vec();
+        Ok(flat.chunks_exact(2).map(|c| (c[0], c[1])).collect())
+    }
+
+    pub(super) fn area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
+        let (this, f) = method("area")?;
+        let fr = Float64Array::from(flatten(ring).as_slice());
+        let res = f
+            .call1(&this, fr.as_ref())
+            .map_err(|e| GeometryError::new(format!("s2 area threw: {e:?}")))?;
+        res.as_f64()
+            .ok_or_else(|| GeometryError::new("s2 area did not return a number"))
+    }
+}
+
 /// The geometric interpretation of an `intersect_polygon` node's edges — the
 /// value of its required `manifold` flag (RFC §8.1; CONFORMANCE_SPEC.md §5.8.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,17 +273,28 @@ fn intersect_spherical(
     Ok(verts)
 }
 
-/// On `wasm32` the native S2 backend is unavailable (the `s2bindings` C++
-/// superbuild does not target wasm), so a spherical clip is an error there.
-/// The planar path remains fully available.
-#[cfg(target_arch = "wasm32")]
+/// On `wasm32` the native S2 C++ backend can't be linked, so a spherical clip is
+/// delegated to the s2bindings Emscripten module via [`s2_wasm`] (the host must
+/// have installed `globalThis.__earthsci_s2`). The planar path stays pure-Rust.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+fn intersect_spherical(
+    a: &[(f64, f64)],
+    b: &[(f64, f64)],
+) -> Result<Vec<(f64, f64)>, GeometryError> {
+    s2_wasm::clip(a, b)
+}
+
+/// Without the `wasm` feature there is no JS-interop bridge (js-sys / wasm-bindgen
+/// are off), so a spherical clip on wasm is a runtime error — the planar path
+/// remains fully available.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
 fn intersect_spherical(
     _a: &[(f64, f64)],
     _b: &[(f64, f64)],
 ) -> Result<Vec<(f64, f64)>, GeometryError> {
     Err(GeometryError::new(
-        "spherical/geodesic intersect_polygon requires the native s2bindings backend, \
-         which is not built for wasm32",
+        "spherical/geodesic intersect_polygon on wasm requires the `wasm` feature \
+         (which bridges to the s2bindings Emscripten module)",
     ))
 }
 
@@ -289,14 +380,26 @@ pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
     Ok(p.area())
 }
 
-/// `spherical_area` requires the native s2bindings backend, which is not
-/// built for wasm32 — this stub keeps the public surface uniform across
-/// targets (a runtime error rather than a compile-time missing symbol),
-/// matching the wasm `polygon_area` stub below.
-#[cfg(target_arch = "wasm32")]
+/// On wasm (with the `wasm` feature) `spherical_area` delegates to the
+/// s2bindings Emscripten module via [`s2_wasm`]. It mirrors the native path's
+/// dedup + degenerate-ring handling so a `< 3`-distinct-vertex ring is `0.0`
+/// without ever crossing the JS boundary.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
+    let ring = dedup_consecutive(ring);
+    if ring.len() < 3 {
+        return Ok(0.0);
+    }
+    s2_wasm::area(&ring)
+}
+
+/// Without the `wasm` feature there is no JS-interop bridge, so `spherical_area`
+/// on wasm is a runtime error — the stub keeps the public surface uniform.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
 pub fn spherical_area(_ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
     Err(GeometryError::new(
-        "spherical_area requires the native s2bindings backend, which is not built for wasm32",
+        "spherical_area on wasm requires the `wasm` feature (which bridges to the \
+         s2bindings Emscripten module)",
     ))
 }
 
@@ -308,24 +411,14 @@ pub fn spherical_area(_ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
 /// ([`crate::regrid`]) now computes the build-once factor `A_ij` through the FAQ
 /// ([`crate::area_faq::polygon_area_faq`]); this function is the same value that
 /// FAQ encodes, kept as the independent oracle (mirrors Python `geometry.polygon_area`).
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Target-agnostic: the spherical arm defers to [`spherical_area`], which is the
+/// native S2 kernel off wasm and the s2bindings Emscripten bridge on wasm (a
+/// runtime error only when the wasm `wasm` feature / s2 module is absent).
 pub fn polygon_area(ring: &[(f64, f64)], manifold: Manifold) -> Result<f64, GeometryError> {
     match manifold {
         Manifold::Planar => Ok(shoelace_area(ring)),
         Manifold::Spherical | Manifold::Geodesic => spherical_area(ring),
-    }
-}
-
-/// On `wasm32` only the planar area is available (the S2 backend is not built for
-/// wasm); a spherical / geodesic `polygon_area` is an error there.
-#[cfg(target_arch = "wasm32")]
-pub fn polygon_area(ring: &[(f64, f64)], manifold: Manifold) -> Result<f64, GeometryError> {
-    match manifold {
-        Manifold::Planar => Ok(shoelace_area(ring)),
-        Manifold::Spherical | Manifold::Geodesic => Err(GeometryError::new(
-            "spherical/geodesic polygon_area requires the native s2bindings backend, \
-             which is not built for wasm32",
-        )),
     }
 }
 

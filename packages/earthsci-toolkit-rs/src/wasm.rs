@@ -380,6 +380,43 @@ pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
     to_js(&graph)
 }
 
+/// Area of a lon/lat polygon `ring` under `manifold` (RFC §8.1). `ring_json` is a
+/// JSON array of `[lon, lat]` pairs in **degrees**; `manifold` is one of
+/// `"planar" | "spherical" | "geodesic"`. Returns the planar shoelace area for
+/// `planar`, or the great-circle area in **steradians** for `spherical`/`geodesic`.
+///
+/// The spherical/geodesic path delegates to the s2bindings Emscripten module,
+/// which the host must install on `globalThis.__earthsci_s2` first (see
+/// `js/s2_interop.mjs`); without it, or without a degenerate ring, it errors.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
+    let ring: Vec<(f64, f64)> = serde_json::from_str(ring_json)
+        .map_err(|e| JsValue::from_str(&format!("ring parse error: {e}")))?;
+    let m = crate::geometry::Manifold::from_flag(manifold)
+        .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
+    crate::geometry::polygon_area(&ring, m).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Clip lon/lat polygon rings `a` and `b` on `manifold` and return the overlap
+/// ring as a JSON array of `[lon, lat]` pairs (degrees; `[]` for a disjoint or
+/// edge-touching clip). `a_json`/`b_json` are JSON `[lon, lat]` arrays; `manifold`
+/// is `"planar" | "spherical" | "geodesic"`. Same s2bindings requirement as
+/// [`polygon_area`] for the spherical/geodesic manifolds.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn intersect_polygon(a_json: &str, b_json: &str, manifold: &str) -> Result<String, JsValue> {
+    let a: Vec<(f64, f64)> = serde_json::from_str(a_json)
+        .map_err(|e| JsValue::from_str(&format!("a parse error: {e}")))?;
+    let b: Vec<(f64, f64)> = serde_json::from_str(b_json)
+        .map_err(|e| JsValue::from_str(&format!("b parse error: {e}")))?;
+    let m = crate::geometry::Manifold::from_flag(manifold)
+        .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
+    let ring = crate::geometry::intersect_polygon(&a, &b, m)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    serde_json::to_string(&ring).map_err(|e| JsValue::from_str(&format!("serialize error: {e}")))
+}
+
 /// Report the crate and supported-schema versions. (The native performance
 /// feature flags were dropped from this report: they are never enabled in a
 /// wasm build, so advertising them here was misleading.)
