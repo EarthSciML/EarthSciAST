@@ -8,6 +8,7 @@
 import type { Expr } from '../types.js';
 import type { ComplexityMetrics } from './types.js';
 import { freeVariables } from '../expression.js';
+import { numericValue } from '../numeric-literal.js';
 
 /**
  * Analyze the complexity of an expression
@@ -45,8 +46,9 @@ function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, dept
   // Update maximum depth
   metrics.depth = Math.max(metrics.depth, depth);
 
-  if (typeof expr === 'number') {
-    // Constant
+  // Constants: plain numbers AND tagged NumericLiteral leaves ({kind, value})
+  // produced by canonical-mode parsing.
+  if (numericValue(expr) !== undefined) {
     metrics.constantCount++;
   } else if (typeof expr === 'string') {
     // Variable - will be counted later in freeVariables call
@@ -116,23 +118,16 @@ function calculateComputationalCost(metrics: ComplexityMetrics): number {
     'ceil': 2,
     'sign': 1,
 
-    // Calculus operations (expensive)
+    // Rewrite-target / calculus ops (expensive; lowered to stencils before
+    // evaluation — see esm-spec §4.2)
+    'D': 30,
     'grad': 50,
     'div': 40,
-    'curl': 60,
     'laplacian': 80,
-
-    // Temporal operations
-    'derivative': 30,
     'integral': 50,
-
-    // Spatial operations
-    'interpolate': 25,
-    'advect': 35,
 
     // Event operations
     'Pre': 5,
-    'integrate_to_event': 40,
 
     // Default for unknown operations
     'default': 10
@@ -300,8 +295,6 @@ export function estimateParallelPotential(expr: Expr): number {
       // Operations that can be parallelized
       const parallelizableOperations = new Set([
         '+', '*', 'and', 'or', 'min', 'max',
-        // Spatial operations are often parallelizable
-        'interpolate', 'advect',
         // Element-wise operations
         'sin', 'cos', 'exp', 'log', 'sqrt', 'abs'
       ]);
@@ -345,19 +338,20 @@ export function detectStabilityIssues(expr: Expr): Array<{
       // Check for division operations
       if (currentExpr.op === '/' && currentExpr.args.length === 2) {
         const denominator = currentExpr.args[1];
+        const denominatorValue = numericValue(denominator);
 
-        // Division by small constants
-        if (typeof denominator === 'number' && Math.abs(denominator) < 1e-6) {
-          issues.push({
-            issue: 'Division by very small constant',
-            severity: 'high',
-            path: [...path, 'args[1]'],
-            suggestion: 'Consider using reciprocal multiplication or check for zero'
-          });
-        }
-
-        // Division by expressions that could be zero
-        if (typeof denominator === 'object') {
+        if (denominatorValue !== undefined) {
+          // Division by small constants
+          if (Math.abs(denominatorValue) < 1e-6) {
+            issues.push({
+              issue: 'Division by very small constant',
+              severity: 'high',
+              path: [...path, 'args[1]'],
+              suggestion: 'Consider using reciprocal multiplication or check for zero'
+            });
+          }
+        } else if (typeof denominator === 'object') {
+          // Division by expressions that could be zero
           issues.push({
             issue: 'Division by expression (potential zero)',
             severity: 'medium',
@@ -369,8 +363,8 @@ export function detectStabilityIssues(expr: Expr): Array<{
 
       // Check for logarithms of small numbers
       if (currentExpr.op === 'log' || currentExpr.op === 'log10') {
-        const argument = currentExpr.args[0];
-        if (typeof argument === 'number' && argument <= 0) {
+        const argument = numericValue(currentExpr.args[0]);
+        if (argument !== undefined && argument <= 0) {
           issues.push({
             issue: 'Logarithm of non-positive number',
             severity: 'high',
@@ -382,8 +376,8 @@ export function detectStabilityIssues(expr: Expr): Array<{
 
       // Check for square roots of negative numbers
       if (currentExpr.op === 'sqrt') {
-        const argument = currentExpr.args[0];
-        if (typeof argument === 'number' && argument < 0) {
+        const argument = numericValue(currentExpr.args[0]);
+        if (argument !== undefined && argument < 0) {
           issues.push({
             issue: 'Square root of negative number',
             severity: 'high',
@@ -395,8 +389,8 @@ export function detectStabilityIssues(expr: Expr): Array<{
 
       // Check for very large exponents
       if (currentExpr.op === '^' && currentExpr.args.length === 2) {
-        const exponent = currentExpr.args[1];
-        if (typeof exponent === 'number' && Math.abs(exponent) > 100) {
+        const exponent = numericValue(currentExpr.args[1]);
+        if (exponent !== undefined && Math.abs(exponent) > 100) {
           issues.push({
             issue: 'Very large exponent',
             severity: 'medium',
@@ -408,8 +402,8 @@ export function detectStabilityIssues(expr: Expr): Array<{
 
       // Check for inverse trigonometric functions with out-of-range arguments
       if ((currentExpr.op === 'asin' || currentExpr.op === 'acos') && currentExpr.args.length === 1) {
-        const argument = currentExpr.args[0];
-        if (typeof argument === 'number' && (argument < -1 || argument > 1)) {
+        const argument = numericValue(currentExpr.args[0]);
+        if (argument !== undefined && (argument < -1 || argument > 1)) {
           issues.push({
             issue: 'Inverse trig function with out-of-range argument',
             severity: 'high',

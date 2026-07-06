@@ -1612,23 +1612,6 @@ Format an expression as plain ASCII text
 
 ---
 
-### toJuliaCode
-
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/codegen.ts:18`
-
-**Signature:**
-```typescript
-export function toJuliaCode(file: EsmFile): string {
-```
-
-**Description:**
-Generate a self-contained Julia script from an ESM file
-@param file ESM file to generate Julia code for
-@returns Julia script as a string
-/
-
----
-
 ### toLatex
 
 **File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/pretty-print.ts:536`
@@ -1655,23 +1638,6 @@ export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFil
 
 **Description:**
 Format an expression as MathML markup for web/academic publishing
-/
-
----
-
-### toPythonCode
-
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/codegen.ts:101`
-
-**Signature:**
-```typescript
-export function toPythonCode(file: EsmFile): string {
-```
-
-**Description:**
-Generate a self-contained Python script from an ESM file
-@param file ESM file to generate Python code for
-@returns Python script as a string
 /
 
 ---

@@ -1,20 +1,14 @@
 /**
  * Advanced Expression Analysis and Manipulation
  *
- * This module provides comprehensive analysis and manipulation capabilities
- * for mathematical expressions in the ESM format, including:
+ * This module provides analysis and manipulation capabilities for
+ * mathematical expressions in the ESM format:
  *
  * - Variable dependency graph construction and analysis
- * - Expression complexity metrics and optimization analysis
- * - Common subexpression identification and elimination
- * - Symbolic differentiation capabilities
+ * - Expression complexity metrics
+ * - Common subexpression identification
+ * - Symbolic differentiation
  * - System graph generation with multiple export formats
- * - Interactive graph layout algorithms
- * - Expression template matching and replacement
- * - Algebraic equation rearrangement and optimization
- *
- * All functions are designed to work with the ESM format type system
- * and integrate seamlessly with existing ESM analysis tools.
  */
 
 // Re-export all types
@@ -25,14 +19,7 @@ export type {
   ComplexityMetrics,
   CommonSubexpression,
   ExpressionLocation,
-  ExpressionPattern,
-  MatchResult,
-  Optimization,
-  DerivativeResult,
-  LayoutAlgorithm,
-  LayoutResult,
-  GraphExportFormat,
-  GraphExportOptions
+  DerivativeResult
 } from './types.js';
 
 // Dependency graph analysis
@@ -70,7 +57,8 @@ export {
   gradient,
   higherOrderDerivative,
   isDifferentiable,
-  findCriticalPoints
+  findCriticalPoints,
+  NonDifferentiableExpressionError
 } from './differentiation.js';
 
 // Import graph functionality from existing modules
@@ -126,6 +114,23 @@ export {
   EntityNotFoundError
 } from '../edit.js';
 
+import type { Expr, Model, EsmFile } from '../types.js';
+import type { ComplexityMetrics, CommonSubexpression, DependencyGraph as DependencyGraphType } from './types.js';
+import { analyzeComplexity, detectStabilityIssues } from './complexity.js';
+import { findCommonSubexpressions } from './common-subexpressions.js';
+import { buildDependencyGraph } from './dependency-graph.js';
+import { gradient, partialDerivatives } from './differentiation.js';
+
+/** Combined results returned by {@link ExpressionAnalyzer.analyze}. */
+export interface AnalysisResults {
+  complexity?: ComplexityMetrics;
+  stabilityIssues?: string[];
+  commonSubexpressions?: CommonSubexpression[];
+  dependencyGraph?: DependencyGraphType;
+  partialDerivatives?: Record<string, Expr>;
+  gradient?: Expr[];
+}
+
 /**
  * Main analysis class providing a unified interface to all analysis capabilities
  */
@@ -137,7 +142,7 @@ export class ExpressionAnalyzer {
    * @returns Complete analysis results
    */
   static analyze(
-    target: any, // Would be Expr | Model | EsmFile in proper typing
+    target: Expr | Model | EsmFile,
     options: {
       includeComplexity?: boolean;
       includeSubexpressions?: boolean;
@@ -146,7 +151,7 @@ export class ExpressionAnalyzer {
       variables?: string[];
       minComplexityThreshold?: number;
     } = {}
-  ) {
+  ): AnalysisResults {
     const {
       includeComplexity = true,
       includeSubexpressions = true,
@@ -156,112 +161,28 @@ export class ExpressionAnalyzer {
       minComplexityThreshold = 5
     } = options;
 
-    const results: any = {};
+    const results: AnalysisResults = {};
+    const isExpressionNode =
+      typeof target === 'object' && target !== null && 'op' in target;
 
-    // Import the necessary functions here to avoid circular dependencies
-    import('./complexity.js').then(({ analyzeComplexity, detectStabilityIssues }) => {
-      import('./common-subexpressions.js').then(({ findCommonSubexpressions }) => {
-        import('./dependency-graph.js').then(({ buildDependencyGraph }) => {
-          import('./differentiation.js').then(({ gradient, partialDerivatives }) => {
+    if (includeComplexity && isExpressionNode) {
+      results.complexity = analyzeComplexity(target as Expr);
+      results.stabilityIssues = detectStabilityIssues(target as Expr);
+    }
 
-            // Complexity analysis
-            if (includeComplexity && typeof target === 'object' && target.op) {
-              results.complexity = analyzeComplexity(target);
-              results.stabilityIssues = detectStabilityIssues(target);
-            }
+    if (includeSubexpressions && isExpressionNode) {
+      results.commonSubexpressions = findCommonSubexpressions(target as Expr, minComplexityThreshold);
+    }
 
-            // Common subexpression analysis
-            if (includeSubexpressions) {
-              if (typeof target === 'object' && target.op) {
-                results.commonSubexpressions = findCommonSubexpressions(target, minComplexityThreshold);
-              }
-            }
+    if (includeDependencies) {
+      results.dependencyGraph = buildDependencyGraph(target);
+    }
 
-            // Dependency analysis
-            if (includeDependencies) {
-              results.dependencyGraph = buildDependencyGraph(target);
-            }
-
-            // Derivative analysis
-            if (includeDerivatives && typeof target === 'object' && target.op) {
-              if (variables.length > 0) {
-                results.partialDerivatives = partialDerivatives(target, variables);
-                results.gradient = gradient(target, variables);
-              }
-            }
-
-            return results;
-          });
-        });
-      });
-    });
+    if (includeDerivatives && isExpressionNode && variables.length > 0) {
+      results.partialDerivatives = partialDerivatives(target as Expr, variables);
+      results.gradient = gradient(target as Expr, variables);
+    }
 
     return results;
-  }
-
-  /**
-   * Generate optimization recommendations for an expression or model
-   */
-  static optimize(target: any, options: { aggressiveness?: 'conservative' | 'moderate' | 'aggressive' } = {}) {
-    const { aggressiveness = 'moderate' } = options;
-
-    // This would contain optimization logic
-    return {
-      recommendations: [],
-      estimatedImprovement: 0,
-      transformations: []
-    };
-  }
-
-  /**
-   * Validate expression properties (stability, differentiability, etc.)
-   */
-  static validate(target: any) {
-    // This would contain validation logic
-    return {
-      isValid: true,
-      warnings: [],
-      errors: [],
-      suggestions: []
-    };
-  }
-}
-
-/**
- * Utility functions for working with analysis results
- */
-export namespace AnalysisUtils {
-  /**
-   * Format analysis results for display
-   */
-  export function formatResults(results: any): string {
-    // Implementation would format results as human-readable text
-    return JSON.stringify(results, null, 2);
-  }
-
-  /**
-   * Export analysis results to various formats
-   */
-  export function exportResults(results: any, format: 'json' | 'yaml' | 'markdown' | 'html') {
-    // Implementation would convert results to specified format
-    switch (format) {
-      case 'json':
-        return JSON.stringify(results, null, 2);
-      case 'markdown':
-        return '# Analysis Results\n\n' + JSON.stringify(results, null, 2);
-      default:
-        return JSON.stringify(results, null, 2);
-    }
-  }
-
-  /**
-   * Compare analysis results between different expressions or models
-   */
-  export function compareAnalysis(results1: any, results2: any) {
-    return {
-      complexityDifference: 0,
-      optimizationPotential: 0,
-      recommendations: []
-    };
   }
 }

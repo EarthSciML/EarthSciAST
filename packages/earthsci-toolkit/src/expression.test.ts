@@ -195,14 +195,19 @@ describe('Expression structural operations', () => {
         expect(simplify(expr)).toBe('x')
       })
 
-      it('should simplify 0 / x to 0', () => {
+      it('should NOT simplify 0 / x (x could be 0, making the result NaN)', () => {
         const expr: Expr = { op: '/', args: [0, 'x'] }
-        expect(simplify(expr)).toBe(0)
+        expect(simplify(expr)).toEqual({ op: '/', args: [0, 'x'] })
       })
 
       it('should fold constants', () => {
         const expr: Expr = { op: '/', args: [6, 2] }
         expect(simplify(expr)).toBe(3)
+      })
+
+      it('should leave a zero denominator unfolded rather than throwing', () => {
+        const expr: Expr = { op: '/', args: [1, 0] }
+        expect(simplify(expr)).toEqual({ op: '/', args: [1, 0] })
       })
     })
 
@@ -217,9 +222,9 @@ describe('Expression structural operations', () => {
         expect(simplify(expr)).toBe('x')
       })
 
-      it('should simplify 0^x to 0', () => {
+      it('should NOT simplify 0^x (the identity only holds for x > 0)', () => {
         const expr: Expr = { op: '^', args: [0, 'x'] }
-        expect(simplify(expr)).toBe(0)
+        expect(simplify(expr)).toEqual({ op: '^', args: [0, 'x'] })
       })
 
       it('should simplify 1^x to 1', () => {

@@ -8,7 +8,20 @@
 
 import type { Expr } from '../types.js';
 import type { DerivativeResult } from './types.js';
-import { simplify } from '../expression.js';
+import { simplify, freeVariables } from '../expression.js';
+import { numericValue } from '../numeric-literal.js';
+
+/**
+ * Thrown when {@link differentiate} encounters an operator with no
+ * differentiation rule. Callers that need a boolean answer should use
+ * {@link isDifferentiable}.
+ */
+export class NonDifferentiableExpressionError extends Error {
+  constructor(public readonly op: string, public readonly variable: string) {
+    super(`No differentiation rule for operator '${op}' (d/d${variable})`);
+    this.name = 'NonDifferentiableExpressionError';
+  }
+}
 
 /**
  * Compute the symbolic derivative of an expression with respect to a variable
@@ -52,7 +65,7 @@ export function partialDerivatives(expr: Expr, variables: string[]): Map<string,
 export function gradient(expr: Expr, variables?: string[]): DerivativeResult[] {
   if (!variables) {
     // Extract variables from the expression
-    variables = Array.from(extractVariables(expr));
+    variables = Array.from(freeVariables(expr));
   }
 
   return variables.map(variable => differentiate(expr, variable));
@@ -62,8 +75,9 @@ export function gradient(expr: Expr, variables?: string[]): DerivativeResult[] {
  * Core differentiation logic using symbolic rules
  */
 function computeDerivative(expr: Expr, variable: string): Expr {
-  // Base cases
-  if (typeof expr === 'number') {
+  // Base cases. numericValue covers plain numbers AND tagged NumericLiteral
+  // leaves from canonical-mode parsing.
+  if (numericValue(expr) !== undefined) {
     // d/dx (constant) = 0
     return 0;
   }
@@ -151,17 +165,18 @@ function computeDerivative(expr: Expr, variable: string): Expr {
         if (args.length === 2) {
           const [base, exponent] = args;
 
-          // Special case: constant exponent
-          if (typeof exponent === 'number') {
-            if (exponent === 0) return 0;
-            if (exponent === 1) return computeDerivative(base, variable);
+          // Special case: constant exponent (plain number or tagged literal)
+          const exponentValue = numericValue(exponent);
+          if (exponentValue !== undefined) {
+            if (exponentValue === 0) return 0;
+            if (exponentValue === 1) return computeDerivative(base, variable);
 
             const du = computeDerivative(base, variable);
             return {
               op: '*',
               args: [
-                exponent,
-                { op: '^', args: [base, exponent - 1] },
+                exponentValue,
+                { op: '^', args: [base, exponentValue - 1] },
                 du
               ]
             };
@@ -521,12 +536,10 @@ function computeDerivative(expr: Expr, variable: string): Expr {
         break;
 
       default:
-        // For unknown functions, assume they are not differentiable
-        // or return a placeholder derivative notation
-        return {
-          op: 'derivative',
-          args: [expr, variable]
-        } as any; // This would need to be added to the Expr type
+        // No differentiation rule for this operator — throw so
+        // isDifferentiable() gives a meaningful answer instead of a
+        // placeholder pseudo-op that no evaluator understands.
+        throw new NonDifferentiableExpressionError(expr.op, variable);
     }
   }
 
@@ -535,32 +548,17 @@ function computeDerivative(expr: Expr, variable: string): Expr {
 }
 
 /**
- * Extract all variables from an expression
- */
-function extractVariables(expr: Expr): Set<string> {
-  const variables = new Set<string>();
-
-  if (typeof expr === 'string') {
-    variables.add(expr);
-  } else if (typeof expr === 'object' && expr.op) {
-    for (const arg of expr.args) {
-      const argVars = extractVariables(arg);
-      argVars.forEach(v => variables.add(v));
-    }
-  }
-
-  return variables;
-}
-
-/**
  * Check if two expressions are structurally equal
  */
 function isEqual(expr1: Expr, expr2: Expr): boolean {
-  if (typeof expr1 !== typeof expr2) return false;
-
-  if (typeof expr1 === 'number') {
-    return expr1 === expr2;
+  // Numeric leaves (plain or tagged) compare by value.
+  const n1 = numericValue(expr1);
+  const n2 = numericValue(expr2);
+  if (n1 !== undefined || n2 !== undefined) {
+    return n1 !== undefined && n2 !== undefined && Object.is(n1, n2);
   }
+
+  if (typeof expr1 !== typeof expr2) return false;
 
   if (typeof expr1 === 'string') {
     return expr1 === expr2;

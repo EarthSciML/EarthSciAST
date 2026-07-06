@@ -128,10 +128,10 @@ function flattenModel(
   equations: FlattenedEquation[]
 ): void {
   // Collect the set of variable names in this model for namespacing expressions
-  const localNames = new Set<string>(Object.keys(model.variables))
+  const localNames = new Set<string>(Object.keys(model.variables || {}))
 
   // Process variables
-  for (const [varName, variable] of Object.entries(model.variables)) {
+  for (const [varName, variable] of Object.entries(model.variables || {})) {
     const namespacedName = `${prefix}.${varName}`
 
     switch (variable.type) {
@@ -153,7 +153,7 @@ function flattenModel(
   }
 
   // Process equations
-  for (const eq of model.equations) {
+  for (const eq of model.equations || []) {
     equations.push({
       lhs: namespaceExpression(eq.lhs, prefix, localNames),
       rhs: namespaceExpression(eq.rhs, prefix, localNames),
@@ -161,10 +161,12 @@ function flattenModel(
     })
   }
 
-  // Recursively process subsystems
+  // Recursively process inline-model subsystems (data loaders and
+  // unresolved refs carry no equations)
   if (model.subsystems) {
     for (const [subName, subModel] of Object.entries(model.subsystems)) {
-      flattenModel(`${prefix}.${subName}`, subModel, stateVariables, parameters, brownianVariables, variables, equations)
+      if ('ref' in subModel || 'kind' in subModel) continue
+      flattenModel(`${prefix}.${subName}`, subModel as Model, stateVariables, parameters, brownianVariables, variables, equations)
     }
   }
 }
@@ -182,22 +184,22 @@ function flattenReactionSystem(
 ): void {
   // Collect local names for namespacing
   const localNames = new Set<string>([
-    ...Object.keys(rs.species),
-    ...Object.keys(rs.parameters),
+    ...Object.keys(rs.species || {}),
+    ...Object.keys(rs.parameters || {}),
   ])
 
   // Species are state variables
-  for (const speciesName of Object.keys(rs.species)) {
+  for (const speciesName of Object.keys(rs.species || {})) {
     stateVariables.push(`${prefix}.${speciesName}`)
   }
 
   // Parameters
-  for (const paramName of Object.keys(rs.parameters)) {
+  for (const paramName of Object.keys(rs.parameters || {})) {
     parameters.push(`${prefix}.${paramName}`)
   }
 
   // Convert reactions to equations
-  for (const reaction of rs.reactions) {
+  for (const reaction of rs.reactions || []) {
     const rateStr = namespaceExpression(reaction.rate, prefix, localNames)
 
     // For each product, add rate * stoichiometry
@@ -240,12 +242,13 @@ function flattenReactionSystem(
     }
   }
 
-  // Recursively process subsystems
+  // Recursively process inline subsystems (unresolved refs are skipped)
   if (rs.subsystems) {
     for (const [subName, subRs] of Object.entries(rs.subsystems)) {
+      if ('ref' in subRs) continue
       flattenReactionSystem(
         `${prefix}.${subName}`,
-        subRs,
+        subRs as ReactionSystem,
         stateVariables,
         parameters,
         variables,
@@ -294,14 +297,12 @@ function processCouplingEntry(
       let ruleDesc = `couple(${sys1}, ${sys2})`
 
       for (const connEq of entry.connector.equations) {
-        const fromRef = connEq.from.includes('.') ? connEq.from : connEq.from
-        const toRef = connEq.to.includes('.') ? connEq.to : connEq.to
         const exprStr = connEq.expression !== undefined
           ? expressionToString(connEq.expression)
-          : fromRef
+          : connEq.from
 
         equations.push({
-          lhs: toRef,
+          lhs: connEq.to,
           rhs: `${connEq.transform}(${exprStr})`,
           sourceSystem: `coupling(${sys1},${sys2})`,
         })
@@ -327,11 +328,6 @@ function processCouplingEntry(
         variables[entry.to] = entry.from
       }
       couplingRules.push(ruleDesc)
-      break
-    }
-
-    case 'operator_apply': {
-      couplingRules.push(`operator_apply(${entry.operator})`)
       break
     }
 

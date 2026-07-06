@@ -8,6 +8,7 @@
 import type { Expr, Model, EsmFile } from '../types.js';
 import type { CommonSubexpression, ExpressionLocation } from './types.js';
 import { analyzeComplexity } from './complexity.js';
+import { isNumericLiteral, isIntLit } from '../numeric-literal.js';
 
 /**
  * Find common subexpressions in a single expression
@@ -151,59 +152,63 @@ export function findCommonSubexpressionsAcrossExpressions(
 }
 
 /**
- * Find common subexpressions in a model
+ * Collect every analyzable expression in a model — observed-variable
+ * definitions, equation right-hand sides, and inline subsystems
+ * (recursively) — with dot-path names for location reporting.
+ */
+function collectModelExpressions(
+  model: Model,
+  prefix: string,
+  out: Array<{ expr: Expr; name: string }>
+): void {
+  if (model.variables) {
+    for (const [varName, variable] of Object.entries(model.variables)) {
+      if (variable.expression) {
+        out.push({
+          expr: variable.expression,
+          name: `${prefix}variable.${varName}`
+        });
+      }
+    }
+  }
+
+  if (model.equations) {
+    model.equations.forEach((equation, index) => {
+      out.push({
+        expr: equation.rhs,
+        name: `${prefix}equation[${index}].rhs`
+      });
+    });
+  }
+
+  if (model.subsystems) {
+    for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
+      // Unresolved refs and data-loader subsystems carry no expressions.
+      if ('ref' in subsystem || 'kind' in subsystem) continue;
+      collectModelExpressions(subsystem as Model, `${prefix}Subsystem "${subsystemName}" `, out);
+    }
+  }
+}
+
+/**
+ * Find common subexpressions in a model (including its subsystems). All of
+ * the model's expressions are analyzed in a single pass so duplicates that
+ * span the parent and a subsystem are counted together.
  * @param model Model to analyze
  * @param minComplexity Minimum complexity threshold
  * @returns Array of common subexpressions found in the model
  */
 export function findCommonSubexpressionsInModel(model: Model, minComplexity: number = 5): CommonSubexpression[] {
   const expressions: Array<{ expr: Expr; name: string }> = [];
-
-  // Extract expressions from variable definitions
-  if (model.variables) {
-    for (const [varName, variable] of Object.entries(model.variables)) {
-      if (variable.expression) {
-        expressions.push({
-          expr: variable.expression,
-          name: `variable.${varName}`
-        });
-      }
-    }
-  }
-
-  // Extract expressions from equations
-  if (model.equations) {
-    model.equations.forEach((equation, index) => {
-      expressions.push({
-        expr: equation.rhs,
-        name: `equation[${index}].rhs`
-      });
-    });
-  }
-
-  const results = findCommonSubexpressionsAcrossExpressions(expressions, minComplexity);
-
-  // Extract expressions from subsystems recursively
-  if (model.subsystems) {
-    for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
-      const subsystemCommonExpressions = findCommonSubexpressionsInModel(subsystem, minComplexity);
-      // Add subsystem prefix to locations
-      for (const commonExpr of subsystemCommonExpressions) {
-        commonExpr.locations = commonExpr.locations.map(loc => ({
-          ...loc,
-          path: [`subsystem.${subsystemName}`, ...loc.path],
-          description: `Subsystem "${subsystemName}": ${loc.description}`
-        }));
-      }
-      results.push(...subsystemCommonExpressions);
-    }
-  }
-
-  return results;
+  collectModelExpressions(model, '', expressions);
+  return findCommonSubexpressionsAcrossExpressions(expressions, minComplexity);
 }
 
 /**
- * Find common subexpressions across an entire ESM file
+ * Find common subexpressions across an entire ESM file. All models' and
+ * reaction systems' raw expressions are aggregated into ONE analysis pass so
+ * occurrence counts and locations reflect actual appearances — including
+ * duplicates local to a single model and duplicates spanning components.
  * @param esmFile ESM file to analyze
  * @param minComplexity Minimum complexity threshold
  * @returns Array of common subexpressions found across the file
@@ -211,26 +216,17 @@ export function findCommonSubexpressionsInModel(model: Model, minComplexity: num
 export function findCommonSubexpressionsInEsmFile(esmFile: EsmFile, minComplexity: number = 5): CommonSubexpression[] {
   const expressions: Array<{ expr: Expr; name: string }> = [];
 
-  // Process models
+  // Collect from models (unresolved refs carry no expressions)
   if (esmFile.models) {
     for (const [modelId, model] of Object.entries(esmFile.models)) {
-      const modelCommonExpressions = findCommonSubexpressionsInModel(model, minComplexity);
-      // Add model prefix to locations
-      for (const commonExpr of modelCommonExpressions) {
-        commonExpr.locations = commonExpr.locations.map(loc => ({
-          ...loc,
-          path: [`model.${modelId}`, ...loc.path],
-          description: `Model "${modelId}": ${loc.description}`
-        }));
-      }
-      expressions.push(...modelCommonExpressions.map(ce => ({ expr: ce.expression, name: `model.${modelId}` })));
+      if ('ref' in model) continue;
+      collectModelExpressions(model as Model, `model.${modelId}.`, expressions);
     }
   }
 
-  // Process reaction systems
+  // Collect rate expressions from reaction systems
   if (esmFile.reaction_systems) {
     for (const [systemId, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
-      // Extract rate expressions from reactions
       if (reactionSystem.reactions) {
         reactionSystem.reactions.forEach((reaction, index) => {
           expressions.push({
@@ -253,6 +249,10 @@ export function findCommonSubexpressionsInEsmFile(esmFile: EsmFile, minComplexit
 function serializeExpression(expr: Expr): string {
   if (typeof expr === 'number') {
     return `n:${expr}`;
+  } else if (isNumericLiteral(expr)) {
+    // Tagged canonical-mode literal: key by value, keeping the int/float
+    // distinction so int 2 and float 2.0 do not collapse.
+    return `${isIntLit(expr) ? 'i' : 'n'}:${expr.value}`;
   } else if (typeof expr === 'string') {
     return `v:${expr}`;
   } else if (typeof expr === 'object' && expr.op) {

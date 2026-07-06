@@ -6,9 +6,33 @@
  * topological sorting, and dead code elimination.
  */
 
-import type { Expr, Model, EsmFile, ReactionSystem, Equation } from '../types.js';
+import type { Expr, Model, EsmFile, ReactionSystem, Equation, ExpressionNode } from '../types.js';
 import type { DependencyGraph, DependencyNode, DependencyRelation } from './types.js';
 import { freeVariables } from '../expression.js';
+
+/**
+ * The variable name an equation LHS defines: a bare name, or the name under
+ * derivative / element-index / aggregate-output wrappers (`D(x)`,
+ * `index(v, i)`, `aggregate(..., expr: D(index(v, i)))`).
+ */
+function lhsTargetName(lhs: Expr): string | undefined {
+  if (typeof lhs === 'string') return lhs;
+  if (lhs && typeof lhs === 'object' && 'op' in lhs) {
+    const node = lhs as ExpressionNode;
+    switch (node.op) {
+      case 'D':
+      case 'index':
+        return node.args && node.args.length > 0 ? lhsTargetName(node.args[0]) : undefined;
+      case 'aggregate': {
+        const body = (node as { expr?: Expr }).expr;
+        return body !== undefined ? lhsTargetName(body) : undefined;
+      }
+      default:
+        return undefined;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Build a dependency graph from an ESM file, model, or expression
@@ -87,10 +111,11 @@ export function buildDependencyGraph(
     // ESM File
     const esmFile = target as EsmFile;
 
-    // Process all models
+    // Process all inline models (unresolved refs carry no variables)
     if (esmFile.models) {
       for (const [modelId, model] of Object.entries(esmFile.models)) {
-        processModel(model, modelId);
+        if ('ref' in model) continue;
+        processModel(model as Model, modelId);
       }
     }
 
@@ -149,11 +174,13 @@ export function buildDependencyGraph(
       });
     }
 
-    // Process subsystems recursively
+    // Process inline-model subsystems recursively (data loaders and
+    // unresolved refs carry no equations)
     if (model.subsystems) {
       for (const [subSystemId, subModel] of Object.entries(model.subsystems)) {
+        if ('ref' in subModel || 'kind' in subModel) continue;
         const fullSubSystemId = mergeAcrossSystems ? systemId : `${systemId}.${subSystemId}`;
-        processModel(subModel, fullSubSystemId);
+        processModel(subModel as Model, fullSubSystemId);
       }
     }
   }
@@ -183,9 +210,9 @@ export function buildDependencyGraph(
         // All species involved in the reaction depend on rate parameters
         const involvedSpecies = new Set<string>();
 
-        if (reaction.reactants) {
-          for (const reactant of reaction.reactants) {
-            involvedSpecies.add(reactant.species);
+        if (reaction.substrates) {
+          for (const substrate of reaction.substrates) {
+            involvedSpecies.add(substrate.species);
           }
         }
 
@@ -213,7 +240,9 @@ export function buildDependencyGraph(
 
   // Process an equation
   function processEquation(equation: Equation, systemId: string, index: number) {
-    const lhsVar = addNode(equation.lhs, 'state', systemId);
+    const targetName = lhsTargetName(equation.lhs);
+    if (targetName === undefined) return; // no recognizable defined variable
+    addNode(targetName, 'state', systemId);
     const rhsVars = freeVariables(equation.rhs);
 
     // Create dependencies from RHS variables to LHS variable
@@ -221,7 +250,7 @@ export function buildDependencyGraph(
       addNode(rhsVar, 'parameter', systemId); // Default assumption
       addDependency(
         scopedName(rhsVar, systemId),
-        scopedName(equation.lhs, systemId),
+        scopedName(targetName, systemId),
         'direct',
         1.0,
         equation.rhs
@@ -458,14 +487,16 @@ function topologicalSort(nodes: DependencyNode[], edges: Array<{ source: string;
 }
 
 /**
- * Find dead variables (those that are defined but never used)
+ * Find dependency-graph sinks: non-state variables that nothing else depends
+ * on. Note this includes terminal observed outputs — a sink is only truly
+ * "dead" if it is also not consumed outside the model (plots, couplings,
+ * downstream tooling), which this graph cannot see. State variables are
+ * excluded because they are integration outputs by definition.
  */
 export function findDeadVariables(graph: DependencyGraph): DependencyNode[] {
   const deadVars: DependencyNode[] = [];
 
   for (const node of graph.nodes) {
-    // A variable is dead if it has no successors (nothing depends on it)
-    // and it's not a state variable (which are typically outputs)
     if (graph.successors(node.name).length === 0 && node.kind !== 'state') {
       deadVars.push(node);
     }

@@ -101,7 +101,7 @@ export function simplify(expr: Expr): Expr {
 
     // Apply simplification rules based on operator
     switch (expr.op) {
-      case '+':
+      case '+': {
         // Remove zeros: x + 0 -> x
         const nonZeroTerms = simplifiedArgs.filter(arg => arg !== 0)
         if (nonZeroTerms.length === 0) return 0
@@ -130,8 +130,9 @@ export function simplify(expr: Expr): Expr {
         }
 
         return { ...expr, args: nonZeroTerms as [Expression, ...Expression[]] }
+      }
 
-      case '*':
+      case '*': {
         // Zero multiplication: x * 0 -> 0
         if (simplifiedArgs.some(arg => arg === 0)) return 0
 
@@ -165,6 +166,7 @@ export function simplify(expr: Expr): Expr {
         }
 
         return { ...expr, args: nonOneFactors as [Expression, ...Expression[]] }
+      }
 
       case '-':
         if (simplifiedArgs.length === 1) {
@@ -189,12 +191,11 @@ export function simplify(expr: Expr): Expr {
           // x / 1 -> x
           if (simplifiedArgs[1] === 1) return simplifiedArgs[0]
 
-          // 0 / x -> 0 (assuming x != 0)
-          if (simplifiedArgs[0] === 0) return 0
-
-          // Constant folding
-          if (typeof simplifiedArgs[0] === 'number' && typeof simplifiedArgs[1] === 'number') {
-            if (simplifiedArgs[1] === 0) throw new Error('Division by zero')
+          // Constant folding. A zero denominator is left unfolded — a pure
+          // simplifier must not throw, and 0/0 vs x/0 semantics belong to
+          // evaluation, not rewriting.
+          if (typeof simplifiedArgs[0] === 'number' && typeof simplifiedArgs[1] === 'number'
+              && simplifiedArgs[1] !== 0) {
             return simplifiedArgs[0] / simplifiedArgs[1]
           }
         }
@@ -209,11 +210,11 @@ export function simplify(expr: Expr): Expr {
           // x^1 -> x
           if (simplifiedArgs[1] === 1) return simplifiedArgs[0]
 
-          // 0^x -> 0 (assuming x > 0)
-          if (simplifiedArgs[0] === 0) return 0
-
-          // 1^x -> 1
+          // 1^x -> 1 (sound for every finite x)
           if (simplifiedArgs[0] === 1) return 1
+
+          // NOTE: 0^x is NOT folded to 0 — that identity only holds for
+          // x > 0, which cannot be assumed for a symbolic exponent.
 
           // Constant folding
           if (typeof simplifiedArgs[0] === 'number' && typeof simplifiedArgs[1] === 'number') {

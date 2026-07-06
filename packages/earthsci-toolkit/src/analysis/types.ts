@@ -5,8 +5,8 @@
  * including dependency graphs, complexity metrics, and manipulation utilities.
  */
 
-import type { Expr, Model, EsmFile } from '../types.js';
-import type { ComponentNode, VariableNode, Graph } from '../graph.js';
+import type { Expr } from '../types.js';
+import type { Graph } from '../graph.js';
 
 /** Node representing a variable in a dependency graph */
 export interface DependencyNode {
@@ -88,40 +88,6 @@ export interface ExpressionLocation {
   context?: Expr;
 }
 
-/** Pattern for expression template matching */
-export interface ExpressionPattern {
-  /** Template expression with placeholders */
-  template: Expr;
-  /** Variable bindings for pattern matching */
-  bindings: Record<string, Expr>;
-  /** Constraints on pattern variables */
-  constraints?: Record<string, (expr: Expr) => boolean>;
-}
-
-/** Result of expression template matching */
-export interface MatchResult {
-  /** Whether the pattern matched */
-  matched: boolean;
-  /** Variable bindings if matched */
-  bindings: Record<string, Expr>;
-  /** Confidence score (0-1) */
-  confidence: number;
-}
-
-/** Optimization transformation for expressions */
-export interface Optimization {
-  /** Name of the optimization */
-  name: string;
-  /** Description of what it does */
-  description: string;
-  /** Pattern to match */
-  pattern: ExpressionPattern;
-  /** Replacement expression template */
-  replacement: Expr;
-  /** Estimated performance improvement */
-  improvement: number;
-}
-
 /** Result of symbolic differentiation */
 export interface DerivativeResult {
   /** The derivative expression */
@@ -137,40 +103,3 @@ export interface DerivativeResult {
   }>;
 }
 
-/** Layout algorithm for graph visualization */
-export interface LayoutAlgorithm {
-  /** Name of the algorithm */
-  name: string;
-  /** Apply layout to graph nodes */
-  layout<N, E>(graph: Graph<N, E>): LayoutResult<N>;
-}
-
-/** Result of graph layout algorithm */
-export interface LayoutResult<N> {
-  /** Node positions */
-  positions: Map<string, { x: number; y: number }>;
-  /** Bounding box of the layout */
-  bounds: { width: number; height: number };
-  /** Layout-specific metadata */
-  metadata?: Record<string, any>;
-}
-
-/** Export format for graphs */
-export type GraphExportFormat = 'dot' | 'mermaid' | 'json' | 'd3' | 'cytoscape';
-
-/** Export options for graphs */
-export interface GraphExportOptions {
-  /** Format to export */
-  format: GraphExportFormat;
-  /** Include metadata in export */
-  includeMetadata?: boolean;
-  /** Styling options */
-  styling?: {
-    nodeColor?: string | ((node: any) => string);
-    edgeColor?: string | ((edge: any) => string);
-    nodeShape?: string | ((node: any) => string);
-    fontSize?: number;
-  };
-  /** Layout algorithm to use */
-  layout?: LayoutAlgorithm;
-}
