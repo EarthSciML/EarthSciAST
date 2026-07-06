@@ -21,9 +21,7 @@ interface Manifest {
   fixtures: ManifestEntry[]
 }
 
-const manifest: Manifest = JSON.parse(
-  readFileSync(resolve(FIXTURES_DIR, 'manifest.json'), 'utf-8'),
-)
+const manifest: Manifest = JSON.parse(readFileSync(resolve(FIXTURES_DIR, 'manifest.json'), 'utf-8'))
 
 describe('canonical-form cross-binding conformance', () => {
   for (const entry of manifest.fixtures) {

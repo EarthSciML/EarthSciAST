@@ -125,12 +125,7 @@ function emitCanonical(value: unknown, indent: number): string {
   return emitValue(value, indent, '', '')
 }
 
-function emitValue(
-  v: unknown,
-  indent: number,
-  curIndent: string,
-  path: string,
-): string {
+function emitValue(v: unknown, indent: number, curIndent: string, path: string): string {
   if (v === null || v === undefined) return 'null'
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   if (typeof v === 'string') return JSON.stringify(v)
@@ -149,9 +144,7 @@ function emitValue(
     const sep = indent === 0 ? ',' : ',\n' + childIndent
     const open = indent === 0 ? '[' : '[\n' + childIndent
     const close = indent === 0 ? ']' : '\n' + curIndent + ']'
-    const parts = v.map((x, i) =>
-      emitValue(x, indent, childIndent, `${path}[${i}]`),
-    )
+    const parts = v.map((x, i) => emitValue(x, indent, childIndent, `${path}[${i}]`))
     return open + parts.join(sep) + close
   }
   if (typeof v === 'object') {

@@ -61,7 +61,9 @@ export const OPS: Record<string, OpInfo> = {
     precedence: 4,
     cost: 1,
     evaluate: (args) =>
-      args.length === 1 ? -args[0] : args.reduce((diff, val, idx) => (idx === 0 ? val : diff - val)),
+      args.length === 1
+        ? -args[0]
+        : args.reduce((diff, val, idx) => (idx === 0 ? val : diff - val)),
   },
   '*': {
     arity: { min: 0, max: null },
@@ -168,16 +170,61 @@ export const OPS: Record<string, OpInfo> = {
   sign: { arity: { min: 1, max: 1 }, cost: 1, evaluate: (args) => Math.sign(args[0]) },
 
   // ---- comparison / logical ----------------------------------------------
-  '>': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] > args[1] ? 1 : 0) },
-  '<': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] < args[1] ? 1 : 0) },
-  '>=': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] >= args[1] ? 1 : 0) },
-  '<=': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] <= args[1] ? 1 : 0) },
-  '==': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] === args[1] ? 1 : 0) },
-  '!=': { arity: { min: 2, max: 2 }, precedence: 3, cost: 2, evaluate: (args) => (args[0] !== args[1] ? 1 : 0) },
+  '>': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] > args[1] ? 1 : 0),
+  },
+  '<': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] < args[1] ? 1 : 0),
+  },
+  '>=': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] >= args[1] ? 1 : 0),
+  },
+  '<=': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] <= args[1] ? 1 : 0),
+  },
+  '==': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] === args[1] ? 1 : 0),
+  },
+  '!=': {
+    arity: { min: 2, max: 2 },
+    precedence: 3,
+    cost: 2,
+    evaluate: (args) => (args[0] !== args[1] ? 1 : 0),
+  },
   '=': { arity: { min: 2, max: 2 }, precedence: 3 },
-  and: { arity: { min: 0, max: null }, precedence: 2, cost: 2, evaluate: (args) => (args.every((x) => x !== 0) ? 1 : 0) },
-  or: { arity: { min: 0, max: null }, precedence: 1, cost: 2, evaluate: (args) => (args.some((x) => x !== 0) ? 1 : 0) },
-  not: { arity: { min: 1, max: 1 }, precedence: 6, cost: 1, evaluate: (args) => (args[0] === 0 ? 1 : 0) },
+  and: {
+    arity: { min: 0, max: null },
+    precedence: 2,
+    cost: 2,
+    evaluate: (args) => (args.every((x) => x !== 0) ? 1 : 0),
+  },
+  or: {
+    arity: { min: 0, max: null },
+    precedence: 1,
+    cost: 2,
+    evaluate: (args) => (args.some((x) => x !== 0) ? 1 : 0),
+  },
+  not: {
+    arity: { min: 1, max: 1 },
+    precedence: 6,
+    cost: 1,
+    evaluate: (args) => (args[0] === 0 ? 1 : 0),
+  },
   ifelse: {
     arity: { min: 3, max: 3 },
     cost: 3,

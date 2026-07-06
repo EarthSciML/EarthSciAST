@@ -61,7 +61,7 @@ function decodeInput(v: unknown): unknown {
 
 function listFunctionFixtures(): Array<{ module: string; fn: string; dir: string }> {
   const out: Array<{ module: string; fn: string; dir: string }> = []
-  let modules: string[] = []
+  let modules: string[]
   try {
     modules = readdirSync(fixturesRoot)
   } catch {
@@ -70,7 +70,7 @@ function listFunctionFixtures(): Array<{ module: string; fn: string; dir: string
   for (const mod of modules) {
     const modDir = join(fixturesRoot, mod)
     if (!statSync(modDir).isDirectory()) continue
-    let fns: string[] = []
+    let fns: string[]
     try {
       fns = readdirSync(modDir)
     } catch {
@@ -153,7 +153,11 @@ describe('Closed function registry — cross-binding conformance', () => {
       // Spec tolerance per esm-spec §9.2 (matches Julia ref): pass
       // if either |actual−expected| ≤ abs OR ≤ rel·max(1, |expected|).
       // NaN expected matches NaN actual (both must be NaN).
-      function withinTolerance(got: number, exp: number, tol: { abs: number; rel: number }): boolean {
+      function withinTolerance(
+        got: number,
+        exp: number,
+        tol: { abs: number; rel: number },
+      ): boolean {
         if (Number.isNaN(exp)) return Number.isNaN(got)
         const diff = Math.abs(got - exp)
         return diff <= tol.abs || diff <= tol.rel * Math.max(1, Math.abs(exp))

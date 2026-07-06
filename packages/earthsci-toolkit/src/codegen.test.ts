@@ -34,7 +34,10 @@ describe('compileExpression / evaluateExpression — TS scalar runner', () => {
     const expr: Expr = { op: '+', args: ['x', 'y'] }
     const fn = compileExpression(expr)
     expect(fn(bindings)).toBe(5)
-    const otherBindings = new Map<string, number>([['x', 10], ['y', 20]])
+    const otherBindings = new Map<string, number>([
+      ['x', 10],
+      ['y', 20],
+    ])
     expect(fn(otherBindings)).toBe(30)
   })
 
@@ -95,10 +98,12 @@ describe('compileExpression / evaluateExpression — TS scalar runner', () => {
 
     it('rejects min/max with fewer than 2 args (esm-spec §4.2)', () => {
       // esm-2is — n-ary arity ≥ 2
-      expect(() => evaluateExpression({ op: 'min', args: ['x'] }, bindings))
-        .toThrow('min requires at least 2 arguments')
-      expect(() => evaluateExpression({ op: 'max', args: ['x'] }, bindings))
-        .toThrow('max requires at least 2 arguments')
+      expect(() => evaluateExpression({ op: 'min', args: ['x'] }, bindings)).toThrow(
+        'min requires at least 2 arguments',
+      )
+      expect(() => evaluateExpression({ op: 'max', args: ['x'] }, bindings)).toThrow(
+        'max requires at least 2 arguments',
+      )
     })
   })
 
@@ -124,36 +129,38 @@ describe('compileExpression / evaluateExpression — TS scalar runner', () => {
 
   describe('error handling', () => {
     it('throws for division by zero', () => {
-      expect(() => evaluateExpression({ op: '/', args: [1, 0] }, bindings))
-        .toThrow('Division by zero')
+      expect(() => evaluateExpression({ op: '/', args: [1, 0] }, bindings)).toThrow(
+        'Division by zero',
+      )
     })
 
     it('throws for invalid log argument', () => {
-      expect(() => evaluateExpression({ op: 'log', args: [-1] }, bindings))
-        .toThrow('log argument must be positive')
+      expect(() => evaluateExpression({ op: 'log', args: [-1] }, bindings)).toThrow(
+        'log argument must be positive',
+      )
     })
 
     it('throws for invalid sqrt argument', () => {
-      expect(() => evaluateExpression({ op: 'sqrt', args: [-1] }, bindings))
-        .toThrow('sqrt argument must be non-negative')
+      expect(() => evaluateExpression({ op: 'sqrt', args: [-1] }, bindings)).toThrow(
+        'sqrt argument must be non-negative',
+      )
     })
 
     it('throws for unsupported operator', () => {
       const expr: any = { op: 'unsupported', args: [1] }
-      expect(() => evaluateExpression(expr, bindings))
-        .toThrow('Unsupported operator: unsupported')
+      expect(() => evaluateExpression(expr, bindings)).toThrow('Unsupported operator: unsupported')
     })
 
     it('rejects unlowered enum nodes', () => {
       const expr: any = { op: 'enum', value: 'foo' }
-      expect(() => evaluateExpression(expr, bindings))
-        .toThrow(/enum op encountered/)
+      expect(() => evaluateExpression(expr, bindings)).toThrow(/enum op encountered/)
     })
 
     it('rejects array-valued const nodes in scalar position', () => {
       const expr: any = { op: 'const', value: [1, 2, 3] }
-      expect(() => evaluateExpression(expr, bindings))
-        .toThrow(/array value cannot be evaluated as a scalar/)
+      expect(() => evaluateExpression(expr, bindings)).toThrow(
+        /array value cannot be evaluated as a scalar/,
+      )
     })
   })
 })

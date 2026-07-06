@@ -34,7 +34,7 @@ export interface SubstitutionContext {
 export function substitute(
   expr: Expr,
   bindings: Record<string, Expr>,
-  context?: SubstitutionContext
+  context?: SubstitutionContext,
 ): Expr {
   // Base cases: numeric literals (plain numbers or tagged int/float
   // canonical-form leaves) remain unchanged.
@@ -63,12 +63,12 @@ export function substitute(
 
   // ExpressionNode case: recursively substitute arguments
   const node = expr as ExprNode
-  const substitutedArgs = node.args.map(arg => substitute(arg, bindings, context))
+  const substitutedArgs = node.args.map((arg) => substitute(arg, bindings, context))
 
   // Return new node with substituted arguments
   return {
     ...node,
-    args: substitutedArgs as [Expr, ...Expr[]]
+    args: substitutedArgs as [Expr, ...Expr[]],
   }
 }
 
@@ -161,14 +161,16 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
 export function substituteInModel(
   model: Model,
   bindings: Record<string, Expr>,
-  context?: SubstitutionContext
+  context?: SubstitutionContext,
 ): Model {
-  // Substitute in all equations
-  const equations = (model.equations || []).map(eq => ({
+  // Substitute in all equations. substitute() may return tagged
+  // NumericLiteral leaves, which are an in-memory-only widening of the
+  // schema's Expression type (see types.ts); cast back to the schema view.
+  const equations = (model.equations || []).map((eq) => ({
     ...eq,
     lhs: substitute(eq.lhs, bindings, context),
-    rhs: substitute(eq.rhs, bindings, context)
-  }))
+    rhs: substitute(eq.rhs, bindings, context),
+  })) as Model['equations']
 
   // Substitute in variable expressions (for observed variables)
   const variables = Object.fromEntries(
@@ -177,11 +179,11 @@ export function substituteInModel(
       {
         ...variable,
         ...(variable.expression && {
-          expression: substitute(variable.expression, bindings, context)
-        })
-      }
-    ])
-  )
+          expression: substitute(variable.expression, bindings, context),
+        }),
+      },
+    ]),
+  ) as Model['variables']
 
   // Substitute in inline-model subsystems recursively; data loaders and
   // unresolved refs pass through unchanged.
@@ -191,8 +193,8 @@ export function substituteInModel(
           name,
           'ref' in subsystem || 'kind' in subsystem
             ? subsystem
-            : substituteInModel(subsystem as Model, bindings, context)
-        ])
+            : substituteInModel(subsystem as Model, bindings, context),
+        ]),
       )
     : undefined
 
@@ -200,7 +202,7 @@ export function substituteInModel(
     ...model,
     equations,
     variables,
-    ...(subsystems && { subsystems })
+    ...(subsystems && { subsystems }),
   }
 }
 
@@ -216,20 +218,22 @@ export function substituteInModel(
 export function substituteInReactionSystem(
   system: ReactionSystem,
   bindings: Record<string, Expr>,
-  context?: SubstitutionContext
+  context?: SubstitutionContext,
 ): ReactionSystem {
   // Substitute in all reaction rate expressions
-  const reactions = system.reactions.map(reaction => ({
+  const reactions = system.reactions.map((reaction) => ({
     ...reaction,
-    rate: substitute(reaction.rate, bindings, context)
-  })) as [typeof system.reactions[0], ...typeof system.reactions[0][]]
+    rate: substitute(reaction.rate, bindings, context),
+  })) as [(typeof system.reactions)[0], ...(typeof system.reactions)[0][]]
 
-  // Substitute in constraint equations if present
-  const constraint_equations = system.constraint_equations?.map(eq => ({
+  // Substitute in constraint equations if present. As above, tagged
+  // NumericLiteral leaves are an in-memory-only widening of the schema's
+  // Expression type; cast back to the schema view.
+  const constraint_equations = system.constraint_equations?.map((eq) => ({
     ...eq,
     lhs: substitute(eq.lhs, bindings, context),
-    rhs: substitute(eq.rhs, bindings, context)
-  }))
+    rhs: substitute(eq.rhs, bindings, context),
+  })) as ReactionSystem['constraint_equations']
 
   // Substitute in inline subsystems recursively; unresolved refs pass
   // through unchanged.
@@ -239,8 +243,8 @@ export function substituteInReactionSystem(
           name,
           'ref' in subsystem
             ? subsystem
-            : substituteInReactionSystem(subsystem as ReactionSystem, bindings, context)
-        ])
+            : substituteInReactionSystem(subsystem as ReactionSystem, bindings, context),
+        ]),
       )
     : undefined
 
@@ -248,6 +252,6 @@ export function substituteInReactionSystem(
     ...system,
     reactions,
     ...(constraint_equations && { constraint_equations }),
-    ...(subsystems && { subsystems })
+    ...(subsystems && { subsystems }),
   }
 }

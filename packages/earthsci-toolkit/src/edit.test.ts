@@ -24,9 +24,20 @@ import {
   merge,
   extract,
   VariableInUseError,
-  EntityNotFoundError
+  EntityNotFoundError,
 } from './edit.js'
-import type { Model, ReactionSystem, EsmFile, ModelVariable, Equation, Reaction, Species } from './types.js'
+import type {
+  Model,
+  ReactionSystem,
+  EsmFile,
+  ModelVariable,
+  Equation,
+  Reaction,
+  Species,
+  ContinuousEvent,
+  DiscreteEvent,
+  CouplingEntry,
+} from './types.js'
 
 describe('edit', () => {
   let model: Model
@@ -39,57 +50,65 @@ describe('edit', () => {
         x: {
           type: 'state',
           units: 'm',
-          description: 'Position'
+          description: 'Position',
         },
         v: {
           type: 'state',
           units: 'm/s',
-          description: 'Velocity'
+          description: 'Velocity',
         },
         k: {
           type: 'parameter',
           units: '1/s',
           default: 1,
-          description: 'Rate constant'
-        }
+          description: 'Rate constant',
+        },
       },
       equations: [
         { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' },
-        { lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: { op: '*', args: [{ op: '-', args: ['k'] }, 'x'] } }
-      ]
+        {
+          lhs: { op: 'D', args: ['v'], wrt: 't' },
+          rhs: { op: '*', args: [{ op: '-', args: ['k'] }, 'x'] },
+        },
+      ],
     }
 
     reactionSystem = {
       species: {
         A: {
           units: 'mol/L',
-          description: 'Species A'
+          description: 'Species A',
         },
         B: {
           units: 'mol/L',
-          description: 'Species B'
-        }
+          description: 'Species B',
+        },
       },
       parameters: {
         rate: {
           units: '1/s',
           default: 0.1,
-          description: 'Rate constant'
-        }
+          description: 'Rate constant',
+        },
       },
-      reactions: [{
-        id: 'r1',
-        substrates: [{ species: 'A', stoichiometry: 1 }],
-        products: [{ species: 'B', stoichiometry: 1 }],
-        rate: 'rate'
-      }]
+      reactions: [
+        {
+          id: 'r1',
+          substrates: [{ species: 'A', stoichiometry: 1 }],
+          products: [{ species: 'B', stoichiometry: 1 }],
+          rate: 'rate',
+        },
+      ],
     }
 
+    // Deliberately schema-incomplete fixture (no `esm` version field;
+    // `version` is not a schema Metadata field): the edit operations under
+    // test must pass such fields/omissions through untouched.
     esmFile = {
       metadata: { name: 'test', version: '0.1.0' },
       models: { TestModel: model },
-      reaction_systems: { TestSystem: reactionSystem }
-    }
+      reaction_systems: { TestSystem: reactionSystem },
+    } as unknown as EsmFile
   })
 
   describe('Variable Operations', () => {
@@ -98,7 +117,7 @@ describe('edit', () => {
         type: 'observed',
         units: 'K',
         expression: 'x',
-        description: 'Temperature'
+        description: 'Temperature',
       }
 
       const result = addVariable(model, 'temp', newVar)
@@ -114,8 +133,8 @@ describe('edit', () => {
         ...model,
         equations: [
           { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' },
-          { lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: { op: '*', args: [-1, 'x'] } }
-        ]
+          { lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: { op: '*', args: [-1, 'x'] } },
+        ],
       }
 
       const result = removeVariable(modelWithoutKReference, 'k')
@@ -154,7 +173,7 @@ describe('edit', () => {
     it('should add a new equation', () => {
       const newEquation: Equation = {
         lhs: 'y',
-        rhs: { op: '+', args: ['x', 'v'] }
+        rhs: { op: '+', args: ['x', 'v'] },
       }
 
       const result = addEquation(model, newEquation)
@@ -201,7 +220,7 @@ describe('edit', () => {
         id: 'r2',
         substrates: [{ species: 'B', stoichiometry: 1 }],
         products: null,
-        rate: { op: '*', args: ['rate', 'B'] }
+        rate: { op: '*', args: ['rate', 'B'] },
       }
 
       const result = addReaction(reactionSystem, newReaction)
@@ -217,7 +236,7 @@ describe('edit', () => {
         id: 'r2',
         substrates: [{ species: 'B', stoichiometry: 1 }],
         products: null,
-        rate: { op: '*', args: ['rate', 'B'] }
+        rate: { op: '*', args: ['rate', 'B'] },
       })
 
       const result = removeReaction(systemWithTwoReactions, 'r1')
@@ -234,7 +253,7 @@ describe('edit', () => {
     it('should add a new species', () => {
       const newSpecies: Species = {
         units: 'mol/L',
-        description: 'Species C'
+        description: 'Species C',
       }
 
       const result = addSpecies(reactionSystem, 'C', newSpecies)
@@ -246,14 +265,16 @@ describe('edit', () => {
 
     it('should remove species when not in use', () => {
       // Create a system where species B is not used
-      const systemWithoutBUsage = {
+      const systemWithoutBUsage: ReactionSystem = {
         ...reactionSystem,
-        reactions: [{
-          id: 'r1',
-          substrates: [{ species: 'A', stoichiometry: 1 }],
-          products: null,
-          rate: 'rate'
-        }]
+        reactions: [
+          {
+            id: 'r1',
+            substrates: [{ species: 'A', stoichiometry: 1 }],
+            products: null,
+            rate: 'rate',
+          },
+        ],
       }
 
       const result = removeSpecies(systemWithoutBUsage, 'B')
@@ -270,11 +291,13 @@ describe('edit', () => {
 
   describe('Event Operations', () => {
     it('should add a continuous event', () => {
+      // Legacy event shape (`condition` instead of the schema's
+      // `conditions`); addContinuousEvent appends it untouched.
       const event = {
         name: 'boundary_hit',
         condition: { op: '>', args: ['x', 10] },
-        affects: [{ lhs: 'v', rhs: { op: '-', args: ['v'] } }]
-      }
+        affects: [{ lhs: 'v', rhs: { op: '-', args: ['v'] } }],
+      } as unknown as ContinuousEvent
 
       const result = addContinuousEvent(model, event)
 
@@ -284,11 +307,13 @@ describe('edit', () => {
     })
 
     it('should add a discrete event', () => {
+      // Legacy event shape (`condition` instead of the schema's
+      // `trigger`); addDiscreteEvent appends it untouched.
       const event = {
         name: 'reset',
         condition: { op: '>', args: ['x', 5] },
-        affects: [{ lhs: 'x', rhs: 0 }]
-      }
+        affects: [{ lhs: 'x', rhs: 0 }],
+      } as unknown as DiscreteEvent
 
       const result = addDiscreteEvent(model, event)
 
@@ -301,8 +326,8 @@ describe('edit', () => {
       const modelWithEvent = addContinuousEvent(model, {
         name: 'test_event',
         condition: { op: '>', args: ['x', 1] },
-        affects: [{ lhs: 'v', rhs: 0 }]
-      })
+        affects: [{ lhs: 'v', rhs: 0 }],
+      } as unknown as ContinuousEvent)
 
       const result = removeEvent(modelWithEvent, 'test_event')
 
@@ -317,11 +342,13 @@ describe('edit', () => {
 
   describe('Coupling Operations', () => {
     it('should add a coupling entry', () => {
+      // Legacy coupling shape (`vars` instead of the schema's
+      // `connector`); addCoupling appends it untouched.
       const coupling = {
         type: 'couple' as const,
         systems: ['TestModel', 'TestSystem'],
-        vars: [['TestModel.x', 'TestSystem.A']]
-      }
+        vars: [['TestModel.x', 'TestSystem.A']],
+      } as unknown as CouplingEntry
 
       const result = addCoupling(esmFile, coupling)
 
@@ -334,8 +361,8 @@ describe('edit', () => {
       const fileWithCoupling = addCoupling(esmFile, {
         type: 'couple' as const,
         systems: ['TestModel', 'TestSystem'],
-        vars: [['TestModel.x', 'TestSystem.A']]
-      })
+        vars: [['TestModel.x', 'TestSystem.A']],
+      } as unknown as CouplingEntry)
 
       const result = removeCoupling(fileWithCoupling, 0)
 
@@ -350,7 +377,7 @@ describe('edit', () => {
       expect(result.coupling).toHaveLength(1)
       expect(result.coupling![0]).toEqual({
         type: 'operator_compose',
-        systems: ['TestModel', 'TestSystem']
+        systems: ['TestModel', 'TestSystem'],
       })
     })
 
@@ -363,14 +390,14 @@ describe('edit', () => {
         type: 'variable_map',
         from: 'TestModel.x',
         to: 'TestSystem.A',
-        transform: 'param_to_var'
+        transform: 'param_to_var',
       })
     })
 
     it('should create a variable mapping with an expression transform', () => {
       const transform = {
         op: '+',
-        args: [{ op: '*', args: [2.0, 'TestModel.x'] }, 'TestSystem.A']
+        args: [{ op: '*', args: [2.0, 'TestModel.x'] }, 'TestSystem.A'],
       }
       const result = mapVariable(esmFile, 'TestModel.x', 'TestSystem.A', transform)
 
@@ -380,35 +407,36 @@ describe('edit', () => {
         type: 'variable_map',
         from: 'TestModel.x',
         to: 'TestSystem.A',
-        transform
+        transform,
       })
     })
   })
 
   describe('File-level Operations', () => {
     it('should merge two ESM files', () => {
-      const fileB: EsmFile = {
+      // Deliberately schema-incomplete fixture, matching `esmFile` above.
+      const fileB = {
         metadata: { name: 'fileB', version: '0.1.0' },
         models: {
           ModelB: {
             variables: { y: { type: 'state', units: 'm' } },
-            equations: [{ lhs: 'y', rhs: 1 }]
-          }
-        }
-      }
+            equations: [{ lhs: 'y', rhs: 1 }],
+          },
+        },
+      } as unknown as EsmFile
 
       const result = merge(esmFile, fileB)
 
       expect(result).not.toBe(esmFile)
-      expect(result.models.TestModel).toEqual(esmFile.models.TestModel)
-      expect(result.models.ModelB).toEqual(fileB.models!.ModelB)
+      expect(result.models!.TestModel).toEqual(esmFile.models!.TestModel)
+      expect(result.models!.ModelB).toEqual(fileB.models!.ModelB)
     })
 
     it('should extract a component', () => {
       const result = extract(esmFile, 'TestModel')
 
       expect(result).not.toBe(esmFile)
-      expect(result.models!.TestModel).toEqual(esmFile.models.TestModel)
+      expect(result.models!.TestModel).toEqual(esmFile.models!.TestModel)
       expect(result.reaction_systems).toBeUndefined()
     })
 

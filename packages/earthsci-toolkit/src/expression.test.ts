@@ -15,7 +15,7 @@ describe('Expression structural operations', () => {
     it('should collect variables from simple expression', () => {
       const expr: Expr = {
         op: '+',
-        args: ['x', 'y']
+        args: ['x', 'y'],
       }
       expect(freeVariables(expr)).toEqual(new Set(['x', 'y']))
     })
@@ -25,8 +25,8 @@ describe('Expression structural operations', () => {
         op: '*',
         args: [
           { op: '+', args: ['x', 2] },
-          { op: 'sin', args: ['y'] }
-        ]
+          { op: 'sin', args: ['y'] },
+        ],
       }
       expect(freeVariables(expr)).toEqual(new Set(['x', 'y']))
     })
@@ -34,7 +34,7 @@ describe('Expression structural operations', () => {
     it('should handle duplicate variables', () => {
       const expr: Expr = {
         op: '+',
-        args: ['x', { op: '*', args: ['x', 2] }]
+        args: ['x', { op: '*', args: ['x', 2] }],
       }
       expect(freeVariables(expr)).toEqual(new Set(['x']))
     })
@@ -43,12 +43,12 @@ describe('Expression structural operations', () => {
   describe('freeParameters', () => {
     const testModel: Model = {
       variables: {
-        'x': { type: 'state' },
-        'k': { type: 'parameter' },
-        'T': { type: 'parameter' },
-        'C': { type: 'observed', expression: { op: '*', args: ['k', 'T'] } }
+        x: { type: 'state' },
+        k: { type: 'parameter' },
+        T: { type: 'parameter' },
+        C: { type: 'observed', expression: { op: '*', args: ['k', 'T'] } },
       },
-      equations: []
+      equations: [],
     }
 
     it('should return empty set for expression with no parameters', () => {
@@ -97,8 +97,8 @@ describe('Expression structural operations', () => {
         op: '*',
         args: [
           { op: '+', args: ['x', 2] },
-          { op: 'sin', args: ['y'] }
-        ]
+          { op: 'sin', args: ['y'] },
+        ],
       }
       expect(contains(expr, 'x')).toBe(true)
       expect(contains(expr, 'y')).toBe(true)
@@ -244,8 +244,8 @@ describe('Expression structural operations', () => {
           op: '+',
           args: [
             { op: '*', args: ['x', 1] },
-            { op: '+', args: [2, 3] }
-          ]
+            { op: '+', args: [2, 3] },
+          ],
         }
         expect(simplify(expr)).toEqual({ op: '+', args: ['x', 5] })
       })
@@ -255,8 +255,8 @@ describe('Expression structural operations', () => {
           op: '*',
           args: [
             { op: '+', args: ['x', 0] },
-            { op: '^', args: ['y', 1] }
-          ]
+            { op: '^', args: ['y', 1] },
+          ],
         }
         expect(simplify(expr)).toEqual({ op: '*', args: ['x', 'y'] })
       })

@@ -7,6 +7,7 @@ import * as path from 'path'
 import { load } from './parse.js'
 import { save } from './serialize.js'
 import { flatten } from './flatten.js'
+import type { Model } from './types.js'
 
 const REPO_ROOT = path.join(__dirname, '..', '..', '..')
 
@@ -17,13 +18,13 @@ describe('Brownian (SDE) support', () => {
       'utf-8',
     )
     const parsed = load(fixture)
-    const bw = parsed.models!.OU.variables.Bw
+    const bw = (parsed.models!.OU as Model).variables.Bw
     expect(bw.type).toBe('brownian')
     expect((bw as any).noise_kind).toBe('wiener')
 
     const out = save(parsed)
     const reparsed = load(out)
-    expect(reparsed.models!.OU.variables.Bw).toEqual(bw)
+    expect((reparsed.models!.OU as Model).variables.Bw).toEqual(bw)
   })
 
   it('flatten surfaces brownian variables in a dedicated collection', () => {

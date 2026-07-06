@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { load, migrate, canMigrate, MigrationError, VERSION, SCHEMA_VERSION, SchemaValidationError } from './index.js'
+import {
+  load,
+  migrate,
+  canMigrate,
+  MigrationError,
+  VERSION,
+  SCHEMA_VERSION,
+  SchemaValidationError,
+} from './index.js'
 
 // Path to version compatibility test fixtures
 const fixturesPath = '../../../tests/version_compatibility'
@@ -15,7 +23,7 @@ describe('Version Compatibility', () => {
   }
 
   // Capture console.warn output around a callback
-  const captureWarnings = <T,>(fn: () => T): { result: T; warnings: string[] } => {
+  const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
     const warnings: string[] = []
     const originalWarn = console.warn
     console.warn = (...args: unknown[]) => {
@@ -35,7 +43,7 @@ describe('Version Compatibility', () => {
 
       expect(result.esm).toBe('0.1.0')
       expect(result.metadata.name).toBe('Version_0_1_0_Baseline')
-      expect(warnings.some(w => w.includes('newer than'))).toBe(false)
+      expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
     it('should load older minor version (0.0.1) successfully', () => {
@@ -63,7 +71,7 @@ describe('Version Compatibility', () => {
         const { result, warnings } = captureWarnings(() => load(fixture))
 
         expect(result.metadata.name).toBe(name)
-        expect(warnings.some(w => w.includes('newer than'))).toBe(false)
+        expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
       }
     })
   })
@@ -74,7 +82,11 @@ describe('Version Compatibility', () => {
       const { result, warnings } = captureWarnings(() => load(fixture))
 
       expect(result.esm).toBe('0.10.0')
-      expect(warnings.some(w => w.includes(`0.10.0 is newer than the current library version ${SCHEMA_VERSION}`))).toBe(true)
+      expect(
+        warnings.some((w) =>
+          w.includes(`0.10.0 is newer than the current library version ${SCHEMA_VERSION}`),
+        ),
+      ).toBe(true)
     })
 
     it('does not weaken schema validation for newer minor versions', () => {
@@ -89,7 +101,7 @@ describe('Version Compatibility', () => {
           } catch (e) {
             return e
           }
-        })()
+        })(),
       )
       expect(result).toBeInstanceOf(SchemaValidationError)
     })

@@ -7,21 +7,19 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { load } from './parse.js'
 import { save } from './serialize.js'
+import type { Model } from './types.js'
 
 const REPO_ROOT = path.join(__dirname, '..', '..', '..')
 
 function loadFixture(name: string) {
-  const text = fs.readFileSync(
-    path.join(REPO_ROOT, 'tests', 'valid', name),
-    'utf-8',
-  )
+  const text = fs.readFileSync(path.join(REPO_ROOT, 'tests', 'valid', name), 'utf-8')
   return { text, parsed: load(text) }
 }
 
 describe('Nonlinear-system additions (gt-ebuq)', () => {
   it('round-trips the ISORROPIA-shape fixture preserving init eqs, guesses, system_kind', () => {
     const { parsed } = loadFixture('nonlinear_isorropia_shape.esm')
-    const model = parsed.models!.IsorropiaEq
+    const model = parsed.models!.IsorropiaEq as Model
     expect(model.system_kind).toBe('nonlinear')
     expect(model.initialization_equations).toHaveLength(2)
     expect(Object.keys(model.guesses!).sort()).toEqual(['H', 'SO4'])
@@ -33,7 +31,7 @@ describe('Nonlinear-system additions (gt-ebuq)', () => {
 
   it('round-trips the Mogi-shape algebraic fixture', () => {
     const { parsed } = loadFixture('nonlinear_mogi_shape.esm')
-    const model = parsed.models!.MogiModel
+    const model = parsed.models!.MogiModel as Model
     expect(model.system_kind).toBe('nonlinear')
     expect(model.initialization_equations).toBeUndefined()
     expect(model.guesses).toBeUndefined()

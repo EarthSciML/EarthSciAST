@@ -92,7 +92,9 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       const v = node.value
       if (typeof v === 'number') return v
       if (Array.isArray(v)) {
-        throw new Error('const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. interp.searchsorted, index)')
+        throw new Error(
+          'const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. interp.searchsorted, index)',
+        )
       }
       throw new Error(`const node with non-numeric value: ${typeof v}`)
     }
@@ -101,7 +103,9 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
     // we see one here, the file was evaluated before the lowering
     // pass ran.
     if (node.op === 'enum') {
-      throw new Error("enum op encountered during evaluateExpression(); enum nodes must be lowered to 'const' integer nodes via lowerEnums() at load time")
+      throw new Error(
+        "enum op encountered during evaluateExpression(); enum nodes must be lowered to 'const' integer nodes via lowerEnums() at load time",
+      )
     }
 
     // fn: closed function registry dispatch (esm-spec §9.2). Most
@@ -114,7 +118,12 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
         throw new Error('fn op missing required string `name` field')
       }
       const fnArgs = node.args.map((arg: any) => {
-        if (arg && typeof arg === 'object' && (arg as ExpressionNode).op === 'const' && Array.isArray((arg as any).value)) {
+        if (
+          arg &&
+          typeof arg === 'object' &&
+          (arg as ExpressionNode).op === 'const' &&
+          Array.isArray((arg as any).value)
+        ) {
           return (arg as any).value
         }
         return evalExprNode(arg, bindings)

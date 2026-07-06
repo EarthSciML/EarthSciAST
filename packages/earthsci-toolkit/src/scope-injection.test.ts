@@ -107,7 +107,12 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     // lower it at load) and each test keeps its import field (survives emit).
     expect(adv.equations[0].rhs.args[1].op).toBe('D')
     expect(adv.tests.length).toBe(2)
-    expect(adv.tests.every((t: any) => Array.isArray(t.expression_template_imports) && t.expression_template_imports.length > 0)).toBe(true)
+    expect(
+      adv.tests.every(
+        (t: any) =>
+          Array.isArray(t.expression_template_imports) && t.expression_template_imports.length > 0,
+      ),
+    ).toBe(true)
     expect(JSON.parse(save(f))).toEqual(golden(conf('inject_test_block', 'roundtrip.esm')))
 
     // One suite, many schemes: each test builds an INDEPENDENT ephemeral
@@ -115,8 +120,20 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     // persisted component is never mutated.
     const src = conf('inject_test_block', 'fixture.esm')
     const base = conf('inject_test_block')
-    const e1 = await ephemeralInjectedFile(f, src, 'Advection', adv.tests[0].expression_template_imports, base)
-    const e2 = await ephemeralInjectedFile(f, src, 'Advection', adv.tests[1].expression_template_imports, base)
+    const e1 = await ephemeralInjectedFile(
+      f,
+      src,
+      'Advection',
+      adv.tests[0].expression_template_imports,
+      base,
+    )
+    const e2 = await ephemeralInjectedFile(
+      f,
+      src,
+      'Advection',
+      adv.tests[1].expression_template_imports,
+      base,
+    )
     expect((e1 as any).models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
     expect((e2 as any).models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
     expect((e1 as any).index_sets.lon.size).toBe(288)

@@ -19,7 +19,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { evaluateExpression } from './codegen.js'
-import type { EsmFile, Expr, Model, ModelVariable, Test, Tolerance } from './types.js'
+import type { EsmFile, Expr, Model, ModelVariable, Test, Assertion } from './types.js'
 
 const FIXTURES_DIR = join(__dirname, '..', '..', '..', 'tests', 'valid')
 const FIXTURES = [
@@ -96,8 +96,10 @@ function buildBindings(model: Model, t: Test): Map<string, number> {
   const bindings = new Map<string, number>()
   for (const [vname, vraw] of Object.entries(model.variables ?? {})) {
     const variable = vraw as ModelVariable
-    if ((variable.type === 'parameter' || variable.type === 'state')
-        && typeof variable.default === 'number') {
+    if (
+      (variable.type === 'parameter' || variable.type === 'state') &&
+      typeof variable.default === 'number'
+    ) {
       bindings.set(vname, variable.default)
     }
   }
@@ -132,19 +134,20 @@ describe('Units fixtures inline tests execution (gt-dt0o)', () => {
           it(`${mname}/${t.id}`, () => {
             const bindings = buildBindings(model, t)
             resolveObserved(model, bindings)
-            for (const a of t.assertions) {
+            for (const a of t.assertions as Assertion[]) {
               const { rel, abs } = resolveTol(
                 model.tolerance as AnyTol,
                 t.tolerance as AnyTol,
                 a.tolerance as AnyTol,
               )
-              expect(bindings.has(a.variable),
+              expect(
+                bindings.has(a.variable),
                 `${fname}::${mname}::${t.id}: ${a.variable} not resolved`,
               ).toBe(true)
               assertWithTolerance(
                 `${fname}::${mname}::${t.id}::${a.variable}`,
                 bindings.get(a.variable)!,
-                a.expected,
+                a.expected!,
                 rel,
                 abs,
               )

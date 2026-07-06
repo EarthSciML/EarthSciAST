@@ -73,10 +73,7 @@ export class RefLoadError extends Error {
  * @throws CircularReferenceError if a circular reference chain is detected
  * @throws RefLoadError if a referenced file cannot be loaded or parsed
  */
-export async function resolveSubsystemRefs(
-  file: EsmFile,
-  basePath: string
-): Promise<void> {
+export async function resolveSubsystemRefs(file: EsmFile, basePath: string): Promise<void> {
   const resolving = new Set<string>()
 
   // The importing document's index-set registry (esm-spec §4.7): every
@@ -293,7 +290,7 @@ async function resolveModelRefs(
   basePath: string,
   resolving: Set<string>,
   refChain: string[],
-  registry: Record<string, unknown>
+  registry: Record<string, unknown>,
 ): Promise<void> {
   // A bare `{ ref }` stub (SubsystemRef) has no subsystems to walk; the
   // top-level model union admits it under v0.8.0, but only a full Model
@@ -304,36 +301,49 @@ async function resolveModelRefs(
     const sub = subsystem as Model & RefEdge
     if (sub.ref) {
       const ref = sub.ref
-      await resolveRefEdge(sub, subName, basePath, resolving, refChain, async (parsed, refBasePath) => {
-        // esm-spec §4.7: the mounted file's document-scoped index sets (already
-        // metaparameter-folded) join the importing document's registry, so the
-        // importer's variables may be shaped over the mesh file's axes and a
-        // disagreement fails loudly (`subsystem_index_set_conflict`).
-        mergeSubsystemIndexSets(registry, parsed, ref)
+      await resolveRefEdge(
+        sub,
+        subName,
+        basePath,
+        resolving,
+        refChain,
+        async (parsed, refBasePath) => {
+          // esm-spec §4.7: the mounted file's document-scoped index sets (already
+          // metaparameter-folded) join the importing document's registry, so the
+          // importer's variables may be shaped over the mesh file's axes and a
+          // disagreement fails loudly (`subsystem_index_set_conflict`).
+          mergeSubsystemIndexSets(registry, parsed, ref)
 
-        // Extract the first model from the referenced file
-        if (parsed.models) {
-          const firstEntry = Object.entries(parsed.models)[0]
-          if (firstEntry) {
-            const resolvedModel = firstEntry[1]
-            // Replace the ref subsystem with the resolved model content, then
-            // recursively resolve any refs in it, relative to the referenced
-            // file's own directory
-            model.subsystems![subName] = resolvedModel
-            await resolveModelRefs(resolvedModel, refBasePath, resolving, [...refChain, subName], registry)
+          // Extract the first model from the referenced file
+          if (parsed.models) {
+            const firstEntry = Object.entries(parsed.models)[0]
+            if (firstEntry) {
+              const resolvedModel = firstEntry[1]
+              // Replace the ref subsystem with the resolved model content, then
+              // recursively resolve any refs in it, relative to the referenced
+              // file's own directory
+              model.subsystems![subName] = resolvedModel
+              await resolveModelRefs(
+                resolvedModel,
+                refBasePath,
+                resolving,
+                [...refChain, subName],
+                registry,
+              )
+            }
+          } else if (parsed.data_loaders) {
+            // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
+            // file's sole component is `data_loaders`. The schema allows a
+            // DataLoader inside Model.subsystems, so inline the first loader
+            // keyed by the parent subName. A loader has no subsystems, so there
+            // is nothing to recurse into.
+            const firstEntry = Object.entries(parsed.data_loaders)[0]
+            if (firstEntry) {
+              model.subsystems![subName] = firstEntry[1] as DataLoader
+            }
           }
-        } else if (parsed.data_loaders) {
-          // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
-          // file's sole component is `data_loaders`. The schema allows a
-          // DataLoader inside Model.subsystems, so inline the first loader
-          // keyed by the parent subName. A loader has no subsystems, so there
-          // is nothing to recurse into.
-          const firstEntry = Object.entries(parsed.data_loaders)[0]
-          if (firstEntry) {
-            model.subsystems![subName] = firstEntry[1] as DataLoader
-          }
-        }
-      })
+        },
+      )
     } else {
       // Even if there's no ref, recurse into subsystems
       await resolveModelRefs(sub, basePath, resolving, [...refChain, subName], registry)
@@ -348,27 +358,37 @@ async function resolveReactionSystemRefs(
   rs: ReactionSystem,
   basePath: string,
   resolving: Set<string>,
-  refChain: string[]
+  refChain: string[],
 ): Promise<void> {
   if (!rs.subsystems) return
 
   for (const [subName, subsystem] of Object.entries(rs.subsystems)) {
     const sub = subsystem as ReactionSystem & RefEdge
     if (sub.ref) {
-      await resolveRefEdge(sub, subName, basePath, resolving, refChain, async (parsed, refBasePath) => {
-        // Extract the first reaction system from the referenced file
-        if (parsed.reaction_systems) {
-          const firstEntry = Object.entries(parsed.reaction_systems)[0]
-          if (firstEntry) {
-            const resolvedRs = firstEntry[1]
-            // Replace the ref subsystem with the resolved content, then
-            // recursively resolve any refs in it, relative to the referenced
-            // file's own directory
-            rs.subsystems![subName] = resolvedRs
-            await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [...refChain, subName])
+      await resolveRefEdge(
+        sub,
+        subName,
+        basePath,
+        resolving,
+        refChain,
+        async (parsed, refBasePath) => {
+          // Extract the first reaction system from the referenced file
+          if (parsed.reaction_systems) {
+            const firstEntry = Object.entries(parsed.reaction_systems)[0]
+            if (firstEntry) {
+              const resolvedRs = firstEntry[1]
+              // Replace the ref subsystem with the resolved content, then
+              // recursively resolve any refs in it, relative to the referenced
+              // file's own directory
+              rs.subsystems![subName] = resolvedRs
+              await resolveReactionSystemRefs(resolvedRs, refBasePath, resolving, [
+                ...refChain,
+                subName,
+              ])
+            }
           }
-        }
-      })
+        },
+      )
     } else {
       // Even if there's no ref, recurse into subsystems
       await resolveReactionSystemRefs(sub, basePath, resolving, [...refChain, subName])
@@ -527,7 +547,7 @@ function joinPath(a: string, b: string): string {
  */
 function canonicalizePath(p: string): string {
   const isAbs = p.startsWith('/')
-  const parts = p.split('/').filter(seg => seg.length > 0 && seg !== '.')
+  const parts = p.split('/').filter((seg) => seg.length > 0 && seg !== '.')
   const stack: string[] = []
   for (const seg of parts) {
     if (seg === '..') {

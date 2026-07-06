@@ -89,7 +89,10 @@ export function numericValue(x: unknown): number | undefined {
 // ---------------------------------------------------------------------------
 
 export class LosslessJsonParseError extends Error {
-  constructor(message: string, public readonly position: number) {
+  constructor(
+    message: string,
+    public readonly position: number,
+  ) {
     super(`${message} (at pos ${position})`)
     this.name = 'LosslessJsonParseError'
   }
@@ -217,14 +220,30 @@ class Parser {
         this.pos++
         const esc = this.src[this.pos++]
         switch (esc) {
-          case '"': out += '"'; break
-          case '\\': out += '\\'; break
-          case '/': out += '/'; break
-          case 'b': out += '\b'; break
-          case 'f': out += '\f'; break
-          case 'n': out += '\n'; break
-          case 'r': out += '\r'; break
-          case 't': out += '\t'; break
+          case '"':
+            out += '"'
+            break
+          case '\\':
+            out += '\\'
+            break
+          case '/':
+            out += '/'
+            break
+          case 'b':
+            out += '\b'
+            break
+          case 'f':
+            out += '\f'
+            break
+          case 'n':
+            out += '\n'
+            break
+          case 'r':
+            out += '\r'
+            break
+          case 't':
+            out += '\t'
+            break
           case 'u': {
             const hex = this.src.slice(this.pos, this.pos + 4)
             if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
@@ -316,7 +335,10 @@ class Parser {
 
 export class CanonicalNonfiniteError extends Error {
   code = 'E_CANONICAL_NONFINITE' as const
-  constructor(public readonly value: number, public readonly path: string) {
+  constructor(
+    public readonly value: number,
+    public readonly path: string,
+  ) {
     super(`Canonical form forbids non-finite number ${value} at ${path}`)
     this.name = 'CanonicalNonfiniteError'
   }

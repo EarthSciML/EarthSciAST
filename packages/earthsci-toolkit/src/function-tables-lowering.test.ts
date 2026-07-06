@@ -20,7 +20,15 @@ import { resolve } from 'node:path'
 import { load } from './parse.js'
 import { dispatchClosedFunction } from './closed-functions.js'
 
-const FIXTURES_ROOT = resolve(__dirname, '..', '..', '..', 'tests', 'conformance', 'function_tables')
+const FIXTURES_ROOT = resolve(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'tests',
+  'conformance',
+  'function_tables',
+)
 
 function bitEq(a: number, b: number): boolean {
   const buf = new ArrayBuffer(16)
@@ -85,11 +93,7 @@ function lowerAndEvaluate(node: any, file: any, vars: Record<string, Var>): numb
     const axis = table.axes[0]
     const slice = slice1d(table.data, outIdx, hasOutputs)
     const x = resolveAxisValue(node.axes[axis.name], vars)
-    return dispatchClosedFunction('interp.linear', [
-      slice,
-      axis.values.map(Number),
-      x,
-    ])
+    return dispatchClosedFunction('interp.linear', [slice, axis.values.map(Number), x])
   }
   if (kind === 'bilinear' && table.axes.length === 2) {
     const ax = table.axes[0]

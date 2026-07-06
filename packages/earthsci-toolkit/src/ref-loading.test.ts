@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
-import type { EsmFile } from './types.js'
+import type { EsmFile, Model } from './types.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -57,7 +57,7 @@ describe('resolveSubsystemRefs', () => {
     } as unknown as EsmFile
 
     await resolveSubsystemRefs(file, tmpDir)
-    const inner = file.models!.Outer!.subsystems!.Inner as any
+    const inner = (file.models!.Outer as Model).subsystems!.Inner as any
     expect(inner.ref).toBeUndefined()
     expect(inner.variables.x).toBeDefined()
   })
@@ -96,7 +96,7 @@ describe('resolveSubsystemRefs', () => {
     } as unknown as EsmFile
 
     await resolveSubsystemRefs(file, tmpDir)
-    const met = file.models!.Outer!.subsystems!.Met as any
+    const met = (file.models!.Outer as Model).subsystems!.Met as any
     expect(met.ref).toBeUndefined()
     expect(met.kind).toBe('grid')
     expect(met.source.url_template).toBe('/data/weather_{date:%Y%m%d}.nc')

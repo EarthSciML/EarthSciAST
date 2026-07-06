@@ -112,9 +112,7 @@ describe('flatten', () => {
     } as unknown as EsmFile
 
     const flat = flatten(file)
-    expect(flat.metadata.couplingRules).toEqual([
-      'variable_map(Src.F -> Sink.y, expression)',
-    ])
+    expect(flat.metadata.couplingRules).toEqual(['variable_map(Src.F -> Sink.y, expression)'])
     expect(flat.variables['Sink.y']).toBe('((2 * Src.F) + Sink.offset)')
   })
 

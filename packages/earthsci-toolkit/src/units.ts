@@ -431,10 +431,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                 w.includes('Unknown variable'),
               )
 
-              if (
-                !hasUnknownVariable &&
-                !dimsEqual(exprResult.dimensions.dims, varDims.dims)
-              ) {
+              if (!hasUnknownVariable && !dimsEqual(exprResult.dimensions.dims, varDims.dims)) {
                 warnings.push({
                   message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
                   code: 'dimensional_mismatch',

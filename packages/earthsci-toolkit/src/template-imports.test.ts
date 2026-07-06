@@ -20,10 +20,7 @@ import {
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
 } from './lower-expression-templates.js'
-import {
-  rejectTemplateImportsPreV08,
-  resolveTemplateMachinery,
-} from './template-imports.js'
+import { rejectTemplateImportsPreV08, resolveTemplateMachinery } from './template-imports.js'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const conf = (...parts: string[]) =>
@@ -100,9 +97,10 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     )
     const d = expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')) as any
     expect(d.models.M.variables.dx.expression).toEqual({ op: '/', args: [1, 8] })
-    expect(
-      d.models.M.variables.c0.expression.args[0].args[1].expr.args[1],
-    ).toEqual({ op: '/', args: [1, 8] })
+    expect(d.models.M.variables.c0.expression.args[0].args[1].expr.args[1]).toEqual({
+      op: '/',
+      args: [1, 8],
+    })
   })
 
   it('import_rename_two_instances: one grid family, two prefixed instances (§9.7.7)', () => {
@@ -144,9 +142,9 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
     // A where shape naming a set the library never declares survives the rename
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).
-    expect(errCode(() => loadPath(conf('import_where_rename_unknown_index_set', 'fixture.esm')))).toBe(
-      'template_constraint_unknown_index_set',
-    )
+    expect(
+      errCode(() => loadPath(conf('import_where_rename_unknown_index_set', 'fixture.esm'))),
+    ).toBe('template_constraint_unknown_index_set')
   })
 
   it('import_rebind_keyed_factors: free-name rebind rewrites body + registry factors (§9.7.7)', () => {
@@ -230,9 +228,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       expect(sub.variables.ramp.expression.ranges.i).toEqual([1, n / 2])
       // Typed round-trip matches the golden, fully structurally.
       const emitted = JSON.parse(save(f))
-      expect(emitted).toEqual(
-        golden(conf('metaparameter_resolutions', goldenName)),
-      )
+      expect(emitted).toEqual(golden(conf('metaparameter_resolutions', goldenName)))
     }
   })
 
@@ -352,15 +348,19 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   it('template_import_unresolved: missing / unparsable ref', () => {
     expect(
       errCode(() =>
-        loadStr(modelJson(`
-          "expression_template_imports": [{"ref": "./nope.esm"}],`)),
+        loadStr(
+          modelJson(`
+          "expression_template_imports": [{"ref": "./nope.esm"}],`),
+        ),
       ),
     ).toBe('template_import_unresolved')
     fs.writeFileSync(path.join(tmpDir, 'junk.esm'), '{not json')
     expect(
       errCode(() =>
-        loadStr(modelJson(`
-          "expression_template_imports": [{"ref": "./junk.esm"}],`)),
+        loadStr(
+          modelJson(`
+          "expression_template_imports": [{"ref": "./junk.esm"}],`),
+        ),
       ),
     ).toBe('template_import_unresolved')
   })
@@ -400,10 +400,12 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // Referencing a filtered-out name from an expression position fails.
     expect(
       errCode(() =>
-        loadStr(modelJson(`
+        loadStr(
+          modelJson(`
           "expression_template_imports": [{"ref": "./lib_only.esm", "only": ["t_keep"]}],
           "expression_templates": {"local_uses_drop": {"params": [],
-            "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},`)),
+            "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},`),
+        ),
       ),
     ).toBe('apply_expression_template_unknown_template')
   })
@@ -421,10 +423,12 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     )
     expect(
       errCode(() =>
-        loadStr(modelJson(`
+        loadStr(
+          modelJson(`
           "expression_template_imports": [
             {"ref": "./grid.esm", "bindings": {"NC": 4}},
-            {"ref": "./grid.esm", "bindings": {"NC": 8}}],`)),
+            {"ref": "./grid.esm", "bindings": {"NC": 8}}],`),
+        ),
       ),
     ).toMatch(/^template_import_(name|index_set)_conflict$/)
     // Equal instantiation on both edges dedups cleanly.
@@ -449,8 +453,10 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     )
     expect(
       errCode(() =>
-        loadStr(modelJson(`
-          "expression_template_imports": [{"ref": "./lib_n.esm", "bindings": {"Q": 1}}],`)),
+        loadStr(
+          modelJson(`
+          "expression_template_imports": [{"ref": "./lib_n.esm", "bindings": {"Q": 1}}],`),
+        ),
       ),
     ).toBe('template_import_unknown_name')
     // A non-integer binding is rejected at the resolver level
@@ -569,9 +575,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
         M: {
           expression_templates: tpl,
           variables: { x: { type: 'state', default: 0.5 } },
-          equations: [
-            { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } },
-          ],
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } }],
         },
       },
     }
@@ -609,9 +613,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
               expression: { op: 'apply_expression_template', args: [], name: 'c1', bindings: {} },
             },
           },
-          equations: [
-            { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } },
-          ],
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } }],
         },
       },
     }
@@ -625,9 +627,9 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // one more: template_body_expansion_too_deep (the shared generated
     // fixture pins the reject side; this pins the boundary).
     expect(() => lowerExpressionTemplates(chainDoc(MAX_TEMPLATE_EXPANSION_DEPTH))).not.toThrow()
-    expect(errCode(() => lowerExpressionTemplates(chainDoc(MAX_TEMPLATE_EXPANSION_DEPTH + 1)))).toBe(
-      'template_body_expansion_too_deep',
-    )
+    expect(
+      errCode(() => lowerExpressionTemplates(chainDoc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))),
+    ).toBe('template_body_expansion_too_deep')
 
     // A body may not reference a `match` rule by name.
     const matchRef = JSON.parse(

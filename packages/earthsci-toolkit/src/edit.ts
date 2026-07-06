@@ -17,10 +17,9 @@ import type {
   DiscreteEvent,
   CouplingEntry,
   CouplingVariableMap,
-  Expr
+  Expr,
 } from './types.js'
-import { substitute, substituteInModel, substituteInReactionSystem } from './substitute.js'
-import { deriveODEs } from './reactions.js'
+import { substituteInModel } from './substitute.js'
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
 
 /**
@@ -29,7 +28,7 @@ import { isNumericLiteral, numericValue } from './numeric-literal.js'
 export class VariableInUseError extends Error {
   constructor(
     public variableName: string,
-    public references: string[]
+    public references: string[],
   ) {
     super(`Cannot remove variable "${variableName}": still referenced in ${references.join(', ')}`)
     this.name = 'VariableInUseError'
@@ -42,7 +41,7 @@ export class VariableInUseError extends Error {
 export class EntityNotFoundError extends Error {
   constructor(
     public entityType: string,
-    public entityName: string
+    public entityName: string,
   ) {
     super(`${entityType} "${entityName}" not found`)
     this.name = 'EntityNotFoundError'
@@ -60,17 +59,13 @@ export class EntityNotFoundError extends Error {
  * @param variable Variable definition
  * @returns New model with variable added
  */
-export function addVariable(
-  model: Model,
-  name: string,
-  variable: ModelVariable
-): Model {
+export function addVariable(model: Model, name: string, variable: ModelVariable): Model {
   return {
     ...model,
     variables: {
       ...model.variables,
-      [name]: variable
-    }
+      [name]: variable,
+    },
   }
 }
 
@@ -82,10 +77,7 @@ export function addVariable(
  * @throws VariableInUseError if variable is still referenced
  * @throws EntityNotFoundError if variable doesn't exist
  */
-export function removeVariable(
-  model: Model,
-  name: string
-): Model {
+export function removeVariable(model: Model, name: string): Model {
   if (!model.variables || !(name in model.variables)) {
     throw new EntityNotFoundError('Variable', name)
   }
@@ -125,7 +117,10 @@ export function removeVariable(
   if (model.discrete_events) {
     for (let i = 0; i < model.discrete_events.length; i++) {
       const event = model.discrete_events[i]
-      if (event.trigger?.type === 'condition' && referencesVariable(event.trigger.expression, name)) {
+      if (
+        event.trigger?.type === 'condition' &&
+        referencesVariable(event.trigger.expression, name)
+      ) {
         references.push(`discrete_event ${i} trigger`)
       }
       if (event.affects) {
@@ -142,10 +137,10 @@ export function removeVariable(
     throw new VariableInUseError(name, references)
   }
 
-  const { [name]: removed, ...remainingVariables } = model.variables
+  const { [name]: _removed, ...remainingVariables } = model.variables
   return {
     ...model,
-    variables: remainingVariables
+    variables: remainingVariables,
   }
 }
 
@@ -157,11 +152,7 @@ export function removeVariable(
  * @returns New model with variable renamed
  * @throws EntityNotFoundError if variable doesn't exist
  */
-export function renameVariable(
-  model: Model,
-  oldName: string,
-  newName: string
-): Model {
+export function renameVariable(model: Model, oldName: string, newName: string): Model {
   if (!model.variables || !(oldName in model.variables)) {
     throw new EntityNotFoundError('Variable', oldName)
   }
@@ -178,8 +169,8 @@ export function renameVariable(
     ...updatedModel,
     variables: {
       ...otherVariables,
-      [newName]: variable
-    }
+      [newName]: variable,
+    },
   }
 
   return updatedModel
@@ -195,14 +186,11 @@ export function renameVariable(
  * @param equation Equation to add
  * @returns New model with equation added
  */
-export function addEquation(
-  model: Model,
-  equation: Equation
-): Model {
+export function addEquation(model: Model, equation: Equation): Model {
   const equations = model.equations || []
   return {
     ...model,
-    equations: [...equations, equation]
+    equations: [...equations, equation],
   }
 }
 
@@ -213,10 +201,7 @@ export function addEquation(
  * @returns New model with equation removed
  * @throws EntityNotFoundError if equation not found
  */
-export function removeEquation(
-  model: Model,
-  indexOrLhs: number | Expr
-): Model {
+export function removeEquation(model: Model, indexOrLhs: number | Expr): Model {
   const equations = model.equations || []
 
   let indexToRemove: number
@@ -228,7 +213,7 @@ export function removeEquation(
     }
   } else {
     // Find equation by LHS
-    indexToRemove = equations.findIndex(eq => expressionsEqual(eq.lhs, indexOrLhs))
+    indexToRemove = equations.findIndex((eq) => expressionsEqual(eq.lhs, indexOrLhs))
     if (indexToRemove === -1) {
       throw new EntityNotFoundError('Equation', `with LHS ${JSON.stringify(indexOrLhs)}`)
     }
@@ -237,7 +222,7 @@ export function removeEquation(
   const newEquations = equations.filter((_, i) => i !== indexToRemove)
   return {
     ...model,
-    equations: newEquations
+    equations: newEquations,
   }
 }
 
@@ -247,10 +232,7 @@ export function removeEquation(
  * @param bindings Variable name to expression mappings
  * @returns New model with substitutions applied
  */
-export function substituteInEquations(
-  model: Model,
-  bindings: Record<string, Expr>
-): Model {
+export function substituteInEquations(model: Model, bindings: Record<string, Expr>): Model {
   return substituteInModel(model, bindings)
 }
 
@@ -264,13 +246,10 @@ export function substituteInEquations(
  * @param reaction Reaction to add
  * @returns New reaction system with reaction added
  */
-export function addReaction(
-  system: ReactionSystem,
-  reaction: Reaction
-): ReactionSystem {
+export function addReaction(system: ReactionSystem, reaction: Reaction): ReactionSystem {
   return {
     ...system,
-    reactions: [...system.reactions, reaction] as [Reaction, ...Reaction[]]
+    reactions: [...system.reactions, reaction] as [Reaction, ...Reaction[]],
   }
 }
 
@@ -281,23 +260,20 @@ export function addReaction(
  * @returns New reaction system with reaction removed
  * @throws EntityNotFoundError if reaction not found
  */
-export function removeReaction(
-  system: ReactionSystem,
-  id: string
-): ReactionSystem {
-  const reactionIndex = system.reactions.findIndex(r => r.id === id)
+export function removeReaction(system: ReactionSystem, id: string): ReactionSystem {
+  const reactionIndex = system.reactions.findIndex((r) => r.id === id)
   if (reactionIndex === -1) {
     throw new EntityNotFoundError('Reaction', id)
   }
 
-  const newReactions = system.reactions.filter(r => r.id !== id)
+  const newReactions = system.reactions.filter((r) => r.id !== id)
   if (newReactions.length === 0) {
     throw new Error('Cannot remove the last reaction from a reaction system')
   }
 
   return {
     ...system,
-    reactions: newReactions as [Reaction, ...Reaction[]]
+    reactions: newReactions as [Reaction, ...Reaction[]],
   }
 }
 
@@ -308,17 +284,13 @@ export function removeReaction(
  * @param species Species definition
  * @returns New reaction system with species added
  */
-export function addSpecies(
-  system: ReactionSystem,
-  name: string,
-  species: Species
-): ReactionSystem {
+export function addSpecies(system: ReactionSystem, name: string, species: Species): ReactionSystem {
   return {
     ...system,
     species: {
       ...system.species,
-      [name]: species
-    }
+      [name]: species,
+    },
   }
 }
 
@@ -330,10 +302,7 @@ export function addSpecies(
  * @throws VariableInUseError if species is still referenced in reactions
  * @throws EntityNotFoundError if species doesn't exist
  */
-export function removeSpecies(
-  system: ReactionSystem,
-  name: string
-): ReactionSystem {
+export function removeSpecies(system: ReactionSystem, name: string): ReactionSystem {
   if (!(name in system.species)) {
     throw new EntityNotFoundError('Species', name)
   }
@@ -372,10 +341,10 @@ export function removeSpecies(
     throw new VariableInUseError(name, references)
   }
 
-  const { [name]: removed, ...remainingSpecies } = system.species
+  const { [name]: _removed, ...remainingSpecies } = system.species
   return {
     ...system,
-    species: remainingSpecies
+    species: remainingSpecies,
   }
 }
 
@@ -389,14 +358,11 @@ export function removeSpecies(
  * @param event Continuous event to add
  * @returns New model with event added
  */
-export function addContinuousEvent(
-  model: Model,
-  event: ContinuousEvent
-): Model {
+export function addContinuousEvent(model: Model, event: ContinuousEvent): Model {
   const events = model.continuous_events || []
   return {
     ...model,
-    continuous_events: [...events, event]
+    continuous_events: [...events, event],
   }
 }
 
@@ -406,14 +372,11 @@ export function addContinuousEvent(
  * @param event Discrete event to add
  * @returns New model with event added
  */
-export function addDiscreteEvent(
-  model: Model,
-  event: DiscreteEvent
-): Model {
+export function addDiscreteEvent(model: Model, event: DiscreteEvent): Model {
   const events = model.discrete_events || []
   return {
     ...model,
-    discrete_events: [...events, event]
+    discrete_events: [...events, event],
   }
 }
 
@@ -424,27 +387,24 @@ export function addDiscreteEvent(
  * @returns New model with event removed
  * @throws EntityNotFoundError if event not found
  */
-export function removeEvent(
-  model: Model,
-  name: string
-): Model {
+export function removeEvent(model: Model, name: string): Model {
   let found = false
-  let updatedModel = { ...model }
+  const updatedModel = { ...model }
 
   // Try to remove from continuous events
   if (model.continuous_events) {
-    const index = model.continuous_events.findIndex(e => e.name === name)
+    const index = model.continuous_events.findIndex((e) => e.name === name)
     if (index !== -1) {
-      updatedModel.continuous_events = model.continuous_events.filter(e => e.name !== name)
+      updatedModel.continuous_events = model.continuous_events.filter((e) => e.name !== name)
       found = true
     }
   }
 
   // Try to remove from discrete events
   if (model.discrete_events && !found) {
-    const index = model.discrete_events.findIndex(e => e.name === name)
+    const index = model.discrete_events.findIndex((e) => e.name === name)
     if (index !== -1) {
-      updatedModel.discrete_events = model.discrete_events.filter(e => e.name !== name)
+      updatedModel.discrete_events = model.discrete_events.filter((e) => e.name !== name)
       found = true
     }
   }
@@ -466,14 +426,11 @@ export function removeEvent(
  * @param entry Coupling entry to add
  * @returns New ESM file with coupling added
  */
-export function addCoupling(
-  file: EsmFile,
-  entry: CouplingEntry
-): EsmFile {
+export function addCoupling(file: EsmFile, entry: CouplingEntry): EsmFile {
   const coupling = file.coupling || []
   return {
     ...file,
-    coupling: [...coupling, entry]
+    coupling: [...coupling, entry],
   }
 }
 
@@ -484,10 +441,7 @@ export function addCoupling(
  * @returns New ESM file with coupling removed
  * @throws EntityNotFoundError if index is out of bounds
  */
-export function removeCoupling(
-  file: EsmFile,
-  index: number
-): EsmFile {
+export function removeCoupling(file: EsmFile, index: number): EsmFile {
   const coupling = file.coupling || []
 
   if (index < 0 || index >= coupling.length) {
@@ -497,7 +451,7 @@ export function removeCoupling(
   const newCoupling = coupling.filter((_, i) => i !== index)
   return {
     ...file,
-    coupling: newCoupling.length > 0 ? newCoupling : undefined
+    coupling: newCoupling.length > 0 ? newCoupling : undefined,
   }
 }
 
@@ -508,14 +462,10 @@ export function removeCoupling(
  * @param b Second system name
  * @returns New ESM file with composition coupling added
  */
-export function compose(
-  file: EsmFile,
-  a: string,
-  b: string
-): EsmFile {
+export function compose(file: EsmFile, a: string, b: string): EsmFile {
   const coupling: CouplingEntry = {
     type: 'operator_compose',
-    systems: [a, b]
+    systems: [a, b],
   }
 
   return addCoupling(file, coupling)
@@ -535,13 +485,13 @@ export function mapVariable(
   file: EsmFile,
   from: string,
   to: string,
-  transform: CouplingVariableMap['transform'] = 'param_to_var'
+  transform: CouplingVariableMap['transform'] = 'param_to_var',
 ): EsmFile {
   const coupling: CouplingEntry = {
     type: 'variable_map',
     from,
     to,
-    transform
+    transform,
   }
 
   return addCoupling(file, coupling)
@@ -557,28 +507,22 @@ export function mapVariable(
  * @param fileB Second ESM file
  * @returns New ESM file with merged content
  */
-export function merge(
-  fileA: EsmFile,
-  fileB: EsmFile
-): EsmFile {
+export function merge(fileA: EsmFile, fileB: EsmFile): EsmFile {
   return {
     ...fileA,
     models: {
       ...fileA.models,
-      ...fileB.models
+      ...fileB.models,
     },
     reaction_systems: {
       ...fileA.reaction_systems,
-      ...fileB.reaction_systems
+      ...fileB.reaction_systems,
     },
     data_loaders: {
       ...fileA.data_loaders,
-      ...fileB.data_loaders
+      ...fileB.data_loaders,
     },
-    coupling: [
-      ...(fileA.coupling || []),
-      ...(fileB.coupling || [])
-    ]
+    coupling: [...(fileA.coupling || []), ...(fileB.coupling || [])],
   }
 }
 
@@ -589,13 +533,10 @@ export function merge(
  * @returns New ESM file containing only the specified component
  * @throws EntityNotFoundError if component not found
  */
-export function extract(
-  file: EsmFile,
-  componentName: string
-): EsmFile {
+export function extract(file: EsmFile, componentName: string): EsmFile {
   const extracted: EsmFile = {
     esm: file.esm,
-    metadata: file.metadata
+    metadata: file.metadata,
   }
 
   // Check models

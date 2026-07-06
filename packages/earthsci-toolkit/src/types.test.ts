@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  EsmFile,
-  Model,
-  Expr,
-  CouplingEntry,
-  DiscreteEventTrigger,
-  VERSION
-} from './index.js'
+import { EsmFile, Model, Expr, DiscreteEventTrigger, VERSION } from './index.js'
 
 describe('ESM Format Types', () => {
   it('should have correct package version', () => {
@@ -16,10 +9,10 @@ describe('ESM Format Types', () => {
   it('should handle Expr type correctly', () => {
     // Test that Expr can be number, string, or ExprNode
     const numberExpr: Expr = 42
-    const stringExpr: Expr = "temperature"
+    const stringExpr: Expr = 'temperature'
     const nodeExpr: Expr = {
-      op: "+",
-      args: [1, "x"]
+      op: '+',
+      args: [1, 'x'],
     }
 
     expect(typeof numberExpr).toBe('number')
@@ -30,18 +23,18 @@ describe('ESM Format Types', () => {
   it('should handle DiscreteEventTrigger discriminated union', () => {
     // Test different trigger types
     const conditionTrigger: DiscreteEventTrigger = {
-      type: "condition",
-      expression: "temperature > 100"
+      type: 'condition',
+      expression: 'temperature > 100',
     }
 
     const periodicTrigger: DiscreteEventTrigger = {
-      type: "periodic",
-      interval: 3600
+      type: 'periodic',
+      interval: 3600,
     }
 
     const presetTrigger: DiscreteEventTrigger = {
-      type: "preset_times",
-      times: [0, 3600, 7200]
+      type: 'preset_times',
+      times: [0, 3600, 7200],
     }
 
     expect(conditionTrigger.type).toBe('condition')
@@ -52,7 +45,7 @@ describe('ESM Format Types', () => {
   it('should handle basic Model structure', () => {
     const model: Partial<Model> = {
       variables: {},
-      equations: []
+      equations: [],
     }
 
     expect(typeof model.variables).toBe('object')
@@ -61,11 +54,11 @@ describe('ESM Format Types', () => {
 
   it('should handle EsmFile structure', () => {
     const esmFile: Partial<EsmFile> = {
-      esm: "0.1.0",
+      esm: '0.1.0',
       metadata: {
-        name: "Test Model",
-        authors: ["Test Author"]
-      }
+        name: 'Test Model',
+        authors: ['Test Author'],
+      },
     }
 
     expect(esmFile.esm).toBe('0.1.0')

@@ -9,15 +9,15 @@ import { join } from 'path'
 
 // Load test fixtures
 const chemicalSubscriptsFixtures = JSON.parse(
-  readFileSync(join(process.cwd(), '../../tests/display/chemical_subscripts.json'), 'utf8')
+  readFileSync(join(process.cwd(), '../../tests/display/chemical_subscripts.json'), 'utf8'),
 )
 
 const comprehensiveOperatorsFixtures = JSON.parse(
-  readFileSync(join(process.cwd(), '../../tests/display/comprehensive_operators.json'), 'utf8')
+  readFileSync(join(process.cwd(), '../../tests/display/comprehensive_operators.json'), 'utf8'),
 )
 
 describe('Chemical Subscripts', () => {
-  chemicalSubscriptsFixtures.forEach((fixture: any, index: number) => {
+  chemicalSubscriptsFixtures.forEach((fixture: any) => {
     it(`should format ${fixture.input} correctly (${fixture.reasoning})`, () => {
       // Test string inputs (chemical species)
       expect(toUnicode(fixture.input)).toBe(fixture.unicode)
@@ -32,7 +32,7 @@ describe('Chemical Subscripts', () => {
 describe('Expression Operators', () => {
   comprehensiveOperatorsFixtures.forEach((group: any) => {
     describe(group.name, () => {
-      group.tests.forEach((test: any, index: number) => {
+      group.tests.forEach((test: any) => {
         it(`should format ${JSON.stringify(test.input)} correctly`, () => {
           const input = test.input
 
@@ -150,8 +150,20 @@ describe('MathML formatting', () => {
   })
 
   it('should format complex expressions correctly', () => {
-    const expr = { op: 'sqrt', args: [{ op: '+', args: [{ op: '^', args: ['x', 2] }, { op: '^', args: ['y', 2] }] }] }
-    const expected = '<msqrt><mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msup><mi>y</mi><mn>2</mn></msup></mrow></msqrt>'
+    const expr = {
+      op: 'sqrt',
+      args: [
+        {
+          op: '+',
+          args: [
+            { op: '^', args: ['x', 2] },
+            { op: '^', args: ['y', 2] },
+          ],
+        },
+      ],
+    }
+    const expected =
+      '<msqrt><mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msup><mi>y</mi><mn>2</mn></msup></mrow></msqrt>'
     expect(toMathML(expr)).toBe(expected)
   })
 

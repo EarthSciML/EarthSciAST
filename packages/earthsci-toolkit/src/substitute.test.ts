@@ -3,8 +3,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { substitute, substituteInModel, substituteInReactionSystem, type SubstitutionContext } from './substitute.js'
-import type { Expr, Model, ReactionSystem, EsmFile } from './types.js'
+import {
+  substitute,
+  substituteInModel,
+  substituteInReactionSystem,
+  type SubstitutionContext,
+} from './substitute.js'
+import type { Expr, Model, ReactionSystem, EsmFile, Reaction } from './types.js'
 
 describe('substitute', () => {
   it('handles number literals unchanged', () => {
@@ -34,24 +39,34 @@ describe('substitute', () => {
   it('handles nested function calls', () => {
     const expr: Expr = {
       op: 'exp',
-      args: [{
-        op: '/',
-        args: [{
-          op: '*',
-          args: [-1370, 'T']
-        }, 'R']
-      }]
+      args: [
+        {
+          op: '/',
+          args: [
+            {
+              op: '*',
+              args: [-1370, 'T'],
+            },
+            'R',
+          ],
+        },
+      ],
     }
     const bindings = { T: 298.15, R: 8.314 }
     const expected: Expr = {
       op: 'exp',
-      args: [{
-        op: '/',
-        args: [{
-          op: '*',
-          args: [-1370, 298.15]
-        }, 8.314]
-      }]
+      args: [
+        {
+          op: '/',
+          args: [
+            {
+              op: '*',
+              args: [-1370, 298.15],
+            },
+            8.314,
+          ],
+        },
+      ],
     }
     expect(substitute(expr, bindings)).toEqual(expected)
   })
@@ -61,16 +76,16 @@ describe('substitute', () => {
       op: '+',
       args: [
         { op: '*', args: ['A', { op: 'sin', args: [{ op: '*', args: ['omega', 't'] }] }] },
-        { op: '*', args: ['A', { op: 'cos', args: [{ op: '*', args: ['omega', 't'] }] }] }
-      ]
+        { op: '*', args: ['A', { op: 'cos', args: [{ op: '*', args: ['omega', 't'] }] }] },
+      ],
     }
     const bindings = { A: 2.5, omega: 1.5 }
     const expected: Expr = {
       op: '+',
       args: [
         { op: '*', args: [2.5, { op: 'sin', args: [{ op: '*', args: [1.5, 't'] }] }] },
-        { op: '*', args: [2.5, { op: 'cos', args: [{ op: '*', args: [1.5, 't'] }] }] }
-      ]
+        { op: '*', args: [2.5, { op: 'cos', args: [{ op: '*', args: [1.5, 't'] }] }] },
+      ],
     }
     expect(substitute(expr, bindings)).toEqual(expected)
   })
@@ -79,13 +94,13 @@ describe('substitute', () => {
     const expr: Expr = {
       op: 'D',
       args: [{ op: '*', args: ['k', 'concentration'] }],
-      wrt: 't'
+      wrt: 't',
     }
     const bindings = { k: 0.1, concentration: 'C_species' }
     const expected: Expr = {
       op: 'D',
       args: [{ op: '*', args: [0.1, 'C_species'] }],
-      wrt: 't'
+      wrt: 't',
     }
     expect(substitute(expr, bindings)).toEqual(expected)
   })
@@ -96,8 +111,8 @@ describe('substitute', () => {
       args: [
         { op: '>', args: [{ op: '*', args: ['x', 'scale'] }, 'threshold'] },
         { op: '*', args: ['x', 'amplification'] },
-        { op: '/', args: ['x', 'damping'] }
-      ]
+        { op: '/', args: ['x', 'damping'] },
+      ],
     }
     const bindings = { scale: 2.0, threshold: 10.0, amplification: 1.5, damping: 0.8 }
     const expected: Expr = {
@@ -105,8 +120,8 @@ describe('substitute', () => {
       args: [
         { op: '>', args: [{ op: '*', args: ['x', 2.0] }, 10.0] },
         { op: '*', args: ['x', 1.5] },
-        { op: '/', args: ['x', 0.8] }
-      ]
+        { op: '/', args: ['x', 0.8] },
+      ],
     }
     expect(substitute(expr, bindings)).toEqual(expected)
   })
@@ -116,20 +131,17 @@ describe('substitute', () => {
       op: '+',
       args: [
         'SuperFast.GasPhase.O3',
-        { op: '*', args: ['SuperFast.k_NO_O3', 'SuperFast.GasPhase.NO'] }
-      ]
+        { op: '*', args: ['SuperFast.k_NO_O3', 'SuperFast.GasPhase.NO'] },
+      ],
     }
     const bindings = {
       'SuperFast.GasPhase.O3': 1.0e-8,
       'SuperFast.k_NO_O3': 1.8e-12,
-      'SuperFast.GasPhase.NO': 1.0e-10
+      'SuperFast.GasPhase.NO': 1.0e-10,
     }
     const expected: Expr = {
       op: '+',
-      args: [
-        1.0e-8,
-        { op: '*', args: [1.8e-12, 1.0e-10] }
-      ]
+      args: [1.0e-8, { op: '*', args: [1.8e-12, 1.0e-10] }],
     }
     expect(substitute(expr, bindings)).toEqual(expected)
   })
@@ -141,15 +153,15 @@ describe('substitute', () => {
     const expr: Expr = {
       op: '+',
       args: [
-        'SuperFast.GasPhase.O3',  // This scoped reference won't be found
-        'k_NO_O3'                 // This direct reference will be found
-      ]
+        'SuperFast.GasPhase.O3', // This scoped reference won't be found
+        'k_NO_O3', // This direct reference will be found
+      ],
     }
 
     // Bindings contain only local variable names (as they would appear within a system)
     const bindings = {
-      O3: 1.0e-8,        // Local variable name within GasPhase subsystem
-      k_NO_O3: 1.8e-12   // Variable name within SuperFast system
+      O3: 1.0e-8, // Local variable name within GasPhase subsystem
+      k_NO_O3: 1.8e-12, // Variable name within SuperFast system
     }
 
     const result = substitute(expr, bindings)
@@ -159,9 +171,9 @@ describe('substitute', () => {
     expect(result).toEqual({
       op: '+',
       args: [
-        'SuperFast.GasPhase.O3',  // Unchanged - not resolved
-        1.8e-12                   // Resolved from direct binding
-      ]
+        'SuperFast.GasPhase.O3', // Unchanged - not resolved
+        1.8e-12, // Resolved from direct binding
+      ],
     })
   })
 
@@ -173,20 +185,20 @@ describe('substitute', () => {
       models: {
         SuperFast: {
           variables: {
-            k_NO_O3: { type: 'parameter', default: 1.8e-12 }
+            k_NO_O3: { type: 'parameter', default: 1.8e-12 },
           },
           equations: [],
           subsystems: {
             GasPhase: {
               variables: {
                 O3: { type: 'state', default: 1.0e-8 },
-                NO: { type: 'state', default: 1.0e-10 }
+                NO: { type: 'state', default: 1.0e-10 },
               },
-              equations: []
-            }
-          }
-        }
-      }
+              equations: [],
+            },
+          },
+        },
+      },
     }
 
     const context: SubstitutionContext = { esmFile }
@@ -194,9 +206,9 @@ describe('substitute', () => {
     const expr: Expr = {
       op: '+',
       args: [
-        'SuperFast.GasPhase.O3',           // Should resolve to 1.0e-8
-        { op: '*', args: ['SuperFast.k_NO_O3', 'SuperFast.GasPhase.NO'] }  // Should resolve to 1.8e-12 * 1.0e-10
-      ]
+        'SuperFast.GasPhase.O3', // Should resolve to 1.0e-8
+        { op: '*', args: ['SuperFast.k_NO_O3', 'SuperFast.GasPhase.NO'] }, // Should resolve to 1.8e-12 * 1.0e-10
+      ],
     }
 
     const bindings = {} // No direct bindings needed - using scoped resolution
@@ -205,10 +217,7 @@ describe('substitute', () => {
 
     const expected: Expr = {
       op: '+',
-      args: [
-        1.0e-8,
-        { op: '*', args: [1.8e-12, 1.0e-10] }
-      ]
+      args: [1.0e-8, { op: '*', args: [1.8e-12, 1.0e-10] }],
     }
 
     expect(result).toEqual(expected)
@@ -222,39 +231,38 @@ describe('substitute', () => {
         SimpleOzone: {
           species: {
             O3: { default: 40e-9 },
-            NO: { default: 0.1e-9 }
+            NO: { default: 0.1e-9 },
           },
           parameters: {
-            T: { default: 298.15 }
+            T: { default: 298.15 },
           },
           reactions: [
+            // Off-schema empty substrate/product lists (the schema requires
+            // null or a non-empty list); irrelevant to the scoped-reference
+            // lookup under test, so keep the fixture as-is via a cast.
             {
               id: 'R1',
               substrates: [],
               products: [],
-              rate: 1.0
-            }
-          ]
-        }
-      }
+              rate: 1.0,
+            } as unknown as Reaction,
+          ],
+        },
+      },
     }
 
     const context: SubstitutionContext = { esmFile }
 
     const expr: Expr = {
       op: 'exp',
-      args: [
-        { op: '/', args: [-1370, 'SimpleOzone.T'] }
-      ]
+      args: [{ op: '/', args: [-1370, 'SimpleOzone.T'] }],
     }
 
     const result = substitute(expr, {}, context)
 
     const expected: Expr = {
       op: 'exp',
-      args: [
-        { op: '/', args: [-1370, 298.15] }
-      ]
+      args: [{ op: '/', args: [-1370, 298.15] }],
     }
 
     expect(result).toEqual(expected)
@@ -268,21 +276,21 @@ describe('substitute', () => {
         GEOSFP: {
           kind: 'grid',
           source: {
-            url_template: 's3://geosfp/{date:%Y/%m/%d}/GEOSFP.{date:%Y%m%d}.A1.05x0625.nc4'
+            url_template: 's3://geosfp/{date:%Y/%m/%d}/GEOSFP.{date:%Y%m%d}.A1.05x0625.nc4',
           },
           variables: {
             T: { file_variable: 'T', units: 'K', description: 'Temperature' },
-            u: { file_variable: 'U', units: 'm/s', description: 'Eastward wind' }
-          }
-        }
-      }
+            u: { file_variable: 'U', units: 'm/s', description: 'Eastward wind' },
+          },
+        },
+      },
     }
 
     const context: SubstitutionContext = { esmFile }
 
     const expr: Expr = {
       op: '*',
-      args: ['GEOSFP.T', 'scale_factor']
+      args: ['GEOSFP.T', 'scale_factor'],
     }
 
     const bindings = { scale_factor: 1.1 }
@@ -292,7 +300,7 @@ describe('substitute', () => {
     // For data loaders, the reference should remain as is since they don't have default values
     const expected: Expr = {
       op: '*',
-      args: ['GEOSFP.T', 1.1]
+      args: ['GEOSFP.T', 1.1],
     }
 
     expect(result).toEqual(expected)
@@ -304,11 +312,9 @@ describe('substituteInModel', () => {
     const model: Model = {
       variables: {
         x: { type: 'state', units: 'm' },
-        k: { type: 'parameter', default: 1.0 }
+        k: { type: 'parameter', default: 1.0 },
       },
-      equations: [
-        { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } }
-      ]
+      equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } }],
     }
     const bindings = { k: 2.5 }
     const result = substituteInModel(model, bindings)
@@ -321,9 +327,9 @@ describe('substituteInModel', () => {
     const model: Model = {
       variables: {
         x: { type: 'state' },
-        y: { type: 'observed', expression: { op: '*', args: ['k', 'x'] } }
+        y: { type: 'observed', expression: { op: '*', args: ['k', 'x'] } },
       },
-      equations: []
+      equations: [],
     }
     const bindings = { k: 2.0 }
     const result = substituteInModel(model, bindings)
@@ -337,19 +343,19 @@ describe('substituteInReactionSystem', () => {
     const system: ReactionSystem = {
       species: {
         A: { units: 'mol/L' },
-        B: { units: 'mol/L' }
+        B: { units: 'mol/L' },
       },
       parameters: {
-        k: { default: 1.0, units: '1/s' }
+        k: { default: 1.0, units: '1/s' },
       },
       reactions: [
         {
           id: 'R1',
           substrates: [{ species: 'A', stoichiometry: 1 }],
           products: [{ species: 'B', stoichiometry: 1 }],
-          rate: { op: '*', args: ['k', 'A'] }
-        }
-      ]
+          rate: { op: '*', args: ['k', 'A'] },
+        },
+      ],
     }
     const bindings = { k: 1.5 }
     const result = substituteInReactionSystem(system, bindings)
@@ -361,12 +367,8 @@ describe('substituteInReactionSystem', () => {
     const system: ReactionSystem = {
       species: { A: { units: 'mol/L' } },
       parameters: { k: { default: 1.0 } },
-      reactions: [
-        { id: 'R1', substrates: null, products: null, rate: 1.0 }
-      ],
-      constraint_equations: [
-        { lhs: 'total', rhs: { op: '*', args: ['k', 'A'] } }
-      ]
+      reactions: [{ id: 'R1', substrates: null, products: null, rate: 1.0 }],
+      constraint_equations: [{ lhs: 'total', rhs: { op: '*', args: ['k', 'A'] } }],
     }
     const bindings = { k: 2.0 }
     const result = substituteInReactionSystem(system, bindings)

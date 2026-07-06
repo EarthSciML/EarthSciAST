@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { validateSchema, load, SchemaValidationError, ParseError } from './index.js'
+import type { Model } from './types.js'
 
 describe('Schema Edge Cases', () => {
   describe('anyOf constraint: models OR reaction_systems required', () => {
     it('should fail when neither models nor reaction_systems are present', () => {
       const invalid = {
-        esm: "0.1.0",
-        metadata: { name: "test" }
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         // Missing both models AND reaction_systems
       }
 
@@ -19,14 +20,14 @@ describe('Schema Edge Cases', () => {
 
     it('should pass with only models', () => {
       const withModels = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test_model": {
+          test_model: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(withModels)
@@ -34,22 +35,20 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using load()
       const result = load(withModels)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should pass with only reaction_systems', () => {
       const withReactionSystems = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         reaction_systems: {
-          "test_rs": {
+          test_rs: {
             species: {},
             parameters: {},
-            reactions: [
-              { id: "R1", substrates: null, products: null, rate: 1.0 }
-            ]
-          }
-        }
+            reactions: [{ id: 'R1', substrates: null, products: null, rate: 1.0 }],
+          },
+        },
       }
 
       const errors = validateSchema(withReactionSystems)
@@ -57,24 +56,24 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using load()
       const result = load(withReactionSystems)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should pass with only data_loaders (loader-only file)', () => {
       // RFC pure-io-data-loaders §4.3: a document whose sole component is
       // `data_loaders` (no models, no reaction_systems) is valid and must load.
       const loaderOnly = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         data_loaders: {
-          "weather": {
-            kind: "grid",
-            source: { url_template: "/data/weather_{date:%Y%m%d}.nc" },
+          weather: {
+            kind: 'grid',
+            source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
             variables: {
-              "temp": { file_variable: "T2", units: "K", description: "Temperature" }
-            }
-          }
-        }
+              temp: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+            },
+          },
+        },
       }
 
       const errors = validateSchema(loaderOnly)
@@ -82,29 +81,27 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using load()
       const result = load(loaderOnly)
-      expect(result.esm).toBe("0.1.0")
-      expect(result.data_loaders?.["weather"]?.kind).toBe("grid")
+      expect(result.esm).toBe('0.1.0')
+      expect(result.data_loaders?.['weather']?.kind).toBe('grid')
     })
 
     it('should pass with both models and reaction_systems', () => {
       const withBoth = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test_model": {
+          test_model: {
             variables: {},
-            equations: []
-          }
+            equations: [],
+          },
         },
         reaction_systems: {
-          "test_rs": {
+          test_rs: {
             species: {},
             parameters: {},
-            reactions: [
-              { id: "R1", substrates: null, products: null, rate: 1.0 }
-            ]
-          }
-        }
+            reactions: [{ id: 'R1', substrates: null, products: null, rate: 1.0 }],
+          },
+        },
       }
 
       const errors = validateSchema(withBoth)
@@ -112,35 +109,35 @@ describe('Schema Edge Cases', () => {
 
       // Should not throw when using load()
       const result = load(withBoth)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
   })
 
   describe('deeply nested expression trees', () => {
     it('should handle deeply nested expressions', () => {
       // Create a deeply nested binary expression tree: ((((a+b)+c)+d)+e)
-      let deepExpression: any = "a"
+      let deepExpression: any = 'a'
       for (let i = 0; i < 50; i++) {
         deepExpression = {
-          op: "+",
-          args: [deepExpression, `var_${i}`]
+          op: '+',
+          args: [deepExpression, `var_${i}`],
         }
       }
 
       const validDeepNested = {
-        esm: "0.1.0",
-        metadata: { name: "deep_test" },
+        esm: '0.1.0',
+        metadata: { name: 'deep_test' },
         models: {
-          "deep_model": {
+          deep_model: {
             variables: {
-              "deep_observed": {
-                type: "observed",
-                expression: deepExpression
-              }
+              deep_observed: {
+                type: 'observed',
+                expression: deepExpression,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validDeepNested)
@@ -148,57 +145,57 @@ describe('Schema Edge Cases', () => {
 
       // Should also work with load()
       const result = load(validDeepNested)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should handle nested expression with multiple operators', () => {
       const complexExpression = {
-        op: "*",
+        op: '*',
         args: [
           {
-            op: "+",
+            op: '+',
             args: [
               {
-                op: "sin",
-                args: ["x"]
+                op: 'sin',
+                args: ['x'],
               },
               {
-                op: "exp",
+                op: 'exp',
                 args: [
                   {
-                    op: "/",
-                    args: ["y", 2.0]
-                  }
-                ]
-              }
-            ]
+                    op: '/',
+                    args: ['y', 2.0],
+                  },
+                ],
+              },
+            ],
           },
           {
-            op: "sqrt",
+            op: 'sqrt',
             args: [
               {
-                op: "abs",
-                args: ["z"]
-              }
-            ]
-          }
-        ]
+                op: 'abs',
+                args: ['z'],
+              },
+            ],
+          },
+        ],
       }
 
       const validComplexNested = {
-        esm: "0.1.0",
-        metadata: { name: "complex_test" },
+        esm: '0.1.0',
+        metadata: { name: 'complex_test' },
         models: {
-          "complex_model": {
+          complex_model: {
             variables: {
-              "complex_observed": {
-                type: "observed",
-                expression: complexExpression
-              }
+              complex_observed: {
+                type: 'observed',
+                expression: complexExpression,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validComplexNested)
@@ -211,32 +208,32 @@ describe('Schema Edge Cases', () => {
       // An unknown identifier op is a legal rewrite-target string at schema time
       // — the typo-catch moved to the `unlowered_operator` evaluation gate.
       const openOp = {
-        esm: "0.1.0",
-        metadata: { name: "open_op_test" },
+        esm: '0.1.0',
+        metadata: { name: 'open_op_test' },
         models: {
-          "m": {
+          m: {
             variables: {
-              "obs": {
-                type: "observed",
-                units: "1",
-                expression: { op: "godunov_hamiltonian", args: ["x", "y"] }
-              }
+              obs: {
+                type: 'observed',
+                units: '1',
+                expression: { op: 'godunov_hamiltonian', args: ['x', 'y'] },
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(openOp)
       // No enum keyword any more, and the well-formed op passes validation.
-      expect(errors.find(error => error.keyword === 'enum')).toBeUndefined()
+      expect(errors.find((error) => error.keyword === 'enum')).toBeUndefined()
       expect(errors).toEqual([])
       // Loading is permissive — the open-tier op survives to (deferred) evaluation.
       expect(() => load(openOp)).not.toThrow()
 
       // A MALFORMED op string (violates the op `pattern`) is still rejected.
       const malformed = JSON.parse(JSON.stringify(openOp))
-      malformed.models.m.variables.obs.expression.op = "9 bad op!"
+      malformed.models.m.variables.obs.expression.op = '9 bad op!'
       expect(validateSchema(malformed).length).toBeGreaterThan(0)
     })
   })
@@ -244,83 +241,87 @@ describe('Schema Edge Cases', () => {
   describe('scientific notation and extreme numbers', () => {
     it('should handle very large numbers in scientific notation', () => {
       const validLargeNumbers = {
-        esm: "0.1.0",
-        metadata: { name: "large_numbers_test" },
+        esm: '0.1.0',
+        metadata: { name: 'large_numbers_test' },
         models: {
-          "large_model": {
+          large_model: {
             variables: {
-              "large_param": {
-                type: "parameter",
-                default: 1.23e50
+              large_param: {
+                type: 'parameter',
+                default: 1.23e50,
               },
-              "very_small_param": {
-                type: "parameter",
-                default: 1.23e-50
+              very_small_param: {
+                type: 'parameter',
+                default: 1.23e-50,
               },
-              "avogadro": {
-                type: "parameter",
-                default: 6.022140857e23
-              }
+              avogadro: {
+                type: 'parameter',
+                default: 6.022140857e23,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validLargeNumbers)
       expect(errors).toEqual([])
 
       const result = load(validLargeNumbers)
-      expect(result.models?.["large_model"].variables?.["avogadro"]?.default).toBe(6.022140857e23)
+      expect((result.models?.['large_model'] as Model).variables?.['avogadro']?.default).toBe(
+        6.022140857e23,
+      )
     })
 
     it('should handle edge case numeric values', () => {
       const edgeCaseNumbers = {
-        esm: "0.1.0",
-        metadata: { name: "edge_numbers_test" },
+        esm: '0.1.0',
+        metadata: { name: 'edge_numbers_test' },
         models: {
-          "edge_model": {
+          edge_model: {
             variables: {
-              "zero": { type: "parameter", default: 0 },
-              "negative_zero": { type: "parameter", default: -0 },
-              "positive_infinity": { type: "parameter", default: Number.POSITIVE_INFINITY },
-              "negative_infinity": { type: "parameter", default: Number.NEGATIVE_INFINITY },
-              "max_safe_integer": { type: "parameter", default: Number.MAX_SAFE_INTEGER },
-              "min_safe_integer": { type: "parameter", default: Number.MIN_SAFE_INTEGER },
-              "epsilon": { type: "parameter", default: Number.EPSILON }
+              zero: { type: 'parameter', default: 0 },
+              negative_zero: { type: 'parameter', default: -0 },
+              positive_infinity: { type: 'parameter', default: Number.POSITIVE_INFINITY },
+              negative_infinity: { type: 'parameter', default: Number.NEGATIVE_INFINITY },
+              max_safe_integer: { type: 'parameter', default: Number.MAX_SAFE_INTEGER },
+              min_safe_integer: { type: 'parameter', default: Number.MIN_SAFE_INTEGER },
+              epsilon: { type: 'parameter', default: Number.EPSILON },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(edgeCaseNumbers)
       expect(errors).toEqual([])
 
       const result = load(edgeCaseNumbers)
-      expect(result.models?.["edge_model"].variables?.["max_safe_integer"]?.default).toBe(Number.MAX_SAFE_INTEGER)
+      expect(
+        (result.models?.['edge_model'] as Model).variables?.['max_safe_integer']?.default,
+      ).toBe(Number.MAX_SAFE_INTEGER)
     })
 
     it('should handle numeric expressions with extreme values', () => {
       const extremeExpression = {
-        op: "*",
-        args: [1e100, 1e-100]
+        op: '*',
+        args: [1e100, 1e-100],
       }
 
       const validExtremeExpr = {
-        esm: "0.1.0",
-        metadata: { name: "extreme_expr_test" },
+        esm: '0.1.0',
+        metadata: { name: 'extreme_expr_test' },
         models: {
-          "extreme_model": {
+          extreme_model: {
             variables: {
-              "extreme_observed": {
-                type: "observed",
-                expression: extremeExpression
-              }
+              extreme_observed: {
+                type: 'observed',
+                expression: extremeExpression,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validExtremeExpr)
@@ -331,108 +332,110 @@ describe('Schema Edge Cases', () => {
   describe('unicode characters in variable names', () => {
     it('should allow unicode characters in variable names', () => {
       const unicodeVariables = {
-        esm: "0.1.0",
-        metadata: { name: "unicode_test" },
+        esm: '0.1.0',
+        metadata: { name: 'unicode_test' },
         models: {
-          "unicode_model": {
+          unicode_model: {
             variables: {
-              "température": { type: "parameter", default: 298.15, units: "K" },
-              "концентрация": { type: "state", units: "mol/L" },
-              "压力": { type: "parameter", default: 101325, units: "Pa" },
-              "ρ_air": { type: "parameter", default: 1.225, units: "kg/m³" },
-              "Δt": { type: "parameter", default: 0.01, units: "s" },
-              "α_mixing": { type: "parameter", default: 1.0 },
-              "β₁": { type: "parameter", default: 0.5 },
-              "γ²": { type: "parameter", default: 2.0 }
+              température: { type: 'parameter', default: 298.15, units: 'K' },
+              концентрация: { type: 'state', units: 'mol/L' },
+              压力: { type: 'parameter', default: 101325, units: 'Pa' },
+              ρ_air: { type: 'parameter', default: 1.225, units: 'kg/m³' },
+              Δt: { type: 'parameter', default: 0.01, units: 's' },
+              α_mixing: { type: 'parameter', default: 1.0 },
+              'β₁': { type: 'parameter', default: 0.5 },
+              'γ²': { type: 'parameter', default: 2.0 },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(unicodeVariables)
       expect(errors).toEqual([])
 
       const result = load(unicodeVariables)
-      expect(result.models?.["unicode_model"].variables?.["température"]?.default).toBe(298.15)
-      expect(result.models?.["unicode_model"].variables?.["β₁"]?.default).toBe(0.5)
+      expect((result.models?.['unicode_model'] as Model).variables?.['température']?.default).toBe(
+        298.15,
+      )
+      expect((result.models?.['unicode_model'] as Model).variables?.['β₁']?.default).toBe(0.5)
     })
 
     it('should allow unicode characters in reaction species names', () => {
       const unicodeReaction = {
-        esm: "0.1.0",
-        metadata: { name: "unicode_reaction_test" },
+        esm: '0.1.0',
+        metadata: { name: 'unicode_reaction_test' },
         reaction_systems: {
-          "unicode_rs": {
+          unicode_rs: {
             species: {
-              "CO₂": { units: "mol/L", default: 0.0 },
-              "H₂O": { units: "mol/L", default: 55.6 },
-              "•OH": { units: "mol/L", default: 1e-12 },
-              "NO₃⁻": { units: "mol/L", default: 0.0 }
+              'CO₂': { units: 'mol/L', default: 0.0 },
+              'H₂O': { units: 'mol/L', default: 55.6 },
+              '•OH': { units: 'mol/L', default: 1e-12 },
+              'NO₃⁻': { units: 'mol/L', default: 0.0 },
             },
             parameters: {
-              "k₁": { default: 1e-9, units: "L/(mol·s)" }
+              'k₁': { default: 1e-9, units: 'L/(mol·s)' },
             },
             reactions: [
               {
-                id: "R1",
-                substrates: [{ species: "CO₂", stoichiometry: 1 }],
-                products: [{ species: "H₂O", stoichiometry: 1 }],
-                rate: "k₁"
-              }
-            ]
-          }
-        }
+                id: 'R1',
+                substrates: [{ species: 'CO₂', stoichiometry: 1 }],
+                products: [{ species: 'H₂O', stoichiometry: 1 }],
+                rate: 'k₁',
+              },
+            ],
+          },
+        },
       }
 
       const errors = validateSchema(unicodeReaction)
       expect(errors).toEqual([])
 
       const result = load(unicodeReaction)
-      expect(result.reaction_systems?.["unicode_rs"].species?.["CO₂"]?.default).toBe(0.0)
+      expect(result.reaction_systems?.['unicode_rs'].species?.['CO₂']?.default).toBe(0.0)
     })
 
     it('should allow unicode in metadata and descriptions', () => {
       const unicodeMetadata = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "test_模型",
-          description: "这是一个测试模型 with émissions atmosphériques",
-          authors: ["José María González", "李小明", "Владимир Петров"],
-          tags: ["大气化学", "émissions", "климат"]
+          name: 'test_模型',
+          description: '这是一个测试模型 with émissions atmosphériques',
+          authors: ['José María González', '李小明', 'Владимир Петров'],
+          tags: ['大气化学', 'émissions', 'климат'],
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(unicodeMetadata)
       expect(errors).toEqual([])
 
       const result = load(unicodeMetadata)
-      expect(result.metadata.description).toContain("émissions")
-      expect(result.metadata.authors?.[1]).toBe("李小明")
+      expect(result.metadata.description).toContain('émissions')
+      expect(result.metadata.authors?.[1]).toBe('李小明')
     })
   })
 
   describe('empty and null field handling', () => {
     it('should handle empty objects and arrays', () => {
       const emptyFields = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "empty_test",
+          name: 'empty_test',
           authors: [], // Empty array should be valid
-          tags: []
+          tags: [],
         },
         models: {
-          "empty_model": {
+          empty_model: {
             variables: {}, // Empty object should be valid
-            equations: [] // Empty array should be valid
-          }
-        }
+            equations: [], // Empty array should be valid
+          },
+        },
       }
 
       const errors = validateSchema(emptyFields)
@@ -440,81 +443,81 @@ describe('Schema Edge Cases', () => {
 
       const result = load(emptyFields)
       expect(result.metadata.authors).toEqual([])
-      expect(result.models?.["empty_model"].equations).toEqual([])
+      expect((result.models?.['empty_model'] as Model).equations).toEqual([])
     })
 
     it('should handle null values where allowed', () => {
       const nullFields = {
-        esm: "0.1.0",
-        metadata: { name: "null_test" },
+        esm: '0.1.0',
+        metadata: { name: 'null_test' },
         reaction_systems: {
-          "null_rs": {
-            species: { "X": {} },
-            parameters: { "k": { default: 1.0 } },
+          null_rs: {
+            species: { X: {} },
+            parameters: { k: { default: 1.0 } },
             reactions: [
               {
-                id: "R1",
+                id: 'R1',
                 substrates: null, // Source reaction: ∅ → X
-                products: [{ species: "X", stoichiometry: 1 }],
-                rate: "k"
+                products: [{ species: 'X', stoichiometry: 1 }],
+                rate: 'k',
               },
               {
-                id: "R2",
-                substrates: [{ species: "X", stoichiometry: 1 }],
+                id: 'R2',
+                substrates: [{ species: 'X', stoichiometry: 1 }],
                 products: null, // Sink reaction: X → ∅
-                rate: "k"
-              }
-            ]
-          }
-        }
+                rate: 'k',
+              },
+            ],
+          },
+        },
       }
 
       const errors = validateSchema(nullFields)
       expect(errors).toEqual([])
 
       const result = load(nullFields)
-      expect(result.reaction_systems?.["null_rs"].reactions[0].substrates).toBeNull()
-      expect(result.reaction_systems?.["null_rs"].reactions[1].products).toBeNull()
+      expect(result.reaction_systems?.['null_rs'].reactions[0].substrates).toBeNull()
+      expect(result.reaction_systems?.['null_rs'].reactions[1].products).toBeNull()
     })
 
     it('should handle nullable coupletype fields', () => {
       const nullCoupletype = {
-        esm: "0.1.0",
-        metadata: { name: "null_coupletype_test" },
+        esm: '0.1.0',
+        metadata: { name: 'null_coupletype_test' },
         models: {
-          "test_model": {
+          test_model: {
             coupletype: null, // Should be allowed
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(nullCoupletype)
       expect(errors).toEqual([])
 
       const result = load(nullCoupletype)
-      expect(result.models?.["test_model"].coupletype).toBeNull()
+      expect((result.models?.['test_model'] as Model).coupletype).toBeNull()
     })
 
     it('should fail when required fields are null', () => {
       const invalidNull = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: { name: null }, // name is required, cannot be null
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(invalidNull)
       expect(errors.length).toBeGreaterThan(0)
 
       // Should find a type error for name field
-      const typeError = errors.find(error =>
-        error.path.includes('name') && error.keyword === 'type'
+      const typeError = errors.find(
+        (error) => error.path.includes('name') && error.keyword === 'type',
       )
       expect(typeError).toBeDefined()
 
@@ -525,24 +528,22 @@ describe('Schema Edge Cases', () => {
   describe('additional properties validation', () => {
     it('should fail with additional properties at root level', () => {
       const extraProps = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
+            equations: [],
+          },
         },
-        unexpected_field: "should not be allowed" // This violates additionalProperties: false
+        unexpected_field: 'should not be allowed', // This violates additionalProperties: false
       }
 
       const errors = validateSchema(extraProps)
       expect(errors.length).toBeGreaterThan(0)
 
       // Should find additionalProperties error
-      const additionalPropsError = errors.find(error =>
-        error.keyword === 'additionalProperties'
-      )
+      const additionalPropsError = errors.find((error) => error.keyword === 'additionalProperties')
       expect(additionalPropsError).toBeDefined()
 
       expect(() => load(extraProps)).toThrow(SchemaValidationError)
@@ -550,24 +551,24 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with additional properties in metadata', () => {
       const extraMetadata = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "test",
-          unknown_metadata: "not allowed" // additionalProperties: false in Metadata
+          name: 'test',
+          unknown_metadata: 'not allowed', // additionalProperties: false in Metadata
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(extraMetadata)
       expect(errors.length).toBeGreaterThan(0)
 
-      const additionalPropsError = errors.find(error =>
-        error.keyword === 'additionalProperties' && error.path.includes('metadata')
+      const additionalPropsError = errors.find(
+        (error) => error.keyword === 'additionalProperties' && error.path.includes('metadata'),
       )
       expect(additionalPropsError).toBeDefined()
 
@@ -576,31 +577,29 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with additional properties in ExpressionNode', () => {
       const extraExprProps = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "bad_expr": {
-                type: "observed",
+              bad_expr: {
+                type: 'observed',
                 expression: {
-                  op: "+",
-                  args: ["x", "y"],
-                  extra_field: "not allowed" // ExpressionNode has additionalProperties: false
-                }
-              }
+                  op: '+',
+                  args: ['x', 'y'],
+                  extra_field: 'not allowed', // ExpressionNode has additionalProperties: false
+                },
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(extraExprProps)
       expect(errors.length).toBeGreaterThan(0)
 
-      const additionalPropsError = errors.find(error =>
-        error.keyword === 'additionalProperties'
-      )
+      const additionalPropsError = errors.find((error) => error.keyword === 'additionalProperties')
       expect(additionalPropsError).toBeDefined()
 
       expect(() => load(extraExprProps)).toThrow(SchemaValidationError)
@@ -608,57 +607,57 @@ describe('Schema Edge Cases', () => {
 
     it('should allow additional properties in data loader metadata', () => {
       const configProps = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
+            equations: [],
+          },
         },
         data_loaders: {
-          "test_loader": {
-            kind: "grid",
-            source: { url_template: "/data/weather_{date:%Y%m%d}.nc" },
+          test_loader: {
+            kind: 'grid',
+            source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
             variables: {
-              "temp": { file_variable: "T2", units: "K", description: "Temperature" }
+              temp: { file_variable: 'T2', units: 'K', description: 'Temperature' },
             },
             metadata: {
               // data loader metadata has additionalProperties: true
-              tags: ["reanalysis"],
-              custom_setting: "allowed",
+              tags: ['reanalysis'],
+              custom_setting: 'allowed',
               another_setting: 42,
               nested_config: {
                 deeply: {
-                  nested: "also allowed"
-                }
-              }
-            }
-          }
-        }
+                  nested: 'also allowed',
+                },
+              },
+            },
+          },
+        },
       }
 
       const errors = validateSchema(configProps)
       expect(errors).toEqual([])
 
       const result = load(configProps)
-      const loader = result.data_loaders?.["test_loader"]
+      const loader = result.data_loaders?.['test_loader']
       const metadata = loader?.metadata as Record<string, unknown> | undefined
-      expect(metadata?.["custom_setting"]).toBe("allowed")
+      expect(metadata?.['custom_setting']).toBe('allowed')
     })
   })
 
   describe('schema evolution compatibility', () => {
     it('should handle version compatibility for minor version differences', () => {
       const minorVersionUpgrade = {
-        esm: "0.2.0", // Minor version upgrade - accepted by v0.2.0 schema (gt-2fvs).
-        metadata: { name: "test" },
+        esm: '0.2.0', // Minor version upgrade - accepted by v0.2.0 schema (gt-2fvs).
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       // v0.2.0 is a first-class accepted version; the schema's esm enum now
@@ -668,20 +667,20 @@ describe('Schema Edge Cases', () => {
 
       // Load succeeds.
       const result = load(minorVersionUpgrade)
-      expect(result.esm).toBe("0.2.0")
-      expect(result.metadata.name).toBe("test")
+      expect(result.esm).toBe('0.2.0')
+      expect(result.metadata.name).toBe('test')
     })
 
     it('should reject major version mismatches', () => {
       const majorVersionUpgrade = {
-        esm: "1.0.0", // Major version mismatch - should be rejected
-        metadata: { name: "test" },
+        esm: '1.0.0', // Major version mismatch - should be rejected
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       // Schema validation catches version mismatch (const: "0.1.0")
@@ -695,14 +694,14 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with invalid version format', () => {
       const invalidVersionFormat = {
-        esm: "0.1", // Invalid semver format (missing patch version)
-        metadata: { name: "test" },
+        esm: '0.1', // Invalid semver format (missing patch version)
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(invalidVersionFormat)
@@ -710,8 +709,9 @@ describe('Schema Edge Cases', () => {
 
       // Should find pattern/const/enum validation error (the esm field is
       // constrained by an enum of supported versions as of gt-2fvs).
-      const patternError = errors.find(error =>
-        error.keyword === 'pattern' || error.keyword === 'const' || error.keyword === 'enum'
+      const patternError = errors.find(
+        (error) =>
+          error.keyword === 'pattern' || error.keyword === 'const' || error.keyword === 'enum',
       )
       expect(patternError).toBeDefined()
 
@@ -720,48 +720,48 @@ describe('Schema Edge Cases', () => {
 
     it('should validate ISO 8601 datetime formats', () => {
       const validDates = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "datetime_test",
-          created: "2024-01-15T10:30:00Z",
-          modified: "2024-01-15T10:30:00.123Z"
+          name: 'datetime_test',
+          created: '2024-01-15T10:30:00Z',
+          modified: '2024-01-15T10:30:00.123Z',
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validDates)
       expect(errors).toEqual([])
 
       const result = load(validDates)
-      expect(result.metadata.created).toBe("2024-01-15T10:30:00Z")
+      expect(result.metadata.created).toBe('2024-01-15T10:30:00Z')
     })
 
     it('should fail with invalid datetime formats', () => {
       const invalidDate = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "bad_datetime_test",
-          created: "2024-13-15T25:30:00Z" // Invalid month and hour
+          name: 'bad_datetime_test',
+          created: '2024-13-15T25:30:00Z', // Invalid month and hour
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(invalidDate)
       expect(errors.length).toBeGreaterThan(0)
 
       // Should find format or anyOf validation error for the invalid date
-      const dateError = errors.find(error =>
-        error.keyword === 'format' || error.keyword === 'anyOf'
+      const dateError = errors.find(
+        (error) => error.keyword === 'format' || error.keyword === 'anyOf',
       )
       expect(dateError).toBeDefined()
 
@@ -770,23 +770,23 @@ describe('Schema Edge Cases', () => {
 
     it('should validate URI formats', () => {
       const validURI = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "uri_test",
+          name: 'uri_test',
           references: [
             {
-              url: "https://example.com/paper",
-              doi: "10.1000/182",
-              citation: "Test paper"
-            }
-          ]
+              url: 'https://example.com/paper',
+              doi: '10.1000/182',
+              citation: 'Test paper',
+            },
+          ],
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(validURI)
@@ -795,30 +795,30 @@ describe('Schema Edge Cases', () => {
 
     it('should fail with invalid URI formats', () => {
       const invalidURI = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "bad_uri_test",
+          name: 'bad_uri_test',
           references: [
             {
-              url: "not-a-valid-uri", // Invalid URI format
-              citation: "Test paper"
-            }
-          ]
+              url: 'not-a-valid-uri', // Invalid URI format
+              citation: 'Test paper',
+            },
+          ],
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(invalidURI)
       expect(errors.length).toBeGreaterThan(0)
 
       // Should find format validation error
-      const formatError = errors.find(error =>
-        error.keyword === 'format' && error.message?.includes('uri')
+      const formatError = errors.find(
+        (error) => error.keyword === 'format' && error.message?.includes('uri'),
       )
       expect(formatError).toBeDefined()
 
@@ -829,29 +829,30 @@ describe('Schema Edge Cases', () => {
   describe('conditional schema: observed variables require expression field', () => {
     it('should fail when observed variable lacks expression', () => {
       const invalid = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "bad_observed": {
-                type: "observed"
+              bad_observed: {
+                type: 'observed',
                 // Missing required expression field for observed type
-              }
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(invalid)
       expect(errors.length).toBeGreaterThan(0)
 
       // Check that the error mentions the missing expression
-      const expressionError = errors.find(error =>
-        error.path.includes('bad_observed') ||
-        error.message.includes('expression') ||
-        error.keyword === 'required'
+      const expressionError = errors.find(
+        (error) =>
+          error.path.includes('bad_observed') ||
+          error.message.includes('expression') ||
+          error.keyword === 'required',
       )
       expect(expressionError).toBeDefined()
 
@@ -861,105 +862,105 @@ describe('Schema Edge Cases', () => {
 
     it('should pass when observed variable has expression (string)', () => {
       const valid = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "good_observed": {
-                type: "observed",
-                expression: "x + y"
-              }
+              good_observed: {
+                type: 'observed',
+                expression: 'x + y',
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(valid)
       expect(errors).toEqual([])
 
       const result = load(valid)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should pass when observed variable has expression (number)', () => {
       const valid = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "good_observed": {
-                type: "observed",
-                expression: 42
-              }
+              good_observed: {
+                type: 'observed',
+                expression: 42,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(valid)
       expect(errors).toEqual([])
 
       const result = load(valid)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should pass when observed variable has expression (object)', () => {
       const valid = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "good_observed": {
-                type: "observed",
+              good_observed: {
+                type: 'observed',
                 expression: {
-                  op: "+",
-                  args: ["x", "y"]
-                }
-              }
+                  op: '+',
+                  args: ['x', 'y'],
+                },
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(valid)
       expect(errors).toEqual([])
 
       const result = load(valid)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
 
     it('should allow other variable types without expression', () => {
       const valid = {
-        esm: "0.1.0",
-        metadata: { name: "test" },
+        esm: '0.1.0',
+        metadata: { name: 'test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "state_var": {
-                type: "state",
-                units: "kg/m3"
+              state_var: {
+                type: 'state',
+                units: 'kg/m3',
               },
-              "param_var": {
-                type: "parameter",
-                default: 1.0
-              }
+              param_var: {
+                type: 'parameter',
+                default: 1.0,
+              },
             },
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const errors = validateSchema(valid)
       expect(errors).toEqual([])
 
       const result = load(valid)
-      expect(result.esm).toBe("0.1.0")
+      expect(result.esm).toBe('0.1.0')
     })
   })
 })

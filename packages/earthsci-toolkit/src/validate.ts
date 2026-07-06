@@ -5,89 +5,95 @@
  * by the conformance test runner across all language implementations.
  */
 
-import { validateSchema, load, ParseError, SchemaValidationError, type SchemaError } from './parse.js';
-import { ExpressionTemplateError } from './lower-expression-templates.js';
-import { EnumLoweringError } from './lower-enums.js';
-import { LosslessJsonParseError, CanonicalNonfiniteError } from './numeric-literal.js';
 import {
-    checkDimensions,
-    parseUnit,
-    isDimensionless,
-    dimsEqual,
-    type UnitWarning,
-    type CanonicalDims,
-    type ParsedUnit,
-} from './units.js';
+  validateSchema,
+  load,
+  ParseError,
+  SchemaValidationError,
+  type SchemaError,
+} from './parse.js'
+import { ExpressionTemplateError } from './lower-expression-templates.js'
+import { EnumLoweringError } from './lower-enums.js'
+import { LosslessJsonParseError, CanonicalNonfiniteError } from './numeric-literal.js'
+import {
+  checkDimensions,
+  parseUnit,
+  isDimensionless,
+  dimsEqual,
+  type UnitWarning,
+  type CanonicalDims,
+  type ParsedUnit,
+} from './units.js'
 import type {
-    EsmFile,
-    Model,
-    DataLoader,
-    ReactionSystem,
-    Expression,
-    ExpressionNode,
-    CouplingOperatorCompose,
-    CouplingCouple,
-    CouplingVariableMap,
-    SubsystemRef,
-} from './types.js';
+  EsmFile,
+  Model,
+  DataLoader,
+  ReactionSystem,
+  Expression,
+  ExpressionNode,
+  CouplingOperatorCompose,
+  CouplingCouple,
+  CouplingVariableMap,
+  SubsystemRef,
+} from './types.js'
 
 /**
  * Validation error with structured details
  */
 export interface ValidationError {
-    path: string;
-    message: string;
-    code: string;
-    details: Record<string, unknown>;
+  path: string
+  message: string
+  code: string
+  details: Record<string, unknown>
 }
 
 /**
  * Structured validation result
  */
 export interface ValidationResult {
-    is_valid: boolean;
-    schema_errors: ValidationError[];
-    structural_errors: ValidationError[];
-    unit_warnings: UnitWarning[];
+  is_valid: boolean
+  schema_errors: ValidationError[]
+  structural_errors: ValidationError[]
+  unit_warnings: UnitWarning[]
 }
 
 /**
  * Structural errors share the ValidationError shape; the alias is kept for
  * API compatibility with earlier releases that declared them separately.
  */
-export type StructuralError = ValidationError;
+export type StructuralError = ValidationError
 
 /** Narrow a `models` / `subsystems` map value to an inline Model. */
 function isInlineModel(v: Model | DataLoader | SubsystemRef): v is Model {
-    return !('ref' in v) && !('kind' in v);
+  return !('ref' in v) && !('kind' in v)
 }
 
 /**
  * Extract all variable references from an expression
  */
 function extractVariableReferences(expr: Expression): string[] {
-    const variables: string[] = [];
+  const variables: string[] = []
 
-    function visit(node: Expression): void {
-        if (typeof node === 'string') {
-            // String references are variable names
-            variables.push(node);
-        } else if (typeof node === 'number') {
-            // Numbers are literals, no variables
-            return;
-        } else if (node && typeof node === 'object' && 'op' in node) {
-            // Expression node - recursively visit arguments
-            const exprNode = node as ExpressionNode;
-            if (exprNode.args) {
-                for (const arg of exprNode.args) {
-                    visit(arg);
-                }
-            }
+  function visit(node: Expression): void {
+    if (typeof node === 'string') {
+      // String references are variable names
+      variables.push(node)
+    } else if (typeof node === 'number') {
+      // Numbers are literals, no variables
+      return
+    } else if (node && typeof node === 'object' && 'op' in node) {
+      // Expression node - recursively visit arguments
+      const exprNode = node as ExpressionNode
+      if (exprNode.args) {
+        for (const arg of exprNode.args) {
+          visit(arg)
         }
+      }
     }
+  }
 
-    visit(expr);
-    return Array.from(new Set(variables)); // Remove duplicates
+  visit(expr)
+  return Array.from(new Set(variables)) // Remove duplicates
 }
 
 /**
@@ -100,38 +106,38 @@ function extractVariableReferences(expr: Expression): string[] {
  * can surface as a candidate reference is captured here.
  */
 function collectIndexSymbols(expr: Expression): Set<string> {
-    const symbols = new Set<string>();
+  const symbols = new Set<string>()
 
-    function visit(node: Expression): void {
-        if (!node || typeof node !== 'object' || !('op' in node)) return;
-        const exprNode = node as ExpressionNode;
+  function visit(node: Expression): void {
+    if (!node || typeof node !== 'object' || !('op' in node)) return
+    const exprNode = node as ExpressionNode
 
-        if (exprNode.op === 'aggregate') {
-            const agg = exprNode as any;
-            for (const idx of agg.output_idx || []) {
-                if (typeof idx === 'string') symbols.add(idx);
-            }
-            if (agg.ranges && typeof agg.ranges === 'object') {
-                for (const key of Object.keys(agg.ranges)) symbols.add(key);
-            }
-        }
-
-        if (exprNode.op === 'index' && exprNode.args) {
-            // index(array, pos1, pos2, ...): positions after the array head are
-            // index expressions; bare-name positions are bound index symbols.
-            for (let i = 1; i < exprNode.args.length; i++) {
-                const pos = exprNode.args[i];
-                if (typeof pos === 'string') symbols.add(pos);
-            }
-        }
-
-        if (exprNode.args) {
-            for (const arg of exprNode.args) visit(arg);
-        }
+    if (exprNode.op === 'aggregate') {
+      const agg = exprNode as any
+      for (const idx of agg.output_idx || []) {
+        if (typeof idx === 'string') symbols.add(idx)
+      }
+      if (agg.ranges && typeof agg.ranges === 'object') {
+        for (const key of Object.keys(agg.ranges)) symbols.add(key)
+      }
     }
 
-    visit(expr);
-    return symbols;
+    if (exprNode.op === 'index' && exprNode.args) {
+      // index(array, pos1, pos2, ...): positions after the array head are
+      // index expressions; bare-name positions are bound index symbols.
+      for (let i = 1; i < exprNode.args.length; i++) {
+        const pos = exprNode.args[i]
+        if (typeof pos === 'string') symbols.add(pos)
+      }
+    }
+
+    if (exprNode.args) {
+      for (const arg of exprNode.args) visit(arg)
+    }
+  }
+
+  visit(expr)
+  return symbols
 }
 
 /**
@@ -140,15 +146,15 @@ function collectIndexSymbols(expr: Expression): Set<string> {
  * that differentiates a single element of an arrayed state variable.
  */
 function derivativeTargetVariable(arg: Expression): string | undefined {
-    if (typeof arg === 'string') return arg;
-    if (arg && typeof arg === 'object' && 'op' in arg) {
-        const node = arg as ExpressionNode;
-        if (node.op === 'index' && node.args && node.args.length > 0) {
-            const head = node.args[0];
-            if (typeof head === 'string') return head;
-        }
+  if (typeof arg === 'string') return arg
+  if (arg && typeof arg === 'object' && 'op' in arg) {
+    const node = arg as ExpressionNode
+    if (node.op === 'index' && node.args && node.args.length > 0) {
+      const head = node.args[0]
+      if (typeof head === 'string') return head
     }
-    return undefined;
+  }
+  return undefined
 }
 
 /**
@@ -159,24 +165,22 @@ function derivativeTargetVariable(arg: Expression): string | undefined {
  * variable without a time derivative.
  */
 function lhsAssignmentTarget(lhs: Expression): string | undefined {
-    if (typeof lhs === 'string') return lhs;
-    if (lhs && typeof lhs === 'object' && 'op' in lhs) {
-        const node = lhs as ExpressionNode;
-        switch (node.op) {
-            case 'D':
-            case 'index':
-                return node.args && node.args.length > 0
-                    ? lhsAssignmentTarget(node.args[0])
-                    : undefined;
-            case 'aggregate':
-                return (node as any).expr !== undefined
-                    ? lhsAssignmentTarget((node as any).expr as Expression)
-                    : undefined;
-            default:
-                return undefined;
-        }
+  if (typeof lhs === 'string') return lhs
+  if (lhs && typeof lhs === 'object' && 'op' in lhs) {
+    const node = lhs as ExpressionNode
+    switch (node.op) {
+      case 'D':
+      case 'index':
+        return node.args && node.args.length > 0 ? lhsAssignmentTarget(node.args[0]) : undefined
+      case 'aggregate':
+        return (node as any).expr !== undefined
+          ? lhsAssignmentTarget((node as any).expr as Expression)
+          : undefined
+      default:
+        return undefined
     }
-    return undefined;
+  }
+  return undefined
 }
 
 /**
@@ -188,408 +192,432 @@ function lhsAssignmentTarget(lhs: Expression): string | undefined {
  * expr: D(index(v, i)))`), whose `D` lives under `expr` rather than `args`.
  */
 function countDerivatives(expr: Expression): { [variable: string]: number } {
-    const derivatives: { [variable: string]: number } = {};
+  const derivatives: { [variable: string]: number } = {}
 
-    function visit(node: Expression): void {
-        if (typeof node === 'object' && node && 'op' in node) {
-            const exprNode = node as ExpressionNode;
-            if (exprNode.op === 'D' && exprNode.args && exprNode.args.length >= 1) {
-                const target = derivativeTargetVariable(exprNode.args[0]);
-                if (target !== undefined) {
-                    derivatives[target] = (derivatives[target] || 0) + 1;
-                }
-            }
-            // Recursively visit all arguments
-            if (exprNode.args) {
-                for (const arg of exprNode.args) {
-                    visit(arg);
-                }
-            }
-            // An aggregate carries its contracted body (and any LHS derivative)
-            // in `expr`, not `args` — descend there too.
-            if ('expr' in exprNode && (exprNode as any).expr !== undefined) {
-                visit((exprNode as any).expr as Expression);
-            }
+  function visit(node: Expression): void {
+    if (typeof node === 'object' && node && 'op' in node) {
+      const exprNode = node as ExpressionNode
+      if (exprNode.op === 'D' && exprNode.args && exprNode.args.length >= 1) {
+        const target = derivativeTargetVariable(exprNode.args[0])
+        if (target !== undefined) {
+          derivatives[target] = (derivatives[target] || 0) + 1
         }
+      }
+      // Recursively visit all arguments
+      if (exprNode.args) {
+        for (const arg of exprNode.args) {
+          visit(arg)
+        }
+      }
+      // An aggregate carries its contracted body (and any LHS derivative)
+      // in `expr`, not `args` — descend there too.
+      if ('expr' in exprNode && (exprNode as any).expr !== undefined) {
+        visit((exprNode as any).expr as Expression)
+      }
     }
+  }
 
-    visit(expr);
-    return derivatives;
+  visit(expr)
+  return derivatives
 }
 
 /**
  * Resolve scoped variable reference like "Model.Subsystem.var"
  */
 function resolveScopedReference(reference: string, esmFile: EsmFile): boolean {
-    const parts = reference.split('.');
-    if (parts.length < 2) {
-        return false; // Not a scoped reference
+  const parts = reference.split('.')
+  if (parts.length < 2) {
+    return false // Not a scoped reference
+  }
+
+  const [systemName, ...pathParts] = parts
+  const variableName = pathParts.pop()!
+
+  // Try to find in models
+  if (esmFile.models && esmFile.models[systemName]) {
+    let current: Model | DataLoader | SubsystemRef = esmFile.models[systemName]
+
+    // Navigate through subsystems (unresolved refs and data loaders
+    // carry none, so navigation simply fails for them)
+    for (const pathPart of pathParts) {
+      const subsystems: Model['subsystems'] =
+        'subsystems' in current ? current.subsystems : undefined
+      if (!subsystems || !subsystems[pathPart]) {
+        return false
+      }
+      current = subsystems[pathPart]
     }
 
-    const [systemName, ...pathParts] = parts;
-    const variableName = pathParts.pop()!;
+    // Check if variable exists
+    return 'variables' in current && !!current.variables && variableName in current.variables
+  }
 
-    // Try to find in models
-    if (esmFile.models && esmFile.models[systemName]) {
-        let current: Model = esmFile.models[systemName];
+  // Try to find in reaction systems
+  if (esmFile.reaction_systems && esmFile.reaction_systems[systemName]) {
+    let current: ReactionSystem | SubsystemRef = esmFile.reaction_systems[systemName]
 
-        // Navigate through subsystems
-        for (const pathPart of pathParts) {
-            if (!current.subsystems || !current.subsystems[pathPart]) {
-                return false;
-            }
-            current = current.subsystems[pathPart];
-        }
-
-        // Check if variable exists
-        return current.variables && variableName in current.variables;
+    // Navigate through subsystems (unresolved refs carry none, so
+    // navigation simply fails for them)
+    for (const pathPart of pathParts) {
+      const subsystems: ReactionSystem['subsystems'] =
+        'subsystems' in current ? current.subsystems : undefined
+      if (!subsystems || !subsystems[pathPart]) {
+        return false
+      }
+      current = subsystems[pathPart]
     }
 
-    // Try to find in reaction systems
-    if (esmFile.reaction_systems && esmFile.reaction_systems[systemName]) {
-        let current: ReactionSystem = esmFile.reaction_systems[systemName];
+    // Check if species or parameter exists
+    return (
+      ('species' in current && !!current.species && variableName in current.species) ||
+      ('parameters' in current && !!current.parameters && variableName in current.parameters)
+    )
+  }
 
-        // Navigate through subsystems
-        for (const pathPart of pathParts) {
-            if (!current.subsystems || !current.subsystems[pathPart]) {
-                return false;
-            }
-            current = current.subsystems[pathPart];
-        }
-
-        // Check if species or parameter exists
-        return (current.species && variableName in current.species) ||
-               (current.parameters && variableName in current.parameters);
-    }
-
-    return false;
+  return false
 }
 
 /**
  * Check equation-unknown balance for a model
  */
 function validateEquationBalance(model: Model, modelPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
+  const errors: StructuralError[] = []
 
-    // Count state variables
-    const stateVariables = Object.entries(model.variables || {})
-        .filter(([_, variable]) => variable.type === 'state')
-        .map(([name, _]) => name);
+  // Count state variables
+  const stateVariables = Object.entries(model.variables || {})
+    .filter(([_, variable]) => variable.type === 'state')
+    .map(([name, _]) => name)
 
-    // Count equations driving each state variable. A normal ODE contributes a
-    // D(var,t) derivative; an aggregate LHS contributes the derivative carried
-    // in its contracted body. A relational / algebraic equation with no time
-    // derivative (the aggregate-IR `index(v, i) = aggregate(...)` form emitted
-    // by skolem / distinct / rank) instead credits the state variable its LHS
-    // assigns to, so element-defined state still balances the unknown count.
-    const derivativeCounts: { [variable: string]: number } = {};
+  // Count equations driving each state variable. A normal ODE contributes a
+  // D(var,t) derivative; an aggregate LHS contributes the derivative carried
+  // in its contracted body. A relational / algebraic equation with no time
+  // derivative (the aggregate-IR `index(v, i) = aggregate(...)` form emitted
+  // by skolem / distinct / rank) instead credits the state variable its LHS
+  // assigns to, so element-defined state still balances the unknown count.
+  const derivativeCounts: { [variable: string]: number } = {}
 
-    for (const equation of model.equations || []) {
-        const lhsDerivatives = countDerivatives(equation.lhs);
-        if (Object.keys(lhsDerivatives).length > 0) {
-            for (const [variable, count] of Object.entries(lhsDerivatives)) {
-                derivativeCounts[variable] = (derivativeCounts[variable] || 0) + count;
-            }
-        } else {
-            const target = lhsAssignmentTarget(equation.lhs);
-            if (target !== undefined && stateVariables.includes(target)) {
-                derivativeCounts[target] = (derivativeCounts[target] || 0) + 1;
-            }
-        }
+  for (const equation of model.equations || []) {
+    const lhsDerivatives = countDerivatives(equation.lhs)
+    if (Object.keys(lhsDerivatives).length > 0) {
+      for (const [variable, count] of Object.entries(lhsDerivatives)) {
+        derivativeCounts[variable] = (derivativeCounts[variable] || 0) + count
+      }
+    } else {
+      const target = lhsAssignmentTarget(equation.lhs)
+      if (target !== undefined && stateVariables.includes(target)) {
+        derivativeCounts[target] = (derivativeCounts[target] || 0) + 1
+      }
     }
+  }
 
-    const odeEquationCount = Object.values(derivativeCounts).reduce((sum, count) => sum + count, 0);
+  const odeEquationCount = Object.values(derivativeCounts).reduce((sum, count) => sum + count, 0)
 
-    if (stateVariables.length !== odeEquationCount) {
-        const missingEquations = stateVariables.filter(varName => !(varName in derivativeCounts));
+  if (stateVariables.length !== odeEquationCount) {
+    const missingEquations = stateVariables.filter((varName) => !(varName in derivativeCounts))
 
-        errors.push({
-            path: modelPath,
-            code: 'equation_count_mismatch',
-            message: `Number of ODE equations (${odeEquationCount}) does not match number of state variables (${stateVariables.length})`,
-            details: {
-                state_variables: stateVariables,
-                ode_equations: odeEquationCount,
-                missing_equations_for: missingEquations
-            }
-        });
-    }
+    errors.push({
+      path: modelPath,
+      code: 'equation_count_mismatch',
+      message: `Number of ODE equations (${odeEquationCount}) does not match number of state variables (${stateVariables.length})`,
+      details: {
+        state_variables: stateVariables,
+        ode_equations: odeEquationCount,
+        missing_equations_for: missingEquations,
+      },
+    })
+  }
 
-    return errors;
+  return errors
 }
 
 /**
  * Check reference integrity for a model
  */
-function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const declaredVariables = new Set(Object.keys(model.variables || {}));
-    // Declared index sets are a legitimate, non-variable identifier namespace
-    // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
-    // as a positional operand — the value-invention form
-    // `aggregate(args:["faces"], ...)` enumerates over the `faces` set itself
-    // (the mesh-edge enumeration of ess-my4.3.10 / §7.3). Such a name is not a
-    // declared variable, so credit the document-scoped `index_sets` keys here,
-    // exactly as the binder symbols below credit aggregate range / `index`
-    // positions (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined
-    // reference still matches neither set and is flagged. As of v0.8.0 the
-    // `index_sets` registry is a single, document-level field shared by every
-    // model (a sibling of `models` / `domain`), not a per-model field.
-    const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}));
+function validateReferenceIntegrity(
+  model: Model,
+  modelPath: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declaredVariables = new Set(Object.keys(model.variables || {}))
+  // Declared index sets are a legitimate, non-variable identifier namespace
+  // (RFC semiring-faq-unified-ir §5.2). An `aggregate` may name an index set
+  // as a positional operand — the value-invention form
+  // `aggregate(args:["faces"], ...)` enumerates over the `faces` set itself
+  // (the mesh-edge enumeration of ess-my4.3.10 / §7.3). Such a name is not a
+  // declared variable, so credit the document-scoped `index_sets` keys here,
+  // exactly as the binder symbols below credit aggregate range / `index`
+  // positions (the aggregate-aware fix of ess-my4.1.7). A genuinely-undefined
+  // reference still matches neither set and is flagged. As of v0.8.0 the
+  // `index_sets` registry is a single, document-level field shared by every
+  // model (a sibling of `models` / `domain`), not a per-model field.
+  const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
 
-    // Check equations
-    for (let i = 0; i < (model.equations || []).length; i++) {
-        const equation = model.equations![i];
-        const equationPath = `${modelPath}/equations/${i}`;
+  // Check equations
+  for (let i = 0; i < (model.equations || []).length; i++) {
+    const equation = model.equations![i]
+    const equationPath = `${modelPath}/equations/${i}`
 
-        // Binder-introduced index / contraction symbols (aggregate ranges and
-        // output indices, `index` element positions) are iteration positions,
-        // not declared variables — collect them so they are not flagged as
-        // undefined references below.
-        const boundSymbols = new Set<string>([
-            ...collectIndexSymbols(equation.lhs),
-            ...collectIndexSymbols(equation.rhs),
-        ]);
+    // Binder-introduced index / contraction symbols (aggregate ranges and
+    // output indices, `index` element positions) are iteration positions,
+    // not declared variables — collect them so they are not flagged as
+    // undefined references below.
+    const boundSymbols = new Set<string>([
+      ...collectIndexSymbols(equation.lhs),
+      ...collectIndexSymbols(equation.rhs),
+    ])
 
-        const checkSide = (expr: Expression, sidePath: string): void => {
-            for (const varRef of extractVariableReferences(expr)) {
-                if (varRef.includes('.')) {
-                    // Scoped reference
-                    if (!resolveScopedReference(varRef, esmFile)) {
-                        errors.push({
-                            path: sidePath,
-                            code: 'unresolved_scoped_ref',
-                            message: `Scoped reference "${varRef}" cannot be resolved`,
-                            details: { reference: varRef }
-                        });
-                    }
-                } else if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
-                    // Local reference
-                    errors.push({
-                        path: sidePath,
-                        code: 'undefined_variable',
-                        message: `Variable "${varRef}" referenced in equation is not declared`,
-                        details: { variable: varRef }
-                    });
-                }
-            }
-        };
-
-        checkSide(equation.lhs, `${equationPath}/lhs`);
-        checkSide(equation.rhs, `${equationPath}/rhs`);
-    }
-
-    // Check observed variables have expressions
-    for (const [varName, variable] of Object.entries(model.variables || {})) {
-        if (variable.type === 'observed' && !variable.expression) {
+    const checkSide = (expr: Expression, sidePath: string): void => {
+      for (const varRef of extractVariableReferences(expr)) {
+        if (varRef.includes('.')) {
+          // Scoped reference
+          if (!resolveScopedReference(varRef, esmFile)) {
             errors.push({
-                path: `${modelPath}/variables/${varName}`,
-                code: 'missing_observed_expr',
-                message: `Observed variable "${varName}" is missing its expression field`,
-                details: { variable: varName }
-            });
+              path: sidePath,
+              code: 'unresolved_scoped_ref',
+              message: `Scoped reference "${varRef}" cannot be resolved`,
+              details: { reference: varRef },
+            })
+          }
+        } else if (
+          !declaredVariables.has(varRef) &&
+          !declaredIndexSets.has(varRef) &&
+          !boundSymbols.has(varRef)
+        ) {
+          // Local reference
+          errors.push({
+            path: sidePath,
+            code: 'undefined_variable',
+            message: `Variable "${varRef}" referenced in equation is not declared`,
+            details: { variable: varRef },
+          })
         }
+      }
     }
 
-    return errors;
+    checkSide(equation.lhs, `${equationPath}/lhs`)
+    checkSide(equation.rhs, `${equationPath}/rhs`)
+  }
+
+  // Check observed variables have expressions
+  for (const [varName, variable] of Object.entries(model.variables || {})) {
+    if (variable.type === 'observed' && !variable.expression) {
+      errors.push({
+        path: `${modelPath}/variables/${varName}`,
+        code: 'missing_observed_expr',
+        message: `Observed variable "${varName}" is missing its expression field`,
+        details: { variable: varName },
+      })
+    }
+  }
+
+  return errors
 }
 
 /**
  * Check discrete parameters in events
  */
 function validateEventConsistency(model: Model, modelPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const declaredVariables = new Set(Object.keys(model.variables || {}));
-    const declaredParameters = new Set(Object.entries(model.variables || {})
-        .filter(([_, variable]) => variable.type === 'parameter')
-        .map(([name, _]) => name));
+  const errors: StructuralError[] = []
+  const declaredVariables = new Set(Object.keys(model.variables || {}))
+  const declaredParameters = new Set(
+    Object.entries(model.variables || {})
+      .filter(([_, variable]) => variable.type === 'parameter')
+      .map(([name, _]) => name),
+  )
 
-    // Check discrete events
-    for (let i = 0; i < (model.discrete_events || []).length; i++) {
-        const event = model.discrete_events![i];
-        const eventPath = `${modelPath}/discrete_events/${i}`;
+  // Check discrete events
+  for (let i = 0; i < (model.discrete_events || []).length; i++) {
+    const event = model.discrete_events![i]
+    const eventPath = `${modelPath}/discrete_events/${i}`
 
-        // Check discrete_parameters entries
-        if (event.discrete_parameters) {
-            for (const paramName of event.discrete_parameters) {
-                if (!declaredParameters.has(paramName)) {
-                    errors.push({
-                        path: `${eventPath}/discrete_parameters`,
-                        code: 'invalid_discrete_param',
-                        message: `discrete_parameters entry "${paramName}" does not match a declared parameter`,
-                        details: { parameter: paramName }
-                    });
-                }
-            }
+    // Check discrete_parameters entries
+    if (event.discrete_parameters) {
+      for (const paramName of event.discrete_parameters) {
+        if (!declaredParameters.has(paramName)) {
+          errors.push({
+            path: `${eventPath}/discrete_parameters`,
+            code: 'invalid_discrete_param',
+            message: `discrete_parameters entry "${paramName}" does not match a declared parameter`,
+            details: { parameter: paramName },
+          })
         }
-
-        // Check affects variables
-        if (event.affects) {
-            for (let j = 0; j < event.affects.length; j++) {
-                const affect = event.affects[j];
-                if (!declaredVariables.has(affect.lhs)) {
-                    errors.push({
-                        path: `${eventPath}/affects/${j}/lhs`,
-                        code: 'event_var_undeclared',
-                        message: `Variable "${affect.lhs}" in event affects is not declared`,
-                        details: { variable: affect.lhs }
-                    });
-                }
-            }
-        }
-
-        // Check functional affect variables
-        if (event.functional_affect) {
-            for (const varName of event.functional_affect.read_vars || []) {
-                if (!declaredVariables.has(varName)) {
-                    errors.push({
-                        path: `${eventPath}/functional_affect/read_vars`,
-                        code: 'event_var_undeclared',
-                        message: `Variable "${varName}" in functional_affect read_vars is not declared`,
-                        details: { variable: varName }
-                    });
-                }
-            }
-
-            for (const paramName of event.functional_affect.read_params || []) {
-                if (!declaredParameters.has(paramName)) {
-                    errors.push({
-                        path: `${eventPath}/functional_affect/read_params`,
-                        code: 'event_var_undeclared',
-                        message: `Parameter "${paramName}" in functional_affect read_params is not declared`,
-                        details: { variable: paramName }
-                    });
-                }
-            }
-        }
+      }
     }
 
-    // Check continuous events
-    for (let i = 0; i < (model.continuous_events || []).length; i++) {
-        const event = model.continuous_events![i];
-        const eventPath = `${modelPath}/continuous_events/${i}`;
-
-        // Check affects variables
-        if (event.affects) {
-            for (let j = 0; j < event.affects.length; j++) {
-                const affect = event.affects[j];
-                if (!declaredVariables.has(affect.lhs)) {
-                    errors.push({
-                        path: `${eventPath}/affects/${j}/lhs`,
-                        code: 'event_var_undeclared',
-                        message: `Variable "${affect.lhs}" in continuous event affects is not declared`,
-                        details: { variable: affect.lhs }
-                    });
-                }
-            }
+    // Check affects variables
+    if (event.affects) {
+      for (let j = 0; j < event.affects.length; j++) {
+        const affect = event.affects[j]
+        if (!declaredVariables.has(affect.lhs)) {
+          errors.push({
+            path: `${eventPath}/affects/${j}/lhs`,
+            code: 'event_var_undeclared',
+            message: `Variable "${affect.lhs}" in event affects is not declared`,
+            details: { variable: affect.lhs },
+          })
         }
-
-        // Check affect_neg variables
-        if (event.affect_neg) {
-            for (let j = 0; j < event.affect_neg.length; j++) {
-                const affect = event.affect_neg[j];
-                if (!declaredVariables.has(affect.lhs)) {
-                    errors.push({
-                        path: `${eventPath}/affect_neg/${j}/lhs`,
-                        code: 'event_var_undeclared',
-                        message: `Variable "${affect.lhs}" in continuous event affect_neg is not declared`,
-                        details: { variable: affect.lhs }
-                    });
-                }
-            }
-        }
+      }
     }
 
-    return errors;
+    // Check functional affect variables
+    if (event.functional_affect) {
+      for (const varName of event.functional_affect.read_vars || []) {
+        if (!declaredVariables.has(varName)) {
+          errors.push({
+            path: `${eventPath}/functional_affect/read_vars`,
+            code: 'event_var_undeclared',
+            message: `Variable "${varName}" in functional_affect read_vars is not declared`,
+            details: { variable: varName },
+          })
+        }
+      }
+
+      for (const paramName of event.functional_affect.read_params || []) {
+        if (!declaredParameters.has(paramName)) {
+          errors.push({
+            path: `${eventPath}/functional_affect/read_params`,
+            code: 'event_var_undeclared',
+            message: `Parameter "${paramName}" in functional_affect read_params is not declared`,
+            details: { variable: paramName },
+          })
+        }
+      }
+    }
+  }
+
+  // Check continuous events
+  for (let i = 0; i < (model.continuous_events || []).length; i++) {
+    const event = model.continuous_events![i]
+    const eventPath = `${modelPath}/continuous_events/${i}`
+
+    // Check affects variables
+    if (event.affects) {
+      for (let j = 0; j < event.affects.length; j++) {
+        const affect = event.affects[j]
+        if (!declaredVariables.has(affect.lhs)) {
+          errors.push({
+            path: `${eventPath}/affects/${j}/lhs`,
+            code: 'event_var_undeclared',
+            message: `Variable "${affect.lhs}" in continuous event affects is not declared`,
+            details: { variable: affect.lhs },
+          })
+        }
+      }
+    }
+
+    // Check affect_neg variables
+    if (event.affect_neg) {
+      for (let j = 0; j < event.affect_neg.length; j++) {
+        const affect = event.affect_neg[j]
+        if (!declaredVariables.has(affect.lhs)) {
+          errors.push({
+            path: `${eventPath}/affect_neg/${j}/lhs`,
+            code: 'event_var_undeclared',
+            message: `Variable "${affect.lhs}" in continuous event affect_neg is not declared`,
+            details: { variable: affect.lhs },
+          })
+        }
+      }
+    }
+  }
+
+  return errors
 }
 
 /**
  * Check reaction consistency for a reaction system
  */
-function validateReactionConsistency(reactionSystem: ReactionSystem, systemPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const declaredSpecies = new Set(Object.keys(reactionSystem.species || {}));
-    const declaredParameters = new Set(Object.keys(reactionSystem.parameters || {}));
+function validateReactionConsistency(
+  reactionSystem: ReactionSystem,
+  systemPath: string,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declaredSpecies = new Set(Object.keys(reactionSystem.species || {}))
+  const declaredParameters = new Set(Object.keys(reactionSystem.parameters || {}))
 
-    for (let i = 0; i < (reactionSystem.reactions || []).length; i++) {
-        const reaction = reactionSystem.reactions![i];
-        const reactionPath = `${systemPath}/reactions/${i}`;
+  for (let i = 0; i < (reactionSystem.reactions || []).length; i++) {
+    const reaction = reactionSystem.reactions![i]
+    const reactionPath = `${systemPath}/reactions/${i}`
 
-        // Check for null-null reactions
-        if (reaction.substrates === null && reaction.products === null) {
-            errors.push({
-                path: reactionPath,
-                code: 'null_reaction',
-                message: `Reaction "${reaction.id}" has both substrates: null and products: null`,
-                details: { reaction_id: reaction.id }
-            });
-        }
-
-        // Check substrates
-        if (reaction.substrates && Array.isArray(reaction.substrates)) {
-            for (let j = 0; j < reaction.substrates.length; j++) {
-                const substrate = reaction.substrates[j];
-                if (substrate && !declaredSpecies.has(substrate.species)) {
-                    errors.push({
-                        path: `${reactionPath}/substrates/${j}/species`,
-                        code: 'undefined_species',
-                        message: `Species "${substrate.species}" in reaction substrates is not declared`,
-                        details: { species: substrate.species, reaction_id: reaction.id }
-                    });
-                }
-
-                // Check stoichiometry is positive integer
-                if (substrate && (!Number.isInteger(substrate.stoichiometry) || substrate.stoichiometry <= 0)) {
-                    errors.push({
-                        path: `${reactionPath}/substrates/${j}/stoichiometry`,
-                        code: 'invalid_stoichiometry',
-                        message: `Stoichiometry must be a positive integer, got ${substrate.stoichiometry}`,
-                        details: { stoichiometry: substrate.stoichiometry, reaction_id: reaction.id }
-                    });
-                }
-            }
-        }
-
-        // Check products
-        if (reaction.products && Array.isArray(reaction.products)) {
-            for (let j = 0; j < reaction.products.length; j++) {
-                const product = reaction.products[j];
-                if (product && !declaredSpecies.has(product.species)) {
-                    errors.push({
-                        path: `${reactionPath}/products/${j}/species`,
-                        code: 'undefined_species',
-                        message: `Species "${product.species}" in reaction products is not declared`,
-                        details: { species: product.species, reaction_id: reaction.id }
-                    });
-                }
-
-                // Check stoichiometry is positive integer
-                if (product && (!Number.isInteger(product.stoichiometry) || product.stoichiometry <= 0)) {
-                    errors.push({
-                        path: `${reactionPath}/products/${j}/stoichiometry`,
-                        code: 'invalid_stoichiometry',
-                        message: `Stoichiometry must be a positive integer, got ${product.stoichiometry}`,
-                        details: { stoichiometry: product.stoichiometry, reaction_id: reaction.id }
-                    });
-                }
-            }
-        }
-
-        // Check rate expression references
-        const rateVars = extractVariableReferences(reaction.rate);
-        for (const varRef of rateVars) {
-            if (!declaredSpecies.has(varRef) && !declaredParameters.has(varRef)) {
-                errors.push({
-                    path: `${reactionPath}/rate`,
-                    code: 'undefined_parameter',
-                    message: `Variable "${varRef}" in rate expression is not declared as species or parameter`,
-                    details: { variable: varRef, reaction_id: reaction.id }
-                });
-            }
-        }
+    // Check for null-null reactions
+    if (reaction.substrates === null && reaction.products === null) {
+      errors.push({
+        path: reactionPath,
+        code: 'null_reaction',
+        message: `Reaction "${reaction.id}" has both substrates: null and products: null`,
+        details: { reaction_id: reaction.id },
+      })
     }
 
-    return errors;
+    // Check substrates
+    if (reaction.substrates && Array.isArray(reaction.substrates)) {
+      for (let j = 0; j < reaction.substrates.length; j++) {
+        const substrate = reaction.substrates[j]
+        if (substrate && !declaredSpecies.has(substrate.species)) {
+          errors.push({
+            path: `${reactionPath}/substrates/${j}/species`,
+            code: 'undefined_species',
+            message: `Species "${substrate.species}" in reaction substrates is not declared`,
+            details: { species: substrate.species, reaction_id: reaction.id },
+          })
+        }
+
+        // Check stoichiometry is positive integer
+        if (
+          substrate &&
+          (!Number.isInteger(substrate.stoichiometry) || substrate.stoichiometry <= 0)
+        ) {
+          errors.push({
+            path: `${reactionPath}/substrates/${j}/stoichiometry`,
+            code: 'invalid_stoichiometry',
+            message: `Stoichiometry must be a positive integer, got ${substrate.stoichiometry}`,
+            details: { stoichiometry: substrate.stoichiometry, reaction_id: reaction.id },
+          })
+        }
+      }
+    }
+
+    // Check products
+    if (reaction.products && Array.isArray(reaction.products)) {
+      for (let j = 0; j < reaction.products.length; j++) {
+        const product = reaction.products[j]
+        if (product && !declaredSpecies.has(product.species)) {
+          errors.push({
+            path: `${reactionPath}/products/${j}/species`,
+            code: 'undefined_species',
+            message: `Species "${product.species}" in reaction products is not declared`,
+            details: { species: product.species, reaction_id: reaction.id },
+          })
+        }
+
+        // Check stoichiometry is positive integer
+        if (product && (!Number.isInteger(product.stoichiometry) || product.stoichiometry <= 0)) {
+          errors.push({
+            path: `${reactionPath}/products/${j}/stoichiometry`,
+            code: 'invalid_stoichiometry',
+            message: `Stoichiometry must be a positive integer, got ${product.stoichiometry}`,
+            details: { stoichiometry: product.stoichiometry, reaction_id: reaction.id },
+          })
+        }
+      }
+    }
+
+    // Check rate expression references
+    const rateVars = extractVariableReferences(reaction.rate)
+    for (const varRef of rateVars) {
+      if (!declaredSpecies.has(varRef) && !declaredParameters.has(varRef)) {
+        errors.push({
+          path: `${reactionPath}/rate`,
+          code: 'undefined_parameter',
+          message: `Variable "${varRef}" in rate expression is not declared as species or parameter`,
+          details: { variable: varRef, reaction_id: reaction.id },
+        })
+      }
+    }
+  }
+
+  return errors
 }
 
 /**
@@ -604,41 +632,41 @@ function validateReactionConsistency(reactionSystem: ReactionSystem, systemPath:
  * legal op) but MUST be rejected structurally with code `ic_in_reaction_system`.
  */
 function validateReactionSystemICs(
-    reactionSystem: ReactionSystem,
-    systemName: string,
-    systemPath: string,
+  reactionSystem: ReactionSystem,
+  systemName: string,
+  systemPath: string,
 ): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const constraintEquations = reactionSystem.constraint_equations;
-    if (!constraintEquations) return errors;
+  const errors: StructuralError[] = []
+  const constraintEquations = reactionSystem.constraint_equations
+  if (!constraintEquations) return errors
 
-    for (let i = 0; i < constraintEquations.length; i++) {
-        const lhs = constraintEquations[i]?.lhs;
-        if (!lhs || typeof lhs !== 'object' || !('op' in lhs)) continue;
-        const node = lhs as ExpressionNode;
-        if (node.op !== 'ic') continue;
+  for (let i = 0; i < constraintEquations.length; i++) {
+    const lhs = constraintEquations[i]?.lhs
+    if (!lhs || typeof lhs !== 'object' || !('op' in lhs)) continue
+    const node = lhs as ExpressionNode
+    if (node.op !== 'ic') continue
 
-        let species: string | null = null;
-        if (node.args && node.args.length > 0 && typeof node.args[0] === 'string') {
-            species = node.args[0];
-        }
-
-        errors.push({
-            path: `${systemPath}/constraint_equations/${i}`,
-            code: 'ic_in_reaction_system',
-            message:
-                'ic equation not allowed in a reaction system; a reaction system has no equations ' +
-                'field and hosts no ic equations (ICs are model-hosted: species.default, or a ' +
-                'scoped-reference ic equation in a model, spec §11.4.1)',
-            details: {
-                system: systemName,
-                species,
-                constraint_equation_index: i,
-            },
-        });
+    let species: string | null = null
+    if (node.args && node.args.length > 0 && typeof node.args[0] === 'string') {
+      species = node.args[0]
     }
 
-    return errors;
+    errors.push({
+      path: `${systemPath}/constraint_equations/${i}`,
+      code: 'ic_in_reaction_system',
+      message:
+        'ic equation not allowed in a reaction system; a reaction system has no equations ' +
+        'field and hosts no ic equations (ICs are model-hosted: species.default, or a ' +
+        'scoped-reference ic equation in a model, spec §11.4.1)',
+      details: {
+        system: systemName,
+        species,
+        constraint_equation_index: i,
+      },
+    })
+  }
+
+  return errors
 }
 
 /**
@@ -647,25 +675,23 @@ function validateReactionSystemICs(
  * scoped to one system so dimensional checks see the author-declared units
  * for each symbol.
  */
-function buildReactionSystemUnitBindings(
-    reactionSystem: ReactionSystem,
-): Map<string, ParsedUnit> {
-    const bindings = new Map<string, ParsedUnit>();
-    if ('species' in reactionSystem && reactionSystem.species) {
-        for (const [name, species] of Object.entries(reactionSystem.species)) {
-            if (species && species.units) {
-                bindings.set(name, parseUnit(species.units));
-            }
-        }
+function buildReactionSystemUnitBindings(reactionSystem: ReactionSystem): Map<string, ParsedUnit> {
+  const bindings = new Map<string, ParsedUnit>()
+  if ('species' in reactionSystem && reactionSystem.species) {
+    for (const [name, species] of Object.entries(reactionSystem.species)) {
+      if (species && species.units) {
+        bindings.set(name, parseUnit(species.units))
+      }
     }
-    if ('parameters' in reactionSystem && reactionSystem.parameters) {
-        for (const [name, param] of Object.entries(reactionSystem.parameters)) {
-            if (param && param.units) {
-                bindings.set(name, parseUnit(param.units));
-            }
-        }
+  }
+  if ('parameters' in reactionSystem && reactionSystem.parameters) {
+    for (const [name, param] of Object.entries(reactionSystem.parameters)) {
+      if (param && param.units) {
+        bindings.set(name, parseUnit(param.units))
+      }
     }
-    return bindings;
+  }
+  return bindings
 }
 
 /**
@@ -675,23 +701,23 @@ function buildReactionSystemUnitBindings(
  * expected_rate_units payloads line up byte-for-byte across bindings.
  */
 function splitUnitNumDen(s: string): [string, string] {
-    const trimmed = s.trim();
-    if (trimmed === '') return ['', ''];
-    let depth = 0;
-    for (let i = 0; i < trimmed.length; i++) {
-        const c = trimmed[i];
-        if (c === '(') depth++;
-        else if (c === ')') depth--;
-        else if (c === '/' && depth === 0) {
-            const num = trimmed.slice(0, i).trim();
-            let den = trimmed.slice(i + 1).trim();
-            if (den.startsWith('(') && den.endsWith(')')) {
-                den = den.slice(1, -1);
-            }
-            return [num, den];
-        }
+  const trimmed = s.trim()
+  if (trimmed === '') return ['', '']
+  let depth = 0
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === '/' && depth === 0) {
+      const num = trimmed.slice(0, i).trim()
+      let den = trimmed.slice(i + 1).trim()
+      if (den.startsWith('(') && den.endsWith(')')) {
+        den = den.slice(1, -1)
+      }
+      return [num, den]
     }
-    return [trimmed, ''];
+  }
+  return [trimmed, '']
 }
 
 /**
@@ -699,11 +725,11 @@ function splitUnitNumDen(s: string): [string, string] {
  * factors when the exponent is not 1. Mirrors Go's powerFactor.
  */
 function powerFactor(s: string, n: number): string {
-    const t = s.trim();
-    if (t === '') return '';
-    if (n === 1) return t;
-    if (/[*/]/.test(t)) return `(${t})^${n}`;
-    return `${t}^${n}`;
+  const t = s.trim()
+  if (t === '') return ''
+  if (n === 1) return t
+  if (/[*/]/.test(t)) return `(${t})^${n}`
+  return `${t}^${n}`
 }
 
 /**
@@ -718,21 +744,21 @@ function powerFactor(s: string, n: number): string {
  *   ("mol/m^3", 2) → "m^3/(mol*s)"
  */
 function formatExpectedRateUnits(speciesUnits: string, totalOrder: number): string {
-    let exp = 1 - totalOrder;
-    if (exp === 0) return '1/s';
-    let [num, den] = splitUnitNumDen(speciesUnits);
-    if (exp < 0) {
-        [num, den] = [den, num];
-        exp = -exp;
-    }
-    let numStr = powerFactor(num, exp);
-    const denFactors: string[] = [];
-    const df = powerFactor(den, exp);
-    if (df !== '') denFactors.push(df);
-    denFactors.push('s');
-    if (numStr === '') numStr = '1';
-    if (denFactors.length === 1) return `${numStr}/${denFactors[0]}`;
-    return `${numStr}/(${denFactors.join('*')})`;
+  let exp = 1 - totalOrder
+  if (exp === 0) return '1/s'
+  let [num, den] = splitUnitNumDen(speciesUnits)
+  if (exp < 0) {
+    ;[num, den] = [den, num]
+    exp = -exp
+  }
+  let numStr = powerFactor(num, exp)
+  const denFactors: string[] = []
+  const df = powerFactor(den, exp)
+  if (df !== '') denFactors.push(df)
+  denFactors.push('s')
+  if (numStr === '') numStr = '1'
+  if (denFactors.length === 1) return `${numStr}/${denFactors[0]}`
+  return `${numStr}/(${denFactors.join('*')})`
 }
 
 /**
@@ -741,16 +767,13 @@ function formatExpectedRateUnits(speciesUnits: string, totalOrder: number): stri
  * Matches Go's rateVarName + unit lookup so rate_units details align across
  * bindings for the bare-variable case that the cross-binding fixture uses.
  */
-function rateUnitStringFromExpression(
-    rate: Expression,
-    reactionSystem: ReactionSystem,
-): string {
-    if (typeof rate !== 'string') return '';
-    const param = (reactionSystem.parameters || {})[rate];
-    if (param && param.units) return param.units;
-    const species = (reactionSystem.species || {})[rate];
-    if (species && species.units) return species.units;
-    return '';
+function rateUnitStringFromExpression(rate: Expression, reactionSystem: ReactionSystem): string {
+  if (typeof rate !== 'string') return ''
+  const param = (reactionSystem.parameters || {})[rate]
+  if (param && param.units) return param.units
+  const species = (reactionSystem.species || {})[rate]
+  if (species && species.units) return species.units
+  return ''
 }
 
 /**
@@ -766,67 +789,67 @@ function rateUnitStringFromExpression(
  * stoichiometric-order convention ambiguous there.
  */
 function validateReactionRateUnits(
-    reactionSystem: ReactionSystem,
-    systemPath: string,
+  reactionSystem: ReactionSystem,
+  systemPath: string,
 ): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (!reactionSystem.reactions) return errors;
+  const errors: StructuralError[] = []
+  if (!reactionSystem.reactions) return errors
 
-    const bindings = buildReactionSystemUnitBindings(reactionSystem);
-    const speciesMap = reactionSystem.species || {};
+  const bindings = buildReactionSystemUnitBindings(reactionSystem)
+  const speciesMap = reactionSystem.species || {}
 
-    for (let i = 0; i < reactionSystem.reactions.length; i++) {
-        const reaction = reactionSystem.reactions[i];
-        if (!reaction || !reaction.substrates || reaction.substrates.length === 0) continue;
+  for (let i = 0; i < reactionSystem.reactions.length; i++) {
+    const reaction = reactionSystem.reactions[i]
+    if (!reaction || !reaction.substrates || reaction.substrates.length === 0) continue
 
-        const firstSubstrate = reaction.substrates[0];
-        const firstSpecies = speciesMap[firstSubstrate.species];
-        if (!firstSpecies || !firstSpecies.units) continue;
+    const firstSubstrate = reaction.substrates[0]
+    const firstSpecies = speciesMap[firstSubstrate.species]
+    if (!firstSpecies || !firstSpecies.units) continue
 
-        const concUnit = parseUnit(firstSpecies.units);
-        if (isDimensionless(concUnit)) continue;
+    const concUnit = parseUnit(firstSpecies.units)
+    if (isDimensionless(concUnit)) continue
 
-        let resolvable = true;
-        let totalOrder = 0;
-        for (const sub of reaction.substrates) {
-            if (!sub || !bindings.has(sub.species)) {
-                resolvable = false;
-                break;
-            }
-            if (typeof sub.stoichiometry === 'number') {
-                totalOrder += sub.stoichiometry;
-            }
-        }
-        if (!resolvable) continue;
-
-        const rateResult = checkDimensions(reaction.rate, bindings);
-        if (rateResult.warnings.some(w => w.includes('Unknown variable'))) continue;
-
-        const expectedPower = 1 - totalOrder;
-        const expectedDims: CanonicalDims = {};
-        for (const [k, v] of Object.entries(concUnit.dims)) {
-            if (v == null) continue;
-            expectedDims[k as keyof CanonicalDims] = v * expectedPower;
-        }
-        const sKey = 's' as keyof CanonicalDims;
-        expectedDims[sKey] = (expectedDims[sKey] ?? 0) - 1;
-
-        if (dimsEqual(rateResult.dimensions.dims, expectedDims)) continue;
-
-        errors.push({
-            path: `${systemPath}/reactions/${i}`,
-            code: 'unit_inconsistency',
-            message: 'Reaction rate expression has incompatible units for reaction stoichiometry',
-            details: {
-                reaction_id: reaction.id,
-                rate_units: rateUnitStringFromExpression(reaction.rate, reactionSystem),
-                expected_rate_units: formatExpectedRateUnits(firstSpecies.units, totalOrder),
-                reaction_order: totalOrder,
-            },
-        });
+    let resolvable = true
+    let totalOrder = 0
+    for (const sub of reaction.substrates) {
+      if (!sub || !bindings.has(sub.species)) {
+        resolvable = false
+        break
+      }
+      if (typeof sub.stoichiometry === 'number') {
+        totalOrder += sub.stoichiometry
+      }
     }
+    if (!resolvable) continue
 
-    return errors;
+    const rateResult = checkDimensions(reaction.rate, bindings)
+    if (rateResult.warnings.some((w) => w.includes('Unknown variable'))) continue
+
+    const expectedPower = 1 - totalOrder
+    const expectedDims: CanonicalDims = {}
+    for (const [k, v] of Object.entries(concUnit.dims)) {
+      if (v == null) continue
+      expectedDims[k as keyof CanonicalDims] = v * expectedPower
+    }
+    const sKey = 's' as keyof CanonicalDims
+    expectedDims[sKey] = (expectedDims[sKey] ?? 0) - 1
+
+    if (dimsEqual(rateResult.dimensions.dims, expectedDims)) continue
+
+    errors.push({
+      path: `${systemPath}/reactions/${i}`,
+      code: 'unit_inconsistency',
+      message: 'Reaction rate expression has incompatible units for reaction stoichiometry',
+      details: {
+        reaction_id: reaction.id,
+        rate_units: rateUnitStringFromExpression(reaction.rate, reactionSystem),
+        expected_rate_units: formatExpectedRateUnits(firstSpecies.units, totalOrder),
+        reaction_order: totalOrder,
+      },
+    })
+  }
+
+  return errors
 }
 
 /**
@@ -837,32 +860,32 @@ function validateReactionRateUnits(
  * `_KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
  */
 const KNOWN_PHYSICAL_CONSTANTS: Array<{
-    name: string;
-    canonical: string;
-    description: string;
+  name: string
+  canonical: string
+  description: string
 }> = [
-    { name: 'R', canonical: 'J/(mol*K)', description: 'ideal gas constant' },
-    { name: 'k_B', canonical: 'J/K', description: 'Boltzmann constant' },
-    { name: 'N_A', canonical: '1/mol', description: 'Avogadro constant' },
-];
+  { name: 'R', canonical: 'J/(mol*K)', description: 'ideal gas constant' },
+  { name: 'k_B', canonical: 'J/K', description: 'Boltzmann constant' },
+  { name: 'N_A', canonical: '1/mol', description: 'Avogadro constant' },
+]
 
 /**
  * Return true if the expression tree references a variable by exact name
  * (string leaf match).
  */
 function expressionReferencesName(expr: Expression | undefined, name: string): boolean {
-    if (expr === undefined || expr === null) return false;
-    if (typeof expr === 'string') return expr === name;
-    if (typeof expr === 'number') return false;
-    if (typeof expr === 'object' && 'op' in expr) {
-        const node = expr as ExpressionNode;
-        if (node.args) {
-            for (const arg of node.args) {
-                if (expressionReferencesName(arg, name)) return true;
-            }
-        }
+  if (expr === undefined || expr === null) return false
+  if (typeof expr === 'string') return expr === name
+  if (typeof expr === 'number') return false
+  if (typeof expr === 'object' && 'op' in expr) {
+    const node = expr as ExpressionNode
+    if (node.args) {
+      for (const arg of node.args) {
+        if (expressionReferencesName(arg, name)) return true
+      }
     }
-    return false;
+  }
+  return false
 }
 
 /**
@@ -874,48 +897,48 @@ function expressionReferencesName(expr: Expression | undefined, name: string): b
  * `parse._check_physical_constant_units`.
  */
 function validatePhysicalConstantUnits(model: Model, modelPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const variables = model.variables || {};
+  const errors: StructuralError[] = []
+  const variables = model.variables || {}
 
-    for (const { name, canonical, description } of KNOWN_PHYSICAL_CONSTANTS) {
-        const declaration = variables[name];
-        if (!declaration) continue;
-        if (declaration.type !== 'parameter') continue;
-        const declared = declaration.units;
-        if (!declared) continue;
+  for (const { name, canonical, description } of KNOWN_PHYSICAL_CONSTANTS) {
+    const declaration = variables[name]
+    if (!declaration) continue
+    if (declaration.type !== 'parameter') continue
+    const declared = declaration.units
+    if (!declared) continue
 
-        const declaredUnit = parseUnit(declared);
-        const canonicalUnit = parseUnit(canonical);
-        if (dimsEqual(declaredUnit.dims, canonicalUnit.dims)) continue;
+    const declaredUnit = parseUnit(declared)
+    const canonicalUnit = parseUnit(canonical)
+    if (dimsEqual(declaredUnit.dims, canonicalUnit.dims)) continue
 
-        let usageName: string | undefined;
-        for (const [otherName, otherVar] of Object.entries(variables)) {
-            if (otherVar.type !== 'observed') continue;
-            if (expressionReferencesName(otherVar.expression, name)) {
-                usageName = otherName;
-                break;
-            }
-        }
-        const targetName = usageName ?? name;
-        errors.push({
-            path: `${modelPath}/variables/${targetName}`,
-            code: 'unit_inconsistency',
-            message: 'Physical constant used with incorrect dimensional analysis',
-            details: {
-                constant_name: name,
-                constant_description: description,
-                declared_units: declared,
-                canonical_units: canonical,
-            },
-        });
+    let usageName: string | undefined
+    for (const [otherName, otherVar] of Object.entries(variables)) {
+      if (otherVar.type !== 'observed') continue
+      if (expressionReferencesName(otherVar.expression, name)) {
+        usageName = otherName
+        break
+      }
     }
-    return errors;
+    const targetName = usageName ?? name
+    errors.push({
+      path: `${modelPath}/variables/${targetName}`,
+      code: 'unit_inconsistency',
+      message: 'Physical constant used with incorrect dimensional analysis',
+      details: {
+        constant_name: name,
+        constant_description: description,
+        declared_units: declared,
+        canonical_units: canonical,
+      },
+    })
+  }
+  return errors
 }
 
-const AFFINE_TEMP_UNITS = new Set(['C', 'degC', 'Celsius']);
+const AFFINE_TEMP_UNITS = new Set(['C', 'degC', 'Celsius'])
 
 function isAffineTempUnit(u: string): boolean {
-    return AFFINE_TEMP_UNITS.has(u.trim());
+  return AFFINE_TEMP_UNITS.has(u.trim())
 }
 
 /**
@@ -928,68 +951,68 @@ function isAffineTempUnit(u: string): boolean {
  * (e.g., degC→K) are excluded.
  */
 function validateConversionFactorConsistency(model: Model, modelPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
-    const variables = model.variables || {};
+  const errors: StructuralError[] = []
+  const variables = model.variables || {}
 
-    for (const [vname, vdef] of Object.entries(variables)) {
-        if (vdef.type !== 'observed') continue;
-        if (vdef.expression === undefined || vdef.expression === null) continue;
-        const lhsUnits = vdef.units;
-        if (!lhsUnits) continue;
+  for (const [vname, vdef] of Object.entries(variables)) {
+    if (vdef.type !== 'observed') continue
+    if (vdef.expression === undefined || vdef.expression === null) continue
+    const lhsUnits = vdef.units
+    if (!lhsUnits) continue
 
-        const expr = vdef.expression;
-        if (typeof expr !== 'object' || !('op' in expr)) continue;
-        const node = expr as ExpressionNode;
-        if (node.op !== '*' || !node.args || node.args.length !== 2) continue;
+    const expr = vdef.expression
+    if (typeof expr !== 'object' || !('op' in expr)) continue
+    const node = expr as ExpressionNode
+    if (node.op !== '*' || !node.args || node.args.length !== 2) continue
 
-        let numeric: number | undefined;
-        let varRef: string | undefined;
-        for (const a of node.args) {
-            if (typeof a === 'number') {
-                numeric = a;
-            } else if (typeof a === 'string') {
-                varRef = a;
-            }
-        }
-        if (numeric === undefined || varRef === undefined) continue;
-
-        const src = variables[varRef];
-        if (!src || !src.units) continue;
-        const srcUnits = src.units;
-        if (srcUnits === lhsUnits) continue;
-
-        let srcU: ParsedUnit;
-        let lhsU: ParsedUnit;
-        try {
-            srcU = parseUnit(srcUnits);
-            lhsU = parseUnit(lhsUnits);
-        } catch {
-            continue;
-        }
-        if (!dimsEqual(srcU.dims, lhsU.dims)) continue;
-        if (isAffineTempUnit(srcUnits) || isAffineTempUnit(lhsUnits)) continue;
-        if (lhsU.scale === 0) continue;
-
-        const factor = srcU.scale / lhsU.scale;
-        if (factor === 0) continue;
-
-        const tol = 1e-9 * Math.max(Math.abs(factor), 1);
-        if (Math.abs(numeric - factor) <= tol) continue;
-
-        errors.push({
-            path: `${modelPath}/variables/${vname}`,
-            code: 'unit_inconsistency',
-            message: 'Unit conversion factor is incorrect for specified unit transformation',
-            details: {
-                variable: vname,
-                declared_units: lhsUnits,
-                source_units: srcUnits,
-                declared_factor: numeric,
-                expected_factor: factor,
-            },
-        });
+    let numeric: number | undefined
+    let varRef: string | undefined
+    for (const a of node.args) {
+      if (typeof a === 'number') {
+        numeric = a
+      } else if (typeof a === 'string') {
+        varRef = a
+      }
     }
-    return errors;
+    if (numeric === undefined || varRef === undefined) continue
+
+    const src = variables[varRef]
+    if (!src || !src.units) continue
+    const srcUnits = src.units
+    if (srcUnits === lhsUnits) continue
+
+    let srcU: ParsedUnit
+    let lhsU: ParsedUnit
+    try {
+      srcU = parseUnit(srcUnits)
+      lhsU = parseUnit(lhsUnits)
+    } catch {
+      continue
+    }
+    if (!dimsEqual(srcU.dims, lhsU.dims)) continue
+    if (isAffineTempUnit(srcUnits) || isAffineTempUnit(lhsUnits)) continue
+    if (lhsU.scale === 0) continue
+
+    const factor = srcU.scale / lhsU.scale
+    if (factor === 0) continue
+
+    const tol = 1e-9 * Math.max(Math.abs(factor), 1)
+    if (Math.abs(numeric - factor) <= tol) continue
+
+    errors.push({
+      path: `${modelPath}/variables/${vname}`,
+      code: 'unit_inconsistency',
+      message: 'Unit conversion factor is incorrect for specified unit transformation',
+      details: {
+        variable: vname,
+        declared_units: lhsUnits,
+        source_units: srcUnits,
+        declared_factor: numeric,
+        expected_factor: factor,
+      },
+    })
+  }
+  return errors
 }
 
 /**
@@ -998,38 +1021,38 @@ function validateConversionFactorConsistency(model: Model, modelPath: string): S
  * call resolveSubsystemRefs() before validate() to inline them first.
  */
 function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (esmFile.models) {
-        for (const [modelName, model] of Object.entries(esmFile.models)) {
-            if (!model.subsystems) continue;
-            for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
-                if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
-                    errors.push({
-                        path: `/models/${modelName}/subsystems/${subsystemName}`,
-                        code: 'unresolved_subsystem_ref',
-                        message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
-                        details: { ref: (subsystem as SubsystemRef).ref },
-                    });
-                }
-            }
+  const errors: StructuralError[] = []
+  if (esmFile.models) {
+    for (const [modelName, model] of Object.entries(esmFile.models)) {
+      if ('ref' in model || !model.subsystems) continue
+      for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
+        if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
+          errors.push({
+            path: `/models/${modelName}/subsystems/${subsystemName}`,
+            code: 'unresolved_subsystem_ref',
+            message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
+            details: { ref: (subsystem as SubsystemRef).ref },
+          })
         }
+      }
     }
-    if (esmFile.reaction_systems) {
-        for (const [systemName, system] of Object.entries(esmFile.reaction_systems)) {
-            if (!system.subsystems) continue;
-            for (const [subsystemName, subsystem] of Object.entries(system.subsystems)) {
-                if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
-                    errors.push({
-                        path: `/reaction_systems/${systemName}/subsystems/${subsystemName}`,
-                        code: 'unresolved_subsystem_ref',
-                        message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
-                        details: { ref: (subsystem as SubsystemRef).ref },
-                    });
-                }
-            }
+  }
+  if (esmFile.reaction_systems) {
+    for (const [systemName, system] of Object.entries(esmFile.reaction_systems)) {
+      if (!system.subsystems) continue
+      for (const [subsystemName, subsystem] of Object.entries(system.subsystems)) {
+        if ('ref' in subsystem && typeof (subsystem as SubsystemRef).ref === 'string') {
+          errors.push({
+            path: `/reaction_systems/${systemName}/subsystems/${subsystemName}`,
+            code: 'unresolved_subsystem_ref',
+            message: `Subsystem '${subsystemName}' is an unresolved file reference ('${(subsystem as SubsystemRef).ref}'). Call resolveSubsystemRefs() before validate().`,
+            details: { ref: (subsystem as SubsystemRef).ref },
+          })
         }
+      }
     }
-    return errors;
+  }
+  return errors
 }
 
 /**
@@ -1039,124 +1062,127 @@ function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
  * default value and must use an explicit expression instead.
  */
 function validateDefaultUnits(model: Model, modelPath: string): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (!model.variables) return errors;
-    for (const [vname, vdef] of Object.entries(model.variables)) {
-        const { units, default_units } = vdef;
-        if (!default_units || !units || default_units === units) continue;
-        if (isAffineTempUnit(default_units) || isAffineTempUnit(units)) {
-            errors.push({
-                path: `${modelPath}/variables/${vname}`,
-                code: 'unit_inconsistency',
-                message: `default_units '${default_units}' requires an affine conversion to/from '${units}'; use an expression instead of a scalar default`,
-                details: { variable: vname, units, default_units },
-            });
-        }
+  const errors: StructuralError[] = []
+  if (!model.variables) return errors
+  for (const [vname, vdef] of Object.entries(model.variables)) {
+    const { units, default_units } = vdef
+    if (!default_units || !units || default_units === units) continue
+    if (isAffineTempUnit(default_units) || isAffineTempUnit(units)) {
+      errors.push({
+        path: `${modelPath}/variables/${vname}`,
+        code: 'unit_inconsistency',
+        message: `default_units '${default_units}' requires an affine conversion to/from '${units}'; use an expression instead of a scalar default`,
+        details: { variable: vname, units, default_units },
+      })
     }
-    return errors;
+  }
+  return errors
 }
 
 /**
  * Check coupling entries reference integrity
  */
 function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
+  const errors: StructuralError[] = []
 
-    if (!esmFile.coupling) return errors;
+  if (!esmFile.coupling) return errors
 
-    // Collect all available systems
-    const availableSystems = new Set([
-        ...Object.keys(esmFile.models || {}),
-        ...Object.keys(esmFile.reaction_systems || {}),
-        ...Object.keys(esmFile.data_loaders || {})
-    ]);
+  // Collect all available systems
+  const availableSystems = new Set([
+    ...Object.keys(esmFile.models || {}),
+    ...Object.keys(esmFile.reaction_systems || {}),
+    ...Object.keys(esmFile.data_loaders || {}),
+  ])
 
-    for (let i = 0; i < esmFile.coupling.length; i++) {
-        const coupling = esmFile.coupling[i];
-        const couplingPath = `/coupling/${i}`;
+  for (let i = 0; i < esmFile.coupling.length; i++) {
+    const coupling = esmFile.coupling[i]
+    const couplingPath = `/coupling/${i}`
 
-        if (coupling.type === 'operator_compose') {
-            // Check systems exist
-            const composeEntry = coupling as CouplingOperatorCompose;
-            for (const systemName of composeEntry.systems) {
-                if (!availableSystems.has(systemName)) {
-                    errors.push({
-                        path: `${couplingPath}/systems`,
-                        code: 'undefined_system',
-                        message: `Coupling entry references nonexistent system "${systemName}"`,
-                        details: { system: systemName }
-                    });
-                }
-            }
-        } else if (coupling.type === 'couple') {
-            // Check systems exist
-            const coupleEntry = coupling as CouplingCouple;
-            for (const systemName of coupleEntry.systems) {
-                if (!availableSystems.has(systemName)) {
-                    errors.push({
-                        path: `${couplingPath}/systems`,
-                        code: 'undefined_system',
-                        message: `Coupling entry references nonexistent system "${systemName}"`,
-                        details: { system: systemName }
-                    });
-                }
-            }
-        } else if (coupling.type === 'variable_map') {
-            // Check from/to system references exist
-            const vmEntry = coupling as CouplingVariableMap;
-            // `factor` is a scaling slot for the scaling string transforms
-            // only; an Expression transform spells its own arithmetic, so a
-            // `factor` alongside it is a modeling error (the schema rejects
-            // this combination too — this mirrors it structurally).
-            if (vmEntry.factor !== undefined
-                && typeof vmEntry.transform === 'object' && vmEntry.transform !== null) {
-                errors.push({
-                    path: `${couplingPath}/factor`,
-                    code: 'factor_with_expression_transform',
-                    message: `variable_map with an Expression transform must not carry 'factor'; fold the scaling into the expression`,
-                    details: { factor: vmEntry.factor }
-                });
-            }
-            for (const field of ['from', 'to'] as const) {
-                const ref = vmEntry[field];
-                if (typeof ref === 'string' && ref.includes('.')) {
-                    const systemName = ref.split('.')[0];
-                    if (!availableSystems.has(systemName)) {
-                        errors.push({
-                            path: `${couplingPath}/${field}`,
-                            code: 'unresolved_scoped_ref',
-                            message: `Scoped reference "${ref}" references nonexistent system "${systemName}"`,
-                            details: { reference: ref, system: systemName }
-                        });
-                    } else {
-                        // Check variable exists in the system
-                        const varName = ref.split('.').slice(1).join('.');
-                        const system = (esmFile.models || {})[systemName]
-                            || (esmFile.reaction_systems || {})[systemName];
-                        if (system) {
-                            const vars = (system as any).variables || (system as any).species || {};
-                            const params = (system as any).parameters || {};
-                            if (!vars[varName] && !params[varName]) {
-                                // Check data loaders
-                                const dataLoader = (esmFile.data_loaders || {})[systemName];
-                                const loaderVariables = dataLoader?.variables || {};
-                                if (!loaderVariables[varName]) {
-                                    errors.push({
-                                        path: `${couplingPath}/${field}`,
-                                        code: 'unresolved_scoped_ref',
-                                        message: `Variable "${varName}" not found in system "${systemName}"`,
-                                        details: { reference: ref, system: systemName, variable: varName }
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    if (coupling.type === 'operator_compose') {
+      // Check systems exist
+      const composeEntry = coupling as CouplingOperatorCompose
+      for (const systemName of composeEntry.systems) {
+        if (!availableSystems.has(systemName)) {
+          errors.push({
+            path: `${couplingPath}/systems`,
+            code: 'undefined_system',
+            message: `Coupling entry references nonexistent system "${systemName}"`,
+            details: { system: systemName },
+          })
         }
+      }
+    } else if (coupling.type === 'couple') {
+      // Check systems exist
+      const coupleEntry = coupling as CouplingCouple
+      for (const systemName of coupleEntry.systems) {
+        if (!availableSystems.has(systemName)) {
+          errors.push({
+            path: `${couplingPath}/systems`,
+            code: 'undefined_system',
+            message: `Coupling entry references nonexistent system "${systemName}"`,
+            details: { system: systemName },
+          })
+        }
+      }
+    } else if (coupling.type === 'variable_map') {
+      // Check from/to system references exist
+      const vmEntry = coupling as CouplingVariableMap
+      // `factor` is a scaling slot for the scaling string transforms
+      // only; an Expression transform spells its own arithmetic, so a
+      // `factor` alongside it is a modeling error (the schema rejects
+      // this combination too — this mirrors it structurally).
+      if (
+        vmEntry.factor !== undefined &&
+        typeof vmEntry.transform === 'object' &&
+        vmEntry.transform !== null
+      ) {
+        errors.push({
+          path: `${couplingPath}/factor`,
+          code: 'factor_with_expression_transform',
+          message: `variable_map with an Expression transform must not carry 'factor'; fold the scaling into the expression`,
+          details: { factor: vmEntry.factor },
+        })
+      }
+      for (const field of ['from', 'to'] as const) {
+        const ref = vmEntry[field]
+        if (typeof ref === 'string' && ref.includes('.')) {
+          const systemName = ref.split('.')[0]
+          if (!availableSystems.has(systemName)) {
+            errors.push({
+              path: `${couplingPath}/${field}`,
+              code: 'unresolved_scoped_ref',
+              message: `Scoped reference "${ref}" references nonexistent system "${systemName}"`,
+              details: { reference: ref, system: systemName },
+            })
+          } else {
+            // Check variable exists in the system
+            const varName = ref.split('.').slice(1).join('.')
+            const system =
+              (esmFile.models || {})[systemName] || (esmFile.reaction_systems || {})[systemName]
+            if (system) {
+              const vars = (system as any).variables || (system as any).species || {}
+              const params = (system as any).parameters || {}
+              if (!vars[varName] && !params[varName]) {
+                // Check data loaders
+                const dataLoader = (esmFile.data_loaders || {})[systemName]
+                const loaderVariables = dataLoader?.variables || {}
+                if (!loaderVariables[varName]) {
+                  errors.push({
+                    path: `${couplingPath}/${field}`,
+                    code: 'unresolved_scoped_ref',
+                    message: `Variable "${varName}" not found in system "${systemName}"`,
+                    details: { reference: ref, system: systemName, variable: varName },
+                  })
+                }
+              }
+            }
+          }
+        }
+      }
     }
+  }
 
-    return errors;
+  return errors
 }
 
 /**
@@ -1166,104 +1192,110 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
  * Check for circular cross-model variable references (without explicit coupling)
  */
 function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (!esmFile.models) return errors;
+  const errors: StructuralError[] = []
+  if (!esmFile.models) return errors
 
-    // Build dependency graph: which models reference which other models
-    const modelDeps = new Map<string, Set<string>>();
+  // Build dependency graph: which models reference which other models
+  const modelDeps = new Map<string, Set<string>>()
 
-    for (const [modelName, model] of Object.entries(esmFile.models)) {
-        const deps = new Set<string>();
-        // Check all equations for cross-model references
-        for (const equation of model.equations || []) {
-            const refs = [
-                ...extractVariableReferences(equation.lhs),
-                ...extractVariableReferences(equation.rhs)
-            ];
-            for (const ref of refs) {
-                if (ref.includes('.')) {
-                    const targetModel = ref.split('.')[0];
-                    if (targetModel !== modelName && esmFile.models[targetModel]) {
-                        deps.add(targetModel);
-                    }
-                }
-            }
+  for (const [modelName, model] of Object.entries(esmFile.models)) {
+    const deps = new Set<string>()
+    // Check all equations for cross-model references (unresolved
+    // SubsystemRef entries carry no equations)
+    const equations = 'ref' in model ? [] : model.equations || []
+    for (const equation of equations) {
+      const refs = [
+        ...extractVariableReferences(equation.lhs),
+        ...extractVariableReferences(equation.rhs),
+      ]
+      for (const ref of refs) {
+        if (ref.includes('.')) {
+          const targetModel = ref.split('.')[0]
+          if (targetModel !== modelName && esmFile.models[targetModel]) {
+            deps.add(targetModel)
+          }
         }
-        modelDeps.set(modelName, deps);
+      }
+    }
+    modelDeps.set(modelName, deps)
+  }
+
+  // Detect cycles using DFS
+  const visited = new Set<string>()
+  const inStack = new Set<string>()
+
+  function dfs(node: string, path: string[]): boolean {
+    if (inStack.has(node)) {
+      const cycleStart = path.indexOf(node)
+      const cycle = path.slice(cycleStart).concat(node)
+      errors.push({
+        path: '/models',
+        message: `Circular dependency detected: ${cycle.join(' → ')}`,
+        code: 'circular_dependency',
+        details: { cycle },
+      })
+      return true
+    }
+    if (visited.has(node)) return false
+
+    visited.add(node)
+    inStack.add(node)
+    path.push(node)
+
+    for (const dep of modelDeps.get(node) || []) {
+      dfs(dep, [...path])
     }
 
-    // Detect cycles using DFS
-    const visited = new Set<string>();
-    const inStack = new Set<string>();
+    inStack.delete(node)
+    return false
+  }
 
-    function dfs(node: string, path: string[]): boolean {
-        if (inStack.has(node)) {
-            const cycleStart = path.indexOf(node);
-            const cycle = path.slice(cycleStart).concat(node);
-            errors.push({
-                path: '/models',
-                message: `Circular dependency detected: ${cycle.join(' → ')}`,
-                code: 'circular_dependency',
-                details: { cycle }
-            });
-            return true;
-        }
-        if (visited.has(node)) return false;
-
-        visited.add(node);
-        inStack.add(node);
-        path.push(node);
-
-        for (const dep of modelDeps.get(node) || []) {
-            dfs(dep, [...path]);
-        }
-
-        inStack.delete(node);
-        return false;
+  for (const modelName of modelDeps.keys()) {
+    if (!visited.has(modelName)) {
+      dfs(modelName, [])
     }
+  }
 
-    for (const modelName of modelDeps.keys()) {
-        if (!visited.has(modelName)) {
-            dfs(modelName, []);
-        }
-    }
-
-    return errors;
+  return errors
 }
 
 /**
  * Validate data loader variable references in coupling entries
  */
 function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (!esmFile.coupling || !esmFile.data_loaders) return errors;
+  const errors: StructuralError[] = []
+  if (!esmFile.coupling || !esmFile.data_loaders) return errors
 
-    for (let i = 0; i < esmFile.coupling.length; i++) {
-        const coupling = esmFile.coupling[i];
-        const couplingPath = `/coupling/${i}`;
+  for (let i = 0; i < esmFile.coupling.length; i++) {
+    const coupling = esmFile.coupling[i]
+    const couplingPath = `/coupling/${i}`
 
-        if (coupling.type === 'variable_map' && 'from' in coupling) {
-            const from = (coupling as any).from as string;
-            if (from && from.includes('.')) {
-                const [sourceName, varName] = from.split('.', 2);
-                // Check if source is a data loader
-                if (esmFile.data_loaders[sourceName]) {
-                    const loader = esmFile.data_loaders[sourceName];
-                    const loaderVariables = (loader as any).variables || {};
-                    if (!(varName in loaderVariables)) {
-                        errors.push({
-                            path: `${couplingPath}/from`,
-                            message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
-                            code: 'undefined_data_loader_variable',
-                            details: { data_loader: sourceName, variable: varName, available: Object.keys(loaderVariables) }
-                        });
-                    }
-                }
-            }
+    if (coupling.type === 'variable_map' && 'from' in coupling) {
+      const from = (coupling as any).from as string
+      if (from && from.includes('.')) {
+        const [sourceName, varName] = from.split('.', 2)
+        // Check if source is a data loader
+        if (esmFile.data_loaders[sourceName]) {
+          const loader = esmFile.data_loaders[sourceName]
+          const loaderVariables = (loader as any).variables || {}
+          if (!(varName in loaderVariables)) {
+            errors.push({
+              path: `${couplingPath}/from`,
+              message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
+              code: 'undefined_data_loader_variable',
+              details: {
+                data_loader: sourceName,
+                variable: varName,
+                available: Object.keys(loaderVariables),
+              },
+            })
+          }
         }
+      }
     }
+  }
 
-    return errors;
+  return errors
 }
 
 /**
@@ -1271,33 +1303,34 @@ function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
  * are valid ISO 8601 durations
  */
 function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
-    if (!esmFile.data_loaders) return errors;
+  const errors: StructuralError[] = []
+  if (!esmFile.data_loaders) return errors
 
-    // ISO 8601 duration pattern: P[nY][nM][nD][T[nH][nM][nS]]
-    const iso8601DurationPattern = /^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/;
-    const isValidDuration = (v: unknown): v is string =>
-        typeof v === 'string' && v !== 'P' && v !== 'PT' && iso8601DurationPattern.test(v);
+  // ISO 8601 duration pattern: P[nY][nM][nD][T[nH][nM][nS]]
+  const iso8601DurationPattern =
+    /^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/
+  const isValidDuration = (v: unknown): v is string =>
+    typeof v === 'string' && v !== 'P' && v !== 'PT' && iso8601DurationPattern.test(v)
 
-    const durationFields: Array<'file_period' | 'frequency'> = ['file_period', 'frequency'];
+  const durationFields: Array<'file_period' | 'frequency'> = ['file_period', 'frequency']
 
-    for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
-        const temporal = (loader as any).temporal;
-        if (!temporal || typeof temporal !== 'object') continue;
-        for (const field of durationFields) {
-            const value = temporal[field];
-            if (value !== undefined && !isValidDuration(value)) {
-                errors.push({
-                    path: `/data_loaders/${loaderName}/temporal/${field}`,
-                    message: `Invalid ISO 8601 duration: '${value}'`,
-                    code: 'invalid_temporal_duration',
-                    details: { field, value }
-                });
-            }
-        }
+  for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
+    const temporal = (loader as any).temporal
+    if (!temporal || typeof temporal !== 'object') continue
+    for (const field of durationFields) {
+      const value = temporal[field]
+      if (value !== undefined && !isValidDuration(value)) {
+        errors.push({
+          path: `/data_loaders/${loaderName}/temporal/${field}`,
+          message: `Invalid ISO 8601 duration: '${value}'`,
+          code: 'invalid_temporal_duration',
+          details: { field, value },
+        })
+      }
     }
+  }
 
-    return errors;
+  return errors
 }
 
 /**
@@ -1306,113 +1339,116 @@ function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
  * (UnitWarning.code, assigned in units.ts beside the message definitions).
  */
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
-    return warnings
-        .filter((warning) => warning.code === 'dimensional_mismatch')
-        .map((warning) => ({
-            path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
-            message: warning.message,
-            code: 'unit_error',
-            details: { equation: warning.equation || '' }
-        }));
+  return warnings
+    .filter((warning) => warning.code === 'dimensional_mismatch')
+    .map((warning) => ({
+      path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
+      message: warning.message,
+      code: 'unit_error',
+      details: { equation: warning.equation || '' },
+    }))
 }
 
 function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
-    const errors: StructuralError[] = [];
+  const errors: StructuralError[] = []
 
-    // Collect systems that participate in coupling — these may reference
-    // variables from other systems, so equation balance and reference
-    // integrity checks must be relaxed.
-    const coupledSystems = new Set<string>();
-    if (esmFile.coupling) {
-        for (const entry of esmFile.coupling) {
-            if ('systems' in entry && Array.isArray((entry as any).systems)) {
-                for (const s of (entry as any).systems) {
-                    coupledSystems.add(s);
-                }
-            }
-            if ('from' in entry && typeof (entry as any).from === 'string') {
-                const fromSystem = (entry as any).from.split('.')[0];
-                coupledSystems.add(fromSystem);
-            }
-            if ('to' in entry && typeof (entry as any).to === 'string') {
-                const toSystem = (entry as any).to.split('.')[0];
-                coupledSystems.add(toSystem);
-            }
+  // Collect systems that participate in coupling — these may reference
+  // variables from other systems, so equation balance and reference
+  // integrity checks must be relaxed.
+  const coupledSystems = new Set<string>()
+  if (esmFile.coupling) {
+    for (const entry of esmFile.coupling) {
+      if ('systems' in entry && Array.isArray((entry as any).systems)) {
+        for (const s of (entry as any).systems) {
+          coupledSystems.add(s)
         }
+      }
+      if ('from' in entry && typeof (entry as any).from === 'string') {
+        const fromSystem = (entry as any).from.split('.')[0]
+        coupledSystems.add(fromSystem)
+      }
+      if ('to' in entry && typeof (entry as any).to === 'string') {
+        const toSystem = (entry as any).to.split('.')[0]
+        coupledSystems.add(toSystem)
+      }
     }
+  }
 
-    // Validate models. Unresolved SubsystemRef entries are reported by
-    // validateSubsystemRefs below; DataLoader subsystems carry no equations.
-    if (esmFile.models) {
-        for (const [modelName, model] of Object.entries(esmFile.models)) {
-            if (!isInlineModel(model)) continue;
-            const modelPath = `/models/${modelName}`;
-            const isCoupled = coupledSystems.has(modelName);
+  // Validate models. Unresolved SubsystemRef entries are reported by
+  // validateSubsystemRefs below; DataLoader subsystems carry no equations.
+  if (esmFile.models) {
+    for (const [modelName, model] of Object.entries(esmFile.models)) {
+      if (!isInlineModel(model)) continue
+      const modelPath = `/models/${modelName}`
+      const isCoupled = coupledSystems.has(modelName)
 
-            // Skip equation balance and reference integrity for coupled models,
-            // as they may reference variables provided by other systems.
-            if (!isCoupled) {
-                errors.push(...validateEquationBalance(model, modelPath));
-                errors.push(...validateReferenceIntegrity(model, modelPath, esmFile));
-            }
-            errors.push(...validateEventConsistency(model, modelPath));
-            errors.push(...validatePhysicalConstantUnits(model, modelPath));
-            errors.push(...validateConversionFactorConsistency(model, modelPath));
-            errors.push(...validateDefaultUnits(model, modelPath));
+      // Skip equation balance and reference integrity for coupled models,
+      // as they may reference variables provided by other systems.
+      if (!isCoupled) {
+        errors.push(...validateEquationBalance(model, modelPath))
+        errors.push(...validateReferenceIntegrity(model, modelPath, esmFile))
+      }
+      errors.push(...validateEventConsistency(model, modelPath))
+      errors.push(...validatePhysicalConstantUnits(model, modelPath))
+      errors.push(...validateConversionFactorConsistency(model, modelPath))
+      errors.push(...validateDefaultUnits(model, modelPath))
 
-            // Recursively validate subsystems
-            if (model.subsystems) {
-                for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
-                    if (!isInlineModel(subsystem)) continue;
-                    const subsystemPath = `${modelPath}/subsystems/${subsystemName}`;
-                    if (!isCoupled) {
-                        errors.push(...validateEquationBalance(subsystem, subsystemPath));
-                        errors.push(...validateReferenceIntegrity(subsystem, subsystemPath, esmFile));
-                    }
-                    errors.push(...validateEventConsistency(subsystem, subsystemPath));
-                    errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath));
-                    errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath));
-                }
-            }
+      // Recursively validate subsystems
+      if (model.subsystems) {
+        for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
+          if (!isInlineModel(subsystem)) continue
+          const subsystemPath = `${modelPath}/subsystems/${subsystemName}`
+          if (!isCoupled) {
+            errors.push(...validateEquationBalance(subsystem, subsystemPath))
+            errors.push(...validateReferenceIntegrity(subsystem, subsystemPath, esmFile))
+          }
+          errors.push(...validateEventConsistency(subsystem, subsystemPath))
+          errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
+          errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
         }
+      }
     }
+  }
 
-    // Validate reaction systems
-    if (esmFile.reaction_systems) {
-        for (const [systemName, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
-            const systemPath = `/reaction_systems/${systemName}`;
+  // Validate reaction systems
+  if (esmFile.reaction_systems) {
+    for (const [systemName, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
+      const systemPath = `/reaction_systems/${systemName}`
 
-            errors.push(...validateReactionConsistency(reactionSystem, systemPath));
-            errors.push(...validateReactionRateUnits(reactionSystem, systemPath));
-            errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath));
+      errors.push(...validateReactionConsistency(reactionSystem, systemPath))
+      errors.push(...validateReactionRateUnits(reactionSystem, systemPath))
+      errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
 
-            // Recursively validate subsystems
-            if (reactionSystem.subsystems) {
-                for (const [subsystemName, subsystem] of Object.entries(reactionSystem.subsystems)) {
-                    const subsystemPath = `${systemPath}/subsystems/${subsystemName}`;
-                    errors.push(...validateReactionConsistency(subsystem, subsystemPath));
-                    errors.push(...validateReactionRateUnits(subsystem, subsystemPath));
-                }
-            }
+      // Recursively validate subsystems (unresolved SubsystemRef
+      // entries carry no species/reactions — validating them is a
+      // no-op, so skip them; validateSubsystemRefs flags them below)
+      if (reactionSystem.subsystems) {
+        for (const [subsystemName, subsystem] of Object.entries(reactionSystem.subsystems)) {
+          if ('ref' in subsystem) continue
+          const subsystemPath = `${systemPath}/subsystems/${subsystemName}`
+          errors.push(...validateReactionConsistency(subsystem, subsystemPath))
+          errors.push(...validateReactionRateUnits(subsystem, subsystemPath))
         }
+      }
     }
+  }
 
-    // Validate subsystem ref resolution
-    errors.push(...validateSubsystemRefs(esmFile));
+  // Validate subsystem ref resolution
+  errors.push(...validateSubsystemRefs(esmFile))
 
-    // Validate coupling integrity
-    errors.push(...validateCouplingIntegrity(esmFile));
+  // Validate coupling integrity
+  errors.push(...validateCouplingIntegrity(esmFile))
 
-    // Check for circular cross-model references
-    errors.push(...validateCircularReferences(esmFile));
+  // Check for circular cross-model references
+  errors.push(...validateCircularReferences(esmFile))
 
-    // Validate data loader variable references in coupling
-    errors.push(...validateDataLoaderReferences(esmFile));
+  // Validate data loader variable references in coupling
+  errors.push(...validateDataLoaderReferences(esmFile))
 
-    // Validate temporal resolution in data loaders
-    errors.push(...validateTemporalResolution(esmFile));
+  // Validate temporal resolution in data loaders
+  errors.push(...validateTemporalResolution(esmFile))
 
-    return errors;
+  return errors
 }
 
 /**
@@ -1421,27 +1457,27 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
  * stable strings that renames cannot silently change.
  */
 function loadErrorCode(error: Error): string {
-    if (error instanceof SchemaValidationError) return 'schema_validation_error';
-    if (error instanceof ParseError) return 'parse_error';
-    if (error instanceof ExpressionTemplateError) return 'expression_template_error';
-    if (error instanceof EnumLoweringError) return 'enum_lowering_error';
-    if (error instanceof LosslessJsonParseError) return 'json_parse_error';
-    if (error instanceof CanonicalNonfiniteError) return 'nonfinite_number';
-    return 'load_error';
+  if (error instanceof SchemaValidationError) return 'schema_validation_error'
+  if (error instanceof ParseError) return 'parse_error'
+  if (error instanceof ExpressionTemplateError) return 'expression_template_error'
+  if (error instanceof EnumLoweringError) return 'enum_lowering_error'
+  if (error instanceof LosslessJsonParseError) return 'json_parse_error'
+  if (error instanceof CanonicalNonfiniteError) return 'nonfinite_number'
+  return 'load_error'
 }
 
 /**
  * Convert a SchemaError to our ValidationError format
  */
 function convertSchemaError(error: SchemaError): ValidationError {
-    return {
-        path: error.path,
-        message: error.message,
-        code: error.keyword,
-        details: {
-            keyword: error.keyword
-        }
-    };
+  return {
+    path: error.path,
+    message: error.message,
+    code: error.keyword,
+    details: {
+      keyword: error.keyword,
+    },
+  }
 }
 
 /**
@@ -1451,90 +1487,93 @@ function convertSchemaError(error: SchemaError): ValidationError {
  * @returns ValidationResult with validation status and errors
  */
 export function validate(data: string | object): ValidationResult {
-    const schema_errors: ValidationError[] = [];
-    const structural_errors: ValidationError[] = [];
-    const unit_warnings: UnitWarning[] = [];
+  const schema_errors: ValidationError[] = []
+  const structural_errors: ValidationError[] = []
+  const unit_warnings: UnitWarning[] = []
 
-    try {
-        let parsedData: object;
+  try {
+    let parsedData: object
 
-        // Parse JSON if string
-        if (typeof data === 'string') {
-            try {
-                parsedData = JSON.parse(data);
-            } catch (e: unknown) {
-                const error = e as Error;
-                return {
-                    is_valid: false,
-                    schema_errors: [{
-                        path: '$',
-                        message: `Invalid JSON: ${error.message}`,
-                        code: 'json_parse_error',
-                        details: { error: error.message }
-                    }],
-                    structural_errors: [],
-                    unit_warnings: []
-                };
-            }
-        } else {
-            parsedData = data;
-        }
-
-        // Validate against schema
-        const schemaErrors = validateSchema(parsedData);
-        schema_errors.push(...schemaErrors.map(convertSchemaError));
-
-        // Try structural validation by loading the data
-        if (schema_errors.length === 0) {
-            try {
-                // Schema validation already ran above; collect unit warnings
-                // from the load pipeline instead of re-running validateUnits.
-                const esmFile = load(parsedData, {
-                    assumeValid: true,
-                    onUnitWarning: (warning) => unit_warnings.push(warning),
-                });
-                // Perform structural validation
-                structural_errors.push(...performStructuralValidation(esmFile));
-
-                // Promote unit incompatibility warnings to structural errors
-                structural_errors.push(...promoteUnitWarningsToErrors(unit_warnings));
-            } catch (e: unknown) {
-                const error = e as Error;
-                structural_errors.push({
-                    path: '$',
-                    message: error.message || String(e),
-                    code: loadErrorCode(error),
-                    details: {
-                        exception_type: error.constructor.name,
-                        error: error.message || String(e)
-                    }
-                });
-            }
-        }
-
-    } catch (e: unknown) {
-        // Unexpected error
-        const error = e as Error;
+    // Parse JSON if string
+    if (typeof data === 'string') {
+      try {
+        parsedData = JSON.parse(data)
+      } catch (e: unknown) {
+        const error = e as Error
         return {
-            is_valid: false,
-            schema_errors: [{
-                path: '$',
-                message: `Validation failed with unexpected error: ${error.message || String(e)}`,
-                code: 'unexpected_error',
-                details: {
-                    exception_type: error.constructor.name,
-                    error: error.message || String(e)
-                }
-            }],
-            structural_errors: [],
-            unit_warnings: []
-        };
+          is_valid: false,
+          schema_errors: [
+            {
+              path: '$',
+              message: `Invalid JSON: ${error.message}`,
+              code: 'json_parse_error',
+              details: { error: error.message },
+            },
+          ],
+          structural_errors: [],
+          unit_warnings: [],
+        }
+      }
+    } else {
+      parsedData = data
     }
 
+    // Validate against schema
+    const schemaErrors = validateSchema(parsedData)
+    schema_errors.push(...schemaErrors.map(convertSchemaError))
+
+    // Try structural validation by loading the data
+    if (schema_errors.length === 0) {
+      try {
+        // Schema validation already ran above; collect unit warnings
+        // from the load pipeline instead of re-running validateUnits.
+        const esmFile = load(parsedData, {
+          assumeValid: true,
+          onUnitWarning: (warning) => unit_warnings.push(warning),
+        })
+        // Perform structural validation
+        structural_errors.push(...performStructuralValidation(esmFile))
+
+        // Promote unit incompatibility warnings to structural errors
+        structural_errors.push(...promoteUnitWarningsToErrors(unit_warnings))
+      } catch (e: unknown) {
+        const error = e as Error
+        structural_errors.push({
+          path: '$',
+          message: error.message || String(e),
+          code: loadErrorCode(error),
+          details: {
+            exception_type: error.constructor.name,
+            error: error.message || String(e),
+          },
+        })
+      }
+    }
+  } catch (e: unknown) {
+    // Unexpected error
+    const error = e as Error
     return {
-        is_valid: schema_errors.length === 0 && structural_errors.length === 0,
-        schema_errors,
-        structural_errors,
-        unit_warnings
-    };
+      is_valid: false,
+      schema_errors: [
+        {
+          path: '$',
+          message: `Validation failed with unexpected error: ${error.message || String(e)}`,
+          code: 'unexpected_error',
+          details: {
+            exception_type: error.constructor.name,
+            error: error.message || String(e),
+          },
+        },
+      ],
+      structural_errors: [],
+      unit_warnings: [],
+    }
+  }
+
+  return {
+    is_valid: schema_errors.length === 0 && structural_errors.length === 0,
+    schema_errors,
+    structural_errors,
+    unit_warnings,
+  }
 }

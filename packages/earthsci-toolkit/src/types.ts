@@ -21,7 +21,7 @@ export * from './generated.js'
  * `losslessJsonParse` and emitted back to bare JSON numbers by
  * `losslessJsonStringify`.
  */
-import type { Expression as GeneratedExpression, ExpressionNode } from './generated.js'
+import type { Expression as GeneratedExpression } from './generated.js'
 import type { NumericLiteral } from './numeric-literal.js'
 export type Expr = GeneratedExpression | NumericLiteral
 
@@ -49,22 +49,9 @@ export {
 import type { ESMFormat } from './generated.js'
 export type EsmFile = ESMFormat
 
-/**
- * Enhanced CouplingEntry with proper discriminated union
- * Based on the 'type' field for better type narrowing
- */
-import type { CouplingEntry as GeneratedCouplingEntry } from './generated.js'
-
-// The base CouplingEntry already has discriminated union structure
-// Re-export with a more descriptive name
-export type { CouplingEntry } from './generated.js'
-
-/**
- * Enhanced DiscreteEventTrigger with proper discriminated union
- * The generated type already has proper discriminated union structure
- */
-import type { DiscreteEventTrigger as GeneratedDiscreteEventTrigger } from './generated.js'
-export type { DiscreteEventTrigger } from './generated.js'
+// Discriminated unions (on the 'type' field) come straight from the
+// generated schema types.
+export type { CouplingEntry, DiscreteEventTrigger } from './generated.js'
 
 // Re-export key types with explicit names for better documentation
 export type {

@@ -1,19 +1,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { load, save, ParseError, SchemaValidationError, validateSchema } from './index.js'
 import { isNumericLiteral, isIntLit, isFloatLit } from './numeric-literal.js'
+import type { Model } from './types.js'
 
 describe('Parse and Serialize', () => {
   const validMinimalEsm = {
-    esm: "0.1.0",
+    esm: '0.1.0',
     metadata: {
-      name: "test-model"
+      name: 'test-model',
     },
     models: {
-      "test_model": {
+      test_model: {
         variables: {},
-        equations: []
-      }
-    }
+        equations: [],
+      },
+    },
   }
 
   const validMinimalEsmJson = JSON.stringify(validMinimalEsm, null, 2)
@@ -38,7 +39,7 @@ describe('Parse and Serialize', () => {
     })
 
     it('should throw SchemaValidationError on missing required fields', () => {
-      const invalid = { esm: "0.1.0" } // missing metadata and models/reaction_systems
+      const invalid = { esm: '0.1.0' } // missing metadata and models/reaction_systems
       expect(() => {
         load(invalid)
       }).toThrow(SchemaValidationError)
@@ -47,7 +48,7 @@ describe('Parse and Serialize', () => {
     it('should throw SchemaValidationError on invalid version string', () => {
       const invalid = {
         ...validMinimalEsm,
-        esm: "not-a-version"
+        esm: 'not-a-version',
       }
       expect(() => {
         load(invalid)
@@ -57,7 +58,7 @@ describe('Parse and Serialize', () => {
     it('should load forward-compatible minor version (0.2.0) without error', () => {
       const forwardCompat = {
         ...validMinimalEsm,
-        esm: "0.2.0"
+        esm: '0.2.0',
       }
       const result = load(forwardCompat)
       expect(result.esm).toBe('0.2.0')
@@ -65,50 +66,55 @@ describe('Parse and Serialize', () => {
 
     it('should handle Expression union types', () => {
       const esmWithExpression = {
-        esm: "0.1.0",
-        metadata: { name: "expr-test" },
+        esm: '0.1.0',
+        metadata: { name: 'expr-test' },
         models: {
-          "test": {
+          test: {
             variables: {
-              "x": {
-                type: "state",
-                units: "kg/m3",
-                description: "concentration"
+              x: {
+                type: 'state',
+                units: 'kg/m3',
+                description: 'concentration',
               },
-              "temperature": {
-                type: "parameter",
-                units: "K",
-                default: 298.15
+              temperature: {
+                type: 'parameter',
+                units: 'K',
+                default: 298.15,
               },
-              "result": {
-                type: "observed",
+              result: {
+                type: 'observed',
                 expression: {
-                  op: "+",
-                  args: [42, "temperature", { op: "*", args: [2, "x"] }]
-                }
-              }
+                  op: '+',
+                  args: [42, 'temperature', { op: '*', args: [2, 'x'] }],
+                },
+              },
             },
             equations: [
               {
-                lhs: "D(x, t)",
+                lhs: 'D(x, t)',
                 rhs: {
-                  op: "+",
-                  args: [42, "temperature", { op: "*", args: [2, "x"] }]
-                }
-              }
-            ]
-          }
-        }
+                  op: '+',
+                  args: [42, 'temperature', { op: '*', args: [2, 'x'] }],
+                },
+              },
+            ],
+          },
+        },
       }
 
       const result = load(esmWithExpression)
-      const testModel = result.models?.["test"]
+      const testModel = result.models?.['test'] as Model | undefined
       expect(testModel).toBeDefined()
-      const observedVar = testModel?.variables["result"]
+      const observedVar = testModel?.variables['result']
       expect(observedVar).toBeDefined()
       expect(observedVar?.type).toBe('observed')
       expect(typeof observedVar?.expression).toBe('object')
-      if (observedVar && typeof observedVar.expression === 'object' && observedVar.expression && 'op' in observedVar.expression) {
+      if (
+        observedVar &&
+        typeof observedVar.expression === 'object' &&
+        observedVar.expression &&
+        'op' in observedVar.expression
+      ) {
         expect(observedVar.expression.op).toBe('+')
         expect(Array.isArray(observedVar.expression.args)).toBe(true)
         expect(observedVar.expression.args[0]).toBe(42) // number
@@ -119,18 +125,18 @@ describe('Parse and Serialize', () => {
 
     it('should handle CouplingEntry discriminated unions', () => {
       const esmWithCoupling = {
-        esm: "0.1.0",
-        metadata: { name: "coupling-test" },
+        esm: '0.1.0',
+        metadata: { name: 'coupling-test' },
         models: {
-          "model1": { variables: {}, equations: [] },
-          "model2": { variables: {}, equations: [] }
+          model1: { variables: {}, equations: [] },
+          model2: { variables: {}, equations: [] },
         },
         coupling: [
           {
-            type: "operator_compose",
-            systems: ["model1", "model2"]
-          }
-        ]
+            type: 'operator_compose',
+            systems: ['model1', 'model2'],
+          },
+        ],
       }
 
       const result = load(esmWithCoupling)
@@ -147,60 +153,60 @@ describe('Parse and Serialize', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const badDimensions = {
-          esm: "0.1.0",
-          metadata: { name: "bad-dims" },
+          esm: '0.1.0',
+          metadata: { name: 'bad-dims' },
           models: {
-            "mech": {
+            mech: {
               variables: {
-                x: { type: "state", units: "m", description: "Position" },
-                f: { type: "parameter", units: "s", description: "Force (wrong units)" }
+                x: { type: 'state', units: 'm', description: 'Position' },
+                f: { type: 'parameter', units: 's', description: 'Force (wrong units)' },
               },
               equations: [
                 {
-                  lhs: { op: "D", args: ["x"], wrt: "t" },
-                  rhs: "f"
-                }
-              ]
-            }
-          }
+                  lhs: { op: 'D', args: ['x'], wrt: 't' },
+                  rhs: 'f',
+                },
+              ],
+            },
+          },
         }
 
         load(badDimensions)
 
         expect(warnSpy).toHaveBeenCalled()
-        const messages = warnSpy.mock.calls.map(args => String(args[0]))
-        expect(messages.some(m => m.includes('ESM unit validation'))).toBe(true)
-        expect(messages.some(m => m.includes('Dimensional mismatch'))).toBe(true)
+        const messages = warnSpy.mock.calls.map((args) => String(args[0]))
+        expect(messages.some((m) => m.includes('ESM unit validation'))).toBe(true)
+        expect(messages.some((m) => m.includes('Dimensional mismatch'))).toBe(true)
       })
 
       it('should not warn when dimensions are consistent', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const goodDimensions = {
-          esm: "0.1.0",
-          metadata: { name: "good-dims" },
+          esm: '0.1.0',
+          metadata: { name: 'good-dims' },
           models: {
-            "mech": {
+            mech: {
               variables: {
-                x: { type: "state", units: "m", description: "Position" },
-                v: { type: "state", units: "m/s", description: "Velocity" },
-                t: { type: "parameter", units: "s", description: "Time" }
+                x: { type: 'state', units: 'm', description: 'Position' },
+                v: { type: 'state', units: 'm/s', description: 'Velocity' },
+                t: { type: 'parameter', units: 's', description: 'Time' },
               },
               equations: [
                 {
-                  lhs: { op: "D", args: ["x"], wrt: "t" },
-                  rhs: "v"
-                }
-              ]
-            }
-          }
+                  lhs: { op: 'D', args: ['x'], wrt: 't' },
+                  rhs: 'v',
+                },
+              ],
+            },
+          },
         }
 
         load(goodDimensions)
 
         const unitCalls = warnSpy.mock.calls
-          .map(args => String(args[0]))
-          .filter(m => m.includes('ESM unit validation'))
+          .map((args) => String(args[0]))
+          .filter((m) => m.includes('ESM unit validation'))
         expect(unitCalls).toEqual([])
       })
 
@@ -208,28 +214,28 @@ describe('Parse and Serialize', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
         const badDimensions = {
-          esm: "0.1.0",
-          metadata: { name: "located" },
+          esm: '0.1.0',
+          metadata: { name: 'located' },
           models: {
-            "mech": {
+            mech: {
               variables: {
-                x: { type: "state", units: "m", description: "Position" },
-                f: { type: "parameter", units: "s", description: "Force (wrong units)" }
+                x: { type: 'state', units: 'm', description: 'Position' },
+                f: { type: 'parameter', units: 's', description: 'Force (wrong units)' },
               },
               equations: [
                 {
-                  lhs: { op: "D", args: ["x"], wrt: "t" },
-                  rhs: "f"
-                }
-              ]
-            }
-          }
+                  lhs: { op: 'D', args: ['x'], wrt: 't' },
+                  rhs: 'f',
+                },
+              ],
+            },
+          },
         }
 
         load(badDimensions)
 
-        const messages = warnSpy.mock.calls.map(args => String(args[0]))
-        expect(messages.some(m => m.includes('[models.mech]'))).toBe(true)
+        const messages = warnSpy.mock.calls.map((args) => String(args[0]))
+        expect(messages.some((m) => m.includes('[models.mech]'))).toBe(true)
       })
     })
 
@@ -243,9 +249,7 @@ describe('Parse and Serialize', () => {
               x: { type: 'state' },
               y: { type: 'parameter', default: 2 },
             },
-            equations: [
-              { lhs: 'x', rhs: { op: '*', args: [2, 1.5] } },
-            ],
+            equations: [{ lhs: 'x', rhs: { op: '*', args: [2, 1.5] } }],
           },
         },
       })
@@ -291,22 +295,22 @@ describe('Parse and Serialize', () => {
 
     it('should handle optional vs required fields correctly', () => {
       const esmWithOptionalFields = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "optional-test",
-          description: "A test model",
+          name: 'optional-test',
+          description: 'A test model',
           // authors field is absent (optional)
         },
         models: {
-          "test": {
+          test: {
             variables: {},
-            equations: []
-          }
-        }
+            equations: [],
+          },
+        },
       }
 
       const result = load(esmWithOptionalFields)
-      expect(result.metadata.description).toBe("A test model")
+      expect(result.metadata.description).toBe('A test model')
       expect(result.metadata.authors).toBeUndefined()
     })
   })
@@ -341,38 +345,43 @@ describe('Parse and Serialize', () => {
 
     it('should handle complex structures in round-trip', () => {
       const complexEsm = {
-        esm: "0.1.0",
+        esm: '0.1.0',
         metadata: {
-          name: "complex-model",
-          description: "A complex test model",
-          authors: ["Test Author"],
-          license: "MIT"
+          name: 'complex-model',
+          description: 'A complex test model',
+          authors: ['Test Author'],
+          license: 'MIT',
         },
         models: {
-          "atmospheric": {
+          atmospheric: {
             variables: {
-              "O3": { type: "state", units: "ppb", description: "Ozone concentration" },
-              "NO2": { type: "parameter", units: "ppb", description: "Nitrogen dioxide", default: 10.0 },
-              "k1": { type: "parameter", default: 0.5 }
+              O3: { type: 'state', units: 'ppb', description: 'Ozone concentration' },
+              NO2: {
+                type: 'parameter',
+                units: 'ppb',
+                description: 'Nitrogen dioxide',
+                default: 10.0,
+              },
+              k1: { type: 'parameter', default: 0.5 },
             },
             equations: [
               {
-                lhs: "D(O3, t)",
-                rhs: { op: "*", args: [{ op: "+", args: ["k1", 0.1] }, "NO2"] }
-              }
-            ]
+                lhs: 'D(O3, t)',
+                rhs: { op: '*', args: [{ op: '+', args: ['k1', 0.1] }, 'NO2'] },
+              },
+            ],
           },
-          "surface": {
+          surface: {
             variables: {},
-            equations: []
-          }
+            equations: [],
+          },
         },
         coupling: [
           {
-            type: "operator_compose",
-            systems: ["atmospheric", "surface"]
-          }
-        ]
+            type: 'operator_compose',
+            systems: ['atmospheric', 'surface'],
+          },
+        ],
       }
 
       const first = load(complexEsm)
@@ -390,7 +399,7 @@ describe('Parse and Serialize', () => {
     })
 
     it('should return error details for invalid data', () => {
-      const invalid = { esm: "invalid", metadata: {} }
+      const invalid = { esm: 'invalid', metadata: {} }
       const errors = validateSchema(invalid)
 
       expect(errors.length).toBeGreaterThan(0)
@@ -403,30 +412,30 @@ describe('Parse and Serialize', () => {
   describe('v0.5.0 inline multi-series y (plots.y array form)', () => {
     it('should accept array-form plots.y without schema error', () => {
       const esmWithArrayY = {
-        esm: "0.5.0",
-        metadata: { name: "multi_y_test" },
+        esm: '0.5.0',
+        metadata: { name: 'multi_y_test' },
         models: {
           AB: {
             variables: {
-              A: { type: "state", default: 1.0 },
-              B: { type: "state", default: 0.0 },
+              A: { type: 'state', default: 1.0 },
+              B: { type: 'state', default: 0.0 },
             },
             equations: [
-              { lhs: { op: "D", args: ["A"], wrt: "t" }, rhs: { op: "*", args: [-0.1, "A"] } },
-              { lhs: { op: "D", args: ["B"], wrt: "t" }, rhs: { op: "*", args: [0.1, "A"] } },
+              { lhs: { op: 'D', args: ['A'], wrt: 't' }, rhs: { op: '*', args: [-0.1, 'A'] } },
+              { lhs: { op: 'D', args: ['B'], wrt: 't' }, rhs: { op: '*', args: [0.1, 'A'] } },
             ],
             examples: [
               {
-                id: "ab_trace",
+                id: 'ab_trace',
                 time_span: { start: 0.0, end: 10.0 },
                 plots: [
                   {
-                    id: "ab_multi",
-                    type: "line",
-                    x: { variable: "t" },
+                    id: 'ab_multi',
+                    type: 'line',
+                    x: { variable: 't' },
                     y: [
-                      { variable: "A", label: "Species A" },
-                      { variable: "B", label: "Species B" },
+                      { variable: 'A', label: 'Species A' },
+                      { variable: 'B', label: 'Species B' },
                     ],
                   },
                 ],
@@ -454,7 +463,7 @@ describe('Parse and Serialize', () => {
 
     it('should include validation errors in SchemaValidationError', () => {
       try {
-        load({ invalid: "data" })
+        load({ invalid: 'data' })
       } catch (error) {
         if (error instanceof SchemaValidationError) {
           expect(error.errors).toBeDefined()

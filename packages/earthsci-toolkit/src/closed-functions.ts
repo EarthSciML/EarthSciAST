@@ -35,7 +35,10 @@ export type ClosedFunctionErrorCode =
  * compare against this exact string.
  */
 export class ClosedFunctionError extends Error {
-  constructor(public code: ClosedFunctionErrorCode, message: string) {
+  constructor(
+    public code: ClosedFunctionErrorCode,
+    message: string,
+  ) {
     super(`[${code}] ${message}`)
     this.name = 'ClosedFunctionError'
   }
@@ -209,7 +212,10 @@ function asNumber(name: string, v: unknown, idx = 0): number {
  * non-monotonic order. Empty arrays are rejected with the spec arity
  * code (the registry requires N ≥ 1).
  */
-export function validateSearchsortedTable(xs: readonly number[], where = 'interp.searchsorted'): void {
+export function validateSearchsortedTable(
+  xs: readonly number[],
+  where = 'interp.searchsorted',
+): void {
   if (xs.length === 0) {
     throw new ClosedFunctionError(
       'closed_function_arity',
@@ -218,10 +224,7 @@ export function validateSearchsortedTable(xs: readonly number[], where = 'interp
   }
   for (let i = 0; i < xs.length; i++) {
     if (Number.isNaN(xs[i])) {
-      throw new ClosedFunctionError(
-        'searchsorted_nan_in_table',
-        `${where}: xs[${i + 1}] is NaN`,
-      )
+      throw new ClosedFunctionError('searchsorted_nan_in_table', `${where}: xs[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < xs.length; i++) {
@@ -272,10 +275,7 @@ export function validateInterpAxis(axis: readonly number[], where: string): void
   }
   for (let i = 0; i < axis.length; i++) {
     if (Number.isNaN(axis[i]!)) {
-      throw new ClosedFunctionError(
-        'interp_nan_in_axis',
-        `${where}: axis[${i + 1}] is NaN`,
-      )
+      throw new ClosedFunctionError('interp_nan_in_axis', `${where}: axis[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < axis.length; i++) {
@@ -299,7 +299,10 @@ function asNumberArray(name: string, v: unknown, argLabel: string): number[] {
 }
 
 function asNumberMatrix(name: string, v: unknown): number[][] {
-  if (!Array.isArray(v) || !v.every((row) => Array.isArray(row) && row.every((e) => typeof e === 'number'))) {
+  if (
+    !Array.isArray(v) ||
+    !v.every((row) => Array.isArray(row) && row.every((e) => typeof e === 'number'))
+  ) {
     throw new ClosedFunctionError(
       'interp_table_not_const',
       `${name}: table must be a const-array of const-arrays of numbers`,

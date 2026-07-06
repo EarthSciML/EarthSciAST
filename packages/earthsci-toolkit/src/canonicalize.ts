@@ -39,21 +39,15 @@ export const E_CANONICAL_DIVBY_ZERO = 'E_CANONICAL_DIVBY_ZERO'
 type Expr = Expression | NumericLiteral
 type Node = { op: string; args: Expr[] } & Record<string, unknown>
 
-function isNode(e: Expr): e is Node {
-  return (
-    typeof e === 'object' &&
-    e !== null &&
-    !isNumericLiteral(e) &&
-    'op' in e &&
-    'args' in e
-  )
+function isNode(e: unknown): e is Node {
+  return typeof e === 'object' && e !== null && !isNumericLiteral(e) && 'op' in e && 'args' in e
 }
 
-function isPlainNumber(e: Expr): e is number {
+function isPlainNumber(e: unknown): e is number {
   return typeof e === 'number'
 }
 
-function isString(e: Expr): e is string {
+function isString(e: unknown): e is string {
   return typeof e === 'string'
 }
 
@@ -343,7 +337,7 @@ function emitJson(e: Expr | unknown): string {
     // element via emitJson so floats/ints round-trip canonically.
     return `[${(e as unknown[]).map((v) => emitJson(v)).join(',')}]`
   }
-  if (isNode(e)) return emitNodeJson(e as Expr)
+  if (isNode(e)) return emitNodeJson(e)
   if (e === null) return 'null'
   return JSON.stringify(e)
 }

@@ -5,101 +5,100 @@
  * including dependency graphs, complexity metrics, and manipulation utilities.
  */
 
-import type { Expr } from '../types.js';
-import type { Graph } from '../graph.js';
+import type { Expr } from '../types.js'
+import type { Graph } from '../graph.js'
 
 /** Node representing a variable in a dependency graph */
 export interface DependencyNode {
   /** Variable name */
-  name: string;
-  /** Type of variable (state, parameter, observed, brownian, species) */
-  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'species';
+  name: string
+  /** Type of variable (state, parameter, observed, brownian, discrete, species) */
+  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'discrete' | 'species'
   /** System/model this variable belongs to */
-  system: string;
+  system: string
   /** Units if specified */
-  units?: string;
+  units?: string
   /** Definition expression if available */
-  definition?: Expr;
+  definition?: Expr
   /** Nesting level in the dependency graph */
-  depth: number;
+  depth: number
 }
 
 /** Edge representing a dependency relationship between variables */
 export interface DependencyRelation {
   /** Source variable */
-  source: string;
+  source: string
   /** Target variable */
-  target: string;
+  target: string
   /** Type of dependency */
-  type: 'direct' | 'indirect' | 'circular' | 'parameter_dependency' | 'definition_dependency';
+  type: 'direct' | 'indirect' | 'circular' | 'parameter_dependency' | 'definition_dependency'
   /** Strength/weight of dependency (0-1) */
-  weight: number;
+  weight: number
   /** Expression that creates this dependency */
-  expression?: Expr;
+  expression?: Expr
 }
 
 /** Graph representing variable dependencies */
 export interface DependencyGraph extends Graph<DependencyNode, DependencyRelation> {
   /** Check for circular dependencies */
-  hasCircularDependencies(): boolean;
+  hasCircularDependencies(): boolean
   /** Get strongly connected components */
-  getStronglyConnectedComponents(): DependencyNode[][];
+  getStronglyConnectedComponents(): DependencyNode[][]
   /** Topological sort of dependencies */
-  topologicalSort(): DependencyNode[];
+  topologicalSort(): DependencyNode[]
 }
 
 /** Complexity metrics for an expression */
 export interface ComplexityMetrics {
   /** Total depth of the expression tree */
-  depth: number;
+  depth: number
   /** Total number of operations */
-  operationCount: number;
+  operationCount: number
   /** Number of unique variables */
-  variableCount: number;
+  variableCount: number
   /** Number of constants */
-  constantCount: number;
+  constantCount: number
   /** Distribution of operation types */
-  operationTypes: Record<string, number>;
+  operationTypes: Record<string, number>
   /** Estimated computational cost (arbitrary units) */
-  computationalCost: number;
+  computationalCost: number
   /** Memory usage estimate (arbitrary units) */
-  memoryUsage: number;
+  memoryUsage: number
 }
 
 /** Common subexpression identification result */
 export interface CommonSubexpression {
   /** The common subexpression */
-  expression: Expr;
+  expression: Expr
   /** Locations where this subexpression appears */
-  locations: ExpressionLocation[];
+  locations: ExpressionLocation[]
   /** Number of occurrences */
-  count: number;
+  count: number
   /** Estimated cost savings from factoring out */
-  savings: number;
+  savings: number
 }
 
 /** Location of an expression within a larger structure */
 export interface ExpressionLocation {
   /** Path to the expression (e.g., ['models', 'Transport', 'equations', 0, 'rhs']) */
-  path: string[];
+  path: string[]
   /** Human-readable description */
-  description: string;
+  description: string
   /** Parent expression context */
-  context?: Expr;
+  context?: Expr
 }
 
 /** Result of symbolic differentiation */
 export interface DerivativeResult {
   /** The derivative expression */
-  derivative: Expr;
+  derivative: Expr
   /** Variable with respect to which we differentiated */
-  variable: string;
+  variable: string
   /** Simplified form if different from derivative */
-  simplified?: Expr;
+  simplified?: Expr
   /** Chain rule components if applicable */
   chainComponents?: Array<{
-    expression: Expr;
-    derivative: Expr;
-  }>;
+    expression: Expr
+    derivative: Expr
+  }>
 }
-

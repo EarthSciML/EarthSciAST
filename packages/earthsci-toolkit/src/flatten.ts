@@ -10,13 +10,11 @@ import type {
   EsmFile,
   Model,
   ReactionSystem,
-  ModelVariable,
   Expression,
   ExpressionNode,
   CouplingEntry,
-  Equation,
 } from './types.js'
-import { isNumericLiteral, numericValue } from './numeric-literal.js'
+import { numericValue } from './numeric-literal.js'
 
 /**
  * A single equation in the flattened system, with dot-namespaced variable names.
@@ -79,11 +77,22 @@ export function flatten(file: EsmFile): FlattenedSystem {
   const sourceSystems: string[] = []
   const couplingRules: string[] = []
 
-  // 1. Process all models
+  // 1. Process all models (unresolved SubsystemRef entries carry no
+  // variables or equations — flattening them is a no-op, so skip them,
+  // but still record the system name)
   if (file.models) {
     for (const [systemName, model] of Object.entries(file.models)) {
       sourceSystems.push(systemName)
-      flattenModel(systemName, model, stateVariables, parameters, brownianVariables, variables, equations)
+      if ('ref' in model) continue
+      flattenModel(
+        systemName,
+        model as Model,
+        stateVariables,
+        parameters,
+        brownianVariables,
+        variables,
+        equations,
+      )
     }
   }
 
@@ -125,7 +134,7 @@ function flattenModel(
   parameters: string[],
   brownianVariables: string[],
   variables: Record<string, string>,
-  equations: FlattenedEquation[]
+  equations: FlattenedEquation[],
 ): void {
   // Collect the set of variable names in this model for namespacing expressions
   const localNames = new Set<string>(Object.keys(model.variables || {}))
@@ -166,7 +175,15 @@ function flattenModel(
   if (model.subsystems) {
     for (const [subName, subModel] of Object.entries(model.subsystems)) {
       if ('ref' in subModel || 'kind' in subModel) continue
-      flattenModel(`${prefix}.${subName}`, subModel as Model, stateVariables, parameters, brownianVariables, variables, equations)
+      flattenModel(
+        `${prefix}.${subName}`,
+        subModel as Model,
+        stateVariables,
+        parameters,
+        brownianVariables,
+        variables,
+        equations,
+      )
     }
   }
 }
@@ -180,7 +197,7 @@ function flattenReactionSystem(
   stateVariables: string[],
   parameters: string[],
   variables: Record<string, string>,
-  equations: FlattenedEquation[]
+  equations: FlattenedEquation[],
 ): void {
   // Collect local names for namespacing
   const localNames = new Set<string>([
@@ -252,7 +269,7 @@ function flattenReactionSystem(
         stateVariables,
         parameters,
         variables,
-        equations
+        equations,
       )
     }
   }
@@ -265,7 +282,7 @@ function processCouplingEntry(
   entry: CouplingEntry,
   equations: FlattenedEquation[],
   variables: Record<string, string>,
-  couplingRules: string[]
+  couplingRules: string[],
 ): void {
   switch (entry.type) {
     case 'operator_compose': {
@@ -275,7 +292,8 @@ function processCouplingEntry(
       if (entry.translate) {
         for (const [from, target] of Object.entries(entry.translate)) {
           const targetVar = typeof target === 'string' ? target : target.var
-          const factor = typeof target === 'object' && target.factor !== undefined ? target.factor : 1
+          const factor =
+            typeof target === 'object' && target.factor !== undefined ? target.factor : 1
           const namespacedFrom = `${sys1}.${from}`
           const namespacedTo = `${sys2}.${targetVar}`
 
@@ -294,12 +312,11 @@ function processCouplingEntry(
 
     case 'couple': {
       const [sys1, sys2] = entry.systems
-      let ruleDesc = `couple(${sys1}, ${sys2})`
+      const ruleDesc = `couple(${sys1}, ${sys2})`
 
       for (const connEq of entry.connector.equations) {
-        const exprStr = connEq.expression !== undefined
-          ? expressionToString(connEq.expression)
-          : connEq.from
+        const exprStr =
+          connEq.expression !== undefined ? expressionToString(connEq.expression) : connEq.from
 
         equations.push({
           lhs: connEq.to,
@@ -348,11 +365,7 @@ function processCouplingEntry(
  * Convert an Expression AST to a string representation, namespacing local variable
  * references with the given prefix.
  */
-function namespaceExpression(
-  expr: Expression,
-  prefix: string,
-  localNames: Set<string>
-): string {
+function namespaceExpression(expr: Expression, prefix: string, localNames: Set<string>): string {
   const n = numericValue(expr)
   if (n !== undefined) {
     return String(n)
@@ -382,9 +395,9 @@ function namespaceExpression(
 function expressionNodeToString(
   node: ExpressionNode,
   prefix: string,
-  localNames: Set<string>
+  localNames: Set<string>,
 ): string {
-  const args = node.args.map(arg => namespaceExpression(arg, prefix, localNames))
+  const args = node.args.map((arg) => namespaceExpression(arg, prefix, localNames))
 
   // Binary infix operators
   const infixOps = new Set(['+', '-', '*', '/', '^', '>', '<', '>=', '<=', '==', '!=', 'and', 'or'])

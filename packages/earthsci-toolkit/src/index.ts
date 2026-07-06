@@ -28,8 +28,24 @@ export { validate } from './validate.js'
 export type { ValidationError, ValidationResult } from './validate.js'
 
 // Export graph utilities
-export { component_graph, componentGraph, expressionGraph, componentExists, getComponentType, toDot, toMermaid, toJsonGraph } from './graph.js'
-export type { ComponentGraph, ComponentNode, CouplingEdge, Graph, VariableNode, DependencyEdge } from './graph.js'
+export {
+  component_graph,
+  componentGraph,
+  expressionGraph,
+  componentExists,
+  getComponentType,
+  toDot,
+  toMermaid,
+  toJsonGraph,
+} from './graph.js'
+export type {
+  ComponentGraph,
+  ComponentNode,
+  CouplingEdge,
+  Graph,
+  VariableNode,
+  DependencyEdge,
+} from './graph.js'
 
 // Export advanced expression analysis and manipulation
 export * from './analysis/index.js'
@@ -54,7 +70,12 @@ export { parseUnit, checkDimensions, validateUnits } from './units.js'
 export type { UnitResult, UnitWarning } from './units.js'
 
 // Export runtime unit conversion
-export { convertUnits, parseUnitForConversion, unitsCompatible, UnitConversionError } from './unit-conversion.js'
+export {
+  convertUnits,
+  parseUnitForConversion,
+  unitsCompatible,
+  UnitConversionError,
+} from './unit-conversion.js'
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
 // Export the official TypeScript runner (AST → JS lowering / scalar

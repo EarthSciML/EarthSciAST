@@ -5,97 +5,107 @@
  * as specified in the ESM Libraries Specification Section 4.8.
  */
 
-import type { EsmFile, CouplingEntry, Model, ReactionSystem, Equation, Reaction, Expr, ExpressionNode, Reference } from './types.js';
-import { freeVariables } from './expression.js';
-import { formatChemicalName } from './pretty-print.js';
+import type {
+  EsmFile,
+  CouplingEntry,
+  Model,
+  ReactionSystem,
+  Equation,
+  Reaction,
+  Expr,
+  ExpressionNode,
+  Reference,
+} from './types.js'
+import { freeVariables } from './expression.js'
+import { formatChemicalName } from './pretty-print.js'
 
 /** Graph node representing a component in the system */
 export interface ComponentNode {
   /** Unique identifier for this component */
-  id: string;
+  id: string
   /** Display name for the component */
-  name: string;
+  name: string
   /** Type of component */
-  type: 'model' | 'reaction_system' | 'data_loader';
+  type: 'model' | 'reaction_system' | 'data_loader'
   /** Optional description */
-  description?: string;
+  description?: string
   /** Optional reference information */
-  reference?: Reference;
+  reference?: Reference
   /** Metadata with counts for this component */
   metadata: {
     /** Number of variables */
-    var_count: number;
+    var_count: number
     /** Number of equations */
-    eq_count: number;
+    eq_count: number
     /** Number of species (for reaction systems) */
-    species_count: number;
-  };
+    species_count: number
+  }
 }
 
 /** Graph edge representing a coupling relationship */
 export interface CouplingEdge {
   /** Unique identifier for this edge */
-  id: string;
+  id: string
   /** Source component ID */
-  from: string;
+  from: string
   /** Target component ID */
-  to: string;
+  to: string
   /** Type of coupling */
-  type: CouplingEntry['type'];
+  type: CouplingEntry['type']
   /** Display label for the edge */
-  label: string;
+  label: string
   /** Optional description */
-  description?: string;
+  description?: string
   /** Full coupling entry for editing */
-  coupling: CouplingEntry;
+  coupling: CouplingEntry
 }
 
 /** System graph representation with components and couplings */
 export interface ComponentGraph {
   /** All components in the system */
-  nodes: ComponentNode[];
+  nodes: ComponentNode[]
   /** All coupling relationships */
-  edges: CouplingEdge[];
+  edges: CouplingEdge[]
 }
 
 /** Graph interface with adjacency methods as specified in task */
 export interface Graph<N, E> {
   /** All nodes in the graph */
-  nodes: N[];
+  nodes: N[]
   /** All edges in the graph */
-  edges: Array<{ source: string; target: string; data: E }>;
+  edges: Array<{ source: string; target: string; data: E }>
   /** Get adjacent nodes for a given node */
-  adjacency(node: string): string[];
+  adjacency(node: string): string[]
   /** Get predecessor nodes for a given node */
-  predecessors(node: string): string[];
+  predecessors(node: string): string[]
   /** Get successor nodes for a given node */
-  successors(node: string): string[];
+  successors(node: string): string[]
 }
 
 /** Graph node representing a variable/parameter/species in the system */
 export interface VariableNode {
   /** Unique identifier for this variable (scoped, e.g., "Transport.temperature") */
-  name: string;
+  name: string
   /** Type of variable */
-  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'species';
+  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'discrete' | 'species'
   /** Units if specified */
-  units?: string;
+  units?: string
   /** System/component this variable belongs to */
-  system: string;
+  system: string
 }
 
 /** Graph edge representing a dependency between variables */
 export interface DependencyEdge {
   /** Source variable name */
-  source: string;
+  source: string
   /** Target variable name */
-  target: string;
+  target: string
   /** Type of dependency relationship */
-  relationship: 'additive' | 'multiplicative' | 'rate' | 'stoichiometric';
+  relationship: 'additive' | 'multiplicative' | 'rate' | 'stoichiometric'
   /** Index of equation/reaction that creates this dependency */
-  equation_index: number;
+  equation_index: number
   /** The expression that created this dependency */
-  expression: Expr;
+  expression: Expr
 }
 
 /**
@@ -103,8 +113,8 @@ export interface DependencyEdge {
  * Returns a directed graph where nodes are model components and edges are coupling rules.
  */
 export function component_graph(esmFile: EsmFile): ComponentGraph {
-  const nodes: ComponentNode[] = [];
-  const edges: CouplingEdge[] = [];
+  const nodes: ComponentNode[] = []
+  const edges: CouplingEdge[] = []
 
   // Extract nodes from different component types
 
@@ -112,7 +122,7 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
   // components of the system) but carry no counts.
   if (esmFile.models) {
     for (const [id, model] of Object.entries(esmFile.models)) {
-      const inline = 'ref' in model ? undefined : (model as Model);
+      const inline = 'ref' in model ? undefined : (model as Model)
       nodes.push({
         id,
         name: id,
@@ -122,9 +132,9 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
         metadata: {
           var_count: inline?.variables ? Object.keys(inline.variables).length : 0,
           eq_count: inline?.equations ? inline.equations.length : 0,
-          species_count: 0
-        }
-      });
+          species_count: 0,
+        },
+      })
     }
   }
 
@@ -140,9 +150,9 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
         metadata: {
           var_count: 0,
           eq_count: reactionSystem.reactions ? reactionSystem.reactions.length : 0,
-          species_count: reactionSystem.species ? Object.keys(reactionSystem.species).length : 0
-        }
-      });
+          species_count: reactionSystem.species ? Object.keys(reactionSystem.species).length : 0,
+        },
+      })
     }
   }
 
@@ -158,16 +168,16 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
         metadata: {
           var_count: dataLoader.variables ? Object.keys(dataLoader.variables).length : 0,
           eq_count: 0,
-          species_count: 0
-        }
-      });
+          species_count: 0,
+        },
+      })
     }
   }
 
   // Extract edges from coupling entries
   if (esmFile.coupling) {
     esmFile.coupling.forEach((coupling, index) => {
-      const edgeId = `coupling-${index}`;
+      const edgeId = `coupling-${index}`
 
       switch (coupling.type) {
         case 'operator_compose':
@@ -182,11 +192,11 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
                 type: 'operator_compose',
                 label: 'compose',
                 description: coupling.description,
-                coupling
-              });
+                coupling,
+              })
             }
           }
-          break;
+          break
 
         case 'couple':
           // couple connects exactly two systems
@@ -198,21 +208,21 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
               type: 'couple',
               label: 'couple',
               description: coupling.description,
-              coupling
-            });
+              coupling,
+            })
           }
-          break;
+          break
 
         case 'variable_map':
           // variable_map connects two variables from different components
           if (coupling.from && coupling.to) {
-            const fromParts = coupling.from.split('.');
-            const toParts = coupling.to.split('.');
+            const fromParts = coupling.from.split('.')
+            const toParts = coupling.to.split('.')
 
             if (fromParts.length >= 2 && toParts.length >= 2) {
-              const fromComponent = fromParts[0];
-              const toComponent = toParts[0];
-              const variable = fromParts.slice(1).join('.');
+              const fromComponent = fromParts[0]
+              const toComponent = toParts[0]
+              const variable = fromParts.slice(1).join('.')
 
               edges.push({
                 id: edgeId,
@@ -221,37 +231,45 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
                 type: 'variable_map',
                 label: variable,
                 description: coupling.description || `${coupling.from} → ${coupling.to}`,
-                coupling
-              });
+                coupling,
+              })
             }
           }
-          break;
+          break
 
-        case 'callback':
-          // callback connects a source to a target via a callback function
-          if (coupling.source && coupling.target) {
+        case 'callback': {
+          // callback connects a source to a target via a callback function.
+          // The current schema no longer declares source/target/callback on
+          // CouplingCallback; tolerate legacy entries that still carry them.
+          const cb = coupling as typeof coupling & {
+            source?: string
+            target?: string
+            callback?: string
+          }
+          if (cb.source && cb.target) {
             edges.push({
               id: edgeId,
-              from: coupling.source,
-              to: coupling.target,
+              from: cb.source,
+              to: cb.target,
               type: 'callback',
-              label: coupling.callback || 'callback',
+              label: cb.callback || 'callback',
               description: coupling.description,
-              coupling
-            });
+              coupling,
+            })
           }
-          break;
+          break
+        }
 
         case 'event':
           // A cross-system event is not a directed data flow between two
           // components; its system references live inside condition/affect
           // expressions. It contributes no component-graph edge.
-          break;
+          break
       }
-    });
+    })
   }
 
-  return { nodes, edges };
+  return { nodes, edges }
 }
 
 /**
@@ -261,40 +279,40 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
  */
 export function componentGraph(file: EsmFile): Graph<ComponentNode, CouplingEdge> {
   // Reuse the existing component_graph logic to get nodes and edges
-  const componentGraphData = component_graph(file);
+  const componentGraphData = component_graph(file)
 
   // Convert CouplingEdge format to Graph edge format
-  const graphEdges = componentGraphData.edges.map(edge => ({
+  const graphEdges = componentGraphData.edges.map((edge) => ({
     source: edge.from,
     target: edge.to,
-    data: edge
-  }));
+    data: edge,
+  }))
 
   // Build adjacency lists for efficient lookups
-  const adjacencyMap = new Map<string, Set<string>>();
-  const predecessorMap = new Map<string, Set<string>>();
-  const successorMap = new Map<string, Set<string>>();
+  const adjacencyMap = new Map<string, Set<string>>()
+  const predecessorMap = new Map<string, Set<string>>()
+  const successorMap = new Map<string, Set<string>>()
 
   // Initialize maps for all nodes
   for (const node of componentGraphData.nodes) {
-    adjacencyMap.set(node.id, new Set());
-    predecessorMap.set(node.id, new Set());
-    successorMap.set(node.id, new Set());
+    adjacencyMap.set(node.id, new Set())
+    predecessorMap.set(node.id, new Set())
+    successorMap.set(node.id, new Set())
   }
 
   // Build adjacency relationships from edges
   for (const edge of graphEdges) {
-    const { source, target } = edge;
+    const { source, target } = edge
 
     // Adjacency includes both predecessors and successors
-    adjacencyMap.get(source)?.add(target);
-    adjacencyMap.get(target)?.add(source);
+    adjacencyMap.get(source)?.add(target)
+    adjacencyMap.get(target)?.add(source)
 
     // Predecessors (nodes that point TO this node)
-    predecessorMap.get(target)?.add(source);
+    predecessorMap.get(target)?.add(source)
 
     // Successors (nodes that this node points TO)
-    successorMap.get(source)?.add(target);
+    successorMap.get(source)?.add(target)
   }
 
   return {
@@ -302,17 +320,17 @@ export function componentGraph(file: EsmFile): Graph<ComponentNode, CouplingEdge
     edges: graphEdges,
 
     adjacency(node: string): string[] {
-      return Array.from(adjacencyMap.get(node) || []);
+      return Array.from(adjacencyMap.get(node) || [])
     },
 
     predecessors(node: string): string[] {
-      return Array.from(predecessorMap.get(node) || []);
+      return Array.from(predecessorMap.get(node) || [])
     },
 
     successors(node: string): string[] {
-      return Array.from(successorMap.get(node) || []);
-    }
-  };
+      return Array.from(successorMap.get(node) || [])
+    },
+  }
 }
 
 /**
@@ -323,17 +341,20 @@ export function componentExists(esmFile: EsmFile, componentId: string): boolean 
     esmFile.models?.[componentId] ||
     esmFile.reaction_systems?.[componentId] ||
     esmFile.data_loaders?.[componentId]
-  );
+  )
 }
 
 /**
  * Get the type of a component by its ID
  */
-export function getComponentType(esmFile: EsmFile, componentId: string): ComponentNode['type'] | null {
-  if (esmFile.models?.[componentId]) return 'model';
-  if (esmFile.reaction_systems?.[componentId]) return 'reaction_system';
-  if (esmFile.data_loaders?.[componentId]) return 'data_loader';
-  return null;
+export function getComponentType(
+  esmFile: EsmFile,
+  componentId: string,
+): ComponentNode['type'] | null {
+  if (esmFile.models?.[componentId]) return 'model'
+  if (esmFile.reaction_systems?.[componentId]) return 'reaction_system'
+  if (esmFile.data_loaders?.[componentId]) return 'data_loader'
+  return null
 }
 
 /**
@@ -346,21 +367,26 @@ export function getComponentType(esmFile: EsmFile, componentId: string): Compone
  */
 export function expressionGraph(
   target: EsmFile | Model | ReactionSystem | Equation | Reaction | Expr,
-  options: { merge_coupled?: boolean } = {}
+  options: { merge_coupled?: boolean } = {},
 ): Graph<VariableNode, DependencyEdge> {
-  const nodes: VariableNode[] = [];
-  const edges: Array<{ source: string; target: string; data: DependencyEdge }> = [];
-  const nodeMap = new Map<string, VariableNode>();
+  const nodes: VariableNode[] = []
+  const edges: Array<{ source: string; target: string; data: DependencyEdge }> = []
+  const nodeMap = new Map<string, VariableNode>()
 
   // Helper function to add a node (avoiding duplicates)
-  function addNode(name: string, kind: VariableNode['kind'], units?: string, system: string = 'default') {
-    const scopedName = system !== 'default' ? `${system}.${name}` : name;
+  function addNode(
+    name: string,
+    kind: VariableNode['kind'],
+    units?: string,
+    system: string = 'default',
+  ) {
+    const scopedName = system !== 'default' ? `${system}.${name}` : name
     if (!nodeMap.has(scopedName)) {
-      const node: VariableNode = { name: scopedName, kind, units, system };
-      nodes.push(node);
-      nodeMap.set(scopedName, node);
+      const node: VariableNode = { name: scopedName, kind, units, system }
+      nodes.push(node)
+      nodeMap.set(scopedName, node)
     }
-    return scopedName;
+    return scopedName
   }
 
   // Helper function to add dependency edge
@@ -369,82 +395,79 @@ export function expressionGraph(
     targetVar: string,
     relationship: DependencyEdge['relationship'],
     equationIndex: number,
-    expression: Expr
+    expression: Expr,
   ) {
     const edgeData: DependencyEdge = {
       source: sourceVar,
       target: targetVar,
       relationship,
       equation_index: equationIndex,
-      expression
-    };
+      expression,
+    }
 
     edges.push({
       source: sourceVar,
       target: targetVar,
-      data: edgeData
-    });
+      data: edgeData,
+    })
   }
 
   // Handle different target types
   if (typeof target === 'object' && 'esm' in target) {
     // EsmFile - process all models and reaction systems
-    const esmFile = target as EsmFile;
+    const esmFile = target as EsmFile
 
-    // Process models
+    // Process models (unresolved SubsystemRef entries carry no variables,
+    // equations, or subsystems, so processing them is a no-op; skip them)
     if (esmFile.models) {
       for (const [modelId, model] of Object.entries(esmFile.models)) {
-        processModel(model, modelId);
+        if ('ref' in model) continue
+        processModel(model as Model, modelId)
       }
     }
 
     // Process reaction systems
     if (esmFile.reaction_systems) {
       for (const [systemId, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
-        processReactionSystem(reactionSystem, systemId);
+        processReactionSystem(reactionSystem, systemId)
       }
     }
 
     // Process coupling if merge_coupled is requested
     if (options.merge_coupled && esmFile.coupling) {
-      processCoupling(esmFile.coupling);
+      processCoupling(esmFile.coupling)
     }
-
   } else if (typeof target === 'object' && 'variables' in target) {
     // Model
-    processModel(target as Model, 'default');
-
+    processModel(target as Model, 'default')
   } else if (typeof target === 'object' && 'species' in target) {
     // ReactionSystem
-    processReactionSystem(target as ReactionSystem, 'default');
-
+    processReactionSystem(target as ReactionSystem, 'default')
   } else if (typeof target === 'object' && 'lhs' in target) {
     // Equation
-    processEquation(target as Equation, 0, 'default');
-
+    processEquation(target as Equation, 0, 'default')
   } else if (typeof target === 'object' && 'rate' in target && !('op' in target)) {
     // Reaction (schema field is `rate`; every reaction carries one)
-    processReaction(target as Reaction, 0, 'default');
-
+    processReaction(target as Reaction, 0, 'default')
   } else {
     // Expression - analyze dependencies within the expression itself
-    processExpression(target as Expr, 'expr_result', 0, 'default');
+    processExpression(target as Expr, 'expr_result', 0, 'default')
   }
 
   // Helper function to process a model
   function processModel(model: Model, systemId: string) {
     // Add all variables as nodes
     for (const [varName, variable] of Object.entries(model.variables || {})) {
-      addNode(varName, variable.type, variable.units, systemId);
+      addNode(varName, variable.type, variable.units, systemId)
 
       // If it's an observed variable with an expression, create dependencies
       if (variable.type === 'observed' && variable.expression) {
-        const observedVar = addNode(varName, 'observed', variable.units, systemId);
-        const freeVars = freeVariables(variable.expression);
+        const observedVar = addNode(varName, 'observed', variable.units, systemId)
+        const freeVars = freeVariables(variable.expression)
 
         for (const freeVar of freeVars) {
-          const sourceVar = addNode(freeVar, 'parameter', undefined, systemId); // Default to parameter; could be refined
-          addDependency(sourceVar, observedVar, 'multiplicative', -1, variable.expression);
+          const sourceVar = addNode(freeVar, 'parameter', undefined, systemId) // Default to parameter; could be refined
+          addDependency(sourceVar, observedVar, 'multiplicative', -1, variable.expression)
         }
       }
     }
@@ -452,17 +475,17 @@ export function expressionGraph(
     // Process equations
     if (model.equations) {
       model.equations.forEach((equation, index) => {
-        processEquation(equation, index, systemId);
-      });
+        processEquation(equation, index, systemId)
+      })
     }
 
     // Process inline-model subsystems recursively (data loaders and
     // unresolved refs carry no equations)
     if (model.subsystems) {
       for (const [subSystemId, subModel] of Object.entries(model.subsystems)) {
-        if ('ref' in subModel || 'kind' in subModel) continue;
-        const fullSubSystemId = systemId !== 'default' ? `${systemId}.${subSystemId}` : subSystemId;
-        processModel(subModel as Model, fullSubSystemId);
+        if ('ref' in subModel || 'kind' in subModel) continue
+        const fullSubSystemId = systemId !== 'default' ? `${systemId}.${subSystemId}` : subSystemId
+        processModel(subModel as Model, fullSubSystemId)
       }
     }
   }
@@ -471,25 +494,25 @@ export function expressionGraph(
   function processReactionSystem(reactionSystem: ReactionSystem, systemId: string) {
     // Add species as nodes
     for (const [speciesName, species] of Object.entries(reactionSystem.species || {})) {
-      addNode(speciesName, 'species', species.units, systemId);
+      addNode(speciesName, 'species', species.units, systemId)
     }
 
     // Add parameters as nodes
     for (const [paramName, parameter] of Object.entries(reactionSystem.parameters || {})) {
-      addNode(paramName, 'parameter', parameter.units, systemId);
+      addNode(paramName, 'parameter', parameter.units, systemId)
     }
 
     // Process reactions
-    const reactions = reactionSystem.reactions || [];
+    const reactions = reactionSystem.reactions || []
     reactions.forEach((reaction, index) => {
-      processReaction(reaction, index, systemId);
-    });
+      processReaction(reaction, index, systemId)
+    })
 
     // Process constraint equations if present
     if (reactionSystem.constraint_equations) {
       reactionSystem.constraint_equations.forEach((equation, index) => {
-        processEquation(equation, index + reactions.length, systemId);
-      });
+        processEquation(equation, index + reactions.length, systemId)
+      })
     }
   }
 
@@ -497,52 +520,52 @@ export function expressionGraph(
   // under derivative / element-index / aggregate-output wrappers
   // (`D(x)`, `index(v, i)`, `aggregate(..., expr: D(index(v, i)))`).
   function lhsTargetName(lhs: Expr): string | undefined {
-    if (typeof lhs === 'string') return lhs;
+    if (typeof lhs === 'string') return lhs
     if (lhs && typeof lhs === 'object' && 'op' in lhs) {
-      const node = lhs as ExpressionNode;
+      const node = lhs as ExpressionNode
       switch (node.op) {
         case 'D':
         case 'index':
-          return node.args && node.args.length > 0 ? lhsTargetName(node.args[0]) : undefined;
+          return node.args && node.args.length > 0 ? lhsTargetName(node.args[0]) : undefined
         case 'aggregate': {
-          const body = (node as { expr?: Expr }).expr;
-          return body !== undefined ? lhsTargetName(body) : undefined;
+          const body = (node as { expr?: Expr }).expr
+          return body !== undefined ? lhsTargetName(body) : undefined
         }
         default:
-          return undefined;
+          return undefined
       }
     }
-    return undefined;
+    return undefined
   }
 
   // Helper function to process an equation
   function processEquation(equation: Equation, equationIndex: number, systemId: string) {
-    const targetName = lhsTargetName(equation.lhs);
-    if (targetName === undefined) return; // no recognizable defined variable
-    const lhsVar = addNode(targetName, 'state', undefined, systemId);
-    const rhsVars = freeVariables(equation.rhs);
+    const targetName = lhsTargetName(equation.lhs)
+    if (targetName === undefined) return // no recognizable defined variable
+    const lhsVar = addNode(targetName, 'state', undefined, systemId)
+    const rhsVars = freeVariables(equation.rhs)
 
     // Create dependencies from all RHS variables to the LHS variable
     for (const rhsVar of rhsVars) {
-      const sourceVar = addNode(rhsVar, 'parameter', undefined, systemId); // Default to parameter; could be refined based on context
-      addDependency(sourceVar, lhsVar, 'additive', equationIndex, equation.rhs);
+      const sourceVar = addNode(rhsVar, 'parameter', undefined, systemId) // Default to parameter; could be refined based on context
+      addDependency(sourceVar, lhsVar, 'additive', equationIndex, equation.rhs)
     }
   }
 
   // Helper function to process a reaction
   function processReaction(reaction: Reaction, reactionIndex: number, systemId: string) {
     // Get rate expression variables
-    const rateVars = freeVariables(reaction.rate);
+    const rateVars = freeVariables(reaction.rate)
 
     // Process substrates - they are consumed (negative stoichiometry)
     if (reaction.substrates) {
       for (const substrate of reaction.substrates) {
-        const substrateVar = addNode(substrate.species, 'species', undefined, systemId);
+        const substrateVar = addNode(substrate.species, 'species', undefined, systemId)
 
         // Rate parameters affect the substrate species
         for (const rateVar of rateVars) {
-          const paramVar = addNode(rateVar, 'parameter', undefined, systemId);
-          addDependency(paramVar, substrateVar, 'rate', reactionIndex, reaction.rate);
+          const paramVar = addNode(rateVar, 'parameter', undefined, systemId)
+          addDependency(paramVar, substrateVar, 'rate', reactionIndex, reaction.rate)
         }
       }
     }
@@ -550,19 +573,19 @@ export function expressionGraph(
     // Process products - they are produced (positive stoichiometry)
     if (reaction.products) {
       for (const product of reaction.products) {
-        const productVar = addNode(product.species, 'species', undefined, systemId);
+        const productVar = addNode(product.species, 'species', undefined, systemId)
 
         // Rate parameters affect the product species
         for (const rateVar of rateVars) {
-          const paramVar = addNode(rateVar, 'parameter', undefined, systemId);
-          addDependency(paramVar, productVar, 'rate', reactionIndex, reaction.rate);
+          const paramVar = addNode(rateVar, 'parameter', undefined, systemId)
+          addDependency(paramVar, productVar, 'rate', reactionIndex, reaction.rate)
         }
 
         // Substrates affect products through stoichiometry
         if (reaction.substrates) {
           for (const substrate of reaction.substrates) {
-            const substrateVar = addNode(substrate.species, 'species', undefined, systemId);
-            addDependency(substrateVar, productVar, 'stoichiometric', reactionIndex, reaction.rate);
+            const substrateVar = addNode(substrate.species, 'species', undefined, systemId)
+            addDependency(substrateVar, productVar, 'stoichiometric', reactionIndex, reaction.rate)
           }
         }
       }
@@ -570,13 +593,18 @@ export function expressionGraph(
   }
 
   // Helper function to process a single expression
-  function processExpression(expr: Expr, targetVar: string, equationIndex: number, systemId: string) {
-    const targetVariable = addNode(targetVar, 'observed', undefined, systemId);
-    const freeVars = freeVariables(expr);
+  function processExpression(
+    expr: Expr,
+    targetVar: string,
+    equationIndex: number,
+    systemId: string,
+  ) {
+    const targetVariable = addNode(targetVar, 'observed', undefined, systemId)
+    const freeVars = freeVariables(expr)
 
     for (const freeVar of freeVars) {
-      const sourceVar = addNode(freeVar, 'parameter', undefined, systemId);
-      addDependency(sourceVar, targetVariable, 'multiplicative', equationIndex, expr);
+      const sourceVar = addNode(freeVar, 'parameter', undefined, systemId)
+      addDependency(sourceVar, targetVariable, 'multiplicative', equationIndex, expr)
     }
   }
 
@@ -585,50 +613,50 @@ export function expressionGraph(
     for (const entry of coupling) {
       if (entry.type === 'variable_map') {
         // Create cross-system dependencies for variable mappings
-        const fromParts = entry.from.split('.');
-        const toParts = entry.to.split('.');
+        const fromParts = entry.from.split('.')
+        const toParts = entry.to.split('.')
 
         if (fromParts.length >= 2 && toParts.length >= 2) {
-          const fromSystem = fromParts[0];
-          const fromVar = fromParts.slice(1).join('.');
-          const toSystem = toParts[0];
-          const toVar = toParts.slice(1).join('.');
+          const fromSystem = fromParts[0]
+          const fromVar = fromParts.slice(1).join('.')
+          const toSystem = toParts[0]
+          const toVar = toParts.slice(1).join('.')
 
-          const sourceVar = addNode(fromVar, 'parameter', undefined, fromSystem);
-          const targetVar = addNode(toVar, 'parameter', undefined, toSystem);
+          const sourceVar = addNode(fromVar, 'parameter', undefined, fromSystem)
+          const targetVar = addNode(toVar, 'parameter', undefined, toSystem)
 
           // Create coupling dependency
-          addDependency(sourceVar, targetVar, 'multiplicative', -1, entry.from);
+          addDependency(sourceVar, targetVar, 'multiplicative', -1, entry.from)
         }
       }
     }
   }
 
   // Build adjacency maps for the Graph interface methods
-  const adjacencyMap = new Map<string, Set<string>>();
-  const predecessorMap = new Map<string, Set<string>>();
-  const successorMap = new Map<string, Set<string>>();
+  const adjacencyMap = new Map<string, Set<string>>()
+  const predecessorMap = new Map<string, Set<string>>()
+  const successorMap = new Map<string, Set<string>>()
 
   // Initialize maps for all nodes
   for (const node of nodes) {
-    adjacencyMap.set(node.name, new Set());
-    predecessorMap.set(node.name, new Set());
-    successorMap.set(node.name, new Set());
+    adjacencyMap.set(node.name, new Set())
+    predecessorMap.set(node.name, new Set())
+    successorMap.set(node.name, new Set())
   }
 
   // Build adjacency relationships from edges
   for (const edge of edges) {
-    const { source, target } = edge;
+    const { source, target } = edge
 
     // Adjacency includes both predecessors and successors
-    adjacencyMap.get(source)?.add(target);
-    adjacencyMap.get(target)?.add(source);
+    adjacencyMap.get(source)?.add(target)
+    adjacencyMap.get(target)?.add(source)
 
     // Predecessors (nodes that point TO this node)
-    predecessorMap.get(target)?.add(source);
+    predecessorMap.get(target)?.add(source)
 
     // Successors (nodes that this node points TO)
-    successorMap.get(source)?.add(target);
+    successorMap.get(source)?.add(target)
   }
 
   return {
@@ -636,289 +664,302 @@ export function expressionGraph(
     edges,
 
     adjacency(node: string): string[] {
-      return Array.from(adjacencyMap.get(node) || []);
+      return Array.from(adjacencyMap.get(node) || [])
     },
 
     predecessors(node: string): string[] {
-      return Array.from(predecessorMap.get(node) || []);
+      return Array.from(predecessorMap.get(node) || [])
     },
 
     successors(node: string): string[] {
-      return Array.from(successorMap.get(node) || []);
-    }
-  };
+      return Array.from(successorMap.get(node) || [])
+    },
+  }
 }
 
 // Chemical subscript formatting for node/edge labels delegates to the
 // element-aware formatter in pretty-print.ts so the same species renders
 // identically everywhere.
-const formatChemicalSubscripts = formatChemicalName;
+const formatChemicalSubscripts = formatChemicalName
 
 /**
  * Export graph as Graphviz DOT format.
  * Node shapes: box for models, ellipse for data_loaders, diamond for operators.
  * Edge styles: solid for compose, dashed for variable_map.
  */
-export function toDot<N, E>(graph: Graph<N, E>): string {
-  const lines: string[] = [];
+export function toDot<N extends object, E>(graph: Graph<N, E>): string {
+  const lines: string[] = []
 
-  lines.push('digraph {');
-  lines.push('  rankdir=TB;');
-  lines.push('  node [fontname="Arial"];');
-  lines.push('  edge [fontname="Arial"];');
-  lines.push('');
+  lines.push('digraph {')
+  lines.push('  rankdir=TB;')
+  lines.push('  node [fontname="Arial"];')
+  lines.push('  edge [fontname="Arial"];')
+  lines.push('')
 
   // Add nodes
   for (const node of graph.nodes) {
-    let shape = 'ellipse';
-    let color = 'lightblue';
+    let shape = 'ellipse'
+    let color = 'lightblue'
 
     // Type-specific formatting for ComponentNode
     if ('type' in node) {
-      const componentNode = node as any;
+      const componentNode = node as any
       switch (componentNode.type) {
         case 'model':
-          shape = 'box';
-          color = 'lightgreen';
-          break;
+          shape = 'box'
+          color = 'lightgreen'
+          break
         case 'reaction_system':
-          shape = 'box';
-          color = 'lightcoral';
-          break;
+          shape = 'box'
+          color = 'lightcoral'
+          break
         case 'data_loader':
-          shape = 'ellipse';
-          color = 'lightyellow';
-          break;
+          shape = 'ellipse'
+          color = 'lightyellow'
+          break
       }
     }
     // Type-specific formatting for VariableNode
     else if ('kind' in node) {
-      const variableNode = node as any;
+      const variableNode = node as any
       switch (variableNode.kind) {
         case 'state':
-          shape = 'box';
-          color = 'lightgreen';
-          break;
+          shape = 'box'
+          color = 'lightgreen'
+          break
         case 'parameter':
-          shape = 'ellipse';
-          color = 'lightblue';
-          break;
+          shape = 'ellipse'
+          color = 'lightblue'
+          break
         case 'observed':
-          shape = 'box';
-          color = 'lightyellow';
-          break;
+          shape = 'box'
+          color = 'lightyellow'
+          break
         case 'brownian':
-          shape = 'diamond';
-          color = 'lightgrey';
-          break;
+          shape = 'diamond'
+          color = 'lightgrey'
+          break
         case 'species':
-          shape = 'ellipse';
-          color = 'lightcoral';
-          break;
+          shape = 'ellipse'
+          color = 'lightcoral'
+          break
       }
     }
 
-    const nodeId = 'id' in node ? (node as any).id : ('name' in node ? (node as any).name : String(node));
-    const nodeLabel = 'name' in node ? formatChemicalSubscripts((node as any).name) : formatChemicalSubscripts(nodeId);
+    const nodeId =
+      'id' in node ? (node as any).id : 'name' in node ? (node as any).name : String(node)
+    const nodeLabel =
+      'name' in node
+        ? formatChemicalSubscripts((node as any).name)
+        : formatChemicalSubscripts(nodeId)
 
-    lines.push(`  "${nodeId}" [label="${nodeLabel}", shape=${shape}, fillcolor=${color}, style=filled];`);
+    lines.push(
+      `  "${nodeId}" [label="${nodeLabel}", shape=${shape}, fillcolor=${color}, style=filled];`,
+    )
   }
 
-  lines.push('');
+  lines.push('')
 
   // Add edges
   for (const edge of graph.edges) {
-    let style = 'solid';
-    let color = 'black';
-    let label = '';
+    let style = 'solid'
+    let color = 'black'
+    let label = ''
 
     // Edge-specific formatting for CouplingEdge
     if (edge.data && typeof edge.data === 'object' && 'type' in edge.data) {
-      const couplingEdge = edge.data as any;
+      const couplingEdge = edge.data as any
       switch (couplingEdge.type) {
         case 'operator_compose':
         case 'couple':
-          style = 'solid';
-          color = 'blue';
-          label = couplingEdge.label || '';
-          break;
+          style = 'solid'
+          color = 'blue'
+          label = couplingEdge.label || ''
+          break
         case 'variable_map':
-          style = 'dashed';
-          color = 'green';
-          label = formatChemicalSubscripts(couplingEdge.label || '');
-          break;
+          style = 'dashed'
+          color = 'green'
+          label = formatChemicalSubscripts(couplingEdge.label || '')
+          break
         case 'callback':
-          style = 'dotted';
-          color = 'orange';
-          label = couplingEdge.label || '';
-          break;
+          style = 'dotted'
+          color = 'orange'
+          label = couplingEdge.label || ''
+          break
       }
     }
     // Edge-specific formatting for DependencyEdge
     else if (edge.data && typeof edge.data === 'object' && 'relationship' in edge.data) {
-      const depEdge = edge.data as any;
+      const depEdge = edge.data as any
       switch (depEdge.relationship) {
         case 'additive':
-          style = 'solid';
-          color = 'blue';
-          label = '+';
-          break;
+          style = 'solid'
+          color = 'blue'
+          label = '+'
+          break
         case 'multiplicative':
-          style = 'solid';
-          color = 'red';
-          label = '*';
-          break;
+          style = 'solid'
+          color = 'red'
+          label = '*'
+          break
         case 'rate':
-          style = 'dashed';
-          color = 'purple';
-          label = 'rate';
-          break;
+          style = 'dashed'
+          color = 'purple'
+          label = 'rate'
+          break
         case 'stoichiometric':
-          style = 'dotted';
-          color = 'green';
-          label = 'stoich';
-          break;
+          style = 'dotted'
+          color = 'green'
+          label = 'stoich'
+          break
       }
     }
 
-    const labelAttr = label ? `, label="${label}"` : '';
-    lines.push(`  "${edge.source}" -> "${edge.target}" [style=${style}, color=${color}${labelAttr}];`);
+    const labelAttr = label ? `, label="${label}"` : ''
+    lines.push(
+      `  "${edge.source}" -> "${edge.target}" [style=${style}, color=${color}${labelAttr}];`,
+    )
   }
 
-  lines.push('}');
-  return lines.join('\n');
+  lines.push('}')
+  return lines.join('\n')
 }
 
 /**
  * Export graph as Mermaid flowchart format for Markdown embedding.
  */
-export function toMermaid<N, E>(graph: Graph<N, E>): string {
-  const lines: string[] = [];
+export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
+  const lines: string[] = []
 
-  lines.push('flowchart TD');
+  lines.push('flowchart TD')
 
   // Add node definitions with shapes
   for (const node of graph.nodes) {
-    const nodeId = 'id' in node ? (node as any).id : ('name' in node ? (node as any).name : String(node));
-    const nodeLabel = 'name' in node ? formatChemicalSubscripts((node as any).name) : formatChemicalSubscripts(nodeId);
+    const nodeId =
+      'id' in node ? (node as any).id : 'name' in node ? (node as any).name : String(node)
+    const nodeLabel =
+      'name' in node
+        ? formatChemicalSubscripts((node as any).name)
+        : formatChemicalSubscripts(nodeId)
 
-    let shape = '';
+    let shape: string
 
     // Type-specific shapes for ComponentNode
     if ('type' in node) {
-      const componentNode = node as any;
+      const componentNode = node as any
       switch (componentNode.type) {
         case 'model':
         case 'reaction_system':
-          shape = `[${nodeLabel}]`; // Rectangle
-          break;
+          shape = `[${nodeLabel}]` // Rectangle
+          break
         case 'data_loader':
-          shape = `((${nodeLabel}))`; // Circle
-          break;
+          shape = `((${nodeLabel}))` // Circle
+          break
         default:
-          shape = `[${nodeLabel}]`;
+          shape = `[${nodeLabel}]`
       }
     }
     // Type-specific shapes for VariableNode
     else if ('kind' in node) {
-      const variableNode = node as any;
+      const variableNode = node as any
       switch (variableNode.kind) {
         case 'state':
         case 'observed':
-          shape = `[${nodeLabel}]`; // Rectangle
-          break;
+          shape = `[${nodeLabel}]` // Rectangle
+          break
         case 'parameter':
         case 'species':
-          shape = `((${nodeLabel}))`; // Circle
-          break;
+          shape = `((${nodeLabel}))` // Circle
+          break
         case 'brownian':
-          shape = `{${nodeLabel}}`; // Diamond-like
-          break;
+          shape = `{${nodeLabel}}` // Diamond-like
+          break
         default:
-          shape = `[${nodeLabel}]`;
+          shape = `[${nodeLabel}]`
       }
     } else {
-      shape = `[${nodeLabel}]`;
+      shape = `[${nodeLabel}]`
     }
 
-    lines.push(`  ${nodeId}${shape}`);
+    lines.push(`  ${nodeId}${shape}`)
   }
 
-  lines.push('');
+  lines.push('')
 
   // Add edges
   for (const edge of graph.edges) {
-    let arrowStyle = '-->';
-    let label = '';
+    let arrowStyle = '-->'
+    let label = ''
 
     // Edge-specific formatting
     if (edge.data && typeof edge.data === 'object' && 'type' in edge.data) {
-      const couplingEdge = edge.data as any;
+      const couplingEdge = edge.data as any
       switch (couplingEdge.type) {
         case 'variable_map':
-          arrowStyle = '-.->';
-          label = formatChemicalSubscripts(couplingEdge.label || '');
-          break;
+          arrowStyle = '-.->'
+          label = formatChemicalSubscripts(couplingEdge.label || '')
+          break
         case 'operator_compose':
         case 'couple':
         case 'callback':
-          arrowStyle = '-->';
-          label = couplingEdge.label || '';
-          break;
+          arrowStyle = '-->'
+          label = couplingEdge.label || ''
+          break
       }
     } else if (edge.data && typeof edge.data === 'object' && 'relationship' in edge.data) {
-      const depEdge = edge.data as any;
+      const depEdge = edge.data as any
       switch (depEdge.relationship) {
         case 'additive':
-          label = '+';
-          break;
+          label = '+'
+          break
         case 'multiplicative':
-          label = '*';
-          break;
+          label = '*'
+          break
         case 'rate':
-          arrowStyle = '-.->';
-          label = 'rate';
-          break;
+          arrowStyle = '-.->'
+          label = 'rate'
+          break
         case 'stoichiometric':
-          arrowStyle = '-..->';
-          label = 'stoich';
-          break;
+          arrowStyle = '-..->'
+          label = 'stoich'
+          break
       }
     }
 
-    const labelPart = label ? `|${label}|` : '';
-    lines.push(`  ${edge.source} ${arrowStyle}${labelPart} ${edge.target}`);
+    const labelPart = label ? `|${label}|` : ''
+    lines.push(`  ${edge.source} ${arrowStyle}${labelPart} ${edge.target}`)
   }
 
-  return lines.join('\n');
+  return lines.join('\n')
 }
 
 /**
  * Export graph as JSON adjacency list format for web consumption.
  */
-export function toJsonGraph<N, E>(graph: Graph<N, E>): string {
+export function toJsonGraph<N extends object, E>(graph: Graph<N, E>): string {
   const jsonGraph = {
-    nodes: graph.nodes.map(node => {
+    nodes: graph.nodes.map((node) => {
       const baseNode = {
-        id: 'id' in node ? (node as any).id : ('name' in node ? (node as any).name : String(node))
-      };
+        id: 'id' in node ? (node as any).id : 'name' in node ? (node as any).name : String(node),
+      }
 
       // Include all node properties
-      return { ...baseNode, ...node };
+      return { ...baseNode, ...node }
     }),
-    edges: graph.edges.map(edge => ({
+    edges: graph.edges.map((edge) => ({
       source: edge.source,
       target: edge.target,
-      data: edge.data
+      data: edge.data,
     })),
-    adjacency: {} as Record<string, string[]>
-  };
+    adjacency: {} as Record<string, string[]>,
+  }
 
   // Build adjacency list
   for (const node of graph.nodes) {
-    const nodeId = 'id' in node ? (node as any).id : ('name' in node ? (node as any).name : String(node));
-    jsonGraph.adjacency[nodeId] = graph.adjacency(nodeId);
+    const nodeId =
+      'id' in node ? (node as any).id : 'name' in node ? (node as any).name : String(node)
+    jsonGraph.adjacency[nodeId] = graph.adjacency(nodeId)
   }
 
-  return JSON.stringify(jsonGraph, null, 2);
+  return JSON.stringify(jsonGraph, null, 2)
 }

@@ -5,8 +5,14 @@
  * from reaction systems using standard mass action kinetics.
  */
 
-import type { ReactionSystem, Model, Reaction, ModelVariable, Equation, Expression, ExpressionNode } from './types.js'
-import { freeVariables } from './expression.js'
+import type {
+  ReactionSystem,
+  Model,
+  Reaction,
+  ModelVariable,
+  Equation,
+  Expression,
+} from './types.js'
 
 /**
  * Derive ODEs from a reaction system using mass action kinetics
@@ -165,7 +171,7 @@ function buildRateLaw(reaction: Reaction): Expression {
 function addReactionContribution(
   odeRhs: { [species: string]: Expression[] },
   reaction: Reaction,
-  rateLaw: Expression
+  rateLaw: Expression,
 ): void {
   // Calculate net stoichiometry for each species
   const netStoich: { [species: string]: number } = {}
@@ -228,7 +234,7 @@ export function stoichiometricMatrix(system: ReactionSystem): {
   reactions: string[]
 } {
   const species = Object.keys(system.species)
-  const reactions = system.reactions.map(r => r.id)
+  const reactions = system.reactions.map((r) => r.id)
 
   // Initialize matrix with zeros
   const matrix: number[][] = species.map(() => new Array(reactions.length).fill(0))

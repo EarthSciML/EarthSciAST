@@ -16,6 +16,18 @@ import { evaluateExpression } from './codegen.js'
 export type Expr = Expression | NumericLiteral
 
 /**
+ * Type guard for operator nodes in the expression AST.
+ *
+ * Narrows the `Expr` union (`number | string | ExpressionNode1 |
+ * NumericLiteral`) to the fully-typed `ExpressionNode` (with `op: string`
+ * and `args: Expression[]`). A `NumericLiteral` leaf has `kind`/`value`
+ * but never `op`/`args`, so it is correctly excluded at runtime.
+ */
+export function isExprNode(e: unknown): e is ExpressionNode {
+  return typeof e === 'object' && e !== null && 'op' in e && 'args' in e
+}
+
+/**
  * Extract all variable references from an expression
  * @param expr Expression to analyze
  * @returns Set of variable names referenced in the expression
@@ -28,11 +40,11 @@ export function freeVariables(expr: Expr): Set<string> {
   } else if (typeof expr === 'number' || isNumericLiteral(expr)) {
     // Numeric literals contain no variables
     return variables
-  } else if (typeof expr === 'object' && (expr as ExpressionNode).op) {
+  } else if (isExprNode(expr)) {
     // ExpressionNode - recursively analyze arguments
-    for (const arg of (expr as ExpressionNode).args) {
-      const childVars = freeVariables(arg as Expr)
-      childVars.forEach(v => variables.add(v))
+    for (const arg of expr.args) {
+      const childVars = freeVariables(arg)
+      childVars.forEach((v) => variables.add(v))
     }
   }
 
@@ -70,9 +82,9 @@ export function contains(expr: Expr, varName: string): boolean {
     return expr === varName
   } else if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return false
-  } else if (typeof expr === 'object' && (expr as ExpressionNode).op) {
+  } else if (isExprNode(expr)) {
     // ExpressionNode - recursively check arguments
-    return (expr as ExpressionNode).args.some(arg => contains(arg as Expr, varName))
+    return expr.args.some((arg) => contains(arg, varName))
   }
 
   return false
@@ -95,21 +107,21 @@ export function simplify(expr: Expr): Expr {
     return expr
   }
 
-  if (typeof expr === 'object' && (expr as ExpressionNode).op) {
+  if (isExprNode(expr)) {
     // First simplify all arguments recursively
-    const simplifiedArgs = expr.args.map(arg => simplify(arg))
+    const simplifiedArgs = expr.args.map((arg) => simplify(arg))
 
     // Apply simplification rules based on operator
     switch (expr.op) {
       case '+': {
         // Remove zeros: x + 0 -> x
-        const nonZeroTerms = simplifiedArgs.filter(arg => arg !== 0)
+        const nonZeroTerms = simplifiedArgs.filter((arg) => arg !== 0)
         if (nonZeroTerms.length === 0) return 0
         if (nonZeroTerms.length === 1) return nonZeroTerms[0]
 
         // Separate constants and variables for partial constant folding
-        const constants = nonZeroTerms.filter(arg => typeof arg === 'number') as number[]
-        const variables = nonZeroTerms.filter(arg => typeof arg !== 'number')
+        const constants = nonZeroTerms.filter((arg) => typeof arg === 'number') as number[]
+        const variables = nonZeroTerms.filter((arg) => typeof arg !== 'number')
 
         // If all terms are constants, return the sum
         if (variables.length === 0) {
@@ -121,7 +133,9 @@ export function simplify(expr: Expr): Expr {
           const constantSum = constants.reduce((sum, val) => sum + val, 0)
           if (constantSum === 0) {
             // If constant sum is zero, just return variables
-            return variables.length === 1 ? variables[0] : { ...expr, args: variables as [Expression, ...Expression[]] }
+            return variables.length === 1
+              ? variables[0]
+              : { ...expr, args: variables as [Expression, ...Expression[]] }
           } else {
             // Include the folded constant with variables
             const finalTerms = [...variables, constantSum]
@@ -134,16 +148,16 @@ export function simplify(expr: Expr): Expr {
 
       case '*': {
         // Zero multiplication: x * 0 -> 0
-        if (simplifiedArgs.some(arg => arg === 0)) return 0
+        if (simplifiedArgs.some((arg) => arg === 0)) return 0
 
         // Remove ones: x * 1 -> x
-        const nonOneFactors = simplifiedArgs.filter(arg => arg !== 1)
+        const nonOneFactors = simplifiedArgs.filter((arg) => arg !== 1)
         if (nonOneFactors.length === 0) return 1
         if (nonOneFactors.length === 1) return nonOneFactors[0]
 
         // Separate constants and variables for partial constant folding
-        const constantFactors = nonOneFactors.filter(arg => typeof arg === 'number') as number[]
-        const variableFactors = nonOneFactors.filter(arg => typeof arg !== 'number')
+        const constantFactors = nonOneFactors.filter((arg) => typeof arg === 'number') as number[]
+        const variableFactors = nonOneFactors.filter((arg) => typeof arg !== 'number')
 
         // If all factors are constants, return the product
         if (variableFactors.length === 0) {
@@ -157,7 +171,9 @@ export function simplify(expr: Expr): Expr {
             return 0
           } else if (constantProd === 1) {
             // If constant product is one, just return variables
-            return variableFactors.length === 1 ? variableFactors[0] : { ...expr, args: variableFactors as [Expression, ...Expression[]] }
+            return variableFactors.length === 1
+              ? variableFactors[0]
+              : { ...expr, args: variableFactors as [Expression, ...Expression[]] }
           } else {
             // Include the folded constant with variables
             const finalFactors = [...variableFactors, constantProd]
@@ -194,8 +210,11 @@ export function simplify(expr: Expr): Expr {
           // Constant folding. A zero denominator is left unfolded — a pure
           // simplifier must not throw, and 0/0 vs x/0 semantics belong to
           // evaluation, not rewriting.
-          if (typeof simplifiedArgs[0] === 'number' && typeof simplifiedArgs[1] === 'number'
-              && simplifiedArgs[1] !== 0) {
+          if (
+            typeof simplifiedArgs[0] === 'number' &&
+            typeof simplifiedArgs[1] === 'number' &&
+            simplifiedArgs[1] !== 0
+          ) {
             return simplifiedArgs[0] / simplifiedArgs[1]
           }
         }
@@ -228,10 +247,13 @@ export function simplify(expr: Expr): Expr {
         // For other operators, apply constant folding if all args are
         // numeric. Folding goes through the official codegen runner so
         // we share one dispatch table with the per-call evaluator.
-        if (simplifiedArgs.every(arg => typeof arg === 'number')) {
+        if (simplifiedArgs.every((arg) => typeof arg === 'number')) {
           try {
             const tempBindings = new Map<string, number>()
-            return evaluateExpression({ ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }, tempBindings)
+            return evaluateExpression(
+              { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] },
+              tempBindings,
+            )
           } catch {
             return { ...expr, args: simplifiedArgs as [Expression, ...Expression[]] }
           }

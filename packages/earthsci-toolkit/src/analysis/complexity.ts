@@ -5,11 +5,11 @@
  * of expressions, including depth, operation counts, and estimated costs.
  */
 
-import type { Expr } from '../types.js';
-import type { ComplexityMetrics } from './types.js';
-import { freeVariables } from '../expression.js';
-import { numericValue } from '../numeric-literal.js';
-import { opCost } from '../op-registry.js';
+import type { Expr } from '../types.js'
+import type { ComplexityMetrics } from './types.js'
+import { freeVariables, isExprNode } from '../expression.js'
+import { numericValue } from '../numeric-literal.js'
+import { opCost } from '../op-registry.js'
 
 /**
  * Analyze the complexity of an expression
@@ -24,20 +24,20 @@ export function analyzeComplexity(expr: Expr): ComplexityMetrics {
     constantCount: 0,
     operationTypes: {},
     computationalCost: 0,
-    memoryUsage: 0
-  };
+    memoryUsage: 0,
+  }
 
   // Analyze the expression recursively
-  analyzeExpressionRecursive(expr, metrics, 0);
+  analyzeExpressionRecursive(expr, metrics, 0)
 
   // Count unique variables
-  metrics.variableCount = freeVariables(expr).size;
+  metrics.variableCount = freeVariables(expr).size
 
   // Calculate final costs
-  metrics.computationalCost = calculateComputationalCost(metrics);
-  metrics.memoryUsage = calculateMemoryUsage(metrics);
+  metrics.computationalCost = calculateComputationalCost(metrics)
+  metrics.memoryUsage = calculateMemoryUsage(metrics)
 
-  return metrics;
+  return metrics
 }
 
 /**
@@ -45,24 +45,24 @@ export function analyzeComplexity(expr: Expr): ComplexityMetrics {
  */
 function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, depth: number) {
   // Update maximum depth
-  metrics.depth = Math.max(metrics.depth, depth);
+  metrics.depth = Math.max(metrics.depth, depth)
 
   // Constants: plain numbers AND tagged NumericLiteral leaves ({kind, value})
   // produced by canonical-mode parsing.
   if (numericValue(expr) !== undefined) {
-    metrics.constantCount++;
+    metrics.constantCount++
   } else if (typeof expr === 'string') {
     // Variable - will be counted later in freeVariables call
     // Just increment memory usage
-    metrics.memoryUsage += 1;
-  } else if (typeof expr === 'object' && expr.op) {
+    metrics.memoryUsage += 1
+  } else if (isExprNode(expr)) {
     // Operation node
-    metrics.operationCount++;
-    metrics.operationTypes[expr.op] = (metrics.operationTypes[expr.op] || 0) + 1;
+    metrics.operationCount++
+    metrics.operationTypes[expr.op] = (metrics.operationTypes[expr.op] || 0) + 1
 
     // Recursively analyze arguments
     for (const arg of expr.args) {
-      analyzeExpressionRecursive(arg, metrics, depth + 1);
+      analyzeExpressionRecursive(arg, metrics, depth + 1)
     }
   }
 }
@@ -72,27 +72,27 @@ function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, dept
  * cost weights come from the central op registry (op-registry.ts).
  */
 function calculateComputationalCost(metrics: ComplexityMetrics): number {
-  let totalCost = 0;
+  let totalCost = 0
 
   for (const [operation, count] of Object.entries(metrics.operationTypes)) {
-    totalCost += opCost(operation) * count;
+    totalCost += opCost(operation) * count
   }
 
   // Add cost for variable lookups
-  totalCost += metrics.variableCount * 1;
+  totalCost += metrics.variableCount * 1
 
   // Add cost for constants (minimal but not zero)
-  totalCost += metrics.constantCount * 0.1;
+  totalCost += metrics.constantCount * 0.1
 
   // Add depth penalty (deeper expressions are more expensive due to stack usage)
-  totalCost += metrics.depth * 2;
+  totalCost += metrics.depth * 2
 
   // Ensure minimum cost of 1 for any non-trivial expression
   if (totalCost === 0 && (metrics.variableCount > 0 || metrics.constantCount > 0)) {
-    totalCost = 1;
+    totalCost = 1
   }
 
-  return totalCost;
+  return totalCost
 }
 
 /**
@@ -100,21 +100,21 @@ function calculateComputationalCost(metrics: ComplexityMetrics): number {
  */
 function calculateMemoryUsage(metrics: ComplexityMetrics): number {
   // Base memory usage for different components
-  let memoryUsage = 0;
+  let memoryUsage = 0
 
   // Each operation node requires memory
-  memoryUsage += metrics.operationCount * 3; // op + args array + metadata
+  memoryUsage += metrics.operationCount * 3 // op + args array + metadata
 
   // Each unique variable requires memory for lookup
-  memoryUsage += metrics.variableCount * 2;
+  memoryUsage += metrics.variableCount * 2
 
   // Each constant requires storage
-  memoryUsage += metrics.constantCount * 1;
+  memoryUsage += metrics.constantCount * 1
 
   // Depth affects stack memory usage
-  memoryUsage += metrics.depth * 1;
+  memoryUsage += metrics.depth * 1
 
-  return memoryUsage;
+  return memoryUsage
 }
 
 /**
@@ -124,30 +124,30 @@ function calculateMemoryUsage(metrics: ComplexityMetrics): number {
  * @returns Comparison result (-1: expr1 simpler, 0: equal, 1: expr1 more complex)
  */
 export function compareComplexity(expr1: Expr, expr2: Expr): number {
-  const metrics1 = analyzeComplexity(expr1);
-  const metrics2 = analyzeComplexity(expr2);
+  const metrics1 = analyzeComplexity(expr1)
+  const metrics2 = analyzeComplexity(expr2)
 
   // Primary comparison: computational cost
-  const costDiff = metrics1.computationalCost - metrics2.computationalCost;
+  const costDiff = metrics1.computationalCost - metrics2.computationalCost
   if (Math.abs(costDiff) > 1) {
-    return Math.sign(costDiff);
+    return Math.sign(costDiff)
   }
 
   // Secondary comparison: operation count
-  const opDiff = metrics1.operationCount - metrics2.operationCount;
+  const opDiff = metrics1.operationCount - metrics2.operationCount
   if (opDiff !== 0) {
-    return Math.sign(opDiff);
+    return Math.sign(opDiff)
   }
 
   // Tertiary comparison: depth
-  const depthDiff = metrics1.depth - metrics2.depth;
+  const depthDiff = metrics1.depth - metrics2.depth
   if (depthDiff !== 0) {
-    return Math.sign(depthDiff);
+    return Math.sign(depthDiff)
   }
 
   // Quaternary comparison: variable count
-  const varDiff = metrics1.variableCount - metrics2.variableCount;
-  return Math.sign(varDiff);
+  const varDiff = metrics1.variableCount - metrics2.variableCount
+  return Math.sign(varDiff)
 }
 
 /**
@@ -155,20 +155,22 @@ export function compareComplexity(expr1: Expr, expr2: Expr): number {
  * @param expr Expression to classify
  * @returns Complexity level
  */
-export function classifyComplexity(expr: Expr): 'trivial' | 'simple' | 'moderate' | 'complex' | 'very_complex' {
-  const metrics = analyzeComplexity(expr);
+export function classifyComplexity(
+  expr: Expr,
+): 'trivial' | 'simple' | 'moderate' | 'complex' | 'very_complex' {
+  const metrics = analyzeComplexity(expr)
 
   // Classification based on computational cost
   if (metrics.computationalCost <= 5) {
-    return 'trivial';
+    return 'trivial'
   } else if (metrics.computationalCost <= 20) {
-    return 'simple';
+    return 'simple'
   } else if (metrics.computationalCost <= 50) {
-    return 'moderate';
+    return 'moderate'
   } else if (metrics.computationalCost <= 150) {
-    return 'complex';
+    return 'complex'
   } else {
-    return 'very_complex';
+    return 'very_complex'
   }
 }
 
@@ -178,39 +180,40 @@ export function classifyComplexity(expr: Expr): 'trivial' | 'simple' | 'moderate
  * @param limit Maximum number of results to return
  * @returns Array of expensive sub-expressions with their costs
  */
-export function findExpensiveSubexpressions(expr: Expr, limit: number = 5): Array<{
-  expression: Expr;
-  cost: number;
-  path: string[];
+export function findExpensiveSubexpressions(
+  expr: Expr,
+  limit: number = 5,
+): Array<{
+  expression: Expr
+  cost: number
+  path: string[]
 }> {
-  const results: Array<{ expression: Expr; cost: number; path: string[] }> = [];
+  const results: Array<{ expression: Expr; cost: number; path: string[] }> = []
 
   function analyzeRecursive(currentExpr: Expr, path: string[]) {
-    const cost = analyzeComplexity(currentExpr).computationalCost;
+    const cost = analyzeComplexity(currentExpr).computationalCost
 
     // Only include expressions that are worth optimizing
     if (cost > 10) {
       results.push({
         expression: currentExpr,
         cost,
-        path: [...path]
-      });
+        path: [...path],
+      })
     }
 
     // Recursively analyze sub-expressions
-    if (typeof currentExpr === 'object' && currentExpr.op) {
+    if (isExprNode(currentExpr)) {
       currentExpr.args.forEach((arg, index) => {
-        analyzeRecursive(arg, [...path, `args[${index}]`]);
-      });
+        analyzeRecursive(arg, [...path, `args[${index}]`])
+      })
     }
   }
 
-  analyzeRecursive(expr, []);
+  analyzeRecursive(expr, [])
 
   // Sort by cost descending and limit results
-  return results
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, limit);
+  return results.sort((a, b) => b.cost - a.cost).slice(0, limit)
 }
 
 /**
@@ -219,38 +222,48 @@ export function findExpensiveSubexpressions(expr: Expr, limit: number = 5): Arra
  * @returns Parallelization score (0-1, higher means more parallelizable)
  */
 export function estimateParallelPotential(expr: Expr): number {
-  if (typeof expr !== 'object' || !expr.op) {
-    return 0; // Atomic expressions can't be parallelized
+  if (!isExprNode(expr)) {
+    return 0 // Atomic expressions can't be parallelized
   }
 
-  let parallelizableOps = 0;
-  let totalOps = 0;
+  let parallelizableOps = 0
+  let totalOps = 0
 
   function analyzeParallelism(currentExpr: Expr) {
-    if (typeof currentExpr === 'object' && currentExpr.op) {
-      totalOps++;
+    if (isExprNode(currentExpr)) {
+      totalOps++
 
       // Operations that can be parallelized
       const parallelizableOperations = new Set([
-        '+', '*', 'and', 'or', 'min', 'max',
+        '+',
+        '*',
+        'and',
+        'or',
+        'min',
+        'max',
         // Element-wise operations
-        'sin', 'cos', 'exp', 'log', 'sqrt', 'abs'
-      ]);
+        'sin',
+        'cos',
+        'exp',
+        'log',
+        'sqrt',
+        'abs',
+      ])
 
       if (parallelizableOperations.has(currentExpr.op) && currentExpr.args.length > 1) {
-        parallelizableOps++;
+        parallelizableOps++
       }
 
       // Recursively analyze arguments
       for (const arg of currentExpr.args) {
-        analyzeParallelism(arg);
+        analyzeParallelism(arg)
       }
     }
   }
 
-  analyzeParallelism(expr);
+  analyzeParallelism(expr)
 
-  return totalOps > 0 ? parallelizableOps / totalOps : 0;
+  return totalOps > 0 ? parallelizableOps / totalOps : 0
 }
 
 /**
@@ -259,24 +272,24 @@ export function estimateParallelPotential(expr: Expr): number {
  * @returns Array of potential stability issues
  */
 export function detectStabilityIssues(expr: Expr): Array<{
-  issue: string;
-  severity: 'low' | 'medium' | 'high';
-  path: string[];
-  suggestion: string;
+  issue: string
+  severity: 'low' | 'medium' | 'high'
+  path: string[]
+  suggestion: string
 }> {
   const issues: Array<{
-    issue: string;
-    severity: 'low' | 'medium' | 'high';
-    path: string[];
-    suggestion: string;
-  }> = [];
+    issue: string
+    severity: 'low' | 'medium' | 'high'
+    path: string[]
+    suggestion: string
+  }> = []
 
   function analyzeStability(currentExpr: Expr, path: string[]) {
-    if (typeof currentExpr === 'object' && currentExpr.op) {
+    if (isExprNode(currentExpr)) {
       // Check for division operations
       if (currentExpr.op === '/' && currentExpr.args.length === 2) {
-        const denominator = currentExpr.args[1];
-        const denominatorValue = numericValue(denominator);
+        const denominator = currentExpr.args[1]
+        const denominatorValue = numericValue(denominator)
 
         if (denominatorValue !== undefined) {
           // Division by small constants
@@ -285,8 +298,8 @@ export function detectStabilityIssues(expr: Expr): Array<{
               issue: 'Division by very small constant',
               severity: 'high',
               path: [...path, 'args[1]'],
-              suggestion: 'Consider using reciprocal multiplication or check for zero'
-            });
+              suggestion: 'Consider using reciprocal multiplication or check for zero',
+            })
           }
         } else if (typeof denominator === 'object') {
           // Division by expressions that could be zero
@@ -294,70 +307,73 @@ export function detectStabilityIssues(expr: Expr): Array<{
             issue: 'Division by expression (potential zero)',
             severity: 'medium',
             path: [...path, 'args[1]'],
-            suggestion: 'Add bounds checking or use safe division'
-          });
+            suggestion: 'Add bounds checking or use safe division',
+          })
         }
       }
 
       // Check for logarithms of small numbers
       if (currentExpr.op === 'log' || currentExpr.op === 'log10') {
-        const argument = numericValue(currentExpr.args[0]);
+        const argument = numericValue(currentExpr.args[0])
         if (argument !== undefined && argument <= 0) {
           issues.push({
             issue: 'Logarithm of non-positive number',
             severity: 'high',
             path: [...path, 'args[0]'],
-            suggestion: 'Ensure argument is positive or add bounds checking'
-          });
+            suggestion: 'Ensure argument is positive or add bounds checking',
+          })
         }
       }
 
       // Check for square roots of negative numbers
       if (currentExpr.op === 'sqrt') {
-        const argument = numericValue(currentExpr.args[0]);
+        const argument = numericValue(currentExpr.args[0])
         if (argument !== undefined && argument < 0) {
           issues.push({
             issue: 'Square root of negative number',
             severity: 'high',
             path: [...path, 'args[0]'],
-            suggestion: 'Ensure argument is non-negative or use absolute value'
-          });
+            suggestion: 'Ensure argument is non-negative or use absolute value',
+          })
         }
       }
 
       // Check for very large exponents
       if (currentExpr.op === '^' && currentExpr.args.length === 2) {
-        const exponent = numericValue(currentExpr.args[1]);
+        const exponent = numericValue(currentExpr.args[1])
         if (exponent !== undefined && Math.abs(exponent) > 100) {
           issues.push({
             issue: 'Very large exponent',
             severity: 'medium',
             path: [...path, 'args[1]'],
-            suggestion: 'Consider using exp() and log() for large powers'
-          });
+            suggestion: 'Consider using exp() and log() for large powers',
+          })
         }
       }
 
       // Check for inverse trigonometric functions with out-of-range arguments
-      if ((currentExpr.op === 'asin' || currentExpr.op === 'acos') && currentExpr.args.length === 1) {
-        const argument = numericValue(currentExpr.args[0]);
+      if (
+        (currentExpr.op === 'asin' || currentExpr.op === 'acos') &&
+        currentExpr.args.length === 1
+      ) {
+        const argument = numericValue(currentExpr.args[0])
         if (argument !== undefined && (argument < -1 || argument > 1)) {
           issues.push({
             issue: 'Inverse trig function with out-of-range argument',
             severity: 'high',
             path: [...path, 'args[0]'],
-            suggestion: 'Clamp argument to [-1, 1] range'
-          });
+            suggestion: 'Clamp argument to [-1, 1] range',
+          })
         }
       }
 
       // Recursively analyze arguments
       currentExpr.args.forEach((arg, index) => {
-        analyzeStability(arg, [...path, `args[${index}]`]);
-      });
+        analyzeStability(arg, [...path, `args[${index}]`])
+      })
     }
   }
 
-  analyzeStability(expr, []);
-  return issues;
+  analyzeStability(expr, [])
+  return issues
 }

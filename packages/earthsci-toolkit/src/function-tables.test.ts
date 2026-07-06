@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
 import { save } from './serialize.js'
+import type { Model } from './types.js'
 
 const FIXTURE = {
   esm: '0.4.0',
@@ -83,7 +84,9 @@ describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
 
   it('preserves table_lookup AST nodes through load', () => {
     const ef = load(FIXTURE)
-    const eqs = ef.models!.M.equations as unknown as Array<{ rhs: Record<string, unknown> }>
+    const eqs = (ef.models!.M as Model).equations as unknown as Array<{
+      rhs: Record<string, unknown>
+    }>
     expect(eqs).toHaveLength(2)
     expect(eqs[0].rhs.op).toBe('table_lookup')
     expect(eqs[0].rhs.table).toBe('sigma_O3')
@@ -98,10 +101,7 @@ describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
     const ef = load(FIXTURE)
     const out = save(ef)
     const reloaded = JSON.parse(out)
-    expect(Object.keys(reloaded.function_tables).sort()).toEqual([
-      'F_actinic',
-      'sigma_O3',
-    ])
+    expect(Object.keys(reloaded.function_tables).sort()).toEqual(['F_actinic', 'sigma_O3'])
     const rhs0 = reloaded.models.M.equations[0].rhs
     expect(rhs0.op).toBe('table_lookup')
     expect(rhs0.table).toBe('sigma_O3')

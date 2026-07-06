@@ -49,9 +49,7 @@ export function migrate(file: EsmFile, targetVersion: string): EsmFile {
   }
 
   if (!canMigrate(sourceVersion, targetVersion)) {
-    throw new MigrationError(
-      `Migration from ${sourceVersion} to ${targetVersion} is not supported`
-    )
+    throw new MigrationError(`Migration from ${sourceVersion} to ${targetVersion} is not supported`)
   }
 
   return { ...file, esm: targetVersion }

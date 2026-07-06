@@ -8,8 +8,7 @@ import {
   formatCanonicalFloat,
 } from './canonicalize.js'
 
-const op = (name: string, args: unknown[]) =>
-  ({ op: name, args: args as never }) as never
+const op = (name: string, args: unknown[]) => ({ op: name, args: args as never }) as never
 
 describe('canonicalize per RFC §5.4 (TS best-effort)', () => {
   it('formats floats per §5.4.6 (with TS-only-floats limitation)', () => {

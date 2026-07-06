@@ -16,57 +16,219 @@ import { opPrecedence, isFunctionCallOp } from './op-registry.js'
 // Element lookup table for chemical subscript detection (118 elements)
 const ELEMENTS = new Set([
   // Period 1
-  'H', 'He',
+  'H',
+  'He',
   // Period 2
-  'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
+  'Li',
+  'Be',
+  'B',
+  'C',
+  'N',
+  'O',
+  'F',
+  'Ne',
   // Period 3
-  'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+  'Na',
+  'Mg',
+  'Al',
+  'Si',
+  'P',
+  'S',
+  'Cl',
+  'Ar',
   // Period 4
-  'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
+  'K',
+  'Ca',
+  'Sc',
+  'Ti',
+  'V',
+  'Cr',
+  'Mn',
+  'Fe',
+  'Co',
+  'Ni',
+  'Cu',
+  'Zn',
+  'Ga',
+  'Ge',
+  'As',
+  'Se',
+  'Br',
+  'Kr',
   // Period 5
-  'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
+  'Rb',
+  'Sr',
+  'Y',
+  'Zr',
+  'Nb',
+  'Mo',
+  'Tc',
+  'Ru',
+  'Rh',
+  'Pd',
+  'Ag',
+  'Cd',
+  'In',
+  'Sn',
+  'Sb',
+  'Te',
+  'I',
+  'Xe',
   // Period 6
-  'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
-  'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
+  'Cs',
+  'Ba',
+  'La',
+  'Ce',
+  'Pr',
+  'Nd',
+  'Pm',
+  'Sm',
+  'Eu',
+  'Gd',
+  'Tb',
+  'Dy',
+  'Ho',
+  'Er',
+  'Tm',
+  'Yb',
+  'Lu',
+  'Hf',
+  'Ta',
+  'W',
+  'Re',
+  'Os',
+  'Ir',
+  'Pt',
+  'Au',
+  'Hg',
+  'Tl',
+  'Pb',
+  'Bi',
+  'Po',
+  'At',
+  'Rn',
   // Period 7
-  'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
-  'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og'
+  'Fr',
+  'Ra',
+  'Ac',
+  'Th',
+  'Pa',
+  'U',
+  'Np',
+  'Pu',
+  'Am',
+  'Cm',
+  'Bk',
+  'Cf',
+  'Es',
+  'Fm',
+  'Md',
+  'No',
+  'Lr',
+  'Rf',
+  'Db',
+  'Sg',
+  'Bh',
+  'Hs',
+  'Mt',
+  'Ds',
+  'Rg',
+  'Cn',
+  'Nh',
+  'Fl',
+  'Mc',
+  'Lv',
+  'Ts',
+  'Og',
 ])
 
 // Unicode subscripts for digits 0-9
 const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉'
-function toSubscript(n: number): string {
-  return n.toString().split('').map(d => SUBSCRIPT_DIGITS[parseInt(d)]).join('')
-}
 
 // Unicode superscripts for digits 0-9 and signs
 const SUPERSCRIPT_MAP: Record<string, string> = {
-  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-  '+': '⁺', '-': '⁻'
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹',
+  '+': '⁺',
+  '-': '⁻',
 }
 function toSuperscript(text: string): string {
-  return text.split('').map(c => SUPERSCRIPT_MAP[c] || c).join('')
+  return text
+    .split('')
+    .map((c) => SUPERSCRIPT_MAP[c] || c)
+    .join('')
 }
 
 // Greek letter mapping for LaTeX
 const GREEK_LETTERS: Record<string, string> = {
-  'alpha': '\\alpha', 'beta': '\\beta', 'gamma': '\\gamma', 'delta': '\\delta',
-  'epsilon': '\\epsilon', 'zeta': '\\zeta', 'eta': '\\eta', 'theta': '\\theta',
-  'iota': '\\iota', 'kappa': '\\kappa', 'lambda': '\\lambda', 'mu': '\\mu',
-  'nu': '\\nu', 'xi': '\\xi', 'omicron': '\\omicron', 'pi': '\\pi',
-  'rho': '\\rho', 'sigma': '\\sigma', 'tau': '\\tau', 'upsilon': '\\upsilon',
-  'phi': '\\phi', 'chi': '\\chi', 'psi': '\\psi', 'omega': '\\omega',
-  'Gamma': '\\Gamma', 'Delta': '\\Delta', 'Theta': '\\Theta', 'Lambda': '\\Lambda',
-  'Xi': '\\Xi', 'Pi': '\\Pi', 'Sigma': '\\Sigma', 'Upsilon': '\\Upsilon',
-  'Phi': '\\Phi', 'Psi': '\\Psi', 'Omega': '\\Omega',
+  alpha: '\\alpha',
+  beta: '\\beta',
+  gamma: '\\gamma',
+  delta: '\\delta',
+  epsilon: '\\epsilon',
+  zeta: '\\zeta',
+  eta: '\\eta',
+  theta: '\\theta',
+  iota: '\\iota',
+  kappa: '\\kappa',
+  lambda: '\\lambda',
+  mu: '\\mu',
+  nu: '\\nu',
+  xi: '\\xi',
+  omicron: '\\omicron',
+  pi: '\\pi',
+  rho: '\\rho',
+  sigma: '\\sigma',
+  tau: '\\tau',
+  upsilon: '\\upsilon',
+  phi: '\\phi',
+  chi: '\\chi',
+  psi: '\\psi',
+  omega: '\\omega',
+  Gamma: '\\Gamma',
+  Delta: '\\Delta',
+  Theta: '\\Theta',
+  Lambda: '\\Lambda',
+  Xi: '\\Xi',
+  Pi: '\\Pi',
+  Sigma: '\\Sigma',
+  Upsilon: '\\Upsilon',
+  Phi: '\\Phi',
+  Psi: '\\Psi',
+  Omega: '\\Omega',
   // Direct Unicode to LaTeX mappings
-  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
-  'ε': '\\epsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
-  'ι': '\\iota', 'κ': '\\kappa', 'λ': '\\lambda', 'μ': '\\mu',
-  'ν': '\\nu', 'ξ': '\\xi', 'ο': '\\omicron', 'π': '\\pi',
-  'ρ': '\\rho', 'σ': '\\sigma', 'τ': '\\tau', 'υ': '\\upsilon',
-  'φ': '\\phi', 'χ': '\\chi', 'ψ': '\\psi', 'ω': '\\omega'
+  α: '\\alpha',
+  β: '\\beta',
+  γ: '\\gamma',
+  δ: '\\delta',
+  ε: '\\epsilon',
+  ζ: '\\zeta',
+  η: '\\eta',
+  θ: '\\theta',
+  ι: '\\iota',
+  κ: '\\kappa',
+  λ: '\\lambda',
+  μ: '\\mu',
+  ν: '\\nu',
+  ξ: '\\xi',
+  ο: '\\omicron',
+  π: '\\pi',
+  ρ: '\\rho',
+  σ: '\\sigma',
+  τ: '\\tau',
+  υ: '\\upsilon',
+  φ: '\\phi',
+  χ: '\\chi',
+  ψ: '\\psi',
+  ω: '\\omega',
 }
 
 function convertGreekLetters(text: string, format: 'unicode' | 'latex' | 'ascii'): string {
@@ -74,28 +236,70 @@ function convertGreekLetters(text: string, format: 'unicode' | 'latex' | 'ascii'
     // Replace Greek letters with LaTeX commands
     // Negative lookahead (?![A-Z}]) prevents conversion when followed by uppercase (chemical prefix)
     // or closing brace (inside \mathrm{})
-    return text.replace(/[α-ωΑ-Ω]|(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![A-Z}])/g,
-      (match) => GREEK_LETTERS[match] || match)
+    return text.replace(
+      /[α-ωΑ-Ω]|(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![A-Z}])/g,
+      (match) => GREEK_LETTERS[match] || match,
+    )
   } else if (format === 'unicode') {
     // Convert named Greek letters to Unicode symbols
     // Negative lookahead (?![A-Z]) prevents conversion when followed by uppercase (chemical prefix)
     const unicodeGreek: Record<string, string> = {
-      'phi': 'φ', 'theta': 'θ', 'gamma': 'γ', 'alpha': 'α', 'beta': 'β',
-      'delta': 'δ', 'epsilon': 'ε', 'zeta': 'ζ', 'eta': 'η', 'iota': 'ι',
-      'kappa': 'κ', 'lambda': 'λ', 'mu': 'μ', 'nu': 'ν', 'xi': 'ξ',
-      'omicron': 'ο', 'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ',
-      'upsilon': 'υ', 'chi': 'χ', 'psi': 'ψ', 'omega': 'ω'
+      phi: 'φ',
+      theta: 'θ',
+      gamma: 'γ',
+      alpha: 'α',
+      beta: 'β',
+      delta: 'δ',
+      epsilon: 'ε',
+      zeta: 'ζ',
+      eta: 'η',
+      iota: 'ι',
+      kappa: 'κ',
+      lambda: 'λ',
+      mu: 'μ',
+      nu: 'ν',
+      xi: 'ξ',
+      omicron: 'ο',
+      pi: 'π',
+      rho: 'ρ',
+      sigma: 'σ',
+      tau: 'τ',
+      upsilon: 'υ',
+      chi: 'χ',
+      psi: 'ψ',
+      omega: 'ω',
     }
-    return text.replace(/(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![A-Z])/g,
-      (match) => unicodeGreek[match] || match)
+    return text.replace(
+      /(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![A-Z])/g,
+      (match) => unicodeGreek[match] || match,
+    )
   } else if (format === 'ascii') {
     // Convert Unicode Greek letters to ASCII names
     const asciiGreek: Record<string, string> = {
-      'φ': 'phi', 'θ': 'theta', 'γ': 'gamma', 'α': 'alpha', 'β': 'beta',
-      'δ': 'delta', 'ε': 'epsilon', 'ζ': 'zeta', 'η': 'eta', 'ι': 'iota',
-      'κ': 'kappa', 'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi',
-      'ο': 'omicron', 'π': 'pi', 'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau',
-      'υ': 'upsilon', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega'
+      φ: 'phi',
+      θ: 'theta',
+      γ: 'gamma',
+      α: 'alpha',
+      β: 'beta',
+      δ: 'delta',
+      ε: 'epsilon',
+      ζ: 'zeta',
+      η: 'eta',
+      ι: 'iota',
+      κ: 'kappa',
+      λ: 'lambda',
+      μ: 'mu',
+      ν: 'nu',
+      ξ: 'xi',
+      ο: 'omicron',
+      π: 'pi',
+      ρ: 'rho',
+      σ: 'sigma',
+      τ: 'tau',
+      υ: 'upsilon',
+      χ: 'chi',
+      ψ: 'psi',
+      ω: 'omega',
     }
     return text.replace(/[α-ωΑ-Ω]/g, (match) => asciiGreek[match] || match)
   }
@@ -135,7 +339,8 @@ function formatChemicalSubscripts(variable: string, format: 'unicode' | 'latex')
           for (const seg of segments) {
             if (hasElementPattern(seg)) {
               const chemFormatted = seg.replace(/(\d+)/g, (_: string, digits: string) =>
-                digits.length === 1 ? `_${digits}` : `_{${digits}}`)
+                digits.length === 1 ? `_${digits}` : `_{${digits}}`,
+              )
               result += `_{\\mathrm{${chemFormatted}}}`
             } else {
               result += `_\\mathrm{${seg}}`
@@ -185,7 +390,7 @@ function formatChemicalSubscripts(variable: string, format: 'unicode' | 'latex')
       // Handle underscore-separated variables with mixed segments
       if (variable.includes('_')) {
         const parts = variable.split('_')
-        const anyChemical = parts.some(p => hasElementPattern(p))
+        const anyChemical = parts.some((p) => hasElementPattern(p))
         if (anyChemical) {
           // Segment-by-segment: base + subscripts
           let result: string
@@ -201,7 +406,8 @@ function formatChemicalSubscripts(variable: string, format: 'unicode' | 'latex')
             const part = parts[i]
             if (hasElementPattern(part)) {
               const chemFormatted = part.replace(/(\d+)/g, (_: string, digits: string) =>
-                digits.length === 1 ? `_${digits}` : `_{${digits}}`)
+                digits.length === 1 ? `_${digits}` : `_{${digits}}`,
+              )
               result += `_{\\mathrm{${chemFormatted}}}`
             } else {
               result += `_\\mathrm{${part}}`
@@ -235,14 +441,16 @@ function formatChemicalSubscripts(variable: string, format: 'unicode' | 'latex')
     // Handle underscore-separated variables with mixed chemical/non-chemical segments
     if (variable.includes('_')) {
       const parts = variable.split('_')
-      const anyChemical = parts.some(p => hasElementPattern(p))
+      const anyChemical = parts.some((p) => hasElementPattern(p))
       if (anyChemical) {
-        return parts.map(part => {
-          if (hasElementPattern(part)) {
-            return formatChemicalSubscripts(part, 'unicode')
-          }
-          return part
-        }).join('_')
+        return parts
+          .map((part) => {
+            if (hasElementPattern(part)) {
+              return formatChemicalSubscripts(part, 'unicode')
+            }
+            return part
+          })
+          .join('_')
       }
     }
     // No element pattern found, return as-is
@@ -318,7 +526,7 @@ function getChemicalSuffix(variable: string): { prefix: string; suffix: string }
     // For patterns like k_NO_O3, try treating NO_O3 as the chemical part
     if (parts.length === 3) {
       const prefix = parts[0]
-      const suffix = parts.slice(1).join('_')  // Keep underscore within chemical formula
+      const suffix = parts.slice(1).join('_') // Keep underscore within chemical formula
       if (hasElementPattern(suffix) && !hasElementPattern(prefix)) {
         return { prefix, suffix }
       }
@@ -358,14 +566,11 @@ function hasElementPattern(variable: string): boolean {
 
     if (i >= cleanVariable.length) break
 
-    let foundElement = false
-
     // Try 2-character element first
     if (i + 1 < cleanVariable.length) {
       const twoChar = cleanVariable.slice(i, i + 2)
       if (ELEMENTS.has(twoChar)) {
         hasElement = true
-        foundElement = true
         i += 2
         // Skip digits
         while (i < cleanVariable.length && /\d/.test(cleanVariable[i])) {
@@ -376,24 +581,19 @@ function hasElementPattern(variable: string): boolean {
     }
 
     // Try 1-character element
-    if (!foundElement) {
-      const oneChar = cleanVariable[i]
-      if (ELEMENTS.has(oneChar)) {
-        hasElement = true
-        foundElement = true
+    const oneChar = cleanVariable[i]
+    if (ELEMENTS.has(oneChar)) {
+      hasElement = true
+      i++
+      // Skip digits
+      while (i < cleanVariable.length && /\d/.test(cleanVariable[i])) {
         i++
-        // Skip digits
-        while (i < cleanVariable.length && /\d/.test(cleanVariable[i])) {
-          i++
-        }
-        continue
       }
+      continue
     }
 
     // If we encounter a non-element character, this is not a pure chemical formula
-    if (!foundElement) {
-      return false
-    }
+    return false
   }
 
   return hasElement
@@ -448,7 +648,9 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
   }
 
   const parentPrec = opPrecedence(parent.op)
-  const childPrec = opPrecedence(child.op)
+  // After the leaf check above, the remaining union member is the schema's
+  // open node object; its `op` is the operator name string.
+  const childPrec = opPrecedence((child as ExprNode).op)
 
   // Function arguments already sit inside the call's own parentheses — only
   // parenthesize the loosest-binding (logical-or) child expressions.
@@ -478,7 +680,10 @@ type TextFormat = 'unicode' | 'latex' | 'ascii'
  * Shared type-dispatch for the three text formats: numeric leaf, variable
  * name, expression node, equation, or a file/model/reaction-system summary.
  */
-function formatAny(expr: Expr | Equation | Model | ReactionSystem | EsmFile, format: TextFormat): string {
+function formatAny(
+  expr: Expr | Equation | Model | ReactionSystem | EsmFile,
+  format: TextFormat,
+): string {
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
     return formatNumber(numericValue(expr)!, format)
   }
@@ -660,23 +865,62 @@ function formatMathMLVariable(variable: string): string {
  */
 function convertGreekLettersToMathML(text: string): string {
   const mathMLGreek: Record<string, string> = {
-    'α': '&alpha;', 'β': '&beta;', 'γ': '&gamma;', 'δ': '&delta;',
-    'ε': '&epsilon;', 'ζ': '&zeta;', 'η': '&eta;', 'θ': '&theta;',
-    'ι': '&iota;', 'κ': '&kappa;', 'λ': '&lambda;', 'μ': '&mu;',
-    'ν': '&nu;', 'ξ': '&xi;', 'ο': '&omicron;', 'π': '&pi;',
-    'ρ': '&rho;', 'σ': '&sigma;', 'τ': '&tau;', 'υ': '&upsilon;',
-    'φ': '&phi;', 'χ': '&chi;', 'ψ': '&psi;', 'ω': '&omega;',
-    'Α': '&Alpha;', 'Β': '&Beta;', 'Γ': '&Gamma;', 'Δ': '&Delta;',
-    'Ε': '&Epsilon;', 'Ζ': '&Zeta;', 'Η': '&Eta;', 'Θ': '&Theta;',
-    'Ι': '&Iota;', 'Κ': '&Kappa;', 'Λ': '&Lambda;', 'Μ': '&Mu;',
-    'Ν': '&Nu;', 'Ξ': '&Xi;', 'Ο': '&Omicron;', 'Π': '&Pi;',
-    'Ρ': '&Rho;', 'Σ': '&Sigma;', 'Τ': '&Tau;', 'Υ': '&Upsilon;',
-    'Φ': '&Phi;', 'Χ': '&Chi;', 'Ψ': '&Psi;', 'Ω': '&Omega;'
+    α: '&alpha;',
+    β: '&beta;',
+    γ: '&gamma;',
+    δ: '&delta;',
+    ε: '&epsilon;',
+    ζ: '&zeta;',
+    η: '&eta;',
+    θ: '&theta;',
+    ι: '&iota;',
+    κ: '&kappa;',
+    λ: '&lambda;',
+    μ: '&mu;',
+    ν: '&nu;',
+    ξ: '&xi;',
+    ο: '&omicron;',
+    π: '&pi;',
+    ρ: '&rho;',
+    σ: '&sigma;',
+    τ: '&tau;',
+    υ: '&upsilon;',
+    φ: '&phi;',
+    χ: '&chi;',
+    ψ: '&psi;',
+    ω: '&omega;',
+    Α: '&Alpha;',
+    Β: '&Beta;',
+    Γ: '&Gamma;',
+    Δ: '&Delta;',
+    Ε: '&Epsilon;',
+    Ζ: '&Zeta;',
+    Η: '&Eta;',
+    Θ: '&Theta;',
+    Ι: '&Iota;',
+    Κ: '&Kappa;',
+    Λ: '&Lambda;',
+    Μ: '&Mu;',
+    Ν: '&Nu;',
+    Ξ: '&Xi;',
+    Ο: '&Omicron;',
+    Π: '&Pi;',
+    Ρ: '&Rho;',
+    Σ: '&Sigma;',
+    Τ: '&Tau;',
+    Υ: '&Upsilon;',
+    Φ: '&Phi;',
+    Χ: '&Chi;',
+    Ψ: '&Psi;',
+    Ω: '&Omega;',
   }
 
-  return text.replace(/[α-ωΑ-Ω]/g, (match) => mathMLGreek[match] || match)
-    .replace(/(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)/g,
-      (match) => mathMLGreek[match] || match)
+  return text
+    .replace(/[α-ωΑ-Ω]/g, (match) => mathMLGreek[match] || match)
+    .replace(
+      /(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)/g,
+      (match) => mathMLGreek[match] || match,
+    )
 }
 
 /**
@@ -735,7 +979,8 @@ function formatExpressionNodeMathML(node: ExprNode): string {
       case 'atan2':
         return `<mrow><mi>atan2</mi><mo>(</mo>${formatArg(left)}<mo>,</mo>${formatArg(right)}<mo>)</mo></mrow>`
 
-      case 'min': case 'max':
+      case 'min':
+      case 'max':
         return `<mrow><mi>${op}</mi><mo>(</mo>${formatArg(left)}<mo>,</mo>${formatArg(right)}<mo>)</mo></mrow>`
     }
   }
@@ -752,7 +997,13 @@ function formatExpressionNodeMathML(node: ExprNode): string {
       case 'not':
         return `<mrow><mo>&not;</mo>${formatArg(arg)}</mrow>`
 
-      case 'exp': case 'sin': case 'cos': case 'tan': case 'asin': case 'acos': case 'atan':
+      case 'exp':
+      case 'sin':
+      case 'cos':
+      case 'tan':
+      case 'asin':
+      case 'acos':
+      case 'atan':
         return `<mrow><mi>${op}</mi><mo>(</mo>${formatArg(arg)}<mo>)</mo></mrow>`
 
       case 'log':
@@ -776,9 +1027,10 @@ function formatExpressionNodeMathML(node: ExprNode): string {
       case 'sign':
         return `<mrow><mi>sgn</mi><mo>(</mo>${formatArg(arg)}<mo>)</mo></mrow>`
 
-      case 'grad':
+      case 'grad': {
         const dim = (node as any).dim || 'x'
         return `<mfrac><mrow><mo>&part;</mo>${formatArg(arg)}</mrow><mrow><mo>&part;</mo><mi>${dim}</mi></mrow></mfrac>`
+      }
 
       case 'div':
         return `<mrow><mo>&nabla;</mo><mo>&cdot;</mo>${formatArg(arg)}</mrow>`
@@ -789,10 +1041,11 @@ function formatExpressionNodeMathML(node: ExprNode): string {
       case 'Pre':
         return `<mrow><mi>Pre</mi><mo>(</mo>${formatArg(arg)}<mo>)</mo></mrow>`
 
-      case 'D':
+      case 'D': {
         // Derivative operator
         const wrtVar = wrt || 't'
         return `<mfrac><mrow><mo>&part;</mo>${formatArg(arg)}</mrow><mrow><mo>&part;</mo><mi>${wrtVar}</mi></mrow></mfrac>`
+      }
     }
   }
 
@@ -808,25 +1061,26 @@ function formatExpressionNodeMathML(node: ExprNode): string {
 
       case '+':
         // N-ary addition
-        return `<mrow>${args.map(arg => formatArg(arg)).join('<mo>+</mo>')}</mrow>`
+        return `<mrow>${args.map((arg) => formatArg(arg)).join('<mo>+</mo>')}</mrow>`
 
       case '*':
         // N-ary multiplication
-        return `<mrow>${args.map(arg => formatArg(arg)).join('<mo>&cdot;</mo>')}</mrow>`
+        return `<mrow>${args.map((arg) => formatArg(arg)).join('<mo>&cdot;</mo>')}</mrow>`
 
       case 'or':
         // N-ary or
-        return `<mrow>${args.map(arg => formatArg(arg)).join('<mo>&or;</mo>')}</mrow>`
+        return `<mrow>${args.map((arg) => formatArg(arg)).join('<mo>&or;</mo>')}</mrow>`
 
-      case 'max':
+      case 'max': {
         // N-ary max
-        const maxArgList = args.map(arg => formatArg(arg)).join('<mo>,</mo>')
+        const maxArgList = args.map((arg) => formatArg(arg)).join('<mo>,</mo>')
         return `<mrow><mi>max</mi><mo>(</mo>${maxArgList}<mo>)</mo></mrow>`
+      }
     }
   }
 
   // Fallback: function call notation
-  const argList = args.map(arg => formatArg(arg)).join('<mo>,</mo>')
+  const argList = args.map((arg) => formatArg(arg)).join('<mo>,</mo>')
   return `<mrow><mi>${op}</mi><mo>(</mo>${argList}<mo>)</mo></mrow>`
 }
 
@@ -856,8 +1110,13 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
     switch (op) {
       case '+': {
         // Simplify a + (-b) → a - b
-        if (typeof right === 'object' && right !== null && 'op' in right &&
-            (right as ExprNode).op === '-' && (right as ExprNode).args.length === 1) {
+        if (
+          typeof right === 'object' &&
+          right !== null &&
+          'op' in right &&
+          (right as ExprNode).op === '-' &&
+          (right as ExprNode).args.length === 1
+        ) {
           const innerArg = (right as ExprNode).args[0]
           // Format as binary subtraction
           const syntheticMinus = { op: '-', args: [left, innerArg] } as ExprNode
@@ -914,8 +1173,8 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `${formatArg(left)}^${formatArg(right, true)}`
 
-
-      case '>': case '<':
+      case '>':
+      case '<':
         return `${formatArg(left)} ${op} ${formatArg(right, true)}`
 
       case '>=':
@@ -934,7 +1193,8 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `${formatArg(left)} ${op} ${formatArg(right, true)}`
 
-      case '=': case '==':
+      case '=':
+      case '==':
         if (format === 'unicode') {
           return `${formatArg(left)} = ${formatArg(right, true)}`
         } else if (format === 'latex') {
@@ -972,7 +1232,8 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `atan2(${formatArg(left)}, ${formatArg(right)})`
 
-      case 'min': case 'max':
+      case 'min':
+      case 'max':
         if (format === 'latex') {
           return `\\${op}(${toLatex(left)}, ${toLatex(right)})`
         }
@@ -1008,8 +1269,13 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `not ${formatArg(arg)}`
 
-      case 'exp': case 'sin': case 'cos': case 'tan':
-      case 'sinh': case 'cosh': case 'tanh':
+      case 'exp':
+      case 'sin':
+      case 'cos':
+      case 'tan':
+      case 'sinh':
+      case 'cosh':
+      case 'tanh':
         if (format === 'latex') {
           const latexArg = toLatex(arg)
           // Use \left( \right) when the argument contains tall elements like \frac
@@ -1081,7 +1347,9 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `${op}(${formatArg(arg)})`
 
-      case 'asin': case 'acos': case 'atan': {
+      case 'asin':
+      case 'acos':
+      case 'atan': {
         const arcName = op.replace('a', 'arc')
         if (format === 'unicode') {
           return `${arcName}(${formatArg(arg)})`
@@ -1091,9 +1359,11 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         return `${op}(${formatArg(arg)})`
       }
 
-      case 'asinh': case 'acosh': case 'atanh': {
+      case 'asinh':
+      case 'acosh':
+      case 'atanh': {
         // Inverse hyperbolic: sinh⁻¹(x), \sinh^{-1}(x)
-        const hypName = op.replace('a', '')  // asinh → sinh
+        const hypName = op.replace('a', '') // asinh → sinh
         if (format === 'unicode') {
           return `${hypName}⁻¹(${formatArg(arg)})`
         } else if (format === 'latex') {
@@ -1102,8 +1372,8 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         return `${op}(${formatArg(arg)})`
       }
 
-      case 'grad':
-        const dim = (node as any).dim || 'x'  // dim is not in ExprNode type yet
+      case 'grad': {
+        const dim = (node as any).dim || 'x' // dim is not in ExprNode type yet
         if (format === 'unicode') {
           const variable2 = formatArg(arg)
           return `∂${variable2}/∂${dim}`
@@ -1111,6 +1381,7 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
           return `\\frac{\\partial ${toLatex(arg)}}{\\partial ${dim}}`
         }
         return `d(${toAscii(arg)})/d${dim}`
+      }
 
       case 'div':
         if (format === 'unicode') {
@@ -1142,13 +1413,14 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         }
         return `${op}(${formatArg(arg)})`
 
-      case 'erf': case 'erfc':
+      case 'erf':
+      case 'erfc':
         if (format === 'latex') {
           return `\\mathrm{${op}}(${toLatex(arg)})`
         }
         return `${op}(${formatArg(arg)})`
 
-      case 'D':
+      case 'D': {
         // Derivative operator
         const wrtVar = wrt || 't'
         if (format === 'unicode') {
@@ -1158,6 +1430,7 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
           return `\\frac{\\partial ${toLatex(arg)}}{\\partial ${wrtVar}}`
         }
         return `D(${toAscii(arg)})/D${wrtVar}`
+      }
     }
   }
 
@@ -1176,43 +1449,49 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
 
       case '+':
         // N-ary addition
-        return args.map(arg => formatArg(arg)).join(' + ')
+        return args.map((arg) => formatArg(arg)).join(' + ')
 
-      case '*':
+      case '*': {
         // N-ary multiplication
         const sep = format === 'unicode' ? '·' : format === 'latex' ? ' \\cdot ' : ' * '
-        return args.map(arg => formatArg(arg)).join(sep)
+        return args.map((arg) => formatArg(arg)).join(sep)
+      }
 
       case 'or':
         // N-ary or
         if (format === 'unicode') {
-          return args.map(arg => formatArg(arg)).join(' ∨ ')
+          return args.map((arg) => formatArg(arg)).join(' ∨ ')
         } else if (format === 'latex') {
-          return args.map(arg => formatArg(arg)).join(' \\lor ')
+          return args.map((arg) => formatArg(arg)).join(' \\lor ')
         }
-        return args.map(arg => formatArg(arg)).join(' or ')
+        return args.map((arg) => formatArg(arg)).join(' or ')
 
-      case 'max':
+      case 'max': {
         // N-ary max
-        const maxArgList = args.map(arg => {
-          if (format === 'unicode') return toUnicode(arg)
-          else if (format === 'latex') return toLatex(arg)
-          else return toAscii(arg)
-        }).join(', ')
+        const maxArgList = args
+          .map((arg) => {
+            if (format === 'unicode') return toUnicode(arg)
+            else if (format === 'latex') return toLatex(arg)
+            else return toAscii(arg)
+          })
+          .join(', ')
 
         if (format === 'latex') {
           return `\\max(${maxArgList})`
         }
         return `max(${maxArgList})`
+      }
     }
   }
 
   // Fallback: function call notation
-  const argList = args.map(arg => {
-    if (format === 'unicode') return toUnicode(arg)
-    else if (format === 'latex') return toLatex(arg)
-    else return toAscii(arg)
-  }).join(', ')
+  const argList = args
+    .map((arg) => {
+      if (format === 'unicode') return toUnicode(arg)
+      else if (format === 'latex') return toLatex(arg)
+      else return toAscii(arg)
+    })
+    .join(', ')
 
   if (format === 'latex') {
     return `\\text{${op}}\\left(${argList}\\right)`
@@ -1226,7 +1505,7 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
 function formatModelSummary(model: Model, format: 'unicode' | 'ascii'): string {
   // Count parameter and state variables
   const variables = model.variables || {}
-  const parameterCount = Object.values(variables).filter(v => v.type === 'parameter').length
+  const parameterCount = Object.values(variables).filter((v) => v.type === 'parameter').length
   const equationCount = model.equations?.length || 0
 
   // Format equation list
@@ -1237,7 +1516,7 @@ function formatModelSummary(model: Model, format: 'unicode' | 'ascii'): string {
         const lhsStr = format === 'unicode' ? toUnicode(equation.lhs) : toAscii(equation.lhs)
         const rhsStr = format === 'unicode' ? toUnicode(equation.rhs) : toAscii(equation.rhs)
         equationLines.push(`    ${lhsStr} = ${rhsStr}`)
-      } catch (err) {
+      } catch {
         // Fallback for equations that can't be formatted
         equationLines.push(`    [equation formatting error]`)
       }
@@ -1245,7 +1524,9 @@ function formatModelSummary(model: Model, format: 'unicode' | 'ascii'): string {
   }
 
   // Build summary - this matches the spec format for individual models within EsmFile
-  const result = [`(${parameterCount} parameters, ${equationCount} equation${equationCount !== 1 ? 's' : ''})`]
+  const result = [
+    `(${parameterCount} parameters, ${equationCount} equation${equationCount !== 1 ? 's' : ''})`,
+  ]
   if (equationLines.length > 0) {
     result.push(...equationLines)
   }

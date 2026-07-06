@@ -18,11 +18,15 @@
  *   - Reference to an unknown member of a declared enum → EnumLoweringError.
  */
 
-import type { EsmFile, Expression, ExpressionNode } from './generated.js'
+import type { Expression, ExpressionNode } from './generated.js'
+import type { EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 
 export class EnumLoweringError extends Error {
-  constructor(public code: string, message: string) {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
     super(`[${code}] ${message}`)
     this.name = 'EnumLoweringError'
   }
@@ -49,7 +53,12 @@ function lowerExpr(expr: unknown, enums: EnumsMap): unknown {
   if (typeof node.op === 'string') {
     if (node.op === 'enum') {
       const args = node.args as unknown[] | undefined
-      if (!Array.isArray(args) || args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'string') {
+      if (
+        !Array.isArray(args) ||
+        args.length !== 2 ||
+        typeof args[0] !== 'string' ||
+        typeof args[1] !== 'string'
+      ) {
         throw new EnumLoweringError(
           'enum_op_malformed',
           `enum op requires args = [enum_name, member_name] (two strings); got ${JSON.stringify(args)}`,

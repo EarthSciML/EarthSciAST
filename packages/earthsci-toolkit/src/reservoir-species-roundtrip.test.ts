@@ -17,8 +17,9 @@ describe('reservoir species (Species.constant=true)', () => {
   it('round-trips the constant flag byte-identical and flags only reservoir species', () => {
     const raw = readFileSync(FIXTURE, 'utf-8')
     const parsed = load(raw) as Record<string, unknown>
-    const rs = (parsed.reaction_systems as Record<string, { species: Record<string, { constant?: boolean }> }>)
-      .SuperFastSubset
+    const rs = (
+      parsed.reaction_systems as Record<string, { species: Record<string, { constant?: boolean }> }>
+    ).SuperFastSubset
     for (const name of ['O2', 'CH4', 'H2O']) {
       expect(rs.species[name].constant).toBe(true)
     }

@@ -29,9 +29,7 @@ describe('save() — NumericLiteral handling', () => {
       models: {
         M: {
           variables: { x: { type: 'state', default: intLit(42) } },
-          equations: [
-            { lhs: 'x', rhs: { op: '*', args: [floatLit(2), 'x'] } },
-          ],
+          equations: [{ lhs: 'x', rhs: { op: '*', args: [floatLit(2), 'x'] } }],
         },
       },
     } as unknown as Parameters<typeof save>[0]
@@ -48,9 +46,7 @@ describe('save() — NumericLiteral handling', () => {
       models: {
         M: {
           variables: { x: { type: 'state', default: floatLit(1) } },
-          equations: [
-            { lhs: 'x', rhs: { op: '*', args: [floatLit(1), 'x'] } },
-          ],
+          equations: [{ lhs: 'x', rhs: { op: '*', args: [floatLit(1), 'x'] } }],
         },
       },
     } as unknown as Parameters<typeof save>[0]

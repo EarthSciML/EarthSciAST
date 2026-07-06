@@ -94,7 +94,10 @@ const GEOMETRY_MANIFOLD_VALUES = new Set(['planar', 'spherical', 'geodesic'])
 const MAX_REWRITE_PASSES = 64
 
 export class ExpressionTemplateError extends Error {
-  constructor(public code: string, message: string) {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
     super(`[${code}] ${message}`)
     this.name = 'ExpressionTemplateError'
   }
@@ -135,9 +138,7 @@ type ShapeEnv = Record<string, string[]>
 const EMPTY_SHAPE_ENV: ShapeEnv = {}
 
 function isObject(v: unknown): v is Record<string, unknown> {
-  return (
-    typeof v === 'object' && v !== null && !Array.isArray(v) && !isNumericLiteral(v)
-  )
+  return typeof v === 'object' && v !== null && !Array.isArray(v) && !isNumericLiteral(v)
 }
 
 /**
@@ -641,11 +642,7 @@ export function composeTemplateBodies(templates: Templates, scope: string): void
  * rewritten in a SUBSEQUENT pass of the outermost-first fixpoint, never within
  * the current pass (esm-spec §9.6.3).
  */
-function expandApply(
-  node: Record<string, unknown>,
-  templates: Templates,
-  scope: string,
-): Json {
+function expandApply(node: Record<string, unknown>, templates: Templates, scope: string): Json {
   const name = node.name
   if (typeof name !== 'string' || name.length === 0) {
     throw new ExpressionTemplateError(

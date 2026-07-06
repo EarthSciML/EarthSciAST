@@ -6,10 +6,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
-import {
-  lowerExpressionTemplates,
-  ExpressionTemplateError,
-} from './lower-expression-templates.js'
+import { lowerExpressionTemplates, ExpressionTemplateError } from './lower-expression-templates.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
@@ -37,9 +34,7 @@ const ARRHENIUS_FIXTURE = {
               'A_pre',
               {
                 op: 'exp',
-                args: [
-                  { op: '/', args: [{ op: '-', args: ['Ea'] }, 'T'] },
-                ],
+                args: [{ op: '/', args: [{ op: '-', args: ['Ea'] }, 'T'] }],
               },
               'num_density',
             ],
@@ -88,7 +83,7 @@ function inlineArrhenius(A: number, Ea: number) {
 describe('expression_templates / apply_expression_template (esm-giy)', () => {
   it('expands apply_expression_template at load time and strips the templates block', () => {
     const file = load(JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE)))
-    const sys = file.reaction_systems!.chem as Record<string, unknown>
+    const sys = file.reaction_systems!.chem as unknown as Record<string, unknown>
     expect('expression_templates' in sys).toBe(false)
     // Both reactions should have a rate AST identical to the inline form.
     const reactions = sys.reactions as Array<{ rate: unknown }>
@@ -190,9 +185,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     )
     const file = load(fs.readFileSync(fixturePath, 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(expandedPath, 'utf8'))
-    expect(file.reaction_systems!.chem.reactions).toEqual(
-      expanded.reaction_systems.chem.reactions,
-    )
+    expect(file.reaction_systems!.chem.reactions).toEqual(expanded.reaction_systems.chem.reactions)
   })
 
   it('coupling_transform_expression conformance fixture matches expanded form (esm-spec §10.4)', () => {
@@ -207,9 +200,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     const file = load(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
     ) as unknown as Record<string, unknown>
-    const expanded = JSON.parse(
-      fs.readFileSync(path.join(casedir, 'expanded.esm'), 'utf8'),
-    )
+    const expanded = JSON.parse(fs.readFileSync(path.join(casedir, 'expanded.esm'), 'utf8'))
     expect(file.coupling).toEqual(expanded.coupling)
     expect(file.models).toEqual(expanded.models)
   })
@@ -222,9 +213,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       throw new Error('expected error')
     } catch (e) {
       expect(e).toBeInstanceOf(ExpressionTemplateError)
-      expect((e as ExpressionTemplateError).code).toBe(
-        'apply_expression_template_unknown_template',
-      )
+      expect((e as ExpressionTemplateError).code).toBe('apply_expression_template_unknown_template')
     }
   })
 })
@@ -307,8 +296,16 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
   it('applies match rules in declaration order (first match wins)', () => {
     const file = gradModel(
       {
-        rule_a: { params: ['f'], match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'sin', args: ['f'] } },
-        rule_b: { params: ['g'], match: { op: 'grad', args: ['g'], dim: 'x' }, body: { op: 'cos', args: ['g'] } },
+        rule_a: {
+          params: ['f'],
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: 'sin', args: ['f'] },
+        },
+        rule_b: {
+          params: ['g'],
+          match: { op: 'grad', args: ['g'], dim: 'x' },
+          body: { op: 'cos', args: ['g'] },
+        },
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
@@ -322,8 +319,16 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     // in the NEXT pass. So grad → div (pass 1) then div → abs (pass 2).
     const file = gradModel(
       {
-        g2d: { params: ['f'], match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'div', args: ['f'], dim: 'x' } },
-        d2z: { params: ['f'], match: { op: 'div', args: ['f'], dim: 'x' }, body: { op: 'abs', args: ['f'] } },
+        g2d: {
+          params: ['f'],
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: 'div', args: ['f'], dim: 'x' },
+        },
+        d2z: {
+          params: ['f'],
+          match: { op: 'div', args: ['f'], dim: 'x' },
+          body: { op: 'abs', args: ['f'] },
+        },
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
@@ -337,8 +342,17 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     // out-ranks it and fires.
     const file = gradModel(
       {
-        lo: { params: ['f'], match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'sin', args: ['f'] } },
-        hi: { params: ['f'], priority: 5, match: { op: 'grad', args: ['f'], dim: 'x' }, body: { op: 'cos', args: ['f'] } },
+        lo: {
+          params: ['f'],
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: 'sin', args: ['f'] },
+        },
+        hi: {
+          params: ['f'],
+          priority: 5,
+          match: { op: 'grad', args: ['f'], dim: 'x' },
+          body: { op: 'cos', args: ['f'] },
+        },
       },
       { op: 'grad', args: ['c'], dim: 'x' },
     )
@@ -427,9 +441,9 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       op: '+',
       args: ['T', 'num_density'],
     })
-    expect('expression_templates' in (file.reaction_systems!.chem as Record<string, unknown>)).toBe(
-      false,
-    )
+    expect(
+      'expression_templates' in (file.reaction_systems!.chem as unknown as Record<string, unknown>),
+    ).toBe(false)
   })
 })
 
@@ -703,7 +717,9 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     src.models.Src.expression_templates = src.models.Sink.expression_templates
     delete src.models.Sink.expression_templates
     expect(() => lowerExpressionTemplates(src)).toThrow(ExpressionTemplateError)
-    expect(() => lowerExpressionTemplates(src)).toThrow(/remain after expansion at: \/coupling\/0\/transform/)
+    expect(() => lowerExpressionTemplates(src)).toThrow(
+      /remain after expansion at: \/coupling\/0\/transform/,
+    )
   })
 
   it('reports the coupling[<idx>].transform scope for an unknown template name', () => {
@@ -1077,7 +1093,10 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
     // tests/valid/makearray_empty_region_min_extent.esm folds the interior
     // region [2, N-1] to [2, 1] at the default N = 2 — the canonical empty
     // bound, which contributes no elements and MUST load.
-    const text = fs.readFileSync(path.join(validDir, 'makearray_empty_region_min_extent.esm'), 'utf8')
+    const text = fs.readFileSync(
+      path.join(validDir, 'makearray_empty_region_min_extent.esm'),
+      'utf8',
+    )
     const f = load(text, { basePath: validDir }) as any
     const regions = f.models.Advection.equations[0].rhs.regions
     expect(regions[0][0]).toEqual([2, 1])
@@ -1086,7 +1105,10 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
   it('inverted bound [2, 0] at N = 1 (loader API) is rejected', () => {
     // Re-binding N = 1 folds the interior region to [2, 0] — inverted
     // (stop < start - 1) — which MUST fail with makearray_region_inverted.
-    const text = fs.readFileSync(path.join(validDir, 'makearray_empty_region_min_extent.esm'), 'utf8')
+    const text = fs.readFileSync(
+      path.join(validDir, 'makearray_empty_region_min_extent.esm'),
+      'utf8',
+    )
     let caught: unknown
     try {
       load(text, { basePath: validDir, metaparameters: { N: 1 } })

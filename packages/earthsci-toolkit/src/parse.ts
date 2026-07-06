@@ -38,7 +38,10 @@ export interface SchemaError {
  * Parse error - thrown when JSON parsing fails
  */
 export class ParseError extends Error {
-  constructor(message: string, public originalError?: Error) {
+  constructor(
+    message: string,
+    public originalError?: Error,
+  ) {
     super(message)
     this.name = 'ParseError'
   }
@@ -48,7 +51,10 @@ export class ParseError extends Error {
  * Schema validation error - thrown when schema validation fails
  */
 export class SchemaValidationError extends Error {
-  constructor(message: string, public errors: SchemaError[]) {
+  constructor(
+    message: string,
+    public errors: SchemaError[],
+  ) {
     super(message)
     this.name = 'SchemaValidationError'
   }
@@ -82,13 +88,13 @@ try {
     verbose: true,
     strict: false, // Allow unknown keywords for compatibility
     addUsedSchema: false, // Don't add the schema to cache
-    validateSchema: false // Skip schema validation for now
+    validateSchema: false, // Skip schema validation for now
   })
   addFormats(ajv)
 
   validator = ajv.compile(schema)
 } catch (error) {
-  throw new Error(`Failed to compile embedded ESM schema: ${error}`)
+  throw new Error(`Failed to compile embedded ESM schema: ${error}`, { cause: error })
 }
 
 /**
@@ -101,11 +107,13 @@ export function validateSchema(data: unknown): SchemaError[] {
     if (typeof esm === 'string') {
       const v = parseSemanticVersion(esm)
       if (v !== null && v.major !== CURRENT_VERSION.major) {
-        return [{
-          path: '/esm',
-          message: `Unsupported major version ${v.major}; this validator supports major version ${CURRENT_VERSION.major}`,
-          keyword: 'major_version_mismatch'
-        }]
+        return [
+          {
+            path: '/esm',
+            message: `Unsupported major version ${v.major}; this validator supports major version ${CURRENT_VERSION.major}`,
+            keyword: 'major_version_mismatch',
+          },
+        ]
       }
     }
   }
@@ -118,7 +126,7 @@ export function validateSchema(data: unknown): SchemaError[] {
   return validator.errors.map((error: ErrorObject): SchemaError => ({
     path: error.instancePath || '/',
     message: error.message || 'Unknown validation error',
-    keyword: error.keyword
+    keyword: error.keyword,
   }))
 }
 
@@ -131,7 +139,7 @@ function parseJson(input: string): unknown {
   } catch (error) {
     throw new ParseError(
       `Invalid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      error instanceof Error ? error : undefined
+      error instanceof Error ? error : undefined,
     )
   }
 }
@@ -247,7 +255,7 @@ function coerceExpression(value: any): Expression {
   if (value && typeof value === 'object' && 'op' in value && 'args' in value) {
     return {
       ...value,
-      args: Array.isArray(value.args) ? value.args.map(coerceExpression) : value.args
+      args: Array.isArray(value.args) ? value.args.map(coerceExpression) : value.args,
     }
   }
 
@@ -257,7 +265,9 @@ function coerceExpression(value: any): Expression {
 /**
  * Parse a semantic version string and return its components
  */
-function parseSemanticVersion(versionString: string): { major: number; minor: number; patch: number } | null {
+function parseSemanticVersion(
+  versionString: string,
+): { major: number; minor: number; patch: number } | null {
   const match = versionString.match(/^(\d+)\.(\d+)\.(\d+)$/)
   if (!match) {
     return null
@@ -266,7 +276,7 @@ function parseSemanticVersion(versionString: string): { major: number; minor: nu
   return {
     major: parseInt(match[1], 10),
     minor: parseInt(match[2], 10),
-    patch: parseInt(match[3], 10)
+    patch: parseInt(match[3], 10),
   }
 }
 
@@ -298,14 +308,16 @@ function checkVersionCompatibility(data: unknown): void {
 
   // Reject unsupported major versions
   if (major !== CURRENT_VERSION.major) {
-    throw new ParseError(`Unsupported major version ${major}. This parser supports major version ${CURRENT_VERSION.major}.`)
+    throw new ParseError(
+      `Unsupported major version ${major}. This parser supports major version ${CURRENT_VERSION.major}.`,
+    )
   }
 
   // Warn about newer minor versions
   if (minor > CURRENT_VERSION.minor) {
     console.warn(
       `${version} is newer than the current library version ${SCHEMA_VERSION}. ` +
-      `Some features may not be supported.`
+        `Some features may not be supported.`,
     )
   }
 }
@@ -433,7 +445,7 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
     if (schemaErrors.length > 0) {
       throw new SchemaValidationError(
         `Schema validation failed with ${schemaErrors.length} error(s)`,
-        schemaErrors
+        schemaErrors,
       )
     }
   }
@@ -514,14 +526,16 @@ function rejectRemovedV02Blocks(view: unknown): void {
     errors.push({
       path: '/operators',
       keyword: 'removed_in_v0_3',
-      message: "top-level 'operators' block was removed in ESM v0.3.0; migrate to AST equations + 'discretizations' (closed-function-registry RFC §6).",
+      message:
+        "top-level 'operators' block was removed in ESM v0.3.0; migrate to AST equations + 'discretizations' (closed-function-registry RFC §6).",
     })
   }
   if ('registered_functions' in root) {
     errors.push({
       path: '/registered_functions',
       keyword: 'removed_in_v0_3',
-      message: "top-level 'registered_functions' block was removed in ESM v0.3.0; migrate to the closed 'fn'-op registry (esm-spec §9.2).",
+      message:
+        "top-level 'registered_functions' block was removed in ESM v0.3.0; migrate to the closed 'fn'-op registry (esm-spec §9.2).",
     })
   }
 
@@ -543,7 +557,8 @@ function rejectRemovedV02Blocks(view: unknown): void {
     errors.push({
       path: p,
       keyword: 'removed_in_v0_3',
-      message: "'call' AST op was removed in ESM v0.3.0; migrate to AST equations or the closed 'fn'-op registry (esm-spec §9.2).",
+      message:
+        "'call' AST op was removed in ESM v0.3.0; migrate to AST equations or the closed 'fn'-op registry (esm-spec §9.2).",
     })
   }
 
