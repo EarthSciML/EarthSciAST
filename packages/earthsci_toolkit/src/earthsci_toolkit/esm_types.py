@@ -184,6 +184,10 @@ class Model:
     guesses: Dict[str, Union[float, 'Expr']] = field(default_factory=dict)
     # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
     system_kind: Optional[str] = None
+    # Events owned by this model (schema nests events inside components; the
+    # flat EsmFile.events view aggregates these same objects for consumers).
+    continuous_events: List['ContinuousEvent'] = field(default_factory=list)
+    discrete_events: List['DiscreteEvent'] = field(default_factory=list)
 
 
 @dataclass
@@ -239,6 +243,10 @@ class ReactionSystem:
     tests: List['Test'] = field(default_factory=list)
     # Inline illustrative examples (esm-spec §6.7).
     examples: List['Example'] = field(default_factory=list)
+    # Events owned by this reaction system (schema nests events inside
+    # components; the flat EsmFile.events view aggregates these same objects).
+    continuous_events: List['ContinuousEvent'] = field(default_factory=list)
+    discrete_events: List['DiscreteEvent'] = field(default_factory=list)
 
 
 # ========================================
@@ -424,6 +432,10 @@ class DiscreteEvent:
     trigger: DiscreteEventTrigger
     affects: List[Union[AffectEquation, FunctionalAffect]] = field(default_factory=list)
     priority: int = 0
+    # Parameters this event may modify (implicitly discrete parameters).
+    discrete_parameters: List[str] = field(default_factory=list)
+    reinitialize: bool = False
+    description: Optional[str] = None
 
 
 # ========================================

@@ -395,7 +395,10 @@ def _parse_discrete_event(event_data: Dict[str, Any]) -> DiscreteEvent:
         name=name,
         trigger=trigger,
         affects=affects,
-        priority=priority
+        priority=priority,
+        discrete_parameters=event_data.get("discrete_parameters", []),
+        reinitialize=event_data.get("reinitialize", False),
+        description=event_data.get("description"),
     )
 
 
@@ -605,6 +608,18 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     if "system_kind" in model_data and model_data["system_kind"] is not None:
         model.system_kind = model_data["system_kind"]
 
+    # Events are owned by the component that declares them (the schema only
+    # allows events nested inside models/reaction_systems); the flat
+    # EsmFile.events view aggregates these same objects in _parse_esm_data.
+    if "continuous_events" in model_data:
+        model.continuous_events = [
+            _parse_continuous_event(ev) for ev in model_data["continuous_events"]
+        ]
+    if "discrete_events" in model_data:
+        model.discrete_events = [
+            _parse_discrete_event(ev) for ev in model_data["discrete_events"]
+        ]
+
     return model
 
 
@@ -728,6 +743,16 @@ def _parse_reaction_system(rs_data: Dict[str, Any]) -> ReactionSystem:
         rs.tests = [_parse_test(t) for t in rs_data["tests"]]
     if "examples" in rs_data:
         rs.examples = [_parse_example(e) for e in rs_data["examples"]]
+
+    # Events are owned by the component that declares them; see _parse_model.
+    if "continuous_events" in rs_data:
+        rs.continuous_events = [
+            _parse_continuous_event(ev) for ev in rs_data["continuous_events"]
+        ]
+    if "discrete_events" in rs_data:
+        rs.discrete_events = [
+            _parse_discrete_event(ev) for ev in rs_data["discrete_events"]
+        ]
 
     return rs
 
@@ -1211,28 +1236,17 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
                 schema_version=ft_data.get("schema_version"),
             )
 
-    # Collect events from models and reaction systems
+    # EsmFile.events is a flat aggregation of the component-owned events (the
+    # SAME objects as model/rs .discrete_events/.continuous_events, so
+    # ownership is preserved for serialization while flat consumers —
+    # flatten, validation, simulation — keep their simple iteration).
     events = []
-
-    # Collect events from models
-    if "models" in data:
-        for model_name, model_data in data["models"].items():
-            if "discrete_events" in model_data:
-                for event_data in model_data["discrete_events"]:
-                    events.append(_parse_discrete_event(event_data))
-            if "continuous_events" in model_data:
-                for event_data in model_data["continuous_events"]:
-                    events.append(_parse_continuous_event(event_data))
-
-    # Collect events from reaction systems
-    if "reaction_systems" in data:
-        for rs_name, rs_data in data["reaction_systems"].items():
-            if "discrete_events" in rs_data:
-                for event_data in rs_data["discrete_events"]:
-                    events.append(_parse_discrete_event(event_data))
-            if "continuous_events" in rs_data:
-                for event_data in rs_data["continuous_events"]:
-                    events.append(_parse_continuous_event(event_data))
+    for component in list(models.values()) + list(reaction_systems.values()):
+        if isinstance(component, dict):
+            # Unresolved {"ref": ...} entry (resolve_model_refs runs later).
+            continue
+        events.extend(component.discrete_events)
+        events.extend(component.continuous_events)
 
     return EsmFile(
         version=data["esm"],

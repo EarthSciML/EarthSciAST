@@ -67,6 +67,17 @@ def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
             result["semiring"] = expr.semiring
         if expr.ranges is not None:
             result["ranges"] = expr.ranges
+        # M2 value-equality join + filter predicate (RFC §5.3) and the §5.5
+        # index-set-producing fields. Mirrors _parse_expression: ``join``/
+        # ``distinct`` are plain data; ``filter``/``key`` are nested Expressions.
+        if expr.join is not None:
+            result["join"] = expr.join
+        if expr.filter is not None:
+            result["filter"] = _serialize_expression(expr.filter)
+        if expr.distinct is not None:
+            result["distinct"] = expr.distinct
+        if expr.key is not None:
+            result["key"] = _serialize_expression(expr.key)
         if expr.regions is not None:
             result["regions"] = expr.regions
         if expr.values is not None:
@@ -177,18 +188,33 @@ def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> Dict[str
     return result
 
 
+def _split_affects(affects) -> "tuple":
+    """Split an event's affects into (symbolic equations, functional affect).
+
+    Parsing folds a schema ``functional_affect`` into the event's ``affects``
+    list; on the way out it must be re-emitted under the singular
+    ``functional_affect`` key the schema defines (an event carries at most one).
+    """
+    equations = [a for a in affects if not isinstance(a, FunctionalAffect)]
+    functional = [a for a in affects if isinstance(a, FunctionalAffect)]
+    return equations, (functional[0] if functional else None)
+
+
 def _serialize_continuous_event(event: ContinuousEvent) -> Dict[str, Any]:
     """Serialize a continuous event to JSON-compatible format."""
+    equations, functional = _split_affects(event.affects)
     result = {
-        "conditions": [_serialize_expression(cond) for cond in event.conditions],  # Fixed: use plural conditions
-        "affects": [_serialize_affect_equation(affect) for affect in event.affects]
+        "conditions": [_serialize_expression(cond) for cond in event.conditions],
     }
     if event.name:
         result["name"] = event.name
+    if equations or functional is None:
+        result["affects"] = [_serialize_affect_equation(a) for a in equations]
+    if functional is not None:
+        result["functional_affect"] = _serialize_affect_equation(functional)
     if event.priority != 0:
         result["priority"] = event.priority
 
-    # Add new fields
     if event.affect_neg is not None:
         result["affect_neg"] = [_serialize_affect_equation(affect) for affect in event.affect_neg]
     if event.root_find and event.root_find != 'left':  # Only include if not default
@@ -203,14 +229,24 @@ def _serialize_continuous_event(event: ContinuousEvent) -> Dict[str, Any]:
 
 def _serialize_discrete_event(event: DiscreteEvent) -> Dict[str, Any]:
     """Serialize a discrete event to JSON-compatible format."""
+    equations, functional = _split_affects(event.affects)
     result = {
         "trigger": _serialize_discrete_event_trigger(event.trigger),
-        "affects": [_serialize_affect_equation(affect) for affect in event.affects]
     }
     if event.name:
         result["name"] = event.name
+    if equations or functional is None:
+        result["affects"] = [_serialize_affect_equation(a) for a in equations]
+    if functional is not None:
+        result["functional_affect"] = _serialize_affect_equation(functional)
     if event.priority != 0:
         result["priority"] = event.priority
+    if event.discrete_parameters:
+        result["discrete_parameters"] = list(event.discrete_parameters)
+    if event.reinitialize:
+        result["reinitialize"] = event.reinitialize
+    if event.description:
+        result["description"] = event.description
 
     return result
 
@@ -400,6 +436,16 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     if model.system_kind is not None:
         result["system_kind"] = model.system_kind
 
+    # Component-owned events (the schema nests events inside components).
+    if model.continuous_events:
+        result["continuous_events"] = [
+            _serialize_continuous_event(ev) for ev in model.continuous_events
+        ]
+    if model.discrete_events:
+        result["discrete_events"] = [
+            _serialize_discrete_event(ev) for ev in model.discrete_events
+        ]
+
     # Subsystems (esm-spec §4.7). A resolved subsystem round-trips as the
     # instantiated inline component; an unresolved `{ref, bindings?}` dict
     # round-trips verbatim — metaparameter bindings at the subsystem edge
@@ -522,6 +568,12 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
     else:
         result["reactions"] = []
 
+    # Constraint equations (esm-spec §11.4) — mirrors _parse_reaction_system.
+    if rs.constraint_equations:
+        result["constraint_equations"] = [
+            _serialize_equation(eq) for eq in rs.constraint_equations
+        ]
+
     # Inline tests, examples, and component-level tolerance (esm-spec §6.6 / §6.7).
     if rs.tolerance is not None:
         tol = _serialize_tolerance(rs.tolerance)
@@ -531,6 +583,16 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
         result["tests"] = [_serialize_test(t) for t in rs.tests]
     if rs.examples:
         result["examples"] = [_serialize_example(e) for e in rs.examples]
+
+    # Component-owned events (the schema nests events inside components).
+    if rs.continuous_events:
+        result["continuous_events"] = [
+            _serialize_continuous_event(ev) for ev in rs.continuous_events
+        ]
+    if rs.discrete_events:
+        result["discrete_events"] = [
+            _serialize_discrete_event(ev) for ev in rs.discrete_events
+        ]
 
     # Subsystems (esm-spec §4.7) — see _serialize_subsystem.
     if rs.subsystems:
@@ -925,13 +987,23 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
             for coupling in esm_file.coupling
         ]
 
-    # Serialize events at the top level. The schema only allows events nested
-    # inside models/reaction_systems, but EsmFile.events stores them flat after
-    # parsing. load() strips and reattaches top-level events on round-trip.
-    if esm_file.events:
+    # Component-owned events serialize inside their model/reaction system
+    # (see _serialize_model/_serialize_reaction_system); EsmFile.events holds
+    # those same objects, so they must not be re-emitted here. Only ORPHAN
+    # events — attached directly to EsmFile.events by tooling, never parsed
+    # from a schema-valid file — fall back to the top-level keys the schema
+    # forbids; load() strips and reattaches them on round-trip.
+    owned = set()
+    for component in list(esm_file.models.values()) + list(
+        esm_file.reaction_systems.values()
+    ):
+        owned.update(id(ev) for ev in component.continuous_events)
+        owned.update(id(ev) for ev in component.discrete_events)
+    orphan_events = [ev for ev in esm_file.events if id(ev) not in owned]
+    if orphan_events:
         continuous_events = []
         discrete_events = []
-        for event in esm_file.events:
+        for event in orphan_events:
             if isinstance(event, ContinuousEvent):
                 continuous_events.append(_serialize_continuous_event(event))
             elif isinstance(event, DiscreteEvent):
