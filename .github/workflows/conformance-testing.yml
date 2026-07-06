@@ -121,11 +121,52 @@ jobs:
       - name: Install TypeScript dependencies
         run: npm ci
 
+      - name: Typecheck TypeScript package
+        run: npm run typecheck
+
+      - name: Lint TypeScript package
+        run: npm run lint
+
+      - name: Check TypeScript formatting
+        run: npm run format:check
+
       - name: Build TypeScript package
         run: npm run build
 
       - name: Run TypeScript tests
         run: npm run test:ci
+
+  esm-editor-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/esm-editor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/esm-editor/package-lock.json
+
+      # esm-editor consumes earthsci-toolkit via a file: devDependency, so
+      # the toolkit's dist must exist before the editor installs/builds.
+      - name: Build earthsci-toolkit dependency
+        working-directory: packages/earthsci-toolkit
+        run: npm ci && npm run build
+
+      - name: Install esm-editor dependencies
+        run: npm install
+
+      - name: Typecheck esm-editor
+        run: npm run typecheck
+
+      - name: Run esm-editor tests
+        run: npx vitest run
 
   python-tests:
     runs-on: ubuntu-latest

@@ -18,7 +18,7 @@
     "removeComments": false,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

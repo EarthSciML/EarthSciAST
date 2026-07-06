@@ -19,21 +19,23 @@ npm install earthsci-toolkit
 import { EsmFile, Model, load, save, validate } from 'earthsci-toolkit';
 
 // Parse ESM file from JSON
-const esmFile = load('{"version": "0.1.0", "models": [...]}');
+const esmFile = load('{"esm": "0.8.0", "metadata": {"name": "demo"}, "models": {...}}');
 
 // Create a new model
 const model: Model = {
-  name: "atmospheric_chemistry",
-  variables: [],
-  equations: []
+  variables: {
+    x: { type: 'state', default: 1.0 },
+    k: { type: 'parameter', default: 0.1 },
+  },
+  equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: [-1, 'k', 'x'] } }],
 };
 
 // Validate an ESM structure
 const result = validate(esmFile);
-if (result.isValid) {
+if (result.is_valid) {
   console.log("Valid ESM file!");
 } else {
-  console.error("Validation errors:", result.errors);
+  console.error("Validation errors:", result.schema_errors, result.structural_errors);
 }
 
 // Serialize back to JSON
@@ -139,14 +141,17 @@ This creates dual ESM/CommonJS builds in the `dist/` directory:
 ### Testing
 
 ```bash
-npm test                    # Run unit tests
-npm run test:e2e           # Run end-to-end tests
-npm run test:all           # Run all tests
+npm test                    # Run unit tests (watch mode)
+npm run test:ci             # Run unit tests once
+npm run typecheck           # Strict TypeScript check
+npm run lint                # ESLint
+npm run format:check        # Prettier check
 ```
 
 ## Schema Version
 
-This package supports ESM Format schema version **0.1.0**.
+This package supports ESM Format schema version **0.8.0** (exported as
+`SCHEMA_VERSION`, derived from the embedded schema's `$id`).
 
 ## License
 

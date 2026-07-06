@@ -36,7 +36,7 @@ All implementations must maintain conformance across languages through our compr
 Ensure you have the following installed:
 
 - **Julia** 1.9+ (for Julia package development and testing)
-- **Node.js** 18+ and npm (for TypeScript/JavaScript packages)
+- **Node.js** 20+ and npm (for TypeScript/JavaScript packages)
 - **Python** 3.8+ and pip (for Python package development)
 - **Rust** 1.75.0+ and Cargo (for Rust package development)
 - **Go** 1.19+ (for Go package development)
@@ -240,16 +240,18 @@ julia --project=. -e 'using Pkg; Pkg.activate("."); Pkg.test()'
 
 ### TypeScript (earthsci-toolkit)
 
-- **Standards**: Strict TypeScript, ESLint + Prettier
-- **Testing**: Jest for unit tests, cross-browser compatibility
-- **Build**: Support both Node.js and browser environments
+- **Standards**: Strict TypeScript (`npm run typecheck`), ESLint + Prettier
+- **Testing**: Vitest for unit tests
+- **Build**: Support both Node.js and browser environments (ESM + CJS bundles via rollup)
 - **Types**: Maintain comprehensive type definitions
 
 ```bash
 # TypeScript development workflow
 cd packages/earthsci-toolkit
 npm install
+npm run typecheck
 npm run lint
+npm run format:check
 npm test
 npm run build
 ```
