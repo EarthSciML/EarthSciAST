@@ -92,6 +92,18 @@ pub enum SimulateError {
         /// The variable name.
         name: String,
     },
+
+    /// An `ic(target)` field initial condition could not be resolved to a
+    /// per-cell value. Carries the `ic(...)` target state name plus a
+    /// diagnostic saying why (wrong field rank, unresolvable RHS, ...), so
+    /// the name field stays a plain identifier.
+    #[error("Invalid field initial condition for '{name}': {details}")]
+    InvalidFieldInitialCondition {
+        /// The `ic(...)` target state name.
+        name: String,
+        /// Why the initial condition could not be resolved.
+        details: String,
+    },
 }
 
 // ============================================================================

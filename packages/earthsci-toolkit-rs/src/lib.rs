@@ -41,6 +41,7 @@ pub mod cadence;
 pub mod canonicalize;
 pub mod coupling;
 pub mod dae;
+pub mod diagnostic;
 pub mod display;
 pub mod edit;
 pub mod error;
@@ -125,10 +126,7 @@ pub use graph::{
     DependencyRelationship, ExpressionGraph, ExpressionGraphInput, VariableKind, VariableNode,
     component_exists, component_graph, expression_graph, get_component_type,
 };
-pub use parse::{
-    LoadOptions, ParseError, SchemaValidationError, load, load_path, load_path_with_options,
-    load_with_options,
-};
+pub use parse::{LoadOptions, load, load_path, load_path_with_options, load_with_options};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };

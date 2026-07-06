@@ -35,26 +35,9 @@ const APPLY_OP: &str = "apply_expression_template";
 
 /// Stable diagnostic codes raised by the expression-template expansion
 /// pass. Mirrors the codes emitted by the TS / Python / Julia / Go bindings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpressionTemplateError {
-    pub code: &'static str,
-    pub message: String,
-}
+pub type ExpressionTemplateError = crate::diagnostic::DiagnosticError;
 
-impl std::fmt::Display for ExpressionTemplateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for ExpressionTemplateError {}
-
-fn err(code: &'static str, message: impl Into<String>) -> ExpressionTemplateError {
-    ExpressionTemplateError {
-        code,
-        message: message.into(),
-    }
-}
+use crate::diagnostic::err;
 
 /// Reject `apply_expression_template` nodes inside a `match` pattern
 /// (esm-spec §9.7.3: match patterns MUST NOT reference templates).

@@ -22,26 +22,9 @@ const ENUM_OP: &str = "enum";
 
 /// Stable diagnostic codes raised by the enum-lowering pass. Mirrors the
 /// codes emitted by the TS / Python / Julia / Go bindings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumLoweringError {
-    pub code: &'static str,
-    pub message: String,
-}
+pub type EnumLoweringError = crate::diagnostic::DiagnosticError;
 
-impl std::fmt::Display for EnumLoweringError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for EnumLoweringError {}
-
-fn err(code: &'static str, message: impl Into<String>) -> EnumLoweringError {
-    EnumLoweringError {
-        code,
-        message: message.into(),
-    }
-}
+use crate::diagnostic::err;
 
 fn parse_enums_block(
     value: &Value,

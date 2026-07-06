@@ -1677,10 +1677,11 @@ impl ArrayCompiled {
         let forcing = self.forcing.borrow();
         for (target, rhs) in &self.field_ics {
             let vs = self.var_shapes.get(target).ok_or_else(|| {
-                SimulateError::InvalidInitialCondition {
-                    name: format!(
-                        "ic({target}): scoped-reference target is not a state variable of the flattened system"
-                    ),
+                SimulateError::InvalidFieldInitialCondition {
+                    name: target.clone(),
+                    details: "scoped-reference target is not a state variable of the flattened \
+                              system"
+                        .to_string(),
                 }
             })?;
             let total = vs.shape.iter().copied().product::<usize>().max(1);
@@ -2187,9 +2188,10 @@ fn resolve_field_ic_cell(
         } else if arr.len() == 1 {
             return Ok(arr.iter().copied().next().unwrap());
         }
-        return Err(SimulateError::InvalidInitialCondition {
-            name: format!(
-                "ic({target}): loaded field '{name}' has ndim={} which does not match the {}-D lifted target grid",
+        return Err(SimulateError::InvalidFieldInitialCondition {
+            name: target.to_string(),
+            details: format!(
+                "loaded field '{name}' has ndim={} which does not match the {}-D lifted target grid",
                 arr.ndim(),
                 cell.len()
             ),
@@ -2221,9 +2223,10 @@ fn resolve_field_ic_cell(
             Some(Value::Scalar(s)) if s.is_finite() => return Ok(*s),
             Some(Value::Array(arr)) => {
                 if arr.ndim() != cell.len() {
-                    return Err(SimulateError::InvalidInitialCondition {
-                        name: format!(
-                            "ic({target}): coordinate expression evaluates to ndim={}, which does not match the {}-D lifted target grid",
+                    return Err(SimulateError::InvalidFieldInitialCondition {
+                        name: target.to_string(),
+                        details: format!(
+                            "coordinate expression evaluates to ndim={}, which does not match the {}-D lifted target grid",
                             arr.ndim(),
                             cell.len()
                         ),
@@ -2242,9 +2245,10 @@ fn resolve_field_ic_cell(
         Expr::Variable(name) => format!(" (no provider field named '{name}')"),
         _ => String::new(),
     };
-    Err(SimulateError::InvalidInitialCondition {
-        name: format!(
-            "ic({target}): RHS is neither a provider-served loaded field, a constant, nor a per-cell coordinate expression{hint}"
+    Err(SimulateError::InvalidFieldInitialCondition {
+        name: target.to_string(),
+        details: format!(
+            "RHS is neither a provider-served loaded field, a constant, nor a per-cell coordinate expression{hint}"
         ),
     })
 }

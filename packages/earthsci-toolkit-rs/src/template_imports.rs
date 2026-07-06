@@ -98,12 +98,7 @@ fn is_rename_protected(k: &str) -> bool {
     META_SUBST_SKIP_KEYS.contains(&k) || RENAME_EXTRA_PROTECTED_KEYS.contains(&k)
 }
 
-fn err(code: &'static str, message: impl Into<String>) -> ExpressionTemplateError {
-    ExpressionTemplateError {
-        code,
-        message: message.into(),
-    }
-}
+use crate::diagnostic::err;
 
 // ---------------------------------------------------------------------------
 // Spec-version gate (esm-spec §9.6.5)

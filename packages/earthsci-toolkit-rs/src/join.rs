@@ -87,15 +87,18 @@ pub enum JoinKey {
 }
 
 /// Why a JSON value cannot be a join key (§5.3 / §5.7 rule 1).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum KeyError {
     /// A floating-point component — forbidden: equality is not portable across
     /// bindings (a `5.0` repr is platform-dependent). Carries the offending value.
+    #[error("floating-point member {0} cannot be a join key")]
     Float(f64),
     /// A `null` / missing component emitted *into* a key column — a build-time
     /// error (§5.3: not silently dropped).
+    #[error("null member cannot be a join key")]
     Null,
     /// A non-scalar (array / object) component, which cannot be an equality key.
+    #[error("non-scalar member cannot be a join key")]
     NonScalar,
 }
 

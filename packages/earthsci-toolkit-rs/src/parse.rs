@@ -4,34 +4,11 @@ use crate::{EsmFile, error::EsmError};
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 use std::sync::OnceLock;
-use thiserror::Error;
 
 /// Library version supported by this implementation (major, minor, patch).
 /// Files with a major version mismatch are rejected per the version
 /// compatibility rules in esm-libraries-spec §8.
 const LIBRARY_VERSION: (u32, u32, u32) = (0, 1, 0);
-
-/// Error type for JSON parsing failures
-#[derive(Error, Debug)]
-#[error("Failed to parse JSON: {message}")]
-pub struct ParseError {
-    pub message: String,
-}
-
-impl From<serde_json::Error> for ParseError {
-    fn from(err: serde_json::Error) -> Self {
-        ParseError {
-            message: err.to_string(),
-        }
-    }
-}
-
-/// Error type for schema validation failures
-#[derive(Error, Debug)]
-#[error("Schema validation failed: {errors:?}")]
-pub struct SchemaValidationError {
-    pub errors: Vec<String>,
-}
 
 /// Bundled ESM JSON Schema
 const ESM_SCHEMA_JSON: &str = include_str!("esm-schema.json");
@@ -236,8 +213,9 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
     metaparameters: &std::collections::BTreeMap<String, i64>,
 ) -> Result<EsmFile, EsmError> {
     let path = path.as_ref();
-    let json_str = std::fs::read_to_string(path).map_err(|e| {
-        EsmError::SchemaValidation(format!("failed to read {}: {e}", path.display()))
+    let json_str = std::fs::read_to_string(path).map_err(|e| EsmError::FileRead {
+        path: path.display().to_string(),
+        source: e,
     })?;
 
     let base = path

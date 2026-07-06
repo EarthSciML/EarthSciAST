@@ -29,6 +29,15 @@ pub enum EsmError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Failed to read a file from disk (I/O error with the offending path).
+    #[error("failed to read {path}: {source}")]
+    FileRead {
+        /// Path of the file that could not be read.
+        path: String,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
     /// Generic error with message
     #[error("{0}")]
     Other(String),
