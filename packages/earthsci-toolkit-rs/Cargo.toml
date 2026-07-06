@@ -98,9 +98,21 @@ s2bindings = { git = "https://github.com/EarthSciML/s2bindings.rs", tag = "v0.1.
 
 [dev-dependencies]
 serde_test = "1.0"
+
+# Native-only dev-dependencies. `criterion` pulls `wait-timeout` (whose `imp`
+# module is unix/windows-only and fails to compile for wasm32), and
+# `proptest` / `tempfile` are filesystem-bound. The wasm test target
+# (`tests/wasm_suite.rs`) needs none of them, so gating them off wasm keeps
+# `wasm-pack test` from dragging them into the wasm build.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.4"
 tempfile = "3.10"
+
+# The wasm test harness — drives `tests/wasm_suite.rs` under node/headless-browser
+# via `wasm-pack test`.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [[bench]]
 name = "benchmarks"

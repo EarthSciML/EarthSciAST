@@ -10,3 +10,15 @@
 # (GitHub Actions has no such rewrite and the CLI fetches over HTTPS).
 [net]
 git-fetch-with-cli = true
+
+# Run the wasm32 test target (`tests/wasm_suite.rs`) under Node.js via the
+# wasm-bindgen test runner. This lets
+#   cargo test --target wasm32-unknown-unknown --test wasm_suite
+# build and run ONLY that target plus the library (not the native-only unit and
+# integration tests, which use the filesystem / tempfiles / the native s2 kernel
+# and cannot compile for wasm32). `wasm-pack test` can't be used for this: it
+# always passes `--tests`, which drags every native test target into the wasm
+# build. Install the matching runner with:
+#   cargo install wasm-bindgen-cli --version 0.2.126
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

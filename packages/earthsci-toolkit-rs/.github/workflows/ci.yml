@@ -101,6 +101,19 @@ jobs:
     - name: Build WASM
       run: wasm-pack build --target web --features wasm
 
+    - name: Run WASM test suite
+      env:
+        RUSTFLAGS: --cfg getrandom_backend="wasm_js"
+      run: |
+        # Match the runner to the resolved wasm-bindgen crate version (schema
+        # check), then run the wasm32 test target under Node (see
+        # .cargo/config.toml). Builds only the lib + tests/wasm_suite.rs, not the
+        # native-only unit/integration tests. `wasm-pack test` can't be used
+        # here — it forces `--tests`, dragging every native target into wasm.
+        wb=$(awk '/^name = "wasm-bindgen"$/{getline; print}' Cargo.lock | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        cargo install wasm-bindgen-cli --version "$wb"
+        cargo test --target wasm32-unknown-unknown --features wasm --test wasm_suite
+
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest

@@ -271,6 +271,24 @@ jobs:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"
         run: cargo build --target wasm32-unknown-unknown --features wasm --verbose
 
+      - name: Run WASM test suite
+        if: matrix.rust == 'stable'
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
+        run: |
+          # `wasm-bindgen-test-runner` must match the resolved `wasm-bindgen`
+          # crate version exactly (it checks a schema version), so read the
+          # version from Cargo.lock — written by the build steps above — and
+          # install the matching runner. Node (preinstalled on the runner) drives
+          # it via the `runner` set in .cargo/config.toml.
+          wb=$(awk '/^name = "wasm-bindgen"$/{getline; print}' Cargo.lock | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Installing wasm-bindgen-cli $wb to match the crate"
+          cargo install wasm-bindgen-cli --version "$wb"
+          # Builds only the library + tests/wasm_suite.rs (a wasm32-gated target),
+          # NOT the native-only unit/integration tests (filesystem / tempfiles /
+          # native s2 C++ kernel), which cannot compile for wasm32.
+          cargo test --target wasm32-unknown-unknown --features wasm --test wasm_suite
+
       - name: Run Rust tests
         run: cargo test --verbose --all-features
 
