@@ -7,8 +7,8 @@
 
 import Ajv, { ErrorObject, ValidateFunction } from 'ajv'
 import addFormats from 'ajv-formats'
-import type { EsmFile, Expression, CouplingEntry } from './types.js'
-import { validateUnits } from './units.js'
+import type { EsmFile, Expression } from './types.js'
+import { validateUnits, type UnitWarning } from './units.js'
 import { isNumericLiteral, losslessJsonParse } from './numeric-literal.js'
 import { lowerEnums } from './lower_enums.js'
 import {
@@ -58,6 +58,21 @@ export class SchemaValidationError extends Error {
 // from the canonical esm-schema.json. See scripts/generate-embedded-schema.mjs
 // and the schema-sync guard in scripts/sync-schema.sh.
 
+/**
+ * The schema version this library implements, derived from the embedded
+ * schema's `$id` (https://earthsciml.org/schemas/esm/<version>/esm.schema.json)
+ * so it cannot hand-drift from the canonical esm-schema.json. The package
+ * version in package.json is kept in lockstep.
+ */
+export const SCHEMA_VERSION: string = (() => {
+  const id = (schema as { $id?: string }).$id ?? ''
+  const m = /\/esm\/(\d+\.\d+\.\d+)\//.exec(id)
+  if (!m) {
+    throw new Error(`Embedded ESM schema $id does not carry a version: "${id}"`)
+  }
+  return m[1]
+})()
+
 // Compile schema validator once at module load time
 let validator: ValidateFunction
 
@@ -85,10 +100,10 @@ export function validateSchema(data: unknown): SchemaError[] {
     const esm = (data as Record<string, unknown>).esm
     if (typeof esm === 'string') {
       const v = parseSemanticVersion(esm)
-      if (v !== null && v.major !== 0) {
+      if (v !== null && v.major !== CURRENT_VERSION.major) {
         return [{
           path: '/esm',
-          message: `Unsupported major version ${v.major}; this validator supports major version 0`,
+          message: `Unsupported major version ${v.major}; this validator supports major version ${CURRENT_VERSION.major}`,
           keyword: 'major_version_mismatch'
         }]
       }
@@ -194,9 +209,11 @@ function coerceTypes(data: any): any {
     const result: any = {}
 
     for (const [key, value] of Object.entries(data)) {
-      // Handle Expression types - they can be number, string, or ExpressionNode
-      // ExpressionNode has 'op' and 'args' properties
-      if (key === 'expression' || key === 'args' || /expr/i.test(key)) {
+      // Expression-bearing fields per the schema: a variable's defining
+      // `expression`, an ExpressionNode's `args` list, and an aggregate
+      // node's contracted body `expr`. Everything else is walked
+      // generically.
+      if (EXPRESSION_KEYS.has(key)) {
         result[key] = coerceExpression(value)
       } else {
         result[key] = coerceTypes(value)
@@ -208,6 +225,8 @@ function coerceTypes(data: any): any {
 
   return data
 }
+
+const EXPRESSION_KEYS = new Set(['expression', 'expr', 'args'])
 
 /**
  * Coerce Expression union type (number | string | ExpressionNode).
@@ -251,15 +270,21 @@ function parseSemanticVersion(versionString: string): { major: number; minor: nu
   }
 }
 
+const CURRENT_VERSION = parseSemanticVersion(SCHEMA_VERSION)!
+
 /**
- * Check version compatibility for an ESM file
+ * Check version compatibility for an ESM file. Mirrors the Python binding's
+ * `_check_version_compatibility`: a different major version is rejected; a
+ * newer minor version warns but loads (the schema's `additionalProperties:
+ * false` still applies — forward compatibility is warn-only, never weakened
+ * validation).
  */
-function checkVersionCompatibility(data: any): void {
+function checkVersionCompatibility(data: unknown): void {
   if (typeof data !== 'object' || data === null) {
     return // Let schema validation handle this
   }
 
-  const version = data.esm
+  const version = (data as Record<string, unknown>).esm
   if (typeof version !== 'string') {
     return // Let schema validation handle this
   }
@@ -269,183 +294,20 @@ function checkVersionCompatibility(data: any): void {
     return // Let schema validation handle invalid version format
   }
 
-  const { major } = versionComponents
-  const CURRENT_MAJOR = 0 // Current supported major version
+  const { major, minor } = versionComponents
 
   // Reject unsupported major versions
-  if (major !== CURRENT_MAJOR) {
-    throw new ParseError(`Unsupported major version ${major}. This parser supports major version ${CURRENT_MAJOR}.`)
-  }
-}
-
-/**
- * Version-aware schema validation that handles backward/forward compatibility
- */
-function validateSchemaWithVersionCompatibility(data: any): SchemaError[] {
-  if (typeof data !== 'object' || data === null) {
-    return validateSchema(data)
+  if (major !== CURRENT_VERSION.major) {
+    throw new ParseError(`Unsupported major version ${major}. This parser supports major version ${CURRENT_VERSION.major}.`)
   }
 
-  const version = data.esm
-  if (typeof version !== 'string') {
-    return validateSchema(data)
+  // Warn about newer minor versions
+  if (minor > CURRENT_VERSION.minor) {
+    console.warn(
+      `${version} is newer than the current library version ${SCHEMA_VERSION}. ` +
+      `Some features may not be supported.`
+    )
   }
-
-  const versionComponents = parseSemanticVersion(version)
-  if (versionComponents === null) {
-    // If version parsing fails, use normal validation
-    return validateSchema(data)
-  }
-
-  const { major, minor, patch } = versionComponents
-  const CURRENT_VERSION = { major: 0, minor: 1, patch: 0 }
-
-  // If it's the exact current version, use normal validation
-  if (major === CURRENT_VERSION.major && minor === CURRENT_VERSION.minor && patch === CURRENT_VERSION.patch) {
-    return validateSchema(data)
-  }
-
-  // Same major version: attempt backward/forward compatibility
-  if (major === CURRENT_VERSION.major) {
-    // Forward compatibility: newer minor version
-    if (minor > CURRENT_VERSION.minor) {
-      console.warn(`Forward compatibility: Version ${version} is newer than current ${CURRENT_VERSION.major}.${CURRENT_VERSION.minor}.${CURRENT_VERSION.patch}. Some features may not be fully supported.`)
-
-      // Validate with current version substituted to check structural validity
-      const tempData = { ...data, esm: '0.1.0' }
-      const errors = validateSchema(tempData)
-
-      // Filter out additionalProperties errors (unknown fields from newer versions)
-      return errors.filter(error => {
-        if (error.keyword === 'additionalProperties') {
-          console.warn(`Forward compatibility: Ignoring unknown field at ${error.path}`)
-          return false
-        }
-        return true
-      })
-    }
-
-    // Backward compatibility or different patch: validate with current version substituted
-    const tempData = { ...data, esm: '0.1.0' }
-    return validateSchema(tempData)
-  }
-
-  // This shouldn't happen due to checkVersionCompatibility, but fallback to normal validation
-  return validateSchema(data)
-}
-
-/**
- * Remove unknown fields for forward compatibility
- */
-function removeUnknownFields(data: any): any {
-  if (typeof data !== 'object' || data === null) {
-    return data
-  }
-
-  const version = data.esm
-  if (typeof version !== 'string') {
-    return data
-  }
-
-  const versionComponents = parseSemanticVersion(version)
-  if (versionComponents === null) {
-    return data
-  }
-
-  const { major, minor } = versionComponents
-  const CURRENT_VERSION = { major: 0, minor: 1, patch: 0 }
-
-  // Only clean up for forward compatible versions (newer minor versions in the same major)
-  if (major === CURRENT_VERSION.major && minor > CURRENT_VERSION.minor) {
-    // Create a copy of the data and remove fields that would cause schema validation errors
-    const cleanedData = { ...data }
-
-    // Remove known forward compatibility fields that aren't in the current schema
-    const unknownRootFields = ['performance_hints', 'validation_metadata', 'extended_metadata']
-    unknownRootFields.forEach(field => {
-      if (field in cleanedData) {
-        delete cleanedData[field]
-      }
-    })
-
-    // Recursively clean model and reaction system objects
-    if (cleanedData.models) {
-      cleanedData.models = cleanModels(cleanedData.models)
-    }
-    if (cleanedData.reaction_systems) {
-      cleanedData.reaction_systems = cleanReactionSystems(cleanedData.reaction_systems)
-    }
-
-    return cleanedData
-  }
-
-  return data
-}
-
-/**
- * Clean unknown fields from models
- */
-function cleanModels(models: any): any {
-  if (typeof models !== 'object' || models === null) {
-    return models
-  }
-
-  const cleaned: any = {}
-  for (const [key, model] of Object.entries(models)) {
-    if (typeof model === 'object' && model !== null) {
-      const cleanedModel: any = { ...model }
-      // Remove known forward compatibility fields
-      const unknownModelFields = ['solver_hints', 'optimization_flags']
-      unknownModelFields.forEach(field => {
-        if (field in cleanedModel) {
-          delete cleanedModel[field]
-        }
-      })
-      cleaned[key] = cleanedModel
-    } else {
-      cleaned[key] = model
-    }
-  }
-  return cleaned
-}
-
-/**
- * Clean unknown fields from reaction systems
- */
-function cleanReactionSystems(reactionSystems: any): any {
-  if (typeof reactionSystems !== 'object' || reactionSystems === null) {
-    return reactionSystems
-  }
-
-  const cleaned: any = {}
-  for (const [key, system] of Object.entries(reactionSystems)) {
-    if (typeof system === 'object' && system !== null) {
-      const cleanedSystem: any = { ...system }
-
-      // Clean reactions array
-      if (Array.isArray(cleanedSystem.reactions)) {
-        cleanedSystem.reactions = cleanedSystem.reactions.map((reaction: any) => {
-          if (typeof reaction === 'object' && reaction !== null) {
-            const cleanedReaction: any = { ...reaction }
-            // Remove known forward compatibility fields from reactions
-            const unknownReactionFields = ['kinetics_metadata', 'thermodynamic_data']
-            unknownReactionFields.forEach(field => {
-              if (field in cleanedReaction) {
-                delete cleanedReaction[field]
-              }
-            })
-            return cleanedReaction
-          }
-          return reaction
-        })
-      }
-
-      cleaned[key] = cleanedSystem
-    } else {
-      cleaned[key] = system
-    }
-  }
-  return cleaned
 }
 
 /**
@@ -498,6 +360,21 @@ export interface LoadOptions {
    * from the subsystem edge; not part of the public authoring surface.
    */
   injectedImports?: readonly unknown[] | undefined
+
+  /**
+   * Skip schema validation because the caller has already run
+   * {@link validateSchema} on this input. Version checks and the
+   * removed-construct rejections still apply. Used by `validate()` to avoid
+   * validating the same document twice.
+   */
+  assumeValid?: boolean | undefined
+
+  /**
+   * Receives each dimensional-analysis warning instead of the default
+   * `console.warn`. Used by `validate()` to collect unit warnings into its
+   * structured result.
+   */
+  onUnitWarning?: ((warning: UnitWarning) => void) | undefined
 }
 
 /**
@@ -550,13 +427,15 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   // declares esm < 0.8.0 (esm-spec §9.6.5).
   rejectTemplateImportsPreV08(validationView)
 
-  // Step 3: Schema validation with version compatibility
-  const schemaErrors = validateSchemaWithVersionCompatibility(validationView)
-  if (schemaErrors.length > 0) {
-    throw new SchemaValidationError(
-      `Schema validation failed with ${schemaErrors.length} error(s)`,
-      schemaErrors
-    )
+  // Step 3: Schema validation
+  if (options?.assumeValid !== true) {
+    const schemaErrors = validateSchema(validationView)
+    if (schemaErrors.length > 0) {
+      throw new SchemaValidationError(
+        `Schema validation failed with ${schemaErrors.length} error(s)`,
+        schemaErrors
+      )
+    }
   }
 
   // Step 3a: Resolve esm-spec §9.7 machinery first — template-library
@@ -586,9 +465,8 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   data = resolved ?? machineryInput
   data = lowerExpressionTemplates(data as object)
 
-  // Step 4: Clean up unknown fields for forward compatibility and type coercion
-  const cleanedData = removeUnknownFields(data)
-  const typedData = coerceTypes(cleanedData) as EsmFile
+  // Step 4: Type coercion
+  const typedData = coerceTypes(data) as EsmFile
 
   // Step 4b: Lower `enum` ops to `const` integer nodes against the
   // file-local `enums` block (esm-spec §9.3). After this pass, the
@@ -599,9 +477,14 @@ export function load(input: string | object, options?: LoadOptions): EsmFile {
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal
   // without an API break.
+  const onUnitWarning = options?.onUnitWarning
   for (const warning of validateUnits(loweredData)) {
-    const location = warning.location ? ` [${warning.location}]` : ''
-    console.warn(`ESM unit validation${location}: ${warning.message}`)
+    if (onUnitWarning) {
+      onUnitWarning(warning)
+    } else {
+      const location = warning.location ? ` [${warning.location}]` : ''
+      console.warn(`ESM unit validation${location}: ${warning.message}`)
+    }
   }
 
   return loweredData

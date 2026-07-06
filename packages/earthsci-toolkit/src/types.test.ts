@@ -10,7 +10,7 @@ import {
 
 describe('ESM Format Types', () => {
   it('should have correct package version', () => {
-    expect(VERSION).toBe('0.1.0')
+    expect(VERSION).toBe('0.8.0')
   })
 
   it('should handle Expr type correctly', () => {

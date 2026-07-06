@@ -57,9 +57,9 @@ export type { UnitResult, UnitWarning } from './units.js'
 export { convertUnits, parseUnitForConversion, unitsCompatible, UnitConversionError } from './unit-conversion.js'
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
-// Export code generation utilities and the official TypeScript runner
-// (AST → JS lowering / scalar evaluator) per AGENTS.md.
-export { toJuliaCode, toPythonCode, compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
+// Export the official TypeScript runner (AST → JS lowering / scalar
+// evaluator) per AGENTS.md.
+export { compileExpression, evaluateExpression, UnloweredOperatorError } from './codegen.js'
 export type { CompiledExpression } from './codegen.js'
 
 // Export migration functionality
@@ -126,6 +126,6 @@ export {
 } from './template_imports.js'
 export type { TemplateResolveOptions, TemplateSchemaError } from './template_imports.js'
 
-// Package metadata
-export const VERSION = '0.1.0'
-export const SCHEMA_VERSION = '0.1.0'
+// Package metadata. Both constants track the embedded schema's version
+// (derived from its $id in parse.ts); package.json is kept in lockstep.
+export { SCHEMA_VERSION, SCHEMA_VERSION as VERSION } from './parse.js'

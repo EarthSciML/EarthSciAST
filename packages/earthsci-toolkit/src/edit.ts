@@ -106,8 +106,11 @@ export function removeVariable(
   if (model.continuous_events) {
     for (let i = 0; i < model.continuous_events.length; i++) {
       const event = model.continuous_events[i]
-      if (event.condition && referencesVariable(event.condition, name)) {
-        references.push(`continuous_event ${i} condition`)
+      for (const condition of event.conditions || []) {
+        if (referencesVariable(condition, name)) {
+          references.push(`continuous_event ${i} condition`)
+          break
+        }
       }
       if (event.affects) {
         for (let j = 0; j < event.affects.length; j++) {
@@ -122,8 +125,8 @@ export function removeVariable(
   if (model.discrete_events) {
     for (let i = 0; i < model.discrete_events.length; i++) {
       const event = model.discrete_events[i]
-      if (event.condition && referencesVariable(event.condition, name)) {
-        references.push(`discrete_event ${i} condition`)
+      if (event.trigger?.type === 'condition' && referencesVariable(event.trigger.expression, name)) {
+        references.push(`discrete_event ${i} trigger`)
       }
       if (event.affects) {
         for (let j = 0; j < event.affects.length; j++) {
@@ -572,10 +575,6 @@ export function merge(
       ...fileA.data_loaders,
       ...fileB.data_loaders
     },
-    operators: {
-      ...fileA.operators,
-      ...fileB.operators
-    },
     coupling: [
       ...(fileA.coupling || []),
       ...(fileB.coupling || [])
@@ -595,6 +594,7 @@ export function extract(
   componentName: string
 ): EsmFile {
   const extracted: EsmFile = {
+    esm: file.esm,
     metadata: file.metadata
   }
 
@@ -613,12 +613,6 @@ export function extract(
   // Check data loaders
   if (file.data_loaders && componentName in file.data_loaders) {
     extracted.data_loaders = { [componentName]: file.data_loaders[componentName] }
-    return extracted
-  }
-
-  // Check operators
-  if (file.operators && componentName in file.operators) {
-    extracted.operators = { [componentName]: file.operators[componentName] }
     return extracted
   }
 
@@ -644,7 +638,10 @@ export { deriveODEs } from './reactions.js'
  */
 function referencesVariable(expr: Expr, variableName: string): boolean {
   if (typeof expr === 'string') {
-    return expr === variableName || expr.includes(variableName + '.') || expr.includes('.' + variableName)
+    // A scoped reference like "Model.Sub.var" references the variable when
+    // one of its dot-separated segments matches exactly. Substring matching
+    // would falsely match "x" against "prefix.xy".
+    return expr === variableName || (expr.includes('.') && expr.split('.').includes(variableName))
   }
 
   if (typeof expr === 'number' || isNumericLiteral(expr)) {

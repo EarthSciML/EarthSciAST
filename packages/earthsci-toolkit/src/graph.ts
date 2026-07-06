@@ -5,7 +5,7 @@
  * as specified in the ESM Libraries Specification Section 4.8.
  */
 
-import type { EsmFile, CouplingEntry, Model, ReactionSystem, Equation, Reaction, Expr } from './types.js';
+import type { EsmFile, CouplingEntry, Model, ReactionSystem, Equation, Reaction, Expr, ExpressionNode, Reference } from './types.js';
 import { freeVariables } from './expression.js';
 
 /** Graph node representing a component in the system */
@@ -15,11 +15,11 @@ export interface ComponentNode {
   /** Display name for the component */
   name: string;
   /** Type of component */
-  type: 'model' | 'reaction_system' | 'data_loader' | 'operator';
+  type: 'model' | 'reaction_system' | 'data_loader';
   /** Optional description */
   description?: string;
   /** Optional reference information */
-  reference?: any;
+  reference?: Reference;
   /** Metadata with counts for this component */
   metadata: {
     /** Number of variables */
@@ -107,18 +107,20 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
 
   // Extract nodes from different component types
 
-  // Models
+  // Models. Unresolved SubsystemRef entries still appear as nodes (they are
+  // components of the system) but carry no counts.
   if (esmFile.models) {
     for (const [id, model] of Object.entries(esmFile.models)) {
+      const inline = 'ref' in model ? undefined : (model as Model);
       nodes.push({
         id,
         name: id,
         type: 'model',
-        description: model.reference?.notes,
-        reference: model.reference,
+        description: inline?.reference?.notes,
+        reference: inline?.reference,
         metadata: {
-          var_count: model.variables ? Object.keys(model.variables).length : 0,
-          eq_count: model.equations ? model.equations.length : 0,
+          var_count: inline?.variables ? Object.keys(inline.variables).length : 0,
+          eq_count: inline?.equations ? inline.equations.length : 0,
           species_count: 0
         }
       });
@@ -154,24 +156,6 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
         reference: dataLoader.reference,
         metadata: {
           var_count: dataLoader.variables ? Object.keys(dataLoader.variables).length : 0,
-          eq_count: 0,
-          species_count: 0
-        }
-      });
-    }
-  }
-
-  // Operators
-  if (esmFile.operators) {
-    for (const [id, operator] of Object.entries(esmFile.operators)) {
-      nodes.push({
-        id,
-        name: id,
-        type: 'operator',
-        description: operator.reference?.notes,
-        reference: operator.reference,
-        metadata: {
-          var_count: 0,
           eq_count: 0,
           species_count: 0
         }
@@ -242,21 +226,6 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
           }
           break;
 
-        case 'operator_apply':
-          // operator_apply applies an operator to a system
-          if (coupling.operator && coupling.system) {
-            edges.push({
-              id: edgeId,
-              from: coupling.operator,
-              to: coupling.system,
-              type: 'operator_apply',
-              label: 'apply',
-              description: coupling.description,
-              coupling
-            });
-          }
-          break;
-
         case 'callback':
           // callback connects a source to a target via a callback function
           if (coupling.source && coupling.target) {
@@ -272,8 +241,10 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
           }
           break;
 
-        default:
-          console.warn(`Unknown coupling type: ${(coupling as any).type}`);
+        case 'event':
+          // A cross-system event is not a directed data flow between two
+          // components; its system references live inside condition/affect
+          // expressions. It contributes no component-graph edge.
           break;
       }
     });
@@ -350,8 +321,7 @@ export function componentExists(esmFile: EsmFile, componentId: string): boolean 
   return !!(
     esmFile.models?.[componentId] ||
     esmFile.reaction_systems?.[componentId] ||
-    esmFile.data_loaders?.[componentId] ||
-    esmFile.operators?.[componentId]
+    esmFile.data_loaders?.[componentId]
   );
 }
 
@@ -362,7 +332,6 @@ export function getComponentType(esmFile: EsmFile, componentId: string): Compone
   if (esmFile.models?.[componentId]) return 'model';
   if (esmFile.reaction_systems?.[componentId]) return 'reaction_system';
   if (esmFile.data_loaders?.[componentId]) return 'data_loader';
-  if (esmFile.operators?.[componentId]) return 'operator';
   return null;
 }
 
@@ -452,8 +421,8 @@ export function expressionGraph(
     // Equation
     processEquation(target as Equation, 0, 'default');
 
-  } else if (typeof target === 'object' && 'reactants' in target) {
-    // Reaction
+  } else if (typeof target === 'object' && 'rate' in target && !('op' in target)) {
+    // Reaction (schema field is `rate`; every reaction carries one)
     processReaction(target as Reaction, 0, 'default');
 
   } else {
@@ -464,7 +433,7 @@ export function expressionGraph(
   // Helper function to process a model
   function processModel(model: Model, systemId: string) {
     // Add all variables as nodes
-    for (const [varName, variable] of Object.entries(model.variables)) {
+    for (const [varName, variable] of Object.entries(model.variables || {})) {
       addNode(varName, variable.type, variable.units, systemId);
 
       // If it's an observed variable with an expression, create dependencies
@@ -486,11 +455,13 @@ export function expressionGraph(
       });
     }
 
-    // Process subsystems recursively
+    // Process inline-model subsystems recursively (data loaders and
+    // unresolved refs carry no equations)
     if (model.subsystems) {
       for (const [subSystemId, subModel] of Object.entries(model.subsystems)) {
+        if ('ref' in subModel || 'kind' in subModel) continue;
         const fullSubSystemId = systemId !== 'default' ? `${systemId}.${subSystemId}` : subSystemId;
-        processModel(subModel, fullSubSystemId);
+        processModel(subModel as Model, fullSubSystemId);
       }
     }
   }
@@ -498,31 +469,56 @@ export function expressionGraph(
   // Helper function to process a reaction system
   function processReactionSystem(reactionSystem: ReactionSystem, systemId: string) {
     // Add species as nodes
-    for (const [speciesName, species] of Object.entries(reactionSystem.species)) {
+    for (const [speciesName, species] of Object.entries(reactionSystem.species || {})) {
       addNode(speciesName, 'species', species.units, systemId);
     }
 
     // Add parameters as nodes
-    for (const [paramName, parameter] of Object.entries(reactionSystem.parameters)) {
+    for (const [paramName, parameter] of Object.entries(reactionSystem.parameters || {})) {
       addNode(paramName, 'parameter', parameter.units, systemId);
     }
 
     // Process reactions
-    reactionSystem.reactions.forEach((reaction, index) => {
+    const reactions = reactionSystem.reactions || [];
+    reactions.forEach((reaction, index) => {
       processReaction(reaction, index, systemId);
     });
 
     // Process constraint equations if present
     if (reactionSystem.constraint_equations) {
       reactionSystem.constraint_equations.forEach((equation, index) => {
-        processEquation(equation, index + reactionSystem.reactions.length, systemId);
+        processEquation(equation, index + reactions.length, systemId);
       });
     }
   }
 
+  // The variable name an equation LHS defines: a bare name, or the name
+  // under derivative / element-index / aggregate-output wrappers
+  // (`D(x)`, `index(v, i)`, `aggregate(..., expr: D(index(v, i)))`).
+  function lhsTargetName(lhs: Expr): string | undefined {
+    if (typeof lhs === 'string') return lhs;
+    if (lhs && typeof lhs === 'object' && 'op' in lhs) {
+      const node = lhs as ExpressionNode;
+      switch (node.op) {
+        case 'D':
+        case 'index':
+          return node.args && node.args.length > 0 ? lhsTargetName(node.args[0]) : undefined;
+        case 'aggregate': {
+          const body = (node as { expr?: Expr }).expr;
+          return body !== undefined ? lhsTargetName(body) : undefined;
+        }
+        default:
+          return undefined;
+      }
+    }
+    return undefined;
+  }
+
   // Helper function to process an equation
   function processEquation(equation: Equation, equationIndex: number, systemId: string) {
-    const lhsVar = addNode(equation.lhs, 'state', undefined, systemId); // LHS is typically a state variable
+    const targetName = lhsTargetName(equation.lhs);
+    if (targetName === undefined) return; // no recognizable defined variable
+    const lhsVar = addNode(targetName, 'state', undefined, systemId);
     const rhsVars = freeVariables(equation.rhs);
 
     // Create dependencies from all RHS variables to the LHS variable
@@ -537,15 +533,15 @@ export function expressionGraph(
     // Get rate expression variables
     const rateVars = freeVariables(reaction.rate);
 
-    // Process reactants - they are consumed (negative stoichiometry)
-    if (reaction.reactants) {
-      for (const reactant of reaction.reactants) {
-        const reactantVar = addNode(reactant.species, 'species', undefined, systemId);
+    // Process substrates - they are consumed (negative stoichiometry)
+    if (reaction.substrates) {
+      for (const substrate of reaction.substrates) {
+        const substrateVar = addNode(substrate.species, 'species', undefined, systemId);
 
-        // Rate parameters affect the reactant species
+        // Rate parameters affect the substrate species
         for (const rateVar of rateVars) {
           const paramVar = addNode(rateVar, 'parameter', undefined, systemId);
-          addDependency(paramVar, reactantVar, 'rate', reactionIndex, reaction.rate);
+          addDependency(paramVar, substrateVar, 'rate', reactionIndex, reaction.rate);
         }
       }
     }
@@ -561,11 +557,11 @@ export function expressionGraph(
           addDependency(paramVar, productVar, 'rate', reactionIndex, reaction.rate);
         }
 
-        // Reactants affect products through stoichiometry
-        if (reaction.reactants) {
-          for (const reactant of reaction.reactants) {
-            const reactantVar = addNode(reactant.species, 'species', undefined, systemId);
-            addDependency(reactantVar, productVar, 'stoichiometric', reactionIndex, reaction.rate);
+        // Substrates affect products through stoichiometry
+        if (reaction.substrates) {
+          for (const substrate of reaction.substrates) {
+            const substrateVar = addNode(substrate.species, 'species', undefined, systemId);
+            addDependency(substrateVar, productVar, 'stoichiometric', reactionIndex, reaction.rate);
           }
         }
       }
@@ -710,10 +706,6 @@ export function toDot<N, E>(graph: Graph<N, E>): string {
           shape = 'ellipse';
           color = 'lightyellow';
           break;
-        case 'operator':
-          shape = 'diamond';
-          color = 'lightgray';
-          break;
       }
     }
     // Type-specific formatting for VariableNode
@@ -771,11 +763,6 @@ export function toDot<N, E>(graph: Graph<N, E>): string {
           style = 'dashed';
           color = 'green';
           label = formatChemicalSubscripts(couplingEdge.label || '');
-          break;
-        case 'operator_apply':
-          style = 'solid';
-          color = 'purple';
-          label = couplingEdge.label || '';
           break;
         case 'callback':
           style = 'dotted';
@@ -845,9 +832,6 @@ export function toMermaid<N, E>(graph: Graph<N, E>): string {
         case 'data_loader':
           shape = `((${nodeLabel}))`; // Circle
           break;
-        case 'operator':
-          shape = `{${nodeLabel}}`; // Diamond
-          break;
         default:
           shape = `[${nodeLabel}]`;
       }
@@ -894,7 +878,6 @@ export function toMermaid<N, E>(graph: Graph<N, E>): string {
           break;
         case 'operator_compose':
         case 'couple':
-        case 'operator_apply':
         case 'callback':
           arrowStyle = '-->';
           label = couplingEdge.label || '';

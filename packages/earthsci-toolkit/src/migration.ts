@@ -36,11 +36,16 @@ export function getSupportedMigrationTargets(sourceVersion: string): string[] {
 
 /**
  * Migrate an ESM file from its current schema version to the target version.
+ *
+ * The supported 0.0.5 → 0.1.0 step is a version-marker bump: no structural
+ * transforms were introduced between those schema versions. Content-level
+ * changes (e.g. converting unit conventions) are not performed — they are
+ * modeling decisions, not mechanical migrations.
  */
 export function migrate(file: EsmFile, targetVersion: string): EsmFile {
-  const sourceVersion = file.metadata?.schema_version || file.metadata?.version
+  const sourceVersion = file.esm
   if (!sourceVersion) {
-    throw new MigrationError('Source file has no schema_version in metadata')
+    throw new MigrationError("Source file has no 'esm' version field")
   }
 
   if (!canMigrate(sourceVersion, targetVersion)) {
@@ -49,6 +54,5 @@ export function migrate(file: EsmFile, targetVersion: string): EsmFile {
     )
   }
 
-  // Return a copy — actual migration logic is version-pair specific
-  return { ...file }
+  return { ...file, esm: targetVersion }
 }

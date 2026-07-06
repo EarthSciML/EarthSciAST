@@ -47,8 +47,8 @@ describe('componentGraph function', () => {
           'C': { units: 'mol/mol', default: 0e-6 }
         },
         reactions: [
-          { reactants: ['A'], products: ['B'], rate: 'k1' },
-          { reactants: ['B'], products: ['C'], rate: 'k2' }
+          { substrates: [{ species: 'A', stoichiometry: 1 }], products: [{ species: 'B', stoichiometry: 1 }], rate: 'k1' },
+          { substrates: [{ species: 'B', stoichiometry: 1 }], products: [{ species: 'C', stoichiometry: 1 }], rate: 'k2' }
         ]
       }
     },
@@ -65,12 +65,6 @@ describe('componentGraph function', () => {
         }
       }
     },
-    operators: {
-      'Diffusion': {
-        type: 'spatial',
-        config: { method: 'finite_difference' }
-      }
-    },
     coupling: [
       {
         type: 'operator_compose',
@@ -82,12 +76,6 @@ describe('componentGraph function', () => {
         from: 'WeatherData.temperature',
         to: 'Chemistry.T',
         description: 'Map temperature data'
-      },
-      {
-        type: 'operator_apply',
-        operator: 'Diffusion',
-        system: 'Transport',
-        description: 'Apply diffusion to transport'
       },
       {
         type: 'couple',
@@ -116,7 +104,7 @@ describe('componentGraph function', () => {
   it('should extract all component nodes with metadata', () => {
     const graph = componentGraph(mockEsmFile);
 
-    expect(graph.nodes).toHaveLength(5);
+    expect(graph.nodes).toHaveLength(4);
 
     // Check Transport model node
     const transportNode = graph.nodes.find(n => n.id === 'Transport');
@@ -150,20 +138,12 @@ describe('componentGraph function', () => {
     expect(weatherNode?.metadata.var_count).toBe(3); // temperature, pressure, humidity
     expect(weatherNode?.metadata.eq_count).toBe(0);
     expect(weatherNode?.metadata.species_count).toBe(0);
-
-    // Check Diffusion operator node
-    const diffusionNode = graph.nodes.find(n => n.id === 'Diffusion');
-    expect(diffusionNode).toBeDefined();
-    expect(diffusionNode?.type).toBe('operator');
-    expect(diffusionNode?.metadata.var_count).toBe(0);
-    expect(diffusionNode?.metadata.eq_count).toBe(0);
-    expect(diffusionNode?.metadata.species_count).toBe(0);
   });
 
   it('should extract coupling edges in Graph format', () => {
     const graph = componentGraph(mockEsmFile);
 
-    expect(graph.edges).toHaveLength(4);
+    expect(graph.edges).toHaveLength(3);
 
     // Check edge structure
     const firstEdge = graph.edges[0];
@@ -185,13 +165,6 @@ describe('componentGraph function', () => {
     expect(mapEdge?.target).toBe('Chemistry');
     expect(mapEdge?.data.label).toBe('temperature');
 
-    // Check operator_apply edge
-    const applyEdge = graph.edges.find(e => e.data.type === 'operator_apply');
-    expect(applyEdge).toBeDefined();
-    expect(applyEdge?.source).toBe('Diffusion');
-    expect(applyEdge?.target).toBe('Transport');
-    expect(applyEdge?.data.label).toBe('apply');
-
     // Check couple edge
     const coupleEdge = graph.edges.find(e => e.data.type === 'couple');
     expect(coupleEdge).toBeDefined();
@@ -203,11 +176,10 @@ describe('componentGraph function', () => {
   it('should implement adjacency method correctly', () => {
     const graph = componentGraph(mockEsmFile);
 
-    // Transport is connected to Chemistry, SimpleReactions, and Diffusion (incoming)
+    // Transport is connected to Chemistry and SimpleReactions
     const transportAdjacent = graph.adjacency('Transport');
     expect(transportAdjacent).toContain('Chemistry');
     expect(transportAdjacent).toContain('SimpleReactions');
-    expect(transportAdjacent).toContain('Diffusion');
 
     // Chemistry is connected to Transport and WeatherData
     const chemistryAdjacent = graph.adjacency('Chemistry');
@@ -227,9 +199,9 @@ describe('componentGraph function', () => {
   it('should implement predecessors method correctly', () => {
     const graph = componentGraph(mockEsmFile);
 
-    // Transport has Diffusion as predecessor (Diffusion applies to Transport)
+    // Transport has no predecessors
     const transportPredecessors = graph.predecessors('Transport');
-    expect(transportPredecessors).toContain('Diffusion');
+    expect(transportPredecessors).toEqual([]);
 
     // Chemistry has Transport and WeatherData as predecessors
     const chemistryPredecessors = graph.predecessors('Chemistry');
@@ -243,10 +215,6 @@ describe('componentGraph function', () => {
     // WeatherData has no predecessors
     const weatherPredecessors = graph.predecessors('WeatherData');
     expect(weatherPredecessors).toEqual([]);
-
-    // Diffusion has no predecessors
-    const diffusionPredecessors = graph.predecessors('Diffusion');
-    expect(diffusionPredecessors).toEqual([]);
   });
 
   it('should implement successors method correctly', () => {
@@ -261,11 +229,6 @@ describe('componentGraph function', () => {
     const weatherSuccessors = graph.successors('WeatherData');
     expect(weatherSuccessors).toContain('Chemistry');
     expect(weatherSuccessors).toHaveLength(1);
-
-    // Diffusion has Transport as successor
-    const diffusionSuccessors = graph.successors('Diffusion');
-    expect(diffusionSuccessors).toContain('Transport');
-    expect(diffusionSuccessors).toHaveLength(1);
 
     // Chemistry has no successors (end node in these connections)
     const chemistrySuccessors = graph.successors('Chemistry');
@@ -302,7 +265,7 @@ describe('componentGraph function', () => {
     };
 
     const graph = componentGraph(noCouplingFile);
-    expect(graph.nodes).toHaveLength(5); // All components
+    expect(graph.nodes).toHaveLength(4); // All components
     expect(graph.edges).toHaveLength(0); // No edges
 
     // All nodes should have no adjacent nodes
@@ -339,12 +302,12 @@ describe('expressionGraph function', () => {
     },
     reactions: [
       {
-        reactants: [{ species: 'A', stoichiometry: 1 }],
+        substrates: [{ species: 'A', stoichiometry: 1 }],
         products: [{ species: 'B', stoichiometry: 1 }],
         rate: 'k1'
       },
       {
-        reactants: [{ species: 'B', stoichiometry: 1 }],
+        substrates: [{ species: 'B', stoichiometry: 1 }],
         products: [{ species: 'C', stoichiometry: 1 }],
         rate: 'k2'
       }
@@ -522,7 +485,7 @@ describe('expressionGraph function', () => {
 
   it('should handle single Reaction input', () => {
     const reaction: Reaction = {
-      reactants: [{ species: 'X', stoichiometry: 2 }],
+      substrates: [{ species: 'X', stoichiometry: 2 }],
       products: [{ species: 'Y', stoichiometry: 1 }],
       rate: { op: '*', args: ['k', 'X'] }
     };
@@ -664,12 +627,6 @@ describe('Graph export functions', () => {
         }
       }
     },
-    operators: {
-      'Diffusion': {
-        type: 'spatial',
-        config: { method: 'finite_difference' }
-      }
-    },
     coupling: [
       {
         type: 'operator_compose',
@@ -681,12 +638,6 @@ describe('Graph export functions', () => {
         from: 'WeatherData.temperature',
         to: 'Chemistry.T',
         description: 'Map temperature data'
-      },
-      {
-        type: 'operator_apply',
-        operator: 'Diffusion',
-        system: 'Transport',
-        description: 'Apply diffusion to transport'
       }
     ]
   };
@@ -704,7 +655,6 @@ describe('Graph export functions', () => {
       expect(dotOutput).toContain('"Transport"');
       expect(dotOutput).toContain('shape=box');
       expect(dotOutput).toContain('shape=ellipse');
-      expect(dotOutput).toContain('shape=diamond');
 
       // Check for edges with correct styles
       expect(dotOutput).toContain('->');
@@ -747,7 +697,6 @@ describe('Graph export functions', () => {
       // Check for nodes with correct shapes
       expect(mermaidOutput).toContain('['); // Rectangle
       expect(mermaidOutput).toContain('(('); // Circle
-      expect(mermaidOutput).toContain('{'); // Diamond
 
       // Check for edges with correct styles
       expect(mermaidOutput).toContain('-->');

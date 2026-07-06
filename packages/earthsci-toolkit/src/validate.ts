@@ -5,9 +5,11 @@
  * by the conformance test runner across all language implementations.
  */
 
-import { validateSchema, load, type SchemaError } from './parse.js';
+import { validateSchema, load, ParseError, SchemaValidationError, type SchemaError } from './parse.js';
+import { ExpressionTemplateError } from './lower_expression_templates.js';
+import { EnumLoweringError } from './lower_enums.js';
+import { LosslessJsonParseError, CanonicalNonfiniteError } from './numeric-literal.js';
 import {
-    validateUnits,
     checkDimensions,
     parseUnit,
     isDimensionless,
@@ -19,20 +21,13 @@ import {
 import type {
     EsmFile,
     Model,
+    DataLoader,
     ReactionSystem,
     Expression,
     ExpressionNode,
-    CouplingEntry,
     CouplingOperatorCompose,
     CouplingCouple,
-    CouplingOperatorApply,
     CouplingVariableMap,
-    DiscreteEvent,
-    ContinuousEvent,
-    AffectEquation,
-    FunctionalAffect,
-    Reaction,
-    StoichiometryEntry,
     SubsystemRef,
 } from './types.js';
 
@@ -43,7 +38,7 @@ export interface ValidationError {
     path: string;
     message: string;
     code: string;
-    details: Record<string, any>;
+    details: Record<string, unknown>;
 }
 
 /**
@@ -57,13 +52,14 @@ export interface ValidationResult {
 }
 
 /**
- * Structural error type matching the format specification
+ * Structural errors share the ValidationError shape; the alias is kept for
+ * API compatibility with earlier releases that declared them separately.
  */
-export interface StructuralError {
-    path: string;
-    message: string;
-    code: string;
-    details: Record<string, any>;
+export type StructuralError = ValidationError;
+
+/** Narrow a `models` / `subsystems` map value to an inline Model. */
+function isInlineModel(v: Model | DataLoader | SubsystemRef): v is Model {
+    return !('ref' in v) && !('kind' in v);
 }
 
 /**
@@ -355,57 +351,32 @@ function validateReferenceIntegrity(model: Model, modelPath: string, esmFile: Es
             ...collectIndexSymbols(equation.rhs),
         ]);
 
-        // Check LHS variables
-        const lhsVars = extractVariableReferences(equation.lhs);
-        for (const varRef of lhsVars) {
-            if (varRef.includes('.')) {
-                // Scoped reference
-                if (!resolveScopedReference(varRef, esmFile)) {
+        const checkSide = (expr: Expression, sidePath: string): void => {
+            for (const varRef of extractVariableReferences(expr)) {
+                if (varRef.includes('.')) {
+                    // Scoped reference
+                    if (!resolveScopedReference(varRef, esmFile)) {
+                        errors.push({
+                            path: sidePath,
+                            code: 'unresolved_scoped_ref',
+                            message: `Scoped reference "${varRef}" cannot be resolved`,
+                            details: { reference: varRef }
+                        });
+                    }
+                } else if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
+                    // Local reference
                     errors.push({
-                        path: `${equationPath}/lhs`,
-                        code: 'unresolved_scoped_ref',
-                        message: `Scoped reference "${varRef}" cannot be resolved`,
-                        details: { reference: varRef }
-                    });
-                }
-            } else {
-                // Local reference
-                if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
-                    errors.push({
-                        path: `${equationPath}/lhs`,
+                        path: sidePath,
                         code: 'undefined_variable',
                         message: `Variable "${varRef}" referenced in equation is not declared`,
                         details: { variable: varRef }
                     });
                 }
             }
-        }
+        };
 
-        // Check RHS variables
-        const rhsVars = extractVariableReferences(equation.rhs);
-        for (const varRef of rhsVars) {
-            if (varRef.includes('.')) {
-                // Scoped reference
-                if (!resolveScopedReference(varRef, esmFile)) {
-                    errors.push({
-                        path: `${equationPath}/rhs`,
-                        code: 'unresolved_scoped_ref',
-                        message: `Scoped reference "${varRef}" cannot be resolved`,
-                        details: { reference: varRef }
-                    });
-                }
-            } else {
-                // Local reference
-                if (!declaredVariables.has(varRef) && !declaredIndexSets.has(varRef) && !boundSymbols.has(varRef)) {
-                    errors.push({
-                        path: `${equationPath}/rhs`,
-                        code: 'undefined_variable',
-                        message: `Variable "${varRef}" referenced in equation is not declared`,
-                        details: { variable: varRef }
-                    });
-                }
-            }
-        }
+        checkSide(equation.lhs, `${equationPath}/lhs`);
+        checkSide(equation.rhs, `${equationPath}/rhs`);
     }
 
     // Check observed variables have expressions
@@ -1097,8 +1068,7 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
     const availableSystems = new Set([
         ...Object.keys(esmFile.models || {}),
         ...Object.keys(esmFile.reaction_systems || {}),
-        ...Object.keys(esmFile.data_loaders || {}),
-        ...Object.keys(esmFile.operators || {})
+        ...Object.keys(esmFile.data_loaders || {})
     ]);
 
     for (let i = 0; i < esmFile.coupling.length; i++) {
@@ -1182,17 +1152,6 @@ function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
                         }
                     }
                 }
-            }
-        } else if (coupling.type === 'operator_apply') {
-            // Check operator exists
-            const applyEntry = coupling as CouplingOperatorApply;
-            if (applyEntry.operator && !availableSystems.has(applyEntry.operator)) {
-                errors.push({
-                    path: `${couplingPath}/operator`,
-                    code: 'undefined_operator',
-                    message: `operator_apply references nonexistent operator "${applyEntry.operator}"`,
-                    details: { operator: applyEntry.operator }
-                });
             }
         }
     }
@@ -1393,9 +1352,11 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
         }
     }
 
-    // Validate models
+    // Validate models. Unresolved SubsystemRef entries are reported by
+    // validateSubsystemRefs below; DataLoader subsystems carry no equations.
     if (esmFile.models) {
         for (const [modelName, model] of Object.entries(esmFile.models)) {
+            if (!isInlineModel(model)) continue;
             const modelPath = `/models/${modelName}`;
             const isCoupled = coupledSystems.has(modelName);
 
@@ -1413,6 +1374,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
             // Recursively validate subsystems
             if (model.subsystems) {
                 for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
+                    if (!isInlineModel(subsystem)) continue;
                     const subsystemPath = `${modelPath}/subsystems/${subsystemName}`;
                     if (!isCoupled) {
                         errors.push(...validateEquationBalance(subsystem, subsystemPath));
@@ -1465,6 +1427,21 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
+ * Structured error code for an exception thrown by load(). Explicit mapping
+ * (rather than deriving a code from the constructor name) so the codes are
+ * stable strings that renames cannot silently change.
+ */
+function loadErrorCode(error: Error): string {
+    if (error instanceof SchemaValidationError) return 'schema_validation_error';
+    if (error instanceof ParseError) return 'parse_error';
+    if (error instanceof ExpressionTemplateError) return 'expression_template_error';
+    if (error instanceof EnumLoweringError) return 'enum_lowering_error';
+    if (error instanceof LosslessJsonParseError) return 'json_parse_error';
+    if (error instanceof CanonicalNonfiniteError) return 'nonfinite_number';
+    return 'load_error';
+}
+
+/**
  * Convert a SchemaError to our ValidationError format
  */
 function convertSchemaError(error: SchemaError): ValidationError {
@@ -1487,7 +1464,7 @@ function convertSchemaError(error: SchemaError): ValidationError {
 export function validate(data: string | object): ValidationResult {
     const schema_errors: ValidationError[] = [];
     const structural_errors: ValidationError[] = [];
-    let unit_warnings: UnitWarning[] = [];
+    const unit_warnings: UnitWarning[] = [];
 
     try {
         let parsedData: object;
@@ -1521,18 +1498,14 @@ export function validate(data: string | object): ValidationResult {
         // Try structural validation by loading the data
         if (schema_errors.length === 0) {
             try {
-                const esmFile = load(parsedData);
+                // Schema validation already ran above; collect unit warnings
+                // from the load pipeline instead of re-running validateUnits.
+                const esmFile = load(parsedData, {
+                    assumeValid: true,
+                    onUnitWarning: (warning) => unit_warnings.push(warning),
+                });
                 // Perform structural validation
-                const structuralErrors = performStructuralValidation(esmFile);
-                structural_errors.push(...structuralErrors.map(err => ({
-                    path: err.path,
-                    message: err.message,
-                    code: err.code,
-                    details: err.details
-                })));
-
-                // Perform unit validation
-                unit_warnings = validateUnits(esmFile);
+                structural_errors.push(...performStructuralValidation(esmFile));
 
                 // Promote unit incompatibility warnings to structural errors
                 structural_errors.push(...promoteUnitWarningsToErrors(unit_warnings));
@@ -1541,7 +1514,7 @@ export function validate(data: string | object): ValidationResult {
                 structural_errors.push({
                     path: '$',
                     message: error.message || String(e),
-                    code: error.constructor.name.toLowerCase().replace('error', ''),
+                    code: loadErrorCode(error),
                     details: {
                         exception_type: error.constructor.name,
                         error: error.message || String(e)
