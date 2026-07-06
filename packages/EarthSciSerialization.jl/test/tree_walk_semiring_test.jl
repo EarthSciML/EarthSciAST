@@ -13,7 +13,9 @@ using Test
 using EarthSciSerialization
 
 const ESM = EarthSciSerialization
-const _SR_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 @testset "tree_walk semiring + index-set registry + aggregate (ess-my4.1.2)" begin
     # Helpers (scoped local to this testset so they don't clobber siblings).

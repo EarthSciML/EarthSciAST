@@ -14,18 +14,9 @@
 using Test
 using EarthSciSerialization
 
-const ESM = EarthSciSerialization
+include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
-# ---- builder helpers (mirrors tree_walk_arrayop_test.jl) ----
-_n(x)   = NumExpr(Float64(x))
-_i(x)   = IntExpr(Int64(x))
-_v(n)   = VarExpr(String(n))
-_op(op, args...; kw...) = OpExpr(String(op), ESM.Expr[args...]; kw...)
-_idx(var, idx_exprs...)  = _op("index", _v(var), idx_exprs...)
-_D_idx(var, idx_exprs...) = _op("D", _idx(var, idx_exprs...); wrt="t")
-_arrayop1d(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
-    output_idx=Any[idx], expr_body=body,
-    ranges=Dict(idx => [lo, hi]))
+const ESM = EarthSciSerialization
 
 @testset "const_array boundary policy (ess-gj4)" begin
 

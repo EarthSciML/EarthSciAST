@@ -3,17 +3,10 @@ using EarthSciSerialization
 import OrdinaryDiffEqTsit5
 import ModelingToolkit
 
+include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet + repo root
+
 const ESM = EarthSciSerialization
 const MTK = ModelingToolkit
-
-# ============================================================
-# Small builder helpers — keep the fixtures readable.
-# ============================================================
-_n(x) = NumExpr(Float64(x))
-_i(x) = IntExpr(Int64(x))
-_v(n) = VarExpr(n)
-_op(op, args...; kw...) = OpExpr(op, ESM.Expr[args...]; kw...)
-_D(varname) = _op("D", _v(varname); wrt="t")
 
 # Evaluate an expression via a throw-away build_evaluator call so the
 # unit tests exercise the same code path as real ODE solves.
@@ -39,8 +32,9 @@ function _eval1(expr::ESM.Expr; u_vals=Dict{String,Float64}(),
     end
     # Anchor with a dummy state "_probe" whose derivative = expr so we
     # can read the result out of du[1].
-    # Qualify ESM.Equation explicitly: the test suite earlier loads
-    # ModelingToolkit (pde_discretize_test), whose `Equation` export shadows
+    # Qualify ESM.Equation explicitly: ModelingToolkit is loaded here (see
+    # the `import ModelingToolkit` at the top of this file, and earlier in
+    # the suite by mtk_catalyst_test.jl), and its `Equation` export shadows
     # ESM's at the Main namespace level under MTK 11.
     vars["_probe"] = ModelVariable(StateVariable; default=0.0)
     eq = ESM.Equation(_D("_probe"), expr)

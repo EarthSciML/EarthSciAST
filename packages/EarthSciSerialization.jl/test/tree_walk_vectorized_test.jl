@@ -14,35 +14,13 @@
 using Test
 using EarthSciSerialization
 
-const ESM = EarthSciSerialization
+include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
-# ---- builder helpers (mirror tree_walk_arrayop_test.jl) ----
-_n(x)  = NumExpr(Float64(x))
-_i(x)  = IntExpr(Int64(x))
-_v(n)  = VarExpr(String(n))
-_op(o, a...; k...) = OpExpr(String(o), ESM.Expr[a...]; k...)
-_idx(v, is...)  = _op("index", _v(v), is...)
-_Didx(v, is...) = _op("D", _idx(v, is...); wrt="t")
-_ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
-    output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
-_const(val) = OpExpr("const", ESM.Expr[]; value=val)
+const ESM = EarthSciSerialization
 
 # `got` and `ref` agree bit-for-bit, treating NaN as equal to NaN (interp clamps
 # / blends propagate the query NaN, whose payload is implementation-defined).
 _bitsame(got, ref) = (got === ref) || (isnan(got) && isnan(ref))
-
-# 1-D second-difference stencil arrayop over the FULL range, so the two end
-# cells gather an out-of-range (ghost) neighbour and form their own boundary
-# kernels — the canonical "interior kernel + boundary kernels" decomposition.
-function _stencil_model(N)
-    vars = Dict("u" => ModelVariable(StateVariable))
-    body = _op("+",
-        _idx("u", _op("-", _v("i"), _i(1))),
-        _op("*", _n(-2.0), _idx("u", _v("i"))),
-        _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
-end
 
 # A 2-D field with a bare-aggregate coordinate initial condition: ic(psi) is a
 # closed-form signed-distance field over [1,N]×[1,N]. Exercises the compile-once

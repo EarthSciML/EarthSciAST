@@ -13,19 +13,12 @@ using Test
 using EarthSciSerialization
 import OrdinaryDiffEqTsit5
 
-const ESM = EarthSciSerialization
-const _REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet + repo root
 
-# ---- builder helpers ----
-_n(x)   = NumExpr(Float64(x))
-_i(x)   = IntExpr(Int64(x))
-_v(n)   = VarExpr(String(n))
-_op(op, args...; kw...) = OpExpr(String(op), ESM.Expr[args...]; kw...)
-_idx(var, idx_exprs...)  = _op("index", _v(var), idx_exprs...)
-_D_idx(var, idx_exprs...) = _op("D", _idx(var, idx_exprs...); wrt="t")
-_arrayop1d(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
-    output_idx=Any[idx], expr_body=body,
-    ranges=Dict(idx => [lo, hi]))
+const ESM = EarthSciSerialization
+const _REPO_ROOT = TESTUTILS_REPO_ROOT
+
+# ---- builder helper derived from the testutils.jl quartet ----
 _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.Expr[];
     output_idx=Any[i, j], expr_body=body,
     ranges=Dict(i => [ilo, ihi], j => [jlo, jhi]))

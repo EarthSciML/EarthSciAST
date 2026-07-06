@@ -16,16 +16,9 @@
 using Test
 using EarthSciSerialization
 
-const ESM = EarthSciSerialization
+include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
-_n(x)  = NumExpr(Float64(x))
-_i(x)  = IntExpr(Int64(x))
-_v(n)  = VarExpr(String(n))
-_op(o, a...; k...) = OpExpr(String(o), ESM.Expr[a...]; k...)
-_idx(v, is...)  = _op("index", _v(v), is...)
-_Didx(v, is...) = _op("D", _idx(v, is...); wrt="t")
-_ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
-    output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
+const ESM = EarthSciSerialization
 
 @testset "live forcing gather _NK_PARAM_GATHER / _VK_PGATHER (ess-14f.3)" begin
 

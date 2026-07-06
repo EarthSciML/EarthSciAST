@@ -15,32 +15,9 @@
 using Test
 using EarthSciSerialization
 
-include("zero_alloc_harness.jl")
+include("testutils.jl")  # builder quartet + zero_alloc_harness.jl
 
 const ESM = EarthSciSerialization
-
-# ---- builder helpers (mirror tree_walk_vectorized_test.jl) ----
-_n(x)  = NumExpr(Float64(x))
-_i(x)  = IntExpr(Int64(x))
-_v(n)  = VarExpr(String(n))
-_op(o, a...; k...) = OpExpr(String(o), ESM.Expr[a...]; k...)
-_idx(v, is...)  = _op("index", _v(v), is...)
-_Didx(v, is...) = _op("D", _idx(v, is...); wrt="t")
-_ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.Expr[];
-    output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
-
-# 1-D second-difference stencil over the FULL range (end cells gather an
-# out-of-range ghost → their own boundary kernels): exercises GATHER + the
-# elementwise `+`/`*`/literal OP arms + the interior/boundary kernel split.
-function _stencil_model(N)
-    vars = Dict("u" => ModelVariable(StateVariable))
-    body = _op("+",
-        _idx("u", _op("-", _v("i"), _i(1))),
-        _op("*", _n(-2.0), _idx("u", _v("i"))),
-        _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
-end
 
 # D(y[i]) = Σ_{k=1..M} A[i,k]·x[k] (sum_product) — exercises the VK_REDUCE axis
 # fold + CONSTVEC (A[i,k]) + GATHER (x[k]).
@@ -86,7 +63,6 @@ function _advection_esm(n)
                 "rhs" => Dict{String,Any}("op" => "grad", "args" => Any["u"], "dim" => "i"))])))
 end
 
-_const(val) = OpExpr("const", ESM.Expr[]; value=val)
 
 # Closed-function (`interp.*`) leaves on the array RHS (ess-wrh). Each is a single
 # arrayop `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
