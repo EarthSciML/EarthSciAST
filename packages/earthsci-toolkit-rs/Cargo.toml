@@ -16,6 +16,10 @@ readme = "README.md"
 [[bin]]
 name = "esm"
 path = "src/bin/esm.rs"
+# The CLI depends on clap; without this, a --no-default-features build would
+# try (and fail) to compile the binary. With it, cargo simply skips the bin
+# target when the `cli` feature is off — no per-item cfg gates needed.
+required-features = ["cli"]
 
 [lib]
 name = "earthsci_toolkit"
