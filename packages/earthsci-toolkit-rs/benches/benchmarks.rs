@@ -68,16 +68,13 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
                     Expr::Variable("k".to_string()),
                     Expr::Variable(format!("x{}_{}", i, (j + 1) % equations_per_model)),
                 ),
-                region: None,
             });
         }
 
         let model = Model {
             reference: None,
-            domain: None,
             coupletype: None,
             subsystems: None,
-            index_sets: None,
             name: Some(format!("model_{i}")),
             variables,
             equations,
@@ -109,17 +106,14 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             dae_info: None,
             discretized_from: None,
         },
+        index_sets: None,
         models: Some(models),
         reaction_systems: None,
         data_loaders: None,
         operators: None,
         enums: None,
         coupling: None,
-        domains: None,
-        interfaces: None,
-        grids: None,
-        discretizations: None,
-        staggering_rules: None,
+        domain: None,
         function_tables: None,
     }
 }
@@ -168,7 +162,6 @@ fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> Reac
     }
 
     ReactionSystem {
-        domain: None,
         coupletype: None,
         reference: None,
         species,
@@ -195,19 +188,13 @@ fn benchmark_parsing(c: &mut Criterion) {
         );
 
         #[cfg(feature = "zero_copy")]
-        {
-            let json_bytes = json_str.clone().into_bytes();
-            group.bench_with_input(
-                BenchmarkId::new("simd_parse", size),
-                &json_bytes,
-                |b, bytes| {
-                    b.iter(|| {
-                        let mut data = bytes.clone();
-                        earthsci_toolkit::performance::fast_parse(black_box(&mut data)).unwrap()
-                    })
-                },
-            );
-        }
+        group.bench_with_input(
+            BenchmarkId::new("simd_parse", size),
+            &json_str,
+            |b, json| {
+                b.iter(|| earthsci_toolkit::performance::fast_parse(black_box(json)).unwrap())
+            },
+        );
     }
 
     group.finish();

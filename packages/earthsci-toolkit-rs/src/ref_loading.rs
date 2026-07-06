@@ -1,4 +1,8 @@
-//! Subsystem reference loading and resolution.
+//! Subsystem reference loading: cross-FILE `{ "ref": ... }` inlining.
+//!
+//! Not to be confused with [`crate::reference_resolution`], which builds the
+//! intra-document node-id / index-set dependency DAG — this module is the
+//! load-time pass that splices other .esm files into this one.
 //!
 //! Implements ESM library spec section 2.1b: walks all `subsystems` maps in
 //! models and reaction systems, and replaces any `{ "ref": "..." }` reference

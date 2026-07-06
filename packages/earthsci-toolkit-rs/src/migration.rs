@@ -37,21 +37,16 @@ pub struct VersionInfo {
 
 /// Parse a semantic version string into components
 fn parse_version(version: &str) -> Result<VersionInfo, MigrationError> {
-    let invalid = || MigrationError {
-        message: format!("Invalid version format: {version}"),
-        from_version: version.to_string(),
-        to_version: String::new(),
-    };
-
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() != 3 {
-        return Err(invalid());
-    }
-
+    let (major, minor, patch) =
+        crate::diagnostic::parse_semver(version).ok_or_else(|| MigrationError {
+            message: format!("Invalid version format: {version}"),
+            from_version: version.to_string(),
+            to_version: String::new(),
+        })?;
     Ok(VersionInfo {
-        major: parts[0].parse().map_err(|_| invalid())?,
-        minor: parts[1].parse().map_err(|_| invalid())?,
-        patch: parts[2].parse().map_err(|_| invalid())?,
+        major,
+        minor,
+        patch,
     })
 }
 

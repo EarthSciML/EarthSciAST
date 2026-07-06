@@ -1,5 +1,11 @@
 //! Build-time value-invention front-door (Rust binding).
 //!
+//! **Value invention**, in plain language: some aggregates do not reduce
+//! data to numbers — they *mint new entities* from it (unique edge IDs from a
+//! mesh, dense ranks from a categorical column, bin keys from coordinates).
+//! This pass materialises those invented values once at setup, so the dense
+//! array runtime never has to run the relational machinery per step.
+//!
 //! Port of the Julia reference `value_invention.jl` (bead ess-3lj.1 → ess-3lj.2);
 //! RFC `semiring-faq-unified-ir` §6.1 (cadence-partition) / §5.5 (determinism) /
 //! §7.3 (edge enumeration); `CONFORMANCE_SPEC.md` §5.5 / §5.7.

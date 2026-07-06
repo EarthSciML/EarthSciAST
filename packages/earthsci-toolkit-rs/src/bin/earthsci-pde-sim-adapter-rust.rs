@@ -17,7 +17,10 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::process::ExitCode;
+
+use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report};
 
 use earthsci_toolkit::flatten::flatten;
 use earthsci_toolkit::simulate_array::ArrayCompiled;
@@ -36,36 +39,19 @@ fn time_key(t: f64) -> String {
     format!("{t}")
 }
 
+/// Index of the solution sample closest to `t` (`total_cmp`, so a NaN sample
+/// cannot panic the comparison). `output_times` pins the sample grid, but the
+/// trajectory lookups match defensively by closest time.
+fn nearest_index(times: &[f64], t: f64) -> Option<usize> {
+    (0..times.len()).min_by(|&a, &b| (times[a] - t).abs().total_cmp(&(times[b] - t).abs()))
+}
+
 fn solver_from(name: &str) -> SolverChoice {
     match name {
         "Bdf" | "bdf" => SolverChoice::Bdf,
         "Sdirk" | "sdirk" => SolverChoice::Sdirk,
         _ => SolverChoice::Erk,
     }
-}
-
-fn parse_args() -> Result<(PathBuf, PathBuf), String> {
-    let mut manifest = None;
-    let mut output = None;
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--manifest" => {
-                manifest = args.get(i + 1).cloned();
-                i += 2;
-            }
-            "--output" => {
-                output = args.get(i + 1).cloned();
-                i += 2;
-            }
-            _ => i += 1,
-        }
-    }
-    Ok((
-        PathBuf::from(manifest.ok_or("--manifest is required")?),
-        PathBuf::from(output.ok_or("--output is required")?),
-    ))
 }
 
 fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
@@ -126,15 +112,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
 
     let mut traj = Map::new();
     for &t in &out_times {
-        // output_times pins the sample grid, but match defensively by closest time.
-        let idx = (0..sol.time.len())
-            .min_by(|&a, &b| {
-                (sol.time[a] - t)
-                    .abs()
-                    .partial_cmp(&(sol.time[b] - t).abs())
-                    .unwrap()
-            })
-            .ok_or("empty solution time grid")?;
+        let idx = nearest_index(&sol.time, t).ok_or("empty solution time grid")?;
         let mut m = Map::new();
         for (row, n) in sol.state_variable_names.iter().enumerate() {
             m.insert(bare(n).to_string(), json!(sol.state[row][idx]));
@@ -259,14 +237,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
 
     let mut traj = Map::new();
     for &t in &checkpoints {
-        let idx = (0..sol.time.len())
-            .min_by(|&a, &b| {
-                (sol.time[a] - t)
-                    .abs()
-                    .partial_cmp(&(sol.time[b] - t).abs())
-                    .unwrap()
-            })
-            .ok_or("empty solution time grid")?;
+        let idx = nearest_index(&sol.time, t).ok_or("empty solution time grid")?;
         let mut m = Map::new();
         for (row, n) in sol.state_variable_names.iter().enumerate() {
             m.insert(bare(n).to_string(), json!(sol.state[row][idx]));
@@ -277,22 +248,23 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
     Ok(json!({ "rhs": Value::Object(rhs), "trajectory": Value::Object(traj) }))
 }
 
-fn main() {
-    let (manifest_path, output_path) = match parse_args() {
-        Ok(v) => v,
+fn main() -> ExitCode {
+    let args = match parse_manifest_output_args() {
+        Ok(a) => a,
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(2);
+            eprintln!("pde-sim-adapter-rust: {e}");
+            return ExitCode::FAILURE;
         }
     };
+    let (manifest_path, output_path) = (args.manifest, args.output);
     let manifest: Value = match fs::read_to_string(&manifest_path)
         .map_err(|e| e.to_string())
         .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
     {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("failed to read manifest: {e}");
-            std::process::exit(2);
+            eprintln!("pde-sim-adapter-rust: failed to read manifest: {e}");
+            return ExitCode::FAILURE;
         }
     };
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
@@ -322,8 +294,9 @@ fn main() {
     }
 
     let payload = json!({ "binding": "rust", "fixtures": Value::Object(fixtures) });
-    if let Err(e) = fs::write(&output_path, serde_json::to_string_pretty(&payload).unwrap()) {
-        eprintln!("failed to write output: {e}");
-        std::process::exit(1);
+    if let Err(e) = write_report(&output_path, &payload) {
+        eprintln!("pde-sim-adapter-rust: failed to write output: {e}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }

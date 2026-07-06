@@ -1,4 +1,10 @@
-//! Reaction system analysis and ODE generation
+//! Reaction system analysis and ODE generation (esm-spec §7.4).
+//!
+//! Two public surfaces: the stoichiometric-matrix builders
+//! ([`stoichiometric_matrix`] and friends) and mass-action ODE derivation
+//! ([`derive_reaction_odes`], §4.7.5), which turns a [`ReactionSystem`]'s
+//! reactions into per-species `D(sp, t) = Σ ±coeff·rate·Π substrates`
+//! equations mirroring the Julia (Catalyst) and Python references.
 
 use crate::{
     Equation, Expr, ExpressionNode, Model, ModelVariable, ReactionSystem, Species, VariableType,
@@ -51,8 +57,10 @@ pub fn lower_reactions_to_equations(
         ));
     }
 
-    // Validate reactions and their stoichiometry (u32 can't be negative,
-    // so there's no negative-coefficient check anymore).
+    // Validate reactions and their stoichiometry. Coefficients are f64
+    // (fractional stoichiometries are allowed); non-negativity is enforced
+    // upstream by the schema (`exclusiveMinimum: 0`) and the parse-level
+    // stoichiometry check, so only species references are checked here.
     for (reaction_idx, reaction) in reactions.iter().enumerate() {
         for substrate in reaction.substrates.iter().flatten() {
             if !species.contains_key(&substrate.species) {

@@ -920,17 +920,8 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
     let Some(esm) = obj.get("esm").and_then(|v| v.as_str()) else {
         return Ok(());
     };
-    let parts: Vec<&str> = esm.split('.').collect();
-    if parts.len() != 3 {
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
         return Ok(());
-    }
-    let major: u32 = match parts[0].parse() {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
-    let minor: u32 = match parts[1].parse() {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
     };
     if !(major == 0 && minor < 4) {
         return Ok(());

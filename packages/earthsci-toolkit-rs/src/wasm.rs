@@ -11,30 +11,62 @@ use crate::{
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
-// WASM bindings
+/// Serialize any `Serialize` value to a plain JS object (never an ES `Map`),
+/// so JS callers get uniform dot-access across every export. All exports go
+/// through this one helper — previously some returned `Map`s and some plain
+/// objects depending on which serializer they used.
 #[cfg(feature = "wasm")]
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
+fn to_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    value
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
 }
 
+/// Render every model equation and reaction rate of a loaded file with one of
+/// the real expression pretty-printers from [`crate::display`] (the same ones
+/// the CLI `pretty` command uses).
 #[cfg(feature = "wasm")]
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) -> String {
+    let mut out = String::new();
+    if let Some(models) = &esm_file.models {
+        let mut ids: Vec<&String> = models.keys().collect();
+        ids.sort();
+        for model_id in ids {
+            out.push_str(&format!("Model: {model_id}\n"));
+            for (i, eq) in models[model_id].equations.iter().enumerate() {
+                out.push_str(&format!(
+                    "  Eq {}: {} = {}\n",
+                    i + 1,
+                    render(&eq.lhs),
+                    render(&eq.rhs)
+                ));
+            }
+        }
+    }
+    if let Some(reaction_systems) = &esm_file.reaction_systems {
+        let mut ids: Vec<&String> = reaction_systems.keys().collect();
+        ids.sort();
+        for rs_id in ids {
+            out.push_str(&format!("Reaction System: {rs_id}\n"));
+            for (i, reaction) in reaction_systems[rs_id].reactions.iter().enumerate() {
+                out.push_str(&format!(
+                    "  Reaction {}: rate = {}\n",
+                    i + 1,
+                    render(&reaction.rate)
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// Load an ESM file from JSON string (WASM version)
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn load(json_str: &str) -> Result<JsValue, JsValue> {
-    match rust_load(json_str) {
-        Ok(esm_file) => match serde_wasm_bindgen::to_value(&esm_file) {
-            Ok(js_value) => Ok(js_value),
-            Err(e) => Err(JsValue::from_str(&format!("Serialization error: {e}"))),
-        },
-        Err(e) => Err(JsValue::from_str(&format!("Load error: {e}"))),
-    }
+    let esm_file = rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
+    to_js(&esm_file)
 }
 
 /// Save an ESM file to JSON string (WASM version)
@@ -58,98 +90,40 @@ pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
         rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let result = rust_validate(&esm_file);
-
-    match serde_wasm_bindgen::to_value(&result) {
-        Ok(js_value) => Ok(js_value),
-        Err(e) => Err(JsValue::from_str(&format!("Serialization error: {e}"))),
-    }
+    to_js(&result)
 }
 
-/// Convert ESM file to Unicode display (WASM version)
+/// Pretty-print every equation and reaction rate with the Unicode expression
+/// printer ([`crate::display::to_unicode`]) — the same renderer the CLI's
+/// `pretty` command uses. (Earlier versions returned a metadata summary
+/// instead of rendered math.)
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
         rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
-
-    // Simple implementation: convert the JSON to a Unicode-friendly string representation
-    let mut result = String::new();
-    result.push_str(&format!("ESM Format v{}\n", esm_file.esm));
-
-    let metadata = &esm_file.metadata;
-    if let Some(ref name) = metadata.name {
-        result.push_str(&format!("Name: {name}\n"));
-    }
-    if let Some(ref desc) = metadata.description {
-        result.push_str(&format!("Description: {desc}\n"));
-    }
-
-    if let Some(models) = &esm_file.models {
-        result.push_str(&format!("\n{} Models:\n", models.len()));
-        for name in models.keys() {
-            result.push_str(&format!("• {name}\n"));
-        }
-    }
-
-    Ok(result)
+    Ok(render_expressions(&esm_file, crate::display::to_unicode))
 }
 
-/// Convert ESM file to LaTeX display (WASM version)
+/// Pretty-print every equation and reaction rate with the LaTeX expression
+/// printer ([`crate::display::to_latex`]).
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
         rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
-
-    // Simple implementation: convert the JSON to a LaTeX-friendly string representation
-    let mut result = String::new();
-    result.push_str(&format!("\\textbf{{ESM Format v{}}}\\\\\n", esm_file.esm));
-
-    let metadata = &esm_file.metadata;
-    if let Some(ref name) = metadata.name {
-        result.push_str(&format!("\\textit{{Name:}} {name}\\\\\n"));
-    }
-    if let Some(ref desc) = metadata.description {
-        result.push_str(&format!("\\textit{{Description:}} {desc}\\\\\n"));
-    }
-
-    if let Some(models) = &esm_file.models {
-        result.push_str(&format!("\n\\textbf{{{} Models:}}\\\\\n", models.len()));
-        for name in models.keys() {
-            result.push_str(&format!("$\\bullet$ {name}\\\\\n"));
-        }
-    }
-
-    Ok(result)
+    Ok(render_expressions(&esm_file, crate::display::to_latex))
 }
 
-/// Convert ESM file to ASCII display (WASM version)
+/// Pretty-print every equation and reaction rate with the ASCII expression
+/// printer ([`crate::display::to_ascii`]) — pure-ASCII output, unlike the
+/// Unicode renderer.
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_ascii(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
         rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
-
-    // Simple implementation: convert the JSON to an ASCII-friendly string representation
-    let mut result = String::new();
-    result.push_str(&format!("ESM Format v{}\n", esm_file.esm));
-
-    let metadata = &esm_file.metadata;
-    if let Some(ref name) = metadata.name {
-        result.push_str(&format!("Name: {name}\n"));
-    }
-    if let Some(ref desc) = metadata.description {
-        result.push_str(&format!("Description: {desc}\n"));
-    }
-
-    if let Some(models) = &esm_file.models {
-        result.push_str(&format!("\n{} Models:\n", models.len()));
-        for name in models.keys() {
-            result.push_str(&format!("• {name}\n"));
-        }
-    }
-
-    Ok(result)
+    Ok(render_expressions(&esm_file, crate::display::to_ascii))
 }
 
 /// Substitute expressions in ESM file (WASM version)
@@ -229,11 +203,7 @@ pub fn create_compact_expression(expr_str: &str) -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let compact = CompactExpr::from_expr(&expr);
-
-    match serde_wasm_bindgen::to_value(&compact) {
-        Ok(js_value) => Ok(js_value),
-        Err(e) => Err(JsValue::from_str(&format!("Serialization error: {e}"))),
-    }
+    to_js(&compact)
 }
 
 /// Compute stoichiometric matrix (WASM version)
@@ -244,11 +214,7 @@ pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValu
         .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let matrix = stoichiometric_matrix(&reaction_system);
-
-    match serde_wasm_bindgen::to_value(&matrix) {
-        Ok(js_value) => Ok(js_value),
-        Err(e) => Err(JsValue::from_str(&format!("Serialization error: {e}"))),
-    }
+    to_js(&matrix)
 }
 
 /// Introspect the **flattened** simulation inputs of an `.esm` file (gt-5ws).
@@ -288,10 +254,7 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
         "independentVariables": flat.independent_variables,
     });
 
-    use serde::Serialize;
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-    out.serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+    to_js(&out)
 }
 
 /// Run an ODE simulation in the browser (WASM version, gt-5ws / spike S1).
@@ -397,12 +360,7 @@ pub fn simulate(
         }
     });
 
-    // Serialize JSON objects as plain JS objects (not ES `Map`s) so callers can
-    // use `result.time` / `result.state` dot-access.
-    use serde::Serialize;
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-    out.serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+    to_js(&out)
 }
 
 /// Generate component graph for ESM file (WASM version)
@@ -413,30 +371,20 @@ pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
         rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let graph = rust_component_graph(&esm_file);
-
-    match serde_wasm_bindgen::to_value(&graph) {
-        Ok(js_value) => Ok(js_value),
-        Err(e) => Err(JsValue::from_str(&format!("Serialization error: {e}"))),
-    }
+    to_js(&graph)
 }
 
-/// Get performance metrics (WASM version)
+/// Report the crate and supported-schema versions. (The native performance
+/// feature flags were dropped from this report: they are never enabled in a
+/// wasm build, so advertising them here was misleading.)
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
-pub fn get_performance_info() -> JsValue {
+pub fn get_version_info() -> JsValue {
     let info = serde_json::json!({
-        "features": {
-            "parallel": cfg!(feature = "parallel"),
-            "simd": cfg!(feature = "simd"),
-            "zero_copy": cfg!(feature = "zero_copy"),
-            "custom_alloc": cfg!(feature = "custom_alloc"),
-            "wasm": true
-        },
         "version": crate::VERSION,
-        "schema_version": crate::SCHEMA_VERSION
+        "schema_version": crate::SCHEMA_VERSION,
     });
-
-    serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
+    to_js(&info).unwrap_or(JsValue::NULL)
 }
 
 /// Benchmark parsing performance (WASM version)
@@ -453,20 +401,6 @@ pub fn benchmark_parsing(json_str: &str, iterations: u32) -> Result<f64, JsValue
     let total_time = end - start;
 
     Ok(total_time / iterations as f64)
-}
-
-/// Initialize WASM module
-#[cfg(feature = "wasm")]
-#[wasm_bindgen(start)]
-pub fn main() {
-    console_log!("earthsci-toolkit Rust WASM module initialized");
-    console_log!(
-        "Features enabled: parallel={}, simd={}, zero_copy={}, custom_alloc={}",
-        cfg!(feature = "parallel"),
-        cfg!(feature = "simd"),
-        cfg!(feature = "zero_copy"),
-        cfg!(feature = "custom_alloc")
-    );
 }
 
 #[cfg(test)]

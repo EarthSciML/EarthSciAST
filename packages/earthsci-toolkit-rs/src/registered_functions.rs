@@ -135,28 +135,50 @@ impl ClosedValue {
     }
 }
 
+/// Native handler signature for one closed function: the dotted spec name
+/// (for diagnostics) plus the evaluated argument list.
+type ClosedHandler = fn(&str, &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError>;
+
+/// The v0.3.0 closed function registry (esm-spec §9.1/§9.2): one row per
+/// primitive, dotted name → native handler. Membership
+/// ([`closed_function_names`]) and dispatch ([`evaluate_closed_function`])
+/// both derive from this single table, so a name can never be registered
+/// without a handler (the old hand-synced set + match could drift and only
+/// failed at runtime). Adding a primitive requires a spec rev.
+const CLOSED_FUNCTIONS: &[(&str, ClosedHandler)] = &[
+    ("datetime.year", cf_datetime_year),
+    ("datetime.month", |name, args| {
+        datetime_field(name, args, |(_, m, _, _, _, _)| m)
+    }),
+    ("datetime.day", |name, args| {
+        datetime_field(name, args, |(_, _, d, _, _, _)| d)
+    }),
+    ("datetime.hour", |name, args| {
+        datetime_field(name, args, |(_, _, _, h, _, _)| h)
+    }),
+    ("datetime.minute", |name, args| {
+        datetime_field(name, args, |(_, _, _, _, mi, _)| mi)
+    }),
+    ("datetime.second", |name, args| {
+        datetime_field(name, args, |(_, _, _, _, _, s)| s)
+    }),
+    ("datetime.day_of_year", cf_datetime_day_of_year),
+    ("datetime.julian_day", cf_datetime_julian_day),
+    ("datetime.is_leap_year", cf_datetime_is_leap_year),
+    ("interp.searchsorted", cf_interp_searchsorted),
+    ("interp.linear", cf_interp_linear),
+    ("interp.bilinear", cf_interp_bilinear),
+];
+
 /// The v0.3.0 closed function set. Bindings MUST reject any `fn`-op `name`
-/// not in this set (esm-spec §9.1). Adding a primitive requires a spec rev.
+/// not in this set (esm-spec §9.1). Derived from [`CLOSED_FUNCTIONS`].
 pub fn closed_function_names() -> &'static HashSet<String> {
     static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
     NAMES.get_or_init(|| {
-        [
-            "datetime.year",
-            "datetime.month",
-            "datetime.day",
-            "datetime.hour",
-            "datetime.minute",
-            "datetime.second",
-            "datetime.day_of_year",
-            "datetime.julian_day",
-            "datetime.is_leap_year",
-            "interp.searchsorted",
-            "interp.linear",
-            "interp.bilinear",
-        ]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect()
+        CLOSED_FUNCTIONS
+            .iter()
+            .map(|(n, _)| (*n).to_string())
+            .collect()
     })
 }
 
@@ -168,76 +190,85 @@ pub fn evaluate_closed_function(
     name: &str,
     args: &[ClosedArg],
 ) -> Result<ClosedValue, ClosedFunctionError> {
-    if !closed_function_names().contains(name) {
-        return Err(ClosedFunctionError::new(
+    match CLOSED_FUNCTIONS.iter().find(|(n, _)| *n == name) {
+        Some((n, handler)) => handler(n, args),
+        None => Err(ClosedFunctionError::new(
             "unknown_closed_function",
             format!(
                 "`fn` name `{name}` is not in the v0.3.0 closed function registry \
                  (esm-spec §9.2). Adding a primitive requires a spec rev."
             ),
-        ));
-    }
-    match name {
-        "datetime.year" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (y, _, _, _, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(check_i32(name, y as i64)?))
-        }
-        "datetime.month" => datetime_field(name, args, |(_, m, _, _, _, _)| m),
-        "datetime.day" => datetime_field(name, args, |(_, _, d, _, _, _)| d),
-        "datetime.hour" => datetime_field(name, args, |(_, _, _, h, _, _)| h),
-        "datetime.minute" => datetime_field(name, args, |(_, _, _, _, mi, _)| mi),
-        "datetime.second" => datetime_field(name, args, |(_, _, _, _, _, s)| s),
-        "datetime.day_of_year" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (y, m, d, _, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(day_of_year(y, m, d) as i32))
-        }
-        "datetime.julian_day" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            Ok(ClosedValue::Float(julian_day(t)))
-        }
-        "datetime.is_leap_year" => {
-            expect_arity(name, args, 1)?;
-            let t = args[0].expect_scalar(name, 0)?;
-            let (y, _, _, _, _, _) = decompose_utc(t);
-            Ok(ClosedValue::Integer(if is_leap_year(y) { 1 } else { 0 }))
-        }
-        "interp.searchsorted" => {
-            expect_arity(name, args, 2)?;
-            let x = args[0].expect_scalar(name, 0)?;
-            let xs = args[1].expect_array(name, 1)?;
-            Ok(ClosedValue::Integer(check_i32(
-                name,
-                searchsorted(name, x, xs)?,
-            )?))
-        }
-        "interp.linear" => {
-            expect_arity(name, args, 3)?;
-            let table = args[0].expect_array(name, 0)?;
-            let axis = args[1].expect_array(name, 1)?;
-            let x = args[2].expect_scalar(name, 2)?;
-            Ok(ClosedValue::Float(interp_linear(table, axis, x)?))
-        }
-        "interp.bilinear" => {
-            expect_arity(name, args, 5)?;
-            let table = args[0].expect_array2d(name, 0)?;
-            let axis_x = args[1].expect_array(name, 1)?;
-            let axis_y = args[2].expect_array(name, 2)?;
-            let x = args[3].expect_scalar(name, 3)?;
-            let y = args[4].expect_scalar(name, 4)?;
-            Ok(ClosedValue::Float(interp_bilinear(
-                table, axis_x, axis_y, x, y,
-            )?))
-        }
-        _ => Err(ClosedFunctionError::new(
-            "unknown_closed_function",
-            format!("internal: `{name}` is in the registry but has no dispatch arm"),
         )),
     }
+}
+
+fn cf_datetime_year(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 1)?;
+    let t = args[0].expect_scalar(name, 0)?;
+    let (y, _, _, _, _, _) = decompose_utc(t);
+    Ok(ClosedValue::Integer(check_i32(name, y as i64)?))
+}
+
+fn cf_datetime_day_of_year(
+    name: &str,
+    args: &[ClosedArg],
+) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 1)?;
+    let t = args[0].expect_scalar(name, 0)?;
+    let (y, m, d, _, _, _) = decompose_utc(t);
+    Ok(ClosedValue::Integer(day_of_year(y, m, d) as i32))
+}
+
+fn cf_datetime_julian_day(
+    name: &str,
+    args: &[ClosedArg],
+) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 1)?;
+    let t = args[0].expect_scalar(name, 0)?;
+    Ok(ClosedValue::Float(julian_day(t)))
+}
+
+fn cf_datetime_is_leap_year(
+    name: &str,
+    args: &[ClosedArg],
+) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 1)?;
+    let t = args[0].expect_scalar(name, 0)?;
+    let (y, _, _, _, _, _) = decompose_utc(t);
+    Ok(ClosedValue::Integer(if is_leap_year(y) { 1 } else { 0 }))
+}
+
+fn cf_interp_searchsorted(
+    name: &str,
+    args: &[ClosedArg],
+) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 2)?;
+    let x = args[0].expect_scalar(name, 0)?;
+    let xs = args[1].expect_array(name, 1)?;
+    Ok(ClosedValue::Integer(check_i32(
+        name,
+        searchsorted(name, x, xs)?,
+    )?))
+}
+
+fn cf_interp_linear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 3)?;
+    let table = args[0].expect_array(name, 0)?;
+    let axis = args[1].expect_array(name, 1)?;
+    let x = args[2].expect_scalar(name, 2)?;
+    Ok(ClosedValue::Float(interp_linear(table, axis, x)?))
+}
+
+fn cf_interp_bilinear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
+    expect_arity(name, args, 5)?;
+    let table = args[0].expect_array2d(name, 0)?;
+    let axis_x = args[1].expect_array(name, 1)?;
+    let axis_y = args[2].expect_array(name, 2)?;
+    let x = args[3].expect_scalar(name, 3)?;
+    let y = args[4].expect_scalar(name, 4)?;
+    Ok(ClosedValue::Float(interp_bilinear(
+        table, axis_x, axis_y, x, y,
+    )?))
 }
 
 /// Evaluate a unary `datetime.*` accessor that returns one `u32` field of the

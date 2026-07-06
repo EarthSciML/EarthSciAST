@@ -1,4 +1,9 @@
-//! Build-time reference resolution for the semiring-FAQ unified IR.
+//! Build-time reference resolution for the semiring-FAQ unified IR: the
+//! intra-document node-id / index-set dependency DAG.
+//!
+//! Not to be confused with [`crate::ref_loading`], which inlines cross-file
+//! `{ "ref": ... }` subsystem mounts at load time — this module never touches
+//! the filesystem; it wires id-addressed edges inside one document.
 //!
 //! Implements *node addressing* and *reference-edge resolution* — the hard
 //! prerequisite the §6.1 cadence-partition pass of the

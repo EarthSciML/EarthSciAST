@@ -4,7 +4,7 @@
 //! such that two ASTs are canonically equal iff their `canonical_json` outputs
 //! are byte-identical.
 //!
-//! See `docs/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
+//! See `docs/content/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
 
 use crate::types::{Expr, ExpressionNode};
 

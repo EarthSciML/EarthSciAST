@@ -36,6 +36,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod adapter_support;
 pub mod aggregate;
 pub mod cadence;
 pub mod canonicalize;
@@ -206,8 +207,29 @@ pub use performance::ModelAllocator;
 
 /// Package version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// ESM schema version supported by this implementation
-pub const SCHEMA_VERSION: &str = "0.1.0";
+/// ESM schema version supported by this implementation. Must track the
+/// version in `esm-schema.json`'s `$id` / esm-spec.md; the
+/// `schema_version_matches_bundled_schema` test enforces it, and
+/// `parse::LIBRARY_VERSION` (major-compat gating) derives from it.
+pub const SCHEMA_VERSION: &str = "0.8.0";
+
+#[cfg(test)]
+mod version_tests {
+    /// SCHEMA_VERSION must track the version embedded in the bundled schema's
+    /// `$id` (and therefore esm-spec.md).
+    #[test]
+    fn schema_version_matches_bundled_schema() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("esm-schema.json")).expect("bundled schema parses");
+        let id = schema["$id"].as_str().expect("schema has an $id");
+        assert!(
+            id.contains(&format!("/{}/", crate::SCHEMA_VERSION)),
+            "SCHEMA_VERSION {} does not match schema $id {}",
+            crate::SCHEMA_VERSION,
+            id
+        );
+    }
+}
 
 #[cfg(test)]
 mod coupling_field_tests {

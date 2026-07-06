@@ -116,11 +116,7 @@ pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTem
     let Some(esm) = obj.get("esm").and_then(|v| v.as_str()) else {
         return Ok(());
     };
-    let parts: Vec<&str> = esm.split('.').collect();
-    if parts.len() != 3 {
-        return Ok(());
-    }
-    let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) else {
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
         return Ok(());
     };
     if !(major == 0 && minor < 8) {

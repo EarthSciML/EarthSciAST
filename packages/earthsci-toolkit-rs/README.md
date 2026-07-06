@@ -4,13 +4,12 @@ Rust implementation of the EarthSciML Serialization Format (ESM).
 
 ## Features
 
-- **Core**: Parse, serialize, pretty-print, substitute, validate schema
-- **Analysis**: Unit checking, equation counting, structural validation
-- **CLI Tool**: Command-line interface for validation and conversion
-- **WASM**: WebAssembly compilation for web use
-- **High Performance**: Zero-copy parsing, parallel evaluation, SIMD optimization
-- **Memory Efficient**: Custom allocators and compact expression trees
-- **Benchmarking**: Comprehensive performance analysis with criterion.rs
+- **Core**: Parse, serialize, pretty-print, substitute, validate (schema + structural)
+- **Analysis**: Unit checking, equation counting, structural validation, component graphs
+- **Simulation**: diffsol-backed ODE integration plus a vectorized array/PDE runtime
+- **CLI Tool**: `esm` command-line interface for validation, conversion, analysis, and simulation
+- **WASM**: WebAssembly compilation for in-browser loading, validation, and 0-D simulation
+- **Conformance**: Adapter binaries for the cross-language conformance harness
 
 ## Installation
 
@@ -20,35 +19,22 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-earthsci-toolkit = "0.1.0"
+earthsci-toolkit = "0.8"
 ```
 
 ### As a CLI Tool
 
 ```bash
-cargo install earthsci-toolkit --features cli
+cargo install earthsci-toolkit
 ```
+
+(The `cli` feature is part of the default feature set.)
 
 ### For WASM
 
 ```bash
 wasm-pack build --target web --features wasm
 ```
-
-### High-Performance Build
-
-For maximum performance, enable all optimization features:
-
-```bash
-cargo build --release --features performance
-```
-
-Available performance features:
-- `parallel`: Multi-threaded evaluation with rayon
-- `simd`: SIMD-optimized mathematical operations
-- `zero_copy`: Fast JSON parsing with simd-json
-- `custom_alloc`: Custom memory allocators for large models
-- `performance`: Enables all performance features
 
 ## Usage
 
@@ -57,86 +43,44 @@ Available performance features:
 ```rust
 use earthsci_toolkit::{load, save, validate};
 
-// Load an ESM file
-let content = std::fs::read_to_string("model.esm")?;
-let esm_file = load(&content)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load an ESM file (parses, schema-validates, and runs the load-time
+    // lowering passes)
+    let content = std::fs::read_to_string("model.esm")?;
+    let esm_file = load(&content)?;
 
-// Validate it
-let validation_result = validate(&esm_file);
-if !validation_result.valid {
-    for error in validation_result.errors {
-        println!("Error: {}", error.message);
+    // Validate it (structural checks on the typed representation)
+    let validation_result = validate(&esm_file);
+    if !validation_result.is_valid {
+        for error in validation_result.errors() {
+            println!("Error: {}", error.message);
+        }
     }
-}
 
-// Save it back
-let json = save(&esm_file)?;
+    // Save it back
+    let json = save(&esm_file)?;
+    println!("{json}");
+    Ok(())
+}
 ```
 
-### High-Performance Usage
-
-For performance-critical applications:
+To simulate:
 
 ```rust
-use earthsci_toolkit::{
-    performance::{CompactExpr, ParallelEvaluator, simd_math},
-    load, stoichiometric_matrix
-};
+use earthsci_toolkit::{load, simulate, SimulateOptions};
 use std::collections::HashMap;
 
-// Fast parsing with zero-copy SIMD JSON
-#[cfg(feature = "zero_copy")]
-{
-    let mut json_bytes = content.into_bytes();
-    let esm_file = earthsci_toolkit::performance::fast_parse(&mut json_bytes)?;
-}
-
-// Compact expression evaluation
-let expr = load_expression_from_file("complex_expr.json")?;
-let compact = CompactExpr::from_expr(&expr);
-let variables = HashMap::from([("x".to_string(), 1.5), ("k".to_string(), 0.1)]);
-
-// Fast stack-based evaluation
-let result = compact.evaluate_fast(&variables)?;
-
-// Parallel expression batch evaluation
-#[cfg(feature = "parallel")]
-{
-    let evaluator = ParallelEvaluator::new(Some(4))?; // Use 4 threads
-    let expressions = load_many_expressions()?;
-    let results = evaluator.evaluate_batch(&expressions, &variables)?;
-}
-
-// SIMD-optimized vector operations
-#[cfg(feature = "simd")]
-{
-    let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let b = vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-    let mut result = vec![0.0; 8];
-
-    // SIMD vector addition (4x faster than scalar)
-    simd_math::add_vectors_simd(&a, &b, &mut result)?;
-
-    // SIMD dot product
-    let dot_product = simd_math::dot_product_simd(&a, &b)?;
-}
-
-// Parallel stoichiometric matrix computation
-#[cfg(feature = "parallel")]
-{
-    let reaction_system = load_reaction_system()?;
-    let matrix = evaluator.compute_stoichiometric_matrix_parallel(&reaction_system)?;
-}
-
-// Custom memory allocation for large models
-#[cfg(feature = "custom_alloc")]
-{
-    use earthsci_toolkit::performance::ModelAllocator;
-
-    let mut allocator = ModelAllocator::with_capacity(1_000_000);
-    let large_array = allocator.alloc_slice::<f64>(10000);
-    // Process large model...
-    allocator.reset(); // Reuse memory
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let esm_file = load(&std::fs::read_to_string("model.esm")?)?;
+    let sol = simulate(
+        &esm_file,
+        (0.0, 10.0),
+        &HashMap::new(), // parameter overrides
+        &HashMap::new(), // initial-condition overrides
+        &SimulateOptions::default(),
+    )?;
+    println!("{} output points", sol.time.len());
+    Ok(())
 }
 ```
 
@@ -147,14 +91,32 @@ let result = compact.evaluate_fast(&variables)?;
 esm validate model.esm
 
 # Convert to compact JSON
-esm convert model.esm -o model_compact.json -f compact-json
+esm convert model.esm -o model_compact.json --to compact-json
 
-# Pretty print expressions
-esm pretty-print model.esm -f latex
+# Pretty print expressions (unicode, latex, or ascii)
+esm pretty model.esm -f latex
+
+# Run a simulation
+esm simulate model.esm --time 10 -o results.json
+
+# Analyze structure / complexity / coupling
+esm analyze model.esm
+
+# Batch-validate a directory of fixtures
+esm validate-fixtures tests/valid --recursive
 
 # Show file information
 esm info model.esm
 ```
+
+Run `esm --help` for the full command list.
+
+## Examples
+
+Runnable examples live in `examples/` (`cargo run --example <name>`):
+`roundtrip_expression` (also driven by the property-corpus conformance
+script), `pde_conformance`, `canonical_expand`, `segmented_refresh_solve`,
+and `unit_validation`.
 
 ## Building
 
@@ -168,21 +130,6 @@ cargo build --release
 
 ```bash
 wasm-pack build --target web --features wasm
-```
-
-### Cross-compilation
-
-The crate supports cross-compilation to various targets:
-
-```bash
-# For Linux ARM64
-cargo build --target aarch64-unknown-linux-gnu
-
-# For Windows
-cargo build --target x86_64-pc-windows-gnu
-
-# For macOS ARM64
-cargo build --target aarch64-apple-darwin
 ```
 
 ## Development
@@ -199,6 +146,13 @@ Run tests with all features:
 cargo test --all-features
 ```
 
+Run benchmarks (the bench target is gated behind the `benchmarks` feature, so
+a plain `cargo bench` builds nothing):
+
+```bash
+cargo bench --features benchmarks
+```
+
 Format code:
 
 ```bash
@@ -208,14 +162,18 @@ cargo fmt
 Lint:
 
 ```bash
-cargo clippy
+cargo clippy --all-targets --all-features
 ```
 
-## Features
+## Cargo features
 
-- `default`: Includes CLI functionality
-- `cli`: Command-line interface (requires clap)
+- `default`: `cli`
+- `cli`: the `esm` command-line binary (requires clap)
 - `wasm`: WebAssembly bindings (requires wasm-bindgen)
+- `parallel` / `simd` / `zero_copy` / `custom_alloc` / `performance`:
+  opt-in experimental performance utilities in the `performance` module
+  (benchmark support; not used by the core simulate paths)
+- `benchmarks`: enables the criterion bench target
 
 ## License
 

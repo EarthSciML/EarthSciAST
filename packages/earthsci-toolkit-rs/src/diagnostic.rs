@@ -32,3 +32,19 @@ pub(crate) fn err(code: &'static str, message: impl Into<String>) -> DiagnosticE
         message: message.into(),
     }
 }
+
+/// Parse a `major.minor.patch` version string into its numeric components.
+/// Returns `None` for anything that is not exactly three dot-separated
+/// non-negative integers. Shared by the load-time spec-version gates, the
+/// migration module, and version-compatibility checking, so all agree on
+/// what counts as a well-formed version token.
+pub fn parse_semver(version: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}

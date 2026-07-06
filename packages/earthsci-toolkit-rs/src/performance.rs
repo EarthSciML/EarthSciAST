@@ -1,12 +1,17 @@
-//! High-performance implementations for ESM format operations
+//! Experimental performance utilities (benchmark support).
 //!
-//! This module provides optimized implementations for core operations including:
-//! - Zero-copy JSON parsing with simd-json
-//! - Parallel expression evaluation with rayon
-//! - SIMD-optimized mathematical operations
-//! - Custom memory allocators for large models
-//!
-//! Features are gated behind compile-time flags for optimal binary size.
+//! Opt-in via the `parallel` / `simd` / `zero_copy` / `custom_alloc` feature
+//! flags (or `performance` for all four). NOTE: nothing in the production
+//! simulate paths uses this module — `simulate` / `simulate_array` have their
+//! own evaluators and deliberately use rustc-hash + reused scratch buffers
+//! (see Cargo.toml). These utilities exist for the `benchmarks` bench target,
+//! the feature-gated tests in `tests/performance.rs`, and downstream
+//! experimentation:
+//! - Zero-copy JSON parsing with simd-json (`fast_parse`)
+//! - Parallel expression batch evaluation with rayon ([`ParallelEvaluator`])
+//! - SIMD vector math (`simd_math`)
+//! - A bump-allocator arena for large models ([`ModelAllocator`])
+//! - A stack-based postfix expression evaluator ([`CompactExpr`])
 
 use crate::{EsmFile, Expr};
 use std::collections::HashMap;
@@ -26,28 +31,37 @@ use bumpalo::Bump;
 /// Error type for performance operations
 #[derive(Debug, thiserror::Error)]
 pub enum PerformanceError {
-    #[error("SIMD-JSON parsing error: {0}")]
-    SimdJsonError(String),
+    /// JSON parsing failed (either backend of [`fast_parse`]).
+    #[error("parse error: {0}")]
+    ParseError(String),
     #[error("Parallel evaluation error: {0}")]
     ParallelError(String),
+    /// Stack-machine evaluation failed ([`CompactExpr::evaluate_fast`]):
+    /// operand underflow, unbound variable, division by zero, or an operator
+    /// outside the compact instruction set.
+    #[error("expression evaluation error: {0}")]
+    EvalError(String),
     #[error("SIMD operation error: {0}")]
     SimdError(String),
     #[error("Memory allocation error: {0}")]
     AllocError(String),
 }
 
-/// High-performance JSON parser using SIMD instructions when available
-#[cfg(feature = "zero_copy")]
-pub fn fast_parse(json_bytes: &mut [u8]) -> Result<EsmFile, PerformanceError> {
-    let value = simd_json::serde::from_slice(json_bytes)
-        .map_err(|e| PerformanceError::SimdJsonError(e.to_string()))?;
-    Ok(value)
-}
-
-/// Fallback parser for when SIMD-JSON is not available
-#[cfg(not(feature = "zero_copy"))]
+/// JSON parser that uses simd-json when the `zero_copy` feature is enabled
+/// and serde_json otherwise. One signature for both backends, so callers do
+/// not need their own cfg fork (simd-json needs a mutable buffer, which this
+/// function owns internally).
 pub fn fast_parse(json_str: &str) -> Result<EsmFile, PerformanceError> {
-    serde_json::from_str(json_str).map_err(|e| PerformanceError::SimdJsonError(e.to_string()))
+    #[cfg(feature = "zero_copy")]
+    {
+        let mut bytes = json_str.as_bytes().to_vec();
+        simd_json::serde::from_slice(&mut bytes)
+            .map_err(|e| PerformanceError::ParseError(e.to_string()))
+    }
+    #[cfg(not(feature = "zero_copy"))]
+    {
+        serde_json::from_str(json_str).map_err(|e| PerformanceError::ParseError(e.to_string()))
+    }
 }
 
 /// Parallel evaluation context for expressions
@@ -349,13 +363,13 @@ impl CompactExpr {
         }
     }
 
-    /// Fast evaluation using stack-based postfix evaluation
-    #[cfg(feature = "parallel")]
+    /// Fast evaluation using stack-based postfix evaluation. Purely
+    /// sequential — available regardless of the `parallel` feature.
     pub fn evaluate_fast(&self, variables: &HashMap<String, f64>) -> Result<f64, PerformanceError> {
         type Stack = smallvec::SmallVec<[f64; 16]>;
 
         fn underflow() -> PerformanceError {
-            PerformanceError::ParallelError("Stack underflow".to_string())
+            PerformanceError::EvalError("Stack underflow".to_string())
         }
 
         // Pop the two operands of a binary op, returning `(a, b)` in
@@ -381,7 +395,7 @@ impl CompactExpr {
                 CompactNode::Number(n) => stack.push(*n),
                 CompactNode::Variable(name) => {
                     let value = variables.get(name).ok_or_else(|| {
-                        PerformanceError::ParallelError(format!("Undefined variable: {name}"))
+                        PerformanceError::EvalError(format!("Undefined variable: {name}"))
                     })?;
                     stack.push(*value);
                 }

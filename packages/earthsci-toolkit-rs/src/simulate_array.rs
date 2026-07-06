@@ -41,8 +41,9 @@ use crate::aggregate::{
     ReduceKind, effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges,
 };
 use crate::flatten::FlattenedSystem;
-use crate::simulate::{CompileError, SimulateError, SimulateOptions, SolutionMetadata};
-use crate::simulate::{SimulateOptions as _SimOpts, Solution, SolverChoice};
+use crate::simulate::{
+    CompileError, SimulateError, SimulateOptions, Solution, SolutionMetadata, SolverChoice,
+};
 use crate::types::{
     EsmFile, Expr, ExpressionNode, IndexSet, Model, ModelVariable, RangeSpec, VariableType,
 };
@@ -90,15 +91,7 @@ type ArrMap = HashMap<String, ArrayD<f64>, FxBuildHasher>;
 /// that dominated allocation in the per-cell interpreter profile.
 type ValVec = SmallVec<[Value; 4]>;
 
-use diffsol::{
-    Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Sdirk, VectorHost,
-};
-
-// `SimulateOptions` re-export alias silences unused-import warnings from the
-// alternate import path above while keeping a single source of truth for the
-// public option type.
-#[allow(dead_code)]
-type _OptsAlias = _SimOpts;
+use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 
 // ============================================================================
 // Value type: scalar or dynamic-rank ndarray.
@@ -329,8 +322,6 @@ pub struct ArrayCompiled {
     /// observed definitions evaluated at each RHS call in order (no cross-
     /// dependency support for v1 — fixtures don't need it).
     observed_rules: Vec<AlgebraicRule>,
-    /// Observed-variable shapes (matches key set of observed_rules).
-    observed_shapes: HashMap<String, VarShape>,
     /// Per-state RHS rules.
     rhs_rules: Vec<RhsRule>,
     /// Number of flat state slots.
@@ -645,6 +636,12 @@ fn expr_has_array_op(expr: &Expr) -> bool {
     }
 }
 
+/// Rewrite-target spatial operators that MUST be lowered to stencils before
+/// reaching any binding's simulator (esm-spec §4.2 / §9.6.8). One list feeds
+/// both the compile-time reject walk ([`check_no_spatial_ops`]) and the
+/// runtime defense-in-depth backstop in `eval_op`.
+const UNLOWERED_SPATIAL_OPS: [&str; 5] = ["grad", "div", "laplacian", "curl", "∇"];
+
 /// Walk an expression and reject any spatial differential operator
 /// (`grad`/`div`/`laplacian`). Per the canonical pipeline contract, ESD
 /// discretization rules MUST rewrite these into `arrayop` AST before
@@ -661,7 +658,7 @@ fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
             // structural time derivative `D(_, t)` (evaluable-core); only a
             // SPATIAL `D` (`wrt` != "t") is a rewrite-target.
             let unlowered = match node.op.as_str() {
-                "grad" | "div" | "laplacian" | "curl" | "∇" => true,
+                op if UNLOWERED_SPATIAL_OPS.contains(&op) => true,
                 "D" => node.wrt.as_deref().is_some_and(|w| w != "t"),
                 _ => false,
             };
@@ -1224,7 +1221,6 @@ impl ArrayCompiled {
         // (6) Build observed algebraic rules from eliminated variables AND
         //     from declared observed variables that define an expression.
         let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
-        let mut observed_shapes: HashMap<String, VarShape> = HashMap::new();
 
         // Declared observed variables with an `expression` field. An array-shaped
         // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
@@ -1240,14 +1236,6 @@ impl ArrayCompiled {
                     var: (*name).clone(),
                     body: Box::new(expr.clone()),
                 });
-                observed_shapes.insert(
-                    (*name).clone(),
-                    VarShape {
-                        shape: Vec::new(),
-                        origin: Vec::new(),
-                        flat_offset: 0,
-                    },
-                );
             }
         }
 
@@ -1257,20 +1245,6 @@ impl ArrayCompiled {
                 extract_algebraic_arrayop(&eq.lhs, &eq.rhs)
                 && eliminated.contains(&var)
             {
-                // Infer the shape from ranges.
-                let shape: Vec<usize> = ranges
-                    .iter()
-                    .map(|(lo, hi)| (hi - lo + 1) as usize)
-                    .collect();
-                let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
-                observed_shapes.insert(
-                    var.clone(),
-                    VarShape {
-                        shape: shape.clone(),
-                        origin,
-                        flat_offset: 0,
-                    },
-                );
                 observed_rules.push(AlgebraicRule::ArrayLoop {
                     var,
                     output_idx_names: idx_names,
@@ -1287,14 +1261,6 @@ impl ArrayCompiled {
                     var: name.clone(),
                     body: Box::new(eq.rhs.clone()),
                 });
-                observed_shapes.insert(
-                    name.clone(),
-                    VarShape {
-                        shape: Vec::new(),
-                        origin: Vec::new(),
-                        flat_offset: 0,
-                    },
-                );
             }
         }
 
@@ -1343,7 +1309,7 @@ impl ArrayCompiled {
         }
 
         for eq in &model.equations {
-            if let Some((
+            if let Some(DerivArrayop {
                 var,
                 idx_names,
                 ranges,
@@ -1353,7 +1319,7 @@ impl ArrayCompiled {
                 contract_dims,
                 reduce,
                 filter,
-            )) = extract_derivative_arrayop(&eq.lhs, &eq.rhs)
+            }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs)
             {
                 // Array-op derivative over (idx_names, ranges).
                 if !var_shapes.contains_key(&var) {
@@ -1530,7 +1496,6 @@ impl ArrayCompiled {
             param_index,
             param_defaults,
             observed_rules,
-            observed_shapes,
             rhs_rules,
             n_states,
             forcing: Rc::new(RefCell::new(HashMap::new())),
@@ -1587,7 +1552,6 @@ impl ArrayCompiled {
         evaluate_rhs_with_scratch(
             &self.rhs_rules,
             &self.observed_rules,
-            &self.observed_shapes,
             &self.var_shapes,
             &self.param_names,
             state,
@@ -1646,7 +1610,6 @@ impl ArrayCompiled {
         evaluate_rhs_with_scratch(
             &self.rhs_rules,
             &self.observed_rules,
-            &self.observed_shapes,
             &self.var_shapes,
             &self.param_names,
             state,
@@ -1826,13 +1789,11 @@ impl ArrayCompiled {
 
         let rhs_rules = self.rhs_rules.clone();
         let observed_rules = self.observed_rules.clone();
-        let observed_shapes = self.observed_shapes.clone();
         let var_shapes = self.var_shapes.clone();
         let param_names = self.param_names.clone();
 
         let rhs_rules_jac = rhs_rules.clone();
         let observed_rules_jac = observed_rules.clone();
-        let observed_shapes_jac = observed_shapes.clone();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
 
@@ -1864,7 +1825,6 @@ impl ArrayCompiled {
             evaluate_rhs_with_scratch(
                 &rhs_rules,
                 &observed_rules,
-                &observed_shapes,
                 &var_shapes,
                 &param_names,
                 y_s,
@@ -1905,7 +1865,6 @@ impl ArrayCompiled {
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
                 &observed_rules_jac,
-                &observed_shapes_jac,
                 &var_shapes_jac,
                 &param_names_jac,
                 y_s,
@@ -1920,7 +1879,6 @@ impl ArrayCompiled {
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
                 &observed_rules_jac,
-                &observed_shapes_jac,
                 &var_shapes_jac,
                 &param_names_jac,
                 &y_perturbed,
@@ -1975,7 +1933,7 @@ impl ArrayCompiled {
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                run_solver(&mut solver, t_end, opts)?
+                crate::simulate::run_solver(&mut solver, t_end, opts)?
             }
             SolverChoice::Sdirk => {
                 let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
@@ -1983,13 +1941,13 @@ impl ArrayCompiled {
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                run_solver(&mut solver, t_end, opts)?
+                crate::simulate::run_solver(&mut solver, t_end, opts)?
             }
             SolverChoice::Erk => {
                 let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                     details: e.to_string(),
                 })?;
-                run_solver(&mut solver, t_end, opts)?
+                crate::simulate::run_solver(&mut solver, t_end, opts)?
             }
         };
 
@@ -2367,6 +2325,7 @@ fn build_state_arrays(
 /// (an `area` FAQ) is a 0-D array. Shared by the RHS driver ([`evaluate_rhs`])
 /// and the output-time observed exposure ([`ArrayCompiled::simulate`]) so both
 /// see identical observed values.
+#[allow(clippy::too_many_arguments)]
 fn materialize_observeds(
     observed_rules: &[AlgebraicRule],
     state_arrays: &ArrMap,
@@ -2377,65 +2336,16 @@ fn materialize_observeds(
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
 ) -> ArrMap {
     let mut observed_arrays: ArrMap = ArrMap::default();
-    for rule in observed_rules {
-        match rule {
-            AlgebraicRule::Scalar { var, body } => {
-                let mut ctx = EvalCtx {
-                    state_arrays,
-                    observed_arrays: &observed_arrays,
-                    params,
-                    param_names,
-                    loop_binds: IdxMap::default(),
-                    t,
-                    derived_rings,
-                    forcing,
-                };
-                let arr = match eval(body, &mut ctx) {
-                    Value::Array(a) => a,
-                    Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
-                };
-                observed_arrays.insert(var.clone(), arr);
-            }
-            AlgebraicRule::ArrayLoop {
-                var,
-                output_idx_names,
-                output_ranges,
-                body,
-            } => {
-                // Size the storage as 1-based (origin 1) with max_index extent
-                // per dimension so downstream `index(v, k)` always computes
-                // offset `k - 1` regardless of the range's lo. Positions below
-                // the defined range are left at 0.
-                let padded_shape: Vec<usize> =
-                    output_ranges.iter().map(|(_, hi)| *hi as usize).collect();
-                let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
-                let total = padded_shape.iter().copied().product::<usize>().max(1);
-                let mut buf = vec![0.0f64; total];
-                for tuple in cartesian_range(output_ranges) {
-                    let mut ctx = EvalCtx {
-                        state_arrays,
-                        observed_arrays: &observed_arrays,
-                        params,
-                        param_names,
-                        loop_binds: IdxMap::default(),
-                        t,
-                        derived_rings,
-                        forcing,
-                    };
-                    for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                        ctx.loop_binds.insert(name.clone(), *val);
-                    }
-                    let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
-                    let flat = multi_to_flat_col_major(&tuple, &padded_shape, &padded_origin);
-                    if flat < buf.len() {
-                        buf[flat] = v;
-                    }
-                }
-                let arr = col_major_to_arrayd(&buf, &padded_shape);
-                observed_arrays.insert(var.clone(), arr);
-            }
-        }
-    }
+    materialize_observeds_into(
+        &mut observed_arrays,
+        observed_rules,
+        state_arrays,
+        params,
+        param_names,
+        t,
+        derived_rings,
+        forcing,
+    );
     observed_arrays
 }
 
@@ -2518,7 +2428,6 @@ fn materialize_observeds_into(
 fn evaluate_rhs_with_scratch(
     rhs_rules: &[RhsRule],
     observed_rules: &[AlgebraicRule],
-    observed_shapes: &HashMap<String, VarShape>,
     var_shapes: &IndexMap<String, VarShape>,
     param_names: &[String],
     state: &[f64],
@@ -2572,7 +2481,6 @@ fn evaluate_rhs_with_scratch(
     );
 
     // Emit observed shapes we need for downstream variable lookups.
-    let _ = observed_shapes; // kept for future consistency checks
 
     // Split the scratch into disjoint field borrows: the state/observed arrays
     // are read (shared) while the buffer pool is checked out (exclusive).
@@ -3886,58 +3794,17 @@ fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // ndarray path as `+`/`*`.
         "min" | "max" => eval_arith(&node.op, &node.args, ctx),
 
-        // Scalar comparison operators — return 1.0 (true) or 0.0 (false).
+        // Scalar comparison operators — return 1.0 (true) or 0.0 (false),
+        // via the same [`scalar_compare`] kernel the vectorized overlay uses
+        // (the bit-identity the vectorized path's doc claims is now
+        // guaranteed by construction).
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
             if node.args.len() != 2 {
                 return Value::Scalar(f64::NAN);
             }
             let a = eval(&node.args[0], ctx).as_scalar().unwrap_or(f64::NAN);
             let b = eval(&node.args[1], ctx).as_scalar().unwrap_or(f64::NAN);
-            Value::Scalar(match node.op.as_str() {
-                "==" => {
-                    if (a - b).abs() == 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                "!=" => {
-                    if (a - b).abs() != 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                "<" => {
-                    if a < b {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                "<=" => {
-                    if a <= b {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                ">" => {
-                    if a > b {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                ">=" => {
-                    if a >= b {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                _ => f64::NAN,
-            })
+            Value::Scalar(scalar_compare(&node.op, a, b))
         }
 
         "ifelse" => {
@@ -3958,7 +3825,7 @@ fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // The compile-time `check_no_spatial_ops` walk in `from_model` catches
         // these with the uniform `unlowered_operator` code; panicking here is
         // defense-in-depth in case the build path is bypassed.
-        "grad" | "div" | "laplacian" => panic!(
+        op if UNLOWERED_SPATIAL_OPS.contains(&op) => panic!(
             "unlowered_operator: rewrite-target operator '{}' reached evaluation without being \
              lowered to a stencil by a rewrite rule (esm-spec §4.2 / §9.6.8).",
             node.op
@@ -4399,32 +4266,40 @@ fn collect_json_array(
 /// data-dependent; a disjoint / edge-touching clip yields a `[0, 2]` array.
 /// Spherical/geodesic clips dispatch to `s2geometry` via [`crate::geometry`];
 /// planar clips use a pure-Rust Sutherland–Hodgman intersection.
-fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+/// Validate and evaluate the shared operand contract of the two polygon-clip
+/// leaf ops (§5.8.4): exactly two array operands that read as `[V, 2]`
+/// lon/lat rings, plus a required in-enum `manifold` flag. `None` means "not
+/// evaluable" — the caller returns the NaN sentinel.
+fn eval_clip_operands(
+    node: &ExpressionNode,
+    ctx: &mut EvalCtx,
+) -> Option<(crate::geometry::Manifold, Vec<(f64, f64)>, Vec<(f64, f64)>)> {
     // Strict binary clip (schema-enforced; defense-in-depth here).
     if node.args.len() != 2 {
-        return Value::Scalar(f64::NAN);
+        return None;
     }
     // The `manifold` flag is required and part of the op's contract (§5.8.4);
     // a missing or out-of-enum value is not evaluable.
-    let manifold = match node
+    let manifold = node
         .manifold
         .as_deref()
-        .and_then(crate::geometry::Manifold::from_flag)
-    {
-        Some(m) => m,
-        None => return Value::Scalar(f64::NAN),
-    };
+        .and_then(crate::geometry::Manifold::from_flag)?;
     let poly_a = match eval(&node.args[0], ctx) {
         Value::Array(a) => a,
-        _ => return Value::Scalar(f64::NAN),
+        _ => return None,
     };
     let poly_b = match eval(&node.args[1], ctx) {
         Value::Array(a) => a,
-        _ => return Value::Scalar(f64::NAN),
+        _ => return None,
     };
-    let (va, vb) = match (arrayd_to_lonlat(&poly_a), arrayd_to_lonlat(&poly_b)) {
-        (Some(a), Some(b)) => (a, b),
-        _ => return Value::Scalar(f64::NAN),
+    let va = arrayd_to_lonlat(&poly_a)?;
+    let vb = arrayd_to_lonlat(&poly_b)?;
+    Some((manifold, va, vb))
+}
+
+fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
+        return Value::Scalar(f64::NAN);
     };
     match crate::geometry::intersect_polygon(&va, &vb, manifold) {
         Ok(ring) => {
@@ -4465,31 +4340,8 @@ fn eval_intersect_polygon(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// to measure, so its value matches the composed form exactly. A disjoint /
 /// edge-touching clip yields a `< 3`-vertex ring, whose area is `0.0`.
 fn eval_polygon_intersection_area(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    // Strict binary clip (schema-enforced; defense-in-depth here).
-    if node.args.len() != 2 {
+    let Some((manifold, va, vb)) = eval_clip_operands(node, ctx) else {
         return Value::Scalar(f64::NAN);
-    }
-    // The `manifold` flag is required and part of the op's contract (§5.8.4);
-    // a missing or out-of-enum value is not evaluable.
-    let manifold = match node
-        .manifold
-        .as_deref()
-        .and_then(crate::geometry::Manifold::from_flag)
-    {
-        Some(m) => m,
-        None => return Value::Scalar(f64::NAN),
-    };
-    let poly_a = match eval(&node.args[0], ctx) {
-        Value::Array(a) => a,
-        _ => return Value::Scalar(f64::NAN),
-    };
-    let poly_b = match eval(&node.args[1], ctx) {
-        Value::Array(a) => a,
-        _ => return Value::Scalar(f64::NAN),
-    };
-    let (va, vb) = match (arrayd_to_lonlat(&poly_a), arrayd_to_lonlat(&poly_b)) {
-        (Some(a), Some(b)) => (a, b),
-        _ => return Value::Scalar(f64::NAN),
     };
     // Clip, then measure — the fused composition. The clip kernel returns the
     // `n` distinct overlap vertices; `polygon_area`'s shoelace / spherical body
@@ -5398,7 +5250,8 @@ fn collect_derivative_targets(equations: &[crate::types::Equation]) -> HashSet<S
         if let Some((name, _)) = extract_derivative_scalar(&eq.lhs) {
             out.insert(name);
         }
-        if let Some((name, _, _, _, _, _, _, _, _)) = extract_derivative_arrayop(&eq.lhs, &eq.rhs) {
+        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs)
+        {
             out.insert(name);
         }
     }
@@ -5449,20 +5302,31 @@ fn extract_derivative_scalar(lhs: &Expr) -> Option<(String, Option<Vec<i64>>)> {
 /// but absent from `output_idx` (generalized-einsum contracted indices).
 /// `reduce` is the semiring ⊕ resolved from the RHS node's `semiring`/`reduce`
 /// (defaulting to `Sum` per the ESM spec).
-fn extract_derivative_arrayop(
-    lhs: &Expr,
-    rhs: &Expr,
-) -> Option<(
-    String,
-    Vec<String>,
-    Vec<(i64, i64)>,
-    Vec<Expr>,
-    Expr,
-    Vec<String>,
-    Vec<ContractDim>,
-    ReduceKind,
-    Option<Box<Expr>>,
-)> {
+/// The parsed pieces of an `aggregate(expr=D(index(var, …))) = aggregate(…)`
+/// derivative equation, as extracted by [`extract_derivative_arrayop`]. The
+/// fields mirror [`RhsRule::ArrayLoop`]'s.
+struct DerivArrayop {
+    /// Target state variable name.
+    var: String,
+    /// Output loop index names (LHS aggregate `output_idx`).
+    idx_names: Vec<String>,
+    /// Concrete `(lo, hi)` bounds per output index, in `idx_names` order.
+    ranges: Vec<(i64, i64)>,
+    /// LHS `index(var, …)` argument expressions (may offset the loop symbols).
+    lhs_idx_exprs: Vec<Expr>,
+    /// Scalar RHS body evaluated per output tuple.
+    body: Expr,
+    /// Contracted (reduction) index names, sorted.
+    contract_names: Vec<String>,
+    /// Bounds of the contracted indices, parallel to `contract_names`.
+    contract_dims: Vec<ContractDim>,
+    /// Semiring ⊕ reducer for the contraction.
+    reduce: ReduceKind,
+    /// Optional §5.3 filter predicate gating the contraction.
+    filter: Option<Box<Expr>>,
+}
+
+fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<DerivArrayop> {
     let Expr::Operator(node) = lhs else {
         return None;
     };
@@ -5525,17 +5389,17 @@ fn extract_derivative_arrayop(
         }
         other => (other.clone(), Vec::new(), Vec::new(), ReduceKind::Sum, None),
     };
-    Some((
-        var_name,
+    Some(DerivArrayop {
+        var: var_name,
         idx_names,
         ranges,
         lhs_idx_exprs,
-        rhs_body,
+        body: rhs_body,
         contract_names,
         contract_dims,
         reduce,
         filter,
-    ))
+    })
 }
 
 /// Extract an algebraic `arrayop(expr=index(var, idx...)) = arrayop(...)`
@@ -5875,120 +5739,7 @@ fn cartesian_range(ranges: &[(i64, i64)]) -> Vec<Vec<i64>> {
     out
 }
 
-// ============================================================================
-// Solver loop (duplicated from simulate.rs — small enough to inline).
-// ============================================================================
 
-fn run_solver<'a, S, Eqn>(
-    solver: &mut S,
-    t_end: f64,
-    opts: &SimulateOptions,
-) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError>
-where
-    S: OdeSolverMethod<'a, Eqn>,
-    Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>>,
-    Eqn: 'a,
-{
-    use diffsol::OdeSolverStopReason;
-
-    let t0 = solver.state().t;
-    let n_states = solver.state().y.as_slice().len();
-    let initial_state: Vec<f64> = solver.state().y.as_slice().to_vec();
-
-    let mut times: Vec<f64> = Vec::new();
-    let mut state_rows: Vec<Vec<f64>> = vec![Vec::new(); n_states];
-
-    let push_state = |times: &mut Vec<f64>, state_rows: &mut [Vec<f64>], t: f64, y: &[f64]| {
-        times.push(t);
-        for (i, &v) in y.iter().enumerate() {
-            state_rows[i].push(v);
-        }
-    };
-
-    solver
-        .set_stop_time(t_end)
-        .map_err(|e| SimulateError::DiffsolError {
-            details: e.to_string(),
-        })?;
-
-    let mut step_count: usize = 0;
-
-    if let Some(t_eval) = &opts.output_times {
-        let mut next_idx: usize = 0;
-        while next_idx < t_eval.len() && t_eval[next_idx] <= t0 {
-            push_state(
-                &mut times,
-                &mut state_rows,
-                t_eval[next_idx],
-                &initial_state,
-            );
-            next_idx += 1;
-        }
-        let mut t_prev = t0;
-        loop {
-            if next_idx >= t_eval.len() {
-                break;
-            }
-            if step_count >= opts.max_steps {
-                return Err(SimulateError::MaxStepsExceeded {
-                    max_steps: opts.max_steps,
-                });
-            }
-            let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
-                details: e.to_string(),
-            })?;
-            step_count += 1;
-            let t_curr = solver.state().t;
-            while next_idx < t_eval.len() && t_eval[next_idx] <= t_curr {
-                let t = t_eval[next_idx];
-                let y = solver
-                    .interpolate(t)
-                    .map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                let y_s = y.as_slice();
-                push_state(&mut times, &mut state_rows, t, y_s);
-                next_idx += 1;
-            }
-            t_prev = t_curr;
-            if matches!(stop, OdeSolverStopReason::TstopReached) {
-                break;
-            }
-        }
-        while next_idx < t_eval.len() {
-            let t = t_eval[next_idx];
-            let y = solver
-                .interpolate(t)
-                .map_err(|e| SimulateError::DiffsolError {
-                    details: e.to_string(),
-                })?;
-            push_state(&mut times, &mut state_rows, t, y.as_slice());
-            next_idx += 1;
-        }
-        let _ = t_prev;
-    } else {
-        push_state(&mut times, &mut state_rows, t0, &initial_state);
-        loop {
-            if step_count >= opts.max_steps {
-                return Err(SimulateError::MaxStepsExceeded {
-                    max_steps: opts.max_steps,
-                });
-            }
-            let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
-                details: e.to_string(),
-            })?;
-            step_count += 1;
-            let t_curr = solver.state().t;
-            let y_owned: Vec<f64> = solver.state().y.as_slice().to_vec();
-            push_state(&mut times, &mut state_rows, t_curr, &y_owned);
-            if matches!(stop, OdeSolverStopReason::TstopReached) {
-                break;
-            }
-        }
-    }
-
-    Ok((times, state_rows))
-}
 
 #[cfg(test)]
 mod geometry_eval_tests {

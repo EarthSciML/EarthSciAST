@@ -757,7 +757,7 @@ impl Compiled {
 /// moving on, since `interpolate()` is only valid for times within the
 /// solver's current dense output window (calling it backwards on a stiff
 /// solver returns garbage).
-fn run_solver<'a, S, Eqn>(
+pub(crate) fn run_solver<'a, S, Eqn>(
     solver: &mut S,
     t_end: f64,
     opts: &SimulateOptions,

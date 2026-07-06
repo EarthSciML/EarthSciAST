@@ -5,10 +5,14 @@ use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 use std::sync::OnceLock;
 
-/// Library version supported by this implementation (major, minor, patch).
-/// Files with a major version mismatch are rejected per the version
-/// compatibility rules in esm-libraries-spec §8.
-const LIBRARY_VERSION: (u32, u32, u32) = (0, 1, 0);
+/// Library version supported by this implementation (major, minor, patch),
+/// derived from [`crate::SCHEMA_VERSION`] so the two can never drift. Files
+/// with a major version mismatch are rejected per the version compatibility
+/// rules in esm-libraries-spec §8.
+fn library_version() -> (u32, u32, u32) {
+    crate::diagnostic::parse_semver(crate::SCHEMA_VERSION)
+        .expect("SCHEMA_VERSION is a valid major.minor.patch string")
+}
 
 /// Bundled ESM JSON Schema
 const ESM_SCHEMA_JSON: &str = include_str!("esm-schema.json");
@@ -300,17 +304,13 @@ fn check_version_compatibility(obj: &serde_json::Map<String, Value>, errors: &mu
     let Some(ver) = obj.get("esm").and_then(|v| v.as_str()) else {
         return;
     };
-    let parts: Vec<&str> = ver.split('.').collect();
-    if parts.len() != 3 {
-        return;
-    }
-    let Ok(major) = parts[0].parse::<u32>() else {
+    let Some((major, _, _)) = crate::diagnostic::parse_semver(ver) else {
         return;
     };
-    if major != LIBRARY_VERSION.0 {
+    let supported_major = library_version().0;
+    if major != supported_major {
         errors.push(format!(
-            "Unsupported major version {}. This library supports major version {} only.",
-            major, LIBRARY_VERSION.0
+            "Unsupported major version {major}. This library supports major version {supported_major} only."
         ));
     }
 }

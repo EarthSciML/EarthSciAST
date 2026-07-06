@@ -11,29 +11,20 @@
 //! Invoked as `earthsci-cadence-adapter-rust --manifest <m.json> --output <r.json>`.
 
 use earthsci_toolkit::cadence::{self, MaterializationPoint};
+use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report};
 use serde_json::{Map, Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut manifest: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--manifest" => manifest = args.next().map(PathBuf::from),
-            "--output" => output = args.next().map(PathBuf::from),
-            other => {
-                eprintln!("cadence-adapter-rust: unexpected argument {other:?}");
-                return ExitCode::FAILURE;
-            }
+    let args = match parse_manifest_output_args() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("cadence-adapter-rust: {e}");
+            return ExitCode::FAILURE;
         }
-    }
-    let (Some(manifest), Some(output)) = (manifest, output) else {
-        eprintln!("cadence-adapter-rust: --manifest and --output are required");
-        return ExitCode::FAILURE;
     };
-    match run(&manifest, &output) {
+    match run(&args.manifest, &args.output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("cadence-adapter-rust: {e}");
@@ -110,16 +101,7 @@ fn run(manifest_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::erro
     }
 
     let report = json!({ "binding": "rust", "fixtures": Value::Object(out_fixtures) });
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(
-        output_path,
-        format!("{}\n", serde_json::to_string_pretty(&report)?),
-    )?;
-    Ok(())
+    write_report(output_path, &report)
 }
 
 fn mp_json(m: &MaterializationPoint) -> Value {

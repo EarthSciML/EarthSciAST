@@ -117,8 +117,7 @@ fn test_fast_parse() {
         }
     }"#;
 
-    let mut json_bytes = json_data.as_bytes().to_vec();
-    let result = fast_parse(&mut json_bytes);
+    let result = fast_parse(json_data);
     assert!(result.is_ok());
 
     let esm_file = result.unwrap();
@@ -223,17 +222,14 @@ fn test_compact_expr_evaluation_errors() {
 #[test]
 fn test_fast_parse_invalid_json() {
     let invalid_json = r#"{ invalid json }"#;
-    let mut json_bytes = invalid_json.as_bytes().to_vec();
-
-    let result = fast_parse(&mut json_bytes);
+    let result = fast_parse(invalid_json);
     assert!(result.is_err());
 }
 
 #[cfg(feature = "zero_copy")]
 #[test]
 fn test_fast_parse_empty_json() {
-    let mut empty_bytes = vec![];
-    let result = fast_parse(&mut empty_bytes);
+    let result = fast_parse("");
     assert!(result.is_err());
 }
 
@@ -712,8 +708,7 @@ fn test_fast_parse_complete_esm_file() {
         }
     }"#;
 
-    let mut json_bytes = complex_json.as_bytes().to_vec();
-    let result = fast_parse(&mut json_bytes).unwrap();
+    let result = fast_parse(complex_json).unwrap();
 
     assert_eq!(result.esm, "0.1.0");
     assert_eq!(result.metadata.name, Some("complex_model".to_string()));

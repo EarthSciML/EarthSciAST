@@ -1,6 +1,10 @@
 //! `polygon_area` as a `sum_product` FAQ over the clipped ring (RFC
 //! `semiring-faq-unified-ir` §8.1; `CONFORMANCE_SPEC.md` §5.8; bead ess-d4g.1).
 //!
+//! **FAQ = Functional Aggregate Query** — the RFC's name for a semiring
+//! aggregate (`⊕` over `⊗`-products) expressed in the unified IR; "the area
+//! FAQ" below means "polygon area written as such an aggregate".
+//!
 //! `polygon_area` is **not** a new op: the area of a clipped vertex ring is an
 //! ordinary `sum_product` aggregate over the ring index set. This module builds
 //! that FAQ as an [`Expr`] and evaluates it through the **same** generic aggregate

@@ -149,32 +149,68 @@ fn find_element_at_position(s: &str, pos: usize) -> Option<usize> {
     None
 }
 
-/// Format a number according to the specification
-fn format_number_unicode(n: f64) -> String {
+/// Backend-independent pieces of a formatted floating-point number.
+///
+/// The Unicode, LaTeX, and ASCII printers previously each hand-rolled the
+/// 0.0 special case, integer collapse, trailing-zero trimming, and
+/// scientific-notation cutoffs — with slightly divergent orderings. They now
+/// share `format_display_float` and differ only in how they render the
+/// exponent (Unicode superscripts, LaTeX `\times 10^{...}`, ASCII `e`).
+enum FloatParts {
+    /// Rendered verbatim in every backend (e.g. "0.0", "42", "3.15").
+    Plain(String),
+    /// Scientific notation, e.g. mantissa "1.80" with exponent "-12".
+    Scientific { mantissa: String, exponent: String },
+}
+
+/// Shared float-formatting core for all three expression printers.
+fn format_display_float(n: f64) -> FloatParts {
     let abs_n = n.abs();
 
-    // Use scientific notation for very large or very small numbers
-    if abs_n >= 10000.0 || abs_n < 0.0001 && abs_n != 0.0 {
+    // Scientific notation for very large or very small magnitudes. This
+    // check comes first (matching the reference Unicode printer) so integral
+    // values like 2e4 render as scientific rather than collapsing to "20000".
+    if abs_n >= 10000.0 || (abs_n < 0.0001 && abs_n != 0.0) {
+        // `{:.2e}` normalizes the mantissa (including rounding overflow such
+        // as 9.999e4 -> 1.00e5), which manual log10 arithmetic got wrong.
         let sci = format!("{n:.2e}");
-        return format_scientific_unicode(&sci);
+        return match sci.find('e') {
+            Some(e_pos) => FloatParts::Scientific {
+                mantissa: sci[..e_pos].to_string(),
+                exponent: sci[e_pos + 1..].trim_start_matches('+').to_string(),
+            },
+            // Non-finite values ("inf", "NaN") carry no exponent.
+            None => FloatParts::Plain(sci),
+        };
     }
 
     // Special handling for 0.0 - display as "0.0" instead of "0"
     if n == 0.0 {
-        return "0.0".to_string();
+        return FloatParts::Plain("0.0".to_string());
     }
 
-    // For other integers in normal range
+    // Other integers in normal range display without a decimal point
     if n.fract() == 0.0 {
-        format!("{}", n as i64)
-    } else {
-        // 1-4 significant digits in decimal notation
-        let formatted = format!("{n:.4}");
-        // Remove trailing zeros
+        return FloatParts::Plain(format!("{}", n as i64));
+    }
+
+    // 1-4 significant digits in decimal notation, trailing zeros removed
+    let formatted = format!("{n:.4}");
+    FloatParts::Plain(
         formatted
             .trim_end_matches('0')
             .trim_end_matches('.')
-            .to_string()
+            .to_string(),
+    )
+}
+
+/// Format a number according to the specification
+fn format_number_unicode(n: f64) -> String {
+    match format_display_float(n) {
+        FloatParts::Plain(s) => s,
+        FloatParts::Scientific { mantissa, exponent } => {
+            format_scientific_unicode(&format!("{mantissa}e{exponent}"))
+        }
     }
 }
 
@@ -238,6 +274,20 @@ impl Expr {
     }
 }
 
+/// Render a call-shaped form `op_symbol(arg1, arg2, ...)`.
+///
+/// Dozens of match arms and every `_` fallback across the three printers
+/// previously hand-rolled this exact shape; they share this helper instead.
+/// `render` supplies the backend-specific argument rendering (typically at
+/// precedence 0, since the parentheses already delimit the arguments).
+fn call_form(op_symbol: &str, args: &[Expr], render: impl Fn(&Expr) -> String) -> String {
+    format!(
+        "{}({})",
+        op_symbol,
+        args.iter().map(render).collect::<Vec<_>>().join(", ")
+    )
+}
+
 fn format_operator_unicode(
     op: &str,
     args: &[Expr],
@@ -247,6 +297,8 @@ fn format_operator_unicode(
 ) -> String {
     let op_prec = get_precedence(op);
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
+    // Renders an argument at precedence 0 (used inside delimited contexts).
+    let r0 = |arg: &Expr| arg.to_unicode_with_precedence(0);
 
     let result = match op {
         "+" => {
@@ -256,33 +308,22 @@ fn format_operator_unicode(
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
-                format!(
-                    "+({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("+", args, r0)
             }
         }
         "-" => {
             if args.len() == 1 {
                 format!("−{}", args[0].to_unicode_with_precedence(op_prec))
             } else if args.len() == 2 {
-                // Special handling for subtraction to use minus sign
+                // Left-associative: the right operand renders at op_prec + 1
+                // so `a − (b − c)` keeps its parentheses.
                 format!(
                     "{} − {}",
                     args[0].to_unicode_with_precedence(op_prec),
                     args[1].to_unicode_with_precedence(op_prec + 1)
                 )
             } else {
-                format!(
-                    "−({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("−", args, r0)
             }
         }
         "*" => {
@@ -292,13 +333,7 @@ fn format_operator_unicode(
                     .collect::<Vec<_>>()
                     .join("·")
             } else {
-                format!(
-                    "·({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("·", args, r0)
             }
         }
         "/" => {
@@ -309,13 +344,7 @@ fn format_operator_unicode(
                     args[1].to_unicode_with_precedence(op_prec + 1)
                 )
             } else {
-                format!(
-                    "÷({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("÷", args, r0)
             }
         }
         "^" => {
@@ -334,543 +363,220 @@ fn format_operator_unicode(
                     ),
                 }
             } else {
-                format!(
-                    "^({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("^", args, r0)
             }
         }
         "D" => {
             // Derivative operator
-            if let Some(wrt_var) = wrt {
-                if args.len() == 1 {
-                    format!(
-                        "∂{}/∂{}",
-                        args[0].to_unicode_with_precedence(0),
-                        format_chemical_subscripts(wrt_var)
-                    )
-                } else {
-                    format!(
-                        "D({})",
-                        args.iter()
-                            .map(|arg| arg.to_unicode_with_precedence(0))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                }
+            if let (Some(wrt_var), [arg]) = (wrt, args) {
+                format!("∂{}/∂{}", r0(arg), format_chemical_subscripts(wrt_var))
             } else {
-                format!(
-                    "D({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("D", args, r0)
             }
         }
         "grad" => {
             // Gradient - use dim field if available
-            if args.len() == 1 {
-                if let Some(dim_val) = dim {
-                    format!("∂{}/∂{}", args[0].to_unicode_with_precedence(0), dim_val)
-                } else {
-                    format!("∇({})", args[0].to_unicode_with_precedence(0))
-                }
+            if let ([arg], Some(dim_val)) = (args, dim) {
+                format!("∂{}/∂{}", r0(arg), dim_val)
+            } else if args.len() == 1 {
+                call_form("∇", args, r0)
             } else {
-                format!(
-                    "grad({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("grad", args, r0)
             }
         }
         "div" => {
             // Divergence operator
-            if args.len() == 1 {
-                format!("∇·{}", args[0].to_unicode_with_precedence(op_prec))
+            if let [arg] = args {
+                format!("∇·{}", arg.to_unicode_with_precedence(op_prec))
             } else {
-                format!(
-                    "div({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("div", args, r0)
             }
         }
         "laplacian" => {
             // Laplacian operator
-            if args.len() == 1 {
-                format!("∇²{}", args[0].to_unicode_with_precedence(op_prec))
+            if let [arg] = args {
+                format!("∇²{}", arg.to_unicode_with_precedence(op_prec))
             } else {
-                format!(
-                    "laplacian({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-        }
-        "exp" => {
-            if args.len() == 1 {
-                format!("exp({})", args[0].to_unicode_with_precedence(0))
-            } else {
-                format!(
-                    "exp({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-        }
-        "ifelse" => {
-            if args.len() == 3 {
-                format!(
-                    "ifelse({}, {}, {})",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0),
-                    args[2].to_unicode_with_precedence(0)
-                )
-            } else {
-                format!(
-                    "ifelse({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("laplacian", args, r0)
             }
         }
         ">" => {
             if args.len() == 2 {
-                format!(
-                    "{} > {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} > {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    ">({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form(">", args, r0)
             }
         }
         "<" => {
             if args.len() == 2 {
-                format!(
-                    "{} < {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} < {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "<({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("<", args, r0)
             }
         }
         ">=" => {
             if args.len() == 2 {
-                format!(
-                    "{} ≥ {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} ≥ {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    ">=({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form(">=", args, r0)
             }
         }
         "<=" => {
             if args.len() == 2 {
-                format!(
-                    "{} ≤ {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} ≤ {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "<=({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("<=", args, r0)
             }
         }
         "=" | "==" => {
             if args.len() == 2 {
-                format!(
-                    "{} = {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} = {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "=({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("=", args, r0)
             }
         }
         "!=" => {
             if args.len() == 2 {
-                format!(
-                    "{} ≠ {}",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("{} ≠ {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "!=({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("!=", args, r0)
             }
         }
         "and" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(" ∧ ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" ∧ ")
             } else {
-                format!(
-                    "and({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("and", args, r0)
             }
         }
         "or" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(" ∨ ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" ∨ ")
             } else {
-                format!(
-                    "or({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("or", args, r0)
             }
         }
         "not" => {
             if args.len() == 1 {
                 // Add parentheses for complex expressions
                 if matches!(&args[0], Expr::Operator(_)) {
-                    format!("¬({})", args[0].to_unicode_with_precedence(0))
+                    format!("¬({})", r0(&args[0]))
                 } else {
-                    format!("¬{}", args[0].to_unicode_with_precedence(0))
+                    format!("¬{}", r0(&args[0]))
                 }
             } else {
-                format!(
-                    "not({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("not", args, r0)
             }
         }
         "log" => {
             if args.len() == 1 {
-                format!("ln({})", args[0].to_unicode_with_precedence(0))
+                call_form("ln", args, r0)
             } else {
-                format!(
-                    "log({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("log", args, r0)
             }
         }
         "log10" => {
             if args.len() == 1 {
-                format!("log₁₀({})", args[0].to_unicode_with_precedence(0))
+                call_form("log₁₀", args, r0)
             } else {
-                format!(
-                    "log10({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("log10", args, r0)
             }
         }
         "sqrt" => {
-            if args.len() == 1 {
-                format!("√{}", args[0].to_unicode_with_precedence(op_prec))
+            if let [arg] = args {
+                format!("√{}", arg.to_unicode_with_precedence(op_prec))
             } else {
-                format!(
-                    "sqrt({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-        }
-        "sin" | "cos" | "tan" => {
-            if args.len() == 1 {
-                format!("{}({})", op, args[0].to_unicode_with_precedence(0))
-            } else {
-                format!(
-                    "{}({})",
-                    op,
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("sqrt", args, r0)
             }
         }
         "asin" => {
             if args.len() == 1 {
-                format!("arcsin({})", args[0].to_unicode_with_precedence(0))
+                call_form("arcsin", args, r0)
             } else {
-                format!(
-                    "asin({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("asin", args, r0)
             }
         }
         "acos" => {
             if args.len() == 1 {
-                format!("arccos({})", args[0].to_unicode_with_precedence(0))
+                call_form("arccos", args, r0)
             } else {
-                format!(
-                    "acos({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("acos", args, r0)
             }
         }
         "atan" => {
             if args.len() == 1 {
-                format!("arctan({})", args[0].to_unicode_with_precedence(0))
+                call_form("arctan", args, r0)
             } else {
-                format!(
-                    "atan({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("atan", args, r0)
             }
-        }
-        "atan2" => {
-            format!(
-                "atan2({})",
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
         }
         "abs" => {
             if args.len() == 1 {
-                format!("|{}|", args[0].to_unicode_with_precedence(0))
+                format!("|{}|", r0(&args[0]))
             } else {
-                format!(
-                    "abs({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("abs", args, r0)
             }
         }
-        "sign" => {
-            format!(
-                "sgn({})",
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+        "sign" => call_form("sgn", args, r0),
         "floor" => {
             if args.len() == 1 {
-                format!("⌊{}⌋", args[0].to_unicode_with_precedence(0))
+                format!("⌊{}⌋", r0(&args[0]))
             } else {
-                format!(
-                    "floor({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("floor", args, r0)
             }
         }
         "ceil" => {
             if args.len() == 1 {
-                format!("⌈{}⌉", args[0].to_unicode_with_precedence(0))
+                format!("⌈{}⌉", r0(&args[0]))
             } else {
-                format!(
-                    "ceil({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("ceil", args, r0)
             }
-        }
-        "min" | "max" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-        "sinh" | "cosh" | "tanh" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
         }
         "asinh" => {
             if args.len() == 1 {
-                format!("sinh⁻¹({})", args[0].to_unicode_with_precedence(0))
+                call_form("sinh⁻¹", args, r0)
             } else {
-                format!(
-                    "asinh({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("asinh", args, r0)
             }
         }
         "acosh" => {
             if args.len() == 1 {
-                format!("cosh⁻¹({})", args[0].to_unicode_with_precedence(0))
+                call_form("cosh⁻¹", args, r0)
             } else {
-                format!(
-                    "acosh({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("acosh", args, r0)
             }
         }
         "atanh" => {
             if args.len() == 1 {
-                format!("tanh⁻¹({})", args[0].to_unicode_with_precedence(0))
+                call_form("tanh⁻¹", args, r0)
             } else {
-                format!(
-                    "atanh({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("atanh", args, r0)
             }
         }
         "binomial" => {
             if args.len() == 2 {
-                format!(
-                    "C({},{})",
-                    args[0].to_unicode_with_precedence(0),
-                    args[1].to_unicode_with_precedence(0)
-                )
+                format!("C({},{})", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "binomial({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("binomial", args, r0)
             }
         }
         "gamma" => {
             if args.len() == 1 {
-                format!("Γ({})", args[0].to_unicode_with_precedence(0))
+                call_form("Γ", args, r0)
             } else {
-                format!(
-                    "gamma({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("gamma", args, r0)
             }
-        }
-        "erf" | "erfc" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
         }
         "Pre" => {
             if args.len() == 1 {
                 format!("{}⁻", args[0].to_unicode_with_precedence(op_prec))
             } else {
-                format!(
-                    "Pre({})",
-                    args.iter()
-                        .map(|arg| arg.to_unicode_with_precedence(0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                call_form("Pre", args, r0)
             }
         }
-        _ => {
-            format!(
-                "{}({})",
-                op,
-                args.iter()
-                    .map(|arg| arg.to_unicode_with_precedence(0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+        // Genuinely call-shaped operators (exp, ifelse, min/max, trig,
+        // hyperbolics, erf/erfc, atan2, ...) and unknown operators.
+        _ => call_form(op, args, r0),
     };
 
     if needs_parens {
@@ -887,33 +593,27 @@ pub fn to_unicode(expr: &Expr) -> String {
 
 /// Convert an expression to LaTeX notation
 pub fn to_latex(expr: &Expr) -> String {
+    to_latex_prec(expr, 0)
+}
+
+/// LaTeX rendering with the parent operator's precedence threaded through.
+///
+/// The LaTeX printer previously ignored precedence entirely, so `(a+b)*c`
+/// rendered as the mathematically wrong `a + b \cdot c`; it now applies the
+/// same parenthesization rule as the reference Unicode printer.
+fn to_latex_prec(expr: &Expr, parent_prec: i32) -> String {
     match expr {
         Expr::Integer(n) => n.to_string(),
-        Expr::Number(n) => {
-            // Special handling for 0.0 - display as "0.0" instead of "0"
-            if *n == 0.0 {
-                "0.0".to_string()
-            } else if n.fract() == 0.0 {
-                format!("{}", *n as i64)
-            } else {
-                let abs_n = n.abs();
-                if (0.0001..10000.0).contains(&abs_n) {
-                    let formatted = format!("{n:.4}");
-                    formatted
-                        .trim_end_matches('0')
-                        .trim_end_matches('.')
-                        .to_string()
-                } else {
-                    format!(
-                        "{:.2} \\times 10^{{{}}}",
-                        n / 10_f64.powf(n.abs().log10().floor()),
-                        n.abs().log10().floor() as i32
-                    )
-                }
+        Expr::Number(n) => match format_display_float(*n) {
+            FloatParts::Plain(s) => s,
+            FloatParts::Scientific { mantissa, exponent } => {
+                format!("{mantissa} \\times 10^{{{exponent}}}")
             }
-        }
+        },
         Expr::Variable(name) => format_variable_latex(name),
-        Expr::Operator(node) => format_operator_latex(&node.op, &node.args, &node.wrt, &node.dim),
+        Expr::Operator(node) => {
+            format_operator_latex(&node.op, &node.args, &node.wrt, &node.dim, parent_prec)
+        }
     }
 }
 
@@ -1039,490 +739,273 @@ fn format_operator_latex(
     args: &[Expr],
     wrt: &Option<String>,
     dim: &Option<String>,
+    parent_prec: i32,
 ) -> String {
-    match op {
+    let op_prec = get_precedence(op);
+    let needs_parens = op_prec > 0 && op_prec <= parent_prec;
+    // Renders an argument at precedence 0 (used inside delimited contexts).
+    let r0 = |arg: &Expr| to_latex_prec(arg, 0);
+
+    // `\frac{...}{...}` groups visually, so the fraction itself never needs
+    // parentheses and its numerator/denominator render at precedence 0.
+    if op == "/" && args.len() == 2 {
+        return format!("\\frac{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]));
+    }
+
+    let result = match op {
         "+" => {
             if args.len() >= 2 {
-                args.iter().map(to_latex).collect::<Vec<_>>().join(" + ")
+                args.iter()
+                    .map(|arg| to_latex_prec(arg, op_prec))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
             } else {
-                format!(
-                    "+({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("+", args, r0)
             }
         }
         "-" => {
             if args.len() == 1 {
-                format!("-{}", to_latex(&args[0]))
+                format!("-{}", to_latex_prec(&args[0], op_prec))
             } else if args.len() == 2 {
-                format!("{} - {}", to_latex(&args[0]), to_latex(&args[1]))
-            } else {
+                // Left-associative: the right operand renders at op_prec + 1
+                // so `a - (b - c)` keeps its parentheses.
                 format!(
-                    "-({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
+                    "{} - {}",
+                    to_latex_prec(&args[0], op_prec),
+                    to_latex_prec(&args[1], op_prec + 1)
                 )
+            } else {
+                call_form("-", args, r0)
             }
         }
         "*" => {
             if args.len() >= 2 {
                 args.iter()
-                    .map(to_latex)
+                    .map(|arg| to_latex_prec(arg, op_prec))
                     .collect::<Vec<_>>()
                     .join(" \\cdot ")
             } else {
-                format!(
-                    "\\cdot({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\cdot", args, r0)
             }
         }
-        "/" => {
-            if args.len() == 2 {
-                format!("\\frac{{{}}}{{{}}}", to_latex(&args[0]), to_latex(&args[1]))
-            } else {
-                format!(
-                    "\\div({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
+        // Binary `/` renders as `\frac` above; anything else falls back.
+        "/" => call_form("\\div", args, r0),
         "^" => {
             if args.len() == 2 {
-                format!("{{{}}}^{{{}}}", to_latex(&args[0]), to_latex(&args[1]))
-            } else {
+                // The base still needs parenthesization (`{a + b}^{2}`
+                // typesets the superscript directly after `b`, reading as
+                // `a + b²`), but the exponent sits inside `^{...}`, which
+                // groups visually, so it renders at precedence 0.
                 format!(
-                    "^({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
+                    "{{{}}}^{{{}}}",
+                    to_latex_prec(&args[0], op_prec),
+                    r0(&args[1])
                 )
+            } else {
+                call_form("^", args, r0)
             }
         }
         "D" => {
-            if let Some(wrt_var) = wrt {
-                if args.len() == 1 {
-                    format!(
-                        "\\frac{{\\partial {}}}{{\\partial {}}}",
-                        to_latex(&args[0]),
-                        wrt_var
-                    )
-                } else {
-                    format!(
-                        "D({})",
-                        args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                    )
-                }
+            if let (Some(wrt_var), [arg]) = (wrt, args) {
+                format!("\\frac{{\\partial {}}}{{\\partial {}}}", r0(arg), wrt_var)
             } else {
-                format!(
-                    "D({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("D", args, r0)
             }
         }
         "grad" => {
-            if args.len() == 1 {
-                if let Some(dim_val) = dim {
-                    format!(
-                        "\\frac{{\\partial {}}}{{\\partial {}}}",
-                        to_latex(&args[0]),
-                        dim_val
-                    )
-                } else {
-                    format!("\\nabla({})", to_latex(&args[0]))
-                }
+            if let ([arg], Some(dim_val)) = (args, dim) {
+                format!("\\frac{{\\partial {}}}{{\\partial {}}}", r0(arg), dim_val)
+            } else if args.len() == 1 {
+                call_form("\\nabla", args, r0)
             } else {
-                format!(
-                    "\\mathrm{{grad}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{grad}", args, r0)
             }
         }
         "div" => {
-            if args.len() == 1 {
-                format!("\\nabla \\cdot {}", to_latex(&args[0]))
+            if let [arg] = args {
+                format!("\\nabla \\cdot {}", to_latex_prec(arg, op_prec))
             } else {
-                format!(
-                    "\\mathrm{{div}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{div}", args, r0)
             }
         }
         "laplacian" => {
-            if args.len() == 1 {
-                format!("\\nabla^2 {}", to_latex(&args[0]))
+            if let [arg] = args {
+                format!("\\nabla^2 {}", to_latex_prec(arg, op_prec))
             } else {
-                format!(
-                    "\\mathrm{{laplacian}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{laplacian}", args, r0)
             }
         }
         "exp" => {
-            if args.len() == 1 {
-                if matches!(&args[0], Expr::Operator(_)) {
-                    format!("\\exp\\left({}\\right)", to_latex(&args[0]))
+            if let [arg] = args {
+                if matches!(arg, Expr::Operator(_)) {
+                    format!("\\exp\\left({}\\right)", r0(arg))
                 } else {
-                    format!("\\exp({})", to_latex(&args[0]))
+                    format!("\\exp({})", r0(arg))
                 }
             } else {
-                format!(
-                    "\\exp({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\exp", args, r0)
             }
         }
         "ifelse" => {
             if args.len() == 3 {
                 format!(
                     "\\begin{{cases}} {} & \\text{{if }} {} \\\\\\\\ {} & \\text{{otherwise}} \\end{{cases}}",
-                    to_latex(&args[1]),
-                    to_latex(&args[0]),
-                    to_latex(&args[2])
+                    r0(&args[1]),
+                    r0(&args[0]),
+                    r0(&args[2])
                 )
             } else {
-                format!(
-                    "\\mathrm{{ifelse}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{ifelse}", args, r0)
             }
         }
         "and" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(to_latex)
-                    .collect::<Vec<_>>()
-                    .join(" \\land ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" \\land ")
             } else {
-                format!(
-                    "\\land({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\land", args, r0)
             }
         }
         "or" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(to_latex)
-                    .collect::<Vec<_>>()
-                    .join(" \\lor ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" \\lor ")
             } else {
-                format!(
-                    "\\lor({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\lor", args, r0)
             }
         }
         "not" => {
             if args.len() == 1 {
                 // Add parentheses for complex expressions
                 if matches!(&args[0], Expr::Operator(_)) {
-                    format!("\\lnot ({})", to_latex(&args[0]))
+                    format!("\\lnot ({})", r0(&args[0]))
                 } else {
-                    format!("\\lnot {}", to_latex(&args[0]))
+                    format!("\\lnot {}", r0(&args[0]))
                 }
             } else {
-                format!(
-                    "\\lnot({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\lnot", args, r0)
             }
         }
         ">" => {
             if args.len() == 2 {
-                format!("{} > {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} > {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    ">({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form(">", args, r0)
             }
         }
         "<" => {
             if args.len() == 2 {
-                format!("{} < {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} < {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "<({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("<", args, r0)
             }
         }
         ">=" => {
             if args.len() == 2 {
-                format!("{} \\geq {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} \\geq {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "\\geq({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\geq", args, r0)
             }
         }
         "<=" => {
             if args.len() == 2 {
-                format!("{} \\leq {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} \\leq {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "\\leq({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\leq", args, r0)
             }
         }
         "=" | "==" => {
             if args.len() == 2 {
-                format!("{} = {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} = {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "=({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("=", args, r0)
             }
         }
         "!=" => {
             if args.len() == 2 {
-                format!("{} \\neq {}", to_latex(&args[0]), to_latex(&args[1]))
+                format!("{} \\neq {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "\\neq({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\neq", args, r0)
             }
         }
         "log" => {
             if args.len() == 1 {
-                format!("\\ln({})", to_latex(&args[0]))
+                call_form("\\ln", args, r0)
             } else {
-                format!(
-                    "\\log({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\log", args, r0)
             }
         }
-        "log10" => {
-            if args.len() == 1 {
-                format!("\\log_{{10}}({})", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\log_{{10}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "sqrt" => {
-            if args.len() == 1 {
-                format!("\\sqrt{{{}}}", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\sqrt{{{}}}",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "asin" => {
-            if args.len() == 1 {
-                format!("\\arcsin({})", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\arcsin({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "acos" => {
-            if args.len() == 1 {
-                format!("\\arccos({})", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\arccos({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "atan" => {
-            if args.len() == 1 {
-                format!("\\arctan({})", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\arctan({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "abs" => {
-            if args.len() == 1 {
-                format!("|{}|", to_latex(&args[0]))
-            } else {
-                format!(
-                    "|{}|",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "sign" => {
-            format!(
-                "\\mathrm{{sgn}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "floor" => {
-            if args.len() == 1 {
-                format!("\\lfloor {} \\rfloor", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\lfloor {} \\rfloor",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "ceil" => {
-            if args.len() == 1 {
-                format!("\\lceil {} \\rceil", to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\lceil {} \\rceil",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
-        "min" => {
-            format!(
-                "\\min({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "max" => {
-            format!(
-                "\\max({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "atan2" => {
-            format!(
-                "\\mathrm{{atan2}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
+        "log10" => call_form("\\log_{10}", args, r0),
+        "sqrt" => format!(
+            "\\sqrt{{{}}}",
+            args.iter().map(r0).collect::<Vec<_>>().join(", ")
+        ),
+        "asin" => call_form("\\arcsin", args, r0),
+        "acos" => call_form("\\arccos", args, r0),
+        "atan" => call_form("\\arctan", args, r0),
+        "abs" => format!("|{}|", args.iter().map(r0).collect::<Vec<_>>().join(", ")),
+        "sign" => call_form("\\mathrm{sgn}", args, r0),
+        "floor" => format!(
+            "\\lfloor {} \\rfloor",
+            args.iter().map(r0).collect::<Vec<_>>().join(", ")
+        ),
+        "ceil" => format!(
+            "\\lceil {} \\rceil",
+            args.iter().map(r0).collect::<Vec<_>>().join(", ")
+        ),
+        "min" => call_form("\\min", args, r0),
+        "max" => call_form("\\max", args, r0),
+        "atan2" => call_form("\\mathrm{atan2}", args, r0),
         "binomial" => {
             if args.len() == 2 {
-                format!(
-                    "\\binom{{{}}}{{{}}}",
-                    to_latex(&args[0]),
-                    to_latex(&args[1])
-                )
+                format!("\\binom{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "\\mathrm{{binomial}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{binomial}", args, r0)
             }
         }
-        "gamma" => {
-            format!(
-                "\\Gamma({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "erf" => {
-            format!(
-                "\\mathrm{{erf}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "erfc" => {
-            format!(
-                "\\mathrm{{erfc}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sinh" => {
-            format!(
-                "\\sinh({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "cosh" => {
-            format!(
-                "\\cosh({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "tanh" => {
-            format!(
-                "\\tanh({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "asinh" => {
-            format!(
-                "\\sinh^{{-1}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "acosh" => {
-            format!(
-                "\\cosh^{{-1}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "atanh" => {
-            format!(
-                "\\tanh^{{-1}}({})",
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sin" | "cos" | "tan" => {
-            if args.len() == 1 {
-                format!("\\{}({})", op, to_latex(&args[0]))
-            } else {
-                format!(
-                    "\\{}({})",
-                    op,
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
-            }
-        }
+        "gamma" => call_form("\\Gamma", args, r0),
+        "erf" => call_form("\\mathrm{erf}", args, r0),
+        "erfc" => call_form("\\mathrm{erfc}", args, r0),
+        "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => call_form(&format!("\\{op}"), args, r0),
+        "asinh" => call_form("\\sinh^{-1}", args, r0),
+        "acosh" => call_form("\\cosh^{-1}", args, r0),
+        "atanh" => call_form("\\tanh^{-1}", args, r0),
         "Pre" => {
             if args.len() == 1 {
-                format!("{{{}}}^{{-}}", to_latex(&args[0]))
+                format!("{{{}}}^{{-}}", r0(&args[0]))
             } else {
-                format!(
-                    "\\mathrm{{Pre}}({})",
-                    args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-                )
+                call_form("\\mathrm{Pre}", args, r0)
             }
         }
-        _ => {
-            format!(
-                "\\mathrm{{{}}}({})",
-                op,
-                args.iter().map(to_latex).collect::<Vec<_>>().join(", ")
-            )
-        }
+        _ => call_form(&format!("\\mathrm{{{op}}}"), args, r0),
+    };
+
+    if needs_parens {
+        format!("({result})")
+    } else {
+        result
     }
 }
 
 /// Convert an expression to ASCII representation
 pub fn to_ascii(expr: &Expr) -> String {
+    to_ascii_prec(expr, 0)
+}
+
+/// ASCII rendering with the parent operator's precedence threaded through.
+///
+/// The ASCII printer previously ignored precedence entirely, so `(a+b)*c`
+/// rendered as the mathematically wrong `a + b * c`; it now applies the
+/// same parenthesization rule as the reference Unicode printer.
+fn to_ascii_prec(expr: &Expr, parent_prec: i32) -> String {
     match expr {
         Expr::Integer(n) => n.to_string(),
-        Expr::Number(n) => {
-            // Special handling for 0.0 - display as "0.0" instead of "0"
-            if *n == 0.0 {
-                "0.0".to_string()
-            } else if n.fract() == 0.0 {
-                format!("{}", *n as i64)
-            } else {
-                let abs_n = n.abs();
-                if (0.0001..10000.0).contains(&abs_n) {
-                    let formatted = format!("{n:.4}");
-                    formatted
-                        .trim_end_matches('0')
-                        .trim_end_matches('.')
-                        .to_string()
-                } else {
-                    format!("{n:.2e}")
-                }
-            }
-        }
+        Expr::Number(n) => match format_display_float(*n) {
+            FloatParts::Plain(s) => s,
+            FloatParts::Scientific { mantissa, exponent } => format!("{mantissa}e{exponent}"),
+        },
         Expr::Variable(name) => name.clone(),
-        Expr::Operator(node) => format_operator_ascii(&node.op, &node.args, &node.wrt, &node.dim),
+        Expr::Operator(node) => {
+            format_operator_ascii(&node.op, &node.args, &node.wrt, &node.dim, parent_prec)
+        }
     }
 }
 
@@ -1531,296 +1014,177 @@ fn format_operator_ascii(
     args: &[Expr],
     wrt: &Option<String>,
     dim: &Option<String>,
+    parent_prec: i32,
 ) -> String {
-    match op {
+    let op_prec = get_precedence(op);
+    let needs_parens = op_prec > 0 && op_prec <= parent_prec;
+    // Renders an argument at precedence 0 (used inside delimited contexts).
+    let r0 = |arg: &Expr| to_ascii_prec(arg, 0);
+
+    let result = match op {
         "+" => {
             if args.len() == 2 {
-                format!("{} + {}", to_ascii(&args[0]), to_ascii(&args[1]))
-            } else {
                 format!(
-                    "+({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
+                    "{} + {}",
+                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[1], op_prec)
                 )
+            } else {
+                call_form("+", args, r0)
             }
         }
         "-" => {
             if args.len() == 1 {
-                format!("-{}", to_ascii(&args[0]))
+                format!("-{}", to_ascii_prec(&args[0], op_prec))
             } else if args.len() == 2 {
-                format!("{} - {}", to_ascii(&args[0]), to_ascii(&args[1]))
-            } else {
+                // Left-associative: the right operand renders at op_prec + 1
+                // so `a - (b - c)` keeps its parentheses.
                 format!(
-                    "-({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
+                    "{} - {}",
+                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[1], op_prec + 1)
                 )
+            } else {
+                call_form("-", args, r0)
             }
         }
         "*" => {
             if args.len() == 2 {
-                format!("{} * {}", to_ascii(&args[0]), to_ascii(&args[1]))
-            } else {
                 format!(
-                    "*({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
+                    "{} * {}",
+                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[1], op_prec)
                 )
+            } else {
+                call_form("*", args, r0)
             }
         }
         "/" => {
             if args.len() == 2 {
-                format!("{} / {}", to_ascii(&args[0]), to_ascii(&args[1]))
-            } else {
                 format!(
-                    "/({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
+                    "{} / {}",
+                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[1], op_prec + 1)
                 )
+            } else {
+                call_form("/", args, r0)
             }
         }
         "^" => {
             if args.len() == 2 {
-                format!("{}^{}", to_ascii(&args[0]), to_ascii(&args[1]))
-            } else {
                 format!(
-                    "^({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
+                    "{}^{}",
+                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[1], op_prec + 1)
                 )
+            } else {
+                call_form("^", args, r0)
             }
         }
         "D" => {
-            if let Some(wrt_var) = wrt {
-                if args.len() == 1 {
-                    format!("D({})/D{}", to_ascii(&args[0]), wrt_var)
-                } else {
-                    format!(
-                        "D({})",
-                        args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                    )
-                }
+            if let (Some(wrt_var), [arg]) = (wrt, args) {
+                format!("D({})/D{}", r0(arg), wrt_var)
             } else {
-                format!(
-                    "D({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("D", args, r0)
             }
         }
         "grad" => {
-            if args.len() == 1 {
-                if let Some(dim_val) = dim {
-                    format!("d({})/d{}", to_ascii(&args[0]), dim_val)
-                } else {
-                    format!("grad({})", to_ascii(&args[0]))
-                }
+            if let ([arg], Some(dim_val)) = (args, dim) {
+                format!("d({})/d{}", r0(arg), dim_val)
             } else {
-                format!(
-                    "grad({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("grad", args, r0)
             }
-        }
-        "laplacian" => {
-            format!(
-                "laplacian({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
         }
         ">" => {
             if args.len() == 2 {
-                format!("{} > {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} > {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    ">({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form(">", args, r0)
             }
         }
         "<" => {
             if args.len() == 2 {
-                format!("{} < {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} < {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "<({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("<", args, r0)
             }
         }
         ">=" => {
             if args.len() == 2 {
-                format!("{} >= {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} >= {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    ">=({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form(">=", args, r0)
             }
         }
         "<=" => {
             if args.len() == 2 {
-                format!("{} <= {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} <= {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "<=({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("<=", args, r0)
             }
         }
         "=" | "==" => {
             if args.len() == 2 {
-                format!("{} == {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} == {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "==({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("==", args, r0)
             }
         }
         "!=" => {
             if args.len() == 2 {
-                format!("{} != {}", to_ascii(&args[0]), to_ascii(&args[1]))
+                format!("{} != {}", r0(&args[0]), r0(&args[1]))
             } else {
-                format!(
-                    "!=({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("!=", args, r0)
             }
         }
         "and" => {
             if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| format!("({})", to_ascii(arg)))
+                    .map(|arg| format!("({})", r0(arg)))
                     .collect::<Vec<_>>()
                     .join(" && ")
             } else {
-                format!(
-                    "and({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("and", args, r0)
             }
         }
         "or" => {
             if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| format!("({})", to_ascii(arg)))
+                    .map(|arg| format!("({})", r0(arg)))
                     .collect::<Vec<_>>()
                     .join(" || ")
             } else {
-                format!(
-                    "or({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("or", args, r0)
             }
         }
         "not" => {
             if args.len() == 1 {
-                format!("!({})", to_ascii(&args[0]))
+                format!("!({})", r0(&args[0]))
             } else {
-                format!(
-                    "not({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("not", args, r0)
             }
         }
-        "log" => {
-            format!(
-                "log({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "log10" => {
-            format!(
-                "log10({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sqrt" => {
-            format!(
-                "sqrt({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sin" | "cos" | "tan" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "asin" | "acos" | "atan" | "atan2" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "abs" => {
-            format!(
-                "abs({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sign" => {
-            format!(
-                "sign({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "floor" | "ceil" | "min" | "max" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "binomial" => {
-            format!(
-                "binomial({}, {})",
-                if !args.is_empty() {
-                    to_ascii(&args[0])
-                } else {
-                    "".to_string()
-                },
-                if args.len() >= 2 {
-                    to_ascii(&args[1])
-                } else {
-                    "".to_string()
-                }
-            )
-        }
-        "gamma" => {
-            format!(
-                "gamma({})",
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
-        "erf" | "erfc" => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
+        "binomial" => format!(
+            "binomial({}, {})",
+            args.first().map(r0).unwrap_or_default(),
+            args.get(1).map(r0).unwrap_or_default()
+        ),
         "Pre" => {
             if args.len() == 1 {
-                format!("{}-", to_ascii(&args[0]))
+                format!("{}-", r0(&args[0]))
             } else {
-                format!(
-                    "Pre({})",
-                    args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-                )
+                call_form("Pre", args, r0)
             }
         }
-        _ => {
-            format!(
-                "{}({})",
-                op,
-                args.iter().map(to_ascii).collect::<Vec<_>>().join(", ")
-            )
-        }
+        // Genuinely call-shaped operators (log, sqrt, trig, min/max,
+        // laplacian, erf/erfc, ...) and unknown operators.
+        _ => call_form(op, args, r0),
+    };
+
+    if needs_parens {
+        format!("({result})")
+    } else {
+        result
     }
 }
 
@@ -2316,5 +1680,76 @@ mod tests {
         assert_eq!(to_unicode(&multi_arg_pre), "Pre(x, y)");
         assert_eq!(to_latex(&multi_arg_pre), "\\mathrm{Pre}(x, y)");
         assert_eq!(to_ascii(&multi_arg_pre), "Pre(x, y)");
+    }
+
+    /// Build an operator node for the precedence tests below.
+    fn op_node(op: &str, args: Vec<Expr>) -> Expr {
+        Expr::Operator(ExpressionNode {
+            op: op.to_string(),
+            args,
+            wrt: None,
+            dim: None,
+            ..Default::default()
+        })
+    }
+
+    fn var(name: &str) -> Expr {
+        Expr::Variable(name.to_string())
+    }
+
+    #[test]
+    fn test_precedence_parens_all_printers() {
+        // Regression test: the LaTeX and ASCII printers previously ignored
+        // precedence, so (a + b) * c rendered as the mathematically wrong
+        // `a + b \cdot c` / `a + b * c`.
+        let mul = op_node("*", vec![op_node("+", vec![var("a"), var("b")]), var("c")]);
+        assert_eq!(to_unicode(&mul), "(a + b)·c");
+        assert_eq!(to_latex(&mul), "(a + b) \\cdot c");
+        assert_eq!(to_ascii(&mul), "(a + b) * c");
+
+        // No spurious parentheses when precedence already binds correctly.
+        let add = op_node("+", vec![var("a"), op_node("*", vec![var("b"), var("c")])]);
+        assert_eq!(to_unicode(&add), "a + b·c");
+        assert_eq!(to_latex(&add), "a + b \\cdot c");
+        assert_eq!(to_ascii(&add), "a + b * c");
+
+        // Left-associative subtraction: the right operand keeps parentheses.
+        let sub = op_node("-", vec![var("a"), op_node("-", vec![var("b"), var("c")])]);
+        assert_eq!(to_unicode(&sub), "a − (b − c)");
+        assert_eq!(to_latex(&sub), "a - (b - c)");
+        assert_eq!(to_ascii(&sub), "a - (b - c)");
+
+        // Powers parenthesize a lower-precedence base in every backend
+        // (`{a + b}^{2}` would typeset as `a + b²` in LaTeX).
+        let pow = op_node(
+            "^",
+            vec![op_node("+", vec![var("a"), var("b")]), Expr::Number(2.0)],
+        );
+        assert_eq!(to_unicode(&pow), "(a + b)²");
+        assert_eq!(to_latex(&pow), "{(a + b)}^{2}");
+        assert_eq!(to_ascii(&pow), "(a + b)^2");
+
+        // `\frac` groups visually, so a fraction under a product stays bare
+        // in LaTeX while the inline forms need parentheses.
+        let frac_mul = op_node("*", vec![var("a"), op_node("/", vec![var("b"), var("c")])]);
+        assert_eq!(to_unicode(&frac_mul), "a·(b/c)");
+        assert_eq!(to_latex(&frac_mul), "a \\cdot \\frac{b}{c}");
+        assert_eq!(to_ascii(&frac_mul), "a * (b / c)");
+    }
+
+    #[test]
+    fn test_scientific_notation_unified_across_printers() {
+        // All three printers share one float-formatting core. LaTeX and
+        // ASCII previously collapsed large integral floats (e.g. 2.46e19)
+        // into long digit strings instead of scientific notation.
+        let large = Expr::Number(2.46e19);
+        assert_eq!(to_unicode(&large), "2.46×10¹⁹");
+        assert_eq!(to_latex(&large), "2.46 \\times 10^{19}");
+        assert_eq!(to_ascii(&large), "2.46e19");
+
+        let small = Expr::Number(1.8e-12);
+        assert_eq!(to_unicode(&small), "1.80×10⁻¹²");
+        assert_eq!(to_latex(&small), "1.80 \\times 10^{-12}");
+        assert_eq!(to_ascii(&small), "1.80e-12");
     }
 }

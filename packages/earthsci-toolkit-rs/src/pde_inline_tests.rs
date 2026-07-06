@@ -2,6 +2,11 @@
 //! vectorized array simulation pathway (the Rust mirror of the Julia
 //! binding's `pde_inline_tests.jl` and the Python `pde_inline_tests.py`).
 //!
+//! NOTE: this is PRODUCT code, not Rust test code — the runner for tests
+//! embedded in ESM model files. The filename mirrors the sibling bindings'
+//! modules (cross-binding naming parity), which is why a "tests"-named file
+//! lives in `src/` and is exported from the crate root.
+//!
 //! A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a
 //! spatial field — `reduce: L2_error | Linf_error` against a `reference`,
 //! or the pure collapsers `integral | mean | max | min` — or point-sample it
