@@ -1080,13 +1080,12 @@ pub fn simulate(
     initial_conditions: &HashMap<String, f64>,
     opts: &SimulateOptions,
 ) -> Result<Solution, SimulateError> {
-    // Array-op / spatial files route to the native `simulate_array` backend,
-    // which depends on the s2bindings geometry kernel and is `cfg`-gated off
-    // wasm. On wasm this branch is removed entirely: such files fall through to
-    // the scalar path below, where `Compiled::from_file` rejects them with an
-    // `UnsupportedDimensionalityError` (the browser tier handles 0-D ODEs only;
-    // gridded/spatial runs go to the native cloud workers per the tier model).
-    #[cfg(not(target_arch = "wasm32"))]
+    // Array-op / spatial files route to the `simulate_array` backend. This
+    // branch is compiled on wasm too (EarthSciSerialization-akz): the array
+    // runtime is wasm-clean — planar / geometry-free PDEs run, and a
+    // spherical/geodesic geometry op degrades to a runtime `GeometryError` via
+    // the `crate::geometry` wasm stub rather than a compile failure. Pure-ODE
+    // files still fall through to the scalar path below.
     if crate::simulate_array::file_has_array_ops(file)
         || crate::simulate_array::file_has_spatial_model(file)
     {

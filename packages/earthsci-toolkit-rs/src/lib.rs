@@ -84,7 +84,9 @@ pub mod compile_error;
 // the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
 pub mod simulate;
 
-#[cfg(not(target_arch = "wasm32"))]
+// Compiled for wasm too (EarthSciSerialization-akz): the array/PDE runtime is
+// wasm-clean — planar / geometry-free PDEs run client-side; only spherical
+// geometry degrades to a runtime `GeometryError` stub (native-only s2 kernel).
 pub mod simulate_array;
 
 // §6.6.5 inline PDE tests over the array simulation pathway (field

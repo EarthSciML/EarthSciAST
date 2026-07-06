@@ -51,7 +51,12 @@
 //! [`AlgebraicRule`], [`ContractDim`]), the compiled model [`ArrayCompiled`],
 //! the kernel buffer [`Pool`], and the evaluation context [`EvalCtx`].
 
-#![cfg(not(target_arch = "wasm32"))]
+// This runtime is compiled for wasm too (EarthSciSerialization-akz): it reaches
+// s2geometry only through the already-wasm-safe `crate::geometry` API (planar
+// clips work; spherical/geodesic returns a runtime `GeometryError` stub on
+// wasm), and its solver is the same diffsol/Faer path the scalar `simulate`
+// export already runs client-side — so no native-only dependency remains, and
+// planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
 #![allow(
     clippy::too_many_arguments,
     clippy::type_complexity,
@@ -67,6 +72,9 @@ mod layout;
 mod rhs;
 mod vectorized;
 
+// Only `area_faq` / `pde_inline_tests` consume this re-export, and both stay
+// native-only, so gate it to avoid an unused-import warning on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::eval_buildtime_field;
 pub use compile::{file_has_array_ops, file_has_spatial_model};
 pub use eval::eval_expression;

@@ -228,8 +228,9 @@ pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValu
 ///
 /// Returns `{ parameters: Var[], states: Var[], independentVariables: string[] }`
 /// where `Var = { name: string, default: number | null, units: string | null }`.
-/// A system whose `independentVariables` is not `["t"]` is spatial/PDE and runs
-/// on the native backend, not in the browser.
+/// A system whose `independentVariables` is not `["t"]` still has an
+/// undiscretized spatial operator; discretized (array-op) PDEs report `["t"]`
+/// here and run in the browser like any other file (EarthSciSerialization-akz).
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
@@ -258,13 +259,17 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
     to_js(&out)
 }
 
-/// Run an ODE simulation in the browser (WASM version, gt-5ws / spike S1).
+/// Run a simulation in the browser (WASM version, gt-5ws / spike S1).
 ///
 /// Flattens and solves the `.esm` file through diffsol's Faer backend, entirely
-/// client-side. This is the **0-D / box-model** tier: pure-ODE files only.
-/// Array-op or spatial files require the native `simulate_array` backend (the
-/// s2bindings geometry kernel does not target wasm) and are rejected here with
-/// an `UnsupportedDimensionalityError` — route those to the cloud workers.
+/// client-side. Pure-ODE / 0-D box models and — since the `simulate_array` wasm
+/// gate was lifted (EarthSciSerialization-akz) — array-op and discretized-PDE
+/// files both run here through the same dispatch the native backend uses. The
+/// one remaining wasm limitation is **spherical/geodesic
+/// geometry** (conservative regridding via s2geometry): those leaf ops hit the
+/// `crate::geometry` wasm stub and return a runtime `GeometryError`, since the
+/// s2bindings C++ kernel is not linked into this `wasm32-unknown-unknown` build.
+/// Planar-grid and geometry-free PDEs are unaffected.
 ///
 /// Arguments:
 /// - `json_str`: the `.esm` file as a JSON string.
