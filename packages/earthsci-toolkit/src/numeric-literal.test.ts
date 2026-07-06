@@ -8,7 +8,7 @@ import {
   numericValue,
   losslessJsonParse,
   losslessJsonStringify,
-  formatCanonicalFloat,
+  formatFloatToken,
   CanonicalNonfiniteError,
   LosslessJsonParseError,
   type NumericLiteral,
@@ -244,18 +244,18 @@ describe('RFC §5.4.6 worked example — round-trip', () => {
   })
 })
 
-describe('formatCanonicalFloat', () => {
+describe('formatFloatToken', () => {
   it('adds trailing .0 only for integer-valued plain-decimal floats', () => {
-    expect(formatCanonicalFloat(1)).toBe('1.0')
-    expect(formatCanonicalFloat(-3)).toBe('-3.0')
-    expect(formatCanonicalFloat(0)).toBe('0.0')
-    expect(formatCanonicalFloat(-0)).toBe('-0.0')
-    expect(formatCanonicalFloat(2.5)).toBe('2.5')
-    expect(formatCanonicalFloat(1e25)).toBe('1e+25')
+    expect(formatFloatToken(1)).toBe('1.0')
+    expect(formatFloatToken(-3)).toBe('-3.0')
+    expect(formatFloatToken(0)).toBe('0.0')
+    expect(formatFloatToken(-0)).toBe('-0.0')
+    expect(formatFloatToken(2.5)).toBe('2.5')
+    expect(formatFloatToken(1e25)).toBe('1e+25')
   })
 
   it('throws on non-finite values', () => {
-    expect(() => formatCanonicalFloat(NaN)).toThrow(CanonicalNonfiniteError)
-    expect(() => formatCanonicalFloat(Infinity)).toThrow(CanonicalNonfiniteError)
+    expect(() => formatFloatToken(NaN)).toThrow(CanonicalNonfiniteError)
+    expect(() => formatFloatToken(Infinity)).toThrow(CanonicalNonfiniteError)
   })
 })

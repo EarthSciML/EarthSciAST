@@ -394,19 +394,20 @@ function formatNumericLiteral(lit: NumericLiteral, path: string): string {
     }
     return s
   }
-  return formatCanonicalFloat(value)
+  return formatFloatToken(value)
 }
 
 /**
- * Emit a float per RFC §5.4.6: ECMAScript `ToString(Number)` with a
- * trailing `.0` override when the result is an integer-valued
- * plain-decimal token.
+ * Emit a float token via ECMAScript `ToString(Number)` with a trailing
+ * `.0` override when the result is an integer-valued plain-decimal token.
  *
- * Exported for use by canonicalize() and downstream consumers that
- * need to emit individual float tokens outside of a full JSON
- * document (e.g. debug logs, custom formatters).
+ * This is the document-serialization float emitter used by
+ * {@link losslessJsonStringify} and `save()`. It is NOT the strict RFC
+ * §5.4.6 canonical-form emitter — that is `formatCanonicalFloat` in
+ * `canonicalize.ts`, which additionally normalizes exponent notation
+ * (strips the leading `+`, forces exponent thresholds).
  */
-export function formatCanonicalFloat(value: number): string {
+export function formatFloatToken(value: number): string {
   if (!Number.isFinite(value)) {
     throw new CanonicalNonfiniteError(value, '$')
   }

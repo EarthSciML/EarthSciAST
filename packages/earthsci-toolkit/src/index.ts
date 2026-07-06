@@ -65,14 +65,8 @@ export type { CompiledExpression } from './codegen.js'
 // Export migration functionality
 export { migrate, canMigrate, getSupportedMigrationTargets, MigrationError } from './migration.js'
 
-// Interactive editor components (SolidJS) - moved to esm-editor package
-// export * from './interactive-editor/index.js'
-
-// Web Components (framework-agnostic usage)
-export * from './web-components.js'
-
-// Error handling and diagnostics
-export * from './error-handling.js'
+// Interactive editor components and web components live in the esm-editor
+// package.
 
 // Coupled system flattening
 export { flatten } from './flatten.js'
@@ -130,7 +124,7 @@ export {
   isTemplateLibraryDoc,
   applyScopeInjections,
 } from './template_imports.js'
-export type { TemplateResolveOptions } from './template_imports.js'
+export type { TemplateResolveOptions, TemplateSchemaError } from './template_imports.js'
 
 // Package metadata
 export const VERSION = '0.1.0'

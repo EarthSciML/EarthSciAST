@@ -37,7 +37,7 @@ export {
   numericValue,
   losslessJsonParse,
   losslessJsonStringify,
-  formatCanonicalFloat,
+  formatFloatToken,
   CanonicalNonfiniteError,
   LosslessJsonParseError,
 } from './numeric-literal.js'

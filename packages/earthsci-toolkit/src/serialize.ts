@@ -34,7 +34,7 @@
 import type { EsmFile } from './types.js'
 import {
   isNumericLiteral,
-  formatCanonicalFloat,
+  formatFloatToken,
   CanonicalNonfiniteError,
 } from './numeric-literal.js'
 
@@ -147,7 +147,7 @@ function emitValue(
       }
       return s
     }
-    return formatCanonicalFloat(v.value)
+    return formatFloatToken(v.value)
   }
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) {

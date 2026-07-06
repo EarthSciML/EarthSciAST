@@ -6,10 +6,7 @@ import dts from 'rollup-plugin-dts';
 
 const external = [
   'ajv',
-  'ajv-formats',
-  'd3-force',
-  'solid-js',
-  'solid-js/web'
+  'ajv-formats'
 ];
 
 const tsPlugin = () =>
@@ -21,9 +18,9 @@ const tsPlugin = () =>
   });
 
 export default [
-  // ESM Build - core functionality only (no JSX)
+  // ESM Build
   {
-    input: 'src/core.ts',
+    input: 'src/index.ts',
     output: {
       file: 'dist/esm/index.js',
       format: 'esm',
@@ -37,9 +34,9 @@ export default [
       json()
     ]
   },
-  // CommonJS Build - core functionality only (no JSX)
+  // CommonJS Build
   {
-    input: 'src/core.ts',
+    input: 'src/index.ts',
     output: {
       file: 'dist/cjs/index.js',
       format: 'cjs',
@@ -56,9 +53,9 @@ export default [
   },
   // Bundled type declarations
   {
-    input: 'src/core.ts',
+    input: 'src/index.ts',
     output: {
-      file: 'dist/core.d.ts',
+      file: 'dist/index.d.ts',
       format: 'esm'
     },
     external,
