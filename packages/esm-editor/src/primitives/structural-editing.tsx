@@ -229,7 +229,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
     const rootExpr = props.rootExpression();
     const expr = getExpressionAtPath(rootExpr, path);
 
-    if (!isUnwrappableUnaryOp(expr)) {
+    if (expr === null || !isUnwrappableUnaryOp(expr)) {
       return false;
     }
 
@@ -271,7 +271,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
     const rootExpr = props.rootExpression();
     const expr = getExpressionAtPath(rootExpr, path);
 
-    if (!isCommutativeOp(expr)) {
+    if (expr === null || !isCommutativeOp(expr)) {
       return false;
     }
 
@@ -294,7 +294,7 @@ export function StructuralEditingProvider(props: StructuralEditingProviderProps)
   };
 
   // Check if term can be deleted
-  const canDeleteTerm = (expr: Expression, path: (string | number)[]): boolean => {
+  const canDeleteTerm = (_expr: Expression, path: (string | number)[]): boolean => {
     const rootExpr = props.rootExpression();
     const { parent } = getParentInfo(rootExpr, path);
     return parent !== null && isCommutativeOp(parent);

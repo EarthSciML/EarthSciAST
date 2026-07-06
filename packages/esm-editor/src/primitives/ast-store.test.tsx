@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot } from 'solid-js';
 import { createAstStore, PathUtils, CommonPaths } from './ast-store';
-import type { EsmFile, Model } from 'earthsci-toolkit';
+import type { EsmFile } from 'earthsci-toolkit';
 
 describe('AST Store', () => {
   let cleanup: (() => void) | null = null;
@@ -18,11 +18,11 @@ describe('AST Store', () => {
     vi.useRealTimers();
   });
   const createTestFile = (name: string = "Test Model"): EsmFile => ({
+    esm: "0.8.0",
     schema_version: "1.0",
     metadata: {
       name,
       description: "Test model",
-      version: "0.1.0",
       authors: [],
       created: new Date().toISOString(),
       modified: new Date().toISOString()
@@ -97,12 +97,12 @@ describe('AST Store', () => {
 
         // Set nested property
         store.setPath(['components', 'Chemistry', 'description'], "Updated chemistry");
-        expect((store.file.components.Chemistry as any).description).toBe("Updated chemistry");
+        expect((store.file.components as any).Chemistry.description).toBe("Updated chemistry");
 
         // Set new property
         store.setPath(['components', 'NewComponent'], { type: "data_loader" });
         expect(store.file.components).toHaveProperty("NewComponent");
-        expect((store.file.components.NewComponent as any).type).toBe("data_loader");
+        expect((store.file.components as any).NewComponent.type).toBe("data_loader");
 
         dispose();
       });
@@ -119,9 +119,9 @@ describe('AST Store', () => {
         // Update object value
         store.updatePath(['metadata'], (current: any) => ({
           ...current,
-          version: "1.0.0"
+          description: "Updated description"
         }));
-        expect(store.file.metadata.version).toBe("1.0.0");
+        expect(store.file.metadata.description).toBe("Updated description");
 
         dispose();
       });
@@ -138,9 +138,9 @@ describe('AST Store', () => {
         });
 
         expect(store.file.components).toHaveProperty("NewModel");
-        expect(store.file.components.NewModel).toHaveProperty("variables");
-        expect((store.file.components.NewModel as any).variables).toHaveProperty("CO2");
-        expect((store.file.components.NewModel as any).variables.CO2.units).toBe("ppmv");
+        expect((store.file.components as any).NewModel).toHaveProperty("variables");
+        expect((store.file.components as any).NewModel.variables).toHaveProperty("CO2");
+        expect((store.file.components as any).NewModel.variables.CO2.units).toBe("ppmv");
 
         dispose();
       });

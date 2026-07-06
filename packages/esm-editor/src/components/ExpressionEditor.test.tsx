@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { render, screen } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
 import { ExpressionEditor } from './ExpressionEditor';
 
@@ -68,7 +68,7 @@ describe('ExpressionEditor', () => {
   });
 
   it('updates expression when initialExpression prop changes', () => {
-    const [expression, setExpression] = createSignal(mockExpression);
+    const [expression] = createSignal(mockExpression);
 
     render(() => <ExpressionEditor {...mockProps} initialExpression={expression()} />);
 

@@ -9,7 +9,7 @@
  */
 
 import { Component, createMemo, For, Show } from 'solid-js';
-import type { EsmFile, Model, ReactionSystem, DataLoader, CouplingEntry } from 'earthsci-toolkit';
+import type { EsmFile, Model, ReactionSystem, SubsystemRef, CouplingEntry } from 'earthsci-toolkit';
 
 export interface FileSummaryProps {
   /** The ESM file to summarize */
@@ -44,8 +44,12 @@ function getCouplingDescription(coupling: CouplingEntry): string {
       return `Compose: ${coupling.systems?.join(', ') || 'N/A'}`;
     case 'couple':
       return `Couple: ${coupling.systems?.join(', ') || 'N/A'}`;
-    case 'operator_apply':
-      return `Apply operator: ${coupling.operator || 'N/A'}`;
+    case 'variable_map':
+      return `Map: ${coupling.from || 'N/A'} → ${coupling.to || 'N/A'}`;
+    case 'callback':
+      return `Callback: ${coupling.callback_id || 'N/A'}`;
+    case 'event':
+      return `Event coupling`;
     default:
       return 'Unknown coupling type';
   }
@@ -54,7 +58,11 @@ function getCouplingDescription(coupling: CouplingEntry): string {
 /**
  * Helper to format model/reaction system summary
  */
-function getSystemSummary(system: Model | ReactionSystem): string {
+function getSystemSummary(system: Model | ReactionSystem | SubsystemRef): string {
+  if ('ref' in system && typeof system.ref === 'string') {
+    return `External reference: ${system.ref}`;
+  }
+
   const items = [];
 
   if ('variables' in system && system.variables) {
@@ -92,7 +100,6 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
   const modelCount = createMemo(() => countItems(props.esmFile.models));
   const reactionSystemCount = createMemo(() => countItems(props.esmFile.reaction_systems));
   const dataLoaderCount = createMemo(() => countItems(props.esmFile.data_loaders));
-  const operatorCount = createMemo(() => countItems(props.esmFile.operators));
   const couplingCount = createMemo(() => props.esmFile.coupling?.length || 0);
 
   // Handle section click
@@ -138,25 +145,25 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
             <h4 class="section-title">Format Information</h4>
             <div class="section-content">
               <div class="info-item">
-                <strong>Version:</strong> {props.esmFile.esm_version || 'Not specified'}
+                <strong>Version:</strong> {props.esmFile.esm || 'Not specified'}
               </div>
               <Show when={props.esmFile.metadata}>
                 <div class="info-item">
-                  <strong>Title:</strong> {props.esmFile.metadata!.title || 'Untitled'}
+                  <strong>Title:</strong> {props.esmFile.metadata!.name || 'Untitled'}
                 </div>
                 <Show when={props.esmFile.metadata!.description}>
                   <div class="info-item">
                     <strong>Description:</strong> {props.esmFile.metadata!.description}
                   </div>
                 </Show>
-                <Show when={props.esmFile.metadata!.authors && props.esmFile.metadata!.authors.length > 0}>
+                <Show when={props.esmFile.metadata!.authors && props.esmFile.metadata!.authors!.length > 0}>
                   <div class="info-item">
                     <strong>Authors:</strong> {props.esmFile.metadata!.authors!.join(', ')}
                   </div>
                 </Show>
-                <Show when={props.esmFile.metadata!.created_date}>
+                <Show when={props.esmFile.metadata!.created}>
                   <div class="info-item">
-                    <strong>Created:</strong> {props.esmFile.metadata!.created_date}
+                    <strong>Created:</strong> {props.esmFile.metadata!.created}
                   </div>
                 </Show>
               </Show>
@@ -289,55 +296,8 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                         <strong>{loaderName}</strong> →
                       </div>
                       <div class="system-summary">
-                        Type: {loader.type || 'Unknown'}
-                        {loader.source && ` | Source: ${loader.source}`}
-                        {loader.description && ` | ${loader.description}`}
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
-          </Show>
-
-          {/* Operators Summary */}
-          <Show when={operatorCount() > 0}>
-            <div class="summary-section">
-              <h4
-                class="section-title clickable-section"
-                onClick={() => handleSectionClick('operators')}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleSectionClick('operators');
-                  }
-                }}
-              >
-                Operators ({operatorCount()}) →
-              </h4>
-              <div class="section-content">
-                <For each={Object.entries(props.esmFile.operators || {})}>
-                  {([operatorName, operator]) => (
-                    <div class="system-item">
-                      <div
-                        class="system-name clickable"
-                        onClick={() => handleSectionClick('operators', operatorName)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handleSectionClick('operators', operatorName);
-                          }
-                        }}
-                      >
-                        <strong>{operatorName}</strong> →
-                      </div>
-                      <div class="system-summary">
-                        Type: {operator.type || 'Unknown'}
-                        {operator.description && ` | ${operator.description}`}
+                        Type: {loader.kind || 'Unknown'}
+                        {loader.source?.url_template && ` | Source: ${loader.source.url_template}`}
                       </div>
                     </div>
                   )}
@@ -409,17 +369,21 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
                 Domain Configuration →
               </h4>
               <div class="section-content">
-                <Show when={props.esmFile.domain!.time}>
+                <Show when={props.esmFile.domain!.temporal}>
                   <div class="info-item">
                     <strong>Time:</strong>
-                    Start: {props.esmFile.domain!.time!.start ?? 'N/A'},
-                    End: {props.esmFile.domain!.time!.end ?? 'N/A'}
-                    {props.esmFile.domain!.time!.step && `, Step: ${props.esmFile.domain!.time!.step}`}
+                    Start: {props.esmFile.domain!.temporal!.start ?? 'N/A'},
+                    End: {props.esmFile.domain!.temporal!.end ?? 'N/A'}
                   </div>
                 </Show>
-                <Show when={props.esmFile.domain!.spatial}>
+                <Show when={props.esmFile.domain!.independent_variable}>
                   <div class="info-item">
-                    <strong>Spatial:</strong> {props.esmFile.domain!.spatial!.type || 'Unknown type'}
+                    <strong>Independent variable:</strong> {props.esmFile.domain!.independent_variable}
+                  </div>
+                </Show>
+                <Show when={props.esmFile.domain!.element_type}>
+                  <div class="info-item">
+                    <strong>Element type:</strong> {props.esmFile.domain!.element_type}
                   </div>
                 </Show>
               </div>

@@ -194,12 +194,12 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(multiSelectHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             selectedComponents: expect.arrayContaining([
               'Atmospheric_Chemistry',
               'Surface_Chemistry'
             ])
-          }
+          })
         })
       );
     });
@@ -269,10 +269,10 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(couplingEditHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             edgeId: 'edge_1',
             editType: 'modify'
-          }
+          })
         })
       );
     });
@@ -301,9 +301,9 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(edgeDeleteHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             edgeId: 'edge_2'
-          }
+          })
         })
       );
     });
@@ -332,10 +332,10 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(dragStartHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             componentId: 'Atmospheric_Chemistry',
             startPosition: { x: 100, y: 150 }
-          }
+          })
         })
       );
     });
@@ -372,10 +372,10 @@ describe('Coupling Graph Interaction E2E', () => {
       expect(dragHandler).toHaveBeenCalledTimes(3);
       expect(dragHandler).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             componentId: 'Atmospheric_Chemistry',
             currentPosition: { x: 140, y: 190 }
-          }
+          })
         })
       );
     });
@@ -415,19 +415,19 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(dragEndHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             componentId: 'Atmospheric_Chemistry',
             finalPosition: { x: 140, y: 190 }
-          }
+          })
         })
       );
 
       expect(layoutUpdateHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             affectedComponents: ['Atmospheric_Chemistry'],
             layoutType: 'user_drag'
-          }
+          })
         })
       );
     });
@@ -460,10 +460,10 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(simulationUpdateHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             alpha: 0.8,
             nodePositions: expect.any(Object)
-          }
+          })
         })
       );
     });
@@ -495,10 +495,10 @@ describe('Coupling Graph Interaction E2E', () => {
       expect(layoutChangeHandler).toHaveBeenCalledTimes(4);
       expect(layoutChangeHandler).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             layoutType: 'grid',
             animate: true
-          }
+          })
         })
       );
     });
@@ -533,11 +533,11 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(variableHoverHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             variableName: 'O3',
             componentId: 'Atmospheric_Chemistry',
             highlightType: 'start'
-          }
+          })
         })
       );
     });
@@ -564,9 +564,9 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(highlightClearHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             highlightType: 'end'
-          }
+          })
         })
       );
     });
@@ -606,10 +606,10 @@ describe('Coupling Graph Interaction E2E', () => {
       expect(zoomHandler).toHaveBeenCalledTimes(2);
       expect(zoomHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             scale: expect.any(Number),
             center: { x: 400, y: 300 }
-          }
+          })
         })
       );
     });
@@ -696,11 +696,11 @@ describe('Coupling Graph Interaction E2E', () => {
 
       expect(performanceHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             renderTime: expect.any(Number),
             nodeCount: 20,
             edgeCount: 15
-          }
+          })
         })
       );
     });

@@ -78,7 +78,7 @@ class UnionFind {
     const equivalentVars = new Set<string>();
 
     // Find all variables with the same root
-    for (const [var_, parent] of this.parent.entries()) {
+    for (const var_ of this.parent.keys()) {
       if (this.find(var_) === root) {
         equivalentVars.add(var_);
       }
@@ -109,8 +109,8 @@ export function buildVarEquivalences(file: EsmFile): Map<string, Set<string>> {
   const unionFind = new UnionFind();
 
   // Process all coupling entries
-  if (file.couplings) {
-    for (const coupling of file.couplings) {
+  if (file.coupling) {
+    for (const coupling of file.coupling) {
       processCouplingEntry(coupling, unionFind);
     }
   }
@@ -149,7 +149,6 @@ function processCouplingEntry(coupling: CouplingEntry, unionFind: UnionFind): vo
       break;
 
     // Other coupling types don't create variable equivalences
-    case 'operator_apply':
     case 'callback':
     case 'event':
       break;
@@ -232,7 +231,7 @@ export function HighlightProvider(props: HighlightProviderProps) {
     // Find all equivalent variables for any normalized reference
     const allEquivalent = new Set<string>();
     for (const ref of normalizedRefs) {
-      for (const [representative, equivalentSet] of equiv.entries()) {
+      for (const [, equivalentSet] of equiv.entries()) {
         if (equivalentSet.has(ref)) {
           // Add all variables in this equivalence class
           for (const equivalent of equivalentSet) {
@@ -291,7 +290,7 @@ function shouldIncludeInHighlighting(
   variable: string,
   hoveredVariable: string,
   scopingMode: ScopingMode,
-  currentModelContext?: string
+  _currentModelContext?: string
 ): boolean {
   switch (scopingMode) {
     case 'equation':

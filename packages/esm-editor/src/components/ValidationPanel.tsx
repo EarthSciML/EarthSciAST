@@ -29,30 +29,9 @@ export interface ValidationPanelProps {
 }
 
 /**
- * Convert JSON Pointer path to AST path array for highlighting
- */
-function jsonPointerToPath(jsonPointer: string): (string | number)[] {
-  if (!jsonPointer || jsonPointer === '$') return [];
-
-  // Remove leading slash if present
-  const cleanPath = jsonPointer.startsWith('/') ? jsonPointer.slice(1) : jsonPointer;
-  if (!cleanPath) return [];
-
-  // Split by '/' and convert numeric strings to numbers
-  return cleanPath.split('/').map(segment => {
-    // Decode JSON Pointer escapes (~1 -> /, ~0 -> ~)
-    const decoded = segment.replace(/~1/g, '/').replace(/~0/g, '~');
-
-    // Try to convert to number if it looks numeric
-    const asNumber = parseInt(decoded, 10);
-    return !isNaN(asNumber) && asNumber.toString() === decoded ? asNumber : decoded;
-  });
-}
-
-/**
  * Get severity level for error classification
  */
-function getErrorSeverity(error: ValidationError): 'error' | 'warning' {
+function getErrorSeverity(_error: ValidationError): 'error' | 'warning' {
   // Schema errors are always errors
   // Structural errors could be warnings in some cases, but treating as errors for now
   // Could be enhanced to check error.code for specific warning types

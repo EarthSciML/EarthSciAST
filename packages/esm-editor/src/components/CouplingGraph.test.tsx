@@ -38,7 +38,7 @@ describe('CouplingGraph', () => {
       {
         id: 'op1',
         name: 'Interpolation Op',
-        type: 'operator',
+        type: 'reaction_system',
         description: 'Spatial interpolation operator',
         metadata: {
           var_count: 1,
@@ -56,7 +56,7 @@ describe('CouplingGraph', () => {
           id: 'edge1',
           from: 'loader1',
           to: 'op1',
-          type: 'variable' as const,
+          type: 'variable_map' as const,
           label: 'Temperature Data',
           description: 'Temperature coupling',
           coupling: {} as any
@@ -69,7 +69,7 @@ describe('CouplingGraph', () => {
           id: 'edge2',
           from: 'op1',
           to: 'model1',
-          type: 'spatial' as const,
+          type: 'couple' as const,
           label: 'Interpolated Temp',
           description: 'Spatial coupling',
           coupling: {} as any
@@ -240,6 +240,7 @@ describe('CouplingGraph', () => {
 
     // This test is simplified since we can't easily test reactive updates in this setup
     // In a real application, the graph updates would be handled by the parent component
+    expect(newGraph.nodes).toHaveLength(4);
     expect(screen.getByText('Atmospheric Model')).toBeInTheDocument();
   });
 });

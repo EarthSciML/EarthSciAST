@@ -18,15 +18,15 @@ const mockValidate = vi.mocked(validate);
 
 describe('validation primitive', () => {
   const validEsmFile: EsmFile = {
-    schema_version: "0.1.0",
+    esm: "0.8.0",
+    metadata: { name: "Validation test file" },
     models: {
       TestModel: {
-        name: "TestModel",
         variables: {
           x: {
             type: "state",
             units: "m",
-            initial_condition: 0.0
+            default: 0.0
           }
         },
         equations: [
@@ -40,7 +40,8 @@ describe('validation primitive', () => {
   };
 
   const invalidEsmFile: EsmFile = {
-    schema_version: "0.1.0",
+    esm: "0.8.0",
+    metadata: { name: "Invalid validation test file" },
     models: {}
   };
 
@@ -138,10 +139,10 @@ describe('validation primitive', () => {
           structural_errors: [],
           unit_warnings: [
             {
-              path: '/models/TestModel/variables/x',
+              location: '/models/TestModel/variables/x',
               message: 'inconsistent units',
-              code: 'unit_inconsistency',
-              details: { expected: 'm/s', actual: 'm' }
+              code: 'analysis' as const,
+              equation: 'D(x, t) = 1'
             }
           ]
         });
@@ -206,7 +207,7 @@ describe('validation primitive', () => {
 
     it('should support manual revalidation', () => {
       createRoot(() => {
-        const [file, setFile] = createSignal(validEsmFile);
+        const [file] = createSignal(validEsmFile);
 
         let callCount = 0;
         mockValidate.mockImplementation(() => {
@@ -283,29 +284,28 @@ describe('validation primitive', () => {
   });
 
   describe('createDebouncedValidation', () => {
-    it('should debounce validation calls', (done) => {
+    it('should debounce validation calls', async () => {
       let callCount = 0;
       const validationFn = () => {
         callCount++;
       };
 
+      let debouncedValidation!: () => void;
       createRoot(() => {
-        const debouncedValidation = createDebouncedValidation(validationFn, 50);
-
-        // Call multiple times rapidly
-        debouncedValidation();
-        debouncedValidation();
-        debouncedValidation();
-
-        // Should not be called immediately
-        expect(callCount).toBe(0);
-
-        // Should be called once after debounce period
-        setTimeout(() => {
-          expect(callCount).toBe(1);
-          done();
-        }, 100);
+        debouncedValidation = createDebouncedValidation(validationFn, 50);
       });
+
+      // Call multiple times rapidly
+      debouncedValidation();
+      debouncedValidation();
+      debouncedValidation();
+
+      // Should not be called immediately
+      expect(callCount).toBe(0);
+
+      // Should be called once after debounce period
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(callCount).toBe(1);
     });
   });
 });

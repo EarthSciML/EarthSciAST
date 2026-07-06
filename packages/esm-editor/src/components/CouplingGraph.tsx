@@ -108,8 +108,6 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
         return { ...baseStyle, fill: '#4CAF50', rx: 5, ry: 5 }; // Green rectangle
       case 'data_loader':
         return { ...baseStyle, fill: '#2196F3' }; // Blue ellipse
-      case 'operator':
-        return { ...baseStyle, fill: '#FF9800' }; // Orange diamond
       case 'reaction_system':
         return { ...baseStyle, fill: '#9C27B0' }; // Purple rectangle
       default:
@@ -128,11 +126,11 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     };
 
     switch (edge.type) {
-      case 'variable':
+      case 'variable_map':
         return { ...baseStyle, 'stroke-dasharray': 'none' };
-      case 'temporal':
+      case 'operator_compose':
         return { ...baseStyle, 'stroke-dasharray': '5,5' };
-      case 'spatial':
+      case 'couple':
         return { ...baseStyle, 'stroke-dasharray': '10,2' };
       default:
         return baseStyle;
@@ -228,18 +226,6 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
             cy={y}
             rx="25"
             ry="15"
-            {...style}
-            onClick={() => handleNodeClick(node)}
-            onMouseEnter={() => setHoveredElement(node.id)}
-            onMouseLeave={() => setHoveredElement(null)}
-            onMouseDown={(e) => handleNodeDrag(node, e)}
-          />
-        );
-
-      case 'operator':
-        return (
-          <polygon
-            points={`${x},${y-20} ${x+20},${y} ${x},${y+20} ${x-20},${y}`}
             {...style}
             onClick={() => handleNodeClick(node)}
             onMouseEnter={() => setHoveredElement(node.id)}

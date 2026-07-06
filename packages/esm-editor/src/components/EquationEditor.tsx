@@ -121,9 +121,9 @@ export const EquationEditor: Component<EquationEditorProps> = (props) => {
       </div>
 
       {/* Optional equation metadata display */}
-      <Show when={props.equation.description}>
-        <div class="equation-description" title="Equation description">
-          {props.equation.description}
+      <Show when={props.equation._comment}>
+        <div class="equation-description" title="Equation comment">
+          {props.equation._comment}
         </div>
       </Show>
     </div>

@@ -5,7 +5,6 @@ import {
   StructuralEditingProvider,
   useStructuralEditingContext,
   StructuralEditingMenu,
-  DraggableExpression,
   WRAP_OPERATORS,
   COMMUTATIVE_OPERATORS
 } from './structural-editing';

@@ -9,19 +9,19 @@ import { FileSummary } from './FileSummary';
 
 describe('FileSummary', () => {
   const basicEsmFile: EsmFile = {
-    esm_version: "1.0.0",
+    esm: "1.0.0",
     metadata: {
-      title: "Test Model",
+      name: "Test Model",
       description: "A comprehensive test model",
       authors: ["Test Author 1", "Test Author 2"],
-      created_date: "2024-01-01"
+      created: "2024-01-01"
     }
   };
 
   const complexEsmFile: EsmFile = {
-    esm_version: "1.0.0",
+    esm: "1.0.0",
     metadata: {
-      title: "Complex Model",
+      name: "Complex Model",
       description: "A complex test model"
     },
     models: {
@@ -50,7 +50,7 @@ describe('FileSummary', () => {
           CO2: { units: 'mol/L', description: 'Carbon dioxide' }
         },
         parameters: {
-          k1: { value: 1.5, units: '1/s', description: 'Rate constant' }
+          k1: { default: 1.5, units: '1/s', description: 'Rate constant' }
         },
         reactions: [
           {
@@ -64,15 +64,11 @@ describe('FileSummary', () => {
     },
     data_loaders: {
       WeatherData: {
-        type: 'csv',
-        source: 'weather.csv',
-        description: 'Weather data loader'
-      }
-    },
-    operators: {
-      Interpolator: {
-        type: 'spatial_interpolation',
-        description: 'Spatial interpolation operator'
+        kind: 'grid',
+        source: { url_template: 'weather.csv' },
+        variables: {
+          temperature: { file_variable: 'T', units: 'K' }
+        }
       }
     },
     coupling: [
@@ -82,22 +78,27 @@ describe('FileSummary', () => {
       },
       {
         type: 'couple',
-        systems: ['TestModel', 'Chemistry']
+        systems: ['TestModel', 'Chemistry'],
+        connector: {
+          equations: [
+            { from: 'TestModel.x', to: 'Chemistry.O2', transform: 'replacement' }
+          ]
+        }
       },
       {
-        type: 'operator_apply',
-        operator: 'Interpolator'
+        type: 'variable_map',
+        from: 'TestModel.v',
+        to: 'Chemistry.k1',
+        transform: 'identity'
       }
     ],
     domain: {
-      time: {
-        start: 0,
-        end: 100,
-        step: 0.1
+      independent_variable: 't',
+      temporal: {
+        start: '2024-01-01T00:00:00Z',
+        end: '2024-01-02T00:00:00Z'
       },
-      spatial: {
-        type: 'grid_2d'
-      }
+      element_type: 'Float64'
     }
   };
 
@@ -139,15 +140,7 @@ describe('FileSummary', () => {
 
     expect(screen.getByText(/Data Loaders \(\d+\)/)).toBeInTheDocument();
     expect(screen.getByText('WeatherData')).toBeInTheDocument();
-    expect(screen.getByText('Type: csv | Source: weather.csv | Weather data loader')).toBeInTheDocument();
-  });
-
-  it('renders operators summary', () => {
-    render(() => <FileSummary esmFile={complexEsmFile} />);
-
-    expect(screen.getByText(/Operators \(\d+\)/)).toBeInTheDocument();
-    expect(screen.getByText('Interpolator')).toBeInTheDocument();
-    expect(screen.getByText('Type: spatial_interpolation | Spatial interpolation operator')).toBeInTheDocument();
+    expect(screen.getByText('Type: grid | Source: weather.csv')).toBeInTheDocument();
   });
 
   it('renders coupling rules summary', () => {
@@ -159,7 +152,7 @@ describe('FileSummary', () => {
     expect(screen.getByText('Rule 2')).toBeInTheDocument();
     expect(screen.getByText('Couple: TestModel, Chemistry')).toBeInTheDocument();
     expect(screen.getByText('Rule 3')).toBeInTheDocument();
-    expect(screen.getByText('Apply operator: Interpolator')).toBeInTheDocument();
+    expect(screen.getByText('Map: TestModel.v → Chemistry.k1')).toBeInTheDocument();
   });
 
   it('renders domain configuration summary', () => {
@@ -167,9 +160,9 @@ describe('FileSummary', () => {
 
     expect(screen.getByText(/Domain Configuration/)).toBeInTheDocument();
     expect(screen.getByText('Time:')).toBeInTheDocument();
-    expect(screen.getByText(/Start:.*End: 100.*Step: 0\.1/)).toBeInTheDocument();
-    expect(screen.getByText('Spatial:')).toBeInTheDocument();
-    expect(screen.getByText('grid_2d')).toBeInTheDocument();
+    expect(screen.getByText(/Start: 2024-01-01T00:00:00Z.*End: 2024-01-02T00:00:00Z/)).toBeInTheDocument();
+    expect(screen.getByText('Independent variable:')).toBeInTheDocument();
+    expect(screen.getByText('Float64')).toBeInTheDocument();
   });
 
 
@@ -224,7 +217,7 @@ describe('FileSummary', () => {
       />
     ));
 
-    const header = screen.getByText('File Summary').closest('.summary-header');
+    const header = screen.getByText('File Summary').closest('.summary-header') as HTMLElement | null;
     expect(header).toBeInTheDocument();
 
     header?.click();
@@ -240,7 +233,8 @@ describe('FileSummary', () => {
 
   it('shows empty state for empty ESM file', () => {
     const emptyEsmFile: EsmFile = {
-      esm_version: "1.0.0"
+      esm: "1.0.0",
+      metadata: { name: "Empty" }
     };
 
     render(() => <FileSummary esmFile={emptyEsmFile} />);
@@ -249,15 +243,15 @@ describe('FileSummary', () => {
   });
 
   it('handles missing metadata gracefully', () => {
-    const minimalEsmFile: EsmFile = {
-      esm_version: "1.0.0",
+    const minimalEsmFile = {
+      esm: "1.0.0",
       models: {
         TestModel: {
           variables: {},
           equations: []
         }
       }
-    };
+    } as unknown as EsmFile;
 
     render(() => <FileSummary esmFile={minimalEsmFile} />);
 
@@ -288,15 +282,16 @@ describe('FileSummary', () => {
 
   it('handles coupling rules with missing systems', () => {
     const esmFileWithIncompleteRules: EsmFile = {
-      esm_version: "1.0.0",
+      esm: "1.0.0",
+      metadata: { name: "Incomplete" },
       coupling: [
         {
           type: 'operator_compose'
           // missing systems property
         } as any,
         {
-          type: 'operator_apply'
-          // missing operator property
+          type: 'callback'
+          // missing callback_id property
         } as any
       ]
     };
@@ -305,19 +300,20 @@ describe('FileSummary', () => {
 
     expect(screen.getByText(/Coupling Rules \(2\)/)).toBeInTheDocument();
     expect(screen.getByText('Compose: N/A')).toBeInTheDocument();
-    expect(screen.getByText('Apply operator: N/A')).toBeInTheDocument();
+    expect(screen.getByText('Callback: N/A')).toBeInTheDocument();
   });
 
   it('handles system summaries for empty systems', () => {
-    const esmFileWithEmptySystems: EsmFile = {
-      esm_version: "1.0.0",
+    const esmFileWithEmptySystems = {
+      esm: "1.0.0",
+      metadata: { name: "Empty systems" },
       models: {
         EmptyModel: {}
       },
       reaction_systems: {
         EmptyReactions: {}
       }
-    };
+    } as unknown as EsmFile;
 
     render(() => <FileSummary esmFile={esmFileWithEmptySystems} />);
 

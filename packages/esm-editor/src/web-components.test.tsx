@@ -53,7 +53,6 @@ describe('Web Components', () => {
     };
 
     const validModel: Model = {
-      type: "model",
       variables: {
         "O3": {
           type: "state",
@@ -65,27 +64,32 @@ describe('Web Components', () => {
     };
 
     const validReactionSystem: ReactionSystem = {
-      type: "reaction_system",
       species: {
         "O3": {
-          formula: "O3",
-          molar_mass: 48.0
+          description: "Ozone"
         }
       },
-      reactions: []
+      parameters: {},
+      reactions: [
+        {
+          id: "R1",
+          substrates: [{ species: "O3", stoichiometry: 1 }],
+          products: null,
+          rate: "k1"
+        }
+      ]
     };
 
     const validEsmFile: EsmFile = {
-      schema_version: "1.0",
+      esm: "0.8.0",
       metadata: {
         name: "Test Model",
         description: "Test",
-        version: "0.1.0",
         authors: [],
         created: new Date().toISOString(),
         modified: new Date().toISOString()
       },
-      components: {
+      models: {
         "Chemistry": validModel
       },
       coupling: []
@@ -151,7 +155,6 @@ describe('Web Components', () => {
 
   describe('Event Handling', () => {
     const validModel: Model = {
-      type: "model",
       variables: {
         "O3": {
           type: "state",

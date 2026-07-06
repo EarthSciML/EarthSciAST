@@ -9,22 +9,13 @@ import type { Model } from 'earthsci-toolkit';
 
 describe('ExpressionPalette', () => {
   const mockModel: Model = {
-    name: 'test_model',
-    variables: [
-      { name: 'temperature', unit: 'K' },
-      { name: 'pressure', unit: 'Pa' }
-    ],
-    reaction_systems: [
-      {
-        name: 'chemistry',
-        species: [
-          { name: 'CO2', equation: 'CO2' },
-          { name: 'H2O', equation: 'H2O' },
-          { name: 'O3', equation: 'O3' }
-        ],
-        reactions: []
-      }
-    ],
+    variables: {
+      temperature: { type: 'state', units: 'K' },
+      pressure: { type: 'state', units: 'Pa' },
+      CO2: { type: 'state', units: 'mol/mol' },
+      H2O: { type: 'state', units: 'mol/mol' },
+      O3: { type: 'state', units: 'mol/mol' }
+    },
     equations: []
   };
 

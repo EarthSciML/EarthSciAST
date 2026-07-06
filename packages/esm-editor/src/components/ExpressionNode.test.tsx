@@ -86,14 +86,16 @@ describe('ExpressionNode', () => {
   it('formats numbers with scientific notation for large numbers', () => {
     render(() => <ExpressionNode expr={1234567} {...mockProps} />);
 
-    const element = screen.getByText('1.235e+6');
+    // Scientific notation uses the same Unicode superscript style as the
+    // component's chemical formula / exponent rendering (e.g. CO₂, x²).
+    const element = screen.getByText('1.234567×10⁶');
     expect(element).toBeInTheDocument();
   });
 
   it('formats numbers with scientific notation for small numbers', () => {
     render(() => <ExpressionNode expr={0.0001} {...mockProps} />);
 
-    const element = screen.getByText('1.000e-4');
+    const element = screen.getByText('1×10⁻⁴');
     expect(element).toBeInTheDocument();
   });
 

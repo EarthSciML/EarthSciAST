@@ -3,14 +3,13 @@
  *
  * This component provides a comprehensive view for editing entire models,
  * including:
- * - Variables panel grouped by type (state/parameter/observed) with badges, units, and defaults
+ * - Variables panel grouped by type (state/parameter/observed/...) with badges, units, and defaults
  * - Equation list with each equation as an EquationEditor
  * - Event editors for both continuous and discrete events
- * - Collapsible subsystems
  * - UI for adding/removing variables and equations
  */
 
-import { Component, createSignal, createMemo, For, Show, JSX } from 'solid-js';
+import { Component, createSignal, createMemo, For, Show } from 'solid-js';
 import type { Model, ModelVariable, Equation, ContinuousEvent, DiscreteEvent } from 'earthsci-toolkit';
 import { EquationEditor } from './EquationEditor';
 import { ExpressionPalette } from './ExpressionPalette';
@@ -18,6 +17,12 @@ import { ExpressionPalette } from './ExpressionPalette';
 export interface ModelEditorProps {
   /** The model to display and edit */
   model: Model;
+
+  /** Display name of the model (in the ESM schema the name is the key in the `models` record) */
+  name?: string;
+
+  /** Optional display description for the model */
+  description?: string;
 
   /** Callback when the model is modified */
   onModelChange?: (newModel: Model) => void;
@@ -33,23 +38,32 @@ export interface ModelEditorProps {
 }
 
 // Variable type definitions for categorization
-type VariableType = 'state' | 'parameter' | 'observed' | 'other';
+type VariableType = ModelVariable['type'] | 'other';
 
 // Badge configuration for different variable types
-const VARIABLE_TYPE_CONFIG = {
+const VARIABLE_TYPE_CONFIG: Record<VariableType, { label: string; color: string; description: string }> = {
   state: { label: 'State', color: 'blue', description: 'State variable' },
   parameter: { label: 'Param', color: 'green', description: 'Parameter' },
   observed: { label: 'Obs', color: 'orange', description: 'Observed variable' },
+  brownian: { label: 'Brownian', color: 'purple', description: 'Brownian variable' },
+  discrete: { label: 'Discrete', color: 'teal', description: 'Discrete variable' },
   other: { label: 'Var', color: 'gray', description: 'Variable' }
 };
+
+/** A model variable paired with its name (the key in the model's variables record) */
+interface NamedVariable {
+  name: string;
+  variable: ModelVariable;
+}
 
 /**
  * Component for individual variable item in the variables panel
  */
 const VariableItem: Component<{
+  name: string;
   variable: ModelVariable;
   type: VariableType;
-  onEdit?: (variable: ModelVariable) => void;
+  onEdit?: (name: string, variable: ModelVariable) => void;
   onRemove?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
@@ -59,14 +73,14 @@ const VariableItem: Component<{
 
   const handleEdit = () => {
     if (!props.readonly) {
-      props.onEdit?.(props.variable);
+      props.onEdit?.(props.name, props.variable);
     }
   };
 
   const handleRemove = (e: MouseEvent) => {
     e.stopPropagation();
     if (!props.readonly) {
-      props.onRemove?.(props.variable.name);
+      props.onRemove?.(props.name);
     }
   };
 
@@ -81,21 +95,21 @@ const VariableItem: Component<{
     >
       <div class="variable-info">
         <div class="variable-header">
-          <span class="variable-name">{props.variable.name}</span>
+          <span class="variable-name">{props.name}</span>
           <span class={`variable-type-badge ${typeConfig().color}`} title={typeConfig().description}>
             {typeConfig().label}
           </span>
         </div>
 
-        <Show when={props.variable.unit}>
+        <Show when={props.variable.units}>
           <div class="variable-unit" title="Unit">
-            [{props.variable.unit}]
+            [{props.variable.units}]
           </div>
         </Show>
 
-        <Show when={props.variable.default_value !== undefined}>
+        <Show when={props.variable.default !== undefined}>
           <div class="variable-default" title="Default value">
-            = {props.variable.default_value}
+            = {props.variable.default}
           </div>
         </Show>
 
@@ -111,7 +125,7 @@ const VariableItem: Component<{
           class="variable-remove-btn"
           onClick={handleRemove}
           title="Remove variable"
-          aria-label={`Remove variable ${props.variable.name}`}
+          aria-label={`Remove variable ${props.name}`}
         >
           ×
         </button>
@@ -124,30 +138,35 @@ const VariableItem: Component<{
  * Variables panel component
  */
 const VariablesPanel: Component<{
-  variables?: ModelVariable[];
+  variables?: Model['variables'];
   onAddVariable?: () => void;
-  onEditVariable?: (variable: ModelVariable) => void;
+  onEditVariable?: (name: string, variable: ModelVariable) => void;
   onRemoveVariable?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
   const [isExpanded, setIsExpanded] = createSignal(true);
 
+  const variableEntries = createMemo((): NamedVariable[] =>
+    Object.entries(props.variables || {}).map(([name, variable]) => ({ name, variable }))
+  );
+
   // Group variables by type
   const groupedVariables = createMemo(() => {
-    const variables = props.variables || [];
-    const groups: Record<VariableType, ModelVariable[]> = {
+    const groups: Record<VariableType, NamedVariable[]> = {
       state: [],
       parameter: [],
       observed: [],
+      brownian: [],
+      discrete: [],
       other: []
     };
 
-    variables.forEach(variable => {
-      // Use the actual type field from ModelVariable, fall back to 'other' if not specified
+    variableEntries().forEach(entry => {
+      // Use the actual type field from ModelVariable, fall back to 'other' if not recognized
       const type: VariableType =
-        ('type' in variable && variable.type) ? variable.type : 'other';
+        entry.variable.type && entry.variable.type in groups ? entry.variable.type : 'other';
 
-      groups[type].push(variable);
+      groups[type].push(entry);
     });
 
     return groups;
@@ -157,7 +176,7 @@ const VariablesPanel: Component<{
     <div class="variables-panel">
       <div class="panel-header" onClick={() => setIsExpanded(!isExpanded())}>
         <span class={`expand-icon ${isExpanded() ? 'expanded' : ''}`}>▶</span>
-        <h3>Variables ({(props.variables || []).length})</h3>
+        <h3>Variables ({variableEntries().length})</h3>
         <Show when={!props.readonly}>
           <button
             class="add-btn"
@@ -172,7 +191,7 @@ const VariablesPanel: Component<{
 
       <Show when={isExpanded()}>
         <div class="variables-content">
-          <For each={Object.entries(groupedVariables()) as [VariableType, ModelVariable[]][]}>
+          <For each={Object.entries(groupedVariables()) as [VariableType, NamedVariable[]][]}>
             {([type, variables]) => (
               <Show when={variables.length > 0}>
                 <div class="variable-group">
@@ -184,9 +203,10 @@ const VariablesPanel: Component<{
                   </h4>
                   <div class="variables-list">
                     <For each={variables}>
-                      {(variable) => (
+                      {(entry) => (
                         <VariableItem
-                          variable={variable}
+                          name={entry.name}
+                          variable={entry.variable}
                           type={type}
                           onEdit={props.onEditVariable}
                           onRemove={props.onRemoveVariable}
@@ -200,7 +220,7 @@ const VariablesPanel: Component<{
             )}
           </For>
 
-          <Show when={(props.variables || []).length === 0}>
+          <Show when={variableEntries().length === 0}>
             <div class="empty-state">
               <div class="empty-icon">📊</div>
               <div class="empty-text">No variables defined</div>
@@ -298,6 +318,8 @@ const EventsPanel: Component<{
   discreteEvents?: DiscreteEvent[];
   onAddContinuousEvent?: () => void;
   onAddDiscreteEvent?: () => void;
+  onEditContinuousEvent?: (index: number, event: ContinuousEvent) => void;
+  onEditDiscreteEvent?: (index: number, event: DiscreteEvent) => void;
   readonly?: boolean;
 }> = (props) => {
   const [isExpanded, setIsExpanded] = createSignal(true);
@@ -336,7 +358,7 @@ const EventsPanel: Component<{
             <div class="event-group">
               <h4>Continuous Events</h4>
               <For each={props.continuousEvents || []}>
-                {(event) => (
+                {(event, eventIndex) => (
                   <div class="event-item continuous">
                     <div class="event-name">{event.name || 'Unnamed Event'}</div>
                     <Show when={event.description}>
@@ -357,15 +379,10 @@ const EventsPanel: Component<{
                                     if (newCondition) {
                                       try {
                                         const parsed = JSON.parse(newCondition);
-                                        const updatedEvents = [...(props.model.continuous_events || [])];
-                                        const eventIndex = updatedEvents.indexOf(event);
-                                        if (eventIndex >= 0) {
-                                          const updatedConditions = [...event.conditions];
-                                          updatedConditions[index()] = parsed;
-                                          updatedEvents[eventIndex] = { ...event, conditions: updatedConditions };
-                                          handleModelChange({ continuous_events: updatedEvents });
-                                        }
-                                      } catch (e) {
+                                        const updatedConditions = [...event.conditions] as ContinuousEvent['conditions'];
+                                        updatedConditions[index()] = parsed;
+                                        props.onEditContinuousEvent?.(eventIndex(), { ...event, conditions: updatedConditions });
+                                      } catch {
                                         alert('Invalid JSON format');
                                       }
                                     }
@@ -396,15 +413,10 @@ const EventsPanel: Component<{
                                       try {
                                         const parsedLhs = JSON.parse(newLhs);
                                         const parsedRhs = JSON.parse(newRhs);
-                                        const updatedEvents = [...(props.model.continuous_events || [])];
-                                        const eventIndex = updatedEvents.indexOf(event);
-                                        if (eventIndex >= 0) {
-                                          const updatedAffects = [...event.affects];
-                                          updatedAffects[index()] = { lhs: parsedLhs, rhs: parsedRhs };
-                                          updatedEvents[eventIndex] = { ...event, affects: updatedAffects };
-                                          handleModelChange({ continuous_events: updatedEvents });
-                                        }
-                                      } catch (e) {
+                                        const updatedAffects = [...event.affects];
+                                        updatedAffects[index()] = { lhs: parsedLhs, rhs: parsedRhs };
+                                        props.onEditContinuousEvent?.(eventIndex(), { ...event, affects: updatedAffects });
+                                      } catch {
                                         alert('Invalid JSON format');
                                       }
                                     }
@@ -428,7 +440,7 @@ const EventsPanel: Component<{
             <div class="event-group">
               <h4>Discrete Events</h4>
               <For each={props.discreteEvents || []}>
-                {(event) => (
+                {(event, eventIndex) => (
                   <div class="event-item discrete">
                     <div class="event-name">{event.name || 'Unnamed Event'}</div>
                     <Show when={event.description}>
@@ -447,13 +459,8 @@ const EventsPanel: Component<{
                                 if (newTrigger) {
                                   try {
                                     const parsed = JSON.parse(newTrigger);
-                                    const updatedEvents = [...(props.model.discrete_events || [])];
-                                    const eventIndex = updatedEvents.indexOf(event);
-                                    if (eventIndex >= 0) {
-                                      updatedEvents[eventIndex] = { ...event, trigger: parsed };
-                                      handleModelChange({ discrete_events: updatedEvents });
-                                    }
-                                  } catch (e) {
+                                    props.onEditDiscreteEvent?.(eventIndex(), { ...event, trigger: parsed });
+                                  } catch {
                                     alert('Invalid JSON format');
                                   }
                                 }
@@ -482,15 +489,10 @@ const EventsPanel: Component<{
                                       try {
                                         const parsedLhs = JSON.parse(newLhs);
                                         const parsedRhs = JSON.parse(newRhs);
-                                        const updatedEvents = [...(props.model.discrete_events || [])];
-                                        const eventIndex = updatedEvents.indexOf(event);
-                                        if (eventIndex >= 0) {
-                                          const updatedAffects = [...event.affects];
-                                          updatedAffects[index()] = { lhs: parsedLhs, rhs: parsedRhs };
-                                          updatedEvents[eventIndex] = { ...event, affects: updatedAffects };
-                                          handleModelChange({ discrete_events: updatedEvents });
-                                        }
-                                      } catch (e) {
+                                        const updatedAffects = [...(event.affects || [])];
+                                        updatedAffects[index()] = { lhs: parsedLhs, rhs: parsedRhs };
+                                        props.onEditDiscreteEvent?.(eventIndex(), { ...event, affects: updatedAffects });
+                                      } catch {
                                         alert('Invalid JSON format');
                                       }
                                     }
@@ -536,7 +538,7 @@ const EventsPanel: Component<{
  * Main ModelEditor component
  */
 export const ModelEditor: Component<ModelEditorProps> = (props) => {
-  const [highlightedVars, setHighlightedVars] = createSignal<Set<string>>(new Set());
+  const [highlightedVars] = createSignal<Set<string>>(new Set());
 
   // Handle model modifications
   const handleModelChange = (changes: Partial<Model>) => {
@@ -551,65 +553,63 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
     const name = prompt('Enter variable name:');
     if (!name || !name.trim()) return;
 
-    const type = prompt('Enter variable type (state, parameter, observed, or other):', 'parameter');
+    const type = prompt('Enter variable type (state, parameter, observed, brownian, or discrete):', 'parameter');
     if (!type) return;
 
-    const validTypes = ['state', 'parameter', 'observed', 'other'];
-    const variableType = validTypes.includes(type) ? type : 'other';
+    const validTypes: ModelVariable['type'][] = ['state', 'parameter', 'observed', 'brownian', 'discrete'];
+    const variableType = (validTypes as string[]).includes(type) ? (type as ModelVariable['type']) : 'parameter';
 
     const newVariable: ModelVariable = {
-      name: name.trim(),
-      type: variableType as any,
-      unit: '',
+      type: variableType,
+      units: '',
       description: '',
-      ...(variableType === 'parameter' && { default_value: 0 })
+      ...(variableType === 'parameter' && { default: 0 })
     };
 
-    const newVariables = [...(props.model.variables || []), newVariable];
+    const newVariables = { ...(props.model.variables || {}), [name.trim()]: newVariable };
     handleModelChange({ variables: newVariables });
   };
 
-  const handleEditVariable = (variable: ModelVariable) => {
-    const newName = prompt('Enter variable name:', variable.name);
-    if (!newName || newName.trim() === variable.name) return;
+  const handleEditVariable = (name: string, variable: ModelVariable) => {
+    const newName = prompt('Enter variable name:', name);
+    if (!newName || !newName.trim()) return;
 
     const newDescription = prompt('Enter description:', variable.description || '');
-    const newUnit = prompt('Enter unit:', variable.unit || '');
+    const newUnit = prompt('Enter unit:', variable.units || '');
 
-    let newDefaultValue = variable.default_value;
+    let newDefault = variable.default;
     if (variable.type === 'parameter') {
-      const defaultInput = prompt('Enter default value:', String(variable.default_value || 0));
+      const defaultInput = prompt('Enter default value:', String(variable.default ?? 0));
       if (defaultInput !== null) {
         const parsed = parseFloat(defaultInput);
         if (!isNaN(parsed)) {
-          newDefaultValue = parsed;
+          newDefault = parsed;
         }
       }
     }
 
-    const updatedVariables = (props.model.variables || []).map(v =>
-      v.name === variable.name
-        ? {
-            ...v,
-            name: newName.trim(),
-            description: newDescription || '',
-            unit: newUnit || '',
-            ...(v.type === 'parameter' && { default_value: newDefaultValue })
-          }
-        : v
-    );
+    const updatedVariables = { ...(props.model.variables || {}) };
+    if (newName.trim() !== name) {
+      delete updatedVariables[name];
+    }
+    updatedVariables[newName.trim()] = {
+      ...variable,
+      description: newDescription || '',
+      units: newUnit || '',
+      ...(variable.type === 'parameter' && { default: newDefault })
+    };
 
     handleModelChange({ variables: updatedVariables });
   };
 
   const handleRemoveVariable = (name: string) => {
-    const newVariables = (props.model.variables || []).filter(v => v.name !== name);
-    handleModelChange({ variables: newVariables });
+    const updatedVariables = { ...(props.model.variables || {}) };
+    delete updatedVariables[name];
+    handleModelChange({ variables: updatedVariables });
   };
 
   // Equation management handlers
   const handleAddEquation = () => {
-    // TODO: Create default equation
     const newEquation: Equation = {
       lhs: '_placeholder_',
       rhs: 0
@@ -659,7 +659,7 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
     const newEvent: DiscreteEvent = {
       name: name.trim(),
       description: description || '',
-      trigger: '_trigger_placeholder',
+      trigger: { type: 'condition', expression: '_trigger_placeholder' },
       affects: [{
         lhs: '_variable_placeholder',
         rhs: '_value_placeholder'
@@ -668,6 +668,18 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
 
     const newDiscreteEvents = [...(props.model.discrete_events || []), newEvent];
     handleModelChange({ discrete_events: newDiscreteEvents });
+  };
+
+  const handleEditContinuousEvent = (index: number, event: ContinuousEvent) => {
+    const updatedEvents = [...(props.model.continuous_events || [])];
+    updatedEvents[index] = event;
+    handleModelChange({ continuous_events: updatedEvents });
+  };
+
+  const handleEditDiscreteEvent = (index: number, event: DiscreteEvent) => {
+    const updatedEvents = [...(props.model.discrete_events || [])];
+    updatedEvents[index] = event;
+    handleModelChange({ discrete_events: updatedEvents });
   };
 
   const editorClasses = () => {
@@ -683,9 +695,9 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
         {/* Main content area */}
         <div class="model-content">
           <div class="model-header">
-            <h2 class="model-name">{props.model.name || 'Untitled Model'}</h2>
-            <Show when={props.model.description}>
-              <div class="model-description">{props.model.description}</div>
+            <h2 class="model-name">{props.name || 'Untitled Model'}</h2>
+            <Show when={props.description}>
+              <div class="model-description">{props.description}</div>
             </Show>
           </div>
 
@@ -712,6 +724,8 @@ export const ModelEditor: Component<ModelEditorProps> = (props) => {
               discreteEvents={props.model.discrete_events}
               onAddContinuousEvent={handleAddContinuousEvent}
               onAddDiscreteEvent={handleAddDiscreteEvent}
+              onEditContinuousEvent={handleEditContinuousEvent}
+              onEditDiscreteEvent={handleEditDiscreteEvent}
               readonly={props.readonly}
             />
           </div>

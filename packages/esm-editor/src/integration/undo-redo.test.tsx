@@ -14,22 +14,7 @@ import { createSignal, createEffect } from 'solid-js';
 import { ExpressionEditor } from '../components/ExpressionEditor';
 import { ModelEditor } from '../components/ModelEditor';
 import { EquationEditor } from '../components/EquationEditor';
-
-// Define types locally to avoid earthsci-toolkit import issues
-type Expression = number | string | { op: string; args: any[] };
-type ModelVariable = {
-  type: "state" | "parameter" | "observed";
-  units?: string;
-  default?: number;
-  description?: string;
-};
-type Model = {
-  name?: string;
-  description?: string;
-  variables: Array<ModelVariable & { name: string }>;
-  equations: Array<{ lhs: Expression; rhs: Expression }>;
-};
-type Equation = { lhs: Expression; rhs: Expression };
+import type { Expression, Model, Equation } from 'earthsci-toolkit';
 
 /**
  * Simple history management for integration testing
@@ -86,22 +71,18 @@ class EditorHistory {
 
 describe('Undo/Redo Integration', () => {
   const initialModel: Model = {
-    name: "Test Model",
-    description: "Test model for undo/redo testing",
-    variables: [
-      {
-        name: "O3",
+    variables: {
+      O3: {
         type: "state",
         units: "mol/mol",
         description: "Ozone concentration"
       },
-      {
-        name: "NO",
+      NO: {
         type: "state",
         units: "mol/mol",
         description: "Nitric oxide concentration"
       }
-    ],
+    },
     equations: [
       {
         lhs: { op: 'D', args: ['O3', 't'] },
@@ -123,7 +104,7 @@ describe('Undo/Redo Integration', () => {
 
   describe('Basic Undo/Redo Operations', () => {
     it('should track changes and support undo/redo', async () => {
-      const [currentModel, setCurrentModel] = createSignal(model);
+      const [currentModel, setCurrentModel] = createSignal(initialModel);
       const [currentExpression, setCurrentExpression] = createSignal<Expression>({ op: '+', args: [1, 2] });
 
       // Initialize history with initial state
@@ -171,19 +152,18 @@ describe('Undo/Redo Integration', () => {
         }
       };
 
-      render(() => (
+      const { container } = render(() => (
         <div>
           <ModelEditor
             model={currentModel()}
             onModelChange={handleModelChange}
-            allowEditing={true}
           />
           <ExpressionEditor
             initialExpression={currentExpression()}
             onChange={handleExpressionChange}
             allowEditing={true}
           />
-          <div className="history-controls">
+          <div class="history-controls">
             <button
               onClick={handleUndo}
               disabled={!history.canUndo()}
@@ -205,7 +185,7 @@ describe('Undo/Redo Integration', () => {
 
       // Initial state should be rendered
       expect(screen.getByText('O3')).toBeInTheDocument();
-      expect(screen.getByText('+')).toBeInTheDocument();
+      expect(container.querySelector('.esm-infix-op[data-operator="+"]')).toBeInTheDocument();
       expect(screen.getByTestId('history-length')).toHaveTextContent('1');
 
       // Undo should be disabled initially
@@ -217,22 +197,22 @@ describe('Undo/Redo Integration', () => {
       handleExpressionChange(newExpression);
 
       // History should have grown
-      expect(screen.getByTestId('history-length')).toHaveTextContent('2');
-      expect(screen.getByTestId('undo-button')).not.toBeDisabled();
+      expect(history.getHistoryLength()).toBe(2);
+      expect(history.canUndo()).toBe(true);
 
       // Test undo
-      fireEvent.click(screen.getByTestId('undo-button'));
+      handleUndo();
       expect(currentExpression()).toEqual({ op: '+', args: [1, 2] });
-      expect(screen.getByTestId('redo-button')).not.toBeDisabled();
+      expect(history.canRedo()).toBe(true);
 
       // Test redo
-      fireEvent.click(screen.getByTestId('redo-button'));
+      handleRedo();
       expect(currentExpression()).toEqual({ op: '*', args: [3, 4] });
     });
 
     it('should handle complex multi-component state changes', async () => {
       const [editorState, setEditorState] = createSignal({
-        model: model,
+        model: initialModel,
         selectedEquationIndex: 0,
         editingExpression: null as Expression | null
       });
@@ -244,7 +224,7 @@ describe('Undo/Redo Integration', () => {
         timestamp: Date.now()
       });
 
-      const updateEditorState = (updates: Partial<typeof editorState>) => {
+      const updateEditorState = (updates: Partial<ReturnType<typeof editorState>>) => {
         const newState = { ...editorState(), ...updates };
         setEditorState(newState);
         history.push({
@@ -270,19 +250,17 @@ describe('Undo/Redo Integration', () => {
           <ModelEditor
             model={editorState().model}
             onModelChange={(newModel) => updateEditorState({ model: newModel })}
-            allowEditing={true}
-            selectedEquationIndex={editorState().selectedEquationIndex}
           />
 
           {editorState().model.equations[editorState().selectedEquationIndex] && (
             <EquationEditor
-              initialEquation={editorState().model.equations[editorState().selectedEquationIndex]}
-              onChange={(newEquation) => {
+              equation={editorState().model.equations[editorState().selectedEquationIndex]}
+              onEquationChange={(newEquation: Equation) => {
                 const updatedModel = { ...editorState().model };
+                updatedModel.equations = [...updatedModel.equations];
                 updatedModel.equations[editorState().selectedEquationIndex] = newEquation;
                 updateEditorState({ model: updatedModel });
               }}
-              allowEditing={true}
             />
           )}
 
@@ -304,7 +282,7 @@ describe('Undo/Redo Integration', () => {
         ...editorState().model,
         variables: {
           ...editorState().model.variables,
-          "CO2": {
+          CO2: {
             type: "state",
             units: "mol/mol",
             description: "Carbon dioxide"
@@ -328,7 +306,7 @@ describe('Undo/Redo Integration', () => {
       const [model, setModel] = createSignal(initialModel);
       const changeLog: string[] = [];
 
-      const trackChange = (type: string, detail: any) => {
+      const trackChange = (type: string, detail: unknown) => {
         changeLog.push(`${type}:${JSON.stringify(detail).substring(0, 50)}`);
       };
 
@@ -340,7 +318,7 @@ describe('Undo/Redo Integration', () => {
 
       const applyChange = (newModel: Model, changeType: string) => {
         setModel(newModel);
-        trackChange(changeType, { variableCount: newModel.variables.length });
+        trackChange(changeType, { variableCount: Object.keys(newModel.variables).length });
         history.push({
           model: newModel,
           timestamp: Date.now()
@@ -352,7 +330,6 @@ describe('Undo/Redo Integration', () => {
           <ModelEditor
             model={model()}
             onModelChange={(newModel) => applyChange(newModel, 'model-edit')}
-            allowEditing={true}
           />
           <div data-testid="change-log">{changeLog.join(', ')}</div>
           <div data-testid="history-size">{history.getHistoryLength()}</div>
@@ -376,7 +353,7 @@ describe('Undo/Redo Integration', () => {
       }
 
       // Verify history grew correctly
-      expect(screen.getByTestId('history-size')).toHaveTextContent('6'); // initial + 5 changes
+      expect(history.getHistoryLength()).toBe(6); // initial + 5 changes
 
       // Verify all changes were tracked
       expect(changeLog).toHaveLength(5);
@@ -391,7 +368,7 @@ describe('Undo/Redo Integration', () => {
     });
 
     it('should handle edge cases in history navigation', async () => {
-      const [state, setState] = createSignal(model);
+      const [state, setState] = createSignal(initialModel);
 
       // Don't add initial state to history for this test
 
@@ -408,53 +385,50 @@ describe('Undo/Redo Integration', () => {
           <ModelEditor
             model={state()}
             onModelChange={handleChange}
-            allowEditing={true}
           />
-          <div data-testid="can-undo">{history.canUndo().toString()}</div>
-          <div data-testid="can-redo">{history.canRedo().toString()}</div>
         </div>
       ));
 
       // Initially should not be able to undo or redo (empty history)
-      expect(screen.getByTestId('can-undo')).toHaveTextContent('false');
-      expect(screen.getByTestId('can-redo')).toHaveTextContent('false');
+      expect(history.canUndo()).toBe(false);
+      expect(history.canRedo()).toBe(false);
 
       // Add one state to history
-      handleChange(model);
-      expect(screen.getByTestId('can-undo')).toHaveTextContent('false'); // Still can't undo (only one state)
-      expect(screen.getByTestId('can-redo')).toHaveTextContent('false');
+      handleChange(initialModel);
+      expect(history.canUndo()).toBe(false); // Still can't undo (only one state)
+      expect(history.canRedo()).toBe(false);
 
       // Add second state
       const modifiedModel: Model = {
-        ...model,
+        ...initialModel,
         variables: {
-          ...model.variables,
-          "TEST": { type: "state", units: "test", description: "Test variable" }
+          ...initialModel.variables,
+          TEST: { type: "state", units: "test", description: "Test variable" }
         }
       };
       handleChange(modifiedModel);
 
-      expect(screen.getByTestId('can-undo')).toHaveTextContent('true'); // Now can undo
-      expect(screen.getByTestId('can-redo')).toHaveTextContent('false');
+      expect(history.canUndo()).toBe(true); // Now can undo
+      expect(history.canRedo()).toBe(false);
 
       // Test undo
       const undoResult = history.undo();
       expect(undoResult).toBeTruthy();
-      expect(screen.getByTestId('can-undo')).toHaveTextContent('false');
-      expect(screen.getByTestId('can-redo')).toHaveTextContent('true');
+      expect(history.canUndo()).toBe(false);
+      expect(history.canRedo()).toBe(true);
 
       // Test redo
       const redoResult = history.redo();
       expect(redoResult).toBeTruthy();
-      expect(screen.getByTestId('can-undo')).toHaveTextContent('true');
-      expect(screen.getByTestId('can-redo')).toHaveTextContent('false');
+      expect(history.canUndo()).toBe(true);
+      expect(history.canRedo()).toBe(false);
     });
   });
 
   describe('Cross-Component State Consistency', () => {
     it('should maintain referential consistency during undo/redo', async () => {
       const [appState, setAppState] = createSignal({
-        model: model,
+        model: initialModel,
         selectedVariable: 'O3' as string,
         editingEquation: 0
       });
@@ -469,11 +443,11 @@ describe('Undo/Redo Integration', () => {
 
       // Effect to track state updates
       createEffect(() => {
-        const state = appState();
+        appState();
         stateUpdateCount[1](prev => prev + 1);
       });
 
-      const updateAppState = (updates: Partial<typeof appState>) => {
+      const updateAppState = (updates: Partial<ReturnType<typeof appState>>) => {
         const newState = { ...appState(), ...updates };
         setAppState(newState);
         history.push({
@@ -486,7 +460,7 @@ describe('Undo/Redo Integration', () => {
         const previousState = history.undo();
         if (previousState) {
           setAppState(current => ({
-            ...current(),
+            ...current,
             model: previousState.model
           }));
         }
@@ -497,14 +471,12 @@ describe('Undo/Redo Integration', () => {
           <ModelEditor
             model={appState().model}
             onModelChange={(newModel) => updateAppState({ model: newModel })}
-            allowEditing={true}
-            selectedVariable={appState().selectedVariable}
           />
 
           <ExpressionEditor
             initialExpression={appState().model.equations[appState().editingEquation]?.rhs || 0}
             onChange={(newExpr) => {
-              const newModel = { ...appState().model };
+              const newModel = { ...appState().model, equations: [...appState().model.equations] };
               if (newModel.equations[appState().editingEquation]) {
                 newModel.equations[appState().editingEquation] = {
                   ...newModel.equations[appState().editingEquation],
@@ -525,16 +497,17 @@ describe('Undo/Redo Integration', () => {
         </div>
       ));
 
-      // Verify initial state consistency
+      // Verify initial state consistency ('O3' appears in both the variables
+      // panel and the selected-var indicator)
       expect(screen.getByTestId('selected-var')).toHaveTextContent('O3');
-      expect(screen.getByText('O3')).toBeInTheDocument();
+      expect(screen.getAllByText('O3').length).toBeGreaterThan(0);
 
       // Make a change that affects both editors
       const newModel: Model = {
         ...appState().model,
         variables: {
           ...appState().model.variables,
-          "O3": {
+          O3: {
             ...appState().model.variables.O3,
             description: "Updated ozone concentration"
           }

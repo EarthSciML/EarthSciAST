@@ -7,43 +7,38 @@
  * Components exported:
  * - <esm-expression-editor> - Interactive expression editing interface
  * - <esm-model-editor> - Full model editing interface
- * - <esm-file-editor> - Complete ESM file editor
+ * - <esm-file-editor> - ESM file summary/editor
  * - <esm-reaction-editor> - Reaction system editor
- * - <esm-coupling-graph> - Visual coupling graph editor
+ * - <esm-coupling-graph> - Visual coupling graph
  */
 
 import { customElement } from 'solid-element';
-import { createSignal } from 'solid-js';
-// Stub types for earthsci-toolkit - this will be properly imported when module resolution works
-type EsmFile = any;
-type Expression = any;
-type Model = any;
-type ReactionSystem = any;
+import { createComponent } from 'solid-js';
+import type { JSX } from 'solid-js';
+import { component_graph } from 'earthsci-toolkit';
+import type {
+  EsmFile,
+  Expression,
+  Model,
+  ReactionSystem,
+  ComponentNode,
+  CouplingEdge,
+  ComponentGraph,
+  Graph
+} from 'earthsci-toolkit';
 
 // Import the editor components
-import { ExpressionEditor, type ExpressionEditorProps } from './components/ExpressionEditor.js';
-import { EquationEditor, type EquationEditorProps } from './components/EquationEditor.js';
-import { ModelEditor, type ModelEditorProps } from './components/ModelEditor.js';
-import { ReactionEditor, type ReactionEditorProps } from './components/ReactionEditor.js';
-import { CouplingGraph as EsmEditorCouplingGraph, type CouplingGraphProps as EsmEditorCouplingGraphProps } from './components/CouplingGraph.js';
-import { ValidationPanel, type ValidationPanelProps } from './components/ValidationPanel.js';
-import { FileSummary, type FileSummaryProps } from './components/FileSummary.js';
+import { ExpressionEditor } from './components/ExpressionEditor.js';
+import { ModelEditor } from './components/ModelEditor.js';
+import { ReactionEditor } from './components/ReactionEditor.js';
+import { CouplingGraph as EsmEditorCouplingGraph } from './components/CouplingGraph.js';
+import { FileSummary } from './components/FileSummary.js';
 
 // Import styles
 import './web-components.css';
 
-// Stub function to convert EsmFile to Graph - this should be replaced with proper import when module resolution works
-function component_graph(esmFile: EsmFile): any {
-  // This is a temporary stub implementation
-  // The real implementation should come from earthsci-toolkit/src/graph.js
-  return {
-    nodes: [],
-    edges: []
-  };
-}
-
 /**
- * Web component wrapper for EquationEditor (expression editing)
+ * Web component wrapper for ExpressionEditor (expression editing)
  *
  * Usage:
  * <esm-expression-editor
@@ -69,42 +64,35 @@ export interface EsmExpressionEditorProps {
  * Usage:
  * <esm-model-editor
  *   model='{"variables": {...}, "equations": [...]}'
- *   allow-editing="true"
- *   show-validation="true">
+ *   name="MyModel"
+ *   allow-editing="true">
  * </esm-model-editor>
  */
 export interface EsmModelEditorProps {
   /** JSON string of the model to edit */
   model: string;
+  /** Display name for the model */
+  name?: string;
   /** Whether editing is allowed */
   'allow-editing'?: boolean;
-  /** Whether to show validation errors inline */
-  'show-validation'?: boolean;
-  /** JSON array string of validation errors to display */
-  'validation-errors'?: string;
+  /** Whether to show the expression palette */
+  'show-palette'?: boolean;
 }
 
 /**
- * Web component wrapper for complete ESM file editing
+ * Web component wrapper for a whole-file summary view
  *
  * Usage:
  * <esm-file-editor
- *   esm-file='{"components": {...}, "coupling": [...]}'
- *   allow-editing="true"
- *   enable-undo="true">
+ *   esm-file='{"esm": "0.8.0", "metadata": {...}, "models": {...}}'
+ *   show-summary="true">
  * </esm-file-editor>
  */
 export interface EsmFileEditorProps {
   /** JSON string of the ESM file to edit */
   'esm-file': string;
-  /** Whether editing is allowed */
-  'allow-editing'?: boolean;
-  /** Whether to enable undo/redo functionality */
-  'enable-undo'?: boolean;
-  /** Whether to show the file summary panel */
+  /** Whether to show the file summary expanded */
   'show-summary'?: boolean;
-  /** Whether to show validation panel */
-  'show-validation'?: boolean;
 }
 
 /**
@@ -112,9 +100,8 @@ export interface EsmFileEditorProps {
  *
  * Usage:
  * <esm-reaction-editor
- *   reaction-system='{"species": {...}, "reactions": [...]}'
- *   allow-editing="true"
- *   show-validation="true">
+ *   reaction-system='{"species": {...}, "parameters": {...}, "reactions": [...]}'
+ *   allow-editing="true">
  * </esm-reaction-editor>
  */
 export interface EsmReactionEditorProps {
@@ -122,10 +109,6 @@ export interface EsmReactionEditorProps {
   'reaction-system': string;
   /** Whether editing is allowed */
   'allow-editing'?: boolean;
-  /** Whether to show validation errors */
-  'show-validation'?: boolean;
-  /** JSON array string of validation errors */
-  'validation-errors'?: string;
 }
 
 /**
@@ -133,11 +116,9 @@ export interface EsmReactionEditorProps {
  *
  * Usage:
  * <esm-coupling-graph
- *   esm-file='{"components": [...], "coupling": [...]}'
+ *   esm-file='{"esm": "0.8.0", "models": {...}, "coupling": [...]}'
  *   width="800"
- *   height="600"
- *   interactive="true"
- *   allow-editing="true">
+ *   height="600">
  * </esm-coupling-graph>
  */
 export interface EsmCouplingGraphProps {
@@ -147,270 +128,168 @@ export interface EsmCouplingGraphProps {
   width?: number;
   /** Height of the visualization area */
   height?: number;
-  /** Whether the visualization should be interactive */
-  interactive?: boolean;
-  /** Whether coupling editing is allowed */
-  'allow-editing'?: boolean;
+  /** Whether to show the minimap */
+  'show-minimap'?: boolean;
+}
+
+/** Interpret a web-component attribute value as a boolean (default true) */
+function attrBool(value: unknown): boolean {
+  return value !== false && value !== 'false';
+}
+
+/** Dispatch a bubbling CustomEvent from a custom element host */
+function dispatch(element: HTMLElement | undefined, type: string, detail: unknown): void {
+  if (typeof window !== 'undefined' && element) {
+    element.dispatchEvent(new CustomEvent(type, { detail, bubbles: true }));
+  }
+}
+
+/** Render an inline error message */
+function renderError(message: string): HTMLElement {
+  const errorDiv = document.createElement('div');
+  errorDiv.className = 'error-state';
+  errorDiv.textContent = message;
+  return errorDiv;
 }
 
 /**
- * Convert kebab-case attributes to camelCase props and handle type conversions
+ * Convert the toolkit's ComponentGraph ({nodes, edges: CouplingEdge[]}) into the
+ * Graph<ComponentNode, CouplingEdge> shape (with adjacency helpers) that the
+ * CouplingGraph component consumes.
  */
-function convertWebComponentProps<T>(
-  attrs: Record<string, any>,
-  conversions: Record<string, (value: string) => any> = {}
-): T {
-  const props: Record<string, any> = {};
+function toGraph(componentGraph: ComponentGraph): Graph<ComponentNode, CouplingEdge> {
+  const edges = componentGraph.edges.map(edge => ({
+    source: edge.from,
+    target: edge.to,
+    data: edge
+  }));
 
-  for (const [key, value] of Object.entries(attrs)) {
-    // Convert kebab-case to camelCase
-    const camelKey = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
-
-    // Apply custom conversions
-    if (conversions[key]) {
-      props[camelKey] = conversions[key](value);
-    } else if (typeof value === 'string') {
-      // Handle common string conversions
-      if (value === 'true' || value === 'false') {
-        props[camelKey] = value === 'true';
-      } else if (/^\d+$/.test(value)) {
-        props[camelKey] = parseInt(value, 10);
-      } else if (/^\d*\.\d+$/.test(value)) {
-        props[camelKey] = parseFloat(value);
-      } else {
-        props[camelKey] = value;
+  return {
+    nodes: componentGraph.nodes,
+    edges,
+    adjacency: (node: string) => {
+      const neighbors = new Set<string>();
+      for (const edge of edges) {
+        if (edge.source === node) neighbors.add(edge.target);
+        if (edge.target === node) neighbors.add(edge.source);
       }
-    } else {
-      props[camelKey] = value;
-    }
-  }
-
-  return props as T;
+      return Array.from(neighbors);
+    },
+    predecessors: (node: string) =>
+      edges.filter(edge => edge.target === node).map(edge => edge.source),
+    successors: (node: string) =>
+      edges.filter(edge => edge.source === node).map(edge => edge.target)
+  };
 }
 
-// Web component definitions with proper event handling
+// Web component render functions wired to the real component props
 
-export const EsmExpressionEditorComponent = (props: any) => {
+export const EsmExpressionEditorComponent = (props: Record<string, any>): JSX.Element => {
   if (!props.expression) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-state';
-    errorDiv.textContent = 'Missing required attribute: expression';
-    return errorDiv;
+    return renderError('Missing required attribute: expression');
   }
 
   try {
     const expression: Expression = JSON.parse(props.expression);
 
-    const componentProps: ExpressionEditorProps = {
+    return createComponent(ExpressionEditor, {
       initialExpression: expression,
-      onChange: (newExpr: Expression) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('change', {
-            detail: { expression: newExpr },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      allowEditing: props['allow-editing'] !== 'false',
-      showPalette: props['show-palette'] !== 'false',
-      showValidation: props['show-validation'] !== 'false'
-    };
-
-    return ExpressionEditor(componentProps);
+      onChange: (newExpr: Expression) =>
+        dispatch(props.element, 'change', { expression: newExpr }),
+      allowEditing: attrBool(props['allow-editing']),
+      showPalette: attrBool(props['show-palette']),
+      showValidation: attrBool(props['show-validation'])
+    });
   } catch (error) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-state';
-    errorDiv.textContent = `Component error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    return errorDiv;
+    return renderError(`Component error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
-export const EsmModelEditorComponent = (props: any) => {
+export const EsmModelEditorComponent = (props: Record<string, any>): JSX.Element => {
   if (!props.model) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-state';
-    errorDiv.textContent = 'Missing required attribute: model';
-    return errorDiv;
+    return renderError('Missing required attribute: model');
   }
 
   try {
     const model: Model = JSON.parse(props.model);
-    const validationErrors: string[] = props['validation-errors']
-      ? JSON.parse(props['validation-errors'])
-      : [];
 
-    const componentProps: ModelEditorProps = {
-      model: model,
-      onChange: (updatedModel: Model) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('change', {
-            detail: { model: updatedModel },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      allowEditing: props['allow-editing'] !== 'false',
-      showValidation: props['show-validation'] !== 'false',
-      validationErrors: validationErrors
-    };
-
-    return ModelEditor(componentProps);
+    return createComponent(ModelEditor, {
+      model,
+      name: typeof props.name === 'string' && props.name ? props.name : undefined,
+      onModelChange: (updatedModel: Model) =>
+        dispatch(props.element, 'change', { model: updatedModel }),
+      readonly: !attrBool(props['allow-editing']),
+      showPalette: attrBool(props['show-palette'])
+    });
   } catch (error) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-state';
-    errorDiv.textContent = `Component error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    return errorDiv;
+    return renderError(`Component error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
-export const EsmFileEditorComponent = (props: any) => {
+export const EsmFileEditorComponent = (props: Record<string, any>): JSX.Element => {
   const esmFileValue = props['esm-file'] || props.esmFile;
   if (!esmFileValue) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = 'Missing required attribute: esm-file';
-      return errorDiv;
-    };
+    return renderError('Missing required attribute: esm-file');
   }
 
   try {
     const esmFile: EsmFile = JSON.parse(esmFileValue);
-    const [currentFile, setCurrentFile] = createSignal(esmFile);
 
-    // This would be a comprehensive file editor combining all components
-    // For now, we'll use FileSummary as a placeholder
-    const componentProps: FileSummaryProps = {
-      esmFile: currentFile(),
-      showDetails: props['show-summary'] !== 'false',
-      showExportOptions: true,
-      onComponentTypeClick: (componentType: string) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('componentTypeClick', {
-            detail: { componentType },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      onExport: (format: 'json' | 'yaml' | 'toml') => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('export', {
-            detail: { format, file: currentFile() },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      }
-    };
-
-    return FileSummary(componentProps);
+    return createComponent(FileSummary, {
+      esmFile,
+      collapsed: !attrBool(props['show-summary']),
+      onSectionClick: (sectionType: string, sectionId?: string) =>
+        dispatch(props.element, 'sectionClick', { sectionType, sectionId })
+    });
   } catch (error) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = `Component error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      return errorDiv;
-    };
+    return renderError(`Component error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
-export const EsmReactionEditorComponent = (props: any) => {
+export const EsmReactionEditorComponent = (props: Record<string, any>): JSX.Element => {
   const reactionSystemValue = props['reaction-system'] || props.reactionSystem;
   if (!reactionSystemValue) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = 'Missing required attribute: reaction-system';
-      return errorDiv;
-    };
+    return renderError('Missing required attribute: reaction-system');
   }
 
   try {
     const reactionSystem: ReactionSystem = JSON.parse(reactionSystemValue);
-    const validationErrors: string[] = props['validation-errors']
-      ? JSON.parse(props['validation-errors'])
-      : [];
 
-    const componentProps: ReactionEditorProps = {
-      reactionSystem: reactionSystem,
-      onChange: (updatedSystem: ReactionSystem) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('change', {
-            detail: { reactionSystem: updatedSystem },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      allowEditing: props['allow-editing'] !== 'false',
-      showValidation: props['show-validation'] !== 'false',
-      validationErrors: validationErrors
-    };
-
-    return ReactionEditor(componentProps);
+    return createComponent(ReactionEditor, {
+      reactionSystem,
+      onReactionSystemChange: (updatedSystem: ReactionSystem) =>
+        dispatch(props.element, 'change', { reactionSystem: updatedSystem }),
+      readonly: !attrBool(props['allow-editing'])
+    });
   } catch (error) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = `Component error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      return errorDiv;
-    };
+    return renderError(`Component error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
-export const EsmCouplingGraphComponent = (props: any) => {
+export const EsmCouplingGraphComponent = (props: Record<string, any>): JSX.Element => {
   const esmFileValue = props['esm-file'] || props.esmFile;
   if (!esmFileValue) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = 'Missing required attribute: esm-file';
-      return errorDiv;
-    };
+    return renderError('Missing required attribute: esm-file');
   }
 
   try {
     const esmFile: EsmFile = JSON.parse(esmFileValue);
 
-    // Convert the ESM file to a graph for the esm-editor CouplingGraph component
-    const graph = component_graph(esmFile);
+    // Convert the ESM file to a graph for the CouplingGraph component
+    const graph = toGraph(component_graph(esmFile));
 
-    const componentProps: EsmEditorCouplingGraphProps = {
-      graph: graph,
-      onNodeSelect: (node: any) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('componentSelect', {
-            detail: { componentId: node.id },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      onEdgeSelect: (edge: any) => {
-        if (typeof window !== 'undefined' && props.element) {
-          const event = new CustomEvent('couplingEdit', {
-            detail: { coupling: edge.data, edgeId: edge.id },
-            bubbles: true
-          });
-          props.element.dispatchEvent(event);
-        }
-      },
-      width: props.width ? parseInt(props.width, 10) : undefined,
-      height: props.height ? parseInt(props.height, 10) : undefined,
-      showMinimap: true
-    };
-
-    return EsmEditorCouplingGraph(componentProps);
+    return createComponent(EsmEditorCouplingGraph, {
+      graph,
+      onNodeSelect: (node: ComponentNode) =>
+        dispatch(props.element, 'componentSelect', { componentId: node.id }),
+      onEdgeSelect: (edge: CouplingEdge) =>
+        dispatch(props.element, 'couplingEdit', { coupling: edge.coupling, edgeId: edge.id }),
+      width: props.width !== undefined ? parseInt(String(props.width), 10) : undefined,
+      height: props.height !== undefined ? parseInt(String(props.height), 10) : undefined,
+      showMinimap: attrBool(props['show-minimap'])
+    });
   } catch (error) {
-    return () => {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'error-state';
-      errorDiv.textContent = `Component error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      return errorDiv;
-    };
+    return renderError(`Component error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
@@ -423,7 +302,6 @@ export function registerWebComponents() {
   }
 
   try {
-    // Register editor components with proper shadow DOM and styling
     customElement('esm-expression-editor', {
       expression: '',
       'allow-editing': true,
@@ -433,32 +311,26 @@ export function registerWebComponents() {
 
     customElement('esm-model-editor', {
       model: '',
+      name: '',
       'allow-editing': true,
-      'show-validation': true,
-      'validation-errors': '[]'
+      'show-palette': true
     }, (props, { element }) => EsmModelEditorComponent({ ...props, element }));
 
     customElement('esm-file-editor', {
       'esm-file': '',
-      'allow-editing': true,
-      'enable-undo': true,
-      'show-summary': true,
-      'show-validation': true
+      'show-summary': true
     }, (props, { element }) => EsmFileEditorComponent({ ...props, element }));
 
     customElement('esm-reaction-editor', {
       'reaction-system': '',
-      'allow-editing': true,
-      'show-validation': true,
-      'validation-errors': '[]'
+      'allow-editing': true
     }, (props, { element }) => EsmReactionEditorComponent({ ...props, element }));
 
     customElement('esm-coupling-graph', {
       'esm-file': '',
       width: 800,
       height: 600,
-      interactive: true,
-      'allow-editing': true
+      'show-minimap': true
     }, (props, { element }) => EsmCouplingGraphComponent({ ...props, element }));
 
     console.log('ESM Editor web components registered successfully');
@@ -478,12 +350,3 @@ if (typeof window !== 'undefined') {
     setTimeout(registerWebComponents, 0);
   }
 }
-
-// Export component interfaces for TypeScript users
-export type {
-  EsmExpressionEditorProps,
-  EsmModelEditorProps,
-  EsmFileEditorProps,
-  EsmReactionEditorProps,
-  EsmCouplingGraphProps
-};

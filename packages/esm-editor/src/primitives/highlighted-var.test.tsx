@@ -3,25 +3,23 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createRoot, createSignal } from 'solid-js';
+import { createRoot } from 'solid-js';
 import {
   buildVarEquivalences,
   normalizeScopedReference,
   createHighlightContext,
-  isHighlighted,
-  type ScopingMode
+  isHighlighted
 } from './highlighted-var';
 import type { EsmFile, CouplingEntry } from 'earthsci-toolkit';
 
 // Helper to create a minimal ESM file
-function createEsmFile(couplings: CouplingEntry[] = []): EsmFile {
+function createEsmFile(coupling: CouplingEntry[] = []): EsmFile {
   return {
-    version: "0.1.0",
+    esm: "0.8.0",
     metadata: {
-      name: "test-file",
-      version: "1.0.0"
+      name: "test-file"
     },
-    couplings
+    coupling
   } as EsmFile;
 }
 

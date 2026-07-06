@@ -3,7 +3,7 @@
  */
 
 import { render, screen } from '@solidjs/testing-library';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { EsmFile } from 'earthsci-toolkit';
 import { ValidationPanel } from './ValidationPanel';
 
@@ -14,9 +14,9 @@ vi.mock('earthsci-toolkit', () => ({
 
 describe('ValidationPanel', () => {
   const validEsmFile: EsmFile = {
-    esm_version: "1.0.0",
+    esm: "1.0.0",
     metadata: {
-      title: "Test Model",
+      name: "Test Model",
       description: "A test model"
     },
     models: {
@@ -32,7 +32,10 @@ describe('ValidationPanel', () => {
   };
 
   const invalidEsmFile: EsmFile = {
-    esm_version: "1.0.0",
+    esm: "1.0.0",
+    metadata: {
+      name: "Invalid Test Model"
+    },
     models: {
       TestModel: {
         variables: {
@@ -146,7 +149,7 @@ describe('ValidationPanel', () => {
     const onErrorClick = vi.fn();
     render(() => <ValidationPanel esmFile={invalidEsmFile} onErrorClick={onErrorClick} />);
 
-    const errorItem = screen.getByText('Test error').closest('.error-item');
+    const errorItem = screen.getByText('Test error').closest('.error-item') as HTMLElement | null;
     expect(errorItem).toBeInTheDocument();
 
     errorItem?.click();
@@ -170,7 +173,7 @@ describe('ValidationPanel', () => {
       />
     ));
 
-    const header = screen.getByText('Validation Results').closest('.validation-header');
+    const header = screen.getByText('Validation Results').closest('.validation-header') as HTMLElement | null;
     expect(header).toBeInTheDocument();
 
     header?.click();

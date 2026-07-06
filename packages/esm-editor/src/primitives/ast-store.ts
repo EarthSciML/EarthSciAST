@@ -8,7 +8,7 @@
 
 import { createStore, produce, Store, SetStoreFunction } from 'solid-js/store';
 import { createSignal, createMemo } from 'solid-js';
-import type { EsmFile, Expression, Model, ReactionSystem } from 'earthsci-toolkit';
+import type { EsmFile } from 'earthsci-toolkit';
 import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js';
 
 /**
@@ -60,11 +60,11 @@ export interface AstStore {
  */
 function createDefaultEsmFile(): EsmFile {
   return {
+    esm: "0.8.0",
     schema_version: "1.0",
     metadata: {
       name: "Untitled Model",
       description: "A new ESM model",
-      version: "0.1.0",
       authors: [],
       created: new Date().toISOString(),
       modified: new Date().toISOString()

@@ -189,27 +189,24 @@ function extractVariableNames(esmFile: EsmFile | null): string[] {
 
   const variables = new Set<string>();
 
-  // Extract from models
+  // Extract from models (variables — including parameters — are keyed by name)
   if (esmFile.models) {
-    for (const model of esmFile.models) {
-      // Add declared variables/parameters
-      if (model.variables) {
-        for (const variable of model.variables) {
-          variables.add(variable.name);
-        }
+    for (const model of Object.values(esmFile.models)) {
+      if ('ref' in model) continue; // Skip external subsystem references
+      for (const name of Object.keys(model.variables || {})) {
+        variables.add(name);
       }
+    }
+  }
 
-      if (model.parameters) {
-        for (const param of model.parameters) {
-          variables.add(param.name);
-        }
+  // Extract species and parameters from reaction systems
+  if (esmFile.reaction_systems) {
+    for (const system of Object.values(esmFile.reaction_systems)) {
+      for (const name of Object.keys(system.species || {})) {
+        variables.add(name);
       }
-
-      // Add chemical species
-      if (model.species) {
-        for (const species of model.species) {
-          variables.add(species.name);
-        }
+      for (const name of Object.keys(system.parameters || {})) {
+        variables.add(name);
       }
     }
   }

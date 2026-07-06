@@ -1,27 +1,24 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@solidjs/testing-library';
+import type { Model } from 'earthsci-toolkit';
 import { ModelEditor } from './ModelEditor';
 
 describe('ModelEditor', () => {
-  const mockModel = {
-    name: 'Test Model',
-    description: 'A test model for demonstration',
-    variables: [
-      {
-        name: 'x',
+  const mockModel: Model = {
+    variables: {
+      x: {
         type: 'state',
-        default_value: 1.0,
-        unit: 'm',
+        default: 1.0,
+        units: 'm',
         description: 'Position variable'
       },
-      {
-        name: 'k_rate',
+      k_rate: {
         type: 'parameter',
-        default_value: 0.5,
-        unit: 's⁻¹',
+        default: 0.5,
+        units: 's⁻¹',
         description: 'Rate constant'
       }
-    ],
+    },
     equations: [
       {
         lhs: 'x',
@@ -34,6 +31,8 @@ describe('ModelEditor', () => {
 
   const mockProps = {
     model: mockModel,
+    name: 'Test Model',
+    description: 'A test model for demonstration',
     onModelChange: vi.fn(),
     readonly: false,
     showPalette: true,
@@ -101,15 +100,14 @@ describe('ModelEditor', () => {
   });
 
   it('displays empty state for models without content', () => {
-    const emptyModel = {
-      name: 'Empty Model',
-      variables: [],
+    const emptyModel: Model = {
+      variables: {},
       equations: [],
       continuous_events: [],
       discrete_events: []
     };
 
-    render(() => <ModelEditor {...mockProps} model={emptyModel} />);
+    render(() => <ModelEditor {...mockProps} model={emptyModel} name="Empty Model" />);
 
     expect(screen.getByText('No variables defined')).toBeInTheDocument();
     expect(screen.getByText('No equations defined')).toBeInTheDocument();

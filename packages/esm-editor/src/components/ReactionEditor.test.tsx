@@ -1,28 +1,27 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@solidjs/testing-library';
+import type { ReactionSystem } from 'earthsci-toolkit';
 import { ReactionEditor } from './ReactionEditor';
 
 describe('ReactionEditor', () => {
-  const mockReactionSystem = {
-    name: 'Test Reaction System',
+  const mockReactionSystem: ReactionSystem = {
     species: {
       'NO': {
-        formula: 'NO',
         description: 'Nitrogen monoxide'
       },
       'O3': {
-        formula: 'O₃',
         description: 'Ozone'
       },
       'NO2': {
-        formula: 'NO₂',
         description: 'Nitrogen dioxide'
       }
     },
+    parameters: {},
     reactions: [
       {
+        id: 'R1',
         name: 'NO oxidation',
-        reactants: [
+        substrates: [
           { species: 'NO', stoichiometry: 1 },
           { species: 'O3', stoichiometry: 1 }
         ],
@@ -102,10 +101,10 @@ describe('ReactionEditor', () => {
 
   it('displays empty state for reaction system without reactions', () => {
     const emptySystem = {
-      name: 'Empty System',
-      species: [],
+      species: {},
+      parameters: {},
       reactions: []
-    };
+    } as unknown as ReactionSystem;
 
     render(() => <ReactionEditor {...mockProps} reactionSystem={emptySystem} />);
 

@@ -19,11 +19,11 @@ describe('History Management', () => {
   });
 
   const createTestFile = (name: string): EsmFile => ({
+    esm: "0.8.0",
     schema_version: "1.0",
     metadata: {
       name,
       description: "Test model",
-      version: "0.1.0",
       authors: [],
       created: new Date().toISOString(),
       modified: new Date().toISOString()

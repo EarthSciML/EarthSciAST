@@ -1,6 +1,5 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@solidjs/testing-library';
-import { createSignal } from 'solid-js';
+import { render, screen } from '@solidjs/testing-library';
 import { EquationEditor } from './EquationEditor';
 
 describe('EquationEditor', () => {
@@ -44,15 +43,15 @@ describe('EquationEditor', () => {
     expect(editor).toBeInTheDocument();
   });
 
-  it('displays equation description when provided', () => {
-    const equationWithDescription = {
+  it('displays equation comment when provided', () => {
+    const equationWithComment = {
       ...mockEquation,
-      description: 'Test equation description'
+      _comment: 'Test equation comment'
     };
 
-    render(() => <EquationEditor {...mockProps} equation={equationWithDescription} />);
+    render(() => <EquationEditor {...mockProps} equation={equationWithComment} />);
 
-    expect(screen.getByText('Test equation description')).toBeInTheDocument();
+    expect(screen.getByText('Test equation comment')).toBeInTheDocument();
   });
 
   it('applies custom CSS classes', () => {

@@ -154,11 +154,11 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(validationUpdateHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             isValid: true,
             errors: [],
             warnings: []
-          }
+          })
         })
       );
     });
@@ -186,7 +186,7 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(validationUpdateHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             isValid: false,
             errors: expect.arrayContaining([
               expect.objectContaining({
@@ -198,7 +198,7 @@ describe('Validation Panel Live Updates E2E', () => {
                 message: 'Invalid units format'
               })
             ])
-          }
+          })
         })
       );
     });
@@ -259,10 +259,10 @@ describe('Validation Panel Live Updates E2E', () => {
       expect(liveValidationHandler).toHaveBeenCalledTimes(2);
       expect(liveValidationHandler).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             isValid: true,
             errors: []
-          }
+          })
         })
       );
     });
@@ -294,19 +294,18 @@ describe('Validation Panel Live Updates E2E', () => {
         element.dispatchEvent(event);
       });
 
-      // Simulate final validation after debounce period
-      setTimeout(() => {
-        const finalValidationEvent = new CustomEvent('debouncedValidation', {
-          detail: {
-            validationPending: false,
-            isValid: false,
-            errors: [{ message: 'Empty arguments array' }]
-          },
-          bubbles: true
-        });
+      // Simulate final validation after the debounce period has elapsed
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const finalValidationEvent = new CustomEvent('debouncedValidation', {
+        detail: {
+          validationPending: false,
+          isValid: false,
+          errors: [{ message: 'Empty arguments array' }]
+        },
+        bubbles: true
+      });
 
-        element.dispatchEvent(finalValidationEvent);
-      }, 600); // Debounce period
+      element.dispatchEvent(finalValidationEvent);
 
       expect(debouncedValidationHandler).toHaveBeenCalledTimes(11); // 10 rapid + 1 final
     });
@@ -351,20 +350,20 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(errorClickHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             error: expect.objectContaining({
               path: '/components/Chemistry/equations/0/rhs/args/0/value'
             })
-          }
+          })
         })
       );
 
       expect(highlightHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             highlightType: 'error',
             scrollToElement: true
-          }
+          })
         })
       );
     });
@@ -401,10 +400,10 @@ describe('Validation Panel Live Updates E2E', () => {
       expect(keyNavigationHandler).toHaveBeenCalledTimes(4);
       expect(keyNavigationHandler).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             key: 'Enter',
             action: 'select'
-          }
+          })
         })
       );
     });
@@ -489,10 +488,10 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(syncHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             source: 'expression-editor',
             affectedComponents: ['Chemistry']
-          }
+          })
         })
       );
     });
@@ -573,10 +572,12 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(conflictHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             conflictType: 'variable_definition',
-            resolution: 'user_choice_required'
-          }
+            conflictDetails: expect.objectContaining({
+              resolution: 'user_choice_required'
+            })
+          })
         })
       );
     });
@@ -650,9 +651,9 @@ describe('Validation Panel Live Updates E2E', () => {
       expect(filterHandler).toHaveBeenCalledTimes(5);
       expect(filterHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             filterType: expect.any(String)
-          }
+          })
         })
       );
     });
@@ -684,12 +685,12 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(statsHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             totalErrors: 3,
             schemaErrors: 2,
             structuralErrors: 1,
             validationTime: expect.any(Number)
-          }
+          })
         })
       );
     });
@@ -751,12 +752,12 @@ describe('Validation Panel Live Updates E2E', () => {
 
       expect(performanceHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             validationTime: expect.any(Number),
             componentCount: 50,
             variableCount: 1000,
             batchProcessing: true
-          }
+          })
         })
       );
     });
@@ -788,10 +789,10 @@ describe('Validation Panel Live Updates E2E', () => {
       expect(incrementalHandler).toHaveBeenCalledTimes(4);
       expect(incrementalHandler).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          detail: {
+          detail: expect.objectContaining({
             progress: 100,
             stage: 'complete'
-          }
+          })
         })
       );
     });

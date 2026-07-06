@@ -5,7 +5,7 @@
  * Supports various delimiter types (parentheses, brackets, braces) with CSS scaling.
  */
 
-import { Component, JSX, createEffect, onMount } from 'solid-js';
+import { Component, JSX, createEffect } from 'solid-js';
 import './delimiters.css';
 
 export interface DelimitersProps {

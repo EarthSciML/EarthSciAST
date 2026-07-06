@@ -9,8 +9,8 @@
  * - Drag-and-drop integration with expression tree
  */
 
-import { Component, createSignal, createMemo, For, Show, JSX } from 'solid-js';
-import type { Expression, ExpressionNode as ExprNode, Model } from 'earthsci-toolkit';
+import { Component, createSignal, createMemo, For, Show } from 'solid-js';
+import type { Expression, Model } from 'earthsci-toolkit';
 
 export interface ExpressionPaletteProps {
   /** Current model for context-aware suggestions */
@@ -342,29 +342,14 @@ const ContextSuggestions: Component<{
 
     const items: { label: string; expression: Expression; type: 'species' | 'variable' | 'parameter' }[] = [];
 
-    // Add model variables
+    // Add model variables (keyed by name in the ESM schema)
     if (props.model.variables) {
-      props.model.variables.forEach(variable => {
+      Object.entries(props.model.variables).forEach(([name, variable]) => {
         items.push({
-          label: variable.name,
-          expression: variable.name,
-          type: 'variable'
+          label: name,
+          expression: name,
+          type: variable.type === 'parameter' ? 'parameter' : 'variable'
         });
-      });
-    }
-
-    // Add species from reaction systems
-    if (props.model.reaction_systems) {
-      props.model.reaction_systems.forEach(system => {
-        if (system.species) {
-          system.species.forEach(species => {
-            items.push({
-              label: species.name,
-              expression: species.name,
-              type: 'species'
-            });
-          });
-        }
       });
     }
 

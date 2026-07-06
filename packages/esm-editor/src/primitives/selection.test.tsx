@@ -8,8 +8,7 @@ import {
   getVariableSuggestions,
   pathsEqual,
   pathToString,
-  stringToPath,
-  type NodeDetails
+  stringToPath
 } from './selection';
 import type { Expression, EsmFile } from 'earthsci-toolkit';
 
@@ -37,20 +36,34 @@ describe('Selection primitives', () => {
 
   describe('getVariableSuggestions', () => {
     const mockEsmFile: EsmFile = {
-      format_version: '1.0.0',
-      models: [
-        {
-          name: 'TestModel',
-          variables: [
-            { name: 'temperature', type: 'continuous', units: 'K' },
-            { name: 'pressure', type: 'continuous', units: 'Pa' }
-          ],
-          species: [
-            { name: 'O3', type: 'chemical' },
-            { name: 'NO2', type: 'chemical' }
+      esm: '0.8.0',
+      metadata: { name: 'Selection test file' },
+      models: {
+        TestModel: {
+          variables: {
+            temperature: { type: 'state', units: 'K' },
+            pressure: { type: 'state', units: 'Pa' }
+          },
+          equations: []
+        }
+      },
+      reaction_systems: {
+        Chemistry: {
+          species: {
+            O3: {},
+            NO2: {}
+          },
+          parameters: {},
+          reactions: [
+            {
+              id: 'R1',
+              substrates: [{ species: 'O3', stoichiometry: 1 }],
+              products: [{ species: 'NO2', stoichiometry: 1 }],
+              rate: 'k1'
+            }
           ]
         }
-      ]
+      }
     };
 
     it('returns all variables when no search term', () => {

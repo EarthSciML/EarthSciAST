@@ -67,7 +67,7 @@ export interface ValidationSignals {
 /**
  * Get severity level for a validation error
  */
-function getErrorSeverity(error: ValidationError, type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
+function getErrorSeverity(_error: ValidationError, type: 'schema' | 'structural' | 'unit'): 'error' | 'warning' {
   // Unit errors are typically warnings
   if (type === 'unit') {
     return 'warning';
@@ -106,7 +106,7 @@ export function createValidationSignals(
   const [forceRevalidation, setForceRevalidation] = createSignal(0);
 
   // Debounced validation trigger
-  let validationTimeout: number | undefined;
+  let validationTimeout: ReturnType<typeof setTimeout> | undefined;
 
   // Core validation result with debouncing
   const validationResult = createMemo((): ValidationResult => {
@@ -193,16 +193,22 @@ export function createValidationSignals(
       });
     });
 
-    // Add unit warnings
+    // Add unit warnings (UnitWarning carries message/code/location/equation, not path/details)
     (result.unit_warnings || []).forEach(warning => {
-      errors.push({
-        path: warning.path || '$',
+      const path = warning.location || '$';
+      const details: Record<string, unknown> = {};
+      if (warning.equation !== undefined) details.equation = warning.equation;
+      const asError: ValidationError = {
+        path,
         message: warning.message,
         code: warning.code || 'unit_warning',
-        details: warning.details || {},
-        severity: getErrorSeverity(warning as ValidationError, 'unit'),
+        details
+      };
+      errors.push({
+        ...asError,
+        severity: getErrorSeverity(asError, 'unit'),
         type: 'unit',
-        highlighted: highlighted === (warning.path || '$')
+        highlighted: highlighted === path
       });
     });
 
@@ -328,7 +334,7 @@ export function createDebouncedValidation(
   validationFn: () => void,
   debounceMs: number = 300
 ) {
-  let timeout: number | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
 
   const debouncedFn = () => {
     if (timeout) {

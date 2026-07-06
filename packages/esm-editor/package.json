@@ -25,7 +25,10 @@
     "test:e2e:watch": "vitest --watch tests/editor/",
     "test:all": "vitest run src/ && vitest run tests/editor/",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src"
   },
   "files": [
     "dist",
@@ -47,40 +50,40 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/user/EarthSciSerialization.git",
+    "url": "git+https://github.com/EarthSciML/EarthSciSerialization.git",
     "directory": "packages/esm-editor"
   },
   "bugs": {
-    "url": "https://github.com/user/EarthSciSerialization/issues"
+    "url": "https://github.com/EarthSciML/EarthSciSerialization/issues"
   },
-  "homepage": "https://github.com/user/EarthSciSerialization#readme",
+  "homepage": "https://github.com/EarthSciML/EarthSciSerialization#readme",
   "dependencies": {
     "d3-force": "^3.0.0",
-    "d3-selection": "^3.0.0",
-    "d3-zoom": "^3.0.0",
     "solid-element": "^1.9.1",
     "solid-js": "^1.8.0"
   },
   "peerDependencies": {
-    "earthsci-toolkit": "^0.0.3",
+    "earthsci-toolkit": "^0.8.0",
     "solid-element": "^1.9.1",
     "solid-js": "^1.8.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@solidjs/testing-library": "^0.8.10",
     "@testing-library/jest-dom": "^6.9.1",
     "@types/d3-force": "^3.0.0",
-    "@types/d3-selection": "^3.0.11",
-    "@types/d3-zoom": "^3.0.8",
     "@types/node": "^20.0.0",
     "earthsci-toolkit": "file:../earthsci-toolkit",
+    "eslint": "^10.6.0",
     "jsdom": "^25.0.0",
+    "prettier": "^3.9.4",
     "typescript": "^5.0.0",
+    "typescript-eslint": "^8.62.1",
     "vite": "^8.0.16",
     "vite-plugin-solid": "^2.11.10",
     "vitest": "^4.1.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }

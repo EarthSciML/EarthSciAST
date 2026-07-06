@@ -11,8 +11,8 @@
  * - UI for adding/removing reactions
  */
 
-import { Component, createSignal, createMemo, For, Show, JSX } from 'solid-js';
-import type { ReactionSystem, Reaction, Species, ModelVariable, Expression } from 'earthsci-toolkit';
+import { Component, createSignal, createMemo, For, Show } from 'solid-js';
+import type { ReactionSystem, Reaction, Species, Parameter, Expression } from 'earthsci-toolkit';
 import { ExpressionNode } from './ExpressionNode';
 
 export interface ReactionEditorProps {
@@ -30,6 +30,18 @@ export interface ReactionEditorProps {
 
   /** CSS class for styling */
   class?: string;
+}
+
+/** A species paired with its name (the key in the reaction system's species record) */
+interface NamedSpecies {
+  name: string;
+  species: Species;
+}
+
+/** A parameter paired with its name (the key in the reaction system's parameters record) */
+interface NamedParameter {
+  name: string;
+  parameter: Parameter;
 }
 
 /**
@@ -52,7 +64,6 @@ const renderChemicalFormula = (formula: string): string => {
 const ReactionItem: Component<{
   reaction: Reaction;
   index: number;
-  species: { [k: string]: Species };
   onEditReaction?: (index: number, reaction: Reaction) => void;
   onRemoveReaction?: (index: number) => void;
   highlightedVars?: Set<string>;
@@ -61,9 +72,6 @@ const ReactionItem: Component<{
   const [isExpanded, setIsExpanded] = createSignal(false);
   const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-
-  // Create species lookup for chemical formulas
-  const speciesMap = createMemo(() => props.species || {});
 
   // Create reactive highlighted vars set
   const highlightedVars = createMemo(() => {
@@ -76,17 +84,16 @@ const ReactionItem: Component<{
     return baseHighlighted;
   });
 
-  // Render reactants with chemical notation
-  const renderReactants = () => {
-    if (!props.reaction.reactants) return '';
+  // Render substrates (reactants) with chemical notation
+  const renderSubstrates = () => {
+    if (!props.reaction.substrates) return '';
 
-    return props.reaction.reactants
-      .map((reactant, idx) => {
-        const species = speciesMap()[reactant.species];
-        const formula = species?.formula || reactant.species;
-        const stoichiometry = reactant.stoichiometry !== undefined ? reactant.stoichiometry : 1;
+    return props.reaction.substrates
+      .map((substrate) => {
+        const formula = renderChemicalFormula(substrate.species);
+        const stoichiometry = substrate.stoichiometry !== undefined ? substrate.stoichiometry : 1;
 
-        return `${stoichiometry !== 1 ? stoichiometry : ''}${renderChemicalFormula(formula)}`;
+        return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
       })
       .join(' + ');
   };
@@ -96,12 +103,11 @@ const ReactionItem: Component<{
     if (!props.reaction.products) return '';
 
     return props.reaction.products
-      .map((product, idx) => {
-        const species = speciesMap()[product.species];
-        const formula = species?.formula || product.species;
+      .map((product) => {
+        const formula = renderChemicalFormula(product.species);
         const stoichiometry = product.stoichiometry !== undefined ? product.stoichiometry : 1;
 
-        return `${stoichiometry !== 1 ? stoichiometry : ''}${renderChemicalFormula(formula)}`;
+        return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
       })
       .join(' + ');
   };
@@ -130,8 +136,8 @@ const ReactionItem: Component<{
     <div class="reaction-item">
       <div class="reaction-header">
         <div class="reaction-equation">
-          {/* Reactants */}
-          <span class="reactants">{renderReactants()}</span>
+          {/* Substrates (reactants) */}
+          <span class="reactants">{renderSubstrates()}</span>
 
           {/* Arrow with rate */}
           <span class="reaction-arrow">
@@ -213,10 +219,6 @@ const ReactionItem: Component<{
           </div>
         </div>
       </Show>
-
-      <Show when={props.reaction.description}>
-        <div class="reaction-description">{props.reaction.description}</div>
-      </Show>
     </div>
   );
 };
@@ -225,9 +227,9 @@ const ReactionItem: Component<{
  * Species panel component
  */
 const SpeciesPanel: Component<{
-  species?: Species[];
+  species?: NamedSpecies[];
   onAddSpecies?: () => void;
-  onEditSpecies?: (species: Species) => void;
+  onEditSpecies?: (name: string, species: Species) => void;
   onRemoveSpecies?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
@@ -253,27 +255,27 @@ const SpeciesPanel: Component<{
       <Show when={isExpanded()}>
         <div class="species-content">
           <For each={props.species || []}>
-            {(species) => (
-              <div class="species-item" onClick={() => props.onEditSpecies?.(species)}>
+            {(entry) => (
+              <div class="species-item" onClick={() => props.onEditSpecies?.(entry.name, entry.species)}>
                 <div class="species-info">
                   <span class="species-formula">
-                    {renderChemicalFormula(species.formula || species.name)}
+                    {renderChemicalFormula(entry.name)}
                   </span>
-                  <Show when={species.name !== species.formula}>
-                    <span class="species-name">({species.name})</span>
+                  <Show when={renderChemicalFormula(entry.name) !== entry.name}>
+                    <span class="species-name">({entry.name})</span>
                   </Show>
                 </div>
 
-                <Show when={species.description}>
-                  <div class="species-description">{species.description}</div>
+                <Show when={entry.species.description}>
+                  <div class="species-description">{entry.species.description}</div>
                 </Show>
 
                 <Show when={!props.readonly}>
                   <button
                     class="species-remove-btn"
-                    onClick={(e) => { e.stopPropagation(); props.onRemoveSpecies?.(species.name); }}
+                    onClick={(e) => { e.stopPropagation(); props.onRemoveSpecies?.(entry.name); }}
                     title="Remove species"
-                    aria-label={`Remove species ${species.name}`}
+                    aria-label={`Remove species ${entry.name}`}
                   >
                     ×
                   </button>
@@ -303,9 +305,9 @@ const SpeciesPanel: Component<{
  * Parameters panel component
  */
 const ParametersPanel: Component<{
-  parameters?: ModelVariable[];
+  parameters?: NamedParameter[];
   onAddParameter?: () => void;
-  onEditParameter?: (parameter: ModelVariable) => void;
+  onEditParameter?: (name: string, parameter: Parameter) => void;
   onRemoveParameter?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
@@ -313,10 +315,10 @@ const ParametersPanel: Component<{
 
   // Filter for rate constants and reaction parameters
   const reactionParameters = createMemo(() => {
-    return (props.parameters || []).filter(param =>
-      param.name.startsWith('k_') ||
-      param.name.includes('rate') ||
-      param.name.includes('const')
+    return (props.parameters || []).filter(entry =>
+      entry.name.startsWith('k_') ||
+      entry.name.includes('rate') ||
+      entry.name.includes('const')
     );
   });
 
@@ -340,28 +342,28 @@ const ParametersPanel: Component<{
       <Show when={isExpanded()}>
         <div class="parameters-content">
           <For each={reactionParameters()}>
-            {(param) => (
-              <div class="parameter-item" onClick={() => props.onEditParameter?.(param)}>
+            {(entry) => (
+              <div class="parameter-item" onClick={() => props.onEditParameter?.(entry.name, entry.parameter)}>
                 <div class="parameter-info">
-                  <span class="parameter-name">{param.name}</span>
-                  <Show when={param.unit}>
-                    <span class="parameter-unit">[{param.unit}]</span>
+                  <span class="parameter-name">{entry.name}</span>
+                  <Show when={entry.parameter.units}>
+                    <span class="parameter-unit">[{entry.parameter.units}]</span>
                   </Show>
-                  <Show when={param.default_value !== undefined}>
-                    <span class="parameter-value">= {param.default_value}</span>
+                  <Show when={entry.parameter.default !== undefined}>
+                    <span class="parameter-value">= {entry.parameter.default}</span>
                   </Show>
                 </div>
 
-                <Show when={param.description}>
-                  <div class="parameter-description">{param.description}</div>
+                <Show when={entry.parameter.description}>
+                  <div class="parameter-description">{entry.parameter.description}</div>
                 </Show>
 
                 <Show when={!props.readonly}>
                   <button
                     class="parameter-remove-btn"
-                    onClick={(e) => { e.stopPropagation(); props.onRemoveParameter?.(param.name); }}
+                    onClick={(e) => { e.stopPropagation(); props.onRemoveParameter?.(entry.name); }}
                     title="Remove parameter"
-                    aria-label={`Remove parameter ${param.name}`}
+                    aria-label={`Remove parameter ${entry.name}`}
                   >
                     ×
                   </button>
@@ -402,36 +404,35 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
   // Reaction management handlers
   const handleAddReaction = () => {
     const newReaction: Reaction = {
-      reactants: [{ species: 'A', stoichiometry: 1 }],
+      id: `R${(props.reactionSystem.reactions || []).length + 1}`,
+      substrates: [{ species: 'A', stoichiometry: 1 }],
       products: [{ species: 'B', stoichiometry: 1 }],
       rate: 'k_rate'
     };
     const newReactions = [...(props.reactionSystem.reactions || []), newReaction];
-    handleReactionSystemChange({ reactions: newReactions });
+    handleReactionSystemChange({ reactions: newReactions as ReactionSystem['reactions'] });
   };
 
   const handleEditReaction = (index: number, reaction: Reaction) => {
     const newReactions = [...(props.reactionSystem.reactions || [])];
     newReactions[index] = reaction;
-    handleReactionSystemChange({ reactions: newReactions });
+    handleReactionSystemChange({ reactions: newReactions as unknown as ReactionSystem['reactions'] });
   };
 
   const handleRemoveReaction = (index: number) => {
     const newReactions = (props.reactionSystem.reactions || []).filter((_, i) => i !== index);
-    handleReactionSystemChange({ reactions: newReactions });
+    handleReactionSystemChange({ reactions: newReactions as unknown as ReactionSystem['reactions'] });
   };
 
   // Species management handlers
   const handleAddSpecies = () => {
-    const name = prompt('Enter species name:');
+    const name = prompt('Enter species name (chemical formula, e.g. NO2):');
     if (!name || !name.trim()) return;
 
-    const formula = prompt('Enter chemical formula:', name);
     const description = prompt('Enter description (optional):', '');
 
-    const newSpecies = {
-      formula: formula || name.trim(),
-      description: description || undefined
+    const newSpecies: Species = {
+      ...(description ? { description } : {})
     };
 
     const updatedSpecies = {
@@ -441,24 +442,23 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
     handleReactionSystemChange({ species: updatedSpecies });
   };
 
-  const handleEditSpecies = (species: Species) => {
-    const newName = prompt('Enter species name:', species.name);
+  const handleEditSpecies = (name: string, species: Species) => {
+    const newName = prompt('Enter species name:', name);
     if (!newName || !newName.trim()) return;
 
-    const newFormula = prompt('Enter chemical formula:', species.formula || species.name);
     const newDescription = prompt('Enter description:', species.description || '');
 
     const updatedSpecies = { ...(props.reactionSystem.species || {}) };
 
     // Remove old species if name changed
-    if (newName.trim() !== species.name) {
-      delete updatedSpecies[species.name];
+    if (newName.trim() !== name) {
+      delete updatedSpecies[name];
     }
 
     // Add/update species with new values
     updatedSpecies[newName.trim()] = {
-      formula: newFormula || newName.trim(),
-      description: newDescription || undefined
+      ...species,
+      ...(newDescription ? { description: newDescription } : { description: undefined })
     };
 
     handleReactionSystemChange({ species: updatedSpecies });
@@ -481,10 +481,10 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
     const unit = prompt('Enter unit (optional):', '');
     const description = prompt('Enter description (optional):', '');
 
-    const newParameter = {
-      value: parseFloat(value || '1.0') || 1.0,
-      unit: unit || undefined,
-      description: description || undefined
+    const newParameter: Parameter = {
+      default: parseFloat(value || '1.0') || 1.0,
+      ...(unit ? { units: unit } : {}),
+      ...(description ? { description } : {})
     };
 
     const updatedParameters = {
@@ -495,25 +495,25 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
     handleReactionSystemChange({ parameters: updatedParameters });
   };
 
-  const handleEditParameter = (parameter: ModelVariable) => {
-    const newName = prompt('Enter parameter name:', parameter.name);
+  const handleEditParameter = (name: string, parameter: Parameter) => {
+    const newName = prompt('Enter parameter name:', name);
     if (!newName || !newName.trim()) return;
 
-    const newValue = prompt('Enter value:', String(parameter.default_value || 1.0));
-    const newUnit = prompt('Enter unit:', parameter.unit || '');
+    const newValue = prompt('Enter value:', String(parameter.default ?? 1.0));
+    const newUnit = prompt('Enter unit:', parameter.units || '');
     const newDescription = prompt('Enter description:', parameter.description || '');
 
     const updatedParameters = { ...(props.reactionSystem.parameters || {}) };
 
     // Remove old parameter if name changed
-    if (newName.trim() !== parameter.name) {
-      delete updatedParameters[parameter.name];
+    if (newName.trim() !== name) {
+      delete updatedParameters[name];
     }
 
     // Add/update parameter with new values
     updatedParameters[newName.trim()] = {
-      value: parseFloat(newValue || '1.0') || 1.0,
-      unit: newUnit || undefined,
+      default: parseFloat(newValue || '1.0') || 1.0,
+      units: newUnit || undefined,
       description: newDescription || undefined
     };
 
@@ -560,7 +560,6 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
                 <ReactionItem
                   reaction={reaction}
                   index={index()}
-                  species={props.reactionSystem.species || {}}
                   onEditReaction={handleEditReaction}
                   onRemoveReaction={handleRemoveReaction}
                   highlightedVars={props.highlightedVars}
@@ -587,8 +586,8 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
         <div class="reaction-sidebar">
           <SpeciesPanel
             species={Object.entries(props.reactionSystem.species || {}).map(([name, species]) => ({
-              ...species,
-              name
+              name,
+              species
             }))}
             onAddSpecies={handleAddSpecies}
             onEditSpecies={handleEditSpecies}
@@ -597,12 +596,9 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
           />
 
           <ParametersPanel
-            parameters={Object.entries(props.reactionSystem.parameters || {}).map(([name, param]) => ({
+            parameters={Object.entries(props.reactionSystem.parameters || {}).map(([name, parameter]) => ({
               name,
-              type: 'parameter',
-              unit: param.unit,
-              description: param.description,
-              default_value: param.value
+              parameter
             }))}
             onAddParameter={handleAddParameter}
             onEditParameter={handleEditParameter}

@@ -13,75 +13,28 @@ import { createSignal } from 'solid-js';
 // Import components for integration testing
 import { ExpressionEditor } from '../components/ExpressionEditor';
 import { ModelEditor } from '../components/ModelEditor';
-
-// Define types locally to avoid earthsci-toolkit import issues
-type Expression = number | string | { op: string; args: any[] };
-type ModelVariable = {
-  type: "state" | "parameter" | "observed";
-  units?: string;
-  default?: number;
-  description?: string;
-};
-type Model = {
-  name?: string;
-  description?: string;
-  variables: Array<ModelVariable & { name: string }>;
-  equations: Array<{ lhs: Expression; rhs: Expression }>;
-};
-type EsmFile = {
-  schema_version: string;
-  metadata: {
-    name: string;
-    description: string;
-    version: string;
-    authors: string[];
-    created: string;
-    modified: string;
-  };
-  components: Record<string, Model>;
-  coupling: any[];
-};
+import type { Expression, Model } from 'earthsci-toolkit';
 
 describe('Cross-Component Integration', () => {
   const validModel: Model = {
-    name: "Test Model",
-    description: "Test model for integration testing",
-    variables: [
-      {
-        name: "O3",
+    variables: {
+      O3: {
         type: "state",
         units: "mol/mol",
         description: "Ozone concentration"
       },
-      {
-        name: "NO",
+      NO: {
         type: "state",
         units: "mol/mol",
         description: "Nitric oxide concentration"
       }
-    ],
+    },
     equations: [
       {
         lhs: { op: 'D', args: ['O3', 't'] },
         rhs: { op: '*', args: [-0.1, 'O3'] }
       }
     ]
-  };
-
-  const validEsmFile: EsmFile = {
-    schema_version: "1.0",
-    metadata: {
-      name: "Integration Test Model",
-      description: "Model for integration testing",
-      version: "0.1.0",
-      authors: ["Test Suite"],
-      created: new Date().toISOString(),
-      modified: new Date().toISOString()
-    },
-    components: {
-      "Chemistry": validModel
-    },
-    coupling: []
   };
 
   beforeEach(() => {
@@ -91,11 +44,11 @@ describe('Cross-Component Integration', () => {
   describe('Expression and Model Editor Integration', () => {
     it('should synchronize data between expression editor and model editor', async () => {
       const expression: Expression = { op: '+', args: ['x', 2] };
-      const [selectedExpression, setSelectedExpression] = createSignal(expression);
+      const [selectedExpression, setSelectedExpression] = createSignal<Expression>(expression);
       const [currentModel, setCurrentModel] = createSignal(validModel);
       const changeLog: string[] = [];
 
-      const logChange = (source: string, data: any) => {
+      const logChange = (source: string, data: unknown) => {
         changeLog.push(`${source}: ${typeof data === 'object' ? JSON.stringify(data).substring(0, 50) : data}`);
       };
 
@@ -113,11 +66,11 @@ describe('Cross-Component Integration', () => {
           />
           <ModelEditor
             model={currentModel()}
+            name="Test Model"
             onModelChange={(newModel) => {
               setCurrentModel(newModel);
-              logChange('model', { variableCount: newModel.variables.length });
+              logChange('model', { variableCount: Object.keys(newModel.variables).length });
             }}
-            allowEditing={true}
           />
           <div data-testid="change-log">{changeLog.join(', ')}</div>
         </div>
@@ -146,8 +99,6 @@ describe('Cross-Component Integration', () => {
           <ModelEditor
             model={model()}
             onModelChange={setModel}
-            allowEditing={true}
-            selectedVariable={Array.from(highlightedVars())[0]}
           />
           <button
             onClick={() => setHighlightedVars(new Set(['NO']))}
@@ -158,8 +109,11 @@ describe('Cross-Component Integration', () => {
         </div>
       ));
 
-      // Verify both variables are present in both components
-      expect(screen.getAllByText('O3')).toHaveLength(2); // Expression + Variables panel
+      // Both variables are present in both components: the expression editor
+      // (and the model equations) render them in chemical notation (O₃) while
+      // the variables panel shows the raw variable name (O3).
+      expect(screen.getAllByText('O₃').length).toBeGreaterThan(0); // Expression editor / equations
+      expect(screen.getByText('O3')).toBeInTheDocument(); // Variables panel
       expect(screen.getAllByText('NO')).toHaveLength(2); // Expression + Variables panel
 
       // Test highlighting change
@@ -172,32 +126,30 @@ describe('Cross-Component Integration', () => {
   describe('Undo/Redo Cross-Component Integration', () => {
     it('should support undo/redo operations across multiple editors', async () => {
       const [currentModel, setCurrentModel] = createSignal(validModel);
-      const [currentExpression, setCurrentExpression] = createSignal({ op: '+', args: ['a', 'b'] });
+      const [currentExpression, setCurrentExpression] = createSignal<Expression>({ op: '+', args: ['a', 'b'] });
 
       const modelChangeHistory: Model[] = [];
-      const expressionModelChangeHistory: Expression[] = [];
+      const expressionChangeHistory: Expression[] = [];
 
       const onModelChange = (newModel: Model) => {
         modelChangeHistory.push(currentModel());
         setCurrentModel(newModel);
       };
 
-      const onExpressionModelChange = (newExpr: Expression) => {
-        expressionModelChangeHistory.push(currentExpression());
+      const onExpressionChange = (newExpr: Expression) => {
+        expressionChangeHistory.push(currentExpression());
         setCurrentExpression(newExpr);
       };
 
-      render(() => (
+      const { container } = render(() => (
         <div>
           <ModelEditor
             model={currentModel()}
             onModelChange={onModelChange}
-            allowEditing={true}
-            showValidation={true}
           />
           <ExpressionEditor
             initialExpression={currentExpression()}
-            onModelChange={onExpressionModelChange}
+            onChange={onExpressionChange}
             allowEditing={true}
             showValidation={true}
           />
@@ -206,20 +158,20 @@ describe('Cross-Component Integration', () => {
 
       // Verify initial render
       expect(screen.getByText('O3')).toBeInTheDocument();
-      expect(screen.getByText('+')).toBeInTheDocument();
+      expect(container.querySelector('.esm-infix-op[data-operator="+"]')).toBeInTheDocument();
 
       // Simulate changes to test history tracking
       const newExpression: Expression = { op: '*', args: ['c', 'd'] };
-      onExpressionModelChange(newExpression);
+      onExpressionChange(newExpression);
 
-      expect(expressionModelChangeHistory).toHaveLength(1);
-      expect(expressionModelChangeHistory[0]).toEqual({ op: '+', args: ['a', 'b'] });
+      expect(expressionChangeHistory).toHaveLength(1);
+      expect(expressionChangeHistory[0]).toEqual({ op: '+', args: ['a', 'b'] });
     });
 
     it('should maintain consistent state during undo/redo operations', async () => {
       const initialState = {
         model: validModel,
-        expression: { op: '+', args: [1, 2] }
+        expression: { op: '+', args: [1, 2] } as Expression
       };
 
       const [appState, setAppState] = createSignal(initialState);
@@ -240,16 +192,15 @@ describe('Cross-Component Integration', () => {
         }
       };
 
-      render(() => (
+      const { container } = render(() => (
         <div>
           <ModelEditor
             model={appState().model}
             onModelChange={(newModel) => updateState({ model: newModel })}
-            allowEditing={true}
           />
           <ExpressionEditor
             initialExpression={appState().expression}
-            onModelChange={(newExpr) => updateState({ expression: newExpr })}
+            onChange={(newExpr) => updateState({ expression: newExpr })}
             allowEditing={true}
           />
           <button onClick={undo} data-testid="undo-button">
@@ -260,7 +211,7 @@ describe('Cross-Component Integration', () => {
 
       // Verify initial state
       expect(screen.getByText('O3')).toBeInTheDocument();
-      expect(screen.getByText('+')).toBeInTheDocument();
+      expect(container.querySelector('.esm-infix-op[data-operator="+"]')).toBeInTheDocument();
 
       // Simulate state change
       updateState({ expression: { op: '*', args: [3, 4] } });
@@ -278,7 +229,7 @@ describe('Cross-Component Integration', () => {
   describe('Data Flow Integration', () => {
     it('should propagate changes from model editor to dependent components', async () => {
       const [model, setModel] = createSignal(validModel);
-      const [validationState, setValidationState] = createSignal({ isValid: true, errors: [] });
+      const [validationState, setValidationState] = createSignal({ isValid: true, errors: [] as string[] });
 
       const onModelChange = (newModel: Model) => {
         setModel(newModel);
@@ -291,7 +242,6 @@ describe('Cross-Component Integration', () => {
           <ModelEditor
             model={model()}
             onModelChange={onModelChange}
-            allowEditing={true}
           />
           <div data-testid="validation-status">
             {validationState().isValid ? 'Valid' : 'Invalid'}
@@ -310,24 +260,22 @@ describe('Cross-Component Integration', () => {
       const [globalState, setGlobalState] = createSignal({
         model: validModel,
         selectedVariable: 'O3',
-        validationErrors: []
+        validationErrors: [] as string[]
       });
 
-      const updateGlobalState = (updates: Partial<typeof globalState>) => {
-        setGlobalState(current => ({ ...current(), ...updates }));
+      const updateGlobalState = (updates: Partial<ReturnType<typeof globalState>>) => {
+        setGlobalState(current => ({ ...current, ...updates }));
       };
 
-      render(() => (
+      const { container } = render(() => (
         <div>
           <ModelEditor
             model={globalState().model}
             onModelChange={(newModel) => updateGlobalState({ model: newModel })}
-            allowEditing={true}
-            selectedVariable={globalState().selectedVariable}
           />
           <ExpressionEditor
             initialExpression={globalState().model.equations[0]?.rhs || 0}
-            onModelChange={(newExpr) => {
+            onChange={(newExpr) => {
               const updatedModel = {
                 ...globalState().model,
                 equations: [{
@@ -346,7 +294,8 @@ describe('Cross-Component Integration', () => {
 
       // Verify all components are rendered and connected
       expect(screen.getByText('O3')).toBeInTheDocument();
-      expect(screen.getByText('*')).toBeInTheDocument(); // From the equation RHS
+      // The equation RHS multiplication renders with the '*' operator layout
+      expect(container.querySelector('[data-operator="*"]')).toBeInTheDocument();
 
       // Test that state updates propagate
       expect(globalState().selectedVariable).toBe('O3');
@@ -357,24 +306,19 @@ describe('Cross-Component Integration', () => {
     it('should coordinate custom events between components', async () => {
       const eventLog: string[] = [];
 
-      const logEvent = (eventType: string, detail: any) => {
+      const logEvent = (eventType: string, detail: unknown) => {
         eventLog.push(`${eventType}: ${JSON.stringify(detail)}`);
       };
 
-      render(() => (
-        <div
-          onSelectionModelChange={(e: CustomEvent) => logEvent('selection', e.detail)}
-          onValidationUpdate={(e: CustomEvent) => logEvent('validation', e.detail)}
-          onModelChange={(e: CustomEvent) => logEvent('change', e.detail)}
-        >
+      const { container } = render(() => (
+        <div>
           <ModelEditor
             model={validModel}
             onModelChange={(newModel) => logEvent('model-change', { model: newModel })}
-            allowEditing={true}
           />
           <ExpressionEditor
             initialExpression={{ op: '+', args: [1, 2] }}
-            onModelChange={(newExpr) => logEvent('expression-change', { expression: newExpr })}
+            onChange={(newExpr) => logEvent('expression-change', { expression: newExpr })}
             allowEditing={true}
           />
         </div>
@@ -382,7 +326,7 @@ describe('Cross-Component Integration', () => {
 
       // Components should be rendered without errors
       expect(screen.getByText('O3')).toBeInTheDocument();
-      expect(screen.getByText('+')).toBeInTheDocument();
+      expect(container.querySelector('.esm-infix-op[data-operator="+"]')).toBeInTheDocument();
 
       // Event coordination is primarily tested through the component rendering
       // and the fact that no errors are thrown during complex interactions

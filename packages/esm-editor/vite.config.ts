@@ -23,16 +23,8 @@ export default defineConfig({
         }
       }
     }
-  },
-
-  test: {
-    environment: 'jsdom',
-    deps: {
-      optimizer: {
-        web: {
-          include: ['solid-js', 'solid-element', '@solidjs/testing-library']
-        }
-      }
-    }
   }
+
+  // Test configuration lives in vitest.config.ts (vitest ignores a `test`
+  // block here when that file exists).
 });
