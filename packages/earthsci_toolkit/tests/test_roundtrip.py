@@ -1,9 +1,9 @@
 """Tests for round-trip functionality: load(save(load(json))) == load(json)."""
 
 import json
-from pathlib import Path
 
 import pytest
+from conftest import FIXTURES_ROOT, VALID_DIR
 
 from earthsci_toolkit import load, save
 from earthsci_toolkit.esm_types import (
@@ -278,8 +278,7 @@ def test_roundtrip_index_outside_arrayop():
     inside an `arrayop.expr` body, to ensure both contexts survive
     load → save → load idempotently.
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    fixture_path = repo_root / "tests" / "indexing" / "idx_outside_arrayop.esm"
+    fixture_path = FIXTURES_ROOT / "indexing" / "idx_outside_arrayop.esm"
     json_str = fixture_path.read_text()
 
     esm1 = load(json_str)
@@ -356,10 +355,7 @@ def test_roundtrip_preserves_int_float_distinction():
 def test_roundtrip_tests_and_examples_fixture():
     """Round-trip the tests_examples_comprehensive fixture: inline Test/Assertion/
     Example/Plot/ParameterSweep blocks must survive parse -> serialize (gt-krpg)."""
-    fixture_path = (
-        Path(__file__).resolve().parents[3]
-        / "tests" / "valid" / "tests_examples_comprehensive.esm"
-    )
+    fixture_path = VALID_DIR / "tests_examples_comprehensive.esm"
     original = fixture_path.read_text()
     orig_obj = json.loads(original)
 
@@ -494,8 +490,7 @@ def test_roundtrip_typed_test_assertion():
 
 def test_roundtrip_nonlinear_isorropia_shape():
     """Round-trip fixture for Model.initialization_equations + guesses + system_kind (gt-ebuq)."""
-    repo_root = Path(__file__).resolve().parents[3]
-    fixture = repo_root / "tests" / "valid" / "nonlinear_isorropia_shape.esm"
+    fixture = VALID_DIR / "nonlinear_isorropia_shape.esm"
     original_text = fixture.read_text()
     first = load(original_text)
     second = load(save(first))
@@ -509,8 +504,7 @@ def test_roundtrip_nonlinear_isorropia_shape():
 
 def test_roundtrip_nonlinear_mogi_shape():
     """Round-trip fixture for algebraic Mogi-shape model (gt-ebuq)."""
-    repo_root = Path(__file__).resolve().parents[3]
-    fixture = repo_root / "tests" / "valid" / "nonlinear_mogi_shape.esm"
+    fixture = VALID_DIR / "nonlinear_mogi_shape.esm"
     first = load(fixture.read_text())
     second = load(save(first))
     assert json.loads(save(first)) == json.loads(save(second))
@@ -525,8 +519,7 @@ def test_roundtrip_fractional_stoichiometry():
     """Reactions with fractional product yields (e.g. ISOP+O3 → 0.87 CH2O)
     round-trip losslessly on the v0.2.x schema (gt-1e96). Integer substrate
     coefficients coexist with fractional products."""
-    repo_root = Path(__file__).resolve().parents[3]
-    fixture = repo_root / "tests" / "valid" / "fractional_stoichiometry.esm"
+    fixture = VALID_DIR / "fractional_stoichiometry.esm"
     original_text = fixture.read_text()
     first = load(original_text)
     second = load(save(first))

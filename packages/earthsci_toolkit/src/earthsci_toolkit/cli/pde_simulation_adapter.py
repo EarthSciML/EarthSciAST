@@ -19,8 +19,6 @@ Emits ``{"binding":"python","fixtures":{<id>:{"rhs":{<probe>:{name:val}},
 """
 from __future__ import annotations
 
-import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -29,6 +27,7 @@ import numpy as np
 
 import earthsci_toolkit as et
 from earthsci_toolkit import evaluate_rhs, simulate
+from earthsci_toolkit.cli._adapter_main import adapter_main
 from earthsci_toolkit.simulation import _build_numpy_rhs, _provider_sample_field
 
 
@@ -135,29 +134,18 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     return {"rhs": rhs, "trajectory": traj}
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Python PDE-simulation conformance adapter")
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args(argv)
-
-    manifest = json.loads(args.manifest.read_text())
+def _run_fixture(fixture: Dict[str, Any], manifest: Dict[str, Any],
+                 manifest_path: Path) -> Dict[str, Any]:
     integ = manifest.get("integrators", {}).get("python", {})
-    base = args.manifest.parent
+    base = manifest_path.parent
+    runner = (run_fixture_full if fixture.get("pipeline") == "full"
+              else run_fixture)
+    return runner(fixture, base, integ)
 
-    fixtures: Dict[str, Any] = {}
-    for fixture in manifest["fixtures"]:
-        runner = (run_fixture_full if fixture.get("pipeline") == "full"
-                  else run_fixture)
-        try:
-            fixtures[fixture["id"]] = runner(fixture, base, integ)
-        except Exception as exc:  # noqa: BLE001 - surface per-fixture failure to the runner
-            fixtures[fixture["id"]] = {"error": f"{type(exc).__name__}: {exc}"}
 
-    payload = {"binding": "python", "fixtures": fixtures}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    return 0
+def main(argv=None) -> int:
+    return adapter_main(argv, description="Python PDE-simulation conformance adapter",
+                        run_fixture=_run_fixture)
 
 
 if __name__ == "__main__":

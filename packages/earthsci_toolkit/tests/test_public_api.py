@@ -6,13 +6,12 @@ points must work on a real, non-empty ``EsmFile`` (not just on dicts or
 empty files, which is how earlier breakage went unnoticed).
 """
 
-from pathlib import Path
+from conftest import VALID_DIR
 
 import earthsci_toolkit
 from earthsci_toolkit import load, to_ascii, to_latex, to_unicode
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_FIXTURE = _REPO_ROOT / "tests" / "valid" / "events_all_types.esm"
+_FIXTURE = VALID_DIR / "events_all_types.esm"
 
 
 def test_all_exports_resolve():

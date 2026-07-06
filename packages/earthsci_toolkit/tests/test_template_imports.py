@@ -13,6 +13,7 @@ import copy
 import json
 import os
 
+import conftest
 import pytest
 
 from earthsci_toolkit.lower_expression_templates import (
@@ -27,12 +28,9 @@ from earthsci_toolkit.template_imports import (
     resolve_template_machinery,
 )
 
-# tests/test_template_imports.py → packages/earthsci_toolkit/tests →
-# packages/earthsci_toolkit → packages → repo root.
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-CONF = os.path.join(REPO_ROOT, "tests", "conformance", "expression_templates")
-INVALID_DIR = os.path.join(REPO_ROOT, "tests", "invalid", "template_imports")
-VALID_DIR = os.path.join(REPO_ROOT, "tests", "valid")
+CONF = str(conftest.CONFORMANCE_DIR / "expression_templates")
+INVALID_DIR = str(conftest.INVALID_DIR / "template_imports")
+VALID_DIR = str(conftest.VALID_DIR)
 
 
 def _read_json(path: str) -> dict:
@@ -232,8 +230,7 @@ def _invalid_fixture_names():
 
 @pytest.mark.parametrize("fname", _invalid_fixture_names())
 def test_invalid_template_import_fixture(fname):
-    expected = _read_json(os.path.join(REPO_ROOT, "tests", "invalid",
-                                       "expected_errors.json"))
+    expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     entry = expected[fname]
     assert entry["resolver_only"] is True
     want = entry["resolver_error_code"]
@@ -246,8 +243,7 @@ def test_invalid_fixture_set_covers_all_12_codes():
     """The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
     template_import_unresolved, is exercised by the unit tests below — a
     missing file is not representable as a fixture)."""
-    expected = _read_json(os.path.join(REPO_ROOT, "tests", "invalid",
-                                       "expected_errors.json"))
+    expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     seen = {expected[f]["resolver_error_code"] for f in _invalid_fixture_names()}
     for code in [
         "template_import_version_too_old", "template_import_not_library",

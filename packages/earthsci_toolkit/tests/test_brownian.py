@@ -1,17 +1,15 @@
 """Round-trip tests for the brownian (SDE) variable type."""
 
 import json
-import os
-from pathlib import Path
 
 import pytest
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit.parse import load, SchemaValidationError
 from earthsci_toolkit.serialize import save
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SDE_DIR = REPO_ROOT / "tests" / "fixtures" / "sde"
+SDE_DIR = FIXTURES_ROOT / "fixtures" / "sde"
 
 
 def test_ornstein_uhlenbeck_round_trip(tmp_path):

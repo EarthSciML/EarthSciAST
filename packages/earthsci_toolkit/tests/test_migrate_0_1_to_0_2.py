@@ -9,9 +9,9 @@ Spec references: docs/rfcs/discretization.md §10.1 and §16.1.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from conftest import CONFORMANCE_DIR, REPO_ROOT
 
 from earthsci_toolkit.cli import migrate as cli_migrate
 from earthsci_toolkit.migration import MigrationError, migrate_file_0_1_to_0_2
@@ -295,15 +295,13 @@ class TestConformanceFixtures:
     """
 
     def _load_manifest(self) -> dict:
-        repo_root = Path(__file__).resolve().parents[3]
-        manifest = repo_root / "tests/conformance/migration/0_1_to_0_2/manifest.json"
+        manifest = CONFORMANCE_DIR / "migration/0_1_to_0_2/manifest.json"
         with manifest.open() as f:
             return json.load(f)
 
     def test_all_conformance_fixtures_match(self):
         data = self._load_manifest()
-        repo_root = Path(__file__).resolve().parents[3]
-        base = repo_root / "tests/conformance/migration/0_1_to_0_2"
+        base = CONFORMANCE_DIR / "migration/0_1_to_0_2"
         assert data["fixtures"], "no fixtures declared in manifest"
         for entry in data["fixtures"]:
             fix_path = base / entry["path"]
@@ -333,8 +331,7 @@ def test_migrated_fixture_validates_under_v02_schema(fixture):
     v0.2.0 output.
     """
     import jsonschema
-    repo_root = Path(__file__).resolve().parents[3]
-    path = repo_root / fixture
+    path = REPO_ROOT / fixture
     if not path.exists():
         pytest.skip(f"fixture not found: {path}")
     with path.open() as f:
@@ -342,7 +339,7 @@ def test_migrated_fixture_validates_under_v02_schema(fixture):
     if data.get("esm", "").startswith("0.2"):
         pytest.skip("already at 0.2")
     migrated = migrate_file_0_1_to_0_2(data)
-    schema_path = repo_root / "esm-schema.json"
+    schema_path = REPO_ROOT / "esm-schema.json"
     with schema_path.open() as f:
         schema = json.load(f)
     jsonschema.validate(instance=migrated, schema=schema)

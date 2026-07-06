@@ -7,7 +7,7 @@ verifying chemical subscripts, operator precedence, and comprehensive formatting
 
 import pytest
 import json
-from pathlib import Path
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit.display import to_unicode, to_latex
 from earthsci_toolkit.parse import load
@@ -19,7 +19,7 @@ class TestDisplayFixtures:
     @pytest.fixture
     def fixtures_dir(self):
         """Get path to display fixtures."""
-        return Path(__file__).resolve().parents[3] / "tests" / "display"
+        return FIXTURES_ROOT / "display"
 
     def _get_cases(self, test_cases):
         """Extract cases from fixture data (handles both list and dict formats)."""

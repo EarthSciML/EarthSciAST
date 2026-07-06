@@ -10,15 +10,14 @@ cross-binding contract.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from conftest import CONFORMANCE_DIR
 
 from earthsci_toolkit.canonicalize import canonical_json
 from earthsci_toolkit.esm_types import ExprNode
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-FIXTURES_DIR = REPO_ROOT / "tests" / "conformance" / "canonical"
+FIXTURES_DIR = CONFORMANCE_DIR / "canonical"
 
 
 def _wire_to_expr(node):

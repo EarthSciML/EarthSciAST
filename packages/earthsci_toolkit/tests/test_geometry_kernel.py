@@ -32,6 +32,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
+from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_toolkit import area_faq
 from earthsci_toolkit import geometry as geom
@@ -47,9 +48,8 @@ from earthsci_toolkit.serialize import save
 from earthsci_toolkit.validation import validate
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_VALID_GEOM = _REPO_ROOT / "tests" / "valid" / "geometry"
-_INVALID_GEOM = _REPO_ROOT / "tests" / "invalid" / "geometry"
+_VALID_GEOM = VALID_DIR / "geometry"
+_INVALID_GEOM = INVALID_DIR / "geometry"
 
 # Two unit-aligned squares overlapping in the [1,2]×[1,2] box → overlap area 1.0.
 _SQUARE_A = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])

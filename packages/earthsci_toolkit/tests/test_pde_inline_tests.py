@@ -10,6 +10,7 @@ import json
 import math
 
 import pytest
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit.esm_types import ExprNode, Tolerance
 from earthsci_toolkit.parse import load
@@ -465,13 +466,9 @@ def test_from_file_reference_missing_file_and_format(tmp_path):
 
 
 def test_shared_fixture_pde_inline_assertions_exec():
-    import os
-
-    fixture = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..",
-        "tests", "spatial", "pde_inline_assertions_exec.esm")
-    assert os.path.isfile(fixture)
-    results = run_pde_tests(fixture, model_name="M", method="LSODA",
+    fixture = FIXTURES_ROOT / "spatial" / "pde_inline_assertions_exec.esm"
+    assert fixture.is_file()
+    results = run_pde_tests(str(fixture), model_name="M", method="LSODA",
                             rtol=1e-12, atol=1e-14)
     assert len(results) == 7
     assert all(r.passed for r in results), \

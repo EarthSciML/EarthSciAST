@@ -50,22 +50,34 @@ Exit codes:
 
 from __future__ import annotations
 
-import argparse
 import copy
 import json
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The shared harness (manifest loading, adapter dispatch, CLI skeleton) lives
+# in scripts/conformance_lib.py; hyphenated runner filenames cannot import
+# each other, so put scripts/ on sys.path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
+    KNOWN_BINDINGS,
+    REPO_ROOT,
+    AdapterHarness,
+    ManifestError,
+    _eprint,
+    build_parser,
+    cli_main,
+    print_summary,
+    write_report,
+)
+from conformance_lib import load_manifest as _load_manifest  # noqa: E402
+
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "cadence" / "manifest.json"
 
-KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
+# Adapter addressing: $EARTHSCI_CADENCE_ADAPTER_<BINDING> or
+# earthsci-cadence-adapter-<binding> on PATH.
+_ADAPTERS = AdapterHarness("cadence")
 
 # The cadence lattice (CONFORMANCE_SPEC.md §5.7): const ⊏ discrete ⊏ continuous.
 # class(node) = max over inputs is the lattice join.
@@ -75,10 +87,6 @@ RANK_CLASS = {v: k for k, v in CLASS_RANK.items()}
 # The relational / value-invention ops that may not run on the hot path (§5.7
 # guard 2): one classifying CONTINUOUS is a hard error.
 RELATIONAL_OPS = {"distinct", "join", "skolem", "rank"}
-
-
-def _eprint(*args: Any) -> None:
-    print(*args, file=sys.stderr)
 
 
 # === The reference classifier + folder ====================================
@@ -364,46 +372,13 @@ def compute_fold(label: str, spec: dict, inputs: dict) -> list:
 # === Manifest / fixture loading ===========================================
 
 
-class ManifestError(Exception):
-    pass
-
-
 def load_manifest(path: Path) -> dict:
-    try:
-        with path.open() as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise ManifestError(f"failed to load manifest {path}: {e}") from e
-    _validate_shape(manifest, path)
-    return manifest
-
-
-def _validate_shape(manifest: Any, path: Path) -> None:
-    if not isinstance(manifest, dict):
-        raise ManifestError(f"{path}: top-level must be a JSON object")
-    if manifest.get("category") != "cadence_partition_conformance":
-        raise ManifestError(
-            f"{path}: category must be 'cadence_partition_conformance', "
-            f"got {manifest.get('category')!r}"
-        )
-    if not isinstance(manifest.get("version"), str):
-        raise ManifestError(f"{path}: version must be a string")
-    fixtures = manifest.get("fixtures")
-    if not isinstance(fixtures, list) or not fixtures:
-        raise ManifestError(f"{path}: fixtures must be a non-empty array")
-    seen: set = set()
-    for i, fx in enumerate(fixtures):
-        if not isinstance(fx, dict):
-            raise ManifestError(f"{path}: fixtures[{i}] must be an object")
-        fid = fx.get("id")
-        if not isinstance(fid, str) or not fid:
-            raise ManifestError(f"{path}: fixtures[{i}].id must be a non-empty string")
-        if fid in seen:
-            raise ManifestError(f"{path}: duplicate fixture id {fid!r}")
-        seen.add(fid)
-        for field in ("fixture", "model", "class_summary", "materialization_points"):
-            if field not in fx:
-                raise ManifestError(f"{path}: fixtures[{fid}] missing '{field}'")
+    return _load_manifest(
+        path,
+        categories=("cadence_partition_conformance",),
+        fixture_fields=("fixture", "model", "class_summary",
+                        "materialization_points"),
+    )
 
 
 def load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict:
@@ -697,55 +672,6 @@ def _flip_first_expect_cadence(node: Any, frm: str, to: str) -> bool:
 # === Default run mode (producers, ess-my4.3.7+) ===========================
 
 
-def discover_adapter(binding: str) -> list[str] | None:
-    env_cmd = os.environ.get(f"EARTHSCI_CADENCE_ADAPTER_{binding.upper()}")
-    if env_cmd:
-        return shlex.split(env_cmd)
-    on_path = shutil.which(f"earthsci-cadence-adapter-{binding}")
-    if on_path:
-        return [on_path]
-    return None
-
-
-def run_adapter(binding: str, argv: list, manifest_path: Path, timeout) -> dict:
-    with tempfile.NamedTemporaryFile(
-        "r", suffix=".json", prefix=f"cadence-{binding}-", delete=False
-    ) as tmp:
-        out_path = Path(tmp.name)
-    try:
-        cmd = [*argv, "--manifest", str(manifest_path), "--output", str(out_path)]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, check=False)
-        except FileNotFoundError as e:
-            return {"binding": binding, "adapter_status": "missing",
-                    "error": str(e), "fixtures": {}}
-        except subprocess.TimeoutExpired:
-            return {"binding": binding, "adapter_status": "timeout",
-                    "error": f"adapter timed out after {timeout}s", "fixtures": {}}
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            return {"binding": binding, "adapter_status": "no_output",
-                    "error": "adapter wrote no output", "exit_code": proc.returncode,
-                    "stderr": (proc.stderr or "").strip()[-2000:], "fixtures": {}}
-        try:
-            with out_path.open() as f:
-                payload = json.load(f)
-        except json.JSONDecodeError as e:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": f"adapter output not valid JSON: {e}", "fixtures": {}}
-        if not isinstance(payload, dict) or "fixtures" not in payload:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": "adapter output missing 'fixtures'", "fixtures": {}}
-        payload.setdefault("binding", binding)
-        payload["adapter_status"] = "ok"
-        return payload
-    finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
-
-
 def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -> int:
     manifest = load_manifest(manifest_path)
     if not bindings:
@@ -760,17 +686,7 @@ def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters: dict = {}
-    for b in bindings:
-        argv = discover_adapter(b)
-        if argv is None:
-            adapters[b] = {"binding": b, "adapter_status": "missing",
-                           "error": ("adapter not found; expected on PATH as "
-                                     f"earthsci-cadence-adapter-{b} or via "
-                                     f"$EARTHSCI_CADENCE_ADAPTER_{b.upper()}"),
-                           "fixtures": {}}
-            continue
-        adapters[b] = run_adapter(b, argv, manifest_path, timeout)
+    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
     report: dict = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
@@ -814,59 +730,28 @@ def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -
     else:
         report["status"] = "ok" if overall_ok else "fail"
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
-        json.dump(report, f, indent=2, sort_keys=True)
-        f.write("\n")
-    _print_summary(report)
+    write_report(report, output_path)
+    print_summary(report, "=== Cadence-Partition Conformance Report ===")
     return 1 if report["status"] == "fail" else 0
-
-
-def _print_summary(report: dict) -> None:
-    print("=== Cadence-Partition Conformance Report ===")
-    print(f"manifest: {report['manifest_path']}")
-    print(f"status:   {report['status'].upper()}")
-    for b, br in report.get("bindings", {}).items():
-        print(f"  {b:>12}  {br.get('status')}  ({br.get('adapter_status')})")
-        for fid, fr in br.get("fixtures", {}).items():
-            if fr.get("status") != "ok":
-                print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
 
 
 # === CLI ==================================================================
 
 
-def parse_args(argv: list) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
-                   help="Path to the cadence manifest.json.")
-    p.add_argument("--output", type=Path,
-                   default=Path("conformance-results/cadence/report.json"),
-                   help="Where to write the aggregated report.")
-    p.add_argument("--bindings", default="",
-                   help="Comma-separated bindings (default: manifest required+optional).")
-    p.add_argument("--timeout", type=float, default=None,
-                   help="Per-adapter timeout in seconds.")
-    p.add_argument("--self-test", action="store_true",
-                   help="Assert the contract against the embedded reference "
-                        "classifier + folder and golden, then exit.")
-    return p.parse_args(argv)
+def parse_args(argv: list):
+    return build_parser(
+        doc=__doc__,
+        default_manifest=DEFAULT_MANIFEST,
+        default_output=Path("conformance-results/cadence/report.json"),
+        manifest_help="Path to the cadence manifest.json.",
+        self_test_help="Assert the contract against the embedded reference "
+                       "classifier + folder and golden, then exit.",
+    ).parse_args(argv)
 
 
 def main(argv: list | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.self_test:
-        return self_test(args.manifest)
-    if not args.manifest.is_file():
-        _eprint(f"error: manifest not found: {args.manifest}")
-        return 2
-    bindings = [b.strip() for b in args.bindings.split(",") if b.strip()]
-    try:
-        return run_suite(args.manifest, bindings, args.output, args.timeout)
-    except ManifestError as e:
-        _eprint(f"manifest error: {e}")
-        return 2
+    return cli_main(argv, parse_args=parse_args, self_test=self_test,
+                    run_suite=run_suite)
 
 
 if __name__ == "__main__":

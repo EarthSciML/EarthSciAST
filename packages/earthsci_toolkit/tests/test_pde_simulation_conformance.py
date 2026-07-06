@@ -13,23 +13,18 @@ lives in ``scripts/run-pde-simulation-conformance.py`` (run from
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import numpy as np
 import pytest
+from conftest import CONFORMANCE_DIR, load_fixture
 
 import earthsci_toolkit as et
 from earthsci_toolkit import evaluate_rhs, simulate
 
-_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests" / "conformance" / "pde_simulation" / "manifest.json"
-)
+_MANIFEST = CONFORMANCE_DIR / "pde_simulation" / "manifest.json"
 
 
 def _load_manifest() -> dict:
-    return json.loads(_MANIFEST.read_text())
+    return load_fixture(_MANIFEST)
 
 
 def _bare(name: str) -> str:

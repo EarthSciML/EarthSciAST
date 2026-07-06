@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import CONFORMANCE_DIR, REPO_ROOT
 
 from earthsci_toolkit.relational import (
     FloatKeyError,
@@ -33,8 +34,7 @@ from earthsci_toolkit.relational import (
     skolem_edge,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = REPO_ROOT / "tests" / "conformance" / "determinism" / "manifest.json"
+MANIFEST = CONFORMANCE_DIR / "determinism" / "manifest.json"
 RUNNER = REPO_ROOT / "scripts" / "run-determinism-conformance.py"
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 

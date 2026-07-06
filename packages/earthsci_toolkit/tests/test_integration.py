@@ -7,7 +7,7 @@ It ensures all components work together correctly.
 
 import pytest
 import json
-from pathlib import Path
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit import (
     load, save, validate, substitute
@@ -23,7 +23,7 @@ class TestFullWorkflowIntegration:
     @pytest.fixture
     def fixtures_dir(self):
         """Get path to test fixtures."""
-        return Path(__file__).resolve().parents[3] / "tests"
+        return FIXTURES_ROOT
 
     def test_simple_model_full_workflow(self):
         """Test full workflow with a simple model."""

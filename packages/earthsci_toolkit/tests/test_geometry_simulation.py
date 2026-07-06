@@ -30,6 +30,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
+from conftest import VALID_DIR
 
 from earthsci_toolkit.esm_types import ExprNode
 from earthsci_toolkit.parse import load
@@ -39,8 +40,7 @@ from earthsci_toolkit.simulation import (
     simulate,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_GEOM_DIR = _REPO_ROOT / "tests" / "valid" / "geometry"
+_GEOM_DIR = VALID_DIR / "geometry"
 
 try:  # the spherical/geodesic clip path needs the pinned optional dependency
     import spherely  # noqa: F401

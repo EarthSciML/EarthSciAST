@@ -28,16 +28,12 @@ from pathlib import Path
 from typing import List
 
 import pytest
+from conftest import VALID_DIR
 
 from earthsci_toolkit.validation import validate
 
 
-_FIXTURES_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "valid"
-    / "aggregate"
-)
+_FIXTURES_DIR = VALID_DIR / "aggregate"
 
 
 def _collect_fixtures() -> List[Path]:

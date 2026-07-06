@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
 
 import pytest
+from conftest import VALID_DIR
 
 
-FIXTURES_DIR = Path(__file__).resolve().parents[3] / "tests" / "valid"
+FIXTURES_DIR = VALID_DIR
 FIXTURES = [
     "units_conversions.esm",
     "units_dimensional_analysis.esm",

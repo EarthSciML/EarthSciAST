@@ -7,7 +7,7 @@ focusing on verification of error codes, cross-references, and semantic consiste
 
 import pytest
 import json
-from pathlib import Path
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit import load
 from earthsci_toolkit.validation import validate, SchemaValidationError
@@ -19,7 +19,7 @@ class TestStructuralValidation:
     @pytest.fixture
     def fixtures_dir(self):
         """Get path to validation fixtures."""
-        return Path(__file__).resolve().parents[3] / "tests"
+        return FIXTURES_ROOT
 
     def test_circular_references_error_code(self, fixtures_dir):
         """Test detection of circular references with specific error code."""
@@ -370,7 +370,7 @@ class TestValidationWithFixtures:
     @pytest.fixture
     def fixtures_dir(self):
         """Get path to fixtures."""
-        return Path(__file__).resolve().parents[3] / "tests"
+        return FIXTURES_ROOT
 
     def test_all_invalid_fixtures_fail_validation(self, fixtures_dir):
         """Test that all files in invalid/ directory fail validation."""

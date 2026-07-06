@@ -31,6 +31,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pytest
+from conftest import VALID_DIR
 
 pytest.importorskip("scipy")
 
@@ -38,12 +39,7 @@ from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..")
-)
-FIXTURE = os.path.join(
-    REPO_ROOT, "tests", "valid", "wildfire_atmosphere_ocean.esm"
-)
+FIXTURE = str(VALID_DIR / "wildfire_atmosphere_ocean.esm")
 
 
 def _resolve_tol(

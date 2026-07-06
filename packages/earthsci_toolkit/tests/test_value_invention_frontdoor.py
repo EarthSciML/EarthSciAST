@@ -25,10 +25,9 @@ the value-invention .esm run end-to-end byte-identical across all three:
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 import numpy as np
 import pytest
+from conftest import REPO_ROOT
 
 from earthsci_toolkit import relational
 from earthsci_toolkit.numpy_interpreter import (
@@ -40,8 +39,6 @@ from earthsci_toolkit.value_invention import (
     ValueInventionError,
     materialize_value_invention,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The shared M3 goldens — the byte-for-byte canonical index-set JSON every
 # binding (Julia / Rust / Python) must reproduce. Byte-identity to these IS the

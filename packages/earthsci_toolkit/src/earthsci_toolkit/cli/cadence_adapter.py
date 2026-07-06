@@ -20,7 +20,6 @@ contract lives in :mod:`earthsci_toolkit.cadence`, not here.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from pathlib import Path
@@ -32,10 +31,7 @@ from earthsci_toolkit.cadence import (
     model_from_doc,
     partition,
 )
-
-# The manifest's fixture paths are repo-root-relative; this file lives at
-# packages/earthsci_toolkit/src/earthsci_toolkit/cli/cadence_adapter.py.
-REPO_ROOT = Path(__file__).resolve().parents[5]
+from earthsci_toolkit.cli._adapter_main import adapter_main
 
 
 def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> Dict[str, Any]:
@@ -46,7 +42,7 @@ def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> Dict[str,
     return model_from_doc(doc, model_name)
 
 
-def _compute_fixture(fixture: Dict[str, Any], repo_root: Path = REPO_ROOT) -> Dict[str, Any]:
+def _compute_fixture(fixture: Dict[str, Any], repo_root: Path) -> Dict[str, Any]:
     """Run the Python partition pass over one manifest fixture and produce its
     conformance record (class summary / materialization thresholds / folded
     buffers)."""
@@ -72,30 +68,17 @@ def _compute_fixture(fixture: Dict[str, Any], repo_root: Path = REPO_ROOT) -> Di
     }
 
 
-def main(argv: "List[str] | None" = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-
-    with args.manifest.open() as f:
-        manifest = json.load(f)
-
+def _run_fixture(fixture: Dict[str, Any], _manifest: Dict[str, Any],
+                 manifest_path: Path) -> Dict[str, Any]:
     # Fixtures are repo-root-relative; resolve them relative to the manifest's
     # repo root (tests/conformance/cadence/manifest.json → parents[3]) so the
     # adapter works regardless of the invoking cwd.
-    repo_root = args.manifest.resolve().parents[3]
+    repo_root = manifest_path.resolve().parents[3]
+    return _compute_fixture(fixture, repo_root)
 
-    fixtures: Dict[str, Any] = {}
-    for fixture in manifest["fixtures"]:
-        fixtures[fixture["id"]] = _compute_fixture(fixture, repo_root)
 
-    result = {"binding": "python", "fixtures": fixtures}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w") as f:
-        json.dump(result, f)
-        f.write("\n")
-    return 0
+def main(argv: "List[str] | None" = None) -> int:
+    return adapter_main(argv, description=__doc__, run_fixture=_run_fixture)
 
 
 if __name__ == "__main__":

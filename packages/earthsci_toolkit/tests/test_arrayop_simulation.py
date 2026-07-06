@@ -20,17 +20,13 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pytest
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-_FIXTURES_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "fixtures"
-    / "arrayop"
-)
+_FIXTURES_DIR = FIXTURES_ROOT / "fixtures" / "arrayop"
 
 
 def _collect_fixtures() -> List[Path]:

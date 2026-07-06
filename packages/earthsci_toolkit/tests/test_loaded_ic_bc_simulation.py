@@ -34,6 +34,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pytest
+from conftest import CONFORMANCE_DIR, VALID_DIR
 
 pytest.importorskip("scipy")
 
@@ -41,15 +42,8 @@ from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..")
-)
-FIXTURE = os.path.join(
-    REPO_ROOT, "tests", "valid", "advection_reaction_loaded_ic_bc.esm"
-)
-MANIFEST = os.path.join(
-    REPO_ROOT, "tests", "conformance", "pde_simulation_pipeline", "manifest.json"
-)
+FIXTURE = str(VALID_DIR / "advection_reaction_loaded_ic_bc.esm")
+MANIFEST = str(CONFORMANCE_DIR / "pde_simulation_pipeline" / "manifest.json")
 
 
 class _StubLoaderProvider:

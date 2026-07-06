@@ -12,15 +12,15 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from conftest import REPO_ROOT, VALID_DIR
 
 from earthsci_toolkit import load, save
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_VALID = _REPO_ROOT / "tests" / "valid"
+_VALID = VALID_DIR
 
 
 def _schema():
-    return json.loads((_REPO_ROOT / "esm-schema.json").read_text())
+    return json.loads((REPO_ROOT / "esm-schema.json").read_text())
 
 
 def _roundtrip(fixture: Path) -> dict:

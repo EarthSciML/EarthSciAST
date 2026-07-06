@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import CONFORMANCE_DIR, INVALID_DIR, REPO_ROOT
 
 from earthsci_toolkit.cadence import (
     CadenceError,
@@ -32,8 +33,7 @@ from earthsci_toolkit.cadence import (
     partition,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = REPO_ROOT / "tests" / "conformance" / "cadence" / "manifest.json"
+MANIFEST = CONFORMANCE_DIR / "cadence" / "manifest.json"
 RUNNER = REPO_ROOT / "scripts" / "run-cadence-conformance.py"
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 
@@ -233,7 +233,7 @@ def test_continuous_relational_fixture_rejected():
     SCHEMA-VALID (Go / TS accept it, marked resolver_only) but the partition pass
     rejects it (guard 2). The same fixture is rejected by the Julia and Rust
     siblings, so all three evaluators agree (bead ess-my4.3.11)."""
-    path = REPO_ROOT / "tests" / "invalid" / "aggregate" / "continuous_relational_node.esm"
+    path = INVALID_DIR / "aggregate" / "continuous_relational_node.esm"
     model = json.loads(path.read_text())["models"]["ContinuousRelationalNode"]
     with pytest.raises(CadenceError, match="CONTINUOUS"):
         partition(model)

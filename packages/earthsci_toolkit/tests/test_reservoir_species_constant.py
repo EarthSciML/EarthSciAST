@@ -1,13 +1,13 @@
 """Round-trip coverage for Species.constant (reservoir species) — gt-ertm."""
 
 import json
-from pathlib import Path
+
+from conftest import VALID_DIR
 
 from earthsci_toolkit import load, save
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-FIXTURE_PATH = REPO_ROOT / "tests" / "valid" / "reservoir_species_constant.esm"
+FIXTURE_PATH = VALID_DIR / "reservoir_species_constant.esm"
 
 
 def test_reservoir_species_constant_round_trip():

@@ -9,6 +9,7 @@ import os
 
 import numpy as np
 import pytest
+from conftest import CONFORMANCE_DIR
 
 from earthsci_toolkit.esm_types import ExprNode
 from earthsci_toolkit.parse import load
@@ -212,28 +213,9 @@ def test_conformance_fixture_matches_expanded_form():
     """Loading the conformance fixture must yield the canonical expanded form
     pinned in `tests/conformance/expression_templates/arrhenius_smoke/expanded.esm`.
     """
-    import os
-
-    here = os.path.dirname(__file__)
-    # tests/test_expression_templates.py → packages/earthsci_toolkit/tests
-    # → packages/earthsci_toolkit → packages → repo root.
-    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    fixture_path = os.path.join(
-        root,
-        "tests",
-        "conformance",
-        "expression_templates",
-        "arrhenius_smoke",
-        "fixture.esm",
-    )
-    expanded_path = os.path.join(
-        root,
-        "tests",
-        "conformance",
-        "expression_templates",
-        "arrhenius_smoke",
-        "expanded.esm",
-    )
+    case = CONFORMANCE_DIR / "expression_templates" / "arrhenius_smoke"
+    fixture_path = case / "fixture.esm"
+    expanded_path = case / "expanded.esm"
     with open(fixture_path) as fp:
         fixture_src = fp.read()
     with open(expanded_path) as fp:
@@ -252,20 +234,10 @@ def test_coupling_transform_expression_conformance_fixture_matches_expanded_form
     (§9.6.4). Cross-binding golden:
     tests/conformance/expression_templates/coupling_transform_expression/expanded.esm.
     """
-    import os
-
-    here = os.path.dirname(__file__)
-    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    case = os.path.join(
-        root,
-        "tests",
-        "conformance",
-        "expression_templates",
-        "coupling_transform_expression",
-    )
-    with open(os.path.join(case, "fixture.esm")) as fp:
+    case = CONFORMANCE_DIR / "expression_templates" / "coupling_transform_expression"
+    with open(case / "fixture.esm") as fp:
         fixture_src = fp.read()
-    with open(os.path.join(case, "expanded.esm")) as fp:
+    with open(case / "expanded.esm") as fp:
         expanded_dict = json.load(fp)
     expanded_via_pass = lower_expression_templates(json.loads(fixture_src))
     assert expanded_via_pass["coupling"] == expanded_dict["coupling"]
@@ -298,11 +270,7 @@ def test_load_end_to_end_produces_inline_rate_in_typed_object():
 
 
 def _conf_dir(fix: str) -> str:
-    # tests/test_expression_templates.py → packages/earthsci_toolkit/tests →
-    # packages/earthsci_toolkit → packages → repo root.
-    here = os.path.dirname(__file__)
-    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    return os.path.join(root, "tests", "conformance", "expression_templates", fix)
+    return str(CONFORMANCE_DIR / "expression_templates" / fix)
 
 
 def _conf_fixture(fix: str, name: str = "fixture.esm") -> dict:

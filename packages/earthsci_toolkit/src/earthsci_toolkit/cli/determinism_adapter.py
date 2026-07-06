@@ -17,13 +17,12 @@ Python's **native 0-based** emission base (the harness normalises via
 
 from __future__ import annotations
 
-import argparse
-import json
 import operator
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from earthsci_toolkit.cli._adapter_main import adapter_main
 from earthsci_toolkit.relational import (
     canonical_index_set_json,
     distinct,
@@ -101,35 +100,23 @@ def _compute_payload(fixture: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     }
 
 
+def _run_fixture(fixture: Dict[str, Any], _manifest: Dict[str, Any],
+                 _manifest_path: Path) -> Dict[str, Any]:
+    record = _compute_fixture(fixture)
+    # Run the adversarial variants through the SAME real producers and emit
+    # each — the runner asserts they collapse to the golden, proving order-,
+    # duplicate-, and orientation-independence per binding (§5.5.4).
+    variants = {
+        vname: _compute_payload(fixture, vpayload)
+        for vname, vpayload in (fixture["inputs"].get("variants") or {}).items()
+    }
+    if variants:
+        record["variants"] = variants
+    return record
+
+
 def main(argv: "List[str] | None" = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-
-    with args.manifest.open() as f:
-        manifest = json.load(f)
-
-    fixtures: Dict[str, Any] = {}
-    for fixture in manifest["fixtures"]:
-        record = _compute_fixture(fixture)
-        # Run the adversarial variants through the SAME real producers and emit
-        # each — the runner asserts they collapse to the golden, proving order-,
-        # duplicate-, and orientation-independence per binding (§5.5.4).
-        variants = {
-            vname: _compute_payload(fixture, vpayload)
-            for vname, vpayload in (fixture["inputs"].get("variants") or {}).items()
-        }
-        if variants:
-            record["variants"] = variants
-        fixtures[fixture["id"]] = record
-
-    result = {"binding": "python", "fixtures": fixtures}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w") as f:
-        json.dump(result, f)
-        f.write("\n")
-    return 0
+    return adapter_main(argv, description=__doc__, run_fixture=_run_fixture)
 
 
 if __name__ == "__main__":

@@ -11,15 +11,15 @@ from __future__ import annotations
 import json
 import os
 
+from conftest import CONFORMANCE_DIR
+
 from earthsci_toolkit.esm_types import Model
 from earthsci_toolkit.lower_expression_templates import ExpressionTemplateError
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.pde_inline_tests import _ephemeral_injected_file
 from earthsci_toolkit.serialize import _serialize_esm_file
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-CONF = os.path.join(REPO_ROOT, "tests", "conformance", "expression_templates")
+CONF = str(CONFORMANCE_DIR / "expression_templates")
 
 
 def _conf(*parts: str) -> str:

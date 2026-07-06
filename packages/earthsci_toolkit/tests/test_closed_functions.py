@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, List
 
 import pytest
+from conftest import FIXTURES_ROOT as _TESTS_ROOT, VALID_DIR
 
 from earthsci_toolkit import load
 from earthsci_toolkit.numpy_interpreter import fold_constant_expr
@@ -27,8 +28,7 @@ from earthsci_toolkit.registered_functions import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-FIXTURES_ROOT = REPO_ROOT / "tests" / "closed_functions"
+FIXTURES_ROOT = _TESTS_ROOT / "closed_functions"
 
 
 def _decode_input(v: Any) -> Any:
@@ -226,7 +226,7 @@ def test_searchsorted_through_ast():
 
 def test_enums_lowered_to_const():
     """End-to-end: ``enum`` ops are resolved to ``const`` integers at load."""
-    fixture = REPO_ROOT / "tests" / "valid" / "enums_categorical_lookup.esm"
+    fixture = VALID_DIR / "enums_categorical_lookup.esm"
     file = load(fixture)
     assert "season" in file.enums
     assert file.enums["season"]["summer"] == 3
@@ -296,7 +296,7 @@ def test_serializer_roundtrip_const_array():
 def test_serializer_roundtrip_enums_block():
     """The top-level ``enums`` block round-trips through serialize → reload."""
     from earthsci_toolkit import save
-    fixture = REPO_ROOT / "tests" / "valid" / "enums_categorical_lookup.esm"
+    fixture = VALID_DIR / "enums_categorical_lookup.esm"
     file = load(fixture)
     out = save(file)
     file2 = load(out)

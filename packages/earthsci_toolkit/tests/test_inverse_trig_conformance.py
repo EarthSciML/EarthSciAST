@@ -24,17 +24,13 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
+from conftest import VALID_DIR
 
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-_FIXTURES_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "valid"
-    / "scalar_leaves"
-)
+_FIXTURES_DIR = VALID_DIR / "scalar_leaves"
 
 
 def _collect_fixtures() -> List[Path]:

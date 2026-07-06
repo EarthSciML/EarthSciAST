@@ -7,7 +7,7 @@ verifying variable replacement, scoped references, and nested substitutions.
 
 import pytest
 import json
-from pathlib import Path
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit import substitute, substitute_in_model, substitute_in_reaction_system
 from earthsci_toolkit.esm_types import ExprNode
@@ -20,7 +20,7 @@ class TestSubstitutionFixtures:
     @pytest.fixture
     def fixtures_dir(self):
         """Get path to substitution fixtures."""
-        return Path(__file__).resolve().parents[3] / "tests" / "substitution"
+        return FIXTURES_ROOT / "substitution"
 
     @staticmethod
     def _run_fixture_cases(fixture_file):

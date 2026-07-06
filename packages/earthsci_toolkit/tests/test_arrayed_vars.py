@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
+from conftest import FIXTURES_ROOT
 
 from earthsci_toolkit import load, save
 
-FIXTURES = (
-    Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "arrayed_vars"
-)
+FIXTURES = FIXTURES_ROOT / "fixtures" / "arrayed_vars"
 
 
 def _load(name: str):

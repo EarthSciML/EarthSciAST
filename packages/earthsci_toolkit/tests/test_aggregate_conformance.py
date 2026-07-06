@@ -27,6 +27,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
+from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_toolkit.parse import load
 from earthsci_toolkit.reference_resolution import (
@@ -37,19 +38,9 @@ from earthsci_toolkit.reference_resolution import (
 from earthsci_toolkit.simulation import simulate
 
 
-_FIXTURES_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "valid"
-    / "aggregate"
-)
+_FIXTURES_DIR = VALID_DIR / "aggregate"
 
-_INVALID_FIXTURES_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "invalid"
-    / "aggregate"
-)
+_INVALID_FIXTURES_DIR = INVALID_DIR / "aggregate"
 
 
 def _collect_fixtures() -> List[Path]:
@@ -198,13 +189,7 @@ def test_undeclared_from_name_rejected_by_resolver() -> None:
 # Build-time key-type rejection (M2 join.on; bead ess-my4.2.5)
 # ---------------------------------------------------------------------------
 
-_BUILD_TIME_INVALID_DIR = (
-    Path(__file__).resolve().parents[3]  # repo root
-    / "tests"
-    / "invalid"
-    / "aggregate"
-    / "build_time"
-)
+_BUILD_TIME_INVALID_DIR = INVALID_DIR / "aggregate" / "build_time"
 
 
 def _build_time_invalid_fixtures() -> List[Path]:

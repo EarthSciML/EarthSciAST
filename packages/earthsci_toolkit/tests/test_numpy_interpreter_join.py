@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 from typing import Dict, Tuple
 
 import numpy as np
 import pytest
+from conftest import VALID_DIR
 
 from earthsci_toolkit.esm_types import ExprNode
 from earthsci_toolkit.numpy_interpreter import (
@@ -28,8 +28,6 @@ from earthsci_toolkit.numpy_interpreter import (
 )
 from earthsci_toolkit.parse import _parse_expression, load
 from earthsci_toolkit.simulation import simulate
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _ctx(
@@ -366,7 +364,7 @@ def test_canonical_join_filter_fixture_evaluates_as_positional() -> None:
     """The repo's ``valid/aggregate/join_filter.esm`` fixture (the ESI MOVES
     contraction, RFC §7.2) evaluates, and its degenerate join is byte-identical
     to the same node with ``join`` removed — the positional-einsum baseline."""
-    fixture = REPO_ROOT / "tests" / "valid" / "aggregate" / "join_filter.esm"
+    fixture = VALID_DIR / "aggregate" / "join_filter.esm"
     doc = json.loads(fixture.read_text())
     model = doc["models"]["EmissionsAggregate"]
     rhs = _parse_expression(model["equations"][0]["rhs"])

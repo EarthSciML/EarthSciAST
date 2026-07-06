@@ -6,20 +6,17 @@ of the ESM Libraries Specification.
 """
 
 import pytest
-import json
-from pathlib import Path
+from conftest import FIXTURES_ROOT, load_fixture as _load_fixture
 from earthsci_toolkit import load, __version__ as VERSION
 from earthsci_toolkit.parse import SchemaValidationError, UnsupportedVersionError
 
 # Path to version compatibility test fixtures
-FIXTURES_DIR = Path(__file__).parent.parent.parent.parent / "tests" / "version_compatibility"
+FIXTURES_DIR = FIXTURES_ROOT / "version_compatibility"
 
 
 def load_fixture(filename: str):
     """Load a test fixture file."""
-    file_path = FIXTURES_DIR / filename
-    with open(file_path, 'r') as f:
-        return json.load(f)
+    return _load_fixture(FIXTURES_DIR / filename)
 
 
 class TestVersionCompatibility:

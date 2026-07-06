@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pytest
+from conftest import FIXTURES_ROOT
 
 pytest.importorskip("scipy")
 
@@ -34,10 +35,7 @@ from earthsci_toolkit.parse import load
 from earthsci_toolkit.simulation import simulate
 
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..")
-)
-SIMULATION_DIR = os.path.join(REPO_ROOT, "tests", "simulation")
+SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")
 
 
 # Fixtures skipped from numerical execution in the Python binding. Each entry

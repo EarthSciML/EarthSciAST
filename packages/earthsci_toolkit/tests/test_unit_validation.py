@@ -10,9 +10,8 @@ This module provides comprehensive tests for:
 - Coupling scenarios with dimensional consistency
 """
 
-from pathlib import Path
-
 import pytest
+from conftest import VALID_DIR
 from pint import UnitRegistry, DimensionalityError
 from earthsci_toolkit import load
 from earthsci_toolkit.esm_types import (
@@ -518,7 +517,7 @@ UNITS_FIXTURE_NAMES = [
 
 @pytest.fixture
 def units_fixtures_dir():
-    return Path(__file__).resolve().parents[3] / "tests" / "valid"
+    return VALID_DIR
 
 
 @pytest.mark.parametrize("fixture_name", UNITS_FIXTURE_NAMES)

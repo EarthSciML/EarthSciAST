@@ -16,17 +16,16 @@ dropped input expression) by computing the reference value from the raw
 from __future__ import annotations
 
 import struct
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from conftest import CONFORMANCE_DIR
 
 from earthsci_toolkit import load
 from earthsci_toolkit.esm_types import EsmFile, ExprNode, ModelVariable
 from earthsci_toolkit.registered_functions import evaluate_closed_function
 
 
-FIXTURES_ROOT = (
-    Path(__file__).resolve().parents[3] / "tests" / "conformance" / "function_tables"
-)
+FIXTURES_ROOT = CONFORMANCE_DIR / "function_tables"
 
 
 def _bit_eq(a: float, b: float) -> bool:
