@@ -19,7 +19,8 @@ fn test_unknown_variable_reference() {
 
             // Check for unknown variable reference error
             let has_unknown_var_error = validation_result
-                .errors()
+                .structural_errors
+                .clone()
                 .iter()
                 .any(|err| matches!(err.code, StructuralErrorCode::UndefinedVariable));
             assert!(has_unknown_var_error, "Expected UndefinedVariable error");
@@ -60,7 +61,8 @@ fn test_undefined_species() {
                 );
 
                 let has_undefined_species_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::UndefinedSpecies));
                 assert!(
@@ -105,7 +107,8 @@ fn test_undefined_parameter() {
                 );
 
                 let has_undefined_param_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::UndefinedParameter));
                 assert!(
@@ -150,7 +153,8 @@ fn test_equation_count_mismatch() {
                 );
 
                 let has_equation_count_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::EquationCountMismatch));
                 assert!(
@@ -191,7 +195,8 @@ fn test_null_reaction() {
                 );
 
                 let has_null_reaction_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::NullReaction));
                 assert!(
@@ -220,7 +225,8 @@ fn test_ic_in_reaction_system() {
     assert!(validation_result.has_errors());
 
     let ic_errors: Vec<_> = validation_result
-        .errors()
+        .structural_errors
+        .clone()
         .into_iter()
         .filter(|err| matches!(err.code, StructuralErrorCode::IcInReactionSystem))
         .collect();
@@ -228,7 +234,7 @@ fn test_ic_in_reaction_system() {
         ic_errors.len(),
         1,
         "expected one ic_in_reaction_system error, got {:?}",
-        validation_result.errors()
+        validation_result.structural_errors.clone()
     );
     let err = &ic_errors[0];
     assert_eq!(
@@ -266,7 +272,8 @@ fn test_reaction_system_non_ic_constraint_ok() {
     let validation_result = validate(&esm_file);
     assert!(
         !validation_result
-            .errors()
+            .structural_errors
+            .clone()
             .iter()
             .any(|err| matches!(err.code, StructuralErrorCode::IcInReactionSystem)),
         "unexpected ic_in_reaction_system false positive"
@@ -303,7 +310,8 @@ fn test_missing_observed_expression() {
                 );
 
                 let has_missing_observed_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::MissingObservedExpr));
                 assert!(
@@ -348,7 +356,8 @@ fn test_unresolved_scoped_reference() {
                 );
 
                 let has_unresolved_ref_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::UnresolvedScopedRef));
                 assert!(
@@ -393,7 +402,8 @@ fn test_event_variable_undeclared() {
                 );
 
                 let has_event_var_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::EventVarUndeclared));
                 assert!(
@@ -434,7 +444,8 @@ fn test_invalid_discrete_parameter() {
                 );
 
                 let has_invalid_discrete_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::InvalidDiscreteParam));
                 assert!(
@@ -475,7 +486,8 @@ fn test_undefined_variable_contexts() {
                 );
 
                 let has_undefined_var_error = validation_result
-                    .errors()
+                    .structural_errors
+                    .clone()
                     .iter()
                     .any(|err| matches!(err.code, StructuralErrorCode::UndefinedVariable));
                 assert!(
@@ -503,7 +515,8 @@ fn test_undefined_system() {
             assert!(validation_result.has_errors());
 
             let has_undefined_system_error = validation_result
-                .errors()
+                .structural_errors
+                .clone()
                 .iter()
                 .any(|err| matches!(err.code, StructuralErrorCode::UndefinedSystem));
             assert!(has_undefined_system_error, "Expected UndefinedSystem error");
@@ -528,7 +541,7 @@ fn test_multiple_errors_combined() {
 
             // Should have multiple different error types
             assert!(
-                validation_result.errors().len() > 1,
+                validation_result.structural_errors.clone().len() > 1,
                 "Expected multiple validation errors"
             );
         }
@@ -577,7 +590,8 @@ fn test_circular_dependency_detection() {
             );
 
             let has_circular_dependency_error = validation_result
-                .errors()
+                .structural_errors
+                .clone()
                 .iter()
                 .any(|err| matches!(err.code, StructuralErrorCode::CircularDependency));
             assert!(
@@ -585,7 +599,7 @@ fn test_circular_dependency_detection() {
                 "Expected CircularDependency error"
             );
 
-            let errors = validation_result.errors();
+            let errors = validation_result.structural_errors.clone();
             let circular_error = errors
                 .iter()
                 .find(|err| matches!(err.code, StructuralErrorCode::CircularDependency))
@@ -665,7 +679,8 @@ fn test_valid_cross_model_references() {
 
             // Should not have circular dependency errors
             let has_circular_dependency_error = validation_result
-                .errors()
+                .structural_errors
+                .clone()
                 .iter()
                 .any(|err| matches!(err.code, StructuralErrorCode::CircularDependency));
             assert!(
@@ -675,7 +690,8 @@ fn test_valid_cross_model_references() {
 
             // Should not have unresolved scoped reference errors for valid references
             let has_unresolved_ref_error = validation_result
-                .errors()
+                .structural_errors
+                .clone()
                 .iter()
                 .any(|err| matches!(err.code, StructuralErrorCode::UnresolvedScopedRef));
             assert!(
@@ -700,13 +716,14 @@ fn test_reaction_rate_units_mismatch_fixture_rejected() {
     let esm_file = load(fixture).expect("fixture should parse and schema-validate");
     let result = validate(&esm_file);
     let err = result
-        .errors()
+        .structural_errors
+        .clone()
         .into_iter()
         .find(|e| matches!(e.code, StructuralErrorCode::UnitInconsistency))
         .unwrap_or_else(|| {
             panic!(
                 "expected UnitInconsistency error for units_reaction_rate_mismatch.esm, got: {:?}",
-                result.errors()
+                result.structural_errors.clone()
             )
         });
     // Match the contract in tests/invalid/expected_errors.json.
@@ -731,7 +748,7 @@ fn test_physical_constant_dimensional_error_fixture_rejected() {
     let esm_file = load(fixture).expect("fixture should parse and schema-validate");
     let result = validate(&esm_file);
     let err = result
-        .errors()
+        .structural_errors.clone()
         .into_iter()
         .find(|e| {
             matches!(e.code, StructuralErrorCode::UnitInconsistency)
@@ -740,7 +757,7 @@ fn test_physical_constant_dimensional_error_fixture_rejected() {
         .unwrap_or_else(|| {
             panic!(
                 "expected UnitInconsistency (physical constant) for units_dimensional_constant_error.esm, got: {:?}",
-                result.errors()
+                result.structural_errors.clone()
             )
         });
     assert_eq!(

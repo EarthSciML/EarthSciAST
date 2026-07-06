@@ -566,6 +566,126 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
     return arr
 end
 
+# ============================================================
+# Build-once NON-aggregate whole-array observeds (makearray / reshape)
+# ============================================================
+# A build-once array observed need not be an `aggregate` MAP. A discretization
+# rule lowers `D(field)` to a `makearray` STENCIL (the `central_D1x/D1y_periodic`
+# rules' interior + periodic-boundary regions, each region a nested
+# central-difference aggregate over the regridded field), and a shape rewrite may
+# emit a `reshape`. Neither carries `output_idx`/`ranges`, so `_materialize_geom_array`
+# (which ranges over `output_idx`) cannot evaluate them. Materialize them here
+# against the already-materialized `env` (the const arrays + scalar params the
+# aggregate path also reads): a `makearray` is evaluated once per output cell
+# through the SAME build-time array pipeline the ODE RHS runs for
+# `index(makearray,…)` — `_eval_cellwise` (`_index_at_cell` → `_resolve_indices`
+# → `_compile` → `_eval_node`) — so its stencil semantics (region selection,
+# nested central-difference, periodic wrap) stay byte-identical to the RHS
+# resolver; a `reshape` (not an ODE-RHS-evaluable op) materializes its source
+# array and reshapes it column-major.
+
+# True iff `rhs` is a whole-array op with no `output_idx`/`ranges` to range over
+# — a `makearray` stencil or a `reshape`.
+_is_setup_wholearray_op(rhs) =
+    rhs isa OpExpr && ((rhs::OpExpr).op == "makearray" || (rhs::OpExpr).op == "reshape")
+
+# Output extents of a build-once makearray/reshape observed. The observed's
+# declared shape (index-set names per dim, in `shape_sets`) drives the extents —
+# resolved against the document index sets + derived extents, exactly like the
+# aggregate path. Fallbacks keep a shapeless op materializable: a makearray's
+# per-dimension region maximum (the regions partition the whole output), or a
+# reshape's own integer/symbolic target `shape`.
+function _setup_wholearray_extents(rhs::OpExpr, shape_sets::Vector{String},
+                                   index_sets, derived_extents)
+    isempty(shape_sets) ||
+        return Int[_geo_index_extent(s, index_sets, derived_extents) for s in shape_sets]
+    if rhs.op == "makearray"
+        regions = rhs.regions === nothing ? Vector{Vector{Vector{Int}}}() : rhs.regions
+        isempty(regions) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+            "cannot determine makearray output shape at setup (no declared shape, no regions)"))
+        nd = length(regions[1])
+        return Int[maximum(r[d][2] for r in regions) for d in 1:nd]
+    end
+    shp = rhs.shape
+    shp === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+        "reshape at setup requires a target `shape`"))
+    return Int[s isa Integer ? Int(s) :
+               _geo_index_extent(String(s), index_sets, derived_extents) for s in shp]
+end
+
+# Split `env` into the (frozen) const-array registry (its array-valued entries —
+# e.g. the regridded `elev_xy`) and the scalar-parameter scope (its Real entries —
+# the grid spacing `dx`/`dy`, offsets, …) the build-time cell pipeline reads.
+function _setup_env_split(env::AbstractDict)
+    ca = Dict{String,AbstractArray{Float64}}()
+    params = Dict{String,Float64}()
+    for (k, v) in env
+        ks = String(k)
+        if v isa AbstractArray
+            ca[ks] = v isa AbstractArray{Float64} ? v : Array{Float64}(v)
+        elseif v isa Real
+            params[ks] = Float64(v)
+        end
+    end
+    return ca, params
+end
+
+# Materialize a build-once `makearray` / `reshape` observed into a dense array
+# against the already-materialized `env`.
+#
+#  * `makearray` — the stencil form a discretization rule lowers `D(field)` to.
+#    Evaluate it once per output cell through `_eval_cellwise` (`_index_at_cell`
+#    → `_resolve_indices` → `_compile` → `_eval_node`), the SAME build-time array
+#    pipeline the ODE RHS runs for `index(makearray, …)`, so the region selection,
+#    nested central-difference and periodic wrap stay byte-identical to the RHS
+#    resolver.
+#  * `reshape` — NOT an ODE-RHS-evaluable op, so materialize its SOURCE array
+#    (`args[1]`, itself a setup array / aggregate / makearray) to a dense array and
+#    reshape column-major (matching the numpy reference `reshape([1..6],[2,3])`
+#    with `M[1,2]==3`) to the declared target shape.
+function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
+                                       index_sets, derived_extents,
+                                       shape_sets::Vector{String},
+                                       registered_functions::AbstractDict)
+    exts = _setup_wholearray_extents(rhs, shape_sets, index_sets, derived_extents)
+    if rhs.op == "reshape"
+        isempty(rhs.args) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+            "reshape at setup requires a source array operand"))
+        src = _setup_source_array(rhs.args[1], env, index_sets, derived_extents,
+                                  registered_functions)
+        length(src) == prod(exts) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+            "reshape source has $(length(src)) elements but target shape needs $(prod(exts))"))
+        return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
+    end
+    ca, params = _setup_env_split(env)
+    arr = zeros(Float64, exts...)
+    for I in CartesianIndices(Tuple(exts))
+        arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
+                                registered_functions=registered_functions,
+                                params=params)
+    end
+    return arr
+end
+
+# The dense source array of a setup-time `reshape`: a bare reference to an
+# already-materialized setup / const array in `env`, or an inline array producer
+# (an aggregate map / a nested makearray) materialized in place.
+function _setup_source_array(src, env, index_sets, derived_extents,
+                             registered_functions)
+    if src isa VarExpr && haskey(env, src.name) && env[src.name] isa AbstractArray
+        return env[src.name]
+    elseif src isa OpExpr && _is_aggregate_op(src.op) &&
+           src.output_idx !== nothing && !isempty(src.output_idx)
+        return _materialize_geom_array(src, env, index_sets, derived_extents)
+    elseif src isa OpExpr && _is_setup_wholearray_op(src)
+        return _materialize_setup_wholearray(src, env, index_sets, derived_extents,
+                                             String[], registered_functions)
+    end
+    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+        "reshape source must be a build-once array (a setup/const array reference " *
+        "or an inline array producer) at setup"))
+end
+
 # Geometry-derived ARRAY observeds to materialize at setup: those whose defining
 # RHS contains an intersect_polygon (ranged clips), plus the closure of array
 # observeds that depend on them WITHOUT touching a state variable. Single direct
@@ -636,6 +756,25 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
          _expr_has_polygon_intersection_area(defs[n])) && push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
+    # An array observed is build-once-SETUP-materializable only if it does NOT read a
+    # COMPUTED SCALAR OBSERVED — a scalar-shaped observed carrying a defining equation
+    # (in `defs`). The setup-time evaluator resolves const arrays, parameters,
+    # const-op / loader-field / bin-buffer observeds (all seeded into the setup env)
+    # and other setup arrays, but it cannot evaluate an arbitrary scalar-observed
+    # equation. So an observed that mixes a build-once spatial field with such a
+    # scalar — the Rothermel slope factor `phi_s = phi_s_coeff · tan_phi²` reads the
+    # computed scalar `phi_s_coeff` — must stay in the ODE RHS, where it GATHERS the
+    # build-once const array (`index(TerrainRegrid.dzdx, …)`, registered by the
+    # geometry setup) per cell and reads the scalar through the normal
+    # observed-substitution path. A reference to an ARRAY observed (e.g. the
+    # value-invention bin buffers `src_bin`/`tgt_bin` a broad-phase `join` gates on,
+    # pulled into setup by the backward pass below) does NOT block, so pure-geometry
+    # regrid chains are unaffected — byte-identical.
+    _is_scalar_computed_obs(f) =
+        haskey(model.variables, f) &&
+        model.variables[f].type == ObservedVariable &&
+        !_is_array_shape(model.variables[f].shape) && haskey(defs, f)
+    _setup_deps_ok(refs) = !any(_is_scalar_computed_obs, refs)
     changed = true
     while changed
         changed = false
@@ -643,7 +782,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
             (is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) && !(n in tainted)) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
             if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
-               !any(f -> f in state_var_names, refs)
+               !any(f -> f in state_var_names, refs) && _setup_deps_ok(refs)
                 push!(setup, n); changed = true
             end
         end
@@ -672,6 +811,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
                  !(defs[r] isa VarExpr)) || continue
                 rrefs = intersect(_referenced_var_names(defs[r]), mvars)
                 any(f -> f in state_var_names, rrefs) && continue
+                _setup_deps_ok(rrefs) || continue   # not setup-materializable (reads a computed scalar observed)
                 push!(setup, r); changed = true
             end
         end
@@ -720,7 +860,8 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
                                      index_sets, derived_extents;
                                      vi_maps=Dict{String,Any}(),
                                      param_overrides=Dict{String,Float64}(),
-                                     const_obs_arrays=Dict{String,Array{Float64}}())
+                                     const_obs_arrays=Dict{String,Array{Float64}}(),
+                                     registered_functions=Dict{String,Function}())
     out = Dict{String,AbstractArray{Float64}}()
     isempty(setup) && return out
     env = Dict{String,Any}()
@@ -772,9 +913,17 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     end
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
-        arr = _is_ranged_clip(rhs) ?
-              _materialize_ranged_clip(rhs, env, index_sets, derived_extents, var_shapes) :
-              _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes)
+        arr = if _is_ranged_clip(rhs)
+            _materialize_ranged_clip(rhs, env, index_sets, derived_extents, var_shapes)
+        elseif _is_setup_wholearray_op(rhs)
+            # A `makearray` stencil (a `D(field)` lowering) or `reshape` — no
+            # `output_idx`/`ranges` to range over. Evaluate per output cell via the
+            # general build-time array pipeline against the materialized `env`.
+            _materialize_setup_wholearray(rhs, env, index_sets, derived_extents,
+                                          get(var_shapes, n, String[]), registered_functions)
+        else
+            _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes)
+        end
         env[n] = arr
         out[n] = arr
     end

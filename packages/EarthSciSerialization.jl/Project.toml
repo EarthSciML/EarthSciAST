@@ -16,6 +16,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
+EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
@@ -25,6 +26,7 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 [extensions]
 EarthSciSerializationCatalystExt = ["Catalyst", "ModelingToolkit", "Symbolics"]
 EarthSciSerializationDataRefreshExt = ["DiffEqCallbacks", "SciMLBase"]
+EarthSciSerializationEarthSciIOExt = "EarthSciIO"
 EarthSciSerializationGeometryOpsExt = ["GeometryOps", "GeoInterface"]
 EarthSciSerializationMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
 EarthSciSerializationSimulateExt = "SciMLBase"

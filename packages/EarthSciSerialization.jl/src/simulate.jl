@@ -90,6 +90,17 @@ function _prepare_run_doc(input)
         input = flatten(input)
     end
     if input isa FlattenedSystem
+        # Lift a feed-forward algebraic physics chain authored as scalars into the
+        # grid shape it inherits from the fields it reads (regrid outputs, loader
+        # fields, the spatial state), so a scalar observed that consumes a build-once
+        # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
+        # becomes a per-cell array whose operand references lower to gathers
+        # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
+        # const-array registry. Both transforms are no-ops (return an equivalent
+        # system) for a document with no algebraic states / no scalar-downstream-of-
+        # array observeds, so an already-array (discretized) or purely-scalar (0-D)
+        # run is byte-identical.
+        input = promote_downstream_shapes(algebraic_states_to_observeds(input))
         return flattened_to_esm(input)
     end
     if input isa AbstractDict

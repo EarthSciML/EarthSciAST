@@ -308,6 +308,17 @@ def _check_variable_references(
                                     f"models/{mname}/equations[{i}]: reference '{ref}' to undefined system '{top_system}'"
                                 )
                             continue
+                        # A 2-part ref whose first component is a SUBSYSTEM of the
+                        # current model is subsystem-LOCAL dot-notation, not a
+                        # `System.var` reference. A pure-I/O data-loader mounted as
+                        # a subsystem (RFC pure-io-data-loaders §4.3) is consumed by
+                        # the owning model's own equations this way — `raw.elevation`
+                        # for `models.<mname>.subsystems.raw` — and flatten lowers it
+                        # to the observed `<mname>.raw.elevation`. Defer it exactly as
+                        # the 3+ part subsystem-nested refs are deferred (the
+                        # subsystem's variables are resolved at flatten time).
+                        if ref.split(".")[0] in (m.get("subsystems") or {}):
+                            continue
                         system, var, status = _resolve_scoped_ref(ref, tables)
                         if status == "no_system":
                             errors.append(

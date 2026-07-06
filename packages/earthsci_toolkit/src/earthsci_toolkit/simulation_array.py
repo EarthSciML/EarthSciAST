@@ -553,9 +553,21 @@ def _order_observed_equations(
     clear unresolved-symbol error rather than the driver hanging.
     """
     rhs_by_name: Dict[str, Expr] = dict(observed_eqs)
+    # Only observeds PRODUCED by an equation here impose an ordering constraint.
+    # A referenced name that is a known observed but has NO equation in this set
+    # — e.g. a data-loader field (``USGS3DEP.raw.elevation``), which flatten
+    # records in ``observed_variables`` yet supplies EXTERNALLY via
+    # ``loader_arrays``/``input_arrays`` — is bound into the eval context BEFORE
+    # any observed is materialized, so it is always available and must NOT block
+    # the sweep. Blocking on such an equation-less input would strand its whole
+    # consumer cone (``F_elev`` → ``elev_xy`` → ``dzdx`` → ``tan_phi`` → ``S_n``
+    # …) in the declaration-order fallback below, which then evaluates consumers
+    # before producers and raises a spurious "Unresolved symbol" for a live
+    # observed. (``observed_names`` is kept for the caller's contract.)
+    produced: Set[str] = set(rhs_by_name)
     deps: Dict[str, Set[str]] = {}
     for name, rhs in observed_eqs:
-        refs = _expr_referenced_names(rhs) & observed_names
+        refs = _expr_referenced_names(rhs) & produced
         refs.discard(name)
         deps[name] = refs
 
@@ -700,6 +712,18 @@ class _NumpyRhsBuild:
     param_values: Dict[str, float]
     ordered_observed: List[Tuple[str, Expr]]
     elem_names: List[str]
+    # State-free observeds materialized ONCE at build (the const-geometry hoist):
+    # ``static_observed`` scalars land in ``static_observed_values``, arrays in
+    # ``static_derived_rings``; ``varying_observed`` is the (dependency-ordered)
+    # subset that transitively references state / ``t`` and so must be re-evaluated
+    # each step. Both the per-step RHS and the output-time observed reconstruction
+    # seed a context with the static products and evaluate only ``varying_observed``
+    # — identical numerics (a state-free body is constant along the trajectory),
+    # but the expensive const geometry (e.g. a conservative-regrid ``A_ij`` clip)
+    # runs once instead of per step. Empty when every observed is time-varying.
+    varying_observed: List[Tuple[str, Expr]] = field(default_factory=list)
+    static_observed_values: Dict[str, float] = field(default_factory=dict)
+    static_derived_rings: Dict[str, "np.ndarray"] = field(default_factory=dict)
     join_key_buffers: Dict[str, "np.ndarray"] = field(default_factory=dict)
     join_key_index_sets: Dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (bare ragged offsets/values factor → in-scope
@@ -1028,28 +1052,15 @@ def _fill_build_inspection(
     # the observed-assertion form (materialized below with these values).
     for k, v in build.param_values.items():
         sink.params[str(k)] = float(v)
-    varying = _time_varying_observeds(build.ordered_observed, set(build.state_names))
-    static_obs = [(n, r) for n, r in build.ordered_observed if n not in varying]
-    if not static_obs:
-        return
-    ctx = EvalContext(
-        state_layout=build.state_layout,
-        state_shapes=build.shapes,
-        param_values=build.param_values,
-        observed_values={},
-        y=np.asarray(build.y0, dtype=float),
-        t=float(t0),
-        index_sets=flat.index_sets,
-        input_arrays=dict(loader_arrays or {}),
-        join_key_buffers=build.join_key_buffers,
-        join_key_index_sets=build.join_key_index_sets,
-        factor_scope=build.factor_scope,
-    )
-    _materialize_observeds(static_obs, ctx, skip_unresolved=True)
-    for name, _ in static_obs:
-        val = ctx.derived_rings.get(name)
-        if val is not None:
-            sink.setup_arrays[name] = np.array(val, dtype=float)
+    # The state-free array observeds were already materialized once by the build
+    # (the const-geometry hoist), so read them straight from the build rather than
+    # re-running the expensive geometry a second time here. Each is recorded in
+    # ``setup_arrays`` under its flattened name (``A_ij`` / ``A_j`` / ``W_ij``,
+    # regridded fields, per-cell slopes, a mesh subsystem's connectivity, …).
+    # ``t0`` is irrelevant to a state-free body, so the values match regardless of
+    # the ``t`` the hoist used.
+    for name, arr in build.static_derived_rings.items():
+        sink.setup_arrays[name] = np.array(arr, dtype=float)
 
 
 def _build_numpy_rhs(
@@ -1216,6 +1227,40 @@ def _build_numpy_rhs(
     )
     _apply_initial_conditions(y0, state_layout, shapes, state_names, initial_conditions)
 
+    # Const-geometry hoist: split observeds into STATE-FREE (constant along the
+    # trajectory) and TIME-VARYING, and materialize the static ones ONCE here.
+    # An observed that transitively references neither a state nor `t` evaluates
+    # to the same value every RHS call, so re-running it per step is pure waste —
+    # and for a conservative-regrid model the static half (the `intersect_polygon`
+    # overlap-area `A_ij`, its row-sums, the regridded elevation, the per-cell
+    # slopes) dominates a single evaluation. Materializing it once and seeding
+    # every per-step / per-output context with the result leaves only the cheap
+    # ∇ψ-dependent front stencils on the hot path, without changing any value
+    # (`_time_varying_observeds` is the same forward propagation the output
+    # reconstruction uses). `skip_unresolved` mirrors the per-step driver: a dead
+    # static observed nothing consumes is dropped, not fatal.
+    _varying_names = _time_varying_observeds(ordered_observed, set(state_names))
+    static_observed = [(n, r) for n, r in ordered_observed if n not in _varying_names]
+    varying_observed = [(n, r) for n, r in ordered_observed if n in _varying_names]
+    static_observed_values: Dict[str, float] = {}
+    static_derived_rings: Dict[str, "np.ndarray"] = {}
+    if static_observed:
+        _static_ctx = EvalContext(
+            state_layout=state_layout,
+            state_shapes=shapes,
+            param_values=param_values,
+            observed_values=static_observed_values,
+            y=y0,
+            t=0.0,
+            index_sets=flat.index_sets,
+            input_arrays=loader_arrays if loader_arrays is not None else {},
+            join_key_buffers=join_key_buffers,
+            join_key_index_sets=join_key_index_sets,
+            factor_scope=factor_scope,
+        )
+        _materialize_observeds(static_observed, _static_ctx, skip_unresolved=True)
+        static_derived_rings = _static_ctx.derived_rings
+
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
     # solve_ivp's RK/BDF/LSODA integrators copy the returned dydt into their
@@ -1235,10 +1280,15 @@ def _build_numpy_rhs(
             state_layout=state_layout,
             state_shapes=shapes,
             param_values=param_values,
-            observed_values={},
+            # Seed the fresh context with the const-geometry hoist (materialized
+            # once at build): scalars into observed_values, arrays into
+            # derived_rings. Copies so the per-step varying observeds append into
+            # a private context without mutating the shared static products.
+            observed_values=dict(static_observed_values),
             y=y,
             t=t,
             index_sets=flat.index_sets,
+            derived_rings=dict(static_derived_rings),
             # Bind the SHARED loader-array registry by reference. Within a cadence
             # segment its contents are fixed, so the RHS is pure; the segmenting
             # driver mutates it in place between segments to advance the cadence.
@@ -1266,7 +1316,7 @@ def _build_numpy_rhs(
         # real defect is masked and the state trajectory is unchanged. CPython's
         # zero-cost exceptions make the guard free on the common (no-dead) path.
         try:
-            _materialize_observeds(ordered_observed, ctx, skip_unresolved=True)
+            _materialize_observeds(varying_observed, ctx, skip_unresolved=True)
         except NumpyInterpreterError as exc:
             raise SimulationError(str(exc)) from exc
         dy.fill(0.0)
@@ -1291,6 +1341,9 @@ def _build_numpy_rhs(
         param_values=param_values,
         ordered_observed=ordered_observed,
         elem_names=elem_names,
+        varying_observed=varying_observed,
+        static_observed_values=static_observed_values,
+        static_derived_rings=static_derived_rings,
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
@@ -1409,34 +1462,54 @@ def _simulate_with_numpy(
                         y_out = np.vstack([y_out, obs_block])
                         out_vars.extend(scalar_obs)
                 else:
+                    # Const-geometry hoist (parity with the RHS driver): the
+                    # static observeds were materialized once at build, so seed
+                    # each output node's context with them and re-evaluate only the
+                    # time-varying observeds — identical values to a full per-node
+                    # materialize, but the expensive const geometry is not re-run
+                    # at every (dense) output node.
+                    varying_observed = build.varying_observed
                     obs_rows: Dict[str, np.ndarray] = {
-                        name: np.empty(t_out.size, dtype=float) for name, _ in ordered_observed
+                        name: np.empty(t_out.size, dtype=float) for name, _ in varying_observed
                     }
-                    obs_is_scalar: Dict[str, bool] = {name: True for name, _ in ordered_observed}
+                    obs_is_scalar: Dict[str, bool] = {name: True for name, _ in varying_observed}
                     for j in range(t_out.size):
                         ctx = EvalContext(
                             state_layout=state_layout,
                             state_shapes=shapes,
                             param_values=param_values,
-                            observed_values={},
+                            observed_values=dict(build.static_observed_values),
                             y=y_out[:, j],
                             t=float(t_out[j]),
                             index_sets=flat.index_sets,
+                            derived_rings=dict(build.static_derived_rings),
                             join_key_buffers=build.join_key_buffers,
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,
                         )
-                        _materialize_observeds(ordered_observed, ctx)
-                        for name, _ in ordered_observed:
+                        _materialize_observeds(varying_observed, ctx)
+                        for name, _ in varying_observed:
                             if name in ctx.observed_values:
                                 obs_rows[name][j] = ctx.observed_values[name]
                             else:
                                 obs_is_scalar[name] = False
-                    scalar_obs = [n for n, _ in ordered_observed if obs_is_scalar[n]]
-                    if scalar_obs:
-                        obs_block = np.vstack([obs_rows[n] for n in scalar_obs])
-                        y_out = np.vstack([y_out, obs_block])
-                        out_vars.extend(scalar_obs)
+                    # Row order follows ordered_observed; a static scalar is a
+                    # constant column (broadcast), a varying scalar its per-node
+                    # trajectory. Array-valued observeds are not scalar rows.
+                    row_names: List[str] = []
+                    row_arrays: List[np.ndarray] = []
+                    for name, _ in ordered_observed:
+                        if name in build.static_observed_values:
+                            row_names.append(name)
+                            row_arrays.append(
+                                np.full(t_out.size, build.static_observed_values[name], dtype=float)
+                            )
+                        elif obs_is_scalar.get(name):
+                            row_names.append(name)
+                            row_arrays.append(obs_rows[name])
+                    if row_arrays:
+                        y_out = np.vstack([y_out] + row_arrays)
+                        out_vars.extend(row_names)
             except NumpyInterpreterError:
                 # Output-time observed recovery is cosmetic; never fail an
                 # otherwise-successful integration because a post-hoc observed

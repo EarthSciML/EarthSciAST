@@ -52,6 +52,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # ---- End-to-end simulation runs + MTK export ----
     include("simulate_run_test.jl")
     include("loaded_ic_bc_simulation_test.jl")
+    include("subsystem_loader_conformance_test.jl")
+    include("build_once_spatial_field_conformance_test.jl")
     include("wildfire_simulation_test.jl")
     include("mtk_export_test.jl")
 

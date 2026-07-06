@@ -929,7 +929,8 @@ function _build_evaluator_impl(model::Model;
         _geom_setup_arrays = _materialize_geometry_setup(_geom_setup_vars, _geom_defs,
             model, const_arrays, index_sets, _derived_extents;
             vi_maps=_vi_maps.maps, param_overrides=parameter_overrides,
-            const_obs_arrays=_const_obs_arrays)
+            const_obs_arrays=_const_obs_arrays,
+            registered_functions=registered_functions)
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
     # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):

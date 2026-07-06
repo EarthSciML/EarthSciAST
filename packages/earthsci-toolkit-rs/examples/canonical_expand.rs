@@ -28,7 +28,7 @@ use serde_json::Value;
 /// Render a non-integral finite float exactly as Julia's `JSON3.write`
 /// (Base.Ryu shortest digits; scientific iff the decimal exponent is < -4 or
 /// >= 6; scientific mantissa always carries a fraction digit; exponent
-/// unpadded, no `+`).
+/// > unpadded, no `+`).
 fn julia_float_repr(v: f64) -> Result<String, String> {
     if !v.is_finite() {
         return Err(format!("non-finite float {v} is not valid JSON"));

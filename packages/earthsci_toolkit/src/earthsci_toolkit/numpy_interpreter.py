@@ -213,11 +213,20 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
     if name in ctx.derived_rings:
         return ctx.derived_rings[name]
     # An externally-injected data-loader field (RFC pure-io-data-loaders §4.3):
-    # a coupling edge substituted the loader's producer symbol (e.g. ``ERA5.pl.u``)
-    # into this consumer equation; resolve it to the array bound for the current
-    # cadence segment. Checked before state/param so the producer symbol wins.
+    # a coupling edge substituted the loader's producer symbol (e.g. ``ERA5.pl.u``),
+    # or the owning model consumed a mounted loader-subsystem field by BARE name
+    # (``Box.raw.k``); resolve it to the array bound for the current cadence
+    # segment. Checked before state/param so the producer symbol wins. A genuine
+    # SCALAR field (0-D or single-element) referenced BARE is scalarised — exactly
+    # as the loaded-`ic` path (`_resolve_field_ic`: ``float(arr.flat[0])``) and the
+    # Julia gather resolver do — so ``D(c) = raw.k - c`` sees the value, not a
+    # 1-vector that later fails ``float(...)``; a multi-element field stays an array
+    # for gather / whole-array consumption.
     if name in ctx.input_arrays:
-        return ctx.input_arrays[name]
+        arr = ctx.input_arrays[name]
+        if isinstance(arr, np.ndarray) and arr.size == 1:
+            return float(arr.reshape(-1)[0])
+        return arr
     if name in ctx.state_layout:
         return _view_state_array(name, ctx)
     if name in ctx.param_values:

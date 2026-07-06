@@ -434,6 +434,24 @@ function _resolve_indices(expr::VarExpr,
                           const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
                           pgather::AbstractDict=_EMPTY_PGATHER,
                           memo::_MaybeMemo=nothing)
+    # Bare (un-indexed) reference to a const-array-backed SCALAR field
+    # (RFC pure-io-data-loaders §4.3): a pure-I/O data-loader subsystem lowers
+    # each of its variables to a const-array-backed observed keyed
+    # `<owner>.<subkey>.<var>` (see flatten `_collect_model!`), and the provider
+    # seam materializes a CONST loader field into `const_arrays` under that same
+    # name (simulate.jl). When such a field is referenced by BARE name (not via a
+    # gather `index(name, …)`) and is a genuine scalar — a 0-D field or a
+    # single-cell array — const-fold it to its literal value here, so the compiler
+    # (which only consults state/param maps) resolves it exactly as the gather path
+    # already resolves `index(name, …)`. A live state slot always wins (never a
+    # loader field), and a multi-element array left bare is not scalarisable, so it
+    # passes through unchanged for the array machinery / normal error path.
+    if !haskey(var_map, expr.name) && haskey(const_arrays, expr.name)
+        arr = const_arrays[expr.name]
+        if arr isa AbstractArray && length(arr) == 1
+            return NumExpr(Float64(first(arr)))
+        end
+    end
     return expr
 end
 function _resolve_indices(expr::OpExpr,

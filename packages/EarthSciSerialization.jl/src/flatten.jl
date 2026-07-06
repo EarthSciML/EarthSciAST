@@ -678,9 +678,28 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
 
     for (sub_name, sub_model) in model.subsystems
         # A DataLoader subsystem (RFC pure-io-data-loaders §4.3) exposes its
-        # variables to the owning model's equations; lowering that consumption
-        # (reprojection / regridding) is a downstream model concern, not part of
-        # plain flattening. Skip non-Model subsystems here.
+        # variables to the owning model under the dot-path `<owner>.<subkey>.<var>`.
+        # Lower each loader variable to an observed of that name — with NO defining
+        # equation (its value is a pure-I/O external input injected at the RHS
+        # boundary by the provider seam, not computed) — so the flattened system is
+        # structurally complete and its name is materialized, exactly as the Python
+        # binding does (earthsci_toolkit `flatten.py` §4.3: a `FlattenedVariable`
+        # of type "observed" named `<owner>.<subkey>.<var>` + a LoaderField). The
+        # bound value reaches the RHS through `const_arrays` keyed by this same name
+        # (a CONST provider materialised at build time by `simulate`, or a discrete
+        # refresh buffer): a gather `index(<owner>.<subkey>.<var>, …)` resolves it
+        # via `_resolve_indices`, and a bare scalar reference const-folds against
+        # the same registry (`_resolve_indices(::VarExpr)`). Julia carries no
+        # separate `loader_fields` descriptor (unlike Python) — the const-array key
+        # is the whole contract — so no equation is synthesized here.
+        if sub_model isa DataLoader
+            for (var_name, loader_var) in sub_model.variables
+                namespaced = "$(prefix).$(sub_name).$(var_name)"
+                observeds[namespaced] = ModelVariable(ObservedVariable;
+                    units=loader_var.units, description=loader_var.description)
+            end
+            continue
+        end
         sub_model isa Model || continue
         _collect_model!(states, params, observeds, equations,
                         continuous_events, discrete_events,
