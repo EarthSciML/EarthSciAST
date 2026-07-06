@@ -276,6 +276,8 @@ pub fn shoelace_area(ring: &[(f64, f64)]) -> f64 {
 /// the §5.8.2 tolerance anchor. Multiply by `R²` for a physical area.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
+    // (On wasm32 a stub below returns a runtime GeometryError instead, the
+    // same pattern as `polygon_area`, so the two public fns gate uniformly.)
     // Dedup consecutive / wrap duplicate vertices before the S2 constructor —
     // S2 rejects zero-length edges as degenerate (esm-spec §8.6.1). A ring with
     // fewer than 3 distinct vertices is a degenerate / empty clip: area 0.
@@ -285,6 +287,17 @@ pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
     }
     let p = SphericalPolygon::from_lon_lat(&ring).map_err(|e| GeometryError::new(e.to_string()))?;
     Ok(p.area())
+}
+
+/// `spherical_area` requires the native s2bindings backend, which is not
+/// built for wasm32 — this stub keeps the public surface uniform across
+/// targets (a runtime error rather than a compile-time missing symbol),
+/// matching the wasm `polygon_area` stub below.
+#[cfg(target_arch = "wasm32")]
+pub fn spherical_area(_ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
+    Err(GeometryError::new(
+        "spherical_area requires the native s2bindings backend, which is not built for wasm32",
+    ))
 }
 
 /// Unsigned `polygon_area` of an overlap ring under `manifold` — the imperative

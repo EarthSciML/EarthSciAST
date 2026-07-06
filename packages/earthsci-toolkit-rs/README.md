@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Validate it (structural checks on the typed representation)
     let validation_result = validate(&esm_file);
     if !validation_result.is_valid {
-        for error in validation_result.errors() {
+        for error in &validation_result.structural_errors {
             println!("Error: {}", error.message);
         }
     }

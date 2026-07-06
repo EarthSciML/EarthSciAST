@@ -231,6 +231,10 @@ pub struct DaeInfo {
 /// `Integer` and float tokens fall through to `Number`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+// Boxing the large variant would change the wire-facing construction/match
+// ergonomics on one of the crate's most-touched types for a size win that
+// profiling has not justified; when a variant IS boxed the field carries its
+// own rationale (see AssertionReference::Expression).
 #[allow(clippy::large_enum_variant)]
 pub enum Expr {
     /// Integer literal (JSON integer token, no `.`, no `e`/`E`).
@@ -1010,6 +1014,10 @@ pub struct DiscreteEvent {
 /// Trigger condition for discrete events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Boxing the large variant would change the wire-facing construction/match
+// ergonomics on one of the crate's most-touched types for a size win that
+// profiling has not justified; when a variant IS boxed the field carries its
+// own rationale (see AssertionReference::Expression).
 #[allow(clippy::large_enum_variant)]
 pub enum DiscreteEventTrigger {
     /// Fires when boolean condition is true
@@ -1388,6 +1396,10 @@ pub struct DataLoaderVariable {
 /// file values to the declared units.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+// Boxing the large variant would change the wire-facing construction/match
+// ergonomics on one of the crate's most-touched types for a size win that
+// profiling has not justified; when a variant IS boxed the field carries its
+// own rationale (see AssertionReference::Expression).
 #[allow(clippy::large_enum_variant)]
 pub enum UnitConversion {
     /// Simple multiplicative factor.
@@ -1452,6 +1464,10 @@ pub struct Operator {
 /// [`VariableMapTransform::Expression`], and a bare number is rejected.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+// Boxing the large variant would change the wire-facing construction/match
+// ergonomics on one of the crate's most-touched types for a size win that
+// profiling has not justified; when a variant IS boxed the field carries its
+// own rationale (see AssertionReference::Expression).
 #[allow(clippy::large_enum_variant)]
 pub enum VariableMapTransform {
     /// Legacy named transform string.
@@ -1500,6 +1516,10 @@ impl std::fmt::Display for VariableMapTransform {
 /// Coupling entry with discriminated union based on type field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Boxing the large variant would change the wire-facing construction/match
+// ergonomics on one of the crate's most-touched types for a size win that
+// profiling has not justified; when a variant IS boxed the field carries its
+// own rationale (see AssertionReference::Expression).
 #[allow(clippy::large_enum_variant)]
 pub enum CouplingEntry {
     /// Operator composition coupling
@@ -1632,4 +1652,165 @@ pub struct Domain {
     /// Array backend identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub array_type: Option<String>,
+}
+
+#[cfg(test)]
+mod coupling_field_tests {
+    use super::*;
+
+    #[test]
+    fn test_operator_compose_new_fields() {
+        // Test OperatorCompose with new systems field
+        let json = r#"{
+            "type": "operator_compose",
+            "systems": ["system1", "system2"]
+        }"#;
+
+        let entry: CouplingEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            CouplingEntry::OperatorCompose { systems, .. } => {
+                assert_eq!(systems, vec!["system1", "system2"]);
+            }
+            _ => panic!("Expected OperatorCompose variant"),
+        }
+    }
+
+    #[test]
+    fn test_couple_new_fields() {
+        // Test Couple with new systems field
+        let json = r#"{
+            "type": "couple",
+            "systems": ["system1", "system2"],
+            "connector": {
+                "equations": []
+            }
+        }"#;
+
+        let entry: CouplingEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            CouplingEntry::Couple { systems, .. } => {
+                assert_eq!(systems, vec!["system1", "system2"]);
+            }
+            _ => panic!("Expected Couple variant"),
+        }
+    }
+
+    #[test]
+    fn test_variable_map_new_fields() {
+        // Test VariableMap with new from/to fields
+        let json = r#"{
+            "type": "variable_map",
+            "from": "source.var",
+            "to": "target.param",
+            "transform": "identity"
+        }"#;
+
+        let entry: CouplingEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            CouplingEntry::VariableMap {
+                from,
+                to,
+                transform,
+                ..
+            } => {
+                assert_eq!(from, "source.var");
+                assert_eq!(to, "target.param");
+                assert_eq!(
+                    transform,
+                    crate::types::VariableMapTransform::Named("identity".to_string())
+                );
+            }
+            _ => panic!("Expected VariableMap variant"),
+        }
+    }
+
+    #[test]
+    fn test_coupling_serialization_round_trip() {
+        // Test serialization round-trip
+        let coupling = CouplingEntry::OperatorCompose {
+            lifting: None,
+            systems: vec!["sys1".to_string(), "sys2".to_string()],
+            translate: None,
+            description: None,
+        };
+
+        let serialized = serde_json::to_string(&coupling).unwrap();
+        let deserialized: CouplingEntry = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            CouplingEntry::OperatorCompose { systems, .. } => {
+                assert_eq!(systems, vec!["sys1", "sys2"]);
+            }
+            _ => panic!("Round-trip failed"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod discrete_event_test {
+    use super::*;
+
+    #[test]
+    fn test_discrete_event_fields_present() {
+        // Test that we can create a DiscreteEvent with discrete_parameters and reinitialize
+        let event = DiscreteEvent {
+            name: Some("test_event".to_string()),
+            trigger: DiscreteEventTrigger::Condition {
+                expression: Expr::Number(1.0),
+            },
+            affects: None,
+            functional_affect: None,
+            discrete_parameters: Some(vec!["param1".to_string(), "param2".to_string()]),
+            reinitialize: Some(true),
+            description: Some("Test event".to_string()),
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&event).expect("Serialization should work");
+        assert!(
+            json.contains("discrete_parameters"),
+            "JSON should contain discrete_parameters field"
+        );
+        assert!(
+            json.contains("reinitialize"),
+            "JSON should contain reinitialize field"
+        );
+        assert!(
+            json.contains("param1"),
+            "JSON should contain the parameter values"
+        );
+
+        // Test deserialization
+        let deserialized: DiscreteEvent =
+            serde_json::from_str(&json).expect("Deserialization should work");
+
+        assert_eq!(
+            deserialized.discrete_parameters,
+            Some(vec!["param1".to_string(), "param2".to_string()])
+        );
+        assert_eq!(deserialized.reinitialize, Some(true));
+    }
+
+    #[test]
+    fn test_discrete_event_json_parsing() {
+        let json = r#"
+        {
+            "trigger": {
+                "type": "condition",
+                "expression": 1.0
+            },
+            "discrete_parameters": ["param1", "param2"],
+            "reinitialize": true
+        }
+        "#;
+
+        let event: DiscreteEvent = serde_json::from_str(json)
+            .expect("Should parse JSON with discrete_parameters and reinitialize");
+
+        assert_eq!(
+            event.discrete_parameters,
+            Some(vec!["param1".to_string(), "param2".to_string()])
+        );
+        assert_eq!(event.reinitialize, Some(true));
+    }
 }

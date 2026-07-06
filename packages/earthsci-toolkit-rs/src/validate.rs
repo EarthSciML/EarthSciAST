@@ -38,7 +38,10 @@ impl ValidationResult {
         !self.schema_errors.is_empty() || !self.structural_errors.is_empty()
     }
 
-    /// Get all errors as a combined vector (for compatibility with old API)
+    /// Structural errors, cloned (legacy shim: prefer reading
+    /// `structural_errors` — and `schema_errors`, which this does NOT
+    /// include — directly).
+    #[deprecated(note = "read the structural_errors / schema_errors fields directly")]
     pub fn errors(&self) -> Vec<StructuralError> {
         self.structural_errors.clone()
     }
@@ -138,14 +141,17 @@ impl std::fmt::Display for StructuralErrorCode {
 /// **Note**: This function performs ONLY structural validation, not schema validation.
 /// For comprehensive validation (both schema and structural), use `validate_complete()` instead.
 ///
-/// This function checks:
-/// - All variable references are defined
-/// - Unit consistency in equations
-/// - Mathematical validity of expressions
-/// - Equation-unknown balance
-/// - Reference integrity (scoped ref resolution via subsystem hierarchy)
-/// - Reaction consistency
-/// - Event consistency
+/// This function runs the structural checks (delegating to
+/// [`crate::structural`] and [`crate::coupling`]):
+/// - All variable references are defined (including scoped refs resolved via
+///   the subsystem hierarchy)
+/// - Equation-unknown balance (ODE count vs. state variables)
+/// - Observed variables carry expressions
+/// - Discrete/continuous event references
+/// - Reaction species/stoichiometry consistency
+/// - Coupling-entry well-formedness
+/// - Dimensional consistency of equations — reported as `unit_warnings`,
+///   never as errors
 ///
 /// # Arguments
 ///

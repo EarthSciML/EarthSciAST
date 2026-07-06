@@ -257,6 +257,13 @@ impl ReferenceGraph {
     /// a cycle among reference edges is an out-of-scope implicit/iterative solve
     /// (RFC §6.1 "Acyclicity").
     pub fn topological_order(&self) -> Result<Vec<String>, ReferenceError> {
+        // Two deliberate passes rather than one Kahn sweep: `detect_cycle`'s
+        // DFS reports the actual cycle PATH (Kahn's leftover-vertex set
+        // cannot name the path), and the wave loop below emits ready vertices
+        // in sorted-key order per wave, keeping the materialization order
+        // deterministic. Document node counts are small, so the O(V²) scan
+        // is irrelevant; after the cycle check the no-progress break is
+        // unreachable.
         if let Some(cyc) = self.detect_cycle() {
             return Err(ReferenceError::ReferenceCycle { path: cyc });
         }

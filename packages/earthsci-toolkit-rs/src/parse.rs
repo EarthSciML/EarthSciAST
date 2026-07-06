@@ -267,6 +267,18 @@ pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
 // can express. The checks in this section mirror Python's `_validate_structural`
 // and Julia's validator so that a fixture that fails in one language fails
 // in all three, per §2.1a cross-language parity.
+//
+// RELATIONSHIP TO `crate::validate` / `crate::structural`: this is the
+// LOAD-TIME stack — it runs on raw JSON inside `load()`, gates whether a file
+// parses at all, and its String messages are pinned cross-binding. The typed
+// stack (`validate()` → structural.rs/coupling.rs) runs on demand over the
+// deserialized `EsmFile` and reports structured `StructuralError`s. Several
+// rules intentionally exist in BOTH layers (event variable references,
+// discrete-parameter declarations, circular model dependencies): this layer
+// rejects files that must not load; the typed layer re-checks documents that
+// were constructed or edited in memory and never passed through `load()`.
+// If you change a shared rule, change it in both layers (and the sibling
+// bindings).
 
 /// Run every post-schema structural check, collecting errors and returning
 /// `EsmError::SchemaValidation` if any check fires.

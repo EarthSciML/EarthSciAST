@@ -237,10 +237,14 @@ fn enhance_rate_with_mass_action(
         return Ok(rate.clone());
     }
 
-    // Enhance with mass action kinetics (spec §7.4).
-    // Stoichiometric coefficients are positive finite numbers — integer coefficients
-    // unroll into repeated multiplication (`[A]·[A]·…`), fractional coefficients
-    // (e.g. 1.5) lower to a `^` power expression.
+    // Enhance with mass action kinetics (spec §7.4): `∏ [Sᵢ]^nᵢ`. Mirrors
+    // the Julia reference (reactions.jl) exactly — a coefficient of 1 is the
+    // bare species reference, an integral coefficient lowers to `^` with an
+    // Integer exponent node, and a fractional coefficient (e.g. 1.5) to `^`
+    // with a Number exponent. (An earlier Rust-only behavior unrolled small
+    // integer coefficients into repeated multiplication `[A]·[A]·…`, which
+    // diverged from both sibling bindings' ASTs and built enormous nodes for
+    // large coefficients.)
     let mut concentration_factors = Vec::new();
 
     for substrate in substrates {
@@ -249,23 +253,17 @@ fn enhance_rate_with_mass_action(
 
         if coeff == 1.0 {
             concentration_factors.push(species_var);
-        } else if coeff.fract() == 0.0 && coeff > 0.0 && coeff < 1e6 {
-            let n = coeff as u64;
-            let mut power_terms = Vec::new();
-            for _ in 0..n {
-                power_terms.push(species_var.clone());
-            }
-            concentration_factors.push(Expr::Operator(ExpressionNode {
-                op: "*".to_string(),
-                args: power_terms,
-                wrt: None,
-                dim: None,
-                ..Default::default()
-            }));
         } else {
+            let exponent = if coeff.fract() == 0.0
+                && (i64::MIN as f64..=i64::MAX as f64).contains(&coeff)
+            {
+                Expr::Integer(coeff as i64)
+            } else {
+                Expr::Number(coeff)
+            };
             concentration_factors.push(Expr::Operator(ExpressionNode {
                 op: "^".to_string(),
-                args: vec![species_var, Expr::Number(coeff)],
+                args: vec![species_var, exponent],
                 wrt: None,
                 dim: None,
                 ..Default::default()

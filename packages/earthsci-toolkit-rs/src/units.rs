@@ -186,33 +186,84 @@ impl Unit {
     }
 }
 
+/// Dispatch one operator node to its family's propagation helper. Kept as a
+/// thin match so each family's dimensional rules live in one named function;
+/// the rules mirror the Python (`units.py::_get_expression_dimension`) and
+/// Julia (`units.jl::get_expression_dimensions`) implementations.
 fn propagate_operator(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
     coords: Option<&HashMap<String, Unit>>,
 ) -> Result<Unit, UnitError> {
     match op.op.as_str() {
-        "+" | "-" => {
-            if op.args.is_empty() {
-                return Ok(Unit::dimensionless());
-            }
-            // Unary minus: propagate the single argument.
-            if op.op == "-" && op.args.len() == 1 {
-                return Unit::propagate_with_coords(&op.args[0], env, coords);
-            }
-            let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            for arg in op.args.iter().skip(1) {
-                let other = Unit::propagate_with_coords(arg, env, coords)?;
-                if !first.is_compatible(&other) {
-                    return Err(UnitError::DimensionMismatch(format!(
-                        "Incompatible dimensions in '{}' operation",
-                        op.op
-                    )));
-                }
-            }
-            Ok(first)
+        "+" | "-" => propagate_additive(op, env, coords),
+        "*" | "/" => propagate_multiplicative(op, env, coords),
+        "^" | "power" | "pow" => propagate_power(op, env, coords),
+        "D" | "ic" => propagate_calculus(op, env, coords),
+        "grad" | "div" | "laplacian" => propagate_spatial(op, env, coords),
+        "exp" | "log" | "log10" | "ln" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
+            propagate_transcendental(op, env, coords)
         }
+        "sqrt" => propagate_sqrt(op, env, coords),
+        // abs/sign/floor/ceil preserve dimensions; `Pre` is an initial-value
+        // marker — same dimensions as its argument.
+        "abs" | "floor" | "ceil" | "round" | "sign" | "Pre" => {
+            propagate_dimension_preserving(op, env, coords)
+        }
+        "min" | "max" => propagate_min_max(op, env, coords),
+        "atan2" => propagate_atan2(op, env, coords),
+        "ifelse" => propagate_ifelse(op, env, coords),
+        ">" | "<" | ">=" | "<=" | "==" | "!=" => propagate_comparison(op, env, coords),
+        "and" | "or" | "not" => Ok(Unit::dimensionless()),
+        // Array operators: propagate the element dimension. Shape and
+        // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
+        // are a separate concern from unit checking).
+        "aggregate" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
+            propagate_array(op, env, coords)
+        }
+        // Unknown operator — fail loudly rather than silently returning
+        // dimensionless, which used to mask propagation gaps.
+        other => Err(UnitError::ParseError(format!(
+            "Unknown operator '{other}' in dimensional propagation"
+        ))),
+    }
+}
 
+/// `+` / `-`: every operand must share dimensions; the result carries them.
+/// A unary minus propagates its single argument unchanged.
+fn propagate_additive(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.is_empty() {
+        return Ok(Unit::dimensionless());
+    }
+    // Unary minus: propagate the single argument.
+    if op.op == "-" && op.args.len() == 1 {
+        return Unit::propagate_with_coords(&op.args[0], env, coords);
+    }
+    let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    for arg in op.args.iter().skip(1) {
+        let other = Unit::propagate_with_coords(arg, env, coords)?;
+        if !first.is_compatible(&other) {
+            return Err(UnitError::DimensionMismatch(format!(
+                "Incompatible dimensions in '{}' operation",
+                op.op
+            )));
+        }
+    }
+    Ok(first)
+}
+
+/// `*` / `/`: dimensions multiply / divide, no compatibility requirement.
+fn propagate_multiplicative(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    match op.op.as_str() {
         "*" => {
             let mut result = Unit::dimensionless();
             for arg in &op.args {
@@ -221,8 +272,7 @@ fn propagate_operator(
             }
             Ok(result)
         }
-
-        "/" => {
+        _ => {
             if op.args.len() != 2 {
                 return Err(UnitError::ParseError(
                     "Division requires exactly 2 arguments".to_string(),
@@ -232,39 +282,58 @@ fn propagate_operator(
             let den = Unit::propagate_with_coords(&op.args[1], env, coords)?;
             Ok(num.divide(&den))
         }
+    }
+}
 
-        "^" | "power" | "pow" => {
-            if op.args.len() != 2 {
-                return Err(UnitError::ParseError(
-                    "Power operator requires exactly 2 arguments".to_string(),
-                ));
-            }
-            let base_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let exp_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-            if !exp_unit.is_dimensionless() {
-                return Err(UnitError::DimensionMismatch(format!(
-                    "Exponent in '{}' must be dimensionless",
-                    op.op
-                )));
-            }
-            // Only integer exponents carry dimensions meaningfully.
-            if base_unit.is_dimensionless() {
-                return Ok(Unit::dimensionless());
-            }
-            if let Expr::Number(n) = &op.args[1] {
-                if n.fract() == 0.0 {
-                    return Ok(base_unit.power(*n as i32));
-                }
-                return Err(UnitError::DimensionMismatch(format!(
-                    "Non-integer exponent {n} applied to dimensional quantity"
-                )));
-            }
-            // Non-literal exponent with a dimensional base is ambiguous.
-            Err(UnitError::DimensionMismatch(
-                "Cannot apply non-literal exponent to a dimensional quantity".to_string(),
-            ))
+/// `^` / `power` / `pow`: the exponent must be dimensionless; a dimensional
+/// base additionally requires a literal integer exponent (only integer powers
+/// of dimensions are representable).
+fn propagate_power(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 2 {
+        return Err(UnitError::ParseError(
+            "Power operator requires exactly 2 arguments".to_string(),
+        ));
+    }
+    let base_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    let exp_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
+    if !exp_unit.is_dimensionless() {
+        return Err(UnitError::DimensionMismatch(format!(
+            "Exponent in '{}' must be dimensionless",
+            op.op
+        )));
+    }
+    // Only integer exponents carry dimensions meaningfully.
+    if base_unit.is_dimensionless() {
+        return Ok(Unit::dimensionless());
+    }
+    if let Expr::Number(n) = &op.args[1] {
+        if n.fract() == 0.0 {
+            return Ok(base_unit.power(*n as i32));
         }
+        return Err(UnitError::DimensionMismatch(format!(
+            "Non-integer exponent {n} applied to dimensional quantity"
+        )));
+    }
+    // Non-literal exponent with a dimensional base is ambiguous.
+    Err(UnitError::DimensionMismatch(
+        "Cannot apply non-literal exponent to a dimensional quantity".to_string(),
+    ))
+}
 
+/// Calculus-family operators: the time/coordinate derivative `D` divides its
+/// argument's dimensions by the `wrt` variable's, and the initial-condition
+/// marker `ic` (v0.8.0) is dimension-preserving — the initial value of a field
+/// carries the same units as the field itself.
+fn propagate_calculus(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    match op.op.as_str() {
         "D" => {
             if op.args.len() != 1 {
                 return Err(UnitError::ParseError(
@@ -288,11 +357,8 @@ fn propagate_operator(
                 })?;
             Ok(arg_unit.divide(&wrt_unit))
         }
-
-        "ic" => {
-            // Initial-condition operator (v0.8.0): `ic(x) = <initial field>`.
-            // The initial value of a field carries the same units as the field
-            // itself, so propagate the unit of the single argument unchanged.
+        _ => {
+            // "ic": propagate the unit of the single argument unchanged.
             if op.args.len() != 1 {
                 return Err(UnitError::ParseError(
                     "Initial condition 'ic' requires exactly 1 argument".to_string(),
@@ -300,179 +366,204 @@ fn propagate_operator(
             }
             Unit::propagate_with_coords(&op.args[0], env, coords)
         }
+    }
+}
 
-        "grad" | "div" => {
-            if op.args.is_empty() {
-                return Err(UnitError::ParseError(format!(
-                    "'{}' requires at least one argument",
-                    op.op
-                )));
-            }
-            let arg_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let denom = coord_denominator(op, coords, 1);
-            Ok(arg_unit.divide(&denom))
+/// Spatial operators `grad` / `div` / `laplacian`: divide the argument's
+/// dimensions by the coordinate unit raised to the operator's order (1 for
+/// first derivatives, 2 for the laplacian), via [`coord_denominator`].
+fn propagate_spatial(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.is_empty() {
+        return Err(UnitError::ParseError(format!(
+            "'{}' requires at least one argument",
+            op.op
+        )));
+    }
+    let arg_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    let power = if op.op == "laplacian" { 2 } else { 1 };
+    let denom = coord_denominator(op, coords, power);
+    Ok(arg_unit.divide(&denom))
+}
+
+/// Transcendental and trigonometric functions: argument must be
+/// dimensionless, result is dimensionless.
+fn propagate_transcendental(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 1 {
+        return Err(UnitError::ParseError(format!(
+            "'{}' requires exactly 1 argument",
+            op.op
+        )));
+    }
+    let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    if !arg.is_dimensionless() {
+        return Err(UnitError::DimensionMismatch(format!(
+            "Argument to '{}' must be dimensionless",
+            op.op
+        )));
+    }
+    Ok(Unit::dimensionless())
+}
+
+/// Square root: halve dimension powers when all even, else error.
+fn propagate_sqrt(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 1 {
+        return Err(UnitError::ParseError(
+            "'sqrt' requires exactly 1 argument".to_string(),
+        ));
+    }
+    let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    if arg.is_dimensionless() {
+        return Ok(Unit::dimensionless());
+    }
+    let mut dims = HashMap::new();
+    for (d, p) in &arg.dimensions {
+        if p % 2 != 0 {
+            return Err(UnitError::DimensionMismatch(
+                "sqrt of a quantity with odd-power dimensions is not representable".to_string(),
+            ));
         }
+        dims.insert(d.clone(), p / 2);
+    }
+    Ok(Unit {
+        dimensions: dims,
+        scale: arg.scale.sqrt(),
+    })
+}
 
-        "laplacian" => {
-            if op.args.is_empty() {
-                return Err(UnitError::ParseError(
-                    "'laplacian' requires at least one argument".to_string(),
-                ));
-            }
-            let arg_unit = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let denom = coord_denominator(op, coords, 2);
-            Ok(arg_unit.divide(&denom))
+/// Single-argument dimension-preserving operators (`abs` / `floor` / `ceil` /
+/// `round` / `sign`, and the initial-value marker `Pre`): the result carries
+/// the argument's dimensions unchanged.
+fn propagate_dimension_preserving(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 1 {
+        return Err(UnitError::ParseError(format!(
+            "'{}' requires exactly 1 argument",
+            op.op
+        )));
+    }
+    Unit::propagate_with_coords(&op.args[0], env, coords)
+}
+
+/// `min` / `max` require matching dimensions across every operand; the result
+/// carries them.
+fn propagate_min_max(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.is_empty() {
+        return Ok(Unit::dimensionless());
+    }
+    let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    for arg in op.args.iter().skip(1) {
+        let other = Unit::propagate_with_coords(arg, env, coords)?;
+        if !first.is_compatible(&other) {
+            return Err(UnitError::DimensionMismatch(format!(
+                "Incompatible dimensions in '{}'",
+                op.op
+            )));
         }
+    }
+    Ok(first)
+}
 
-        // Transcendental and trigonometric functions: argument must be
-        // dimensionless, result is dimensionless.
-        "exp" | "log" | "log10" | "ln" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(format!(
-                    "'{}' requires exactly 1 argument",
-                    op.op
-                )));
-            }
-            let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            if !arg.is_dimensionless() {
-                return Err(UnitError::DimensionMismatch(format!(
-                    "Argument to '{}' must be dimensionless",
-                    op.op
-                )));
-            }
-            Ok(Unit::dimensionless())
-        }
+/// `atan2`: both arguments must share dimensions (their ratio is the angle);
+/// the result is dimensionless.
+fn propagate_atan2(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 2 {
+        return Err(UnitError::ParseError(
+            "'atan2' requires exactly 2 arguments".to_string(),
+        ));
+    }
+    let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
+    if !a.is_compatible(&b) {
+        return Err(UnitError::DimensionMismatch(
+            "atan2 arguments must share dimensions (ratio is the angle)".to_string(),
+        ));
+    }
+    Ok(Unit::dimensionless())
+}
 
-        // Square root: halve dimension powers when all even, else error.
-        "sqrt" => {
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(
-                    "'sqrt' requires exactly 1 argument".to_string(),
-                ));
-            }
-            let arg = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            if arg.is_dimensionless() {
-                return Ok(Unit::dimensionless());
-            }
-            let mut dims = HashMap::new();
-            for (d, p) in &arg.dimensions {
-                if p % 2 != 0 {
-                    return Err(UnitError::DimensionMismatch(
-                        "sqrt of a quantity with odd-power dimensions is not representable"
-                            .to_string(),
-                    ));
-                }
-                dims.insert(d.clone(), p / 2);
-            }
-            Ok(Unit {
-                dimensions: dims,
-                scale: arg.scale.sqrt(),
-            })
-        }
+/// `ifelse`: the two branches must share dimensions; the result carries them.
+fn propagate_ifelse(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 3 {
+        return Err(UnitError::ParseError(
+            "'ifelse' requires exactly 3 arguments".to_string(),
+        ));
+    }
+    // Condition (arg 0) need not be dimensionless — comparison ops
+    // already produce a dimensionless Boolean, and we don't want to
+    // reject bare scalars used as truthiness flags. Branches must
+    // match.
+    let t_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
+    let f_unit = Unit::propagate_with_coords(&op.args[2], env, coords)?;
+    if !t_unit.is_compatible(&f_unit) {
+        return Err(UnitError::DimensionMismatch(
+            "'ifelse' branches must share dimensions".to_string(),
+        ));
+    }
+    Ok(t_unit)
+}
 
-        // abs/sign/floor/ceil preserve dimensions.
-        "abs" | "floor" | "ceil" | "round" | "sign" => {
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(format!(
-                    "'{}' requires exactly 1 argument",
-                    op.op
-                )));
-            }
-            Unit::propagate_with_coords(&op.args[0], env, coords)
-        }
+/// Comparison operators return a dimensionless flag, but their operands must
+/// share dimensions (logical `and`/`or`/`not` are handled directly in the
+/// dispatcher — always dimensionless).
+fn propagate_comparison(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    if op.args.len() != 2 {
+        return Err(UnitError::ParseError(format!(
+            "'{}' requires exactly 2 arguments",
+            op.op
+        )));
+    }
+    let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
+    let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
+    if !a.is_compatible(&b) {
+        return Err(UnitError::DimensionMismatch(format!(
+            "Comparison '{}' requires matching dimensions",
+            op.op
+        )));
+    }
+    Ok(Unit::dimensionless())
+}
 
-        // min / max require matching dimensions.
-        "min" | "max" => {
-            if op.args.is_empty() {
-                return Ok(Unit::dimensionless());
-            }
-            let first = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            for arg in op.args.iter().skip(1) {
-                let other = Unit::propagate_with_coords(arg, env, coords)?;
-                if !first.is_compatible(&other) {
-                    return Err(UnitError::DimensionMismatch(format!(
-                        "Incompatible dimensions in '{}'",
-                        op.op
-                    )));
-                }
-            }
-            Ok(first)
-        }
-
-        "atan2" => {
-            if op.args.len() != 2 {
-                return Err(UnitError::ParseError(
-                    "'atan2' requires exactly 2 arguments".to_string(),
-                ));
-            }
-            let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-            if !a.is_compatible(&b) {
-                return Err(UnitError::DimensionMismatch(
-                    "atan2 arguments must share dimensions (ratio is the angle)".to_string(),
-                ));
-            }
-            Ok(Unit::dimensionless())
-        }
-
-        "ifelse" => {
-            if op.args.len() != 3 {
-                return Err(UnitError::ParseError(
-                    "'ifelse' requires exactly 3 arguments".to_string(),
-                ));
-            }
-            // Condition (arg 0) need not be dimensionless — comparison ops
-            // already produce a dimensionless Boolean, and we don't want to
-            // reject bare scalars used as truthiness flags. Branches must
-            // match.
-            let t_unit = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-            let f_unit = Unit::propagate_with_coords(&op.args[2], env, coords)?;
-            if !t_unit.is_compatible(&f_unit) {
-                return Err(UnitError::DimensionMismatch(
-                    "'ifelse' branches must share dimensions".to_string(),
-                ));
-            }
-            Ok(t_unit)
-        }
-
-        // Comparison and logical operators return a dimensionless flag, but
-        // their operands must share dimensions (for comparisons) or be
-        // dimensionless (for logicals).
-        ">" | "<" | ">=" | "<=" | "==" | "!=" => {
-            if op.args.len() != 2 {
-                return Err(UnitError::ParseError(format!(
-                    "'{}' requires exactly 2 arguments",
-                    op.op
-                )));
-            }
-            let a = Unit::propagate_with_coords(&op.args[0], env, coords)?;
-            let b = Unit::propagate_with_coords(&op.args[1], env, coords)?;
-            if !a.is_compatible(&b) {
-                return Err(UnitError::DimensionMismatch(format!(
-                    "Comparison '{}' requires matching dimensions",
-                    op.op
-                )));
-            }
-            Ok(Unit::dimensionless())
-        }
-        "and" | "or" | "not" => Ok(Unit::dimensionless()),
-
-        // `Pre` is an initial-value marker — same dimensions as its
-        // argument.
-        "Pre" => {
-            if op.args.len() != 1 {
-                return Err(UnitError::ParseError(
-                    "'Pre' requires exactly 1 argument".to_string(),
-                ));
-            }
-            Unit::propagate_with_coords(&op.args[0], env, coords)
-        }
-
-        // Array operators: propagate the element dimension. Shape and
-        // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
-        // are a separate concern from unit checking). `aggregate` is the
-        // unified Functional Aggregate Query op (RFC §5.6).
+/// Array operators: propagate the element dimension. Shape and indexing are
+/// orthogonal to dimension (see gt-t5c / gt-vt3 — shapes are a separate
+/// concern from unit checking). `aggregate` is the unified Functional
+/// Aggregate Query op (RFC §5.6).
+fn propagate_array(
+    op: &ExpressionNode,
+    env: &HashMap<String, Unit>,
+    coords: Option<&HashMap<String, Unit>>,
+) -> Result<Unit, UnitError> {
+    match op.op.as_str() {
         "aggregate" => {
             // The body is the scalar expression evaluated for each tuple of
             // loop-index values; its dimension is the array's element
@@ -505,14 +596,6 @@ fn propagate_operator(
             }
             Ok(Unit::dimensionless())
         }
-        "index" | "reshape" | "transpose" | "concat" => {
-            // Shape-only reorderings: element dimension is inherited from
-            // the first positional arg (the source array).
-            if let Some(first) = op.args.first() {
-                return Unit::propagate_with_coords(first, env, coords);
-            }
-            Ok(Unit::dimensionless())
-        }
         "broadcast" => {
             // Elementwise map over arrays with `fn` naming the scalar
             // operator. Construct a synthetic scalar node and recurse so we
@@ -528,12 +611,15 @@ fn propagate_operator(
             };
             propagate_operator(&synthetic, env, coords)
         }
-
-        // Unknown operator — fail loudly rather than silently returning
-        // dimensionless, which used to mask propagation gaps.
-        other => Err(UnitError::ParseError(format!(
-            "Unknown operator '{other}' in dimensional propagation"
-        ))),
+        // "index" | "reshape" | "transpose" | "concat"
+        _ => {
+            // Shape-only reorderings: element dimension is inherited from
+            // the first positional arg (the source array).
+            if let Some(first) = op.args.first() {
+                return Unit::propagate_with_coords(first, env, coords);
+            }
+            Ok(Unit::dimensionless())
+        }
     }
 }
 
@@ -707,7 +793,17 @@ fn parens_balance(s: &str) -> bool {
 }
 
 /// Get commonly used base units
-fn get_base_units() -> HashMap<String, Unit> {
+/// The cached base-unit registry. `parse_unit` recurses (parentheses, `/`,
+/// `*` splits) and runs inside per-equation validation loops, so rebuilding
+/// the ~50-entry map on every call was pure waste; the table is immutable
+/// and deterministic, so one process-wide build is safe.
+fn get_base_units() -> &'static HashMap<String, Unit> {
+    static BASE_UNITS: std::sync::LazyLock<HashMap<String, Unit>> =
+        std::sync::LazyLock::new(build_base_units);
+    &BASE_UNITS
+}
+
+fn build_base_units() -> HashMap<String, Unit> {
     let mut units = HashMap::new();
 
     // Length units

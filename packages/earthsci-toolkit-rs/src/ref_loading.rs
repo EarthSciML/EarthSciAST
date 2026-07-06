@@ -532,23 +532,25 @@ fn resolve_value(
             return Err(e);
         }
 
-        // Recursively resolve any refs inside the loaded file before we
-        // pluck out the single top-level system to inline. This also merges the
-        // loaded file's OWN nested subsystem index_sets into its top-level
-        // `index_sets` (written back), so the merge into the parent below sees
-        // the complete registry (esm-spec §4.7, bottom-up).
-        walk_top_level(&mut parsed, &parent_dir, visited)?;
-
-        // Merge the referenced file's top-level `index_sets` into the importing
-        // document's registry (esm-spec §4.7). Scoped to model subsystems:
-        // `registry` is `None` for reaction-system subsystem refs.
-        if let Some(reg) = registry
-            && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
-        {
-            merge_subsystem_index_sets(reg, &loaded.clone(), ref_str)?;
-        }
+        // Recursively resolve any refs inside the loaded file, then merge its
+        // top-level `index_sets` into the importing document's registry
+        // (esm-spec §4.7, bottom-up; `registry` is `None` for reaction-system
+        // subsystem refs). Wrapped in a closure so `visited.remove` below runs
+        // on the error paths too — a load error aborts the whole resolution
+        // today, but a path left marked visited would silently skip the file
+        // if resolution ever becomes partially recoverable.
+        let nested_result = (|| -> Result<(), String> {
+            walk_top_level(&mut parsed, &parent_dir, visited)?;
+            if let Some(reg) = registry
+                && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
+            {
+                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str)?;
+            }
+            Ok(())
+        })();
 
         visited.remove(&canonical);
+        nested_result?;
 
         return extract_single_system(parsed, &canonical);
     }

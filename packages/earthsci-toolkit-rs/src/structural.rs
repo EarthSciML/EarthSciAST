@@ -5,6 +5,11 @@
 //! Schema validation, the public `ValidationResult` types, and the top-level
 //! orchestrator live in [`crate::validate`]; coupling-entry validation lives
 //! in [`crate::coupling`].
+//!
+//! A parallel LOAD-TIME stack lives in `crate::parse`
+//! (`validate_structural_json`): it runs on raw JSON inside `load()` with
+//! cross-binding-pinned String messages, and some rules deliberately exist in
+//! both layers — see the note in parse.rs before changing a shared rule.
 
 use crate::EsmFile;
 use crate::units::{Unit, build_unit_env, parse_unit, validate_equation_dimensions_with_coords};

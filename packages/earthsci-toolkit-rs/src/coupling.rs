@@ -182,8 +182,15 @@ pub(crate) fn validate_coupling(
                     errors,
                 );
             }
-            _ => {
-                // Handle other coupling types as needed
+            // Exhaustive on purpose: a future CouplingEntry variant must
+            // decide its validation story here rather than silently skipping.
+            crate::CouplingEntry::Callback { .. } => {
+                // Callback couplings reference platform handlers; nothing to
+                // validate against the document's system tables.
+            }
+            crate::CouplingEntry::Event { .. } => {
+                // Cross-system event affects are validated by the JSON-level
+                // event checks in `parse` (mirroring Python).
             }
         }
     }

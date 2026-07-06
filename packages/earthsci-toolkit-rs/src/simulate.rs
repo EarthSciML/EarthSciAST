@@ -230,33 +230,18 @@ enum StateKind {
 
 impl Compiled {
     /// Build from a [`FlattenedSystem`] (the spec-compliant flattening output).
+    ///
+    /// The build runs as a sequence of named phases: v1 scope guards
+    /// ([`reject_unsupported_features`]), equation classification
+    /// ([`classify_equations`]), observed-variable topo-sort + resolution
+    /// ([`resolve_observed`]), algebraic-state topo-sort
+    /// ([`order_algebraic_states`], esm-0kt), and per-state lowering
+    /// ([`build_state_kinds`]).
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
-        // (1) Reject hybrid dimensionality.
-        if flat.independent_variables != ["t"] {
-            return Err(CompileError::UnsupportedDimensionalityError {
-                independent_variables: flat.independent_variables.clone(),
-            });
-        }
+        // (1) Reject hybrid dimensionality and events (v1 scope).
+        reject_unsupported_features(flat)?;
 
-        // (2) Reject events.
-        if !flat.continuous_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "continuous_events".to_string(),
-                message: "v1 does not support continuous (root-finding) events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
-        }
-        if !flat.discrete_events.is_empty() {
-            return Err(CompileError::UnsupportedFeatureError {
-                feature: "discrete_events".to_string(),
-                message: "v1 does not support discrete events. \
-                          Track the future Rust events bead for support."
-                    .to_string(),
-            });
-        }
-
-        // (3) Build name -> index tables for state, params, observed.
+        // (2) Build name -> index tables for state, params, observed.
         let state_names: Vec<String> = flat.state_variables.keys().cloned().collect();
         let state_index = build_index_map(&state_names);
         let state_defaults: Vec<Option<f64>> =
@@ -270,158 +255,35 @@ impl Compiled {
         let observed_names_raw: Vec<String> = flat.observed_variables.keys().cloned().collect();
         let observed_index_raw = build_index_map(&observed_names_raw);
 
-        // (4) Walk equations: classify each as differential state derivative,
-        // algebraic state definition, or observed assignment.
-        let mut state_diff_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
-        let mut state_alg_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
-        let mut observed_rhs_raw: Vec<Option<Expr>> = vec![None; observed_names_raw.len()];
+        // (3) Classify equations into differential / algebraic / observed
+        // defining expressions.
+        let ClassifiedEquations {
+            state_diff_raw,
+            state_alg_raw,
+            observed_rhs_raw,
+        } = classify_equations(flat, &state_names, &state_index, &observed_index_raw)?;
 
-        // Pull observed defining expressions out of the variable struct as a
-        // fallback (some flattening pipelines store the expression there
-        // rather than as an algebraic equation).
-        for (idx, (_name, mv)) in flat.observed_variables.iter().enumerate() {
-            if let Some(expr) = &mv.expression {
-                observed_rhs_raw[idx] = Some(expr.clone());
-            }
-        }
+        // (4) Topologically sort observed variables and resolve their
+        // expressions to typed indices.
+        let (observed_names, observed_index, observed_exprs) = resolve_observed(
+            &observed_names_raw,
+            &observed_index_raw,
+            &observed_rhs_raw,
+            &state_index,
+            &param_index,
+        )?;
 
-        for eq in &flat.equations {
-            if let Some(state_name) = state_lhs_name(&eq.lhs) {
-                let idx = state_index.get(&state_name).ok_or_else(|| {
-                    CompileError::InterpreterBuildError {
-                        details: format!(
-                            "Equation defines D({state_name}, t) but '{state_name}' \
-                             is not in flat.state_variables"
-                        ),
-                    }
-                })?;
-                state_diff_raw[*idx] = Some(eq.rhs.clone());
-            } else if let Some(name) = observed_lhs_name(&eq.lhs) {
-                if let Some(idx) = state_index.get(&name) {
-                    // Bare-LHS equation whose target is a *state* variable
-                    // — algebraic-elimination case (esm-0kt). The integrator
-                    // does not advance this slot; its value is reconstructed
-                    // from the body whenever the RHS or output is evaluated.
-                    state_alg_raw[*idx] = Some(eq.rhs.clone());
-                } else if let Some(idx) = observed_index_raw.get(&name) {
-                    observed_rhs_raw[*idx] = Some(eq.rhs.clone());
-                }
-                // Bare-LHS equations whose target is neither a state nor an
-                // observed variable are ignored — they'd be true DAE
-                // constraints (out of v1 scope).
-            }
-            // Other LHS shapes (array ops, etc.) are handled elsewhere or
-            // ignored.
-        }
+        // (5) Topologically sort algebraic states (esm-0kt).
+        let algebraic_topo = order_algebraic_states(&state_names, &state_index, &state_alg_raw)?;
 
-        // (5) Every state must have a defining equation — either a
-        // differential D(state, t) RHS or a bare-LHS algebraic body. If both
-        // are present the differential equation wins (matches the Python
-        // simulation runner's overdetermined-system rule, esm-y3n).
-        for (idx, name) in state_names.iter().enumerate() {
-            if state_diff_raw[idx].is_some() {
-                state_alg_raw[idx] = None;
-                continue;
-            }
-            if state_alg_raw[idx].is_none() {
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!(
-                        "State variable '{name}' has no D({name}, t) = ... equation in \
-                         flat.equations. Cannot simulate."
-                    ),
-                });
-            }
-        }
-
-        // (6) Topologically sort observed variables. Each observed expression
-        // may only reference state, params, time, or *earlier* observed
-        // variables. We compute the dependency set per observed variable,
-        // restricted to other observed names.
-        let mut obs_deps: Vec<HashSet<usize>> = vec![HashSet::new(); observed_names_raw.len()];
-        for (i, raw) in observed_rhs_raw.iter().enumerate() {
-            if let Some(expr) = raw {
-                collect_observed_refs(expr, &observed_index_raw, &mut obs_deps[i]);
-            }
-        }
-
-        let order = topo_sort(&obs_deps).map_err(|cycle| CompileError::InterpreterBuildError {
-            details: format!(
-                "Cyclic observed-variable dependency: {:?}",
-                cycle
-                    .into_iter()
-                    .map(|i| observed_names_raw[i].clone())
-                    .collect::<Vec<_>>()
-            ),
-        })?;
-
-        let observed_names: Vec<String> = order
-            .iter()
-            .map(|&i| observed_names_raw[i].clone())
-            .collect();
-        let observed_index = build_index_map(&observed_names);
-        let observed_raw_in_order: Vec<Option<Expr>> =
-            order.iter().map(|&i| observed_rhs_raw[i].clone()).collect();
-
-        // (7) Resolve every expression to ResolvedExpr (variable refs become
-        // typed indices).
-        let observed_exprs: Vec<ResolvedExpr> = observed_raw_in_order
-            .iter()
-            .enumerate()
-            .map(|(i, raw)| {
-                let expr = raw.as_ref().unwrap_or(&Expr::Number(0.0));
-                resolve_expr(expr, &state_index, &param_index, &observed_index, Some(i))
-            })
-            .collect::<Result<_, _>>()?;
-
-        // (8) Topologically sort algebraic states (esm-0kt). An algebraic
-        // state's defining body may reference parameters, time, observed
-        // variables, differential states, or *other* algebraic states. The
-        // scalar equivalent of MTK's structural_simplify is a single pass
-        // that resolves each algebraic body in dependency order, so by the
-        // time we evaluate it every algebraic dependency already has a
-        // current value in the working state buffer. Cycles among algebraic
-        // states are rejected — the integrator has no way to break them.
-        let algebraic_indices: Vec<usize> = (0..state_names.len())
-            .filter(|i| state_alg_raw[*i].is_some())
-            .collect();
-        let alg_membership: HashSet<usize> = algebraic_indices.iter().copied().collect();
-
-        let mut alg_deps_dense: Vec<HashSet<usize>> = vec![HashSet::new(); state_names.len()];
-        for &i in &algebraic_indices {
-            if let Some(expr) = state_alg_raw[i].as_ref() {
-                collect_state_refs(expr, &state_index, &alg_membership, &mut alg_deps_dense[i]);
-            }
-        }
-        let algebraic_topo =
-            topo_sort_subset(&algebraic_indices, &alg_deps_dense).map_err(|cycle| {
-                CompileError::InterpreterBuildError {
-                    details: format!(
-                        "Cyclic algebraic equations detected: {}",
-                        cycle
-                            .into_iter()
-                            .map(|i| state_names[i].clone())
-                            .collect::<Vec<_>>()
-                            .join(" -> ")
-                    ),
-                }
-            })?;
-
-        // (9) Build per-state classification + resolved expression.
-        let mut state_kinds: Vec<StateKind> = Vec::with_capacity(state_names.len());
-        for i in 0..state_names.len() {
-            if let Some(rhs) = state_diff_raw[i].as_ref() {
-                let resolved =
-                    resolve_expr(rhs, &state_index, &param_index, &observed_index, None)?;
-                state_kinds.push(StateKind::Differential(resolved));
-            } else {
-                let body = state_alg_raw[i]
-                    .as_ref()
-                    .expect("algebraic-only states checked above");
-                let resolved =
-                    resolve_expr(body, &state_index, &param_index, &observed_index, None)?;
-                state_kinds.push(StateKind::Algebraic(resolved));
-            }
-        }
+        // (6) Build per-state classification + resolved expression.
+        let state_kinds = build_state_kinds(
+            &state_diff_raw,
+            &state_alg_raw,
+            &state_index,
+            &param_index,
+            &observed_index,
+        )?;
 
         Ok(Self {
             state_names,
@@ -467,6 +329,13 @@ impl Compiled {
     }
 
     /// Run the simulation.
+    ///
+    /// Phases, each a named private method below: input validation + vector
+    /// assembly ([`Self::build_param_vec`] / [`Self::build_initial_state`]),
+    /// algebraic IC consistency ([`Self::apply_algebraic_ics`], esm-0kt),
+    /// problem build + solver dispatch ([`Self::integrate`]), and
+    /// algebraic-trajectory output reconstruction
+    /// ([`Self::reconstruct_algebraic_trajectory`]).
     pub fn simulate(
         &self,
         tspan: (f64, f64),
@@ -475,18 +344,35 @@ impl Compiled {
         opts: &SimulateOptions,
     ) -> Result<Solution, SimulateError> {
         let (t0, t_end) = tspan;
-        let n_states = self.state_names.len();
-        let n_params = self.param_names.len();
 
-        // Validate user-supplied parameters: every key must be a known param.
+        let param_vec = self.build_param_vec(params)?;
+        let mut ic_vec = self.build_initial_state(initial_conditions)?;
+        self.apply_algebraic_ics(&mut ic_vec, &param_vec, t0);
+
+        let (time, mut state) = self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
+        self.reconstruct_algebraic_trajectory(&time, &mut state, &param_vec);
+
+        Ok(Solution {
+            time,
+            state,
+            state_variable_names: self.state_names.clone(),
+            metadata: SolutionMetadata {
+                solver: solver_name(opts.solver).to_string(),
+                ..Default::default()
+            },
+        })
+    }
+
+    /// Validate user-supplied parameters (every key must be a known param)
+    /// and build the parameter vector in canonical order: user value >
+    /// declared default; a parameter with neither is an error.
+    fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
         for key in params.keys() {
             if !self.param_index.contains_key(key) {
                 return Err(SimulateError::InvalidParameter { name: key.clone() });
             }
         }
-
-        // Build the parameter vector in canonical order: user value > default.
-        let mut param_vec = vec![0.0f64; n_params];
+        let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
                 param_vec[i] = v;
@@ -496,16 +382,22 @@ impl Compiled {
                 return Err(SimulateError::InvalidParameter { name: name.clone() });
             }
         }
+        Ok(param_vec)
+    }
 
-        // Validate user-supplied initial conditions.
+    /// Validate user-supplied initial conditions (every key must be a state
+    /// variable) and build the initial state vector: user value > declared
+    /// default; a state with neither is an error.
+    fn build_initial_state(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Result<Vec<f64>, SimulateError> {
         for key in initial_conditions.keys() {
             if !self.state_index.contains_key(key) {
                 return Err(SimulateError::InvalidInitialCondition { name: key.clone() });
             }
         }
-
-        // Build the initial state vector.
-        let mut ic_vec = vec![0.0f64; n_states];
+        let mut ic_vec = vec![0.0f64; self.state_names.len()];
         for (i, name) in self.state_names.iter().enumerate() {
             if let Some(&v) = initial_conditions.get(name) {
                 ic_vec[i] = v;
@@ -515,46 +407,48 @@ impl Compiled {
                 return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
             }
         }
+        Ok(ic_vec)
+    }
 
-        // Apply algebraic constraints to the initial-condition vector so that
-        // y0[i] for an algebraic state is consistent with its defining body
-        // — otherwise users must hand-tune defaults to satisfy the algebraic
-        // equations at t = t0 (esm-0kt).
-        {
-            let n_obs0 = self.observed_exprs.len();
-            let mut obs_buf = vec![0.0f64; n_obs0];
-            for (i, e) in self.observed_exprs.iter().enumerate() {
-                obs_buf[i] = interpret(e, &ic_vec, &param_vec, &obs_buf, t0);
-            }
-            for &idx in &self.algebraic_topo {
-                if let StateKind::Algebraic(expr) = &self.state_kinds[idx] {
-                    ic_vec[idx] = interpret(expr, &ic_vec, &param_vec, &obs_buf, t0);
-                }
+    /// Apply algebraic constraints to the initial-condition vector so that
+    /// y0[i] for an algebraic state is consistent with its defining body
+    /// — otherwise users must hand-tune defaults to satisfy the algebraic
+    /// equations at t = t0 (esm-0kt).
+    fn apply_algebraic_ics(&self, ic_vec: &mut [f64], param_vec: &[f64], t0: f64) {
+        let n_obs0 = self.observed_exprs.len();
+        let mut obs_buf = vec![0.0f64; n_obs0];
+        for (i, e) in self.observed_exprs.iter().enumerate() {
+            obs_buf[i] = interpret(e, ic_vec, param_vec, &obs_buf, t0);
+        }
+        for &idx in &self.algebraic_topo {
+            if let StateKind::Algebraic(expr) = &self.state_kinds[idx] {
+                ic_vec[idx] = interpret(expr, ic_vec, param_vec, &obs_buf, t0);
             }
         }
+    }
 
-        // Capture-friendly clones for the closures.
+    /// Build the RHS closure: y is current state, p is param vector, t is
+    /// time, dy is the derivative output. Captures owned clones of the
+    /// compiled expressions so the closure is `'static`.
+    ///
+    /// For models with algebraic states (esm-0kt), the integrator is not
+    /// free to wander the algebraic-state slots: dy[idx] must be zero AND
+    /// y[idx] must be reconstructed from the algebraic body before the
+    /// differential RHS reads it. We work in a local copy of y so the
+    /// integrator's own state vector is untouched.
+    fn make_rhs_closure(
+        &self,
+    ) -> impl Fn(&diffsol::FaerVec<f64>, &diffsol::FaerVec<f64>, f64, &mut diffsol::FaerVec<f64>)
+    + use<> {
         let state_kinds = self.state_kinds.clone();
         let observed_exprs = self.observed_exprs.clone();
         let algebraic_topo = self.algebraic_topo.clone();
-        let state_kinds_jac = state_kinds.clone();
-        let observed_exprs_jac = observed_exprs.clone();
-        let algebraic_topo_jac = algebraic_topo.clone();
-
         let n_obs = observed_exprs.len();
 
-        // RHS closure: y is current state, p is param vector, t is time, dy
-        // is the derivative output.
-        //
-        // For models with algebraic states (esm-0kt), the integrator is not
-        // free to wander the algebraic-state slots: dy[idx] must be zero AND
-        // y[idx] must be reconstructed from the algebraic body before the
-        // differential RHS reads it. We work in a local copy of y so the
-        // integrator's own state vector is untouched.
-        let rhs_closure = move |y: &diffsol::FaerVec<f64>,
-                                p: &diffsol::FaerVec<f64>,
-                                t: f64,
-                                dy: &mut diffsol::FaerVec<f64>| {
+        move |y: &diffsol::FaerVec<f64>,
+              p: &diffsol::FaerVec<f64>,
+              t: f64,
+              dy: &mut diffsol::FaerVec<f64>| {
             let p_s = p.as_slice();
             let mut obs_buf = vec![0.0f64; n_obs];
             // Only the algebraic reconstruction below mutates the state the
@@ -590,18 +484,33 @@ impl Compiled {
                     }
                 }
             }
-        };
+        }
+    }
 
-        // Jacobian-vector product closure (finite differences). Algebraic
-        // slots in `y` are reconstructed from the algebraic body before the
-        // differential RHS is evaluated, on both the unperturbed and
-        // perturbed states, so the resulting Jacobian column reflects the
-        // total derivative through any chained algebraic substitutions.
-        let jac_closure = move |y: &diffsol::FaerVec<f64>,
-                                p: &diffsol::FaerVec<f64>,
-                                t: f64,
-                                v: &diffsol::FaerVec<f64>,
-                                jv: &mut diffsol::FaerVec<f64>| {
+    /// Build the Jacobian-vector product closure (finite differences).
+    /// Algebraic slots in `y` are reconstructed from the algebraic body
+    /// before the differential RHS is evaluated, on both the unperturbed and
+    /// perturbed states, so the resulting Jacobian column reflects the
+    /// total derivative through any chained algebraic substitutions.
+    fn make_jac_closure(
+        &self,
+    ) -> impl Fn(
+        &diffsol::FaerVec<f64>,
+        &diffsol::FaerVec<f64>,
+        f64,
+        &diffsol::FaerVec<f64>,
+        &mut diffsol::FaerVec<f64>,
+    ) + use<> {
+        let state_kinds_jac = self.state_kinds.clone();
+        let observed_exprs_jac = self.observed_exprs.clone();
+        let algebraic_topo_jac = self.algebraic_topo.clone();
+        let n_obs = observed_exprs_jac.len();
+
+        move |y: &diffsol::FaerVec<f64>,
+              p: &diffsol::FaerVec<f64>,
+              t: f64,
+              v: &diffsol::FaerVec<f64>,
+              jv: &mut diffsol::FaerVec<f64>| {
             let n = y.as_slice().len();
             let v_s = v.as_slice();
             let p_s = p.as_slice();
@@ -649,18 +558,35 @@ impl Compiled {
                     }
                 }
             }
-        };
+        }
+    }
+
+    /// Assemble the diffsol [`OdeBuilder`] problem (RHS + Jacobian closures,
+    /// tolerances, initial state) and dispatch to the configured solver
+    /// family, returning the raw `(time, state_rows)` trajectory from
+    /// [`run_solver`].
+    fn integrate(
+        &self,
+        t0: f64,
+        t_end: f64,
+        param_vec: &[f64],
+        ic_vec: &[f64],
+        opts: &SimulateOptions,
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError> {
+        let n_states = self.state_names.len();
+        let rhs_closure = self.make_rhs_closure();
+        let jac_closure = self.make_jac_closure();
 
         // ----- Build the OdeBuilder -----
         let abstol = opts.abstol;
         let reltol = opts.reltol;
-        let ic_for_init = ic_vec.clone();
+        let ic_for_init = ic_vec.to_vec();
 
         let builder = OdeBuilder::<FaerMat<f64>>::new()
             .t0(t0)
             .rtol(reltol)
             .atol(vec![abstol; n_states])
-            .p(param_vec.clone())
+            .p(param_vec.to_vec())
             .rhs_implicit(rhs_closure, jac_closure)
             .init(
                 move |_p: &diffsol::FaerVec<f64>, _t: f64, y: &mut diffsol::FaerVec<f64>| {
@@ -677,13 +603,7 @@ impl Compiled {
         })?;
 
         // ----- Solver dispatch -----
-        let solver_name = match opts.solver {
-            SolverChoice::Bdf => "Bdf",
-            SolverChoice::Sdirk => "Sdirk",
-            SolverChoice::Erk => "Erk",
-        };
-
-        let (time, mut state) = match opts.solver {
+        let trajectory = match opts.solver {
             SolverChoice::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
@@ -707,44 +627,292 @@ impl Compiled {
                 run_solver(&mut solver, t_end, opts)?
             }
         };
+        Ok(trajectory)
+    }
 
-        // Reconstruct algebraic-state values along the output trajectory
-        // (esm-0kt). The integrator carries the algebraic slots forward
-        // without advancing them, so the natural state matrix shows the
-        // algebraic IC at every sample. Recompute from the differential
-        // states + parameters at each output time.
-        if !self.algebraic_topo.is_empty() && !time.is_empty() {
-            let n_obs0 = self.observed_exprs.len();
-            let n_states = self.state_names.len();
-            let mut y_eff = vec![0.0f64; n_states];
-            let mut obs_buf = vec![0.0f64; n_obs0];
-            for (k, &t) in time.iter().enumerate() {
-                for i in 0..n_states {
-                    y_eff[i] = state[i][k];
-                }
-                for (i, e) in self.observed_exprs.iter().enumerate() {
-                    obs_buf[i] = interpret(e, &y_eff, &param_vec, &obs_buf, t);
-                }
-                for &idx in &self.algebraic_topo {
-                    if let StateKind::Algebraic(expr) = &self.state_kinds[idx] {
-                        let v = interpret(expr, &y_eff, &param_vec, &obs_buf, t);
-                        y_eff[idx] = v;
-                        state[idx][k] = v;
-                    }
+    /// Reconstruct algebraic-state values along the output trajectory
+    /// (esm-0kt). The integrator carries the algebraic slots forward
+    /// without advancing them, so the natural state matrix shows the
+    /// algebraic IC at every sample. Recompute from the differential
+    /// states + parameters at each output time. No-op for a system without
+    /// algebraic states.
+    fn reconstruct_algebraic_trajectory(
+        &self,
+        time: &[f64],
+        state: &mut [Vec<f64>],
+        param_vec: &[f64],
+    ) {
+        if self.algebraic_topo.is_empty() || time.is_empty() {
+            return;
+        }
+        let n_obs0 = self.observed_exprs.len();
+        let n_states = self.state_names.len();
+        let mut y_eff = vec![0.0f64; n_states];
+        let mut obs_buf = vec![0.0f64; n_obs0];
+        for (k, &t) in time.iter().enumerate() {
+            for i in 0..n_states {
+                y_eff[i] = state[i][k];
+            }
+            for (i, e) in self.observed_exprs.iter().enumerate() {
+                obs_buf[i] = interpret(e, &y_eff, param_vec, &obs_buf, t);
+            }
+            for &idx in &self.algebraic_topo {
+                if let StateKind::Algebraic(expr) = &self.state_kinds[idx] {
+                    let v = interpret(expr, &y_eff, param_vec, &obs_buf, t);
+                    y_eff[idx] = v;
+                    state[idx][k] = v;
                 }
             }
         }
-
-        Ok(Solution {
-            time,
-            state,
-            state_variable_names: self.state_names.clone(),
-            metadata: SolutionMetadata {
-                solver: solver_name.to_string(),
-                ..Default::default()
-            },
-        })
     }
+}
+
+/// Human-readable solver-family name recorded in [`SolutionMetadata::solver`].
+fn solver_name(choice: SolverChoice) -> &'static str {
+    match choice {
+        SolverChoice::Bdf => "Bdf",
+        SolverChoice::Sdirk => "Sdirk",
+        SolverChoice::Erk => "Erk",
+    }
+}
+
+// ============================================================================
+// from_flattened build phases
+// ============================================================================
+
+/// v1 scope guards for [`Compiled::from_flattened`]: only pure `t`-dimensional
+/// ODE systems with no continuous or discrete events are supported.
+fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), CompileError> {
+    if flat.independent_variables != ["t"] {
+        return Err(CompileError::UnsupportedDimensionalityError {
+            independent_variables: flat.independent_variables.clone(),
+        });
+    }
+    if !flat.continuous_events.is_empty() {
+        return Err(CompileError::UnsupportedFeatureError {
+            feature: "continuous_events".to_string(),
+            message: "v1 does not support continuous (root-finding) events. \
+                      Track the future Rust events bead for support."
+                .to_string(),
+        });
+    }
+    if !flat.discrete_events.is_empty() {
+        return Err(CompileError::UnsupportedFeatureError {
+            feature: "discrete_events".to_string(),
+            message: "v1 does not support discrete events. \
+                      Track the future Rust events bead for support."
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Per-name defining expressions extracted from a [`FlattenedSystem`] by
+/// [`classify_equations`]. Indices parallel the state / raw-observed name
+/// tables built in [`Compiled::from_flattened`].
+struct ClassifiedEquations {
+    /// `D(state, t) = rhs` RHS per state index.
+    state_diff_raw: Vec<Option<Expr>>,
+    /// Bare-LHS algebraic body per state index (esm-0kt).
+    state_alg_raw: Vec<Option<Expr>>,
+    /// Defining RHS per raw observed index.
+    observed_rhs_raw: Vec<Option<Expr>>,
+}
+
+/// Walk `flat.equations` and classify each as a differential state
+/// derivative, an algebraic state definition, or an observed assignment.
+/// Then enforce that every state has a defining equation — either a
+/// differential `D(state, t)` RHS or a bare-LHS algebraic body. If both are
+/// present the differential equation wins (matches the Python simulation
+/// runner's overdetermined-system rule, esm-y3n).
+fn classify_equations(
+    flat: &FlattenedSystem,
+    state_names: &[String],
+    state_index: &HashMap<String, usize>,
+    observed_index_raw: &HashMap<String, usize>,
+) -> Result<ClassifiedEquations, CompileError> {
+    let mut state_diff_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
+    let mut state_alg_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
+    let mut observed_rhs_raw: Vec<Option<Expr>> = vec![None; flat.observed_variables.len()];
+
+    // Pull observed defining expressions out of the variable struct as a
+    // fallback (some flattening pipelines store the expression there
+    // rather than as an algebraic equation).
+    for (idx, (_name, mv)) in flat.observed_variables.iter().enumerate() {
+        if let Some(expr) = &mv.expression {
+            observed_rhs_raw[idx] = Some(expr.clone());
+        }
+    }
+
+    for eq in &flat.equations {
+        if let Some(state_name) = state_lhs_name(&eq.lhs) {
+            let idx =
+                state_index
+                    .get(&state_name)
+                    .ok_or_else(|| CompileError::InterpreterBuildError {
+                        details: format!(
+                            "Equation defines D({state_name}, t) but '{state_name}' \
+                             is not in flat.state_variables"
+                        ),
+                    })?;
+            state_diff_raw[*idx] = Some(eq.rhs.clone());
+        } else if let Some(name) = observed_lhs_name(&eq.lhs) {
+            if let Some(idx) = state_index.get(&name) {
+                // Bare-LHS equation whose target is a *state* variable
+                // — algebraic-elimination case (esm-0kt). The integrator
+                // does not advance this slot; its value is reconstructed
+                // from the body whenever the RHS or output is evaluated.
+                state_alg_raw[*idx] = Some(eq.rhs.clone());
+            } else if let Some(idx) = observed_index_raw.get(&name) {
+                observed_rhs_raw[*idx] = Some(eq.rhs.clone());
+            }
+            // Bare-LHS equations whose target is neither a state nor an
+            // observed variable are ignored — they'd be true DAE
+            // constraints (out of v1 scope).
+        }
+        // Other LHS shapes (array ops, etc.) are handled elsewhere or
+        // ignored.
+    }
+
+    // Every state must have a defining equation; differential wins over
+    // algebraic when both are present (esm-y3n).
+    for (idx, name) in state_names.iter().enumerate() {
+        if state_diff_raw[idx].is_some() {
+            state_alg_raw[idx] = None;
+            continue;
+        }
+        if state_alg_raw[idx].is_none() {
+            return Err(CompileError::InterpreterBuildError {
+                details: format!(
+                    "State variable '{name}' has no D({name}, t) = ... equation in \
+                     flat.equations. Cannot simulate."
+                ),
+            });
+        }
+    }
+
+    Ok(ClassifiedEquations {
+        state_diff_raw,
+        state_alg_raw,
+        observed_rhs_raw,
+    })
+}
+
+/// Topologically sort observed variables and resolve their defining
+/// expressions to typed indices. Each observed expression may only reference
+/// state, params, time, or *earlier* observed variables; the dependency set
+/// per observed variable is restricted to other observed names. Returns the
+/// names in evaluation order, the matching name -> index table, and the
+/// resolved expressions (parallel to the ordered names).
+fn resolve_observed(
+    observed_names_raw: &[String],
+    observed_index_raw: &HashMap<String, usize>,
+    observed_rhs_raw: &[Option<Expr>],
+    state_index: &HashMap<String, usize>,
+    param_index: &HashMap<String, usize>,
+) -> Result<(Vec<String>, HashMap<String, usize>, Vec<ResolvedExpr>), CompileError> {
+    let mut obs_deps: Vec<HashSet<usize>> = vec![HashSet::new(); observed_names_raw.len()];
+    for (i, raw) in observed_rhs_raw.iter().enumerate() {
+        if let Some(expr) = raw {
+            collect_observed_refs(expr, observed_index_raw, &mut obs_deps[i]);
+        }
+    }
+
+    let order = topo_sort(&obs_deps).map_err(|cycle| CompileError::InterpreterBuildError {
+        details: format!(
+            "Cyclic observed-variable dependency: {:?}",
+            cycle
+                .into_iter()
+                .map(|i| observed_names_raw[i].clone())
+                .collect::<Vec<_>>()
+        ),
+    })?;
+
+    let observed_names: Vec<String> = order
+        .iter()
+        .map(|&i| observed_names_raw[i].clone())
+        .collect();
+    let observed_index = build_index_map(&observed_names);
+    let observed_raw_in_order: Vec<Option<Expr>> =
+        order.iter().map(|&i| observed_rhs_raw[i].clone()).collect();
+
+    // Resolve every expression to ResolvedExpr (variable refs become typed
+    // indices); `Some(i)` enforces the forward-only observed dependency rule.
+    let observed_exprs: Vec<ResolvedExpr> = observed_raw_in_order
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| {
+            let expr = raw.as_ref().unwrap_or(&Expr::Number(0.0));
+            resolve_expr(expr, state_index, param_index, &observed_index, Some(i))
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok((observed_names, observed_index, observed_exprs))
+}
+
+/// Topologically sort algebraic states (esm-0kt). An algebraic state's
+/// defining body may reference parameters, time, observed variables,
+/// differential states, or *other* algebraic states. The scalar equivalent of
+/// MTK's structural_simplify is a single pass that resolves each algebraic
+/// body in dependency order, so by the time we evaluate it every algebraic
+/// dependency already has a current value in the working state buffer. Cycles
+/// among algebraic states are rejected — the integrator has no way to break
+/// them.
+fn order_algebraic_states(
+    state_names: &[String],
+    state_index: &HashMap<String, usize>,
+    state_alg_raw: &[Option<Expr>],
+) -> Result<Vec<usize>, CompileError> {
+    let algebraic_indices: Vec<usize> = (0..state_names.len())
+        .filter(|i| state_alg_raw[*i].is_some())
+        .collect();
+    let alg_membership: HashSet<usize> = algebraic_indices.iter().copied().collect();
+
+    let mut alg_deps_dense: Vec<HashSet<usize>> = vec![HashSet::new(); state_names.len()];
+    for &i in &algebraic_indices {
+        if let Some(expr) = state_alg_raw[i].as_ref() {
+            collect_state_refs(expr, state_index, &alg_membership, &mut alg_deps_dense[i]);
+        }
+    }
+    topo_sort_subset(&algebraic_indices, &alg_deps_dense).map_err(|cycle| {
+        CompileError::InterpreterBuildError {
+            details: format!(
+                "Cyclic algebraic equations detected: {}",
+                cycle
+                    .into_iter()
+                    .map(|i| state_names[i].clone())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        }
+    })
+}
+
+/// Build the per-state classification + resolved defining expression: a
+/// [`StateKind::Differential`] for each `D(state, t)` RHS, a
+/// [`StateKind::Algebraic`] for each bare-LHS algebraic body (every state has
+/// exactly one after [`classify_equations`]).
+fn build_state_kinds(
+    state_diff_raw: &[Option<Expr>],
+    state_alg_raw: &[Option<Expr>],
+    state_index: &HashMap<String, usize>,
+    param_index: &HashMap<String, usize>,
+    observed_index: &HashMap<String, usize>,
+) -> Result<Vec<StateKind>, CompileError> {
+    let mut state_kinds: Vec<StateKind> = Vec::with_capacity(state_diff_raw.len());
+    for i in 0..state_diff_raw.len() {
+        if let Some(rhs) = state_diff_raw[i].as_ref() {
+            let resolved = resolve_expr(rhs, state_index, param_index, observed_index, None)?;
+            state_kinds.push(StateKind::Differential(resolved));
+        } else {
+            let body = state_alg_raw[i]
+                .as_ref()
+                .expect("algebraic-only states checked in classify_equations");
+            let resolved = resolve_expr(body, state_index, param_index, observed_index, None)?;
+            state_kinds.push(StateKind::Algebraic(resolved));
+        }
+    }
+    Ok(state_kinds)
 }
 
 /// Run the configured solver from `t0` to `t_end`, honoring `opts.max_steps`

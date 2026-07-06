@@ -268,6 +268,75 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     }
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
+    let (source_systems, mut per_system) = collect_component_systems(file)?;
+
+    // Phase 2: reject spatial operators in any equation (Core tier = ODE only).
+    for block in &per_system {
+        for eq in &block.equations {
+            reject_spatial_operators(&eq.lhs)?;
+            reject_spatial_operators(&eq.rhs)?;
+        }
+    }
+
+    // Phase 3: apply coupling rules, collecting rule descriptions.
+    let coupling_rules_applied = apply_coupling_entries(file, &mut per_system)?;
+
+    // Phase 4: conflict detection after coupling.
+    detect_conflicts(file, &per_system)?;
+
+    // Phase 5: collect into the final FlattenedSystem shape.
+    let mut parts = assemble_output(per_system);
+
+    // Phase 5a: post-collection variable_map parameter removals.
+    let loaded_producers = apply_variable_map_removals(file, &mut parts);
+
+    // Phase 5b: pointwise spatial lift (esm-spec §10.5).
+    maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
+
+    let AssembledParts {
+        state_variables,
+        parameters,
+        observed_variables,
+        brownian_variables,
+        field_ics,
+        equations,
+        continuous_events,
+        discrete_events,
+    } = parts;
+
+    Ok(FlattenedSystem {
+        independent_variables: vec!["t".to_string()],
+        state_variables,
+        parameters,
+        observed_variables,
+        brownian_variables,
+        field_ics,
+        equations,
+        continuous_events,
+        discrete_events,
+        domain: file.domain.clone(),
+        index_sets: file
+            .index_sets
+            .as_ref()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+        metadata: FlattenMetadata {
+            source_systems,
+            coupling_rules_applied,
+            dimension_promotions_applied: Vec::new(),
+            implicit_interface_inferred: false,
+        },
+    })
+}
+
+/// Phase 1 of [`flatten`]: build one [`SystemBlock`] per component — models
+/// first (spec §4.7.5 step 2), then reaction systems lowered to ODE
+/// equations — each with dot-namespaced variables and equations. Component
+/// names are sorted within each kind for deterministic output. Returns the
+/// contributing system names (provenance) alongside the blocks.
+fn collect_component_systems(
+    file: &EsmFile,
+) -> Result<(Vec<String>, Vec<SystemBlock>), FlattenError> {
     let mut source_systems = Vec::new();
     let mut per_system: Vec<SystemBlock> = Vec::new();
 
@@ -293,16 +362,31 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         }
     }
 
-    // Phase 2: reject spatial operators in any equation (Core tier = ODE only).
-    for block in &per_system {
-        for eq in &block.equations {
-            reject_spatial_operators(&eq.lhs)?;
-            reject_spatial_operators(&eq.rhs)?;
+    Ok((source_systems, per_system))
+}
+
+/// Phase 3 of [`flatten`]: apply the file's coupling entries in declaration
+/// order (`operator_compose`, `couple`, `variable_map` — §4.7.1–§4.7.4),
+/// mutating the per-system blocks. Returns the human-readable descriptions of
+/// the rules applied, in order, for [`FlattenMetadata`].
+fn apply_coupling_entries(
+    file: &EsmFile,
+    per_system: &mut Vec<SystemBlock>,
+) -> Result<Vec<String>, FlattenError> {
+    let mut coupling_rules_applied = Vec::new();
+    if let Some(entries) = &file.coupling {
+        for entry in entries {
+            apply_coupling_entry(entry, per_system, &mut coupling_rules_applied)?;
         }
     }
+    Ok(coupling_rules_applied)
+}
 
-    // Phase 3: apply coupling rules, collecting rule descriptions.
-    let mut coupling_rules_applied = Vec::new();
+/// Phase 4 of [`flatten`]: conflict detection after coupling — every pair of
+/// equations with the same D(X, t) LHS across systems that were NOT jointly
+/// named in an `operator_compose` entry is a
+/// [`FlattenError::ConflictingDerivative`].
+fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), FlattenError> {
     let operator_compose_systems: Vec<Vec<String>> = file
         .coupling
         .as_ref()
@@ -317,17 +401,8 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         })
         .unwrap_or_default();
 
-    if let Some(entries) = &file.coupling {
-        for entry in entries {
-            apply_coupling_entry(entry, &mut per_system, &mut coupling_rules_applied)?;
-        }
-    }
-
-    // Phase 4: conflict detection after coupling — every pair of equations
-    // with the same D(X, t) LHS across systems that were NOT jointly named
-    // in an operator_compose entry is a ConflictingDerivative.
     let mut lhs_targets: IndexMap<String, Vec<String>> = IndexMap::new();
-    for block in &per_system {
+    for block in per_system {
         for eq in &block.equations {
             if let Some(dep) = extract_ddt_dependent(&eq.lhs) {
                 lhs_targets.entry(dep).or_default().push(block.name.clone());
@@ -354,54 +429,82 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             species: conflicting_species,
         });
     }
+    Ok(())
+}
 
-    // Phase 5: collect into the final FlattenedSystem.
-    let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
-    let mut parameters: IndexMap<String, ModelVariable> = IndexMap::new();
-    let mut observed_variables: IndexMap<String, ModelVariable> = IndexMap::new();
-    let mut brownian_variables: IndexMap<String, ModelVariable> = IndexMap::new();
-    let mut equations: Vec<Equation> = Vec::new();
-    let mut continuous_events: Vec<ContinuousEvent> = Vec::new();
-    let mut discrete_events: Vec<DiscreteEvent> = Vec::new();
+/// The [`FlattenedSystem`]-shaped accumulation produced by phase 5
+/// ([`assemble_output`]) and refined by the post-collection passes
+/// ([`apply_variable_map_removals`], [`maybe_apply_pointwise_lift`]).
+struct AssembledParts {
+    state_variables: IndexMap<String, ModelVariable>,
+    parameters: IndexMap<String, ModelVariable>,
+    observed_variables: IndexMap<String, ModelVariable>,
+    brownian_variables: IndexMap<String, ModelVariable>,
+    field_ics: Vec<(String, Expr)>,
+    equations: Vec<Equation>,
+    continuous_events: Vec<ContinuousEvent>,
+    discrete_events: Vec<DiscreteEvent>,
+}
 
-    // Scoped-reference / array `ic` equations (esm-spec §11.4.1) are classified
-    // out of the ordinary equation list here — the downstream simulator folds
-    // them into `u0` from the data-Provider seam rather than treating them as
-    // state ODEs. Collected as `(target_state, rhs)`.
-    let mut field_ics: Vec<(String, Expr)> = Vec::new();
+/// Phase 5 of [`flatten`]: merge the per-system blocks (in block order) into
+/// the final variable maps, equation list, and event lists.
+///
+/// Scoped-reference / array `ic` equations (esm-spec §11.4.1) are classified
+/// out of the ordinary equation list here — the downstream simulator folds
+/// them into `u0` from the data-Provider seam rather than treating them as
+/// state ODEs. Collected as `(target_state, rhs)`.
+fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
+    let mut parts = AssembledParts {
+        state_variables: IndexMap::new(),
+        parameters: IndexMap::new(),
+        observed_variables: IndexMap::new(),
+        brownian_variables: IndexMap::new(),
+        field_ics: Vec::new(),
+        equations: Vec::new(),
+        continuous_events: Vec::new(),
+        discrete_events: Vec::new(),
+    };
 
     for block in per_system {
         for (name, var) in block.state_vars {
-            state_variables.insert(name, var);
+            parts.state_variables.insert(name, var);
         }
         for (name, var) in block.parameters {
-            parameters.insert(name, var);
+            parts.parameters.insert(name, var);
         }
         for (name, var) in block.observed_vars {
-            observed_variables.insert(name, var);
+            parts.observed_variables.insert(name, var);
         }
         for (name, var) in block.brownian_vars {
-            brownian_variables.insert(name, var);
+            parts.brownian_variables.insert(name, var);
         }
         for eq in block.equations {
             if let Some(target) = extract_ic_target(&eq.lhs) {
-                field_ics.push((target, eq.rhs));
+                parts.field_ics.push((target, eq.rhs));
             } else {
-                equations.push(eq);
+                parts.equations.push(eq);
             }
         }
-        continuous_events.extend(block.continuous_events);
-        discrete_events.extend(block.discrete_events);
+        parts.continuous_events.extend(block.continuous_events);
+        parts.discrete_events.extend(block.discrete_events);
     }
+    parts
+}
 
-    // Apply post-collection variable_map parameter removals. A `param_to_var`
-    // that binds a LOADED field (its producer's owning system is a top-level
-    // `data_loaders` entry) onto a grid-shaped consumer parameter records the
-    // producer name + rank so the pointwise lift indexes the loaded field per
-    // grid cell (esm-spec §11.5 "BCs from data"). The loaded producer is NOT
-    // added to `parameters`: it is served at runtime through the data-Provider
-    // forcing seam, not as a scalar parameter (which the array evaluator would
-    // otherwise resolve ahead of the forcing buffer).
+/// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
+/// removals. A `param_to_var` that binds a LOADED field (its producer's
+/// owning system is a top-level `data_loaders` entry) onto a grid-shaped
+/// consumer parameter records the producer name + rank so the pointwise lift
+/// indexes the loaded field per grid cell (esm-spec §11.5 "BCs from data").
+/// The loaded producer is NOT added to `parameters`: it is served at runtime
+/// through the data-Provider forcing seam, not as a scalar parameter (which
+/// the array evaluator would otherwise resolve ahead of the forcing buffer).
+/// Returns the loaded-producer name → rank map consumed by
+/// [`maybe_apply_pointwise_lift`].
+fn apply_variable_map_removals(
+    file: &EsmFile,
+    parts: &mut AssembledParts,
+) -> HashMap<String, usize> {
     let loader_names: HashSet<String> = file
         .data_loaders
         .as_ref()
@@ -423,16 +526,17 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
                 VariableMapTransform::Named(name)
                     if matches!(name.as_str(), "param_to_var" | "conversion_factor") =>
                 {
-                    let consumer_shape_rank = parameters
+                    let consumer_shape_rank = parts
+                        .parameters
                         .get(to)
                         .and_then(|v| v.shape.as_ref())
                         .map(|s| s.len())
                         .filter(|r| *r > 0);
-                    parameters.shift_remove(to);
+                    parts.parameters.shift_remove(to);
                     let from_owner = from.split('.').next().unwrap_or("");
                     if let Some(rank) = consumer_shape_rank
                         && loader_names.contains(from_owner)
-                        && !parameters.contains_key(from)
+                        && !parts.parameters.contains_key(from)
                     {
                         loaded_producers.insert(from.clone(), rank);
                     }
@@ -446,11 +550,11 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
                 // `to` in the equations are left intact: they now resolve to
                 // the observed, exactly as if the author had declared it.
                 VariableMapTransform::Expression(node) => {
-                    let removed = parameters.shift_remove(to);
+                    let removed = parts.parameters.shift_remove(to);
                     let (units, shape, description) = removed
                         .map(|p| (p.units, p.shape, p.description))
                         .unwrap_or((None, None, None));
-                    observed_variables.insert(
+                    parts.observed_variables.insert(
                         to.clone(),
                         ModelVariable {
                             var_type: VariableType::Observed,
@@ -469,13 +573,20 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             }
         }
     }
+    loaded_producers
+}
 
-    // Step 5b: pointwise spatial lift (esm-spec §10.5). `operator_compose` has
-    // merged each reaction/model state ODE with the spatial operator's advection
-    // makearray; array-ify those merged equations onto the operator's grid so the
-    // lifted reaction network runs pointwise. No-op unless an `operator_compose`
-    // entry declares `lifting: "pointwise"` and a merged equation carries an
-    // operator makearray.
+/// Phase 5b of [`flatten`]: pointwise spatial lift trigger (esm-spec §10.5).
+/// `operator_compose` has merged each reaction/model state ODE with the
+/// spatial operator's advection makearray; array-ify those merged equations
+/// onto the operator's grid so the lifted reaction network runs pointwise.
+/// No-op unless an `operator_compose` entry declares `lifting: "pointwise"`
+/// and a merged equation carries an operator makearray.
+fn maybe_apply_pointwise_lift(
+    file: &EsmFile,
+    parts: &mut AssembledParts,
+    loaded_producers: &HashMap<String, usize>,
+) -> Result<(), FlattenError> {
     let pointwise = file
         .coupling
         .as_ref()
@@ -486,32 +597,13 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         })
         .unwrap_or(false);
     if pointwise {
-        apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)?;
+        apply_pointwise_lift(
+            &mut parts.equations,
+            &mut parts.state_variables,
+            loaded_producers,
+        )?;
     }
-
-    Ok(FlattenedSystem {
-        independent_variables: vec!["t".to_string()],
-        state_variables,
-        parameters,
-        observed_variables,
-        brownian_variables,
-        field_ics,
-        equations,
-        continuous_events,
-        discrete_events,
-        domain: file.domain.clone(),
-        index_sets: file
-            .index_sets
-            .as_ref()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default(),
-        metadata: FlattenMetadata {
-            source_systems,
-            coupling_rules_applied,
-            dimension_promotions_applied: Vec::new(),
-            implicit_interface_inferred: false,
-        },
-    })
+    Ok(())
 }
 
 /// Flatten a single [`Model`] as a convenience wrapper around [`flatten`].
