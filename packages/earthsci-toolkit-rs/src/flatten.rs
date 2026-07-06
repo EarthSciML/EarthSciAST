@@ -995,7 +995,7 @@ fn apply_coupling_entry(
                             to: to.clone(),
                         });
                     }
-                    if !node_references_variable(node, from) {
+                    if !node.any_child(&mut |e| expr_references_variable(e, from)) {
                         return Err(FlattenError::VariableMapExpressionMissingFrom {
                             from: from.clone(),
                             to: to.clone(),
@@ -1206,12 +1206,13 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
 ///
 /// Array nodes (`makearray`/`arrayop`/`aggregate`/`integral`/…) carry their
 /// value/body sub-expressions in out-of-band fields (`values`, `expr`, `filter`,
-/// `lower`, `upper`) plus structural metadata (`regions`, `output_idx`, `ranges`,
-/// …). Every field is preserved by cloning first, then the expression-bearing
-/// ones are recursively substituted — otherwise a `variable_map` binding could
-/// not reach a loaded inflow field referenced inside a `makearray`'s `values`
-/// (the boundary stencil), and the `..Default::default()` rebuild would silently
-/// drop `regions`/`values` and corrupt the discretized operator.
+/// `lower`, `upper`, `axes`) plus structural metadata (`regions`, `output_idx`,
+/// `ranges`, …). [`ExpressionNode::map_children`] preserves every field by
+/// cloning first, then recursively substitutes the expression-bearing ones —
+/// otherwise a `variable_map` binding could not reach a loaded inflow field
+/// referenced inside a `makearray`'s `values` (the boundary stencil), and a
+/// `..Default::default()` rebuild would silently drop `regions`/`values` and
+/// corrupt the discretized operator.
 fn substitute_var(expr: &Expr, target: &str, replacement: &Expr) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
@@ -1219,76 +1220,23 @@ fn substitute_var(expr: &Expr, target: &str, replacement: &Expr) -> Expr {
         Expr::Variable(name) if name == target => replacement.clone(),
         Expr::Variable(name) => Expr::Variable(name.clone()),
         Expr::Operator(node) => {
-            let mut out = node.clone();
-            out.args = node
-                .args
-                .iter()
-                .map(|a| substitute_var(a, target, replacement))
-                .collect();
-            out.expr = node
-                .expr
-                .as_ref()
-                .map(|e| Box::new(substitute_var(e, target, replacement)));
-            out.filter = node
-                .filter
-                .as_ref()
-                .map(|e| Box::new(substitute_var(e, target, replacement)));
-            out.lower = node
-                .lower
-                .as_ref()
-                .map(|e| Box::new(substitute_var(e, target, replacement)));
-            out.upper = node
-                .upper
-                .as_ref()
-                .map(|e| Box::new(substitute_var(e, target, replacement)));
-            out.values = node.values.as_ref().map(|vs| {
-                vs.iter()
-                    .map(|v| substitute_var(v, target, replacement))
-                    .collect()
-            });
-            Expr::Operator(out)
+            Expr::Operator(node.map_children(&mut |a| substitute_var(a, target, replacement)))
         }
     }
 }
 
 /// Does `expr` reference the variable `name` anywhere — including inside
 /// aggregate/arrayop bodies (`expr`), `filter` predicates, integral bounds
-/// (`lower`/`upper`), and makearray `values`? The traversal mirrors the
-/// expression-bearing field set walked by [`substitute_var`]. Used to enforce
-/// the esm-spec §10.4 contract that a `variable_map` expression transform
-/// references its `from` variable.
+/// (`lower`/`upper`), makearray `values`, and `table_lookup` axes? The
+/// traversal is [`ExpressionNode::any_child`], the same field set walked by
+/// [`substitute_var`]. Used to enforce the esm-spec §10.4 contract that a
+/// `variable_map` expression transform references its `from` variable.
 fn expr_references_variable(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => false,
         Expr::Variable(v) => v == name,
-        Expr::Operator(node) => node_references_variable(node, name),
+        Expr::Operator(node) => node.any_child(&mut |e| expr_references_variable(e, name)),
     }
-}
-
-/// [`expr_references_variable`] over an operator node's expression-bearing
-/// fields (`args`, `expr`, `filter`, `lower`, `upper`, `values`).
-fn node_references_variable(node: &ExpressionNode, name: &str) -> bool {
-    node.args.iter().any(|a| expr_references_variable(a, name))
-        || node
-            .expr
-            .as_deref()
-            .is_some_and(|e| expr_references_variable(e, name))
-        || node
-            .filter
-            .as_deref()
-            .is_some_and(|e| expr_references_variable(e, name))
-        || node
-            .lower
-            .as_deref()
-            .is_some_and(|e| expr_references_variable(e, name))
-        || node
-            .upper
-            .as_deref()
-            .is_some_and(|e| expr_references_variable(e, name))
-        || node
-            .values
-            .as_ref()
-            .is_some_and(|vs| vs.iter().any(|v| expr_references_variable(v, name)))
 }
 
 // ============================================================================

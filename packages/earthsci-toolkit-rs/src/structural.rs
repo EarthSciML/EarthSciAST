@@ -335,28 +335,18 @@ fn check_gradient_ops(
             details,
         });
     }
-    for arg in &node.args {
-        check_gradient_ops(arg, coords, model, eq_path, eq_index, errors);
-    }
-    if let Some(inner) = node.expr.as_ref() {
-        check_gradient_ops(inner, coords, model, eq_path, eq_index, errors);
-    }
+    node.for_each_child(&mut |child| {
+        check_gradient_ops(child, coords, model, eq_path, eq_index, errors)
+    });
 }
 
 /// Returns true if the expression references a variable by exact name
-/// (string leaf match). Walks operator arg lists recursively.
+/// (string leaf match). Walks the canonical expression-bearing child set
+/// ([`crate::types::ExpressionNode::any_child`]).
 fn expr_references_name(expr: &crate::Expr, name: &str) -> bool {
     match expr {
         crate::Expr::Variable(v) => v == name,
-        crate::Expr::Operator(node) => {
-            if node.args.iter().any(|a| expr_references_name(a, name)) {
-                return true;
-            }
-            if let Some(inner) = node.expr.as_ref() {
-                return expr_references_name(inner, name);
-            }
-            false
-        }
+        crate::Expr::Operator(node) => node.any_child(&mut |a| expr_references_name(a, name)),
         crate::Expr::Number(_) | crate::Expr::Integer(_) => false,
     }
 }

@@ -1,154 +1,104 @@
-//! Expression substitution utilities
+//! Expression substitution utilities.
+//!
+//! All entry points funnel through one generic core, [`substitute_expr`],
+//! which resolves variable leaves via a caller-supplied closure and rebuilds
+//! operator nodes with [`crate::types::ExpressionNode::map_children`] — so
+//! sidecar expressions (`expr`, `filter`, `lower`, `upper`, `values`, `axes`)
+//! are traversed and every non-expression field (`regions`, `ranges`,
+//! `output_idx`, …) is preserved. The `*_with_context` family differs only in
+//! its leaf resolver (scoped-reference fallback per esm-spec §2.3.3).
 
 use crate::types::{
-    AffectEquation, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, Equation, ExpressionNode,
-    Reaction,
+    AffectEquation, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, Equation, Reaction,
 };
 use crate::{EsmFile, Expr, Model, ReactionSystem};
 use std::collections::HashMap;
 
-/// Substitute variables in an expression
+// ============================================================================
+// Generic core
+// ============================================================================
+
+/// Recursively rewrite `expr`, replacing each variable leaf with
+/// `resolve(name)` when it returns `Some` (leaving the variable untouched
+/// otherwise).
 ///
-/// # Arguments
-///
-/// * `expr` - The expression to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New expression with substitutions applied
-pub fn substitute(expr: &Expr, substitutions: &std::collections::HashMap<String, Expr>) -> Expr {
+/// Bound index symbols (`output_idx`, `ranges` keys, `int_var`) are not
+/// shadow-checked: callers must not substitute names that collide with loop
+/// indices — the same contract as the flatten pass and the Julia/Python
+/// bindings.
+fn substitute_expr(expr: &Expr, resolve: &mut dyn FnMut(&str) -> Option<Expr>) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
         Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(var_name) => {
-            if let Some(replacement) = substitutions.get(var_name) {
-                replacement.clone()
-            } else {
-                Expr::Variable(var_name.clone())
-            }
-        }
-        Expr::Operator(op_node) => {
-            let new_args: Vec<Expr> = op_node
-                .args
-                .iter()
-                .map(|arg| substitute(arg, substitutions))
-                .collect();
-
-            Expr::Operator(ExpressionNode {
-                op: op_node.op.clone(),
-                args: new_args,
-                wrt: op_node.wrt.clone(),
-                dim: op_node.dim.clone(),
-                ..Default::default()
-            })
+        Expr::Variable(name) => resolve(name).unwrap_or_else(|| Expr::Variable(name.clone())),
+        Expr::Operator(node) => {
+            Expr::Operator(node.map_children(&mut |child| substitute_expr(child, resolve)))
         }
     }
 }
 
-/// Substitute variables in a discrete event trigger
-///
-/// # Arguments
-///
-/// * `trigger` - The discrete event trigger to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New discrete event trigger with substitutions applied
-pub fn substitute_in_discrete_event_trigger(
+// Structure-preserving expression maps over the container types. Each applies
+// `m` to every expression position and clones everything else, so the plain
+// and `_with_context` substitution families share one traversal.
+
+fn map_exprs_in_trigger(
     trigger: &DiscreteEventTrigger,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> DiscreteEventTrigger {
     match trigger {
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: substitute(expression, substitutions),
+            expression: m(expression),
         },
         // Periodic and preset-time triggers carry no expressions to substitute.
         other => other.clone(),
     }
 }
 
-/// Substitute variables in an affect equation
-///
-/// # Arguments
-///
-/// * `affect` - The affect equation to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New affect equation with substitutions applied
-pub fn substitute_in_affect_equation(
-    affect: &AffectEquation,
-    substitutions: &std::collections::HashMap<String, Expr>,
-) -> AffectEquation {
+fn map_exprs_in_affect(affect: &AffectEquation, m: &mut dyn FnMut(&Expr) -> Expr) -> AffectEquation {
     AffectEquation {
         lhs: affect.lhs.clone(), // LHS is a variable name string, not an expression
-        rhs: substitute(&affect.rhs, substitutions),
+        rhs: m(&affect.rhs),
     }
 }
 
-/// Substitute variables in a discrete event
-///
-/// # Arguments
-///
-/// * `event` - The discrete event to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New discrete event with substitutions applied
-pub fn substitute_in_discrete_event(
+fn map_exprs_in_discrete_event(
     event: &DiscreteEvent,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> DiscreteEvent {
     DiscreteEvent {
         name: event.name.clone(),
-        trigger: substitute_in_discrete_event_trigger(&event.trigger, substitutions),
+        trigger: map_exprs_in_trigger(&event.trigger, m),
         affects: event.affects.as_ref().map(|affects| {
             affects
                 .iter()
-                .map(|affect| substitute_in_affect_equation(affect, substitutions))
+                .map(|affect| map_exprs_in_affect(affect, m))
                 .collect()
         }),
-        functional_affect: event.functional_affect.clone(), // TODO: Could also substitute in functional affects if needed
+        // Functional affects are opaque platform snippets, carried verbatim
+        // rather than substituted (matching the sibling bindings).
+        functional_affect: event.functional_affect.clone(),
         discrete_parameters: event.discrete_parameters.clone(),
         reinitialize: event.reinitialize,
         description: event.description.clone(),
     }
 }
 
-/// Substitute variables in a continuous event
-///
-/// # Arguments
-///
-/// * `event` - The continuous event to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New continuous event with substitutions applied
-pub fn substitute_in_continuous_event(
+fn map_exprs_in_continuous_event(
     event: &ContinuousEvent,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> ContinuousEvent {
     ContinuousEvent {
         name: event.name.clone(),
-        conditions: event
-            .conditions
-            .iter()
-            .map(|condition| substitute(condition, substitutions))
-            .collect(),
+        conditions: event.conditions.iter().map(&mut *m).collect(),
         affects: event
             .affects
             .iter()
-            .map(|affect| substitute_in_affect_equation(affect, substitutions))
+            .map(|affect| map_exprs_in_affect(affect, m))
             .collect(),
         affect_neg: event.affect_neg.as_ref().map(|affects| {
             affects
                 .iter()
-                .map(|affect| substitute_in_affect_equation(affect, substitutions))
+                .map(|affect| map_exprs_in_affect(affect, m))
                 .collect()
         }),
         root_find: event.root_find.clone(),
@@ -159,78 +109,112 @@ pub fn substitute_in_continuous_event(
     }
 }
 
-/// Substitute variables in all expressions within a model
-///
-/// # Arguments
-///
-/// * `model` - The model to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New model with substitutions applied
-pub fn substitute_in_model(
-    model: &Model,
-    substitutions: &std::collections::HashMap<String, Expr>,
-) -> Model {
-    let new_equations = model
-        .equations
-        .iter()
-        .map(|eq| Equation {
-            lhs: substitute(&eq.lhs, substitutions),
-            rhs: substitute(&eq.rhs, substitutions),
-        })
-        .collect();
-
+fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model {
     Model {
-        equations: new_equations,
+        equations: model
+            .equations
+            .iter()
+            .map(|eq| Equation {
+                lhs: m(&eq.lhs),
+                rhs: m(&eq.rhs),
+            })
+            .collect(),
         discrete_events: model.discrete_events.as_ref().map(|events| {
             events
                 .iter()
-                .map(|event| substitute_in_discrete_event(event, substitutions))
+                .map(|event| map_exprs_in_discrete_event(event, m))
                 .collect()
         }),
         continuous_events: model.continuous_events.as_ref().map(|events| {
             events
                 .iter()
-                .map(|event| substitute_in_continuous_event(event, substitutions))
+                .map(|event| map_exprs_in_continuous_event(event, m))
                 .collect()
         }),
         ..model.clone()
     }
 }
 
-/// Substitute variables in all expressions within a reaction system
-///
-/// # Arguments
-///
-/// * `reaction_system` - The reaction system to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-///
-/// # Returns
-///
-/// * New reaction system with substitutions applied
-pub fn substitute_in_reaction_system(
+fn map_exprs_in_reaction_system(
     reaction_system: &ReactionSystem,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    m: &mut dyn FnMut(&Expr) -> Expr,
 ) -> ReactionSystem {
-    let new_reactions = reaction_system
-        .reactions
-        .iter()
-        .map(|rxn| Reaction {
-            id: rxn.id.clone(),
-            name: rxn.name.clone(),
-            substrates: rxn.substrates.clone(),
-            products: rxn.products.clone(),
-            rate: substitute(&rxn.rate, substitutions),
-            reference: rxn.reference.clone(),
-        })
-        .collect();
-
     ReactionSystem {
-        reactions: new_reactions,
+        reactions: reaction_system
+            .reactions
+            .iter()
+            .map(|rxn| Reaction {
+                id: rxn.id.clone(),
+                name: rxn.name.clone(),
+                substrates: rxn.substrates.clone(),
+                products: rxn.products.clone(),
+                rate: m(&rxn.rate),
+                reference: rxn.reference.clone(),
+            })
+            .collect(),
         ..reaction_system.clone()
     }
+}
+
+// ============================================================================
+// Plain substitution (exact-name lookup)
+// ============================================================================
+
+/// Substitute variables in an expression, returning a new expression.
+///
+/// Traverses the full expression tree — including aggregate/arrayop bodies,
+/// `filter` predicates, integral bounds, makearray `values`, and
+/// `table_lookup` axes — and preserves all operator-node metadata.
+pub fn substitute(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
+    substitute_expr(expr, &mut |name| substitutions.get(name).cloned())
+}
+
+/// Substitute variables in a discrete event trigger.
+pub fn substitute_in_discrete_event_trigger(
+    trigger: &DiscreteEventTrigger,
+    substitutions: &HashMap<String, Expr>,
+) -> DiscreteEventTrigger {
+    map_exprs_in_trigger(trigger, &mut |e| substitute(e, substitutions))
+}
+
+/// Substitute variables in an affect equation (RHS only; the LHS is a
+/// variable name string, not an expression).
+pub fn substitute_in_affect_equation(
+    affect: &AffectEquation,
+    substitutions: &HashMap<String, Expr>,
+) -> AffectEquation {
+    map_exprs_in_affect(affect, &mut |e| substitute(e, substitutions))
+}
+
+/// Substitute variables in every expression of a discrete event.
+pub fn substitute_in_discrete_event(
+    event: &DiscreteEvent,
+    substitutions: &HashMap<String, Expr>,
+) -> DiscreteEvent {
+    map_exprs_in_discrete_event(event, &mut |e| substitute(e, substitutions))
+}
+
+/// Substitute variables in every expression of a continuous event.
+pub fn substitute_in_continuous_event(
+    event: &ContinuousEvent,
+    substitutions: &HashMap<String, Expr>,
+) -> ContinuousEvent {
+    map_exprs_in_continuous_event(event, &mut |e| substitute(e, substitutions))
+}
+
+/// Substitute variables in all expressions within a model (equations plus
+/// discrete/continuous events; other model fields are cloned unchanged).
+pub fn substitute_in_model(model: &Model, substitutions: &HashMap<String, Expr>) -> Model {
+    map_exprs_in_model(model, &mut |e| substitute(e, substitutions))
+}
+
+/// Substitute variables in all reaction-rate expressions within a reaction
+/// system.
+pub fn substitute_in_reaction_system(
+    reaction_system: &ReactionSystem,
+    substitutions: &HashMap<String, Expr>,
+) -> ReactionSystem {
+    map_exprs_in_reaction_system(reaction_system, &mut |e| substitute(e, substitutions))
 }
 
 /// Context for hierarchical scoped reference resolution
@@ -380,277 +364,104 @@ impl ScopedContext {
 }
 
 /// Substitute variables in an expression with scoped reference resolution
+/// (esm-spec §2.3.3).
 ///
-/// # Arguments
-///
-/// * `expr` - The expression to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New expression with substitutions applied using scoped resolution
+/// Resolution order per variable leaf: exact-name substitution, then scoped
+/// resolution of the name via `context` (substituting the resolved name if it
+/// has a binding, else rewriting the leaf to the resolved name), else the
+/// leaf is left unchanged. Traversal and metadata preservation are identical
+/// to [`substitute`].
 pub fn substitute_with_context(
     expr: &Expr,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(var_name) => {
-            // First try direct substitution
-            if let Some(replacement) = substitutions.get(var_name) {
-                return replacement.clone();
-            }
-
-            // If not found, try scoped resolution
-            if let Some(resolved_name) = context.resolve_scoped_reference(var_name) {
-                if let Some(replacement) = substitutions.get(&resolved_name) {
-                    return replacement.clone();
-                }
-                // Return the resolved name if no substitution found
-                return Expr::Variable(resolved_name);
-            }
-
-            // Return original if no resolution possible
-            Expr::Variable(var_name.clone())
+    substitute_expr(expr, &mut |name| {
+        if let Some(replacement) = substitutions.get(name) {
+            return Some(replacement.clone());
         }
-        Expr::Operator(op_node) => {
-            let new_args: Vec<Expr> = op_node
-                .args
-                .iter()
-                .map(|arg| substitute_with_context(arg, substitutions, context))
-                .collect();
-
-            Expr::Operator(ExpressionNode {
-                op: op_node.op.clone(),
-                args: new_args,
-                wrt: op_node.wrt.clone(),
-                dim: op_node.dim.clone(),
-                ..Default::default()
-            })
+        if let Some(resolved_name) = context.resolve_scoped_reference(name) {
+            if let Some(replacement) = substitutions.get(&resolved_name) {
+                return Some(replacement.clone());
+            }
+            // No binding for the resolved name: rewrite the leaf to it.
+            return Some(Expr::Variable(resolved_name));
         }
-    }
+        None
+    })
 }
 
-/// Substitute variables in all expressions within a model using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `model` - The model to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New model with substitutions applied using scoped resolution
+/// [`substitute_in_model`] with scoped reference resolution.
 pub fn substitute_in_model_with_context(
     model: &Model,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> Model {
-    let new_equations = model
-        .equations
-        .iter()
-        .map(|eq| Equation {
-            lhs: substitute_with_context(&eq.lhs, substitutions, context),
-            rhs: substitute_with_context(&eq.rhs, substitutions, context),
-        })
-        .collect();
-
-    Model {
-        equations: new_equations,
-        discrete_events: model.discrete_events.as_ref().map(|events| {
-            events
-                .iter()
-                .map(|event| {
-                    substitute_in_discrete_event_with_context(event, substitutions, context)
-                })
-                .collect()
-        }),
-        continuous_events: model.continuous_events.as_ref().map(|events| {
-            events
-                .iter()
-                .map(|event| {
-                    substitute_in_continuous_event_with_context(event, substitutions, context)
-                })
-                .collect()
-        }),
-        ..model.clone()
-    }
+    map_exprs_in_model(model, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
-/// Substitute variables in a discrete event trigger using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `trigger` - The discrete event trigger to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New discrete event trigger with substitutions applied using scoped resolution
+/// [`substitute_in_discrete_event_trigger`] with scoped reference resolution.
 pub fn substitute_in_discrete_event_trigger_with_context(
     trigger: &DiscreteEventTrigger,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> DiscreteEventTrigger {
-    match trigger {
-        DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: substitute_with_context(expression, substitutions, context),
-        },
-        // Periodic and preset-time triggers carry no expressions to substitute.
-        other => other.clone(),
-    }
+    map_exprs_in_trigger(trigger, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
-/// Substitute variables in an affect equation using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `affect` - The affect equation to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New affect equation with substitutions applied using scoped resolution
+/// [`substitute_in_affect_equation`] with scoped reference resolution.
 pub fn substitute_in_affect_equation_with_context(
     affect: &AffectEquation,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> AffectEquation {
-    AffectEquation {
-        lhs: affect.lhs.clone(), // LHS is a variable name string, not an expression
-        rhs: substitute_with_context(&affect.rhs, substitutions, context),
-    }
+    map_exprs_in_affect(affect, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
-/// Substitute variables in a discrete event using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `event` - The discrete event to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New discrete event with substitutions applied using scoped resolution
+/// [`substitute_in_discrete_event`] with scoped reference resolution.
 pub fn substitute_in_discrete_event_with_context(
     event: &DiscreteEvent,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> DiscreteEvent {
-    DiscreteEvent {
-        name: event.name.clone(),
-        trigger: substitute_in_discrete_event_trigger_with_context(
-            &event.trigger,
-            substitutions,
-            context,
-        ),
-        affects: event.affects.as_ref().map(|affects| {
-            affects
-                .iter()
-                .map(|affect| {
-                    substitute_in_affect_equation_with_context(affect, substitutions, context)
-                })
-                .collect()
-        }),
-        functional_affect: event.functional_affect.clone(), // TODO: Could also substitute in functional affects if needed
-        discrete_parameters: event.discrete_parameters.clone(),
-        reinitialize: event.reinitialize,
-        description: event.description.clone(),
-    }
+    map_exprs_in_discrete_event(event, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
-/// Substitute variables in a continuous event using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `event` - The continuous event to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New continuous event with substitutions applied using scoped resolution
+/// [`substitute_in_continuous_event`] with scoped reference resolution.
 pub fn substitute_in_continuous_event_with_context(
     event: &ContinuousEvent,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> ContinuousEvent {
-    ContinuousEvent {
-        name: event.name.clone(),
-        conditions: event
-            .conditions
-            .iter()
-            .map(|condition| substitute_with_context(condition, substitutions, context))
-            .collect(),
-        affects: event
-            .affects
-            .iter()
-            .map(|affect| {
-                substitute_in_affect_equation_with_context(affect, substitutions, context)
-            })
-            .collect(),
-        affect_neg: event.affect_neg.as_ref().map(|affects| {
-            affects
-                .iter()
-                .map(|affect| {
-                    substitute_in_affect_equation_with_context(affect, substitutions, context)
-                })
-                .collect()
-        }),
-        root_find: event.root_find.clone(),
-        reinitialize: event.reinitialize,
-        discrete_parameters: event.discrete_parameters.clone(),
-        priority: event.priority,
-        description: event.description.clone(),
-    }
+    map_exprs_in_continuous_event(event, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
-/// Substitute variables in all expressions within a reaction system using scoped reference resolution
-///
-/// # Arguments
-///
-/// * `reaction_system` - The reaction system to modify
-/// * `substitutions` - Map from variable names to replacement expressions
-/// * `context` - Scoped context for hierarchical resolution
-///
-/// # Returns
-///
-/// * New reaction system with substitutions applied using scoped resolution
+/// [`substitute_in_reaction_system`] with scoped reference resolution.
 pub fn substitute_in_reaction_system_with_context(
     reaction_system: &ReactionSystem,
-    substitutions: &std::collections::HashMap<String, Expr>,
+    substitutions: &HashMap<String, Expr>,
     context: &ScopedContext,
 ) -> ReactionSystem {
-    let new_reactions = reaction_system
-        .reactions
-        .iter()
-        .map(|rxn| Reaction {
-            id: rxn.id.clone(),
-            name: rxn.name.clone(),
-            substrates: rxn.substrates.clone(),
-            products: rxn.products.clone(),
-            rate: substitute_with_context(&rxn.rate, substitutions, context),
-            reference: rxn.reference.clone(),
-        })
-        .collect();
-
-    ReactionSystem {
-        reactions: new_reactions,
-        ..reaction_system.clone()
-    }
+    map_exprs_in_reaction_system(reaction_system, &mut |e| {
+        substitute_with_context(e, substitutions, context)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ModelVariable;
+    use crate::types::ExpressionNode;
     use std::collections::HashMap;
 
     #[test]

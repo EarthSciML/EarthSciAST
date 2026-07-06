@@ -510,6 +510,146 @@ pub struct ExpressionNode {
     pub manifold: Option<String>,
 }
 
+impl ExpressionNode {
+    /// Visit every expression-bearing child of this node, in deterministic
+    /// order: `args` first, then the sidecar expression fields in struct
+    /// declaration order (`lower`, `upper`, `expr`, `filter`, `values`), then
+    /// `axes` entries sorted by axis name.
+    ///
+    /// This is the ONE canonical definition of which fields carry child
+    /// `Expr`s. Every AST traversal in this crate must go through this (or
+    /// [`Self::map_children`] / [`Self::any_child`]) rather than enumerating
+    /// fields by hand — hand-rolled walkers have historically each covered a
+    /// different subset and missed variables hidden in aggregate bodies,
+    /// `filter` predicates, integral bounds, or `table_lookup` axes.
+    ///
+    /// Note: this enumerates children only. `output_idx`, `ranges`, and
+    /// `int_var` *bind* index symbols for the node's body; callers that
+    /// resolve variable names decide how to treat bound symbols.
+    pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Expr)) {
+        for a in &self.args {
+            f(a);
+        }
+        if let Some(e) = self.lower.as_deref() {
+            f(e);
+        }
+        if let Some(e) = self.upper.as_deref() {
+            f(e);
+        }
+        if let Some(e) = self.expr.as_deref() {
+            f(e);
+        }
+        if let Some(e) = self.filter.as_deref() {
+            f(e);
+        }
+        if let Some(vs) = &self.values {
+            for v in vs {
+                f(v);
+            }
+        }
+        if let Some(axes) = &self.axes {
+            let mut keys: Vec<&String> = axes.keys().collect();
+            keys.sort();
+            for k in keys {
+                f(&axes[k]);
+            }
+        }
+    }
+
+    /// Mutable variant of [`Self::for_each_child`], visiting the same field
+    /// set in the same deterministic order.
+    pub fn for_each_child_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        for a in &mut self.args {
+            f(a);
+        }
+        if let Some(e) = self.lower.as_deref_mut() {
+            f(e);
+        }
+        if let Some(e) = self.upper.as_deref_mut() {
+            f(e);
+        }
+        if let Some(e) = self.expr.as_deref_mut() {
+            f(e);
+        }
+        if let Some(e) = self.filter.as_deref_mut() {
+            f(e);
+        }
+        if let Some(vs) = &mut self.values {
+            for v in vs {
+                f(v);
+            }
+        }
+        if let Some(axes) = &mut self.axes {
+            let mut keys: Vec<String> = axes.keys().cloned().collect();
+            keys.sort();
+            for k in keys {
+                if let Some(v) = axes.get_mut(&k) {
+                    f(v);
+                }
+            }
+        }
+    }
+
+    /// Short-circuiting predicate over the same child set as
+    /// [`Self::for_each_child`]: true iff `f` returns true for any
+    /// expression-bearing child.
+    pub fn any_child(&self, f: &mut impl FnMut(&Expr) -> bool) -> bool {
+        if self.args.iter().any(&mut *f) {
+            return true;
+        }
+        for opt in [
+            self.lower.as_deref(),
+            self.upper.as_deref(),
+            self.expr.as_deref(),
+            self.filter.as_deref(),
+        ] {
+            if let Some(e) = opt {
+                if f(e) {
+                    return true;
+                }
+            }
+        }
+        if let Some(vs) = &self.values {
+            if vs.iter().any(&mut *f) {
+                return true;
+            }
+        }
+        if let Some(axes) = &self.axes {
+            if axes.values().any(&mut *f) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Rebuild this node with `f` applied to every expression-bearing child
+    /// (the [`Self::for_each_child`] field set), preserving ALL other fields
+    /// by cloning.
+    ///
+    /// This is the safe replacement for the
+    /// `ExpressionNode { op, args, ..Default::default() }` rebuild pattern,
+    /// which silently drops sidecar fields (`expr`, `filter`, `values`,
+    /// `regions`, `ranges`, …) and corrupts array / integral / table nodes —
+    /// see the corruption note on `crate::flatten`'s variable substitution.
+    pub fn map_children(&self, f: &mut impl FnMut(&Expr) -> Expr) -> ExpressionNode {
+        let mut out = self.clone();
+        out.args = self.args.iter().map(&mut *f).collect();
+        out.lower = self.lower.as_deref().map(|e| Box::new(f(e)));
+        out.upper = self.upper.as_deref().map(|e| Box::new(f(e)));
+        out.expr = self.expr.as_deref().map(|e| Box::new(f(e)));
+        out.filter = self.filter.as_deref().map(|e| Box::new(f(e)));
+        out.values = self
+            .values
+            .as_ref()
+            .map(|vs| vs.iter().map(&mut *f).collect());
+        out.axes = self
+            .axes
+            .as_ref()
+            .map(|axes| axes.iter().map(|(k, v)| (k.clone(), f(v))).collect());
+        out
+    }
+}
+
 /// Numerical comparison tolerance used by inline model tests.
 ///
 /// Either or both of `abs` / `rel` may be set. An assertion passes when any

@@ -829,13 +829,33 @@ fn check_event_discrete_parameters(obj: &serde_json::Map<String, Value>, errors:
 // ---- structural helpers ---------------------------------------------------
 
 /// Collect every bare `Expr::Variable`-style string out of an expression tree.
+///
+/// Descends the same expression-bearing operator-node fields as the typed
+/// walker [`crate::types::ExpressionNode::for_each_child`]: `args`, `lower`,
+/// `upper`, `expr`, `filter`, `values`, and `axes` — so references hidden in
+/// aggregate bodies, filter predicates, integral bounds, and table-lookup
+/// axes are not missed. Non-expression metadata keys (`ranges`, `output_idx`,
+/// `regions`, …) are deliberately not descended: their strings are index
+/// symbols and set names, not variable references.
 fn collect_variable_refs(expr: &Value, out: &mut Vec<String>) {
     match expr {
         Value::String(s) => out.push(s.clone()),
         Value::Object(obj) => {
-            if let Some(args) = obj.get("args").and_then(|v| v.as_array()) {
-                for a in args {
-                    collect_variable_refs(a, out);
+            for key in ["args", "values"] {
+                if let Some(items) = obj.get(key).and_then(|v| v.as_array()) {
+                    for a in items {
+                        collect_variable_refs(a, out);
+                    }
+                }
+            }
+            for key in ["lower", "upper", "expr", "filter"] {
+                if let Some(child) = obj.get(key) {
+                    collect_variable_refs(child, out);
+                }
+            }
+            if let Some(axes) = obj.get("axes").and_then(|v| v.as_object()) {
+                for axis_expr in axes.values() {
+                    collect_variable_refs(axis_expr, out);
                 }
             }
         }

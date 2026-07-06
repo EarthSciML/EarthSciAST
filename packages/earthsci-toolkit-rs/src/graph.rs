@@ -679,16 +679,17 @@ fn extract_variables_from_expr(expr: &crate::Expr) -> Vec<String> {
     vars
 }
 
-/// Recursively collect variable names from an expression
+/// Recursively collect variable names from an expression, covering the full
+/// canonical child set ([`crate::types::ExpressionNode::for_each_child`]) so
+/// variables inside aggregate bodies, `filter` predicates, integral bounds,
+/// makearray `values`, and `table_lookup` axes all contribute graph edges.
 fn collect_variables(expr: &crate::Expr, vars: &mut Vec<String>) {
     match expr {
         crate::Expr::Variable(var) => {
             vars.push(var.clone());
         }
         crate::Expr::Operator(op) => {
-            for arg in &op.args {
-                collect_variables(arg, vars);
-            }
+            op.for_each_child(&mut |arg| collect_variables(arg, vars));
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
             // Numbers are not variables, skip

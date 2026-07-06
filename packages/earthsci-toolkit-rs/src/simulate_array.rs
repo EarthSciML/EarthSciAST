@@ -640,24 +640,7 @@ fn expr_has_array_op(expr: &Expr) -> bool {
                 // into — always recognise it as an array-op signal.
                 return true;
             }
-            if let Some(inner) = &node.expr
-                && expr_has_array_op(inner)
-            {
-                return true;
-            }
-            if let Some(vals) = &node.values {
-                for v in vals {
-                    if expr_has_array_op(v) {
-                        return true;
-                    }
-                }
-            }
-            for a in &node.args {
-                if expr_has_array_op(a) {
-                    return true;
-                }
-            }
-            false
+            node.any_child(&mut expr_has_array_op)
         }
     }
 }
@@ -687,18 +670,18 @@ fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
                     op: node.op.clone(),
                 });
             }
-            if let Some(inner) = &node.expr {
-                check_no_spatial_ops(inner)?;
-            }
-            if let Some(vals) = &node.values {
-                for v in vals {
-                    check_no_spatial_ops(v)?;
+            let mut first_err: Option<CompileError> = None;
+            node.for_each_child(&mut |child| {
+                if first_err.is_none()
+                    && let Err(e) = check_no_spatial_ops(child)
+                {
+                    first_err = Some(e);
                 }
+            });
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(()),
             }
-            for a in &node.args {
-                check_no_spatial_ops(a)?;
-            }
-            Ok(())
         }
     }
 }
@@ -2281,8 +2264,8 @@ fn observed_rule_body(rule: &AlgebraicRule) -> &Expr {
 }
 
 /// Collect every variable-reference leaf (`Expr::Variable`) in `expr`, walking
-/// `args`, the aggregate `expr` body, makearray `values`, table `axes`, the join
-/// `filter`, and the `lower`/`upper` bounds so a dependency edge is never missed.
+/// the canonical expression-bearing child set
+/// ([`ExpressionNode::for_each_child`]) so a dependency edge is never missed.
 /// Loop indices and other non-observed names are gathered too; the caller
 /// intersects with the observed-name set to keep only the meaningful edges.
 fn collect_expr_var_refs(expr: &Expr, out: &mut HashSet<String>) {
@@ -2291,31 +2274,7 @@ fn collect_expr_var_refs(expr: &Expr, out: &mut HashSet<String>) {
             out.insert(name.clone());
         }
         Expr::Operator(node) => {
-            for a in &node.args {
-                collect_expr_var_refs(a, out);
-            }
-            if let Some(b) = &node.expr {
-                collect_expr_var_refs(b, out);
-            }
-            if let Some(l) = &node.lower {
-                collect_expr_var_refs(l, out);
-            }
-            if let Some(u) = &node.upper {
-                collect_expr_var_refs(u, out);
-            }
-            if let Some(vals) = &node.values {
-                for v in vals {
-                    collect_expr_var_refs(v, out);
-                }
-            }
-            if let Some(axes) = &node.axes {
-                for v in axes.values() {
-                    collect_expr_var_refs(v, out);
-                }
-            }
-            if let Some(f) = &node.filter {
-                collect_expr_var_refs(f, out);
-            }
+            node.for_each_child(&mut |child| collect_expr_var_refs(child, out));
         }
         Expr::Number(_) | Expr::Integer(_) => {}
     }
@@ -5050,22 +5009,7 @@ fn expr_contains_skolem(expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
         Expr::Operator(node) => {
-            if node.op == "skolem" {
-                return true;
-            }
-            node.args.iter().any(expr_contains_skolem)
-                || node.expr.as_deref().is_some_and(expr_contains_skolem)
-                || node.filter.as_deref().is_some_and(expr_contains_skolem)
-                || node.lower.as_deref().is_some_and(expr_contains_skolem)
-                || node.upper.as_deref().is_some_and(expr_contains_skolem)
-                || node
-                    .values
-                    .as_ref()
-                    .is_some_and(|vs| vs.iter().any(expr_contains_skolem))
-                || node
-                    .axes
-                    .as_ref()
-                    .is_some_and(|ax| ax.values().any(expr_contains_skolem))
+            node.op == "skolem" || node.any_child(&mut expr_contains_skolem)
         }
     }
 }
@@ -5086,25 +5030,7 @@ fn collect_geometry_producer_ids(expr: &Expr, out: &mut HashSet<String>) {
             out.insert(id.clone());
         }
     }
-    for a in &node.args {
-        collect_geometry_producer_ids(a, out);
-    }
-    if let Some(b) = &node.expr {
-        collect_geometry_producer_ids(b, out);
-    }
-    if let Some(f) = &node.filter {
-        collect_geometry_producer_ids(f, out);
-    }
-    if let Some(vals) = &node.values {
-        for v in vals {
-            collect_geometry_producer_ids(v, out);
-        }
-    }
-    if let Some(axes) = &node.axes {
-        for v in axes.values() {
-            collect_geometry_producer_ids(v, out);
-        }
-    }
+    node.for_each_child(&mut |child| collect_geometry_producer_ids(child, out));
 }
 
 /// Strip every `join.on` key-pair that references a dropped value-invention
@@ -5130,31 +5056,7 @@ fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
             node.join = None;
         }
     }
-    for a in &mut node.args {
-        strip_vi_joins(a, vi_cols);
-    }
-    if let Some(b) = &mut node.expr {
-        strip_vi_joins(b, vi_cols);
-    }
-    if let Some(f) = &mut node.filter {
-        strip_vi_joins(f, vi_cols);
-    }
-    if let Some(l) = &mut node.lower {
-        strip_vi_joins(l, vi_cols);
-    }
-    if let Some(u) = &mut node.upper {
-        strip_vi_joins(u, vi_cols);
-    }
-    if let Some(vals) = &mut node.values {
-        for v in vals {
-            strip_vi_joins(v, vi_cols);
-        }
-    }
-    if let Some(axes) = &mut node.axes {
-        for v in axes.values_mut() {
-            strip_vi_joins(v, vi_cols);
-        }
-    }
+    node.for_each_child_mut(&mut |child| strip_vi_joins(child, vi_cols));
 }
 
 /// Drop value-invention (relational) variables and their defining equations, and
@@ -5329,40 +5231,7 @@ fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
             if binds {
                 return expr.clone();
             }
-            let mut out = node.clone();
-            out.args = node
-                .args
-                .iter()
-                .map(|a| rename_free_symbol(a, from, to))
-                .collect();
-            out.expr = node
-                .expr
-                .as_ref()
-                .map(|e| Box::new(rename_free_symbol(e, from, to)));
-            out.filter = node
-                .filter
-                .as_ref()
-                .map(|e| Box::new(rename_free_symbol(e, from, to)));
-            out.lower = node
-                .lower
-                .as_ref()
-                .map(|e| Box::new(rename_free_symbol(e, from, to)));
-            out.upper = node
-                .upper
-                .as_ref()
-                .map(|e| Box::new(rename_free_symbol(e, from, to)));
-            out.values = node
-                .values
-                .as_ref()
-                .map(|vs| vs.iter().map(|v| rename_free_symbol(v, from, to)).collect());
-            if let Some(axes) = &node.axes {
-                out.axes = Some(
-                    axes.iter()
-                        .map(|(k, v)| (k.clone(), rename_free_symbol(v, from, to)))
-                        .collect(),
-                );
-            }
-            Expr::Operator(out)
+            Expr::Operator(node.map_children(&mut |a| rename_free_symbol(a, from, to)))
         }
         _ => expr.clone(),
     }
@@ -5498,42 +5367,14 @@ fn index_array_leaves(expr: &Expr, array_ranks: &HashMap<String, usize>, cell: &
             }
         }
         Expr::Operator(node) => {
-            let mut out = node.clone();
-            if node.op == "index" {
-                // Keep the (already array-valued) target; rewrite only the index
-                // argument expressions.
-                out.args = node
-                    .args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        if i == 0 {
-                            a.clone()
-                        } else {
-                            index_array_leaves(a, array_ranks, cell)
-                        }
-                    })
-                    .collect();
-            } else {
-                out.args = node
-                    .args
-                    .iter()
-                    .map(|a| index_array_leaves(a, array_ranks, cell))
-                    .collect();
+            let mut out = node.map_children(&mut |a| index_array_leaves(a, array_ranks, cell));
+            if node.op == "index"
+                && let Some(first) = node.args.first()
+            {
+                // Keep the (already array-valued) target; only the index
+                // argument expressions are rewritten.
+                out.args[0] = first.clone();
             }
-            out.expr = node
-                .expr
-                .as_ref()
-                .map(|e| Box::new(index_array_leaves(e, array_ranks, cell)));
-            out.filter = node
-                .filter
-                .as_ref()
-                .map(|e| Box::new(index_array_leaves(e, array_ranks, cell)));
-            out.values = node.values.as_ref().map(|vs| {
-                vs.iter()
-                    .map(|v| index_array_leaves(v, array_ranks, cell))
-                    .collect()
-            });
             Expr::Operator(out)
         }
         other => other.clone(),
@@ -5768,31 +5609,34 @@ fn infer_shapes(
     let mut per_var_max: HashMap<String, Vec<i64>> = HashMap::new();
     let mut seen_indexed: HashSet<String> = HashSet::new();
     let skip_none: HashSet<String> = HashSet::new();
-    for eq in equations {
-        walk_for_shapes(
-            &eq.lhs,
-            &state_set,
-            &mut per_var_min,
-            &mut per_var_max,
-            &mut seen_indexed,
-            &HashMap::new(),
-            &skip_none,
-        );
+    let no_loops: HashMap<String, (i64, i64)> = HashMap::new();
+    {
+        let mut walk = ShapeWalk {
+            states: &state_set,
+            per_var_min: &mut per_var_min,
+            per_var_max: &mut per_var_max,
+            seen_indexed: &mut seen_indexed,
+            skip_shape_update: &skip_none,
+        };
+        for eq in equations {
+            walk.walk(&eq.lhs, &no_loops);
+        }
     }
 
     // Pass 2: RHS — skip variables already pinned by LHS to prevent stencil
     // offsets (e.g. index(u, i-1)) from expanding the state's extent.
     let lhs_pinned = seen_indexed.clone();
-    for eq in equations {
-        walk_for_shapes(
-            &eq.rhs,
-            &state_set,
-            &mut per_var_min,
-            &mut per_var_max,
-            &mut seen_indexed,
-            &HashMap::new(),
-            &lhs_pinned,
-        );
+    {
+        let mut walk = ShapeWalk {
+            states: &state_set,
+            per_var_min: &mut per_var_min,
+            per_var_max: &mut per_var_max,
+            seen_indexed: &mut seen_indexed,
+            skip_shape_update: &lhs_pinned,
+        };
+        for eq in equations {
+            walk.walk(&eq.rhs, &no_loops);
+        }
     }
 
     let mut out: HashMap<String, Vec<usize>> = HashMap::new();
@@ -5819,137 +5663,72 @@ fn infer_shapes(
     Ok(out)
 }
 
-/// Walk an expression tree collecting per-variable index bounds for shape
-/// inference. `skip_shape_update` lists variables whose shapes are already
-/// pinned (by a prior LHS pass); their bounds are not updated here, though
-/// they are still marked as seen.
-fn walk_for_shapes(
-    expr: &Expr,
-    states: &HashSet<&str>,
-    per_var_min: &mut HashMap<String, Vec<i64>>,
-    per_var_max: &mut HashMap<String, Vec<i64>>,
-    seen_indexed: &mut HashSet<String>,
-    loop_ranges: &HashMap<String, (i64, i64)>,
-    skip_shape_update: &HashSet<String>,
-) {
-    match expr {
-        Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => {}
-        Expr::Operator(node) => {
-            if node.op == "index" {
-                if let Some(Expr::Variable(var)) = node.args.first()
-                    && states.contains(var.as_str())
-                {
-                    seen_indexed.insert(var.clone());
-                    if !skip_shape_update.contains(var) {
-                        let mut dim_min: Vec<i64> = Vec::new();
-                        let mut dim_max: Vec<i64> = Vec::new();
-                        for idx_expr in node.args.iter().skip(1) {
-                            let (lo, hi) = evaluate_index_range(idx_expr, loop_ranges);
-                            dim_min.push(lo);
-                            dim_max.push(hi);
-                        }
-                        let cur_min = per_var_min.entry(var.clone()).or_default();
-                        let cur_max = per_var_max.entry(var.clone()).or_default();
-                        if cur_min.len() < dim_min.len() {
-                            cur_min.resize(dim_min.len(), i64::MAX);
-                        }
-                        if cur_max.len() < dim_max.len() {
-                            cur_max.resize(dim_max.len(), i64::MIN);
-                        }
-                        for (d, v) in dim_min.iter().enumerate() {
-                            cur_min[d] = cur_min[d].min(*v);
-                        }
-                        for (d, v) in dim_max.iter().enumerate() {
-                            cur_max[d] = cur_max[d].max(*v);
-                        }
-                    }
+/// Accumulator state for [`infer_shapes`]'s expression walk, so the recursion
+/// threads one context reference instead of five parallel parameters.
+/// `skip_shape_update` lists variables whose shapes are already pinned (by a
+/// prior LHS pass); their bounds are not updated, though they are still
+/// marked as seen.
+struct ShapeWalk<'a> {
+    states: &'a HashSet<&'a str>,
+    per_var_min: &'a mut HashMap<String, Vec<i64>>,
+    per_var_max: &'a mut HashMap<String, Vec<i64>>,
+    seen_indexed: &'a mut HashSet<String>,
+    skip_shape_update: &'a HashSet<String>,
+}
+
+impl ShapeWalk<'_> {
+    /// Walk an expression tree collecting per-variable index bounds for shape
+    /// inference. `loop_ranges` carries the concrete bounds of the enclosing
+    /// aggregate loop symbols.
+    fn walk(&mut self, expr: &Expr, loop_ranges: &HashMap<String, (i64, i64)>) {
+        let Expr::Operator(node) = expr else {
+            return;
+        };
+        if node.op == "index"
+            && let Some(Expr::Variable(var)) = node.args.first()
+            && self.states.contains(var.as_str())
+        {
+            self.seen_indexed.insert(var.clone());
+            if !self.skip_shape_update.contains(var) {
+                let mut dim_min: Vec<i64> = Vec::new();
+                let mut dim_max: Vec<i64> = Vec::new();
+                for idx_expr in node.args.iter().skip(1) {
+                    let (lo, hi) = evaluate_index_range(idx_expr, loop_ranges);
+                    dim_min.push(lo);
+                    dim_max.push(hi);
                 }
-            }
-            if is_aggregate_op(&node.op) {
-                // Build loop range map from the arrayop's ranges. Ranges have
-                // already been resolved to concrete intervals (RFC §5.2) by
-                // `resolve_aggregate_ranges` at the top of `from_model`.
-                let mut inner = loop_ranges.clone();
-                if let Some(ranges) = &node.ranges {
-                    for (k, v) in ranges {
-                        if let Some(b) = v.bounds() {
-                            inner.insert(k.clone(), (b[0], b[1]));
-                        }
-                    }
+                let cur_min = self.per_var_min.entry(var.clone()).or_default();
+                let cur_max = self.per_var_max.entry(var.clone()).or_default();
+                if cur_min.len() < dim_min.len() {
+                    cur_min.resize(dim_min.len(), i64::MAX);
                 }
-                if let Some(inner_expr) = &node.expr {
-                    walk_for_shapes(
-                        inner_expr,
-                        states,
-                        per_var_min,
-                        per_var_max,
-                        seen_indexed,
-                        &inner,
-                        skip_shape_update,
-                    );
+                if cur_max.len() < dim_max.len() {
+                    cur_max.resize(dim_max.len(), i64::MIN);
                 }
-                for a in &node.args {
-                    walk_for_shapes(
-                        a,
-                        states,
-                        per_var_min,
-                        per_var_max,
-                        seen_indexed,
-                        &inner,
-                        skip_shape_update,
-                    );
+                for (d, v) in dim_min.iter().enumerate() {
+                    cur_min[d] = cur_min[d].min(*v);
                 }
-                if let Some(vs) = &node.values {
-                    for v in vs {
-                        walk_for_shapes(
-                            v,
-                            states,
-                            per_var_min,
-                            per_var_max,
-                            seen_indexed,
-                            &inner,
-                            skip_shape_update,
-                        );
-                    }
+                for (d, v) in dim_max.iter().enumerate() {
+                    cur_max[d] = cur_max[d].max(*v);
                 }
-                return;
-            }
-            if let Some(inner) = &node.expr {
-                walk_for_shapes(
-                    inner,
-                    states,
-                    per_var_min,
-                    per_var_max,
-                    seen_indexed,
-                    loop_ranges,
-                    skip_shape_update,
-                );
-            }
-            if let Some(vs) = &node.values {
-                for v in vs {
-                    walk_for_shapes(
-                        v,
-                        states,
-                        per_var_min,
-                        per_var_max,
-                        seen_indexed,
-                        loop_ranges,
-                        skip_shape_update,
-                    );
-                }
-            }
-            for a in &node.args {
-                walk_for_shapes(
-                    a,
-                    states,
-                    per_var_min,
-                    per_var_max,
-                    seen_indexed,
-                    loop_ranges,
-                    skip_shape_update,
-                );
             }
         }
+        if is_aggregate_op(&node.op) {
+            // Build loop range map from the arrayop's ranges. Ranges have
+            // already been resolved to concrete intervals (RFC §5.2) by
+            // `resolve_aggregate_ranges` at the top of `from_model`.
+            let mut inner = loop_ranges.clone();
+            if let Some(ranges) = &node.ranges {
+                for (k, v) in ranges {
+                    if let Some(b) = v.bounds() {
+                        inner.insert(k.clone(), (b[0], b[1]));
+                    }
+                }
+            }
+            node.for_each_child(&mut |child| self.walk(child, &inner));
+            return;
+        }
+        node.for_each_child(&mut |child| self.walk(child, loop_ranges));
     }
 }
 

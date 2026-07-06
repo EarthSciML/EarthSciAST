@@ -47,30 +47,25 @@ pub fn free_parameters(expr: &Expr) -> HashSet<String> {
 pub fn contains(expr: &Expr, var_name: &str) -> bool {
     match expr {
         Expr::Variable(name) => name == var_name,
-        Expr::Operator(op_node) => op_node.args.iter().any(|arg| contains(arg, var_name)),
+        Expr::Operator(op_node) => op_node.any_child(&mut |arg| contains(arg, var_name)),
         Expr::Number(_) | Expr::Integer(_) => false,
     }
 }
 
-/// Simplify an expression (basic symbolic simplification)
+/// Simplify an expression (basic symbolic simplification).
 ///
-/// # Arguments
-///
-/// * `expr` - The expression to simplify
-///
-/// # Returns
-///
-/// * Simplified expression
+/// Applies constant folding and the identity/absorbing-element rules for
+/// binary `+`, `*`, and `^`. Children are simplified first — including
+/// sidecar expressions (aggregate bodies, `filter`, integral bounds,
+/// makearray `values`, `table_lookup` axes) — and operator nodes are rebuilt
+/// with [`crate::types::ExpressionNode::map_children`], so all node metadata
+/// is preserved.
 pub fn simplify(expr: &Expr) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
         Expr::Integer(n) => Expr::Integer(*n),
         Expr::Variable(name) => Expr::Variable(name.clone()),
-        Expr::Operator(op_node) => {
-            let simplified_args: Vec<Expr> = op_node.args.iter().map(simplify).collect();
-
-            simplify_operator(&op_node.op, &simplified_args)
-        }
+        Expr::Operator(op_node) => simplify_node(op_node.map_children(&mut |c| simplify(c))),
     }
 }
 
@@ -80,9 +75,7 @@ fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
             vars.insert(name.clone());
         }
         Expr::Operator(op_node) => {
-            for arg in &op_node.args {
-                collect_variables(arg, vars);
-            }
+            op_node.for_each_child(&mut |arg| collect_variables(arg, vars));
         }
         Expr::Number(_) | Expr::Integer(_) => {
             // Numbers don't contain variables
@@ -90,103 +83,33 @@ fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
     }
 }
 
-fn simplify_operator(op: &str, args: &[Expr]) -> Expr {
-    use crate::types::ExpressionNode;
-
-    match op {
-        "+" => {
-            if args.len() == 2 {
-                match (&args[0], &args[1]) {
-                    // 0 + x = x
-                    (Expr::Number(0.0), x) => x.clone(),
-                    // x + 0 = x
-                    (x, Expr::Number(0.0)) => x.clone(),
-                    // a + b = (a + b) for numbers
-                    (Expr::Number(a), Expr::Number(b)) => Expr::Number(a + b),
-                    _ => Expr::Operator(ExpressionNode {
-                        op: op.to_string(),
-                        args: args.to_vec(),
-                        wrt: None,
-                        dim: None,
-                        ..Default::default()
-                    }),
-                }
-            } else {
-                Expr::Operator(ExpressionNode {
-                    op: op.to_string(),
-                    args: args.to_vec(),
-                    wrt: None,
-                    dim: None,
-                    ..Default::default()
-                })
-            }
+/// Algebraic identities over a node whose children are already simplified.
+/// Returns the node unchanged (all fields intact) when no rule applies.
+fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
+    let folded = match (node.op.as_str(), node.args.as_slice()) {
+        // 0 + x = x ; x + 0 = x
+        ("+", [Expr::Number(z), x]) | ("+", [x, Expr::Number(z)]) if *z == 0.0 => Some(x.clone()),
+        // a + b for numbers
+        ("+", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a + b)),
+        // 0 * x = 0 ; x * 0 = 0
+        ("*", [Expr::Number(z), _]) | ("*", [_, Expr::Number(z)]) if *z == 0.0 => {
+            Some(Expr::Number(0.0))
         }
-        "*" => {
-            if args.len() == 2 {
-                match (&args[0], &args[1]) {
-                    // 0 * x = 0
-                    (Expr::Number(0.0), _) => Expr::Number(0.0),
-                    // x * 0 = 0
-                    (_, Expr::Number(0.0)) => Expr::Number(0.0),
-                    // 1 * x = x
-                    (Expr::Number(1.0), x) => x.clone(),
-                    // x * 1 = x
-                    (x, Expr::Number(1.0)) => x.clone(),
-                    // a * b = (a * b) for numbers
-                    (Expr::Number(a), Expr::Number(b)) => Expr::Number(a * b),
-                    _ => Expr::Operator(ExpressionNode {
-                        op: op.to_string(),
-                        args: args.to_vec(),
-                        wrt: None,
-                        dim: None,
-                        ..Default::default()
-                    }),
-                }
-            } else {
-                Expr::Operator(ExpressionNode {
-                    op: op.to_string(),
-                    args: args.to_vec(),
-                    wrt: None,
-                    dim: None,
-                    ..Default::default()
-                })
-            }
+        // 1 * x = x ; x * 1 = x
+        ("*", [Expr::Number(one), x]) | ("*", [x, Expr::Number(one)]) if *one == 1.0 => {
+            Some(x.clone())
         }
-        "^" => {
-            if args.len() == 2 {
-                match (&args[0], &args[1]) {
-                    // x^0 = 1
-                    (_, Expr::Number(0.0)) => Expr::Number(1.0),
-                    // x^1 = x
-                    (x, Expr::Number(1.0)) => x.clone(),
-                    // a^b = (a^b) for numbers
-                    (Expr::Number(a), Expr::Number(b)) => Expr::Number(a.powf(*b)),
-                    _ => Expr::Operator(ExpressionNode {
-                        op: op.to_string(),
-                        args: args.to_vec(),
-                        wrt: None,
-                        dim: None,
-                        ..Default::default()
-                    }),
-                }
-            } else {
-                Expr::Operator(ExpressionNode {
-                    op: op.to_string(),
-                    args: args.to_vec(),
-                    wrt: None,
-                    dim: None,
-                    ..Default::default()
-                })
-            }
-        }
-        _ => Expr::Operator(ExpressionNode {
-            op: op.to_string(),
-            args: args.to_vec(),
-            wrt: None,
-            dim: None,
-            ..Default::default()
-        }),
-    }
+        // a * b for numbers
+        ("*", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a * b)),
+        // x^0 = 1
+        ("^", [_, Expr::Number(z)]) if *z == 0.0 => Some(Expr::Number(1.0)),
+        // x^1 = x
+        ("^", [x, Expr::Number(one)]) if *one == 1.0 => Some(x.clone()),
+        // a^b for numbers
+        ("^", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a.powf(*b))),
+        _ => None,
+    };
+    folded.unwrap_or(Expr::Operator(node))
 }
 
 /// Evaluate a scalar AST expression against a map of float variable bindings.
