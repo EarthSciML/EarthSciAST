@@ -9,7 +9,7 @@ import { load } from './parse.js'
 import {
   lowerExpressionTemplates,
   ExpressionTemplateError,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one

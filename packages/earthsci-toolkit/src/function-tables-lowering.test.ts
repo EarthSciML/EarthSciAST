@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { load } from './parse.js'
-import { dispatchClosedFunction } from './registered_functions.js'
+import { dispatchClosedFunction } from './closed-functions.js'
 
 const FIXTURES_ROOT = resolve(__dirname, '..', '..', '..', 'tests', 'conformance', 'function_tables')
 

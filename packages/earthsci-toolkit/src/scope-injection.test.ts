@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 import { load } from './parse.js'
 import { save } from './serialize.js'
 import { ephemeralInjectedFile, resolveSubsystemRefs } from './ref-loading.js'
-import { ExpressionTemplateError } from './lower_expression_templates.js'
+import { ExpressionTemplateError } from './lower-expression-templates.js'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const conf = (...parts: string[]) =>

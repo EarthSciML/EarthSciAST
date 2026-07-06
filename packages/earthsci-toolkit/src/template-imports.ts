@@ -37,7 +37,7 @@ import {
   deepEqual,
   rejectExpressionTemplatesPreV04,
   validateTemplates,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 import { isNumericLiteral } from './numeric-literal.js'
 
 type Json = unknown

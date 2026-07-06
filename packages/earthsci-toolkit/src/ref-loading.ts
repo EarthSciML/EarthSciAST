@@ -15,13 +15,13 @@ import {
   deepEqual,
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 import {
   applyScopeInjections,
   isTemplateLibraryDoc,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
-} from './template_imports.js'
+} from './template-imports.js'
 import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 

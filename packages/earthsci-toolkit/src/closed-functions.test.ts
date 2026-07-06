@@ -24,7 +24,7 @@ import {
   searchsortedFirst,
   interpLinear,
   interpBilinear,
-} from './registered_functions.js'
+} from './closed-functions.js'
 
 const fixturesRoot = join(__dirname, '../../../tests/closed_functions')
 

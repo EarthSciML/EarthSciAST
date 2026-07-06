@@ -38,11 +38,9 @@ interface TaggedNumericLiteral extends NumericLiteral {
 }
 
 export function intLit(value: number): NumericLiteral {
+  // Number.isInteger implies finiteness, so no separate isFinite check.
   if (!Number.isInteger(value)) {
     throw new TypeError(`intLit requires an integer-valued number; got ${value}`)
-  }
-  if (!Number.isFinite(value)) {
-    throw new TypeError(`intLit requires a finite number; got ${value}`)
   }
   return makeTagged('int', value)
 }

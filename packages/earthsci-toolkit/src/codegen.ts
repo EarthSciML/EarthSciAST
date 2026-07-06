@@ -8,7 +8,7 @@
 
 import type { Expr, ExpressionNode } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
-import { dispatchClosedFunction } from './registered_functions.js'
+import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
 
 /**

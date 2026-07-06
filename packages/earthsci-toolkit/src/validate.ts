@@ -6,8 +6,8 @@
  */
 
 import { validateSchema, load, ParseError, SchemaValidationError, type SchemaError } from './parse.js';
-import { ExpressionTemplateError } from './lower_expression_templates.js';
-import { EnumLoweringError } from './lower_enums.js';
+import { ExpressionTemplateError } from './lower-expression-templates.js';
+import { EnumLoweringError } from './lower-enums.js';
 import { LosslessJsonParseError, CanonicalNonfiniteError } from './numeric-literal.js';
 import {
     checkDimensions,

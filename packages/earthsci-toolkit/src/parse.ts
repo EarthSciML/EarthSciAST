@@ -10,16 +10,16 @@ import addFormats from 'ajv-formats'
 import type { EsmFile, Expression } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
 import { isNumericLiteral, losslessJsonParse } from './numeric-literal.js'
-import { lowerEnums } from './lower_enums.js'
+import { lowerEnums } from './lower-enums.js'
 import {
   lowerExpressionTemplates,
   rejectExpressionTemplatesPreV04,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 import {
   applyScopeInjections,
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
-} from './template_imports.js'
+} from './template-imports.js'
 import { schema } from './embedded-schema.js'
 
 /**

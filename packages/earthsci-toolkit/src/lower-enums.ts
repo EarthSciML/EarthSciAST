@@ -12,10 +12,10 @@
  * `const`. Mirrors the Julia `lower_enums!` pass.
  *
  * Errors:
- *   - Reference to an undeclared enum name → ClosedFunctionError with a
+ *   - Reference to an undeclared enum name → EnumLoweringError with a
  *     descriptive message (no spec-pinned diagnostic code at this time;
  *     follow-up if a stable code is added).
- *   - Reference to an unknown member of a declared enum → ClosedFunctionError.
+ *   - Reference to an unknown member of a declared enum → EnumLoweringError.
  */
 
 import type { EsmFile, Expression, ExpressionNode } from './generated.js'

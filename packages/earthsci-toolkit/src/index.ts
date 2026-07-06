@@ -101,11 +101,11 @@ export {
   interpLinear,
   interpBilinear,
   validateInterpAxis,
-} from './registered_functions.js'
-export type { ClosedFunctionErrorCode } from './registered_functions.js'
+} from './closed-functions.js'
+export type { ClosedFunctionErrorCode } from './closed-functions.js'
 
 // Load-time enum lowering (esm-spec §9.3).
-export { lowerEnums, EnumLoweringError } from './lower_enums.js'
+export { lowerEnums, EnumLoweringError } from './lower-enums.js'
 
 // Load-time expression-template expansion (esm-spec §9.6,
 // docs/rfcs/ast-expression-templates.md).
@@ -114,7 +114,7 @@ export {
   rejectExpressionTemplatesPreV04,
   ExpressionTemplateError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 
 // Template-library imports + load-time metaparameters (esm-spec §9.7 /
 // docs/content/rfcs/template-library-imports.md).
@@ -123,8 +123,8 @@ export {
   rejectTemplateImportsPreV08,
   isTemplateLibraryDoc,
   applyScopeInjections,
-} from './template_imports.js'
-export type { TemplateResolveOptions, TemplateSchemaError } from './template_imports.js'
+} from './template-imports.js'
+export type { TemplateResolveOptions, TemplateSchemaError } from './template-imports.js'
 
 // Package metadata. Both constants track the embedded schema's version
 // (derived from its $id in parse.ts); package.json is kept in lockstep.

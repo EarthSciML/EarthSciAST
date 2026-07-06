@@ -19,11 +19,11 @@ import {
   ExpressionTemplateError,
   MAX_TEMPLATE_EXPANSION_DEPTH,
   lowerExpressionTemplates,
-} from './lower_expression_templates.js'
+} from './lower-expression-templates.js'
 import {
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
-} from './template_imports.js'
+} from './template-imports.js'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const conf = (...parts: string[]) =>

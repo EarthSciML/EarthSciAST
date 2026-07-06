@@ -82,11 +82,6 @@ function checkInt32(name: string, v: number): number {
 function fdiv(a: number, b: number): number {
   return Math.floor(a / b)
 }
-function fmod(a: number, b: number): number {
-  // Euclidean mod with positive result for positive b.
-  const r = a - fdiv(a, b) * b
-  return r
-}
 
 /**
  * Decompose UTC seconds-since-epoch (IEEE-754 binary64, no leap seconds)
@@ -505,6 +500,3 @@ export function dispatchClosedFunction(name: string, args: unknown[]): number {
       )
   }
 }
-
-/** Suppress unused-symbol lint for fmod (kept for parity). */
-void fmod
