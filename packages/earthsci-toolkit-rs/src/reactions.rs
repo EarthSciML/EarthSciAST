@@ -890,7 +890,6 @@ mod tests {
         use std::collections::HashMap;
 
         let system = ReactionSystem {
-            domain: None,
             coupletype: None,
             reference: None,
             species: [
