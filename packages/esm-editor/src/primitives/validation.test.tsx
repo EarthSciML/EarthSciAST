@@ -222,15 +222,66 @@ describe('validation primitive', () => {
 
         const signals = createValidationSignals(file, { validateOnInit: false });
 
-        // Initial call when validation result is accessed
+        // With validateOnInit disabled, no validation runs until requested
         signals.isValid();
-        expect(callCount).toBe(1);
+        expect(callCount).toBe(0);
 
-        // Force revalidation
+        // Force revalidation runs synchronously
         signals.revalidate();
-        signals.isValid();
+        expect(callCount).toBe(1);
+        expect(signals.isValid()).toBe(true);
+
+        signals.revalidate();
         expect(callCount).toBe(2);
       });
+    });
+
+    it('should debounce validation on file changes and report isValidating', () => {
+      vi.useFakeTimers();
+      try {
+        let callCount = 0;
+        mockValidate.mockImplementation(() => {
+          callCount++;
+          return {
+            is_valid: true,
+            schema_errors: [],
+            structural_errors: [],
+            unit_warnings: []
+          };
+        });
+
+        let signals!: ReturnType<typeof createValidationSignals>;
+        let setFile!: (f: EsmFile) => void;
+        let dispose!: () => void;
+        // The debounce effect gets its initial run when the root body
+        // completes, so trigger file changes outside the createRoot body.
+        createRoot((d) => {
+          dispose = d;
+          const [file, setF] = createSignal(validEsmFile);
+          setFile = setF;
+          signals = createValidationSignals(file, { debounceMs: 100 });
+        });
+
+        // Initial synchronous validation, nothing pending
+        expect(callCount).toBe(1);
+        expect(signals.isValidating()).toBe(false);
+
+        // A file change marks validation as pending...
+        setFile({ ...validEsmFile, metadata: { name: "Changed" } });
+        expect(signals.isValidating()).toBe(true);
+        // ...but does not validate until the debounce elapses
+        expect(callCount).toBe(1);
+
+        // Rapid successive changes coalesce into one validation run
+        setFile({ ...validEsmFile, metadata: { name: "Changed again" } });
+        vi.advanceTimersByTime(150);
+        expect(callCount).toBe(2);
+        expect(signals.isValidating()).toBe(false);
+
+        dispose();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should handle disabled validation', () => {

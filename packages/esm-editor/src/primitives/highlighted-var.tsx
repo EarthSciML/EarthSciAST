@@ -204,63 +204,15 @@ export interface HighlightProviderProps {
 }
 
 /**
- * Create and provide the highlight context
+ * Create and provide the highlight context.
+ * Delegates all state management to `createHighlightContext`.
  */
 export function HighlightProvider(props: HighlightProviderProps) {
-  // Hovered variable signal
-  const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-
-  // Build equivalences from the file (memoized)
-  const equivalences = createMemo(() => buildVarEquivalences(props.file));
-
-  // Get highlighted variables based on the hovered variable
-  const highlightedVars = createMemo(() => {
-    const hovered = hoveredVar();
-    if (!hovered) return new Set<string>();
-
-    const equiv = equivalences();
-    const scopingMode = props.scopingMode || 'model';
-
-    // Normalize the hovered variable reference
-    const normalizedRefs = normalizeScopedReference(
-      hovered,
-      props.currentModelContext,
-      scopingMode
-    );
-
-    // Find all equivalent variables for any normalized reference
-    const allEquivalent = new Set<string>();
-    for (const ref of normalizedRefs) {
-      for (const [, equivalentSet] of equiv.entries()) {
-        if (equivalentSet.has(ref)) {
-          // Add all variables in this equivalence class
-          for (const equivalent of equivalentSet) {
-            // Apply scoping mode filtering
-            if (shouldIncludeInHighlighting(equivalent, hovered, scopingMode, props.currentModelContext)) {
-              allEquivalent.add(equivalent);
-            }
-          }
-          break;
-        }
-      }
-    }
-
-    // Also add the original hovered variable and its normalized versions
-    for (const ref of normalizedRefs) {
-      if (shouldIncludeInHighlighting(ref, hovered, scopingMode, props.currentModelContext)) {
-        allEquivalent.add(ref);
-      }
-    }
-
-    return allEquivalent;
-  });
-
-  const contextValue: HighlightContextValue = {
-    hoveredVar,
-    setHoveredVar,
-    highlightedVars,
-    equivalences,
-  };
+  const contextValue = createHighlightContext(
+    () => props.file,
+    () => props.currentModelContext,
+    () => props.scopingMode ?? 'model'
+  );
 
   return (
     <HighlightContext.Provider value={contextValue}>
@@ -316,31 +268,44 @@ export function isHighlighted(variable: string, highlightedVars: Set<string>): b
   return highlightedVars.has(variable);
 }
 
+/** A value that may be provided directly or as a reactive accessor */
+type MaybeAccessor<T> = T | Accessor<T>;
+
+function access<T>(value: MaybeAccessor<T>): T {
+  return typeof value === 'function' ? (value as Accessor<T>)() : value;
+}
+
 /**
- * Create a highlight context with default settings
- * Convenience function for simple use cases
+ * Create highlight context state and actions.
+ *
+ * This is the single implementation of variable-hover highlighting;
+ * `HighlightProvider` delegates to it. Arguments may be plain values or
+ * reactive accessors — pass accessors to keep highlighting reactive to
+ * file/scoping changes.
  */
 export function createHighlightContext(
-  file: EsmFile,
-  currentModelContext?: string,
-  scopingMode: ScopingMode = 'model'
-) {
+  file: MaybeAccessor<EsmFile>,
+  currentModelContext?: MaybeAccessor<string | undefined>,
+  scopingMode: MaybeAccessor<ScopingMode> = 'model'
+): HighlightContextValue {
   const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-  const equivalences = createMemo(() => buildVarEquivalences(file));
+  const equivalences = createMemo(() => buildVarEquivalences(access(file)));
 
   const highlightedVars = createMemo(() => {
     const hovered = hoveredVar();
     if (!hovered) return new Set<string>();
 
     const equiv = equivalences();
-    const normalizedRefs = normalizeScopedReference(hovered, currentModelContext, scopingMode);
+    const modelContext = currentModelContext === undefined ? undefined : access(currentModelContext);
+    const mode = access(scopingMode);
+    const normalizedRefs = normalizeScopedReference(hovered, modelContext, mode);
     const allEquivalent = new Set<string>();
 
     for (const ref of normalizedRefs) {
       for (const [, equivalentSet] of equiv.entries()) {
         if (equivalentSet.has(ref)) {
           for (const equivalent of equivalentSet) {
-            if (shouldIncludeInHighlighting(equivalent, hovered, scopingMode, currentModelContext)) {
+            if (shouldIncludeInHighlighting(equivalent, hovered, mode, modelContext)) {
               allEquivalent.add(equivalent);
             }
           }
@@ -350,7 +315,7 @@ export function createHighlightContext(
     }
 
     for (const ref of normalizedRefs) {
-      if (shouldIncludeInHighlighting(ref, hovered, scopingMode, currentModelContext)) {
+      if (shouldIncludeInHighlighting(ref, hovered, mode, modelContext)) {
         allEquivalent.add(ref);
       }
     }

@@ -220,8 +220,27 @@ describe('CouplingGraph', () => {
     // This basic test ensures the event handler is attached
   });
 
+  it('animates node positions as the force simulation ticks', async () => {
+    const { waitFor } = await import('@solidjs/testing-library');
+    render(() => <CouplingGraph graph={mockGraph} showMinimap={false} />);
+
+    const modelShape = document.querySelector('rect[fill="#4CAF50"]') as SVGRectElement;
+    expect(modelShape).toBeTruthy();
+    const initialX = modelShape.getAttribute('x');
+    const initialY = modelShape.getAttribute('y');
+
+    // The tick handler publishes positions into a reactive signal, so the
+    // SVG attributes must change as the simulation settles.
+    await waitFor(() => {
+      expect(
+        modelShape.getAttribute('x') !== initialX ||
+        modelShape.getAttribute('y') !== initialY
+      ).toBe(true);
+    }, { timeout: 3000 });
+  });
+
   it('updates simulation when graph data changes', () => {
-    let graphSignal = mockGraph;
+    const graphSignal = mockGraph;
     render(() => <CouplingGraph graph={graphSignal} />);
 
     // Add a new node

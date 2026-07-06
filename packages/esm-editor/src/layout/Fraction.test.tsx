@@ -4,7 +4,7 @@
 
 import { render, cleanup } from '@solidjs/testing-library';
 import { describe, it, expect, afterEach } from 'vitest';
-import { Fraction } from './fraction';
+import { Fraction } from './Fraction';
 
 afterEach(cleanup);
 

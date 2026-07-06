@@ -109,6 +109,38 @@ describe('ValidationPanel', () => {
     expect(screen.getByText('undefined_variable')).toBeInTheDocument();
   });
 
+  it('renders unit warnings in the Warnings section', async () => {
+    const { validate } = await import('earthsci-toolkit');
+    (validate as any).mockReturnValue({
+      is_valid: true,
+      schema_errors: [],
+      structural_errors: [],
+      unit_warnings: [{
+        message: 'Units of lhs and rhs disagree',
+        location: '/models/TestModel/equations/0',
+        equation: 'D(x, t) = v'
+      }]
+    });
+
+    const onErrorClick = vi.fn();
+    render(() => <ValidationPanel esmFile={validEsmFile} onErrorClick={onErrorClick} />);
+
+    // Warnings section is reachable even when the file is valid
+    expect(screen.getByText('Warnings (1)')).toBeInTheDocument();
+    expect(screen.getByText('Units of lhs and rhs disagree')).toBeInTheDocument();
+    expect(screen.getByTitle('1 warning(s)')).toBeInTheDocument();
+
+    // The success message is not shown when warnings are present
+    expect(
+      screen.queryByText('No validation errors found. The ESM file is valid.')
+    ).not.toBeInTheDocument();
+
+    // Warning items are clickable and report their location path
+    const warningItem = screen.getByText('Units of lhs and rhs disagree').closest('.error-item') as HTMLElement | null;
+    warningItem?.click();
+    expect(onErrorClick).toHaveBeenCalledWith('/models/TestModel/equations/0');
+  });
+
   it('displays error count badges', async () => {
     const { validate } = await import('earthsci-toolkit');
     (validate as any).mockReturnValue({

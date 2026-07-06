@@ -5,15 +5,21 @@
  * displaying reactions in chemical notation (e.g., NO + O₃ →[k] NO₂)
  * with clickable rate expressions that expand to full ExpressionEditor.
  * Features:
- * - Chemical notation display with proper subscripts
+ * - Chemical notation display with proper subscripts (shared element-aware
+ *   renderer, identical to ExpressionNode's variable rendering)
  * - Species panel with chemical formulas
- * - Parameter panel for rate constants
+ * - Parameter panel listing all parameters
  * - UI for adding/removing reactions
+ *
+ * Add/edit flows use inline forms (InlineForm) — no blocking prompt()
+ * dialogs.
  */
 
 import { Component, createSignal, createMemo, For, Show } from 'solid-js';
 import type { ReactionSystem, Reaction, Species, Parameter, Expression } from 'earthsci-toolkit';
 import { ExpressionNode } from './ExpressionNode';
+import { InlineForm } from './InlineForm';
+import { renderChemicalName } from '../primitives/chemical-formula';
 
 export interface ReactionEditorProps {
   /** The reaction system to display and edit */
@@ -43,20 +49,6 @@ interface NamedParameter {
   name: string;
   parameter: Parameter;
 }
-
-/**
- * Helper function to render chemical formulas with subscripts
- */
-const renderChemicalFormula = (formula: string): string => {
-  // Convert numbers to subscripts (already done in ExpressionNode, but good to be consistent)
-  return formula.replace(/(\d+)/g, (match) => {
-    const subscripts = '₀₁₂₃₄₅₆₇₈₉';
-    return match
-      .split('')
-      .map((digit) => subscripts[parseInt(digit, 10)])
-      .join('');
-  });
-};
 
 /**
  * Component for rendering a single chemical reaction
@@ -90,7 +82,7 @@ const ReactionItem: Component<{
 
     return props.reaction.substrates
       .map((substrate) => {
-        const formula = renderChemicalFormula(substrate.species);
+        const formula = renderChemicalName(substrate.species);
         const stoichiometry = substrate.stoichiometry !== undefined ? substrate.stoichiometry : 1;
 
         return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
@@ -104,7 +96,7 @@ const ReactionItem: Component<{
 
     return props.reaction.products
       .map((product) => {
-        const formula = renderChemicalFormula(product.species);
+        const formula = renderChemicalName(product.species);
         const stoichiometry = product.stoichiometry !== undefined ? product.stoichiometry : 1;
 
         return `${stoichiometry !== 1 ? stoichiometry : ''}${formula}`;
@@ -228,12 +220,39 @@ const ReactionItem: Component<{
  */
 const SpeciesPanel: Component<{
   species?: NamedSpecies[];
-  onAddSpecies?: () => void;
-  onEditSpecies?: (name: string, species: Species) => void;
+  onAddSpecies?: (name: string, species: Species) => void;
+  onEditSpecies?: (oldName: string, newName: string, species: Species) => void;
   onRemoveSpecies?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
   const [isExpanded, setIsExpanded] = createSignal(true);
+  const [isAdding, setIsAdding] = createSignal(false);
+  const [editingName, setEditingName] = createSignal<string | null>(null);
+
+  const startAdding = () => {
+    setIsExpanded(true);
+    setEditingName(null);
+    setIsAdding(true);
+  };
+
+  const handleAddConfirm = (values: Record<string, string>) => {
+    const name = values.name.trim();
+    if (!name) return 'Species name is required';
+
+    props.onAddSpecies?.(name, values.description ? { description: values.description } : {});
+    setIsAdding(false);
+  };
+
+  const handleEditConfirm = (oldName: string, species: Species, values: Record<string, string>) => {
+    const newName = values.name.trim();
+    if (!newName) return 'Species name is required';
+
+    props.onEditSpecies?.(oldName, newName, {
+      ...species,
+      description: values.description || undefined
+    });
+    setEditingName(null);
+  };
 
   return (
     <div class="species-panel">
@@ -243,7 +262,7 @@ const SpeciesPanel: Component<{
         <Show when={!props.readonly}>
           <button
             class="add-btn"
-            onClick={(e) => { e.stopPropagation(); props.onAddSpecies?.(); }}
+            onClick={(e) => { e.stopPropagation(); startAdding(); }}
             title="Add new species"
             aria-label="Add new species"
           >
@@ -254,42 +273,78 @@ const SpeciesPanel: Component<{
 
       <Show when={isExpanded()}>
         <div class="species-content">
+          <Show when={isAdding()}>
+            <InlineForm
+              title="Add species"
+              fields={[
+                { name: 'name', label: 'Name (chemical formula)', placeholder: 'e.g. NO2' },
+                { name: 'description', label: 'Description' }
+              ]}
+              confirmLabel="Add"
+              onConfirm={handleAddConfirm}
+              onCancel={() => setIsAdding(false)}
+            />
+          </Show>
+
           <For each={props.species || []}>
             {(entry) => (
-              <div class="species-item" onClick={() => props.onEditSpecies?.(entry.name, entry.species)}>
-                <div class="species-info">
-                  <span class="species-formula">
-                    {renderChemicalFormula(entry.name)}
-                  </span>
-                  <Show when={renderChemicalFormula(entry.name) !== entry.name}>
-                    <span class="species-name">({entry.name})</span>
-                  </Show>
-                </div>
-
-                <Show when={entry.species.description}>
-                  <div class="species-description">{entry.species.description}</div>
-                </Show>
-
-                <Show when={!props.readonly}>
-                  <button
-                    class="species-remove-btn"
-                    onClick={(e) => { e.stopPropagation(); props.onRemoveSpecies?.(entry.name); }}
-                    title="Remove species"
-                    aria-label={`Remove species ${entry.name}`}
+              <Show
+                when={editingName() === entry.name}
+                fallback={
+                  <div
+                    class="species-item"
+                    onClick={() => {
+                      if (!props.readonly) {
+                        setIsAdding(false);
+                        setEditingName(entry.name);
+                      }
+                    }}
                   >
-                    ×
-                  </button>
-                </Show>
-              </div>
+                    <div class="species-info">
+                      <span class="species-formula">
+                        {renderChemicalName(entry.name)}
+                      </span>
+                      <Show when={renderChemicalName(entry.name) !== entry.name}>
+                        <span class="species-name">({entry.name})</span>
+                      </Show>
+                    </div>
+
+                    <Show when={entry.species.description}>
+                      <div class="species-description">{entry.species.description}</div>
+                    </Show>
+
+                    <Show when={!props.readonly}>
+                      <button
+                        class="species-remove-btn"
+                        onClick={(e) => { e.stopPropagation(); props.onRemoveSpecies?.(entry.name); }}
+                        title="Remove species"
+                        aria-label={`Remove species ${entry.name}`}
+                      >
+                        ×
+                      </button>
+                    </Show>
+                  </div>
+                }
+              >
+                <InlineForm
+                  title={`Edit species ${entry.name}`}
+                  fields={[
+                    { name: 'name', label: 'Name', initial: entry.name },
+                    { name: 'description', label: 'Description', initial: entry.species.description || '' }
+                  ]}
+                  onConfirm={(values) => handleEditConfirm(entry.name, entry.species, values)}
+                  onCancel={() => setEditingName(null)}
+                />
+              </Show>
             )}
           </For>
 
-          <Show when={(props.species || []).length === 0}>
+          <Show when={(props.species || []).length === 0 && !isAdding()}>
             <div class="empty-state">
               <div class="empty-icon">🧪</div>
               <div class="empty-text">No species defined</div>
               <Show when={!props.readonly}>
-                <button class="add-first-btn" onClick={props.onAddSpecies}>
+                <button class="add-first-btn" onClick={startAdding}>
                   Add first species
                 </button>
               </Show>
@@ -302,35 +357,70 @@ const SpeciesPanel: Component<{
 };
 
 /**
- * Parameters panel component
+ * Parameters panel component. Lists ALL parameters of the reaction system
+ * (no name-based filtering — rate constants are not required to follow any
+ * particular naming convention).
  */
 const ParametersPanel: Component<{
   parameters?: NamedParameter[];
-  onAddParameter?: () => void;
-  onEditParameter?: (name: string, parameter: Parameter) => void;
+  onAddParameter?: (name: string, parameter: Parameter) => void;
+  onEditParameter?: (oldName: string, newName: string, parameter: Parameter) => void;
   onRemoveParameter?: (name: string) => void;
   readonly?: boolean;
 }> = (props) => {
   const [isExpanded, setIsExpanded] = createSignal(true);
+  const [isAdding, setIsAdding] = createSignal(false);
+  const [editingName, setEditingName] = createSignal<string | null>(null);
 
-  // Filter for rate constants and reaction parameters
-  const reactionParameters = createMemo(() => {
-    return (props.parameters || []).filter(entry =>
-      entry.name.startsWith('k_') ||
-      entry.name.includes('rate') ||
-      entry.name.includes('const')
-    );
-  });
+  const startAdding = () => {
+    setIsExpanded(true);
+    setEditingName(null);
+    setIsAdding(true);
+  };
+
+  const parseParameter = (values: Record<string, string>): Parameter | string => {
+    const value = parseFloat(values.value);
+    if (values.value.trim() !== '' && isNaN(value)) {
+      return 'Default value must be a number';
+    }
+    return {
+      default: isNaN(value) ? 1.0 : value,
+      units: values.units || undefined,
+      description: values.description || undefined
+    };
+  };
+
+  const handleAddConfirm = (values: Record<string, string>) => {
+    const name = values.name.trim();
+    if (!name) return 'Parameter name is required';
+
+    const parameter = parseParameter(values);
+    if (typeof parameter === 'string') return parameter;
+
+    props.onAddParameter?.(name, parameter);
+    setIsAdding(false);
+  };
+
+  const handleEditConfirm = (oldName: string, values: Record<string, string>) => {
+    const newName = values.name.trim();
+    if (!newName) return 'Parameter name is required';
+
+    const parameter = parseParameter(values);
+    if (typeof parameter === 'string') return parameter;
+
+    props.onEditParameter?.(oldName, newName, parameter);
+    setEditingName(null);
+  };
 
   return (
     <div class="parameters-panel">
       <div class="panel-header" onClick={() => setIsExpanded(!isExpanded())}>
         <span class={`expand-icon ${isExpanded() ? 'expanded' : ''}`}>▶</span>
-        <h3>Parameters ({reactionParameters().length})</h3>
+        <h3>Parameters ({(props.parameters || []).length})</h3>
         <Show when={!props.readonly}>
           <button
             class="add-btn"
-            onClick={(e) => { e.stopPropagation(); props.onAddParameter?.(); }}
+            onClick={(e) => { e.stopPropagation(); startAdding(); }}
             title="Add new parameter"
             aria-label="Add new parameter"
           >
@@ -341,43 +431,83 @@ const ParametersPanel: Component<{
 
       <Show when={isExpanded()}>
         <div class="parameters-content">
-          <For each={reactionParameters()}>
+          <Show when={isAdding()}>
+            <InlineForm
+              title="Add parameter"
+              fields={[
+                { name: 'name', label: 'Name', placeholder: 'e.g. k_rate' },
+                { name: 'value', label: 'Default value', initial: '1.0' },
+                { name: 'units', label: 'Units' },
+                { name: 'description', label: 'Description' }
+              ]}
+              confirmLabel="Add"
+              onConfirm={handleAddConfirm}
+              onCancel={() => setIsAdding(false)}
+            />
+          </Show>
+
+          <For each={props.parameters || []}>
             {(entry) => (
-              <div class="parameter-item" onClick={() => props.onEditParameter?.(entry.name, entry.parameter)}>
-                <div class="parameter-info">
-                  <span class="parameter-name">{entry.name}</span>
-                  <Show when={entry.parameter.units}>
-                    <span class="parameter-unit">[{entry.parameter.units}]</span>
-                  </Show>
-                  <Show when={entry.parameter.default !== undefined}>
-                    <span class="parameter-value">= {entry.parameter.default}</span>
-                  </Show>
-                </div>
-
-                <Show when={entry.parameter.description}>
-                  <div class="parameter-description">{entry.parameter.description}</div>
-                </Show>
-
-                <Show when={!props.readonly}>
-                  <button
-                    class="parameter-remove-btn"
-                    onClick={(e) => { e.stopPropagation(); props.onRemoveParameter?.(entry.name); }}
-                    title="Remove parameter"
-                    aria-label={`Remove parameter ${entry.name}`}
+              <Show
+                when={editingName() === entry.name}
+                fallback={
+                  <div
+                    class="parameter-item"
+                    onClick={() => {
+                      if (!props.readonly) {
+                        setIsAdding(false);
+                        setEditingName(entry.name);
+                      }
+                    }}
                   >
-                    ×
-                  </button>
-                </Show>
-              </div>
+                    <div class="parameter-info">
+                      <span class="parameter-name">{entry.name}</span>
+                      <Show when={entry.parameter.units}>
+                        <span class="parameter-unit">[{entry.parameter.units}]</span>
+                      </Show>
+                      <Show when={entry.parameter.default !== undefined}>
+                        <span class="parameter-value">= {entry.parameter.default}</span>
+                      </Show>
+                    </div>
+
+                    <Show when={entry.parameter.description}>
+                      <div class="parameter-description">{entry.parameter.description}</div>
+                    </Show>
+
+                    <Show when={!props.readonly}>
+                      <button
+                        class="parameter-remove-btn"
+                        onClick={(e) => { e.stopPropagation(); props.onRemoveParameter?.(entry.name); }}
+                        title="Remove parameter"
+                        aria-label={`Remove parameter ${entry.name}`}
+                      >
+                        ×
+                      </button>
+                    </Show>
+                  </div>
+                }
+              >
+                <InlineForm
+                  title={`Edit parameter ${entry.name}`}
+                  fields={[
+                    { name: 'name', label: 'Name', initial: entry.name },
+                    { name: 'value', label: 'Default value', initial: String(entry.parameter.default ?? 1.0) },
+                    { name: 'units', label: 'Units', initial: entry.parameter.units || '' },
+                    { name: 'description', label: 'Description', initial: entry.parameter.description || '' }
+                  ]}
+                  onConfirm={(values) => handleEditConfirm(entry.name, values)}
+                  onCancel={() => setEditingName(null)}
+                />
+              </Show>
             )}
           </For>
 
-          <Show when={reactionParameters().length === 0}>
+          <Show when={(props.parameters || []).length === 0 && !isAdding()}>
             <div class="empty-state">
               <div class="empty-icon">⚗️</div>
               <div class="empty-text">No parameters defined</div>
               <Show when={!props.readonly}>
-                <button class="add-first-btn" onClick={props.onAddParameter}>
+                <button class="add-first-btn" onClick={startAdding}>
                   Add first parameter
                 </button>
               </Show>
@@ -425,46 +555,32 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
   };
 
   // Species management handlers
-  const handleAddSpecies = () => {
-    const name = prompt('Enter species name (chemical formula, e.g. NO2):');
-    if (!name || !name.trim()) return;
-
-    const description = prompt('Enter description (optional):', '');
-
-    const newSpecies: Species = {
-      ...(description ? { description } : {})
-    };
-
+  const handleAddSpecies = (name: string, species: Species) => {
     const updatedSpecies = {
       ...(props.reactionSystem.species || {}),
-      [name.trim()]: newSpecies
+      [name]: species
     };
     handleReactionSystemChange({ species: updatedSpecies });
   };
 
-  const handleEditSpecies = (name: string, species: Species) => {
-    const newName = prompt('Enter species name:', name);
-    if (!newName || !newName.trim()) return;
-
-    const newDescription = prompt('Enter description:', species.description || '');
-
+  const handleEditSpecies = (oldName: string, newName: string, species: Species) => {
     const updatedSpecies = { ...(props.reactionSystem.species || {}) };
 
     // Remove old species if name changed
-    if (newName.trim() !== name) {
-      delete updatedSpecies[name];
+    if (newName !== oldName) {
+      delete updatedSpecies[oldName];
     }
 
-    // Add/update species with new values
-    updatedSpecies[newName.trim()] = {
-      ...species,
-      ...(newDescription ? { description: newDescription } : { description: undefined })
-    };
-
+    updatedSpecies[newName] = species;
     handleReactionSystemChange({ species: updatedSpecies });
   };
 
   const handleRemoveSpecies = (name: string) => {
+    // window.confirm is intentionally kept for this destructive action:
+    // removing a species can silently break every reaction that references
+    // it, and the species list has no undo affordance of its own. A native
+    // blocking confirm is the conservative guard until a proper non-blocking
+    // confirmation UI exists.
     if (!confirm(`Remove species "${name}"? This may affect reactions that reference it.`)) return;
 
     const updatedSpecies = { ...(props.reactionSystem.species || {}) };
@@ -473,54 +589,29 @@ export const ReactionEditor: Component<ReactionEditorProps> = (props) => {
   };
 
   // Parameter management handlers
-  const handleAddParameter = () => {
-    const name = prompt('Enter parameter name (e.g., k_rate):');
-    if (!name || !name.trim()) return;
-
-    const value = prompt('Enter default value:', '1.0');
-    const unit = prompt('Enter unit (optional):', '');
-    const description = prompt('Enter description (optional):', '');
-
-    const newParameter: Parameter = {
-      default: parseFloat(value || '1.0') || 1.0,
-      ...(unit ? { units: unit } : {}),
-      ...(description ? { description } : {})
-    };
-
+  const handleAddParameter = (name: string, parameter: Parameter) => {
     const updatedParameters = {
       ...(props.reactionSystem.parameters || {}),
-      [name.trim()]: newParameter
+      [name]: parameter
     };
-
     handleReactionSystemChange({ parameters: updatedParameters });
   };
 
-  const handleEditParameter = (name: string, parameter: Parameter) => {
-    const newName = prompt('Enter parameter name:', name);
-    if (!newName || !newName.trim()) return;
-
-    const newValue = prompt('Enter value:', String(parameter.default ?? 1.0));
-    const newUnit = prompt('Enter unit:', parameter.units || '');
-    const newDescription = prompt('Enter description:', parameter.description || '');
-
+  const handleEditParameter = (oldName: string, newName: string, parameter: Parameter) => {
     const updatedParameters = { ...(props.reactionSystem.parameters || {}) };
 
     // Remove old parameter if name changed
-    if (newName.trim() !== name) {
-      delete updatedParameters[name];
+    if (newName !== oldName) {
+      delete updatedParameters[oldName];
     }
 
-    // Add/update parameter with new values
-    updatedParameters[newName.trim()] = {
-      default: parseFloat(newValue || '1.0') || 1.0,
-      units: newUnit || undefined,
-      description: newDescription || undefined
-    };
-
+    updatedParameters[newName] = parameter;
     handleReactionSystemChange({ parameters: updatedParameters });
   };
 
   const handleRemoveParameter = (name: string) => {
+    // window.confirm intentionally kept for destructive delete — see
+    // handleRemoveSpecies for the rationale.
     if (!confirm(`Remove parameter "${name}"? This may affect reactions that reference it.`)) return;
 
     const updatedParameters = { ...(props.reactionSystem.parameters || {}) };

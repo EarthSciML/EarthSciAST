@@ -4,13 +4,18 @@
  * Implements a comprehensive graph visualization component that consumes
  * componentGraph() from earthsci-toolkit and provides interactive exploration
  * of system coupling relationships.
+ *
+ * Reactivity: node positions live in a Solid signal that the d3-force tick
+ * handler updates each frame, so the SVG animates as the layout settles.
+ * Nodes are draggable via pointer move/up listeners, and the panels are
+ * styled with plain CSS (coupling-graph.css) — no Tailwind dependency.
  */
 
-import { Component, createSignal, createMemo, onMount, onCleanup, Show, For } from 'solid-js';
+import { Component, createSignal, createMemo, createEffect, on, onMount, onCleanup, Show, For } from 'solid-js';
 import type { ComponentNode, CouplingEdge, Graph } from 'earthsci-toolkit';
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force';
 import type { Simulation, SimulationNodeDatum, SimulationLinkDatum } from 'd3-force';
-
+import './coupling-graph.css';
 
 export interface CouplingGraphProps {
   /** The graph data to visualize */
@@ -41,6 +46,9 @@ interface GraphEdge extends SimulationLinkDatum<GraphNode> {
   data: CouplingEdge;
 }
 
+/** Node position snapshot published by the simulation tick handler */
+type PositionMap = Map<string, { x: number; y: number }>;
+
 export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   // Default dimensions
   const width = () => props.width ?? 800;
@@ -62,14 +70,36 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   const [hoveredElement, setHoveredElement] = createSignal<string | null>(null);
   const [transform, setTransform] = createSignal({ x: 0, y: 0, k: 1 });
 
+  // Node positions, written by the simulation tick handler and read by the
+  // JSX below — this is what makes the force layout animate.
+  const [positions, setPositions] = createSignal<PositionMap>(new Map());
+
+  const pos = (id: string) => positions().get(id) ?? { x: 0, y: 0 };
+
   // SVG refs
   let svgRef: SVGSVGElement | undefined;
   let simulation: Simulation<GraphNode, GraphEdge> | undefined;
+
+  /** Publish current simulation positions into the reactive signal */
+  const publishPositions = () => {
+    if (!simulation) return;
+    const map: PositionMap = new Map();
+    for (const node of simulation.nodes()) {
+      map.set(node.id, { x: node.x ?? 0, y: node.y ?? 0 });
+    }
+    setPositions(map);
+  };
 
   // Initialize D3 force simulation
   const initializeSimulation = () => {
     const nodeData = nodes();
     const edgeData = edges();
+
+    // Initialize positions if not set
+    nodeData.forEach(node => {
+      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100;
+      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100;
+    });
 
     simulation = forceSimulation(nodeData)
       .force('link', forceLink(edgeData)
@@ -79,20 +109,10 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
       .force('charge', forceManyBody().strength(-300))
       .force('center', forceCenter(width() / 2, height() / 2))
       .force('collision', forceCollide().radius(30))
-      .on('tick', () => {
-        // Force reactive update
-        setNodes([...nodeData]);
-      });
+      .on('tick', publishPositions);
 
-    // Initialize positions if not set
-    nodeData.forEach(node => {
-      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100;
-      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100;
-    });
+    publishPositions();
   };
-
-  // Force re-render signal for simulation updates
-  const [, setNodes] = createSignal(nodes(), { equals: false });
 
   // Node styling based on type
   const getNodeStyle = (node: ComponentNode) => {
@@ -150,12 +170,51 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
     props.onEdgeSelect?.(edge);
   };
 
-  const handleNodeDrag = (node: GraphNode, event: MouseEvent) => {
-    if (simulation) {
-      node.fx = event.offsetX;
-      node.fy = event.offsetY;
-      simulation.alpha(0.3).restart();
-    }
+  // Teardown for an in-progress drag (also invoked if the component
+  // unmounts mid-drag)
+  let endActiveDrag: (() => void) | null = null;
+
+  /**
+   * Pointer-based node dragging: mousedown pins the node (fx/fy), document
+   * mousemove follows the pointer, and mouseup releases the pin.
+   */
+  const handleNodeMouseDown = (node: GraphNode, event: MouseEvent) => {
+    event.preventDefault();
+    endActiveDrag?.();
+
+    node.fx = node.x;
+    node.fy = node.y;
+    simulation?.alphaTarget(0.3).restart();
+
+    const toGraphCoords = (e: MouseEvent) => {
+      const rect = svgRef?.getBoundingClientRect();
+      const k = transform().k || 1;
+      if (!rect) return { x: e.offsetX, y: e.offsetY };
+      return {
+        x: (e.clientX - rect.left) / k,
+        y: (e.clientY - rect.top) / k
+      };
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const point = toGraphCoords(e);
+      node.fx = point.x;
+      node.fy = point.y;
+      simulation?.alpha(Math.max(simulation.alpha(), 0.3)).restart();
+    };
+
+    const handleMouseUp = () => {
+      node.fx = null;
+      node.fy = null;
+      simulation?.alphaTarget(0);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      endActiveDrag = null;
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    endActiveDrag = handleMouseUp;
   };
 
   // Zoom and pan functionality
@@ -178,93 +237,98 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   });
 
   onCleanup(() => {
+    endActiveDrag?.();
     simulation?.stop();
     if (svgRef) {
       svgRef.removeEventListener('wheel', handleWheel);
     }
   });
 
-  // Reactive simulation updates
-  createMemo(() => {
-    if (simulation) {
-      simulation.nodes(nodes());
-      const linkForce = simulation.force('link');
-      if (linkForce && 'links' in linkForce) {
-        (linkForce as any).links(edges());
-      }
-      simulation.alpha(0.3).restart();
-    }
-  });
+  // Feed graph-data changes into the running simulation (side effect, so an
+  // effect — not a memo). Deferred: onMount performs the initial setup.
+  createEffect(on([nodes, edges], ([nodeData, edgeData]) => {
+    if (!simulation) return;
 
-  // Render node shapes based on type
+    nodeData.forEach(node => {
+      if (node.x === undefined) node.x = width() / 2 + (Math.random() - 0.5) * 100;
+      if (node.y === undefined) node.y = height() / 2 + (Math.random() - 0.5) * 100;
+    });
+
+    simulation.nodes(nodeData);
+    const linkForce = simulation.force('link');
+    if (linkForce && 'links' in linkForce) {
+      (linkForce as { links: (edges: GraphEdge[]) => void }).links(edgeData);
+    }
+    simulation.alpha(0.3).restart();
+    publishPositions();
+  }, { defer: true }));
+
+  // Render node shapes based on type (positions read reactively)
   const renderNode = (node: GraphNode) => {
-    const style = getNodeStyle(node);
-    const x = node.x ?? 0;
-    const y = node.y ?? 0;
+    const style = () => getNodeStyle(node);
+    const commonHandlers = {
+      onClick: () => handleNodeClick(node),
+      onMouseEnter: () => setHoveredElement(node.id),
+      onMouseLeave: () => setHoveredElement(null),
+      onMouseDown: (e: MouseEvent) => handleNodeMouseDown(node, e)
+    };
 
     switch (node.type) {
       case 'model':
       case 'reaction_system':
         return (
           <rect
-            x={x - 25}
-            y={y - 15}
+            x={pos(node.id).x - 25}
+            y={pos(node.id).y - 15}
             width="50"
             height="30"
-            {...style}
-            onClick={() => handleNodeClick(node)}
-            onMouseEnter={() => setHoveredElement(node.id)}
-            onMouseLeave={() => setHoveredElement(null)}
-            onMouseDown={(e) => handleNodeDrag(node, e)}
+            {...style()}
+            {...commonHandlers}
           />
         );
 
       case 'data_loader':
         return (
           <ellipse
-            cx={x}
-            cy={y}
+            cx={pos(node.id).x}
+            cy={pos(node.id).y}
             rx="25"
             ry="15"
-            {...style}
-            onClick={() => handleNodeClick(node)}
-            onMouseEnter={() => setHoveredElement(node.id)}
-            onMouseLeave={() => setHoveredElement(null)}
-            onMouseDown={(e) => handleNodeDrag(node, e)}
+            {...style()}
+            {...commonHandlers}
           />
         );
 
       default:
         return (
           <circle
-            cx={x}
-            cy={y}
+            cx={pos(node.id).x}
+            cy={pos(node.id).y}
             r="20"
-            {...style}
-            onClick={() => handleNodeClick(node)}
-            onMouseEnter={() => setHoveredElement(node.id)}
-            onMouseLeave={() => setHoveredElement(null)}
-            onMouseDown={(e) => handleNodeDrag(node, e)}
+            {...style()}
+            {...commonHandlers}
           />
         );
     }
   };
 
+  /** Resolve an edge endpoint to a node id */
+  const endpointId = (endpoint: GraphEdge['source']): string =>
+    typeof endpoint === 'object' ? (endpoint as GraphNode).id : String(endpoint);
+
   // Render edge with arrowhead
   const renderEdge = (edge: GraphEdge) => {
-    const source = typeof edge.source === 'object' ? edge.source : nodes().find(n => n.id === edge.source);
-    const target = typeof edge.target === 'object' ? edge.target : nodes().find(n => n.id === edge.target);
+    const style = () => getEdgeStyle(edge.data);
+    const source = () => pos(endpointId(edge.source));
+    const target = () => pos(endpointId(edge.target));
 
-    if (!source?.x || !source?.y || !target?.x || !target?.y) return null;
-
-    const style = getEdgeStyle(edge.data);
     return (
       <line
-        x1={source.x}
-        y1={source.y}
-        x2={target.x}
-        y2={target.y}
-        {...style}
+        x1={source().x}
+        y1={source().y}
+        x2={target().x}
+        y2={target().y}
+        {...style()}
         onClick={() => handleEdgeClick(edge.data)}
         onMouseEnter={() => setHoveredElement(edge.data.id)}
         onMouseLeave={() => setHoveredElement(null)}
@@ -275,10 +339,10 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   // Minimap component
   const Minimap: Component = () => {
     const minimapSize = 150;
-    const scale = Math.min(minimapSize / width(), minimapSize / height());
+    const scale = () => Math.min(minimapSize / width(), minimapSize / height());
 
     return (
-      <div class="absolute top-4 right-4 border border-gray-300 bg-white bg-opacity-90">
+      <div class="coupling-graph-minimap">
         <svg width={minimapSize} height={minimapSize}>
           <rect width="100%" height="100%" fill="white" stroke="gray" />
 
@@ -286,8 +350,8 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
           <For each={nodes()}>
             {(node) => (
               <circle
-                cx={(node.x ?? 0) * scale}
-                cy={(node.y ?? 0) * scale}
+                cx={pos(node.id).x * scale()}
+                cy={pos(node.id).y * scale()}
                 r="2"
                 fill={getNodeStyle(node).fill as string}
               />
@@ -296,10 +360,10 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
 
           {/* Viewport indicator */}
           <rect
-            x={-transform().x * scale}
-            y={-transform().y * scale}
-            width={width() * scale / transform().k}
-            height={height() * scale / transform().k}
+            x={-transform().x * scale()}
+            y={-transform().y * scale()}
+            width={width() * scale() / transform().k}
+            height={height() * scale() / transform().k}
             fill="none"
             stroke="red"
             stroke-width="1"
@@ -310,13 +374,13 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
   };
 
   return (
-    <div class="relative w-full h-full">
+    <div class="coupling-graph-container">
       <svg
-        ref={svgRef}
+        ref={(el) => (svgRef = el)}
         width={width()}
         height={height()}
         style={`transform: translate(${transform().x}px, ${transform().y}px) scale(${transform().k})`}
-        class="border border-gray-300"
+        class="coupling-graph-svg"
       >
         {/* Arrow marker definition */}
         <defs>
@@ -354,8 +418,8 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
           <For each={nodes()}>
             {(node) => (
               <text
-                x={node.x ?? 0}
-                y={(node.y ?? 0) + 40}
+                x={pos(node.id).x}
+                y={pos(node.id).y + 40}
                 text-anchor="middle"
                 font-size="12"
                 fill="black"
@@ -375,15 +439,15 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
 
       {/* Selection details panel */}
       <Show when={selectedNode() || selectedEdge()}>
-        <div class="absolute bottom-4 left-4 p-4 bg-white border border-gray-300 rounded shadow-lg max-w-md">
+        <div class="coupling-graph-details">
           <Show when={selectedNode()}>
             <div>
-              <h3 class="font-bold text-lg">{selectedNode()!.name}</h3>
-              <p class="text-sm text-gray-600">Type: {selectedNode()!.type}</p>
+              <h3>{selectedNode()!.name}</h3>
+              <p class="coupling-graph-detail-type">Type: {selectedNode()!.type}</p>
               <Show when={selectedNode()!.description}>
-                <p class="text-sm mt-2">{selectedNode()!.description}</p>
+                <p class="coupling-graph-detail-text">{selectedNode()!.description}</p>
               </Show>
-              <div class="text-xs mt-2">
+              <div class="coupling-graph-detail-meta">
                 <div>Variables: {selectedNode()!.metadata.var_count}</div>
                 <div>Equations: {selectedNode()!.metadata.eq_count}</div>
                 <Show when={selectedNode()!.metadata.species_count > 0}>
@@ -395,11 +459,13 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
 
           <Show when={selectedEdge()}>
             <div>
-              <h3 class="font-bold text-lg">{selectedEdge()!.label}</h3>
-              <p class="text-sm text-gray-600">Type: {selectedEdge()!.type}</p>
-              <p class="text-sm">From: {selectedEdge()!.from} → To: {selectedEdge()!.to}</p>
+              <h3>{selectedEdge()!.label}</h3>
+              <p class="coupling-graph-detail-type">Type: {selectedEdge()!.type}</p>
+              <p class="coupling-graph-detail-text">
+                From: {selectedEdge()!.from} → To: {selectedEdge()!.to}
+              </p>
               <Show when={selectedEdge()!.description}>
-                <p class="text-sm mt-2">{selectedEdge()!.description}</p>
+                <p class="coupling-graph-detail-text">{selectedEdge()!.description}</p>
               </Show>
             </div>
           </Show>
@@ -409,7 +475,7 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
               setSelectedNode(null);
               setSelectedEdge(null);
             }}
-            class="mt-2 px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded"
+            class="coupling-graph-close-btn"
           >
             Close
           </button>

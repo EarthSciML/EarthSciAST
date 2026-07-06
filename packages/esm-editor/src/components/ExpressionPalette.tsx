@@ -11,6 +11,7 @@
 
 import { Component, createSignal, createMemo, For, Show } from 'solid-js';
 import type { Expression, Model } from 'earthsci-toolkit';
+import { EXPRESSION_PLACEHOLDER } from '../constants';
 
 export interface ExpressionPaletteProps {
   /** Current model for context-aware suggestions */
@@ -55,7 +56,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'derivative',
     label: 'D(_, t)',
     description: 'Time derivative',
-    expression: { op: 'D', args: ['_placeholder_', 't'] },
+    expression: { op: 'D', args: [EXPRESSION_PLACEHOLDER, 't'] },
     keywords: ['derivative', 'time', 'differential', 'd', 'dt'],
     category: 'calculus'
   },
@@ -63,7 +64,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'gradient',
     label: 'grad(_, x)',
     description: 'Spatial gradient',
-    expression: { op: 'grad', args: ['_placeholder_', 'x'] },
+    expression: { op: 'grad', args: [EXPRESSION_PLACEHOLDER, 'x'] },
     keywords: ['gradient', 'spatial', 'grad', 'nabla'],
     category: 'calculus'
   },
@@ -71,7 +72,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'divergence',
     label: 'div(_)',
     description: 'Divergence operator',
-    expression: { op: 'div', args: ['_placeholder_'] },
+    expression: { op: 'div', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['divergence', 'div'],
     category: 'calculus'
   },
@@ -79,7 +80,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'laplacian',
     label: 'laplacian(_)',
     description: 'Laplacian operator',
-    expression: { op: 'laplacian', args: ['_placeholder_'] },
+    expression: { op: 'laplacian', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['laplacian', 'laplace', 'del2'],
     category: 'calculus'
   },
@@ -89,7 +90,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'addition',
     label: '_ + _',
     description: 'Addition',
-    expression: { op: '+', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '+', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['add', 'addition', 'plus', '+'],
     category: 'arithmetic'
   },
@@ -97,7 +98,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'subtraction',
     label: '_ - _',
     description: 'Subtraction',
-    expression: { op: '-', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '-', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['subtract', 'subtraction', 'minus', '-'],
     category: 'arithmetic'
   },
@@ -105,7 +106,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'multiplication',
     label: '_ * _',
     description: 'Multiplication',
-    expression: { op: '*', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '*', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['multiply', 'multiplication', 'times', '*'],
     category: 'arithmetic'
   },
@@ -113,7 +114,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'division',
     label: '_ / _',
     description: 'Division',
-    expression: { op: '/', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '/', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['divide', 'division', 'over', '/'],
     category: 'arithmetic'
   },
@@ -121,7 +122,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'power',
     label: '_ ^ _',
     description: 'Power/Exponentiation',
-    expression: { op: '^', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '^', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['power', 'exponent', 'exp', '^', '**'],
     category: 'arithmetic'
   },
@@ -129,7 +130,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'negate',
     label: '-_',
     description: 'Unary negation',
-    expression: { op: '-', args: ['_placeholder_'] },
+    expression: { op: '-', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['negate', 'negative', 'unary', 'minus'],
     category: 'arithmetic'
   },
@@ -139,7 +140,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'exponential',
     label: 'exp(_)',
     description: 'Exponential function (e^x)',
-    expression: { op: 'exp', args: ['_placeholder_'] },
+    expression: { op: 'exp', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['exponential', 'exp', 'e'],
     category: 'functions'
   },
@@ -147,7 +148,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'logarithm',
     label: 'log(_)',
     description: 'Natural logarithm',
-    expression: { op: 'log', args: ['_placeholder_'] },
+    expression: { op: 'log', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['logarithm', 'log', 'ln', 'natural'],
     category: 'functions'
   },
@@ -155,7 +156,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'sqrt',
     label: 'sqrt(_)',
     description: 'Square root',
-    expression: { op: 'sqrt', args: ['_placeholder_'] },
+    expression: { op: 'sqrt', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sqrt', 'square', 'root'],
     category: 'functions'
   },
@@ -163,7 +164,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'absolute',
     label: 'abs(_)',
     description: 'Absolute value',
-    expression: { op: 'abs', args: ['_placeholder_'] },
+    expression: { op: 'abs', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['absolute', 'abs', 'magnitude'],
     category: 'functions'
   },
@@ -171,7 +172,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'sine',
     label: 'sin(_)',
     description: 'Sine function',
-    expression: { op: 'sin', args: ['_placeholder_'] },
+    expression: { op: 'sin', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['sine', 'sin', 'trigonometry'],
     category: 'functions'
   },
@@ -179,7 +180,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'cosine',
     label: 'cos(_)',
     description: 'Cosine function',
-    expression: { op: 'cos', args: ['_placeholder_'] },
+    expression: { op: 'cos', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['cosine', 'cos', 'trigonometry'],
     category: 'functions'
   },
@@ -187,7 +188,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'minimum',
     label: 'min(_, _)',
     description: 'Minimum of two values',
-    expression: { op: 'min', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: 'min', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['minimum', 'min', 'smaller'],
     category: 'functions'
   },
@@ -195,7 +196,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'maximum',
     label: 'max(_, _)',
     description: 'Maximum of two values',
-    expression: { op: 'max', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: 'max', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['maximum', 'max', 'larger'],
     category: 'functions'
   },
@@ -205,7 +206,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'ifelse',
     label: 'ifelse(_, _, _)',
     description: 'Conditional expression',
-    expression: { op: 'ifelse', args: ['_placeholder_', '_placeholder_', '_placeholder_'] },
+    expression: { op: 'ifelse', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['if', 'ifelse', 'conditional', 'ternary'],
     category: 'logic'
   },
@@ -213,7 +214,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'greater_than',
     label: '_ > _',
     description: 'Greater than comparison',
-    expression: { op: '>', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '>', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['greater', 'than', '>', 'compare'],
     category: 'logic'
   },
@@ -221,7 +222,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'less_than',
     label: '_ < _',
     description: 'Less than comparison',
-    expression: { op: '<', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '<', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['less', 'than', '<', 'compare'],
     category: 'logic'
   },
@@ -229,7 +230,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'equals',
     label: '_ == _',
     description: 'Equality comparison',
-    expression: { op: '==', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: '==', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['equals', 'equal', '==', 'compare'],
     category: 'logic'
   },
@@ -237,7 +238,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'logical_and',
     label: '_ && _',
     description: 'Logical AND',
-    expression: { op: 'and', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: 'and', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['and', 'logical', '&&', 'both'],
     category: 'logic'
   },
@@ -245,7 +246,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'logical_or',
     label: '_ || _',
     description: 'Logical OR',
-    expression: { op: 'or', args: ['_placeholder_', '_placeholder_'] },
+    expression: { op: 'or', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['or', 'logical', '||', 'either'],
     category: 'logic'
   },
@@ -253,7 +254,7 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'logical_not',
     label: '!_',
     description: 'Logical NOT',
-    expression: { op: 'not', args: ['_placeholder_'] },
+    expression: { op: 'not', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['not', 'logical', '!', 'negate'],
     category: 'logic'
   }

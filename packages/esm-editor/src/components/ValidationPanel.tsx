@@ -28,15 +28,70 @@ export interface ValidationPanelProps {
   onToggleCollapsed?: (collapsed: boolean) => void;
 }
 
-/**
- * Get severity level for error classification
- */
-function getErrorSeverity(_error: ValidationError): 'error' | 'warning' {
-  // Schema errors are always errors
-  // Structural errors could be warnings in some cases, but treating as errors for now
-  // Could be enhanced to check error.code for specific warning types
-  return 'error';
+/** A validation item with UI metadata */
+interface ValidationItem extends ValidationError {
+  severity: 'error' | 'warning';
+  type: 'schema' | 'structural' | 'unit';
 }
+
+/**
+ * One titled, clickable list of validation items. Rendered once per
+ * category (schema errors, structural errors, warnings).
+ */
+const ErrorSection: Component<{
+  title: string;
+  items: ValidationItem[];
+  severity: 'error' | 'warning';
+  onErrorClick: (error: ValidationError) => void;
+}> = (props) => {
+  return (
+    <Show when={props.items.length > 0}>
+      <div class="error-section">
+        <h4 class={`error-section-title ${props.severity === 'warning' ? 'warning-title' : 'error-title'}`}>
+          {props.title} ({props.items.length})
+        </h4>
+        <div class="error-list">
+          <For each={props.items}>
+            {(error) => (
+              <div
+                class={`error-item ${props.severity === 'warning' ? 'warning-severity' : 'error-severity'} clickable`}
+                onClick={() => props.onErrorClick(error)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    props.onErrorClick(error);
+                  }
+                }}
+              >
+                <div class="error-header">
+                  <span class="error-icon">{props.severity === 'warning' ? '🟡' : '🔴'}</span>
+                  <span class="error-code">{error.code}</span>
+                  <span class="error-path" title={`Path: ${error.path}`}>
+                    {error.path || '$'}
+                  </span>
+                </div>
+                <div class="error-message">{error.message}</div>
+                <Show when={Object.keys(error.details).length > 0}>
+                  <div class="error-details">
+                    <For each={Object.entries(error.details)}>
+                      {([key, value]) => (
+                        <div class="error-detail">
+                          <strong>{key}:</strong> {String(value)}
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
+    </Show>
+  );
+};
 
 /**
  * Main ValidationPanel component
@@ -47,44 +102,42 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
     return validate(props.esmFile);
   });
 
-  // Aggregate all errors with severity
-  const allErrors = createMemo(() => {
-    const result = validationResult();
-    const errors: Array<ValidationError & { severity: 'error' | 'warning'; type: 'schema' | 'structural' }> = [];
+  // Categorized validation items. Schema and structural failures are errors;
+  // unit warnings from the toolkit's dimensional analysis are warnings.
+  const schemaErrors = createMemo((): ValidationItem[] =>
+    (validationResult().schema_errors || []).map(error => ({
+      ...error,
+      severity: 'error' as const,
+      type: 'schema' as const
+    }))
+  );
 
-    // Add schema errors
-    result.schema_errors.forEach(error => {
-      errors.push({
-        ...error,
-        severity: 'error',
-        type: 'schema'
-      });
-    });
+  const structuralErrors = createMemo((): ValidationItem[] =>
+    (validationResult().structural_errors || []).map(error => ({
+      ...error,
+      severity: 'error' as const,
+      type: 'structural' as const
+    }))
+  );
 
-    // Add structural errors
-    result.structural_errors.forEach(error => {
-      errors.push({
-        ...error,
-        severity: getErrorSeverity(error),
-        type: 'structural'
-      });
-    });
-
-    return errors;
-  });
-
-  // Group errors by severity
-  const errorsByType = createMemo(() => {
-    const errors = allErrors();
-    return {
-      errors: errors.filter(e => e.severity === 'error'),
-      warnings: errors.filter(e => e.severity === 'warning')
-    };
-  });
+  const unitWarnings = createMemo((): ValidationItem[] =>
+    (validationResult().unit_warnings || []).map(warning => {
+      const details: Record<string, unknown> = {};
+      if (warning.equation !== undefined) details.equation = warning.equation;
+      return {
+        path: warning.location || '$',
+        message: warning.message,
+        code: 'unit_warning',
+        details,
+        severity: 'warning' as const,
+        type: 'unit' as const
+      };
+    })
+  );
 
   // Total counts for badge display
-  const errorCount = createMemo(() => errorsByType().errors.length);
-  const warningCount = createMemo(() => errorsByType().warnings.length);
+  const errorCount = createMemo(() => schemaErrors().length + structuralErrors().length);
+  const warningCount = createMemo(() => unitWarnings().length);
   const isValid = createMemo(() => validationResult().is_valid);
 
   // Handle error click to highlight AST node
@@ -144,157 +197,34 @@ export const ValidationPanel: Component<ValidationPanelProps> = (props) => {
       {/* Panel content - only shown when not collapsed */}
       <Show when={!props.collapsed}>
         <div class="validation-content">
-          {/* Success message when valid */}
-          <Show when={isValid()}>
+          {/* Success message when valid and warning-free */}
+          <Show when={isValid() && warningCount() === 0}>
             <div class="validation-success">
               <span class="success-icon">✓</span>
               No validation errors found. The ESM file is valid.
             </div>
           </Show>
 
-          {/* Error sections */}
-          <Show when={!isValid()}>
-            {/* Schema errors section */}
-            <Show when={errorsByType().errors.filter(e => e.type === 'schema').length > 0}>
-              <div class="error-section">
-                <h4 class="error-section-title error-title">
-                  Schema Errors ({errorsByType().errors.filter(e => e.type === 'schema').length})
-                </h4>
-                <div class="error-list">
-                  <For each={errorsByType().errors.filter(e => e.type === 'schema')}>
-                    {(error) => (
-                      <div
-                        class="error-item error-severity clickable"
-                        onClick={() => handleErrorClick(error)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handleErrorClick(error);
-                          }
-                        }}
-                      >
-                        <div class="error-header">
-                          <span class="error-icon">🔴</span>
-                          <span class="error-code">{error.code}</span>
-                          <span class="error-path" title={`Path: ${error.path}`}>
-                            {error.path || '$'}
-                          </span>
-                        </div>
-                        <div class="error-message">{error.message}</div>
-                        <Show when={Object.keys(error.details).length > 0}>
-                          <div class="error-details">
-                            <For each={Object.entries(error.details)}>
-                              {([key, value]) => (
-                                <div class="error-detail">
-                                  <strong>{key}:</strong> {String(value)}
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </Show>
+          <ErrorSection
+            title="Schema Errors"
+            items={schemaErrors()}
+            severity="error"
+            onErrorClick={handleErrorClick}
+          />
 
-            {/* Structural errors section */}
-            <Show when={errorsByType().errors.filter(e => e.type === 'structural').length > 0}>
-              <div class="error-section">
-                <h4 class="error-section-title error-title">
-                  Structural Errors ({errorsByType().errors.filter(e => e.type === 'structural').length})
-                </h4>
-                <div class="error-list">
-                  <For each={errorsByType().errors.filter(e => e.type === 'structural')}>
-                    {(error) => (
-                      <div
-                        class="error-item error-severity clickable"
-                        onClick={() => handleErrorClick(error)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handleErrorClick(error);
-                          }
-                        }}
-                      >
-                        <div class="error-header">
-                          <span class="error-icon">🔴</span>
-                          <span class="error-code">{error.code}</span>
-                          <span class="error-path" title={`Path: ${error.path}`}>
-                            {error.path || '$'}
-                          </span>
-                        </div>
-                        <div class="error-message">{error.message}</div>
-                        <Show when={Object.keys(error.details).length > 0}>
-                          <div class="error-details">
-                            <For each={Object.entries(error.details)}>
-                              {([key, value]) => (
-                                <div class="error-detail">
-                                  <strong>{key}:</strong> {String(value)}
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </Show>
+          <ErrorSection
+            title="Structural Errors"
+            items={structuralErrors()}
+            severity="error"
+            onErrorClick={handleErrorClick}
+          />
 
-            {/* Warnings section */}
-            <Show when={warningCount() > 0}>
-              <div class="error-section">
-                <h4 class="error-section-title warning-title">
-                  Warnings ({warningCount()})
-                </h4>
-                <div class="error-list">
-                  <For each={errorsByType().warnings}>
-                    {(warning) => (
-                      <div
-                        class="error-item warning-severity clickable"
-                        onClick={() => handleErrorClick(warning)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handleErrorClick(warning);
-                          }
-                        }}
-                      >
-                        <div class="error-header">
-                          <span class="error-icon">🟡</span>
-                          <span class="error-code">{warning.code}</span>
-                          <span class="error-path" title={`Path: ${warning.path}`}>
-                            {warning.path || '$'}
-                          </span>
-                        </div>
-                        <div class="error-message">{warning.message}</div>
-                        <Show when={Object.keys(warning.details).length > 0}>
-                          <div class="error-details">
-                            <For each={Object.entries(warning.details)}>
-                              {([key, value]) => (
-                                <div class="error-detail">
-                                  <strong>{key}:</strong> {String(value)}
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </Show>
-          </Show>
+          <ErrorSection
+            title="Warnings"
+            items={unitWarnings()}
+            severity="warning"
+            onErrorClick={handleErrorClick}
+          />
         </div>
       </Show>
     </div>

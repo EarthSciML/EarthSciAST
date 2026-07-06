@@ -9,8 +9,9 @@
  * - Reorder: drag-and-drop reordering for commutative operations
  */
 
-import { createSignal, Accessor, Setter, createContext, useContext, JSX } from 'solid-js';
+import { createSignal, Accessor, Setter, createContext, useContext, JSX, For, Show } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode } from 'earthsci-toolkit';
+import { getExpressionAtPath, replaceExpressionAtPath } from './path-utils';
 
 // Common operators available for wrapping
 export const WRAP_OPERATORS = [
@@ -109,27 +110,6 @@ function isCommutativeOp(expr: Expression): expr is ExprNode {
 }
 
 /**
- * Get expression at a given path
- */
-function getExpressionAtPath(expr: Expression, path: (string | number)[]): Expression | null {
-  let current: any = expr;
-
-  for (const segment of path) {
-    if (current == null) return null;
-
-    if (segment === 'args' && typeof current === 'object' && 'args' in current) {
-      current = current.args;
-    } else if (typeof segment === 'number' && Array.isArray(current)) {
-      current = current[segment];
-    } else {
-      return null;
-    }
-  }
-
-  return current;
-}
-
-/**
  * Get parent expression and context for a given path
  */
 function getParentInfo(
@@ -150,45 +130,6 @@ function getParentInfo(
     parentPath,
     argIndex: typeof argIndex === 'number' ? argIndex : null
   };
-}
-
-/**
- * Replace expression at a given path with a new expression
- */
-function replaceExpressionAtPath(
-  rootExpr: Expression,
-  path: (string | number)[],
-  newExpr: Expression
-): Expression {
-  if (path.length === 0) {
-    return newExpr;
-  }
-
-  // Make a deep copy of the root expression
-  let newRoot = JSON.parse(JSON.stringify(rootExpr));
-  let current: any = newRoot;
-
-  // Navigate to the parent of the target
-  for (let i = 0; i < path.length - 1; i++) {
-    const segment = path[i];
-    if (segment === 'args' && typeof current === 'object' && 'args' in current) {
-      current = current.args;
-    } else if (typeof segment === 'number' && Array.isArray(current)) {
-      current = current[segment];
-    } else {
-      throw new Error(`Invalid path segment: ${segment}`);
-    }
-  }
-
-  // Replace at the final segment
-  const lastSegment = path[path.length - 1];
-  if (typeof lastSegment === 'number' && Array.isArray(current)) {
-    current[lastSegment] = newExpr;
-  } else {
-    throw new Error(`Invalid final path segment: ${lastSegment}`);
-  }
-
-  return newRoot;
 }
 
 /**
@@ -343,6 +284,14 @@ export function useStructuralEditingContext(): StructuralEditingContextValue {
 }
 
 /**
+ * Non-throwing variant of `useStructuralEditingContext` for components that
+ * work with or without a surrounding provider (e.g. ExpressionNode).
+ */
+export function useMaybeStructuralEditingContext(): StructuralEditingContextValue | undefined {
+  return useContext(StructuralEditingContext);
+}
+
+/**
  * Component for structural editing menu
  */
 export interface StructuralEditingMenuProps {
@@ -360,10 +309,6 @@ export interface StructuralEditingMenuProps {
 
 export function StructuralEditingMenu(props: StructuralEditingMenuProps) {
   const structuralEditing = useStructuralEditingContext();
-
-  if (!props.isVisible || !props.selectedPath || !props.selectedExpr) {
-    return null;
-  }
 
   const handleWrapClick = (operator: string) => {
     if (props.selectedPath) {
@@ -384,70 +329,78 @@ export function StructuralEditingMenu(props: StructuralEditingMenuProps) {
     }
   };
 
-  const canUnwrap = structuralEditing.canUnwrap(props.selectedExpr);
-  const canDelete = props.selectedPath && structuralEditing.canDeleteTerm(props.selectedExpr, props.selectedPath);
+  const canUnwrap = () =>
+    props.selectedExpr !== null && structuralEditing.canUnwrap(props.selectedExpr);
+  const canDelete = () =>
+    props.selectedPath !== null &&
+    props.selectedExpr !== null &&
+    structuralEditing.canDeleteTerm(props.selectedExpr, props.selectedPath);
 
   return (
-    <div
-      class="structural-editing-menu"
-      style={{
-        position: 'absolute',
-        left: `${props.position?.x || 0}px`,
-        top: `${props.position?.y || 0}px`,
-        'background-color': 'white',
-        border: '1px solid #ccc',
-        'border-radius': '4px',
-        padding: '8px',
-        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-        'z-index': 1000,
-        'min-width': '200px'
-      }}
-    >
-      <div class="menu-section">
-        <h4 class="menu-header">Wrap in Operator</h4>
-        <div class="wrap-operators">
-          {structuralEditing.getWrapOperators().map((op) => (
+    <Show when={props.isVisible && props.selectedPath && props.selectedExpr !== null}>
+      <div
+        class="structural-editing-menu"
+        style={{
+          position: 'absolute',
+          left: `${props.position?.x || 0}px`,
+          top: `${props.position?.y || 0}px`,
+          'background-color': 'white',
+          border: '1px solid #ccc',
+          'border-radius': '4px',
+          padding: '8px',
+          'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
+          'z-index': 1000,
+          'min-width': '200px'
+        }}
+      >
+        <div class="menu-section">
+          <h4 class="menu-header">Wrap in Operator</h4>
+          <div class="wrap-operators">
+            <For each={structuralEditing.getWrapOperators()}>
+              {(op) => (
+                <button
+                  class="wrap-operator-btn"
+                  onClick={() => handleWrapClick(op.op)}
+                  title={op.label}
+                >
+                  {op.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+
+        <Show when={canUnwrap()}>
+          <div class="menu-section">
             <button
-              class="wrap-operator-btn"
-              onClick={() => handleWrapClick(op.op)}
-              title={op.label}
+              class="unwrap-btn"
+              onClick={handleUnwrapClick}
+              title="Remove the outer operator and keep its argument"
             >
-              {op.label}
+              Unwrap
             </button>
-          ))}
-        </div>
-      </div>
+          </div>
+        </Show>
 
-      {canUnwrap && (
+        <Show when={canDelete()}>
+          <div class="menu-section">
+            <button
+              class="delete-term-btn"
+              onClick={handleDeleteClick}
+              title="Remove this term from the operation"
+            >
+              Delete Term
+            </button>
+          </div>
+        </Show>
+
         <div class="menu-section">
-          <button
-            class="unwrap-btn"
-            onClick={handleUnwrapClick}
-            title="Remove the outer operator and keep its argument"
-          >
-            Unwrap
+          <button class="close-menu-btn" onClick={props.onClose}>
+            Close
           </button>
         </div>
-      )}
-
-      {canDelete && (
-        <div class="menu-section">
-          <button
-            class="delete-term-btn"
-            onClick={handleDeleteClick}
-            title="Remove this term from the operation"
-          >
-            Delete Term
-          </button>
-        </div>
-      )}
-
-      <div class="menu-section">
-        <button class="close-menu-btn" onClick={props.onClose}>
-          Close
-        </button>
       </div>
-    </div>
+    </Show>
   );
 }
 
@@ -464,10 +417,6 @@ export interface DraggableExpressionProps {
 
 export function DraggableExpression(props: DraggableExpressionProps) {
   const structuralEditing = useStructuralEditingContext();
-
-  if (!props.canDrag) {
-    return props.children;
-  }
 
   const handleDragStart = (e: DragEvent) => {
     if (e.dataTransfer) {
@@ -528,16 +477,18 @@ export function DraggableExpression(props: DraggableExpressionProps) {
   };
 
   return (
-    <div
-      class="draggable-expression"
-      draggable={true}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      data-drag-index={props.index}
-    >
-      {props.children}
-    </div>
+    <Show when={props.canDrag} fallback={props.children}>
+      <div
+        class="draggable-expression"
+        draggable={true}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        data-drag-index={props.index}
+      >
+        {props.children}
+      </div>
+    </Show>
   );
 }

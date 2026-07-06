@@ -4,9 +4,15 @@
  * Provides reactive validation results for ESM files, wrapping the core
  * validation functionality from earthsci-toolkit with SolidJS reactivity.
  * Enables live validation feedback in editor components.
+ *
+ * Structure: validation runs synchronously on creation (when
+ * `validateOnInit` is set) and inside a debounced `createEffect` when the
+ * file changes. Results are written to a plain signal — no side effects
+ * inside memos — so `isValidating()` truthfully reports the window between
+ * a file change and the debounced validation completing.
  */
 
-import { createMemo, createSignal, createEffect, onCleanup } from 'solid-js';
+import { createMemo, createSignal, createEffect, on, onCleanup, untrack } from 'solid-js';
 import { validate, type ValidationError, type ValidationResult } from 'earthsci-toolkit';
 import type { EsmFile } from 'earthsci-toolkit';
 
@@ -54,9 +60,9 @@ export interface ValidationSignals {
   warningCount: () => number;
   /** Whether the file is valid */
   isValid: () => boolean;
-  /** Whether validation is currently running */
+  /** Whether a debounced validation is pending */
   isValidating: () => boolean;
-  /** Force re-validation */
+  /** Force immediate re-validation */
   revalidate: () => void;
   /** Highlight a specific error by path */
   highlightError: (path: string) => void;
@@ -83,6 +89,53 @@ function getErrorSeverity(_error: ValidationError, type: 'schema' | 'structural'
   return 'error';
 }
 
+/** Empty (valid) validation result */
+function emptyResult(): ValidationResult {
+  return {
+    is_valid: true,
+    schema_errors: [],
+    structural_errors: [],
+    unit_warnings: []
+  };
+}
+
+/** Run validation on a file, converting exceptions into result errors */
+function runValidation(currentFile: EsmFile | null | undefined): ValidationResult {
+  if (!currentFile) {
+    return {
+      is_valid: false,
+      schema_errors: [{
+        path: '$',
+        message: 'No ESM file provided',
+        code: 'missing_file',
+        details: {}
+      }],
+      structural_errors: [],
+      unit_warnings: []
+    };
+  }
+
+  try {
+    return validate(currentFile);
+  } catch (error: unknown) {
+    const err = error as Error;
+    return {
+      is_valid: false,
+      schema_errors: [{
+        path: '$',
+        message: `Validation error: ${err.message || String(error)}`,
+        code: 'validation_exception',
+        details: {
+          exception_type: err.constructor.name,
+          error: err.message || String(error)
+        }
+      }],
+      structural_errors: [],
+      unit_warnings: []
+    };
+  }
+}
+
 /**
  * Create reactive validation signals for an ESM file
  *
@@ -103,64 +156,45 @@ export function createValidationSignals(
   // Internal state
   const [isValidating, setIsValidating] = createSignal(false);
   const [highlightedPath, setHighlightedPath] = createSignal<string | null>(null);
-  const [forceRevalidation, setForceRevalidation] = createSignal(0);
+  const [validationResult, setValidationResult] = createSignal<ValidationResult>(
+    // Validate the initial file synchronously when requested; otherwise start
+    // from an empty (valid) result until the first file change or revalidate()
+    enabled && validateOnInit ? runValidation(untrack(file)) : emptyResult()
+  );
 
-  // Debounced validation trigger
   let validationTimeout: ReturnType<typeof setTimeout> | undefined;
 
-  // Core validation result with debouncing
-  const validationResult = createMemo((): ValidationResult => {
-    // Access forceRevalidation to trigger recomputation when needed
-    forceRevalidation();
+  /** Immediately validate the current file and publish the result */
+  const doValidate = () => {
+    if (!enabled) return;
+    setValidationResult(runValidation(untrack(file)));
+    setIsValidating(false);
+  };
 
-    if (!enabled) {
-      return {
-        is_valid: true,
-        schema_errors: [],
-        structural_errors: [],
-        unit_warnings: []
-      };
-    }
+  // Debounced validation on file changes. Deferred so creation does not
+  // schedule a redundant run on top of the synchronous initial validation.
+  if (enabled) {
+    createEffect(on(
+      () => file(),
+      () => {
+        setIsValidating(true);
+        if (validationTimeout) {
+          clearTimeout(validationTimeout);
+        }
+        validationTimeout = setTimeout(() => {
+          validationTimeout = undefined;
+          doValidate();
+        }, debounceMs);
+      },
+      { defer: true }
+    ));
 
-    const currentFile = file();
-    if (!currentFile) {
-      return {
-        is_valid: false,
-        schema_errors: [{
-          path: '$',
-          message: 'No ESM file provided',
-          code: 'missing_file',
-          details: {}
-        }],
-        structural_errors: [],
-        unit_warnings: []
-      };
-    }
-
-    try {
-      setIsValidating(true);
-      const result = validate(currentFile);
-      setIsValidating(false);
-      return result;
-    } catch (error: unknown) {
-      setIsValidating(false);
-      const err = error as Error;
-      return {
-        is_valid: false,
-        schema_errors: [{
-          path: '$',
-          message: `Validation error: ${err.message || String(error)}`,
-          code: 'validation_exception',
-          details: {
-            exception_type: err.constructor.name,
-            error: err.message || String(error)
-          }
-        }],
-        structural_errors: [],
-        unit_warnings: []
-      };
-    }
-  });
+    onCleanup(() => {
+      if (validationTimeout) {
+        clearTimeout(validationTimeout);
+      }
+    });
+  }
 
   // All errors with metadata and highlighting
   const allErrors = createMemo((): ValidationErrorWithMetadata[] => {
@@ -193,7 +227,7 @@ export function createValidationSignals(
       });
     });
 
-    // Add unit warnings (UnitWarning carries message/code/location/equation, not path/details)
+    // Add unit warnings (UnitWarning carries message/location/equation, not path/details)
     (result.unit_warnings || []).forEach(warning => {
       const path = warning.location || '$';
       const details: Record<string, unknown> = {};
@@ -201,7 +235,7 @@ export function createValidationSignals(
       const asError: ValidationError = {
         path,
         message: warning.message,
-        code: warning.code || 'unit_warning',
+        code: 'unit_warning',
         details
       };
       errors.push({
@@ -244,7 +278,11 @@ export function createValidationSignals(
 
   // Actions
   const revalidate = () => {
-    setForceRevalidation(prev => prev + 1);
+    if (validationTimeout) {
+      clearTimeout(validationTimeout);
+      validationTimeout = undefined;
+    }
+    doValidate();
   };
 
   const highlightError = (path: string) => {
@@ -254,37 +292,6 @@ export function createValidationSignals(
   const clearHighlight = () => {
     setHighlightedPath(null);
   };
-
-  // Setup debounced validation on file changes
-  if (enabled && debounceMs > 0) {
-    createEffect(() => {
-      // Track file changes
-      file();
-
-      // Clear existing timeout
-      if (validationTimeout) {
-        clearTimeout(validationTimeout);
-      }
-
-      // Set new timeout for debounced validation
-      validationTimeout = setTimeout(() => {
-        revalidate();
-      }, debounceMs);
-    });
-
-    // Cleanup timeout on disposal
-    onCleanup(() => {
-      if (validationTimeout) {
-        clearTimeout(validationTimeout);
-      }
-    });
-  }
-
-  // Initial validation
-  if (validateOnInit && enabled) {
-    // Trigger initial validation on next tick
-    setTimeout(() => revalidate(), 0);
-  }
 
   return {
     validationResult,

@@ -170,6 +170,78 @@ describe('AST Store', () => {
       });
     });
 
+    it('automatically captures setPath mutations so they are undoable', () => {
+      createRoot((dispose) => {
+        cleanup = dispose;
+        const store = createAstStore({
+          initialFile: createTestFile(),
+          historyConfig: { debounceMs: 50, registerKeyboardShortcuts: false }
+        });
+
+        const originalName = store.file.metadata.name;
+
+        // No manual capture: the setter itself must record the undo point
+        store.setPath(['metadata', 'name'], "Changed Name");
+        expect(store.file.metadata.name).toBe("Changed Name");
+
+        // Let the debounced capture land
+        vi.advanceTimersByTime(100);
+        expect(store.history.canUndo()).toBe(true);
+
+        store.history.undo();
+        expect(store.file.metadata.name).toBe(originalName);
+
+        // And redo restores the mutation
+        store.history.redo();
+        expect(store.file.metadata.name).toBe("Changed Name");
+      });
+    });
+
+    it('coalesces a burst of mutations into a single undo step', () => {
+      createRoot((dispose) => {
+        cleanup = dispose;
+        const store = createAstStore({
+          initialFile: createTestFile(),
+          historyConfig: { debounceMs: 50, registerKeyboardShortcuts: false }
+        });
+
+        const originalName = store.file.metadata.name;
+
+        store.setPath(['metadata', 'name'], "Name 1");
+        store.setPath(['metadata', 'name'], "Name 2");
+        store.setPath(['metadata', 'name'], "Name 3");
+        vi.advanceTimersByTime(100);
+
+        // One undo returns to the pre-burst state
+        store.history.undo();
+        expect(store.file.metadata.name).toBe(originalName);
+      });
+    });
+
+    it('undo removes keys added after the snapshot', () => {
+      createRoot((dispose) => {
+        cleanup = dispose;
+        const store = createAstStore({
+          initialFile: createTestFile(),
+          historyConfig: { debounceMs: 0, registerKeyboardShortcuts: false }
+        });
+
+        expect(store.file.components).not.toHaveProperty("NewComponent");
+
+        // Add a new key after the initial snapshot
+        store.setPath(['components', 'NewComponent'], { type: "data_loader" });
+        expect(store.file.components).toHaveProperty("NewComponent");
+        vi.advanceTimersByTime(10);
+
+        // Undo must remove the added key (requires reconcile-based restore;
+        // Solid's default merging setter would leave the key behind)
+        store.history.undo();
+        expect(store.file.components).not.toHaveProperty("NewComponent");
+        expect((store.file.components as any).NewComponent).toBeUndefined();
+        expect(store.file.components).toHaveProperty("Chemistry");
+      });
+    });
+
     it('validates ESM file structure', () => {
       createRoot((dispose) => {
         // Valid file

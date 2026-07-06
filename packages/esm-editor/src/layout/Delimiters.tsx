@@ -110,7 +110,7 @@ export const Delimiters: Component<DelimitersProps> = (props) => {
 
   return (
     <span
-      ref={containerRef}
+      ref={(el) => (containerRef = el)}
       class={classes()}
       onClick={props.onClick}
       onMouseEnter={props.onMouseEnter}

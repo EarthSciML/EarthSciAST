@@ -132,6 +132,83 @@ describe('ReactionEditor', () => {
     expect(screen.getByText('NO oxidation')).toBeInTheDocument();
   });
 
+  it('shows all parameters regardless of naming convention', () => {
+    const paramSystem: ReactionSystem = {
+      ...mockReactionSystem,
+      parameters: {
+        alpha: { default: 2 },
+        k_NO_O3: { default: 1 },
+        temperature_ref: { default: 298.15 }
+      }
+    };
+
+    render(() => <ReactionEditor {...mockProps} reactionSystem={paramSystem} />);
+
+    // Previously the panel filtered parameters by name spelling (k_/rate/const),
+    // hiding everything else. All parameters must be listed.
+    expect(screen.getByText(/Parameters \(3\)/)).toBeInTheDocument();
+    expect(screen.getByText('alpha')).toBeInTheDocument();
+    expect(screen.getByText('k_NO_O3')).toBeInTheDocument();
+    expect(screen.getByText('temperature_ref')).toBeInTheDocument();
+  });
+
+  it('adds a parameter through the inline form (no prompt dialogs)', () => {
+    const onReactionSystemChange = vi.fn();
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+
+    fireEvent.click(screen.getByLabelText('Add new parameter'));
+    fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'j_photo' } });
+    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '2.5' } });
+    fireEvent.click(screen.getByText('Add'));
+
+    expect(onReactionSystemChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parameters: expect.objectContaining({
+          j_photo: expect.objectContaining({ default: 2.5 })
+        })
+      })
+    );
+  });
+
+  it('adds a species through the inline form (no prompt dialogs)', () => {
+    const onReactionSystemChange = vi.fn();
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+
+    fireEvent.click(screen.getByLabelText('Add new species'));
+    fireEvent.input(screen.getByLabelText('Name (chemical formula)'), { target: { value: 'SO2' } });
+    fireEvent.click(screen.getByText('Add'));
+
+    expect(onReactionSystemChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        species: expect.objectContaining({
+          SO2: {}
+        })
+      })
+    );
+  });
+
+  it('edits a species through the inline form', () => {
+    const onReactionSystemChange = vi.fn();
+    render(() => <ReactionEditor {...mockProps} onReactionSystemChange={onReactionSystemChange} />);
+
+    // Click the NO species item to open the inline edit form
+    const speciesItem = screen.getByText('Nitrogen monoxide').closest('.species-item')!;
+    fireEvent.click(speciesItem);
+
+    expect(screen.getByText('Edit species NO')).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'Nitric oxide' } });
+    fireEvent.click(screen.getByText('Save'));
+
+    expect(onReactionSystemChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        species: expect.objectContaining({
+          NO: expect.objectContaining({ description: 'Nitric oxide' })
+        })
+      })
+    );
+  });
+
   it('handles species with different formulas and names', () => {
     render(() => <ReactionEditor {...mockProps} />);
 

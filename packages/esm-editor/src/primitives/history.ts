@@ -1,11 +1,19 @@
 /**
  * Undo/Redo History Management for ESM Editor
  *
- * Provides undo/redo functionality with automatic change capture,
- * debounced updates, and keyboard shortcuts.
+ * Provides undo/redo functionality with debounced change capture and
+ * keyboard shortcuts.
+ *
+ * Capture semantics: `capture()` snapshots the file state eagerly (at call
+ * time) and pushes the snapshot onto the undo stack after the debounce
+ * delay. Calls arriving while a capture is pending are coalesced — the
+ * earliest snapshot wins — so a burst of edits becomes a single undo step
+ * whose snapshot is the state before the burst. Callers that mutate state
+ * (e.g. the AST store) should call `capture()` immediately BEFORE applying
+ * a mutation so the pre-mutation state becomes the undo point.
  */
 
-import { createSignal, createEffect, onCleanup } from 'solid-js';
+import { createSignal, onCleanup, untrack } from 'solid-js';
 import type { EsmFile } from 'earthsci-toolkit';
 
 /**
@@ -48,12 +56,13 @@ export interface UndoHistory {
   clear: () => void;
   /** Get current history length */
   historyLength: () => number;
-  /** Manually capture current state */
+  /** Capture the current state as an undo point (debounced) */
   capture: (description?: string) => void;
 }
 
 /**
- * Deep clone an EsmFile to create an independent snapshot
+ * Deep clone an EsmFile to create an independent snapshot.
+ * Works for both plain objects and Solid store proxies.
  */
 function cloneEsmFile(file: EsmFile): EsmFile {
   return JSON.parse(JSON.stringify(file));
@@ -62,8 +71,8 @@ function cloneEsmFile(file: EsmFile): EsmFile {
 /**
  * Create undo/redo history management for an ESM file
  *
- * @param file - Reactive signal containing the current ESM file
- * @param setFile - Function to update the ESM file
+ * @param file - Reactive signal (or store accessor) for the current ESM file
+ * @param setFile - Function to update the ESM file when restoring a snapshot
  * @param config - Optional configuration
  * @returns History management interface with undo/redo functions
  */
@@ -85,49 +94,82 @@ export function createUndoHistory(
   // Track if we're currently applying a history change to avoid capturing it
   let isApplyingHistory = false;
   let debounceTimeout: number | null = null;
+  // Snapshot waiting for its debounced push (earliest snapshot of the burst)
+  let pendingEntry: { snapshot: EsmFile; description?: string } | null = null;
+  // Last state pushed onto the undo stack, for change detection
   let lastCapturedFile: EsmFile | null = null;
 
   /**
-   * Add a new history entry, with debouncing
+   * Push a snapshot onto the undo stack (skipping no-op captures) and
+   * clear the redo stack.
+   */
+  function pushEntry(snapshot: EsmFile, description?: string) {
+    // Don't capture if the state hasn't actually changed since the last push
+    if (lastCapturedFile && JSON.stringify(snapshot) === JSON.stringify(lastCapturedFile)) {
+      return;
+    }
+
+    const entry: HistoryEntry = {
+      state: snapshot,
+      timestamp: Date.now(),
+      description
+    };
+
+    setUndoStack(prev => {
+      const newStack = [...prev, entry];
+      // Maintain maximum stack size
+      if (newStack.length > maxEntries) {
+        newStack.splice(0, newStack.length - maxEntries);
+      }
+      return newStack;
+    });
+
+    // Clear redo stack when new change is made
+    setRedoStack([]);
+
+    lastCapturedFile = cloneEsmFile(snapshot);
+  }
+
+  /**
+   * Immediately push any pending (debounced) capture.
+   */
+  function flushPending() {
+    if (debounceTimeout !== null) {
+      clearTimeout(debounceTimeout);
+      debounceTimeout = null;
+    }
+    if (pendingEntry) {
+      const { snapshot, description } = pendingEntry;
+      pendingEntry = null;
+      pushEntry(snapshot, description);
+    }
+  }
+
+  /**
+   * Capture the current state as an undo point, with debouncing.
+   * The snapshot is taken eagerly; the push is debounced. Coalesced calls
+   * keep the earliest snapshot so a burst of edits is one undo step.
    */
   function captureState(description?: string) {
     if (isApplyingHistory) return;
 
-    // Clear any existing timeout
+    const currentFile = untrack(() => file());
+    if (!currentFile) return;
+
+    if (!pendingEntry) {
+      pendingEntry = {
+        snapshot: untrack(() => cloneEsmFile(currentFile)),
+        description
+      };
+    }
+
+    // Debounce the push to avoid excessive history entries
     if (debounceTimeout !== null) {
       clearTimeout(debounceTimeout);
     }
-
-    // Debounce the capture to avoid excessive history entries
     debounceTimeout = window.setTimeout(() => {
-      const currentFile = file();
-      if (!currentFile) return;
-
-      // Don't capture if file hasn't actually changed
-      if (lastCapturedFile && JSON.stringify(currentFile) === JSON.stringify(lastCapturedFile)) {
-        return;
-      }
-
-      const entry: HistoryEntry = {
-        state: cloneEsmFile(currentFile),
-        timestamp: Date.now(),
-        description
-      };
-
-      setUndoStack(prev => {
-        const newStack = [...prev, entry];
-        // Maintain maximum stack size
-        if (newStack.length > maxEntries) {
-          newStack.splice(0, newStack.length - maxEntries);
-        }
-        return newStack;
-      });
-
-      // Clear redo stack when new change is made
-      setRedoStack([]);
-
-      lastCapturedFile = cloneEsmFile(currentFile);
       debounceTimeout = null;
+      flushPending();
     }, debounceMs);
   }
 
@@ -135,62 +177,77 @@ export function createUndoHistory(
    * Undo the last change
    */
   function undo() {
-    const stack = undoStack();
-    if (stack.length === 0) return;
+    flushPending();
 
-    const currentFile = file();
-    if (!currentFile) return;
+    const stack = undoStack();
+    const currentFile = untrack(() => file());
+    if (!currentFile || stack.length === 0) return;
+
+    // Skip over entries identical to the current state (e.g. the capture of
+    // the state we are currently in) so a single undo visibly changes state.
+    const currentJson = untrack(() => JSON.stringify(currentFile));
+    let idx = stack.length - 1;
+    while (idx >= 0 && JSON.stringify(stack[idx].state) === currentJson) {
+      idx--;
+    }
+    if (idx < 0) return;
+
+    const previousEntry = stack[idx];
 
     // Save current state to redo stack
-    const currentEntry: HistoryEntry = {
-      state: cloneEsmFile(currentFile),
+    setRedoStack(prev => [...prev, {
+      state: untrack(() => cloneEsmFile(currentFile)),
       timestamp: Date.now(),
       description: 'Current state'
-    };
+    }]);
 
-    setRedoStack(prev => [...prev, currentEntry]);
-
-    // Get the previous state
-    const previousEntry = stack[stack.length - 1];
-
-    // Remove from undo stack
-    setUndoStack(prev => prev.slice(0, -1));
+    // Remove the restored entry (and any skipped duplicates) from undo stack
+    setUndoStack(stack.slice(0, idx));
 
     // Apply the previous state
     isApplyingHistory = true;
     setFile(cloneEsmFile(previousEntry.state));
     isApplyingHistory = false;
+
+    // The next capture should always be pushed relative to the restored state
+    lastCapturedFile = null;
   }
 
   /**
    * Redo the next change
    */
   function redo() {
-    const stack = redoStack();
-    if (stack.length === 0) return;
+    flushPending();
 
-    const currentFile = file();
-    if (!currentFile) return;
+    const stack = redoStack();
+    const currentFile = untrack(() => file());
+    if (!currentFile || stack.length === 0) return;
+
+    const currentJson = untrack(() => JSON.stringify(currentFile));
+    let idx = stack.length - 1;
+    while (idx >= 0 && JSON.stringify(stack[idx].state) === currentJson) {
+      idx--;
+    }
+    if (idx < 0) return;
+
+    const nextEntry = stack[idx];
 
     // Save current state to undo stack
-    const currentEntry: HistoryEntry = {
-      state: cloneEsmFile(currentFile),
+    setUndoStack(prev => [...prev, {
+      state: untrack(() => cloneEsmFile(currentFile)),
       timestamp: Date.now(),
       description: 'Redo checkpoint'
-    };
+    }]);
 
-    setUndoStack(prev => [...prev, currentEntry]);
-
-    // Get the next state
-    const nextEntry = stack[stack.length - 1];
-
-    // Remove from redo stack
-    setRedoStack(prev => prev.slice(0, -1));
+    // Remove the restored entry (and any skipped duplicates) from redo stack
+    setRedoStack(stack.slice(0, idx));
 
     // Apply the next state
     isApplyingHistory = true;
     setFile(cloneEsmFile(nextEntry.state));
     isApplyingHistory = false;
+
+    lastCapturedFile = null;
   }
 
   /**
@@ -216,6 +273,7 @@ export function createUndoHistory(
       clearTimeout(debounceTimeout);
       debounceTimeout = null;
     }
+    pendingEntry = null;
 
     setUndoStack([]);
     setRedoStack([]);
@@ -228,40 +286,20 @@ export function createUndoHistory(
     return undoStack().length + redoStack().length;
   }
 
-  // Watch for file changes and capture them
-  createEffect(() => {
-    const currentFile = file();
-    if (currentFile && !isApplyingHistory) {
-      captureState('File change');
+  // Capture the initial state so the first mutation can be undone.
+  captureState('Initial state');
+
+  // Register keyboard shortcuts if enabled (single, shared handler)
+  if (registerKeyboardShortcuts && typeof window !== 'undefined') {
+    createUndoKeyboardHandler(undo, redo, canUndo, canRedo);
+  }
+
+  onCleanup(() => {
+    if (debounceTimeout !== null) {
+      clearTimeout(debounceTimeout);
+      debounceTimeout = null;
     }
   });
-
-  // Register keyboard shortcuts if enabled
-  if (registerKeyboardShortcuts && typeof window !== 'undefined') {
-    const handleKeydown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey)) {
-        if (event.key === 'z' && !event.shiftKey) {
-          event.preventDefault();
-          undo();
-        } else if (
-          (event.key === 'y') ||
-          (event.key === 'z' && event.shiftKey)
-        ) {
-          event.preventDefault();
-          redo();
-        }
-      }
-    };
-
-    document.addEventListener('keydown', handleKeydown);
-
-    onCleanup(() => {
-      document.removeEventListener('keydown', handleKeydown);
-      if (debounceTimeout !== null) {
-        clearTimeout(debounceTimeout);
-      }
-    });
-  }
 
   return {
     undo,
@@ -275,8 +313,10 @@ export function createUndoHistory(
 }
 
 /**
- * Default keyboard shortcut handler for undo/redo
- * Can be used independently of createUndoHistory if needed
+ * Keyboard shortcut handler for undo/redo (Ctrl/Cmd+Z, Ctrl/Cmd+Y,
+ * Ctrl/Cmd+Shift+Z). This is the single keyboard-binding implementation —
+ * `createUndoHistory` registers it when `registerKeyboardShortcuts` is on,
+ * and it can also be used independently.
  */
 export function createUndoKeyboardHandler(
   undoFn: () => void,

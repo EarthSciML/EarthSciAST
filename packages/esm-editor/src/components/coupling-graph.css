@@ -1,0 +1,69 @@
+/**
+ * CouplingGraph - plain CSS styling (this package does not use Tailwind).
+ */
+
+.coupling-graph-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.coupling-graph-svg {
+  border: 1px solid #d1d5db;
+}
+
+.coupling-graph-minimap {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  border: 1px solid #d1d5db;
+  background-color: rgba(255, 255, 255, 0.9);
+}
+
+.coupling-graph-details {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  padding: 16px;
+  background-color: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  max-width: 28rem;
+}
+
+.coupling-graph-details h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.coupling-graph-detail-type {
+  font-size: 0.875rem;
+  color: #4b5563;
+  margin: 2px 0;
+}
+
+.coupling-graph-detail-text {
+  font-size: 0.875rem;
+  margin-top: 8px;
+}
+
+.coupling-graph-detail-meta {
+  font-size: 0.75rem;
+  margin-top: 8px;
+}
+
+.coupling-graph-close-btn {
+  margin-top: 8px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  background-color: #e5e7eb;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.coupling-graph-close-btn:hover {
+  background-color: #d1d5db;
+}

@@ -4,13 +4,18 @@
  * This is a simplified, focused recursive AST renderer for the esm-editor package.
  * It provides the foundation for interactive expression editing with:
  * - Number literals with click-to-select and hover highlighting
- * - Variable references with chemical subscript rendering
- * - Operator nodes that dispatch to OperatorLayout components
+ * - Variable references with chemical subscript rendering (shared module)
+ * - Operator nodes that dispatch to the layout components in src/layout
+ *   (Fraction, Superscript, Radical) for mathematical typography
  */
 
-import { Component, Accessor, createSignal, createMemo, Show } from 'solid-js';
+import { Component, Accessor, createSignal, createMemo, Show, Switch, Match, Index, JSX } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode } from 'earthsci-toolkit';
-import { useStructuralEditingContext, DraggableExpression, StructuralEditingMenu, COMMUTATIVE_OPERATORS } from '../primitives/structural-editing';
+import { useMaybeStructuralEditingContext, DraggableExpression, StructuralEditingMenu, COMMUTATIVE_OPERATORS } from '../primitives/structural-editing';
+import { renderChemicalName } from '../primitives/chemical-formula';
+import { Fraction } from '../layout/Fraction';
+import { Superscript } from '../layout/Superscript';
+import { Radical } from '../layout/Radical';
 
 export interface ExpressionNodeProps {
   /** The expression to render (reactive from Solid store) */
@@ -41,201 +46,10 @@ export interface ExpressionNodeProps {
   indexInParent?: number;
 }
 
-// Element lookup table for chemical subscript detection (118 elements)
-const ELEMENTS = new Set([
-  // Period 1
-  'H', 'He',
-  // Period 2
-  'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
-  // Period 3
-  'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
-  // Period 4
-  'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
-  // Period 5
-  'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
-  // Period 6
-  'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
-  'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
-  // Period 7
-  'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
-  'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og'
-]);
-
-// Unicode subscripts for digits 0-9
-const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉';
-
 /**
- * Check if a variable has element patterns (for chemical formula detection)
- * Must be PURELY a chemical formula (no non-element characters)
- */
-function hasElementPattern(variable: string): boolean {
-  // Remove underscores for pure chemical formula check
-  const cleanVariable = variable.replace(/_/g, '');
-
-  let i = 0;
-  let hasElement = false;
-
-  while (i < cleanVariable.length) {
-    // Skip non-alphabetic characters at the start
-    while (i < cleanVariable.length && !/[A-Za-z]/.test(cleanVariable[i])) {
-      i++;
-    }
-
-    if (i >= cleanVariable.length) break;
-
-    let foundElement = false;
-
-    // Try 2-character element first
-    if (i + 1 < cleanVariable.length) {
-      const twoChar = cleanVariable.slice(i, i + 2);
-      if (ELEMENTS.has(twoChar)) {
-        hasElement = true;
-        foundElement = true;
-        i += 2;
-        // Skip digits
-        while (i < cleanVariable.length && /\d/.test(cleanVariable[i])) {
-          i++;
-        }
-        continue;
-      }
-    }
-
-    // Try 1-character element
-    if (!foundElement) {
-      const oneChar = cleanVariable[i];
-      if (ELEMENTS.has(oneChar)) {
-        hasElement = true;
-        foundElement = true;
-        i++;
-        // Skip digits
-        while (i < cleanVariable.length && /\d/.test(cleanVariable[i])) {
-          i++;
-        }
-        continue;
-      }
-    }
-
-    // If we encounter a non-element character, this is not a pure chemical formula
-    if (!foundElement) {
-      return false;
-    }
-  }
-
-  return hasElement;
-}
-
-/**
- * Extract chemical formula suffix from a variable name
- */
-function getChemicalSuffix(variable: string): { prefix: string; suffix: string } | null {
-  // Handle patterns like k_NO_O3 (with underscore)
-  if (variable.includes('_')) {
-    const parts = variable.split('_');
-    if (parts.length === 2) {
-      const [prefix, suffix] = parts;
-      if (hasElementPattern(suffix) && !hasElementPattern(prefix)) {
-        return { prefix, suffix };
-      }
-    }
-    // For patterns like k_NO_O3, try treating NO_O3 as the chemical part
-    if (parts.length === 3) {
-      const prefix = parts[0];
-      const suffix = parts.slice(1).join('_');  // Keep underscore within chemical formula
-      if (hasElementPattern(suffix) && !hasElementPattern(prefix)) {
-        return { prefix, suffix };
-      }
-    }
-  }
-
-  // Handle patterns like jNO2 (without underscore)
-  // Try each position to split into non-element prefix and element suffix
-  for (let i = 1; i < variable.length; i++) {
-    const prefix = variable.substring(0, i);
-    const suffix = variable.substring(i);
-
-    if (hasElementPattern(suffix) && !hasElementPattern(prefix)) {
-      return { prefix, suffix };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Apply element-aware chemical subscript formatting to a variable name.
- * Uses greedy 2-char-before-1-char matching for element detection.
- */
-function renderChemicalName(variable: string): string {
-  // Check if variable looks like a chemical formula (starts with element and has digits)
-  const hasElements = hasElementPattern(variable);
-
-  if (!hasElements) {
-    // Check if it's a mixed variable (non-element prefix + chemical suffix)
-    const chemicalInfo = getChemicalSuffix(variable);
-    if (chemicalInfo) {
-      // Split into prefix and chemical part
-      const { prefix, suffix } = chemicalInfo;
-      const chemicalPart = renderChemicalName(suffix);
-      // For variables without underscores (like jNO2), don't add underscores
-      if (!variable.includes('_')) {
-        return `${prefix}${chemicalPart}`;
-      }
-      // For variables with underscores (like k_NO_O3), preserve them
-      return `${prefix}_${chemicalPart}`;
-    }
-    // No element pattern found, return as-is
-    return variable;
-  }
-
-  // For element-aware subscript detection
-  let result = '';
-  let i = 0;
-
-  while (i < variable.length) {
-    let matched = false;
-
-    // Try 2-character element first
-    if (i + 1 < variable.length) {
-      const twoChar = variable.slice(i, i + 2);
-      if (ELEMENTS.has(twoChar)) {
-        result += twoChar;
-        i += 2;
-        // Convert following digits to subscripts
-        while (i < variable.length && /\d/.test(variable[i])) {
-          result += SUBSCRIPT_DIGITS[parseInt(variable[i])];
-          i++;
-        }
-        matched = true;
-      }
-    }
-
-    // Try 1-character element if 2-char didn't match
-    if (!matched && i < variable.length) {
-      const oneChar = variable[i];
-      if (ELEMENTS.has(oneChar)) {
-        result += oneChar;
-        i++;
-        // Convert following digits to subscripts
-        while (i < variable.length && /\d/.test(variable[i])) {
-          result += SUBSCRIPT_DIGITS[parseInt(variable[i])];
-          i++;
-        }
-        matched = true;
-      }
-    }
-
-    // If not an element, copy character as-is
-    if (!matched) {
-      result += variable[i];
-      i++;
-    }
-  }
-
-  return result;
-}
-
-/**
- * Enhanced OperatorLayout component with proper mathematical layout and drag-and-drop support
+ * Operator layout dispatcher with proper mathematical layout and
+ * drag-and-drop support. Fractions, exponents, and radicals render via the
+ * shared layout components (Section 5.2.3) instead of hand-rolled markup.
  */
 function OperatorLayout(props: {
   node: ExprNode;
@@ -246,24 +60,20 @@ function OperatorLayout(props: {
   onReplace: (path: (string | number)[], newExpr: Expression) => void;
   selectedPath?: (string | number)[] | null;
 }) {
-  // Get structural editing context if available
-  let structuralEditing: ReturnType<typeof useStructuralEditingContext> | undefined;
-  try {
-    structuralEditing = useStructuralEditingContext();
-  } catch {
-    // Not in structural editing context
-  }
+  // Structural editing context is optional (non-throwing accessor)
+  const structuralEditing = useMaybeStructuralEditingContext();
 
-  const isCommutative = COMMUTATIVE_OPERATORS.has(props.node.op);
-  const { op, args } = props.node;
+  const op = () => props.node.op;
+  const args = () => (props.node.args as Expression[] | undefined) ?? [];
+  const isCommutative = () => COMMUTATIVE_OPERATORS.has(props.node.op);
 
   // Helper to create child nodes with drag support
-  const createChildNode = (arg: Expression, index: number) => {
-    const argPath = [...props.path, 'args', index];
+  const child = (arg: () => Expression, index: number): JSX.Element => {
+    const argPath = () => [...props.path, 'args', index];
     const childNode = (
       <ExpressionNode
-        expr={arg}
-        path={argPath}
+        expr={arg()}
+        path={argPath()}
         highlightedVars={props.highlightedVars}
         onHoverVar={props.onHoverVar}
         onSelect={props.onSelect}
@@ -275,161 +85,124 @@ function OperatorLayout(props: {
     );
 
     // Wrap in draggable component for commutative operations
-    if (structuralEditing && isCommutative && (args?.length || 0) > 1) {
-      return (
+    return (
+      <Show
+        when={structuralEditing && isCommutative() && args().length > 1}
+        fallback={childNode}
+      >
         <DraggableExpression
-          path={argPath}
+          path={argPath()}
           index={index}
           parentPath={props.path}
           canDrag={true}
         >
           {childNode}
         </DraggableExpression>
-      );
-    }
-
-    return childNode;
+      </Show>
+    );
   };
 
+  /** Render args as a separated infix sequence */
+  const infixArgs = (separator: () => JSX.Element) => (
+    <Index each={args()}>
+      {(arg, index) => (
+        <>
+          <Show when={index > 0}>{separator()}</Show>
+          {child(arg, index)}
+        </>
+      )}
+    </Index>
+  );
+
+  /** Render args as a parenthesized function argument list */
+  const functionArgs = () => (
+    <span class="esm-function-args">
+      (
+      <Index each={args()}>
+        {(arg, index) => (
+          <>
+            <Show when={index > 0}>, </Show>
+            {child(arg, index)}
+          </>
+        )}
+      </Index>
+      )
+    </span>
+  );
+
+  const COMPARISON_OPS = ['>', '<', '>=', '<=', '==', '!='];
+  const NAMED_FUNCTION_OPS = ['exp', 'log', 'sin', 'cos', 'tan'];
+
   // Handle different operators with appropriate CSS layouts per Section 5.2.4
-  switch (op) {
-    case '+':
-    case '-':
-      return (
-        <span class="esm-infix-op" data-operator={op}>
-          {args?.map((arg, index) => (
-            <>
-              <Show when={index > 0}>
-                <span class="esm-operator"> {op} </span>
-              </Show>
-              {createChildNode(arg, index)}
-            </>
-          ))}
+  return (
+    <Switch
+      fallback={
+        // Generic function notation for unknown operators
+        <span class="esm-generic-function" data-operator={op()}>
+          <span class="esm-function-name">{op()}</span>
+          {functionArgs()}
         </span>
-      );
-
-    case '*':
-      return (
-        <span class="esm-multiplication" data-operator={op}>
-          {args?.map((arg, index) => (
-            <>
-              <Show when={index > 0}>
-                <span class="esm-multiply">⋅</span>
-              </Show>
-              {createChildNode(arg, index)}
-            </>
-          ))}
+      }
+    >
+      <Match when={op() === '+' || op() === '-'}>
+        <span class="esm-infix-op" data-operator={op()}>
+          {infixArgs(() => <span class="esm-operator"> {op()} </span>)}
         </span>
-      );
+      </Match>
 
-    case '/':
-      return (
-        <span class="esm-fraction" data-operator={op}>
-          <span class="esm-fraction-numerator">
-            {args && createChildNode(args[0], 0)}
-          </span>
-          <span class="esm-fraction-denominator">
-            {args && createChildNode(args[1], 1)}
-          </span>
+      <Match when={op() === '*'}>
+        <span class="esm-multiplication" data-operator={op()}>
+          {infixArgs(() => <span class="esm-multiply">⋅</span>)}
         </span>
-      );
+      </Match>
 
-    case '^':
-      return (
-        <span class="esm-exponentiation" data-operator={op}>
-          <span class="esm-base">
-            {args && createChildNode(args[0], 0)}
-          </span>
-          <span class="esm-exponent">
-            {args && createChildNode(args[1], 1)}
-          </span>
-        </span>
-      );
+      <Match when={op() === '/'}>
+        <Fraction
+          numerator={child(() => args()[0], 0)}
+          denominator={child(() => args()[1], 1)}
+        />
+      </Match>
 
-    case 'D':
-      return (
-        <span class="esm-derivative" data-operator={op}>
+      <Match when={op() === '^'}>
+        <Superscript
+          base={child(() => args()[0], 0)}
+          exponent={child(() => args()[1], 1)}
+        />
+      </Match>
+
+      <Match when={op() === 'sqrt'}>
+        <Radical class="esm-sqrt" content={child(() => args()[0], 0)} />
+      </Match>
+
+      <Match when={op() === 'D'}>
+        <span class="esm-derivative" data-operator={op()}>
           <span class="esm-d-operator">d</span>
           <span class="esm-derivative-body">
-            {args && createChildNode(args[0], 0)}
+            {child(() => args()[0], 0)}
           </span>
-          <Show when={(props.node as any).wrt}>
+          <Show when={(props.node as { wrt?: string }).wrt}>
             <span class="esm-derivative-wrt">
               <span class="esm-d-operator">d</span>
-              <span class="esm-variable">{(props.node as any).wrt}</span>
+              <span class="esm-variable">{(props.node as { wrt?: string }).wrt}</span>
             </span>
           </Show>
         </span>
-      );
+      </Match>
 
-    case 'sqrt':
-      return (
-        <span class="esm-function esm-sqrt" data-operator={op}>
-          <span class="esm-radical">√</span>
-          <span class="esm-sqrt-content">
-            {args && createChildNode(args[0], 0)}
-          </span>
+      <Match when={NAMED_FUNCTION_OPS.includes(op())}>
+        <span class="esm-function" data-operator={op()}>
+          <span class="esm-function-name">{op()}</span>
+          {functionArgs()}
         </span>
-      );
+      </Match>
 
-    case 'exp':
-    case 'log':
-    case 'sin':
-    case 'cos':
-    case 'tan':
-      return (
-        <span class="esm-function" data-operator={op}>
-          <span class="esm-function-name">{op}</span>
-          <span class="esm-function-args">
-            (
-            {args?.map((arg, index) => (
-              <>
-                <Show when={index > 0}>, </Show>
-                {createChildNode(arg, index)}
-              </>
-            ))}
-            )
-          </span>
+      <Match when={COMPARISON_OPS.includes(op())}>
+        <span class="esm-comparison" data-operator={op()}>
+          {infixArgs(() => <span class="esm-operator"> {op()} </span>)}
         </span>
-      );
-
-    case '>':
-    case '<':
-    case '>=':
-    case '<=':
-    case '==':
-    case '!=':
-      return (
-        <span class="esm-comparison" data-operator={op}>
-          {args?.map((arg, index) => (
-            <>
-              <Show when={index > 0}>
-                <span class="esm-operator"> {op} </span>
-              </Show>
-              {createChildNode(arg, index)}
-            </>
-          ))}
-        </span>
-      );
-
-    default:
-      // Fallback to generic function notation for unknown operators
-      return (
-        <span class="esm-generic-function" data-operator={op}>
-          <span class="esm-function-name">{op}</span>
-          <span class="esm-function-args">
-            (
-            {args?.map((arg, index) => (
-              <>
-                <Show when={index > 0}>, </Show>
-                {createChildNode(arg, index)}
-              </>
-            ))}
-            )
-          </span>
-        </span>
-      );
-  }
+      </Match>
+    </Switch>
+  );
 }
 
 /**
@@ -440,13 +213,8 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   const [showStructuralMenu, setShowStructuralMenu] = createSignal(false);
   const [menuPosition, setMenuPosition] = createSignal({ x: 0, y: 0 });
 
-  // Get structural editing context if available
-  let structuralEditing: ReturnType<typeof useStructuralEditingContext> | undefined;
-  try {
-    structuralEditing = useStructuralEditingContext();
-  } catch {
-    // Not in structural editing context, continue without
-  }
+  // Structural editing context is optional (non-throwing accessor)
+  const structuralEditing = useMaybeStructuralEditingContext();
 
   // Determine if this expression is a variable reference
   const isVariable = createMemo(() =>
@@ -460,15 +228,15 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
 
   // Check if this node is currently selected
   const isSelected = createMemo(() =>
-    props.selectedPath &&
+    props.selectedPath != null &&
     props.selectedPath.length === props.path.length &&
     props.selectedPath.every((segment, i) => segment === props.path[i])
   );
 
   // Check if this can be dragged (is in a commutative operation with siblings)
   const canDrag = createMemo(() =>
-    structuralEditing &&
-    props.parentPath &&
+    structuralEditing !== undefined &&
+    props.parentPath !== undefined &&
     typeof props.indexInParent === 'number' &&
     props.parentPath.length > 0
   );
@@ -522,44 +290,22 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
     setShowStructuralMenu(false);
   };
 
-  // Render based on expression type
-  const renderContent = () => {
-    // Number literal
+  // Get ARIA label for accessibility
+  const ariaLabel = (): string => {
     if (typeof props.expr === 'number') {
-      return (
-        <span class="esm-num" title={`Number: ${props.expr}`}>
-          {formatNumber(props.expr)}
-        </span>
-      );
+      return `Number: ${props.expr}`;
     }
-
-    // Variable reference
     if (typeof props.expr === 'string') {
-      return (
-        <span class="esm-var" title={`Variable: ${props.expr}`}>
-          {renderChemicalName(props.expr)}
-        </span>
-      );
+      return `Variable: ${props.expr}`;
     }
-
-    // Operator node - dispatch to OperatorLayout
     if (typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr) {
-      return (
-        <OperatorLayout
-          node={props.expr as ExprNode}
-          path={props.path}
-          highlightedVars={props.highlightedVars}
-          onHoverVar={props.onHoverVar}
-          onSelect={props.onSelect}
-          onReplace={props.onReplace}
-          selectedPath={props.selectedPath}
-        />
-      );
+      return `Operator: ${(props.expr as ExprNode).op}`;
     }
-
-    // Fallback for unknown types
-    return <span class="esm-unknown">?</span>;
+    return 'Expression';
   };
+
+  const isOperatorNode = () =>
+    typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr;
 
   const content = (
     <>
@@ -571,10 +317,34 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
         onContextMenu={handleContextMenu}
         tabIndex={0}
         role="button"
-        aria-label={getAriaLabel()}
+        aria-label={ariaLabel()}
         data-path={props.path.join('.')}
       >
-        {renderContent()}
+        <Switch fallback={<span class="esm-unknown">?</span>}>
+          <Match when={typeof props.expr === 'number'}>
+            <span class="esm-num" title={`Number: ${props.expr}`}>
+              {formatNumber(props.expr as number)}
+            </span>
+          </Match>
+
+          <Match when={typeof props.expr === 'string'}>
+            <span class="esm-var" title={`Variable: ${props.expr}`}>
+              {renderChemicalName(props.expr as string)}
+            </span>
+          </Match>
+
+          <Match when={isOperatorNode()}>
+            <OperatorLayout
+              node={props.expr as ExprNode}
+              path={props.path}
+              highlightedVars={props.highlightedVars}
+              onHoverVar={props.onHoverVar}
+              onSelect={props.onSelect}
+              onReplace={props.onReplace}
+              selectedPath={props.selectedPath}
+            />
+          </Match>
+        </Switch>
       </span>
 
       <Show when={showStructuralMenu() && structuralEditing}>
@@ -590,34 +360,18 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   );
 
   // Wrap in draggable component if this can be dragged
-  if (canDrag() && structuralEditing && props.parentPath && typeof props.indexInParent === 'number') {
-    return (
+  return (
+    <Show when={canDrag()} fallback={content}>
       <DraggableExpression
         path={props.path}
-        index={props.indexInParent}
-        parentPath={props.parentPath}
+        index={props.indexInParent!}
+        parentPath={props.parentPath!}
         canDrag={true}
       >
         {content}
       </DraggableExpression>
-    );
-  }
-
-  return content;
-
-  // Get ARIA label for accessibility
-  function getAriaLabel(): string {
-    if (typeof props.expr === 'number') {
-      return `Number: ${props.expr}`;
-    }
-    if (typeof props.expr === 'string') {
-      return `Variable: ${props.expr}`;
-    }
-    if (typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr) {
-      return `Operator: ${(props.expr as ExprNode).op}`;
-    }
-    return 'Expression';
-  }
+    </Show>
+  );
 };
 
 // Helper functions

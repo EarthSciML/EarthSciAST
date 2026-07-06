@@ -99,7 +99,7 @@ describe('ExpressionNode', () => {
     expect(element).toBeInTheDocument();
   });
 
-  it('renders division as fraction layout, not prefix notation', () => {
+  it('renders division with the shared Fraction layout component, not prefix notation', () => {
     const divisionExpr = {
       op: '/' as const,
       args: ['numerator', 'denominator']
@@ -109,13 +109,17 @@ describe('ExpressionNode', () => {
       <ExpressionNode expr={divisionExpr} {...mockProps} />
     ));
 
-    // Should use fraction layout, not prefix notation like "/(numerator, denominator)"
+    // Should use the Fraction layout component, not prefix notation like
+    // "/(numerator, denominator)"
     const fractionElement = container.querySelector('.esm-fraction');
     const numeratorElement = container.querySelector('.esm-fraction-numerator');
+    const barElement = container.querySelector('.esm-fraction-bar');
     const denominatorElement = container.querySelector('.esm-fraction-denominator');
 
     expect(fractionElement).toBeInTheDocument();
+    expect(fractionElement).toHaveAttribute('role', 'math');
     expect(numeratorElement).toBeInTheDocument();
+    expect(barElement).toBeInTheDocument();
     expect(denominatorElement).toBeInTheDocument();
 
     // Should NOT have generic function layout (prefix notation)
@@ -123,7 +127,7 @@ describe('ExpressionNode', () => {
     expect(genericFunction).not.toBeInTheDocument();
   });
 
-  it('renders exponentiation as superscript, not prefix notation', () => {
+  it('renders exponentiation with the shared Superscript layout component, not prefix notation', () => {
     const exponentExpr = {
       op: '^' as const,
       args: ['x', 2]
@@ -133,21 +137,23 @@ describe('ExpressionNode', () => {
       <ExpressionNode expr={exponentExpr} {...mockProps} />
     ));
 
-    // Should use superscript layout, not prefix notation like "^(x, 2)"
-    const exponentElement = container.querySelector('.esm-exponentiation');
-    const baseElement = container.querySelector('.esm-base');
-    const superscriptElement = container.querySelector('.esm-exponent');
+    // Should use the Superscript layout component, not prefix notation
+    // like "^(x, 2)"
+    const superscriptElement = container.querySelector('.esm-superscript');
+    const baseElement = container.querySelector('.esm-superscript-base');
+    const exponentElement = container.querySelector('.esm-superscript-exponent');
 
-    expect(exponentElement).toBeInTheDocument();
-    expect(baseElement).toBeInTheDocument();
     expect(superscriptElement).toBeInTheDocument();
+    expect(superscriptElement).toHaveAttribute('role', 'math');
+    expect(baseElement).toBeInTheDocument();
+    expect(exponentElement).toBeInTheDocument();
 
     // Should NOT have generic function layout (prefix notation)
     const genericFunction = container.querySelector('.esm-generic-function');
     expect(genericFunction).not.toBeInTheDocument();
   });
 
-  it('renders sqrt as radical notation, not prefix notation', () => {
+  it('renders sqrt with the shared Radical layout component, not prefix notation', () => {
     const sqrtExpr = {
       op: 'sqrt' as const,
       args: ['x']
@@ -157,13 +163,17 @@ describe('ExpressionNode', () => {
       <ExpressionNode expr={sqrtExpr} {...mockProps} />
     ));
 
-    // Should use radical notation, not prefix notation like "sqrt(x)"
+    // Should use the Radical layout component, not prefix notation like "sqrt(x)"
     const sqrtElement = container.querySelector('.esm-sqrt');
     const radicalElement = container.querySelector('.esm-radical');
+    const symbolElement = container.querySelector('.esm-radical-symbol');
+    const contentElement = container.querySelector('.esm-radical-content');
 
     expect(sqrtElement).toBeInTheDocument();
     expect(radicalElement).toBeInTheDocument();
-    expect(radicalElement?.textContent).toBe('√');
+    expect(radicalElement).toHaveAttribute('role', 'math');
+    expect(symbolElement?.textContent).toBe('√');
+    expect(contentElement?.textContent).toBe('x');
 
     // Should NOT have generic function layout (prefix notation)
     const genericFunction = container.querySelector('.esm-generic-function');

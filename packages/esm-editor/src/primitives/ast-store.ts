@@ -4,22 +4,20 @@
  * Provides a SolidJS store wrapper around EsmFile with path-based updates,
  * integrated undo/redo functionality, and centralized state that all
  * components can share.
+ *
+ * Undo integration: every mutation that flows through the store's setters
+ * (`setFile`, `setPath`, `updatePath`) captures the pre-mutation state as a
+ * debounced undo point. Undo/redo restore snapshots with `reconcile`, so
+ * keys added after a snapshot are correctly removed on undo.
  */
 
-import { createStore, produce, Store, SetStoreFunction } from 'solid-js/store';
-import { createSignal, createMemo } from 'solid-js';
+import { createStore, produce, reconcile, unwrap, Store, SetStoreFunction } from 'solid-js/store';
+import { createSignal } from 'solid-js';
 import type { EsmFile } from 'earthsci-toolkit';
 import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js';
+import { getValueAtPath, PathUtils, type Path, type PathSegment } from './path-utils.js';
 
-/**
- * Path segment for navigating nested structures
- */
-export type PathSegment = string | number;
-
-/**
- * Path for addressing nested properties in the ESM file
- */
-export type Path = PathSegment[];
+export { PathUtils, type Path, type PathSegment };
 
 /**
  * Configuration for the AST store
@@ -39,7 +37,7 @@ export interface AstStoreConfig {
 export interface AstStore {
   /** Reactive ESM file store */
   file: Store<EsmFile>;
-  /** Function to update the store */
+  /** Function to update the store (captures an undo point per mutation) */
   setFile: SetStoreFunction<EsmFile>;
   /** Get value at a specific path */
   getPath: (path: Path) => any;
@@ -72,20 +70,6 @@ function createDefaultEsmFile(): EsmFile {
     components: {},
     coupling: []
   };
-}
-
-/**
- * Navigate to a path in an object and return the value
- */
-function getValueAtPath(obj: any, path: Path): any {
-  if (path.length === 0) return obj;
-
-  let current = obj;
-  for (const segment of path) {
-    if (current == null) return undefined;
-    current = current[segment];
-  }
-  return current;
 }
 
 /**
@@ -134,25 +118,40 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
   } = config;
 
   // Create the main store
-  const [file, setFile] = createStore<EsmFile>(initialFile);
+  const [file, setFileRaw] = createStore<EsmFile>(initialFile);
 
   // Create validation signals
   const [validationState, setValidationState] = createSignal(
     enableValidation ? validateEsmFile(initialFile) : { isValid: true, errors: [] }
   );
 
-  // Create undo/redo history
-  const fileSignal = createMemo(() => file);
+  function revalidate(): void {
+    if (enableValidation) {
+      setValidationState(validateEsmFile(unwrap(file)));
+    }
+  }
+
+  // Create undo/redo history. Snapshots are restored with `reconcile` so
+  // properties added after the snapshot are removed on undo (a plain merging
+  // store set would leave them behind).
   const history = createUndoHistory(
-    fileSignal,
+    () => file,
     (newFile: EsmFile) => {
-      setFile(newFile);
-      if (enableValidation) {
-        setValidationState(validateEsmFile(newFile));
-      }
+      setFileRaw(reconcile(newFile));
+      revalidate();
     },
     historyConfig
   );
+
+  /**
+   * Store setter that records the pre-mutation state as an undo point,
+   * then applies the mutation and refreshes validation.
+   */
+  const setFile: SetStoreFunction<EsmFile> = ((...args: unknown[]) => {
+    history.capture();
+    (setFileRaw as (...a: unknown[]) => void)(...args);
+    revalidate();
+  }) as SetStoreFunction<EsmFile>;
 
   /**
    * Get value at a specific path in the file
@@ -166,31 +165,29 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
    */
   function setPath(path: Path, value: any): void {
     if (path.length === 0) {
-      // Setting root file
-      setFile(value);
-    } else {
-      // Setting nested path
-      setFile(
-        produce(draft => {
-          let current: any = draft;
-          for (let i = 0; i < path.length - 1; i++) {
-            const segment = path[i];
-            if (current[segment] == null) {
-              // Create intermediate objects/arrays as needed
-              const nextSegment = path[i + 1];
-              current[segment] = typeof nextSegment === 'number' ? [] : {};
-            }
-            current = current[segment];
-          }
-          current[path[path.length - 1]] = value;
-        })
-      );
+      // Replacing the whole file: use reconcile so removed keys are dropped
+      history.capture();
+      setFileRaw(reconcile(value));
+      revalidate();
+      return;
     }
 
-    // Update validation if enabled
-    if (enableValidation) {
-      setValidationState(validateEsmFile(file));
-    }
+    // Setting nested path (setFile captures the undo point)
+    setFile(
+      produce(draft => {
+        let current: any = draft;
+        for (let i = 0; i < path.length - 1; i++) {
+          const segment = path[i];
+          if (current[segment] == null) {
+            // Create intermediate objects/arrays as needed
+            const nextSegment = path[i + 1];
+            current[segment] = typeof nextSegment === 'number' ? [] : {};
+          }
+          current = current[segment];
+        }
+        current[path[path.length - 1]] = value;
+      })
+    );
   }
 
   /**
@@ -227,62 +224,6 @@ export function createAstStore(config: AstStoreConfig = {}): AstStore {
     validationErrors
   };
 }
-
-/**
- * Utility functions for common path operations
- */
-export const PathUtils = {
-  /**
-   * Convert a dot-separated string to a path array
-   */
-  fromString: (pathString: string): Path => {
-    return pathString.split('.').filter(segment => segment.length > 0);
-  },
-
-  /**
-   * Convert a path array to a dot-separated string
-   */
-  toString: (path: Path): string => {
-    return path.join('.');
-  },
-
-  /**
-   * Check if two paths are equal
-   */
-  equals: (path1: Path, path2: Path): boolean => {
-    if (path1.length !== path2.length) return false;
-    return path1.every((segment, i) => segment === path2[i]);
-  },
-
-  /**
-   * Check if path1 is a parent of path2
-   */
-  isParent: (parent: Path, child: Path): boolean => {
-    if (parent.length >= child.length) return false;
-    return parent.every((segment, i) => segment === child[i]);
-  },
-
-  /**
-   * Get the parent path (all segments except the last)
-   */
-  parent: (path: Path): Path => {
-    return path.slice(0, -1);
-  },
-
-  /**
-   * Get the last segment of a path
-   */
-  lastSegment: (path: Path): PathSegment | undefined => {
-    return path[path.length - 1];
-  },
-
-  /**
-   * Append a segment to a path
-   */
-  append: (path: Path, segment: PathSegment): Path => {
-    return [...path, segment];
-  }
-};
 
 /**
  * Common path patterns for ESM file structures

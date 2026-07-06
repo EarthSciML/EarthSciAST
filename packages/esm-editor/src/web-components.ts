@@ -4,6 +4,9 @@
  * This module uses solid-element to convert SolidJS components into standard
  * web components that can be used in any framework (React, Vue, Svelte) or vanilla HTML.
  *
+ * Importing this module has no side effects: call `registerWebComponents()`
+ * explicitly to define the custom elements.
+ *
  * Components exported:
  * - <esm-expression-editor> - Interactive expression editing interface
  * - <esm-model-editor> - Full model editing interface
@@ -332,21 +335,7 @@ export function registerWebComponents() {
       height: 600,
       'show-minimap': true
     }, (props, { element }) => EsmCouplingGraphComponent({ ...props, element }));
-
-    console.log('ESM Editor web components registered successfully');
-
   } catch (error) {
     console.warn('Failed to register ESM Editor web components:', error);
-  }
-}
-
-// Auto-register when module is imported in browser environment
-if (typeof window !== 'undefined') {
-  // Delay registration to ensure solid-element is loaded
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', registerWebComponents);
-  } else {
-    // Document is already loaded
-    setTimeout(registerWebComponents, 0);
   }
 }

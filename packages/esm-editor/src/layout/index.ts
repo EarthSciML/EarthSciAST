@@ -7,20 +7,20 @@
  */
 
 // Export all layout components
-export { Fraction } from './fraction';
-export type { FractionProps } from './fraction';
+export { Fraction } from './Fraction';
+export type { FractionProps } from './Fraction';
 
-export { Superscript } from './superscript';
-export type { SuperscriptProps } from './superscript';
+export { Superscript } from './Superscript';
+export type { SuperscriptProps } from './Superscript';
 
-export { Subscript } from './subscript';
-export type { SubscriptProps } from './subscript';
+export { Subscript } from './Subscript';
+export type { SubscriptProps } from './Subscript';
 
-export { Radical } from './radical';
-export type { RadicalProps } from './radical';
+export { Radical } from './Radical';
+export type { RadicalProps } from './Radical';
 
-export { Delimiters } from './delimiters';
-export type { DelimitersProps } from './delimiters';
+export { Delimiters } from './Delimiters';
+export type { DelimitersProps } from './Delimiters';
 
 // Import all CSS files to ensure they're bundled
 import './fraction.css';

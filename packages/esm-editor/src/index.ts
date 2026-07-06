@@ -48,20 +48,29 @@ export {
 export {
   SelectionProvider,
   useSelectionContext,
+  useMaybeSelectionContext,
   createSelectionContext,
   getVariableSuggestions,
-  pathsEqual,
-  pathToString,
-  stringToPath,
   type SelectionContextValue,
   type SelectionProviderProps,
   type NodeDetails
 } from './primitives/selection';
 
+// Shared path utilities (single implementation used by all primitives)
+export {
+  getValueAtPath,
+  getExpressionAtPath,
+  replaceExpressionAtPath,
+  pathsEqual,
+  pathToString,
+  stringToPath
+} from './primitives/path-utils';
+
 // Structural editing primitives
 export {
   StructuralEditingProvider,
   useStructuralEditingContext,
+  useMaybeStructuralEditingContext,
   StructuralEditingMenu,
   DraggableExpression,
   WRAP_OPERATORS,

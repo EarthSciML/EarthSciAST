@@ -128,6 +128,141 @@ describe('ModelEditor', () => {
     expect(editor).toHaveClass('readonly');
   });
 
+  it('adds a variable through the inline form (no prompt dialogs)', () => {
+    const onModelChange = vi.fn();
+    render(() => <ModelEditor {...mockProps} onModelChange={onModelChange} />);
+
+    // Open the inline add-variable form
+    fireEvent.click(screen.getByLabelText('Add new variable'));
+    expect(screen.getByText('Add variable')).toBeInTheDocument();
+
+    // Fill in the name and confirm
+    fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'CO2' } });
+    fireEvent.click(screen.getByText('Add'));
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variables: expect.objectContaining({
+          CO2: expect.objectContaining({ type: 'parameter', default: 0 })
+        })
+      })
+    );
+
+    // The form closes after a successful add
+    expect(screen.queryByText('Add variable')).not.toBeInTheDocument();
+  });
+
+  it('requires a variable name in the inline add form', () => {
+    const onModelChange = vi.fn();
+    render(() => <ModelEditor {...mockProps} onModelChange={onModelChange} />);
+
+    fireEvent.click(screen.getByLabelText('Add new variable'));
+    fireEvent.click(screen.getByText('Add'));
+
+    expect(screen.getByText('Variable name is required')).toBeInTheDocument();
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
+  it('edits a variable through the inline form', () => {
+    const onModelChange = vi.fn();
+    render(() => <ModelEditor {...mockProps} onModelChange={onModelChange} />);
+
+    // Click the k_rate variable item to open the edit form
+    const variableName = screen
+      .getAllByText('k_rate')
+      .find(el => el.classList.contains('variable-name'))!;
+    fireEvent.click(variableName.closest('.variable-item')!);
+
+    expect(screen.getByText('Edit variable k_rate')).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText('Default value'), { target: { value: '2.5' } });
+    fireEvent.click(screen.getByText('Save'));
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variables: expect.objectContaining({
+          k_rate: expect.objectContaining({ default: 2.5 })
+        })
+      })
+    );
+  });
+
+  it('edits event conditions inline with JSON validation instead of alert()', () => {
+    const eventModel: Model = {
+      ...mockModel,
+      continuous_events: [{
+        name: 'Threshold event',
+        conditions: ['c1'],
+        affects: [{ lhs: 'x', rhs: 0 }]
+      }]
+    };
+    const onModelChange = vi.fn();
+    render(() => <ModelEditor {...mockProps} model={eventModel} onModelChange={onModelChange} />);
+
+    // The condition edit button comes before the affect edit button in DOM order
+    fireEvent.click(screen.getAllByText('Edit')[0]);
+    const conditionInput = screen.getByLabelText('Condition (JSON)');
+
+    // Invalid JSON shows an inline error and does not modify the model
+    fireEvent.input(conditionInput, { target: { value: 'not json' } });
+    fireEvent.click(screen.getByText('Save'));
+    expect(screen.getByText('Invalid JSON format')).toBeInTheDocument();
+    expect(onModelChange).not.toHaveBeenCalled();
+
+    // Valid JSON updates the condition and closes the form
+    fireEvent.input(conditionInput, { target: { value: '{"op":">","args":["x",1]}' } });
+    fireEvent.click(screen.getByText('Save'));
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuous_events: [
+          expect.objectContaining({
+            conditions: [{ op: '>', args: ['x', 1] }]
+          })
+        ]
+      })
+    );
+    expect(screen.queryByLabelText('Condition (JSON)')).not.toBeInTheDocument();
+  });
+
+  it('adds a continuous event through the inline form', () => {
+    const onModelChange = vi.fn();
+    render(() => <ModelEditor {...mockProps} onModelChange={onModelChange} />);
+
+    fireEvent.click(screen.getByTitle('Add continuous event'));
+    fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'My Event' } });
+    fireEvent.click(screen.getByText('Add'));
+
+    expect(onModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuous_events: [
+          expect.objectContaining({ name: 'My Event' })
+        ]
+      })
+    );
+  });
+
+  it('highlights hovered variables in the equation list', () => {
+    const { container } = render(() => <ModelEditor {...mockProps} />);
+
+    expect(container.querySelector('.esm-expression-node.highlighted')).toBeNull();
+
+    // Hover the 'x' variable in the variables panel
+    const variableName = screen
+      .getAllByText('x')
+      .find(el => el.classList.contains('variable-name'))!;
+    const variableItem = variableName.closest('.variable-item')!;
+    fireEvent.mouseEnter(variableItem);
+
+    const highlighted = container.querySelector('.esm-expression-node.highlighted');
+    expect(highlighted).not.toBeNull();
+    expect(highlighted!.textContent).toBe('x');
+
+    // Leaving the variable clears the highlight
+    fireEvent.mouseLeave(variableItem);
+    expect(container.querySelector('.esm-expression-node.highlighted')).toBeNull();
+  });
+
   it('shows expression palette when enabled', () => {
     render(() => <ModelEditor {...mockProps} showPalette={true} />);
 

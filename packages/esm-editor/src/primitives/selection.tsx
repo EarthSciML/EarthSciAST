@@ -7,10 +7,16 @@
  * - Inline editing for numbers (double-click to input field)
  * - Inline editing for variables (double-click to autocomplete dropdown)
  * - onReplace callback integration for updating the store
+ *
+ * `createSelectionContext` is the single implementation; `SelectionProvider`
+ * simply wraps it in a SolidJS context provider.
  */
 
 import { createSignal, createMemo, Accessor, Setter, createContext, useContext } from 'solid-js';
 import type { Expression, ExpressionNode as ExprNode, EsmFile } from 'earthsci-toolkit';
+import { getExpressionAtPath, replaceExpressionAtPath, pathsEqual } from './path-utils';
+
+export { pathsEqual, pathToString, stringToPath } from './path-utils';
 
 // Types for selection context
 export interface SelectionContextValue {
@@ -72,69 +78,6 @@ export interface SelectionProviderProps {
   onRootReplace: (newExpr: Expression) => void;
   /** ESM file for variable suggestions */
   esmFile?: Accessor<EsmFile | null>;
-}
-
-/**
- * Get expression at a given path
- */
-function getExpressionAtPath(expr: Expression, path: (string | number)[]): Expression | null {
-  let current: any = expr;
-
-  for (const segment of path) {
-    if (current == null) return null;
-
-    if (segment === 'args' && typeof current === 'object' && 'args' in current) {
-      // Move to the args array
-      current = current.args;
-    } else if (typeof segment === 'number' && Array.isArray(current)) {
-      // Access array element by index
-      current = current[segment];
-    } else {
-      // Invalid path segment for current context
-      return null;
-    }
-  }
-
-  return current;
-}
-
-/**
- * Replace expression at a given path with a new expression
- */
-function replaceExpressionAtPath(
-  rootExpr: Expression,
-  path: (string | number)[],
-  newExpr: Expression
-): Expression {
-  if (path.length === 0) {
-    return newExpr;
-  }
-
-  // Make a deep copy of the root expression
-  let newRoot = JSON.parse(JSON.stringify(rootExpr));
-  let current: any = newRoot;
-
-  // Navigate to the parent of the target
-  for (let i = 0; i < path.length - 1; i++) {
-    const segment = path[i];
-    if (segment === 'args' && typeof current === 'object' && 'args' in current) {
-      current = current.args;
-    } else if (typeof segment === 'number' && Array.isArray(current)) {
-      current = current[segment];
-    } else {
-      throw new Error(`Invalid path segment: ${segment}`);
-    }
-  }
-
-  // Replace at the final segment
-  const lastSegment = path[path.length - 1];
-  if (typeof lastSegment === 'number' && Array.isArray(current)) {
-    current[lastSegment] = newExpr;
-  } else {
-    throw new Error(`Invalid final path segment: ${lastSegment}`);
-  }
-
-  return newRoot;
 }
 
 /**
@@ -215,147 +158,23 @@ function extractVariableNames(esmFile: EsmFile | null): string[] {
 }
 
 /**
- * Provider component for selection context
- */
-export function SelectionProvider(props: SelectionProviderProps) {
-  // Selection state
-  const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
-
-  // Inline editing state
-  const [isInlineEditing, setIsInlineEditing] = createSignal(false);
-  const [inlineEditValue, setInlineEditValue] = createSignal('');
-
-  // Check if a path is selected
-  const isSelected = (path: (string | number)[]) => {
-    const selected = selectedPath();
-    if (!selected || selected.length !== path.length) return false;
-    return selected.every((segment, i) => segment === path[i]);
-  };
-
-  // Get details for the selected node
-  const selectedNodeDetails = createMemo((): NodeDetails | null => {
-    const path = selectedPath();
-    if (!path) return null;
-
-    const rootExpr = props.rootExpression();
-    const expression = getExpressionAtPath(rootExpr, path);
-    if (!expression) return null;
-
-    const type = typeof expression === 'number' ? 'number' :
-                 typeof expression === 'string' ? 'variable' : 'operator';
-
-    const value = typeof expression === 'object' && 'op' in expression
-      ? (expression as ExprNode).op
-      : expression;
-
-    return {
-      type,
-      value: (value as string | number),
-      parentContext: getParentContext(rootExpr, path),
-      availableActions: getAvailableActions(expression),
-      path: [...path],
-      expression
-    };
-  });
-
-  // Handle node replacement
-  const onReplace = (path: (string | number)[], newExpr: Expression) => {
-    const rootExpr = props.rootExpression();
-    const newRoot = replaceExpressionAtPath(rootExpr, path, newExpr);
-    props.onRootReplace(newRoot);
-  };
-
-  // Start inline editing
-  const startInlineEdit = () => {
-    const details = selectedNodeDetails();
-    if (!details) return;
-
-    if (details.type === 'number') {
-      setInlineEditValue(String(details.value));
-      setIsInlineEditing(true);
-    } else if (details.type === 'variable') {
-      setInlineEditValue(String(details.value));
-      setIsInlineEditing(true);
-    }
-  };
-
-  // Cancel inline editing
-  const cancelInlineEdit = () => {
-    setIsInlineEditing(false);
-    setInlineEditValue('');
-  };
-
-  // Confirm inline editing
-  const confirmInlineEdit = (newValue: string) => {
-    const path = selectedPath();
-    const details = selectedNodeDetails();
-    if (!path || !details) return;
-
-    let newExpr: Expression;
-
-    if (details.type === 'number') {
-      const numValue = parseFloat(newValue);
-      if (isNaN(numValue)) return; // Invalid number
-      newExpr = numValue;
-    } else if (details.type === 'variable') {
-      if (!newValue.trim()) return; // Empty variable name
-      newExpr = newValue.trim();
-    } else {
-      return; // Can't inline edit operators
-    }
-
-    onReplace(path, newExpr);
-    cancelInlineEdit();
-  };
-
-  const contextValue: SelectionContextValue = {
-    selectedPath,
-    setSelectedPath,
-    isSelected,
-    selectedNodeDetails,
-    onReplace,
-    startInlineEdit,
-    cancelInlineEdit,
-    confirmInlineEdit,
-    isInlineEditing,
-    inlineEditValue,
-    setInlineEditValue
-  };
-
-  return (
-    <SelectionContext.Provider value={contextValue}>
-      {props.children}
-    </SelectionContext.Provider>
-  );
-}
-
-/**
- * Hook to access the selection context
- */
-export function useSelectionContext(): SelectionContextValue {
-  const context = useContext(SelectionContext);
-  if (!context) {
-    throw new Error('useSelectionContext must be used within a SelectionProvider');
-  }
-  return context;
-}
-
-/**
- * Create selection context with default settings
- * Convenience function for simple use cases
+ * Create selection context state and actions.
+ *
+ * This is the single implementation of selection + inline editing;
+ * `SelectionProvider` delegates to it.
  */
 export function createSelectionContext(
   rootExpression: Accessor<Expression>,
   onRootReplace: (newExpr: Expression) => void
-) {
+): SelectionContextValue {
   const [selectedPath, setSelectedPath] = createSignal<(string | number)[] | null>(null);
   const [isInlineEditing, setIsInlineEditing] = createSignal(false);
   const [inlineEditValue, setInlineEditValue] = createSignal('');
 
   const isSelected = (path: (string | number)[]) => {
     const selected = selectedPath();
-    if (!selected || selected.length !== path.length) return false;
-    return selected.every((segment, i) => segment === path[i]);
+    if (!selected) return false;
+    return pathsEqual(selected, path);
   };
 
   const selectedNodeDetails = createMemo((): NodeDetails | null => {
@@ -389,54 +208,92 @@ export function createSelectionContext(
     onRootReplace(newRoot);
   };
 
+  const startInlineEdit = () => {
+    const details = selectedNodeDetails();
+    if (!details) return;
+
+    if (details.type === 'number' || details.type === 'variable') {
+      setInlineEditValue(String(details.value));
+      setIsInlineEditing(true);
+    }
+  };
+
+  const cancelInlineEdit = () => {
+    setIsInlineEditing(false);
+    setInlineEditValue('');
+  };
+
+  const confirmInlineEdit = (newValue: string) => {
+    const path = selectedPath();
+    const details = selectedNodeDetails();
+    if (!path || !details) return;
+
+    let newExpr: Expression;
+
+    if (details.type === 'number') {
+      const numValue = parseFloat(newValue);
+      if (isNaN(numValue)) return; // Invalid number
+      newExpr = numValue;
+    } else if (details.type === 'variable') {
+      if (!newValue.trim()) return; // Empty variable name
+      newExpr = newValue.trim();
+    } else {
+      return; // Can't inline edit operators
+    }
+
+    onReplace(path, newExpr);
+    cancelInlineEdit();
+  };
+
   return {
     selectedPath,
     setSelectedPath,
     isSelected,
     selectedNodeDetails,
     onReplace,
-    startInlineEdit: () => {
-      const details = selectedNodeDetails();
-      if (!details) return;
-
-      if (details.type === 'number') {
-        setInlineEditValue(String(details.value));
-        setIsInlineEditing(true);
-      } else if (details.type === 'variable') {
-        setInlineEditValue(String(details.value));
-        setIsInlineEditing(true);
-      }
-    },
-    cancelInlineEdit: () => {
-      setIsInlineEditing(false);
-      setInlineEditValue('');
-    },
-    confirmInlineEdit: (newValue: string) => {
-      const path = selectedPath();
-      const details = selectedNodeDetails();
-      if (!path || !details) return;
-
-      let newExpr: Expression;
-
-      if (details.type === 'number') {
-        const numValue = parseFloat(newValue);
-        if (isNaN(numValue)) return;
-        newExpr = numValue;
-      } else if (details.type === 'variable') {
-        if (!newValue.trim()) return;
-        newExpr = newValue.trim();
-      } else {
-        return;
-      }
-
-      onReplace(path, newExpr);
-      setIsInlineEditing(false);
-      setInlineEditValue('');
-    },
+    startInlineEdit,
+    cancelInlineEdit,
+    confirmInlineEdit,
     isInlineEditing,
     inlineEditValue,
     setInlineEditValue
   };
+}
+
+/**
+ * Provider component for selection context.
+ * Delegates all state management to `createSelectionContext`.
+ */
+export function SelectionProvider(props: SelectionProviderProps) {
+  const contextValue = createSelectionContext(
+    () => props.rootExpression(),
+    (newExpr) => props.onRootReplace(newExpr)
+  );
+
+  return (
+    <SelectionContext.Provider value={contextValue}>
+      {props.children}
+    </SelectionContext.Provider>
+  );
+}
+
+/**
+ * Hook to access the selection context
+ */
+export function useSelectionContext(): SelectionContextValue {
+  const context = useContext(SelectionContext);
+  if (!context) {
+    throw new Error('useSelectionContext must be used within a SelectionProvider');
+  }
+  return context;
+}
+
+/**
+ * Non-throwing variant of `useSelectionContext` for components that work
+ * with or without a surrounding provider.
+ */
+export function useMaybeSelectionContext(): SelectionContextValue | undefined {
+  return useContext(SelectionContext);
 }
 
 /**
@@ -454,22 +311,4 @@ export function getVariableSuggestions(
   return allVars.filter(variable =>
     variable.toLowerCase().includes(lowerTerm)
   );
-}
-
-// Helper functions for path comparison and manipulation
-export function pathsEqual(path1: (string | number)[], path2: (string | number)[]): boolean {
-  if (path1.length !== path2.length) return false;
-  return path1.every((segment, i) => segment === path2[i]);
-}
-
-export function pathToString(path: (string | number)[]): string {
-  return path.join('.');
-}
-
-export function stringToPath(pathStr: string): (string | number)[] {
-  if (!pathStr) return [];
-  return pathStr.split('.').map(segment => {
-    const num = parseInt(segment, 10);
-    return isNaN(num) ? segment : num;
-  });
 }
