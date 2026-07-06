@@ -1,0 +1,151 @@
+{
+  "esm": "0.7.0",
+  "metadata": {
+    "name": "build_once_spatial_ode",
+    "description": "Cross-language conformance fixture for a BUILD-ONCE SPATIAL FIELD that is materialized once at setup and then consumed elementwise by an ODE (CONFORMANCE_SPEC.md §5.12). Model 'Field' declares three const polygon cells (`poly`, an in-file ring stack) and derives a per-cell `area[c] = polygon_intersection_area(poly[c], poly[c], planar)` — a geometry leaf that arms the build-once setup machinery, yielding area = [10, 30, 60]. It then takes a build-once centered first difference of that area with periodic wrap, `darea = D_c(area)`, authored directly as the `makearray` STENCIL a discretization rule lowers `D` to (an interior region plus the two periodic-boundary face regions, each a nested central-difference aggregate over `area`, divided by 2·dx). Both `area` (an aggregate) and `darea` (a makearray) are build-once functions of the const geometry, so they are materialized at setup into const arrays; the ODE `D(u[c]) = darea[c] - u[c]`, u(0)=0 then GATHERS the build-once `darea` per cell (`index(darea, c)`) at every RHS call. With dx=1 the difference is darea = [(30-60)/2, (60-10)/2, (10-30)/2] = [-15, 25, -10] and the trajectory u_c(t) = darea_c (1 - e^-t) is analytic and network-free. This is the ONLY fixture that exercises a NON-aggregate build-once array op (makearray) materialized at setup AND a build-once array crossing into the ODE RHS as a per-cell gather — the two gaps the terrain-regrid path surfaced in the Julia runner (a `D`-lowered makearray had no `output_idx` for the setup materializer, and the setup array was not exposed to the RHS)."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 3 },
+    "verts": { "kind": "interval", "size": 4 },
+    "coord": { "kind": "interval", "size": 2 }
+  },
+  "models": {
+    "Field": {
+      "variables": {
+        "dx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Uniform cell spacing for the centered difference (2·dx divisor)."
+        },
+        "poly": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["cells", "verts", "coord"],
+          "description": "Three const axis-aligned cell rings of widths 10/30/60 and unit height, so the self-overlap area of cell c is [10, 30, 60].",
+          "expression": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0]],
+              [[0.0, 0.0], [30.0, 0.0], [30.0, 1.0], [0.0, 1.0]],
+              [[0.0, 0.0], [60.0, 0.0], [60.0, 1.0], [0.0, 1.0]]
+            ]
+          }
+        },
+        "area": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["cells"],
+          "description": "Per-cell self-overlap area (a build-once geometry leaf that arms the setup machinery): area = [10, 30, 60].",
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": ["c"],
+            "args": ["poly"],
+            "ranges": { "c": { "from": "cells" } },
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                { "op": "index", "args": ["poly", "c"] },
+                { "op": "index", "args": ["poly", "c"] }
+              ]
+            }
+          }
+        },
+        "darea": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["cells"],
+          "description": "Build-once centered first difference of `area` with periodic wrap, authored as the makearray stencil a discretization rule lowers D to: interior region [2,2] plus the two periodic face regions [1,1] and [3,3], each a nested central-difference aggregate over `area` divided by 2·dx. darea = [-15, 25, -10].",
+          "expression": {
+            "op": "makearray",
+            "args": [],
+            "regions": [ [[2, 2]], [[1, 1]], [[3, 3]] ],
+            "values": [
+              {
+                "op": "aggregate",
+                "output_idx": ["c"],
+                "args": ["area"],
+                "ranges": { "c": [2, 2] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["area", { "op": "+", "args": ["c", 1] }] },
+                      { "op": "index", "args": ["area", { "op": "-", "args": ["c", 1] }] }
+                    ]},
+                    { "op": "*", "args": [2, "dx"] }
+                  ]
+                }
+              },
+              {
+                "op": "aggregate",
+                "output_idx": ["c"],
+                "args": ["area"],
+                "ranges": { "c": [1, 1] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["area", 2] },
+                      { "op": "index", "args": ["area", 3] }
+                    ]},
+                    { "op": "*", "args": [2, "dx"] }
+                  ]
+                }
+              },
+              {
+                "op": "aggregate",
+                "output_idx": ["c"],
+                "args": ["area"],
+                "ranges": { "c": [3, 3] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["area", 1] },
+                      { "op": "index", "args": ["area", 2] }
+                    ]},
+                    { "op": "*", "args": [2, "dx"] }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "u": {
+          "type": "state",
+          "shape": ["cells"],
+          "default": 0.0,
+          "description": "Per-cell tracer forced by the build-once spatial field darea. D(u[c]) = darea[c] - u[c]; u_c(t) = darea_c (1 - e^-t)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["c"],
+            "ranges": { "c": { "from": "cells" } },
+            "expr": { "op": "D", "args": [ { "op": "index", "args": ["u", "c"] } ], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["c"],
+            "ranges": { "c": { "from": "cells" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["darea", "c"] },
+                { "op": "index", "args": ["u", "c"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

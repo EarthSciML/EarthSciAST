@@ -41,6 +41,11 @@ pub(crate) fn validate_model(
         // This validation would be added once the types are updated to match the spec
     }
 
+    // Scoped references this model's equations may use that are NOT top-level
+    // systems: the `<sub>.<var>` fields of each DataLoader mounted as a
+    // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
+    let local_scoped = loader_subsystem_scoped_refs(model);
+
     // Check equation-unknown balance
     let ode_equations = count_ode_equations(&model.equations);
     if ode_equations != state_vars.len() {
@@ -93,6 +98,7 @@ pub(crate) fn validate_model(
                 expr,
                 &defined_vars,
                 system_refs,
+                &local_scoped,
                 &eq_path,
                 eq_idx,
                 errors,
@@ -130,6 +136,7 @@ pub(crate) fn validate_model(
                     expr,
                     &defined_vars,
                     system_refs,
+                    &local_scoped,
                     &expr_path,
                     0,
                     errors,
@@ -770,10 +777,32 @@ fn validate_rate_expression(
     }
 }
 
+/// The full scoped references `<sub>.<var>` exposed by each DataLoader mounted as
+/// a subsystem of `model` (RFC pure-io-data-loaders §4.3). `flatten` lowers each
+/// to a const-array-backed observed `<model>.<sub>.<var>`, so the owning model's
+/// own equations may reference it (`raw.k`, `index(raw.wind, …)`) even though
+/// `raw` is not a top-level system. A nested MODEL subsystem is not a DataLoader
+/// and contributes nothing. Empty for a model with no subsystems.
+fn loader_subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    let Some(subs) = &model.subsystems else {
+        return refs;
+    };
+    for (sub_name, value) in subs {
+        if let Ok(loader) = serde_json::from_value::<crate::types::DataLoader>(value.clone()) {
+            for var in loader.variables.keys() {
+                refs.insert(format!("{sub_name}.{var}"));
+            }
+        }
+    }
+    refs
+}
+
 pub(crate) fn validate_expression_references_with_systems(
     expr: &crate::Expr,
     defined_vars: &HashSet<String>,
     system_refs: &HashMap<String, SystemInfo>,
+    local_scoped: &HashSet<String>,
     base_path: &str,
     equation_index: usize,
     errors: &mut Vec<StructuralError>,
@@ -787,6 +816,14 @@ pub(crate) fn validate_expression_references_with_systems(
                 || is_builtin_function(var_name)
             {
                 return; // These are always valid
+            }
+
+            // A model-local scoped reference — a DataLoader mounted as a
+            // subsystem exposes `<sub>.<var>` to the owning model's equations
+            // (RFC pure-io-data-loaders §4.3). It is not a top-level system, so
+            // it would otherwise be flagged UnresolvedScopedRef.
+            if local_scoped.contains(var_name) {
+                return;
             }
 
             // Check for scoped references (e.g., "ModelA.x")
@@ -850,6 +887,7 @@ pub(crate) fn validate_expression_references_with_systems(
                     arg,
                     defined_vars,
                     system_refs,
+                    local_scoped,
                     base_path,
                     equation_index,
                     errors,

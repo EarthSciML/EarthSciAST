@@ -1,0 +1,19 @@
+{
+  "fixture": "subsystem_loader_ode",
+  "reference": "analytic",
+  "description": "Analytic golden for the subsystem-mounted CONST loader consumed by the owning model. Providers are seeded OFFLINE from `loaders[*].native` (no network, no file I/O): the CONST provider for `Box.raw.k` returns [2.0] (read once, consumed as a bare scalar), and the CONST provider for `Box.raw.wind` returns [99, 5, -99] (read once, element 2 = 5 consumed via `index(raw.wind, 2)`). The forcing F = k + wind[2] = 2 + 5 = 7 is constant, so c(t) = 7 (1 - e^-t) with c(0)=0 is exact.",
+  "loaders": {
+    "Box.raw.k":    {"cadence": "const", "consumption": "bare-scalar",     "native": [2.0]},
+    "Box.raw.wind": {"cadence": "const", "consumption": "gather(index=2)", "native": [99.0, 5.0, -99.0]}
+  },
+  "forcing": 7.0,
+  "cadence": {"tspan": [0.0, 5.0]},
+  "state_order": ["Box.c"],
+  "trajectory": {
+    "comment": "c(t) = F (1 - e^-t), F = Box.raw.k + Box.raw.wind[2] = 2 + 5 = 7, c(0) = 0.",
+    "0.0": {"Box.c": 0.0},
+    "1.0": {"Box.c": 4.424843911799904},
+    "2.0": {"Box.c": 6.052653017343711},
+    "5.0": {"Box.c": 6.952834371006402}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "fixture": "build_once_spatial_ode",
+  "reference": "analytic",
+  "description": "Analytic golden for a BUILD-ONCE SPATIAL FIELD materialized at setup and gathered into an ODE. `Field.area[c] = polygon_intersection_area(poly[c], poly[c], planar) = [10, 30, 60]` is a build-once geometry leaf; `Field.darea = D_c(area)` is a build-once centered first difference authored as the periodic `makearray` stencil a discretization rule lowers `D` to, giving (with dx=1) darea = [(area[2]-area[3])/2, (area[3]-area[1])/2, (area[1]-area[2])/2] = [-15, 25, -10]. The ODE D(u[c]) = darea[c] - u[c], u(0)=0 gathers the build-once `darea` per cell, so u_c(t) = darea_c (1 - e^-t) is exact. Strictly offline (no providers, no network).",
+  "setup_fields": {
+    "Field.area":  [10.0, 30.0, 60.0],
+    "Field.darea": [-15.0, 25.0, -10.0]
+  },
+  "cadence": { "tspan": [0.0, 5.0] },
+  "state_order": ["Field.u[1]", "Field.u[2]", "Field.u[3]"],
+  "trajectory": {
+    "comment": "u_c(t) = darea_c (1 - e^-t), darea = [-15, 25, -10], u(0)=0.",
+    "0.0": { "Field.u[1]":  0.0,                 "Field.u[2]":  0.0,                "Field.u[3]":  0.0 },
+    "1.0": { "Field.u[1]": -9.481808382428365,   "Field.u[2]": 15.803013970713941,  "Field.u[3]": -6.321205588285577 },
+    "3.0": { "Field.u[1]": -14.253193974482041,  "Field.u[2]": 23.7553232908034,    "Field.u[3]": -9.50212931632136 },
+    "5.0": { "Field.u[1]": -14.898930795013717,  "Field.u[2]": 24.831551325022865,  "Field.u[3]": -9.932620530009146 }
+  }
+}

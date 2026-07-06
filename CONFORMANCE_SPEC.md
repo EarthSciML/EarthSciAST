@@ -1465,6 +1465,148 @@ golden, **failing loudly** on any divergence. `bindings_required` is currently
 the Python (`ess-14f.2`) and Julia (`ess-14f.6`) consumer adapters reproduce the
 same golden and move themselves into `bindings_required` when wired.
 
+### 5.11 Subsystem-Mounted Loader Consumption (normative)
+
+§5.10 governs **top-level** `data_loaders` fed to a model through a coupling
+edge. This section governs a pure-I/O data loader **mounted as a model
+subsystem** (RFC `pure-io-data-loaders` §4.3 — `models.X.subsystems.raw =
+<DataLoader>`) and consumed by the **owning model's own equations** by the
+existing dot-notation (`raw.field`, lowered to the observed `<owner>.raw.field`).
+The two simulation bindings that support it — **Python, Julia** — must agree, on
+a **numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/subsystem_loader/`.
+
+This closes a gap the §5.10 top-level/`variable_map` fixtures do not cover: the
+loader is a **subsystem of the consumer**, and it is consumed both by a
+**bare-scalar** reference (`raw.k`) and by a **gather** (`index(raw.wind, 2)`).
+The bare-scalar path is the one that previously failed — Julia raised
+`E_TREEWALK_UNBOUND_VARIABLE: <owner>.<subkey>.<var>`, and Python's structural
+validator rejected the 2-part `raw.field` reference.
+
+#### 5.11.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it, and asserts each
+DataLoader-subsystem variable lowered to a const-array-backed **observed**
+`<owner>.<subkey>.<var>` with **no defining equation** (its value is a pure-I/O
+external input). It seeds one **offline CONST provider** per loader field from the
+golden's `loaders[*].native`, integrates `D(c) = (raw.k + wind[2]) - c` (c(0)=0)
+with the pinned integrator, and compares each golden `trajectory` point's `Box.c`.
+The forcing `F = k + wind[2] = 2 + 5 = 7` is constant, so `c(t) = 7 (1 - e^-t)` is
+analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+#### 5.11.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.10, trajectories MUST NOT be asserted byte-identical; the integrator is
+pinned per binding in `manifest.json` (`integrators`). Providers are seeded from
+`golden.loaders[*].native` — **no network, no file I/O** — so the suite is
+deterministic and CI-safe.
+
+#### 5.11.3 Coverage
+
+The fixture `subsystem_loader_ode` is a 0-D ODE whose model `Box` mounts a static
+(CONST) loader `raw` exposing a scalar `k` and a 3-element `wind`, consuming `k`
+bare and `wind` via `index(raw.wind, 2)`. It exercises: subsystem-mount lowering
+to `<owner>.<subkey>.<var>` observeds, **bare-scalar** loader consumption,
+**gather** loader consumption, and CONST-once materialization.
+
+#### 5.11.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`packages/EarthSciSerialization.jl/test/subsystem_loader_conformance_test.jl`;
+**Python** —
+`packages/earthsci_toolkit/tests/test_subsystem_loader_conformance.py`;
+**Rust** —
+`packages/earthsci-toolkit-rs/tests/subsystem_loader_conformance.rs`.
+`bindings_required` is `["python", "julia", "rust"]`. Rust's flattener now lowers
+a DataLoader mounted as a model subsystem (`flatten.rs`
+`lower_loader_subsystems`): each loader variable becomes a const-array-backed
+observed `Box.raw.<var>` with no defining expression, and the owner's bare
+`raw.<var>` references are namespaced to `Box.raw.<var>`; both resolve at the RHS
+through the existing data-Provider forcing seam (`ArrayCompiled::forcing_handle`),
+a bare-scalar field seeded as a 0-D array and a gathered field as a 1-D array.
+
+### 5.12 Build-Once Spatial-Field Consumption (normative)
+
+§5.8 governs the build-once conservative-regrid **areas**; §5.11 governs binding a
+CONST **loader** field. This section governs a **build-once spatial field** — a
+`const`-derived array **regridded and/or differentiated** once at setup — that is
+then **consumed elementwise by an ODE**. It is the pattern a coupling emits when a
+static field (e.g. loader/const terrain elevation) is regridded onto a model grid
+and differentiated (`grad`/`D`) into a per-cell forcing that flows into the ODE
+RHS (`wildlandfire.esm`'s `TerrainRegrid` → `TerrainSlope`). The two simulation
+bindings that support it — **Julia, Python** — must agree, on a
+**numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/build_once_spatial_field/`.
+
+This closes two gaps the §5.8 / §5.11 fixtures do not cover, both on the
+build-once materialization ⇄ RHS seam:
+
+1. **A build-once array op that is NOT an aggregate.** A discretization rule
+   lowers `D(field)` to a `makearray` STENCIL (interior + periodic-boundary
+   regions, each a nested central-difference aggregate), and a shape rewrite may
+   emit a `reshape`. Neither carries `output_idx`/`ranges`, so the setup-time
+   materializer must evaluate them per output cell through the **same** build-time
+   array pipeline the ODE RHS uses for `index(makearray, …)` — not only the
+   aggregate (`output_idx`) form.
+2. **A build-once array crossing into the ODE RHS.** A field materialized at
+   setup must be exposed to the ODE RHS as a **gatherable const array**, so a
+   per-cell reference `index(darea, c)` (after shape promotion of a scalar
+   consumer of the spatial field) resolves against the setup-registered const
+   arrays.
+
+#### 5.12.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it (asserting `Field.area`
+and `Field.darea` are observeds, not integrated state slots), and integrates
+`D(u[c]) = darea[c] - u[c]` (u(0)=0) with the pinned integrator, comparing each
+golden `trajectory` point's `Field.u[c]`. Julia additionally asserts the
+materialized `setup_fields` (`Field.area = [10, 30, 60]`, `Field.darea =
+[-15, 25, -10]`) through `BuildInspection`. The forcing is CONST, so
+`u_c(t) = darea_c (1 - e^-t)` is analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+#### 5.12.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.11, trajectories MUST NOT be asserted byte-identical; the integrator is
+pinned per binding in `manifest.json` (`integrators`). The fixture takes no
+providers — the source field is an in-file `const` polygon stack — so the suite is
+deterministic and CI-safe.
+
+#### 5.12.3 Coverage
+
+The fixture `build_once_spatial_ode` is a 0-D-per-cell array ODE whose model
+`Field` declares three const polygon cells, derives `area[c] =
+polygon_intersection_area(poly[c], poly[c], planar)` (a geometry leaf arming the
+build-once setup machinery), differentiates it build-once with a periodic
+`makearray` (`darea = D_c(area)`), and forces `D(u[c]) = darea[c] - u[c]`. It
+exercises: setup-time materialization of a **makearray** (Gap 1), a build-once
+array **gathered into the ODE RHS** (Gap 2), and CONST build-once materialization.
+
+#### 5.12.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`packages/EarthSciSerialization.jl/test/build_once_spatial_field_conformance_test.jl`;
+**Python** —
+`packages/earthsci_toolkit/tests/test_build_once_spatial_field_conformance.py`;
+**Rust** —
+`packages/earthsci-toolkit-rs/tests/build_once_spatial_field_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]` (Julia is where the two gaps
+were fixed — the setup-materializer + const-array crossing; Python and Rust
+already evaluate `polygon_intersection_area` + `makearray` + the array ODE
+end-to-end, resolving the build-once field at the RHS rather than at a separate
+setup pass, so the numeric result matches Julia's setup-materialized path). Rust
+drives the composed path through its `simulate_array` runtime with no source
+changes required to enable it.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

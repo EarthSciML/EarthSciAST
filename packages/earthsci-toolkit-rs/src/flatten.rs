@@ -677,11 +677,79 @@ struct SystemBlock {
     discrete_events: Vec<DiscreteEvent>,
 }
 
+/// Lower every DataLoader mounted as a model subsystem (esm-spec §4.6; RFC
+/// `pure-io-data-loaders` §4.3; CONFORMANCE_SPEC §5.11) into const-array-backed
+/// observeds named `<system>.<sub>.<var>` — one per exposed loader variable,
+/// carrying **no defining expression**: their values are pure-I/O external
+/// inputs injected at the RHS boundary through the data-Provider forcing seam
+/// ([`crate::simulate_array::ArrayCompiled::forcing_handle`]), keyed by the same
+/// name. So the owning model's own equations consume a subsystem field both as a
+/// bare scalar (`raw.k` → observed `Box.raw.k`) and via a gather
+/// (`index(raw.wind, 2)` → observed `Box.raw.wind`).
+///
+/// Returns `(observeds, subsys_keys)`. `subsys_keys` is the set of loader
+/// subsystem names whose bare dotted references (`raw.k`) must be
+/// model-namespaced (`Box.raw.k`) by [`namespace_expr_with_subsys`]. A nested
+/// MODEL subsystem — one that does not parse as a [`DataLoader`] — is left
+/// untouched here (and out of `subsys_keys`); the array runtime mounts those via
+/// its own `mount_subsystems`. Byte-identical (empty result) for a model with no
+/// subsystems.
+fn lower_loader_subsystems(
+    system_name: &str,
+    model: &Model,
+) -> (IndexMap<String, ModelVariable>, HashSet<String>) {
+    let mut observeds = IndexMap::new();
+    let mut keys = HashSet::new();
+    let Some(subs) = &model.subsystems else {
+        return (observeds, keys);
+    };
+    let mut sub_names: Vec<&String> = subs.keys().collect();
+    sub_names.sort();
+    for sub_name in sub_names {
+        // A DataLoader subsystem round-trips through `DataLoader`; anything else
+        // (a nested model, a `{ "ref": … }`) does not and is skipped.
+        let Ok(loader) = serde_json::from_value::<DataLoader>(subs[sub_name].clone()) else {
+            continue;
+        };
+        keys.insert(sub_name.clone());
+        let mut var_names: Vec<&String> = loader.variables.keys().collect();
+        var_names.sort();
+        for vname in var_names {
+            let lv = &loader.variables[vname];
+            let observed_name = format!("{system_name}.{sub_name}.{vname}");
+            observeds.insert(
+                observed_name,
+                ModelVariable {
+                    var_type: VariableType::Observed,
+                    units: Some(lv.units.clone()),
+                    default: None,
+                    description: lv.description.clone(),
+                    // No defining equation: the value is served at the RHS
+                    // boundary by the provider forcing seam, keyed by this name.
+                    expression: None,
+                    shape: None,
+                    location: None,
+                    noise_kind: None,
+                    correlation_group: None,
+                },
+            );
+        }
+    }
+    (observeds, keys)
+}
+
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
     let mut observed_vars = IndexMap::new();
     let mut brownian_vars = IndexMap::new();
+
+    // Lower each DataLoader mounted as a subsystem into const-array-backed
+    // observeds `<system>.<sub>.<var>` (RFC `pure-io-data-loaders` §4.3). Their
+    // bare references (`raw.k`) must be model-namespaced (`Box.raw.k`), which the
+    // generic `namespace_expr` — treating any dotted reference as
+    // already-namespaced — would otherwise leave untouched.
+    let (loader_observeds, subsys_keys) = lower_loader_subsystems(system_name, model);
 
     let mut var_names: Vec<&String> = model.variables.keys().collect();
     var_names.sort();
@@ -690,7 +758,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         let namespaced = format!("{system_name}.{var_name}");
         let mut cloned = var.clone();
         if let Some(expr) = cloned.expression {
-            cloned.expression = Some(namespace_expr(&expr, system_name));
+            cloned.expression = Some(namespace_expr_with_subsys(&expr, system_name, &subsys_keys));
         }
         match var.var_type {
             VariableType::State => {
@@ -707,13 +775,16 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             }
         }
     }
+    // The subsystem-loader observeds carry no defining expression (value injected
+    // at the RHS through the provider forcing seam), so they need no namespacing.
+    observed_vars.extend(loader_observeds);
 
     let equations: Vec<Equation> = model
         .equations
         .iter()
         .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name),
-            rhs: namespace_expr(&eq.rhs, system_name),
+            lhs: namespace_expr_with_subsys(&eq.lhs, system_name, &subsys_keys),
+            rhs: namespace_expr_with_subsys(&eq.rhs, system_name, &subsys_keys),
         })
         .collect();
 
@@ -832,16 +903,40 @@ fn build_reaction_block(
 /// positionally against `loop_binds`, never against the variable registry — so
 /// they are excluded from namespacing within that node's scope (ess-14f.8).
 fn namespace_expr(expr: &Expr, system_name: &str) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new())
+    namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new())
 }
 
-fn namespace_expr_scoped(expr: &Expr, system_name: &str, bound: &HashSet<String>) -> Expr {
+/// [`namespace_expr`] that additionally model-namespaces bare subsystem-local
+/// references: a dotted reference `<sub>.<rest>` whose head `<sub>` is a declared
+/// subsystem key becomes `<system>.<sub>.<rest>`. The default rule treats *any*
+/// dotted name as already-namespaced (correct for a cross-component reference,
+/// wrong for a subsystem-local one), so `subsys` is the exception set.
+fn namespace_expr_with_subsys(expr: &Expr, system_name: &str, subsys: &HashSet<String>) -> Expr {
+    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys)
+}
+
+fn namespace_expr_scoped(
+    expr: &Expr,
+    system_name: &str,
+    bound: &HashSet<String>,
+    subsys: &HashSet<String>,
+) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
         Expr::Integer(n) => Expr::Integer(*n),
         Expr::Variable(name) => {
-            if name.contains('.') || name == "t" || bound.contains(name) {
+            if name == "t" || bound.contains(name) {
                 Expr::Variable(name.clone())
+            } else if name.contains('.') {
+                // A dotted reference is already-namespaced UNLESS its head is a
+                // subsystem key, in which case it is a subsystem-local reference
+                // (`raw.k`) that must be lifted to `<system>.raw.k`.
+                let head = name.split('.').next().unwrap_or("");
+                if subsys.contains(head) {
+                    Expr::Variable(format!("{system_name}.{name}"))
+                } else {
+                    Expr::Variable(name.clone())
+                }
             } else {
                 Expr::Variable(format!("{system_name}.{name}"))
             }
@@ -872,7 +967,7 @@ fn namespace_expr_scoped(expr: &Expr, system_name: &str, bound: &HashSet<String>
             out.args = node
                 .args
                 .iter()
-                .map(|a| namespace_expr_scoped(a, system_name, &child_bound))
+                .map(|a| namespace_expr_scoped(a, system_name, &child_bound, subsys))
                 .collect();
             out.wrt = node.wrt.as_ref().map(|w| {
                 if w.contains('.') || w == "t" || child_bound.contains(w) {
@@ -884,22 +979,22 @@ fn namespace_expr_scoped(expr: &Expr, system_name: &str, bound: &HashSet<String>
             out.expr = node
                 .expr
                 .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound)));
+                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
             out.filter = node
                 .filter
                 .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound)));
+                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
             out.lower = node
                 .lower
                 .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound)));
+                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
             out.upper = node
                 .upper
                 .as_ref()
-                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound)));
+                .map(|e| Box::new(namespace_expr_scoped(e, system_name, &child_bound, subsys)));
             out.values = node.values.as_ref().map(|vs| {
                 vs.iter()
-                    .map(|v| namespace_expr_scoped(v, system_name, &child_bound))
+                    .map(|v| namespace_expr_scoped(v, system_name, &child_bound, subsys))
                     .collect()
             });
             out.axes = node.axes.as_ref().map(|axes| {
@@ -907,7 +1002,7 @@ fn namespace_expr_scoped(expr: &Expr, system_name: &str, bound: &HashSet<String>
                     .map(|(k, v)| {
                         (
                             k.clone(),
-                            namespace_expr_scoped(v, system_name, &child_bound),
+                            namespace_expr_scoped(v, system_name, &child_bound, subsys),
                         )
                     })
                     .collect()
