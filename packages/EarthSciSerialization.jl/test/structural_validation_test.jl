@@ -5,11 +5,13 @@ Tests for ESM Format structural validation functionality.
 using Test
 using EarthSciSerialization
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
+
 @testset "Structural Validation" begin
 
     @testset "StructuralError struct" begin
-        error = EarthSciSerialization.StructuralError("models.test.equations", "Test error message", "missing_equation")
-        @test error.path == "models.test.equations"
+        error = EarthSciSerialization.StructuralError("/models/test/equations", "Test error message", "missing_equation")
+        @test error.path == "/models/test/equations"
         @test error.message == "Test error message"
         @test error.error_type == "missing_equation"
     end
@@ -55,7 +57,7 @@ using EarthSciSerialization
 
             errors = EarthSciSerialization.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "models.test_model.equations"
+            @test errors[1].path == "/models/test_model/equations"
             @test occursin("State variable 'y' has no defining equation", errors[1].message)
             @test errors[1].error_type == "missing_equation"
         end
@@ -70,7 +72,7 @@ using EarthSciSerialization
 
             errors = EarthSciSerialization.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "reaction_systems.test_reactions.reactions[1].products"
+            @test errors[1].path == "/reaction_systems/test_reactions/reactions/0/products"
             @test occursin("Species 'C' not declared", errors[1].message)
             @test errors[1].error_type == "undefined_species"
         end
@@ -92,7 +94,7 @@ using EarthSciSerialization
 
             errors = EarthSciSerialization.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "reaction_systems.test_reactions.reactions[1]"
+            @test errors[1].path == "/reaction_systems/test_reactions/reactions/0"
             @test occursin("null-null reaction", errors[1].message)
             @test errors[1].error_type == "null_reaction"
         end
@@ -115,7 +117,7 @@ using EarthSciSerialization
 
             errors = EarthSciSerialization.validate_structural(esm_file)
             @test length(errors) == 1
-            @test errors[1].path == "models.test_model.continuous_events[1].affects[1]"
+            @test errors[1].path == "/models/test_model/continuous_events/0/affects/0"
             @test occursin("Affect target variable 'undefined_var' not declared", errors[1].message)
             @test errors[1].error_type == "undefined_affect_variable"
         end
@@ -185,14 +187,14 @@ using EarthSciSerialization
 
             # Valid system reference
             coupling = EarthSciSerialization.CouplingOperatorCompose(["test_model"])
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "/coupling/0")
             @test isempty(errors)
 
             # Invalid system reference
             coupling_bad = EarthSciSerialization.CouplingOperatorCompose(["nonexistent_system"])
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "coupling[1].systems[1]"
+            @test errors[1].path == "/coupling/0/systems/0"
             @test occursin("nonexistent_system", errors[1].message)
             @test errors[1].error_type == "undefined_system"
         end
@@ -203,14 +205,14 @@ using EarthSciSerialization
 
             # Valid operator reference
             coupling = EarthSciSerialization.CouplingOperatorApply("test_op")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "/coupling/0")
             @test isempty(errors)
 
             # Invalid operator reference
             coupling_bad = EarthSciSerialization.CouplingOperatorApply("nonexistent_op")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "coupling[1].operator"
+            @test errors[1].path == "/coupling/0/operator"
             @test occursin("nonexistent_op", errors[1].message)
             @test errors[1].error_type == "undefined_operator"
         end
@@ -220,14 +222,14 @@ using EarthSciSerialization
 
             # Valid callback
             coupling = EarthSciSerialization.CouplingCallback("my_callback")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "/coupling/0")
             @test isempty(errors)
 
             # Empty callback ID
             coupling_bad = EarthSciSerialization.CouplingCallback("")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "coupling[1].callback_id"
+            @test errors[1].path == "/coupling/0/callback_id"
             @test occursin("empty", errors[1].message)
             @test errors[1].error_type == "empty_callback_id"
         end
@@ -239,22 +241,22 @@ using EarthSciSerialization
 
             # Valid variable mapping
             coupling = EarthSciSerialization.CouplingVariableMap("test_model.x", "test_model.x", "identity")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling, "/coupling/0")
             @test isempty(errors)
 
             # Invalid 'from' reference
             coupling_bad_from = EarthSciSerialization.CouplingVariableMap("invalid.ref", "test_model.x", "identity")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad_from, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad_from, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "coupling[1].from"
+            @test errors[1].path == "/coupling/0/from"
             @test occursin("invalid.ref", errors[1].message)
             @test errors[1].error_type == "unresolved_reference"
 
             # Invalid 'to' reference
             coupling_bad_to = EarthSciSerialization.CouplingVariableMap("test_model.x", "invalid.ref", "identity")
-            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad_to, "coupling[1]")
+            errors = EarthSciSerialization.validate_coupling_references(esm_file, coupling_bad_to, "/coupling/0")
             @test length(errors) == 1
-            @test errors[1].path == "coupling[1].to"
+            @test errors[1].path == "/coupling/0/to"
             @test occursin("invalid.ref", errors[1].message)
             @test errors[1].error_type == "unresolved_reference"
         end
@@ -308,15 +310,16 @@ using EarthSciSerialization
         end
 
         @testset "Invalid fixture units_reaction_rate_mismatch.esm is rejected" begin
-            fixture_path = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid", "units_reaction_rate_mismatch.esm")
-            if isfile(fixture_path)
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_reaction_rate_mismatch.esm")
+            if _require_fixture(fixture_path)
                 esm_data = EarthSciSerialization.load(fixture_path)
                 result = EarthSciSerialization.validate(esm_data)
                 @test !result.is_valid
                 @test any(e -> e.error_type == "unit_inconsistency", result.structural_errors)
-            else
-                @warn "Fixture not found: $fixture_path"
-                @test_broken false
+                # Unit findings are mirrored into unit_warnings (TS-binding parity)
+                @test !isempty(result.unit_warnings)
+                @test length(result.unit_warnings) ==
+                      count(e -> e.error_type == "unit_inconsistency", result.structural_errors)
             end
         end
 
@@ -326,8 +329,8 @@ using EarthSciSerialization
         # at the usage site `gas_law_calculation` (mirrors Python's
         # parse._check_physical_constant_units, gt-3tgv).
         @testset "Invalid fixture units_dimensional_constant_error.esm is rejected" begin
-            fixture_path = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid", "units_dimensional_constant_error.esm")
-            if isfile(fixture_path)
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_dimensional_constant_error.esm")
+            if _require_fixture(fixture_path)
                 esm_data = EarthSciSerialization.load(fixture_path)
                 result = EarthSciSerialization.validate(esm_data)
                 @test !result.is_valid
@@ -342,9 +345,6 @@ using EarthSciSerialization
                     @test occursin("kcal/mol", err.message)
                     @test occursin("J/(mol*K)", err.message)
                 end
-            else
-                @warn "Fixture not found: $fixture_path"
-                @test_broken false
             end
         end
 
@@ -436,9 +436,9 @@ using EarthSciSerialization
         end
 
         @testset "Invalid fixture units_conversion_factor_error.esm is rejected" begin
-            fixture_path = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid",
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
                                     "units_conversion_factor_error.esm")
-            if isfile(fixture_path)
+            if _require_fixture(fixture_path)
                 esm_data = EarthSciSerialization.load(fixture_path)
                 result = EarthSciSerialization.validate(esm_data)
                 @test !result.is_valid
@@ -452,9 +452,6 @@ using EarthSciSerialization
                     @test occursin("declared_factor=50000", err.message)
                     @test occursin("expected_factor=101325", err.message)
                 end
-            else
-                @warn "Fixture not found: $fixture_path"
-                @test_broken false
             end
         end
     end
@@ -512,8 +509,8 @@ using EarthSciSerialization
         end
 
         @testset "Invalid fixture units_gradient_operator_mismatch.esm surfaces the grad error" begin
-            fixture_path = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid", "units_gradient_operator_mismatch.esm")
-            if isfile(fixture_path)
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_gradient_operator_mismatch.esm")
+            if _require_fixture(fixture_path)
                 esm_data = EarthSciSerialization.load(fixture_path)
                 result = EarthSciSerialization.validate(esm_data)
                 @test !result.is_valid
@@ -522,9 +519,6 @@ using EarthSciSerialization
                                        occursin("coordinate 'x' has no declared units", e.message),
                                   result.structural_errors)
                 @test length(matching) == 1
-            else
-                @warn "Fixture not found: $fixture_path"
-                @test_broken false
             end
         end
     end

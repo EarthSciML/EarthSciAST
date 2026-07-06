@@ -89,17 +89,61 @@ using Unitful
         @test dims_speed !== nothing
         @test dimension(dims_speed) == Unitful.𝐋/Unitful.𝐓
 
-        # Test unknown variable - should return nothing but this implementation may have issues
+        # Unknown variable: dimensions are UNKNOWN (nothing), not assumed
+        # dimensionless — nothing propagates so callers skip rather than warn.
         var_expr_unknown = VarExpr("unknown")
         dims_unknown = EarthSciSerialization.get_expression_dimensions(var_expr_unknown, var_units)
-        # Just test it doesn't crash
-        @test dims_unknown isa Union{Unitful.Units, Nothing}
+        @test dims_unknown === nothing
 
         # Test basic OpExpr (multiplication works better than addition with mixed units)
         mul_expr = OpExpr("*", EarthSciSerialization.Expr[VarExpr("x"), VarExpr("y")])
         dims_mul = EarthSciSerialization.get_expression_dimensions(mul_expr, var_units)
         @test dims_mul !== nothing
         @test dimension(dims_mul) == Unitful.𝐋 * Unitful.𝐓
+    end
+
+    @testset "Expression Dimensions: extended op coverage" begin
+        E = EarthSciSerialization.Expr
+        var_units = Dict("x" => "m", "y" => "m", "z" => "s", "f" => "")
+
+        # min/max: same-dimension args carry the dimension through
+        mm = EarthSciSerialization.get_expression_dimensions(
+            OpExpr("max", E[VarExpr("x"), VarExpr("y")]), var_units)
+        @test mm !== nothing
+        @test dimension(mm) == Unitful.𝐋
+        # min/max mismatched dimensions -> nothing (with a warning)
+        bad = @test_logs (:warn,) match_mode=:any EarthSciSerialization.get_expression_dimensions(
+            OpExpr("min", E[VarExpr("x"), VarExpr("z")]), var_units)
+        @test bad === nothing
+
+        # ifelse: branch dimensions carry through (condition irrelevant)
+        ie = EarthSciSerialization.get_expression_dimensions(
+            OpExpr("ifelse", E[VarExpr("f"), VarExpr("x"), VarExpr("y")]), var_units)
+        @test ie !== nothing
+        @test dimension(ie) == Unitful.𝐋
+
+        # sign strips dimensions
+        sg = EarthSciSerialization.get_expression_dimensions(
+            OpExpr("sign", E[VarExpr("x")]), var_units)
+        @test sg == Unitful.NoUnits
+
+        # abs preserves dimensions
+        ab = EarthSciSerialization.get_expression_dimensions(
+            OpExpr("abs", E[VarExpr("x")]), var_units)
+        @test ab !== nothing
+        @test dimension(ab) == Unitful.𝐋
+
+        # log10 / tanh: dimensionless in, dimensionless out
+        for op in ("log10", "tanh")
+            r = EarthSciSerialization.get_expression_dimensions(
+                OpExpr(op, E[VarExpr("f")]), var_units)
+            @test r == Unitful.NoUnits
+        end
+
+        # An op with no dimensional rule degrades silently to nothing
+        unk = EarthSciSerialization.get_expression_dimensions(
+            OpExpr("some_unknown_op", E[VarExpr("x")]), var_units)
+        @test unk === nothing
     end
 
     @testset "Equation Validation" begin
@@ -150,6 +194,25 @@ using Unitful
         # Should validate correctly
         result = EarthSciSerialization.validate_model_dimensions(model)
         @test result isa Bool  # Just test that it returns a boolean without error
+    end
+
+    @testset "Reaction System Dimension Validation (delegates to §7.4 rule)" begin
+        # Mirrors validate_reaction_rate_units: a second-order reaction with a
+        # first-order rate constant fails; the fixed one passes.
+        SE = EarthSciSerialization.StoichiometryEntry
+        species = [
+            Species("A"; units="mol/L", default=1.0),
+            Species("B"; units="mol/L", default=1.0),
+            Species("C"; units="mol/L", default=0.0),
+        ]
+        rxn = Reaction("R1", [SE("A", 1), SE("B", 1)], [SE("C", 1)], VarExpr("k"))
+
+        bad = ReactionSystem(species, [rxn]; parameters=[Parameter("k", 0.1; units="1/s")])
+        result_bad = @test_logs (:warn,) match_mode=:any EarthSciSerialization.validate_reaction_system_dimensions(bad)
+        @test result_bad == false
+
+        good = ReactionSystem(species, [rxn]; parameters=[Parameter("k", 0.1; units="L/(mol*s)")])
+        @test EarthSciSerialization.validate_reaction_system_dimensions(good) == true
     end
 
     @testset "File Validation" begin

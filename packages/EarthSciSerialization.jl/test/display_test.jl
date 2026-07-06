@@ -18,6 +18,11 @@ using EarthSciSerialization
         @test EarthSciSerialization.has_element_pattern("temp") == false
         @test EarthSciSerialization.has_element_pattern("H") == true
         @test EarthSciSerialization.has_element_pattern("He") == true
+
+        # Non-ASCII names must not throw StringIndexError
+        @test EarthSciSerialization.has_element_pattern("α2") == false
+        @test EarthSciSerialization.has_element_pattern("αH2O") == true
+        @test EarthSciSerialization.has_element_pattern("θ") == false
     end
 
     @testset "Chemical Formula Formatting" begin
@@ -39,6 +44,11 @@ using EarthSciSerialization
         @test EarthSciSerialization.format_chemical_subscripts("CO2", :ascii) == "CO2"   # No subscripts in ASCII
         @test EarthSciSerialization.format_chemical_subscripts("NH3", :ascii) == "NH3"   # No subscripts in ASCII
         @test EarthSciSerialization.format_chemical_subscripts("temp", :ascii) == "temp" # Non-chemical variable unchanged
+
+        # Non-ASCII names must not throw and pass through / subscript correctly
+        @test EarthSciSerialization.format_chemical_subscripts("α2", :unicode) == "α2"
+        @test EarthSciSerialization.format_chemical_subscripts("αH2O", :unicode) == "αH₂O"
+        @test EarthSciSerialization.format_chemical_subscripts("α2", :ascii) == "α2"
     end
 
     @testset "Number Formatting" begin
@@ -148,17 +158,87 @@ using EarthSciSerialization
     end
 
     @testset "EsmFile Display" begin
-        # Test EsmFile show method
         metadata = Metadata("test_model", description="Test model")
         esm_file = EsmFile("0.1.0", metadata)
 
+        # 2-arg show: compact one-liner (used in reprs and collections)
         io = IOBuffer()
         show(io, esm_file)
         output = String(take!(io))
-        # Just test that show produces some output with the basic info
         @test Base.contains(output, "test_model")
         @test Base.contains(output, "0.1.0")
-        @test length(output) > 0
+        @test !Base.contains(output, "\n")
+
+        # 3-arg text/plain show: multi-line structured summary
+        show(io, MIME("text/plain"), esm_file)
+        plain = String(take!(io))
+        @test Base.contains(plain, "ESM v0.1.0: test_model")
+        @test Base.contains(plain, "Description: Test model")
+    end
+
+    @testset "Model and ReactionSystem Display" begin
+        variables = Dict(
+            "x" => ModelVariable(StateVariable, default=1.0),
+            "k" => ModelVariable(ParameterVariable, default=0.5),
+        )
+        equations = [Equation(
+            OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t"),
+            OpExpr("*", EarthSciSerialization.Expr[VarExpr("k"), VarExpr("x")]),
+        )]
+        model = Model(variables, equations)
+
+        # 2-arg show: compact, single line — safe inside collections
+        io = IOBuffer()
+        show(io, model)
+        compact = String(take!(io))
+        @test compact == "Model(2 variables, 1 equations)"
+        @test !Base.contains(compact, "\n")
+
+        # 3-arg text/plain show: full multi-line listing
+        show(io, MIME("text/plain"), model)
+        plain = String(take!(io))
+        @test Base.contains(plain, "Model:")
+        @test Base.contains(plain, "Variables (2):")
+        @test Base.contains(plain, "Equations (1):")
+
+        rs = ReactionSystem(
+            [Species("A"), Species("B")],
+            [Reaction("r1",
+                      [EarthSciSerialization.StoichiometryEntry("A", 1)],
+                      [EarthSciSerialization.StoichiometryEntry("B", 1)],
+                      VarExpr("k"))];
+            parameters=[Parameter("k", 0.1)],
+        )
+
+        show(io, rs)
+        rs_compact = String(take!(io))
+        @test rs_compact == "ReactionSystem(2 species, 1 reactions)"
+        @test !Base.contains(rs_compact, "\n")
+
+        show(io, MIME("text/plain"), rs)
+        rs_plain = String(take!(io))
+        @test Base.contains(rs_plain, "ReactionSystem:")
+        @test Base.contains(rs_plain, "Species (2):")
+        @test Base.contains(rs_plain, "Reactions (1):")
+    end
+
+    @testset "min/max render as function calls for any arity" begin
+        E = EarthSciSerialization.Expr
+        two = OpExpr("max", E[VarExpr("a"), VarExpr("b")])
+        three = OpExpr("min", E[VarExpr("a"), VarExpr("b"), VarExpr("c")])
+        @test EarthSciSerialization.format_expression_unicode(two) == "max(a, b)"
+        @test EarthSciSerialization.format_expression_ascii(two) == "max(a, b)"
+        @test EarthSciSerialization.format_expression_latex(two) == "\\max(a, b)"
+        @test EarthSciSerialization.format_expression_unicode(three) == "min(a, b, c)"
+    end
+
+    @testset "to_ascii dispatch" begin
+        @test to_ascii(nothing) == "nothing"
+        @test to_ascii(2.5) == "2.5"
+        @test to_ascii("H2O") == "H2O"
+        eq = Equation(VarExpr("y"), OpExpr("+", EarthSciSerialization.Expr[VarExpr("x"), NumExpr(1.0)]))
+        @test to_ascii(eq) == "y = x + 1"
+        @test_throws ArgumentError to_ascii(:a_symbol)
     end
 
 end

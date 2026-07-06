@@ -168,6 +168,10 @@ the dependency edges, deterministic (sorted vertices, sorted neighbours).
 function detect_cycle(g::ReferenceGraph)
     WHITE, GREY, BLACK = 0, 1, 2
     colour = Dict{String,Int}(k => WHITE for k in keys(g.vertices))
+    # Precompute sorted adjacency once: the DFS revisits each vertex's
+    # neighbour list once per outgoing edge, and re-sorting per visit was
+    # needless repeated work.
+    sorted_out = Dict{String,Vector{String}}(k => sort(v) for (k, v) in g.out)
     for start in sort(collect(keys(g.vertices)))
         get(colour, start, WHITE) == WHITE || continue
         stack = Tuple{String,Int}[(start, 1)]   # (vertex, 1-based neighbour index)
@@ -175,7 +179,7 @@ function detect_cycle(g::ReferenceGraph)
         colour[start] = GREY
         while !isempty(stack)
             node, i = stack[end]
-            neigh = sort(get(g.out, node, String[]))
+            neigh = get(sorted_out, node, String[])
             if i <= length(neigh)
                 stack[end] = (node, i + 1)
                 nxt = neigh[i]
@@ -211,18 +215,24 @@ function topological_order(g::ReferenceGraph)
         E_REF_CYCLE, "reference cycle detected: " * join(cyc, " -> "), cyc))
     emitted = String[]
     done = Set{String}()
-    keys_sorted = sort(collect(keys(g.vertices)))
-    while length(emitted) < length(g.vertices)
+    # Round-based scan preserving the historical (cross-binding) emission
+    # order; vertices emitted in an earlier round are dropped from the scan
+    # list instead of being re-checked every subsequent round.
+    remaining = sort(collect(keys(g.vertices)))
+    while !isempty(remaining)
         progressed = false
-        for k in keys_sorted
-            k in done && continue
+        next_remaining = String[]
+        for k in remaining
             if all(d -> d in done, get(g.out, k, String[]))
                 push!(emitted, k)
                 push!(done, k)
                 progressed = true
+            else
+                push!(next_remaining, k)
             end
         end
         progressed || break
+        remaining = next_remaining
     end
     return emitted
 end

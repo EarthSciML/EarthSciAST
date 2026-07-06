@@ -48,6 +48,37 @@ end
 
 @testset "Section 4 Editing Operations" begin
 
+    @testset "edits preserve extended struct fields" begin
+        # Editing operations rebuild immutable structs; fields not touched by
+        # the edit (initialization_equations, guesses, system_kind, enums,
+        # index_sets, …) must survive the rebuild instead of being reset.
+        vars = Dict{String,ModelVariable}(
+            "x" => ModelVariable(StateVariable, default=1.0),
+        )
+        init_eqs = Equation[Equation(VarExpr("x"), NumExpr(1.0))]
+        m = Model(vars, Equation[_make_eq("x", 2.0)];
+                  initialization_equations=init_eqs,
+                  guesses=Dict{String,Union{Float64,ESS.Expr}}("x" => 0.5),
+                  system_kind="ode")
+
+        m2 = add_variable(m, "y", ModelVariable(StateVariable, default=0.0))
+        @test m2.initialization_equations == init_eqs
+        @test m2.guesses["x"] == 0.5
+        @test m2.system_kind == "ode"
+
+        m3 = add_equation(m, _make_eq("x", 3.0))
+        @test m3.initialization_equations == init_eqs
+        @test m3.system_kind == "ode"
+
+        file = EsmFile("0.8.0", Metadata("t");
+                       models=Dict("M" => m),
+                       coupling=CouplingEntry[],
+                       enums=Dict("phase" => Dict("gas" => 1)))
+        file2 = add_coupling(file, CouplingOperatorCompose(["M", "M"]))
+        @test file2.enums !== nothing
+        @test file2.enums["phase"]["gas"] == 1
+    end
+
     @testset "add_variable" begin
         m = _make_model()
         @test length(m.variables) == 2
@@ -85,9 +116,8 @@ end
         @test !haskey(m3.variables, "x")
         @test length(m3.equations) == length(m2.equations)
 
-        # Removing non-existent: returns original model with warning.
-        m4 = @test_logs (:warn,) match_mode=:any remove_variable(m2, "nonexistent")
-        @test length(m4.variables) == length(m2.variables)
+        # Removing non-existent: throws EditError.
+        @test_throws ESS.EditError remove_variable(m2, "nonexistent")
     end
 
     @testset "rename_variable rewrites equation references" begin
@@ -128,9 +158,8 @@ end
         m2 = remove_equation(m, 1)
         @test length(m2.equations) == 1
 
-        # Out-of-bounds: returns original with warning
-        m3 = @test_logs (:warn,) match_mode=:any remove_equation(m2, 99)
-        @test length(m3.equations) == length(m2.equations)
+        # Out-of-bounds: throws EditError
+        @test_throws ESS.EditError remove_equation(m2, 99)
     end
 
     @testset "remove_equation by LHS pattern" begin
@@ -144,10 +173,9 @@ end
         remaining = m2.equations[1]
         @test remaining.lhs.args[1].name == "k"
 
-        # Pattern with no match: warns and returns unchanged
+        # Pattern with no match: throws EditError
         bogus = OpExpr("D", ESS.Expr[VarExpr("nonexistent")], wrt="t")
-        m3 = @test_logs (:warn,) match_mode=:any remove_equation(m2, bogus)
-        @test length(m3.equations) == length(m2.equations)
+        @test_throws ESS.EditError remove_equation(m2, bogus)
     end
 
     @testset "substitute_in_equations rewrites expression trees" begin
@@ -272,9 +300,8 @@ end
         @test length(sys3.species) == length(sys.species)
         @test length(sys3.parameters) == length(sys.parameters)
 
-        # Remove nonexistent: warning, unchanged
-        sys4 = @test_logs (:warn,) match_mode=:any remove_reaction(sys3, "nope")
-        @test length(sys4.reactions) == length(sys3.reactions)
+        # Remove nonexistent: throws EditError
+        @test_throws ESS.EditError remove_reaction(sys3, "nope")
     end
 
     @testset "add_species / remove_species" begin
@@ -292,9 +319,8 @@ end
         sys4 = @test_logs (:warn,) match_mode=:any remove_species(sys3, "A")
         @test !any(s -> s.name == "A", sys4.species)
 
-        # Removing nonexistent: warning only
-        sys5 = @test_logs (:warn,) match_mode=:any remove_species(sys4, "ZZ")
-        @test length(sys5.species) == length(sys4.species)
+        # Removing nonexistent: throws EditError
+        @test_throws ESS.EditError remove_species(sys4, "ZZ")
     end
 
     @testset "add_continuous_event / add_discrete_event / remove_event" begin
@@ -331,10 +357,8 @@ end
         @test length(m5.discrete_events) == 0
         @test length(m5.continuous_events) == 0
 
-        # Removing a missing event: warning, unchanged
-        m6 = @test_logs (:warn,) match_mode=:any remove_event(m5, "ghost")
-        @test length(m6.discrete_events) == 0
-        @test length(m6.continuous_events) == 0
+        # Removing a missing event: throws EditError
+        @test_throws ESS.EditError remove_event(m5, "ghost")
     end
 
     @testset "add_coupling / remove_coupling" begin
@@ -355,9 +379,8 @@ end
         @test length(file3.coupling) == 1
         @test file3.coupling[1] isa CouplingVariableMap
 
-        # Out-of-bounds remove: warning, unchanged
-        file4 = @test_logs (:warn,) match_mode=:any remove_coupling(file3, 99)
-        @test length(file4.coupling) == length(file3.coupling)
+        # Out-of-bounds remove: throws EditError
+        @test_throws ESS.EditError remove_coupling(file3, 99)
     end
 
     @testset "compose (convenience for operator_compose)" begin
@@ -440,13 +463,20 @@ end
         @test ex.reaction_systems !== nothing || ex.reaction_systems === nothing  # structural check
     end
 
-    @testset "extract returns empty when component not found" begin
+    @testset "extract throws EditError when component not found" begin
         file = EsmFile("0.1.0", Metadata("t");
                        models=Dict("A" => Model(Dict{String,ModelVariable}(), Equation[])),
                        coupling=CouplingEntry[])
-        ex = @test_logs (:warn,) match_mode=:any ESS.extract(file, "Missing")
-        @test isempty(ex.models)
-        @test isempty(ex.coupling)
+        @test_throws ESS.EditError ESS.extract(file, "Missing")
+        # EditError carries the message in its `msg` field
+        err = try
+            ESS.extract(file, "Missing")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ESS.EditError
+        @test occursin("Missing", err.msg)
     end
 
     # Model-level substitution — ported from Python's TestModelSubstitution

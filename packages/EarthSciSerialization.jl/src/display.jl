@@ -5,9 +5,11 @@ Implements display methods for various ESM format types:
 - Base.show(io::IO, ::MIME"text/plain", expr::Expr): Unicode display with chemical subscripts
 - Base.show(io::IO, ::MIME"text/latex", expr::Expr): LaTeX mathematical notation
 - Base.show(io::IO, ::MIME"text/ascii", expr::Expr): Plain ASCII mathematical notation
-- Base.show(io::IO, model::Model): Model summary display
-- Base.show(io::IO, esm_file::EsmFile): Structured ESM file summary per spec Section 6.3
-- Base.show(io::IO, reaction_system::ReactionSystem): Chemical reaction notation
+- Base.show(io::IO, ::MIME"text/plain", model::Model): Model summary display
+- Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile): Structured ESM file summary per spec Section 6.3
+- Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem): Chemical reaction notation
+- 2-arg Base.show for Model/EsmFile/ReactionSystem prints a compact one-liner
+  suitable for reprs and collection display.
 
 Based on ESM Format Specification Section 6.1 algorithms.
 """
@@ -61,27 +63,31 @@ Check if a variable has element patterns (for chemical formula detection).
 Uses greedy matching algorithm per spec Section 6.1.
 """
 function has_element_pattern(variable::String)
+    # Work on a Char vector: byte-indexing a String with 1:length(...) bounds
+    # throws StringIndexError for non-ASCII names like "α2".
+    chars = collect(variable)
+    n = length(chars)
     i = 1
     has_element = false
 
-    while i <= length(variable)
+    while i <= n
         # Skip non-alphabetic characters at the start
-        while i <= length(variable) && !isletter(variable[i])
+        while i <= n && !isletter(chars[i])
             i += 1
         end
 
-        if i > length(variable)
+        if i > n
             break
         end
 
         # Try 2-character element first (greedy matching)
-        if i + 1 <= length(variable)
-            two_char = variable[i:i+1]
+        if i + 1 <= n
+            two_char = String(chars[i:i+1])
             if two_char in ELEMENTS
                 has_element = true
                 i += 2
                 # Skip digits
-                while i <= length(variable) && isdigit(variable[i])
+                while i <= n && isdigit(chars[i])
                     i += 1
                 end
                 continue
@@ -89,12 +95,12 @@ function has_element_pattern(variable::String)
         end
 
         # Try 1-character element
-        one_char = string(variable[i])
+        one_char = string(chars[i])
         if one_char in ELEMENTS
             has_element = true
             i += 1
             # Skip digits
-            while i <= length(variable) && isdigit(variable[i])
+            while i <= n && isdigit(chars[i])
                 i += 1
             end
             continue
@@ -139,22 +145,25 @@ function format_chemical_subscripts(variable::String, format::Symbol)
         return variable
     end
 
-    # For unicode: element-aware subscript detection
+    # For unicode: element-aware subscript detection. Work on a Char vector so
+    # non-ASCII names (e.g. "α2") cannot trigger StringIndexError.
+    chars = collect(variable)
+    n = length(chars)
     result = ""
     i = 1
 
-    while i <= length(variable)
+    while i <= n
         matched = false
 
         # Try 2-character element first (greedy matching)
-        if i + 1 <= length(variable)
-            two_char = variable[i:i+1]
+        if i + 1 <= n
+            two_char = String(chars[i:i+1])
             if two_char in ELEMENTS
                 result *= two_char
                 i += 2
                 # Convert following digits to subscripts
-                while i <= length(variable) && isdigit(variable[i])
-                    result *= string(SUBSCRIPT_MAP[variable[i]])
+                while i <= n && isdigit(chars[i])
+                    result *= string(SUBSCRIPT_MAP[chars[i]])
                     i += 1
                 end
                 matched = true
@@ -162,14 +171,14 @@ function format_chemical_subscripts(variable::String, format::Symbol)
         end
 
         # Try 1-character element if 2-char didn't match
-        if !matched && i <= length(variable)
-            one_char = string(variable[i])
+        if !matched && i <= n
+            one_char = string(chars[i])
             if one_char in ELEMENTS
                 result *= one_char
                 i += 1
                 # Convert following digits to subscripts
-                while i <= length(variable) && isdigit(variable[i])
-                    result *= string(SUBSCRIPT_MAP[variable[i]])
+                while i <= n && isdigit(chars[i])
+                    result *= string(SUBSCRIPT_MAP[chars[i]])
                     i += 1
                 end
                 matched = true
@@ -178,7 +187,7 @@ function format_chemical_subscripts(variable::String, format::Symbol)
 
         # If not an element, copy character as-is
         if !matched
-            result *= variable[i]
+            result *= chars[i]
             i += 1
         end
     end
@@ -393,6 +402,16 @@ function format_operator_expression(node::OpExpr, format::Symbol)
         return result
     end
 
+    # min/max: function-call notation for any arity ≥ 2 (esm-spec §4.2)
+    if (op == "min" || op == "max") && length(args) >= 2
+        arg_list = join([format_expression(arg, format) for arg in args], ", ")
+        if format == :latex
+            return "\\$op($arg_list)"
+        else
+            return "$op($arg_list)"
+        end
+    end
+
     # Binary operators
     if length(args) == 2
         left, right = args
@@ -577,25 +596,6 @@ function format_operator_expression(node::OpExpr, format::Symbol)
             else
                 return join([format_arg(arg) for arg in args], " or ")
             end
-        elseif op == "max" || op == "min"
-            # N-ary max / min (esm-spec §4.2)
-            arg_list = join([format_expression(arg, format) for arg in args], ", ")
-
-            if format == :latex
-                return "\\$op($arg_list)"
-            else
-                return "$op($arg_list)"
-            end
-        end
-    end
-
-    # Binary min/max (≥ 2 args) — n-ary branch handles ≥ 3
-    if length(args) == 2 && (op == "min" || op == "max")
-        arg_list = join([format_expression(arg, format) for arg in args], ", ")
-        if format == :latex
-            return "\\$op($arg_list)"
-        else
-            return "$op($arg_list)"
         end
     end
 
@@ -623,9 +623,20 @@ end
 """
     Base.show(io::IO, model::Model)
 
-Model display: show(Model) prints equation list per spec Section 6.3.
+Compact one-line Model display (used in reprs and collections).
+The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, model::Model)
+    print(io, "Model(", length(model.variables), " variables, ",
+          length(model.equations), " equations)")
+end
+
+"""
+    Base.show(io::IO, ::MIME"text/plain", model::Model)
+
+Model display: prints variable and equation lists per spec Section 6.3.
+"""
+function Base.show(io::IO, ::MIME"text/plain", model::Model)
     println(io, "Model:")
     println(io, "  Variables ($(length(model.variables))):")
     for (name, var) in model.variables
@@ -693,9 +704,19 @@ end
 """
     Base.show(io::IO, esm_file::EsmFile)
 
-EsmFile display: show(EsmFile) prints structured summary per spec Section 6.3.
+Compact one-line EsmFile display (used in reprs and collections).
+The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, esm_file::EsmFile)
+    print(io, "EsmFile(v", esm_file.esm, ", \"", esm_file.metadata.name, "\")")
+end
+
+"""
+    Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile)
+
+EsmFile display: prints structured summary per spec Section 6.3.
+"""
+function Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile)
     println(io, "ESM v$(esm_file.esm): $(esm_file.metadata.name)")
 
     if !isnothing(esm_file.metadata.description)
@@ -742,9 +763,20 @@ end
 """
     Base.show(io::IO, reaction_system::ReactionSystem)
 
-ReactionSystem display: reactions in chemical notation.
+Compact one-line ReactionSystem display (used in reprs and collections).
+The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, reaction_system::ReactionSystem)
+    print(io, "ReactionSystem(", length(reaction_system.species), " species, ",
+          length(reaction_system.reactions), " reactions)")
+end
+
+"""
+    Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
+
+ReactionSystem display: reactions in chemical notation.
+"""
+function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
     println(io, "ReactionSystem:")
     println(io, "  Species ($(length(reaction_system.species))):")
     for species in reaction_system.species
@@ -775,8 +807,14 @@ function Base.show(io::IO, reaction_system::ReactionSystem)
 
     println(io, "  Reactions ($(length(reaction_system.reactions))):")
     for (i, reaction) in enumerate(reaction_system.reactions)
+        # Access the ordered StoichiometryEntry vectors via getfield: the
+        # `.products` property goes through a backward-compat Dict shim whose
+        # iteration yields Pairs (and loses author order).
+        substrates = getfield(reaction, :substrates)
+        products = getfield(reaction, :products)
+
         # Format substrates
-        reactants_str = if reaction.substrates === nothing || isempty(reaction.substrates)
+        reactants_str = if substrates === nothing || isempty(substrates)
             ""
         else
             join([
@@ -788,12 +826,12 @@ function Base.show(io::IO, reaction_system::ReactionSystem)
                         string(entry.stoichiometry)
                     "$(coeff_str)$(format_chemical_subscripts(entry.species, :unicode))"
                 end
-                for entry in reaction.substrates
+                for entry in substrates
             ], " + ")
         end
 
         # Format products
-        products_str = if reaction.products === nothing || isempty(reaction.products)
+        products_str = if products === nothing || isempty(products)
             ""
         else
             join([
@@ -805,7 +843,7 @@ function Base.show(io::IO, reaction_system::ReactionSystem)
                         string(entry.stoichiometry)
                     "$(coeff_str)$(format_chemical_subscripts(entry.species, :unicode))"
                 end
-                for entry in reaction.products
+                for entry in products
             ], " + ")
         end
 
@@ -850,43 +888,25 @@ eq = Equation(VarExpr("y"), OpExpr("+", [VarExpr("x"), NumExpr(1.0)]))
 to_ascii(eq)   # Returns "y = x + 1"
 ```
 """
-function to_ascii(target)
-    if target === nothing
-        return "nothing"
-    end
-
-    if isa(target, Real)
-        return format_number(target, :ascii)
-    end
-
-    if isa(target, String)
-        return format_chemical_subscripts(target, :ascii)
-    end
-
-    if isa(target, Expr)
-        return format_expression_ascii(target)
-    end
-
-    if isa(target, Equation)
-        lhs_str = format_expression_ascii(target.lhs)
-        rhs_str = format_expression_ascii(target.rhs)
-        return "$lhs_str = $rhs_str"
-    end
-
-    if isa(target, Model)
-        # Simple ASCII summary for models
-        return "Model($(length(target.variables)) variables, $(length(target.equations)) equations)"
-    end
-
-    if isa(target, ReactionSystem)
-        # Simple ASCII summary for reaction systems
-        return "ReactionSystem($(length(target.species)) species, $(length(target.reactions)) reactions)"
-    end
-
-    if isa(target, EsmFile)
-        # Simple ASCII summary for ESM files
-        return "ESM v$(target.esm): $(target.metadata.name)"
-    end
-
+to_ascii(target) =
     throw(ArgumentError("Unsupported type for ASCII formatting: $(typeof(target))"))
-end
+
+to_ascii(::Nothing) = "nothing"
+
+to_ascii(target::Real) = format_number(target, :ascii)
+
+to_ascii(target::String) = format_chemical_subscripts(target, :ascii)
+
+to_ascii(target::Expr) = format_expression_ascii(target)
+
+to_ascii(target::Equation) =
+    "$(format_expression_ascii(target.lhs)) = $(format_expression_ascii(target.rhs))"
+
+# Simple ASCII summaries for container types
+to_ascii(target::Model) =
+    "Model($(length(target.variables)) variables, $(length(target.equations)) equations)"
+
+to_ascii(target::ReactionSystem) =
+    "ReactionSystem($(length(target.species)) species, $(length(target.reactions)) reactions)"
+
+to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"

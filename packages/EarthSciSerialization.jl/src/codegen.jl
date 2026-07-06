@@ -10,8 +10,13 @@ from ESM files in multiple target languages:
 """
     to_julia_code(file::EsmFile)
 
-Generate a self-contained Julia script from an ESM file.
-Returns a string containing Julia code that can be executed.
+Generate a Julia script from an ESM file.
+Returns a string containing Julia code.
+
+The output is *illustrative scaffolding*: it sketches the MTK/Catalyst system
+definitions implied by the file (variables, parameters, equations, reactions)
+but is not guaranteed to run unmodified against the current ModelingToolkit
+release (e.g. variable default/unit metadata syntax, SDE noise equations).
 """
 function to_julia_code(file::EsmFile)
     lines = String[]
@@ -88,8 +93,11 @@ end
 """
     to_python_code(file::EsmFile)
 
-Generate a self-contained Python script from an ESM file.
-Returns a string containing Python code that can be executed.
+Generate a Python script from an ESM file.
+Returns a string containing Python code.
+
+Like [`to_julia_code`](@ref), the output is illustrative scaffolding for a
+SymPy/earthsci_toolkit workflow, not guaranteed-runnable code.
 """
 function to_python_code(file::EsmFile)
     lines = String[]
@@ -144,7 +152,7 @@ function to_python_code(file::EsmFile)
     if !isnothing(file.coupling) && !isempty(file.coupling)
         push!(lines, "# Coupling")
         for coupling in file.coupling
-            append!(lines, generate_python_coupling_placeholder(coupling))
+            append!(lines, generate_coupling_placeholder(coupling; lang=:python))
         end
         push!(lines, "")
     end
@@ -153,7 +161,7 @@ function to_python_code(file::EsmFile)
     # single shared top-level `domain`, not a map of named domains.
     if !isnothing(file.domain)
         push!(lines, "# Domain")
-        append!(lines, generate_python_domain_placeholder("domain", file.domain))
+        append!(lines, generate_domain_placeholder("domain", file.domain))
         push!(lines, "")
     end
 
@@ -213,12 +221,13 @@ function generate_model_code(name::String, model::Model)
         push!(lines, "]")
     end
 
-    # Generate @named system. Brownian variables present => SDESystem; otherwise ODESystem.
+    # Generate @named system. Brownian variables present => SDESystem; otherwise
+    # ODESystem. Modern MTK requires the independent variable as second argument.
     push!(lines, "")
     if !isempty(brownians)
         push!(lines, "@named $(name)_system = SDESystem(eqs, t)")
     else
-        push!(lines, "@named $(name)_system = ODESystem(eqs)")
+        push!(lines, "@named $(name)_system = ODESystem(eqs, t)")
     end
 
     return lines
@@ -235,28 +244,33 @@ function generate_reaction_system_code(name::String, reaction_system::ReactionSy
     # macro rejects isconstantspecies metadata ("can only be used with
     # parameters"), so the metadata must travel with a @parameters declaration.
     state_species = !isnothing(reaction_system.species) ?
-        filter(s -> s.constant !== true, reaction_system.species) : EarthSciSerialization.Species[]
+        filter(s -> s.constant !== true, reaction_system.species) : Species[]
     const_species = !isnothing(reaction_system.species) ?
-        filter(s -> s.constant === true, reaction_system.species) : EarthSciSerialization.Species[]
+        filter(s -> s.constant === true, reaction_system.species) : Species[]
 
     if !isempty(state_species)
         species_decls = join(map(format_species_declaration, state_species), " ")
         push!(lines, "@species $species_decls")
     end
 
-    # Generate @parameters for reaction parameters plus reservoir species.
+    # Generate @parameters for rate-expression symbols plus reservoir species.
+    # Rate symbols are resolved against the declared species list: anything a
+    # rate references that is not a species is emitted as a parameter (this
+    # covers declared parameters and undeclared symbols alike, and never
+    # re-declares a species).
+    species_names = !isnothing(reaction_system.species) ?
+        Set(s.name for s in reaction_system.species) : Set{String}()
     reaction_params = Set{String}()
     if !isnothing(reaction_system.reactions) && !isempty(reaction_system.reactions)
         for reaction in reaction_system.reactions
             if !isnothing(reaction.rate)
-                param_names = extract_parameter_names(reaction.rate)
-                union!(reaction_params, param_names)
+                union!(reaction_params, extract_parameter_names(reaction.rate, species_names))
             end
         end
     end
 
     if !isempty(reaction_params)
-        push!(lines, "@parameters $(join(reaction_params, " "))")
+        push!(lines, "@parameters $(join(sort!(collect(reaction_params)), " "))")
     end
     if !isempty(const_species)
         reservoir_decls = join([string(s.name, " [isconstantspecies=true]") for s in const_species], " ")
@@ -280,17 +294,26 @@ function generate_reaction_system_code(name::String, reaction_system::ReactionSy
     return lines
 end
 
-function generate_coupling_placeholder(coupling::CouplingEntry)
+"""
+    generate_coupling_placeholder(coupling::CouplingEntry; lang::Symbol=:julia)
+
+Emit comment-only placeholder lines describing a coupling entry (coupling
+codegen is not yet implemented). Shared by the Julia and Python emitters;
+`lang=:julia` adds Julia-specific implementation notes.
+"""
+function generate_coupling_placeholder(coupling::CouplingEntry; lang::Symbol=:julia)
     lines = String[]
     if coupling isa CouplingOperatorCompose
         push!(lines, "# Coupling (operator_compose): compose systems $(join(coupling.systems, ", "))")
-        push!(lines, "#   Needs: ConnectorSystem to match LHS time derivatives and add RHS terms")
+        lang === :julia &&
+            push!(lines, "#   Needs: ConnectorSystem to match LHS time derivatives and add RHS terms")
     elseif coupling isa CouplingCouple
         push!(lines, "# Coupling (couple): bidirectional coupling of $(join(coupling.systems, ", "))")
-        push!(lines, "#   Needs: connector equations via compose()")
+        lang === :julia &&
+            push!(lines, "#   Needs: connector equations via compose()")
     elseif coupling isa CouplingVariableMap
         push!(lines, "# Coupling (variable_map): $(coupling.from) → $(coupling.to) via $(coupling.transform)")
-        if !isnothing(coupling.factor)
+        if lang === :julia && !isnothing(coupling.factor)
             push!(lines, "#   Factor: $(coupling.factor)")
         end
     elseif coupling isa CouplingOperatorApply
@@ -308,6 +331,13 @@ function generate_coupling_placeholder(coupling::CouplingEntry)
     return lines
 end
 
+"""
+    generate_domain_placeholder(name::String, domain::Domain)
+
+Emit comment-only placeholder lines describing the domain (domain codegen is
+not yet implemented). The comment syntax is identical in Julia and Python, so
+one generator serves both emitters.
+"""
 function generate_domain_placeholder(name::String, domain::Domain)
     lines = String[]
     push!(lines, "# Domain: $name")
@@ -371,26 +401,88 @@ function format_equation(equation::Equation)
     return "$lhs ~ $rhs"
 end
 
+# Render one side (substrates or products) of a reaction from the ordered
+# StoichiometryEntry vector (accessed via getfield to bypass the
+# backward-compat Dict property shim, whose iteration order is nondeterministic).
+function _format_reaction_side(entries::Union{Vector{StoichiometryEntry},Nothing})
+    if entries === nothing || isempty(entries)
+        return "∅"
+    end
+    return join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
+                 for entry in entries], " + ")
+end
+
 function format_reaction(reaction::Reaction)
     rate = isnothing(reaction.rate) ? "1.0" : format_expression(reaction.rate)
 
-    # Format reactants
-    reactants = if isnothing(reaction.reactants) || isempty(reaction.reactants)
-        "∅"
-    else
-        join(["$(stoich != 1 ? "$stoich*" : "")$species"
-              for (species, stoich) in reaction.reactants], " + ")
-    end
-
-    # Format products
-    products = if isnothing(reaction.products) || isempty(reaction.products)
-        "∅"
-    else
-        join(["$(stoich != 1 ? "$stoich*" : "")$species"
-              for (species, stoich) in reaction.products], " + ")
-    end
+    reactants = _format_reaction_side(getfield(reaction, :substrates))
+    products = _format_reaction_side(getfield(reaction, :products))
 
     return "Reaction($rate, [$reactants], [$products])"
+end
+
+# ---------------------------------------------------------------------------
+# Precedence-aware parenthesization for emitted code
+#
+# Adapted from display.jl's `get_operator_precedence` / `needs_parentheses`,
+# but per target language: generated code is *executed*, not just read, so the
+# tables must match each language's parser. In particular the Python emitter
+# renders `and`/`or` as bitwise `&`/`|`, which bind *tighter* than comparisons
+# in Python — the opposite of Julia's `&&`/`||`.
+# ---------------------------------------------------------------------------
+
+# Julia surface syntax: ||, && loosest; ^ tightest and right-associative.
+const _JULIA_CODEGEN_PRECEDENCE = Dict{String,Int}(
+    "or" => 1, "and" => 2,
+    "==" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
+    "+" => 4, "-" => 4,
+    "*" => 5, "/" => 5,
+    "^" => 7,
+)
+
+# Python surface syntax for the SymPy emitter: comparisons bind looser than
+# `|`/`&`; `**` is right-associative.
+const _PYTHON_CODEGEN_PRECEDENCE = Dict{String,Int}(
+    "==" => 1, "!=" => 1, "<" => 1, ">" => 1, "<=" => 1, ">=" => 1,
+    "or" => 2,   # emitted as |
+    "and" => 3,  # emitted as &
+    "+" => 4, "-" => 4,
+    "*" => 5, "/" => 5,
+    "^" => 7,    # emitted as **
+)
+
+# Function calls / atoms: effectively infinite precedence, never parenthesized.
+const _CODEGEN_FUNCTION_PRECEDENCE = 8
+
+_codegen_precedence(table::Dict{String,Int}, op::String) =
+    get(table, op, _CODEGEN_FUNCTION_PRECEDENCE)
+
+# Should `child`, rendered as an operand of infix `parent_op`, be parenthesized?
+function _codegen_needs_parens(table::Dict{String,Int}, parent_op::String,
+                               child::Expr, is_right::Bool)
+    child isa OpExpr || return false
+    parent_prec = _codegen_precedence(table, parent_op)
+    # Function-call parents wrap their args in (...) already.
+    parent_prec == _CODEGEN_FUNCTION_PRECEDENCE && return false
+    child_prec = _codegen_precedence(table, child.op)
+    child_prec < parent_prec && return true
+    child_prec > parent_prec && return false
+    # Equal precedence:
+    parent_op in ("-", "/") && return is_right   # left-associative, non-commutative
+    parent_op == "^" && return !is_right         # right-associative (Julia ^, Python **)
+    # Chained comparisons mean something different in both languages — wrap.
+    parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
+    return false
+end
+
+# Render the operand of a unary minus, parenthesizing children that bind
+# looser than multiplication (so `-(a + b)` never degrades to `-a + b`).
+function _format_unary_minus_operand(arg::Expr, table::Dict{String,Int}, fmt::Function)
+    inner = fmt(arg)
+    if arg isa OpExpr && _codegen_precedence(table, arg.op) <= table["+"]
+        return "($inner)"
+    end
+    return inner
 end
 
 function format_expression(expr::Expr)
@@ -411,11 +503,19 @@ function format_expression_node(node::OpExpr)
     op = node.op
     args = node.args
 
+    # Format one operand with precedence-aware parenthesization. In n-ary
+    # chains (`a - b - c`), every operand after the first is a right operand.
+    fmt(arg, is_right::Bool=false) = begin
+        s = format_expression(arg)
+        _codegen_needs_parens(_JULIA_CODEGEN_PRECEDENCE, op, arg, is_right) ? "($s)" : s
+    end
+    fmt_chain(sep) = join([fmt(args[1]); [fmt(a, true) for a in args[2:end]]], sep)
+
     # Apply expression mappings for Julia
     if op == "+"
-        return join(map(format_expression, args), " + ")
+        return fmt_chain(" + ")
     elseif op == "*"
-        return join(map(format_expression, args), " * ")
+        return fmt_chain(" * ")
     elseif op == "D"
         # D(x,t) → D(x) (remove time parameter)
         if length(args) >= 1
@@ -429,7 +529,7 @@ function format_expression_node(node::OpExpr)
     elseif op == "Pre"
         return "Pre($(join(map(format_expression, args), ", ")))"
     elseif op == "^"
-        return join(map(format_expression, args), " ^ ")
+        return fmt_chain(" ^ ")
     elseif op == "grad"
         # grad(x,y) → Differential(y)(x)
         if length(args) >= 2
@@ -440,18 +540,18 @@ function format_expression_node(node::OpExpr)
         return "Differential(x)()"
     elseif op == "-"
         if length(args) == 1
-            return "-$(format_expression(args[1]))"
+            return "-$(_format_unary_minus_operand(args[1], _JULIA_CODEGEN_PRECEDENCE, format_expression))"
         else
-            return join(map(format_expression, args), " - ")
+            return fmt_chain(" - ")
         end
     elseif op == "/"
-        return join(map(format_expression, args), " / ")
+        return fmt_chain(" / ")
     elseif op in ["<", ">", "<=", ">=", "==", "!="]
-        return join(map(format_expression, args), " $op ")
+        return fmt_chain(" $op ")
     elseif op == "and"
-        return join(map(format_expression, args), " && ")
+        return fmt_chain(" && ")
     elseif op == "or"
-        return join(map(format_expression, args), " || ")
+        return fmt_chain(" || ")
     elseif op == "not"
         return "!($(format_expression(args[1])))"
     else
@@ -460,21 +560,18 @@ function format_expression_node(node::OpExpr)
     end
 end
 
-function extract_parameter_names(expr::Expr)
-    params = Set{String}()
+"""
+    extract_parameter_names(expr::Expr, species_names::Set{String}) -> Set{String}
 
-    if isa(expr, VarExpr)
-        # Simple heuristic: single letters or names starting with k/K are likely parameters
-        if length(expr.name) == 1 || startswith(expr.name, "k") || startswith(expr.name, "K")
-            push!(params, expr.name)
-        end
-    elseif isa(expr, OpExpr)
-        for arg in expr.args
-            union!(params, extract_parameter_names(arg))
-        end
-    end
-
-    return params
+Rate-expression symbols that should be emitted as `@parameters`: every free
+variable of `expr` that is not a declared species. Resolving against the
+declared species list (rather than guessing from naming conventions) means
+single-letter species are never re-declared as parameters, while declared
+parameters and undeclared symbols alike still get a `@parameters` entry so
+the generated script defines them.
+"""
+function extract_parameter_names(expr::Expr, species_names::Set{String})
+    return Set{String}(name for name in free_variables(expr) if !(name in species_names))
 end
 
 # Helper functions for Python code generation
@@ -573,56 +670,21 @@ function generate_python_reaction_system_code(name::String, reaction_system::Rea
         push!(lines, "# Stoichiometry")
         for (i, reaction) in enumerate(reaction_system.reactions)
             push!(lines, "# Reaction $i:")
-            if !isnothing(reaction.reactants) && !isempty(reaction.reactants)
-                reactant_str = join(["$(stoich != 1 ? "$stoich*" : "")$species"
-                                   for (species, stoich) in reaction.reactants], " + ")
+            substrates = getfield(reaction, :substrates)
+            if !isnothing(substrates) && !isempty(substrates)
+                reactant_str = join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
+                                     for entry in substrates], " + ")
                 push!(lines, "#   Reactants: $reactant_str")
             end
-            if !isnothing(reaction.products) && !isempty(reaction.products)
-                product_str = join(["$(stoich != 1 ? "$stoich*" : "")$species"
-                                  for (species, stoich) in reaction.products], " + ")
+            products = getfield(reaction, :products)
+            if !isnothing(products) && !isempty(products)
+                product_str = join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
+                                    for entry in products], " + ")
                 push!(lines, "#   Products: $product_str")
             end
         end
     end
 
-    return lines
-end
-
-function generate_python_coupling_placeholder(coupling::CouplingEntry)
-    lines = String[]
-    if coupling isa CouplingOperatorCompose
-        push!(lines, "# Coupling (operator_compose): compose systems $(join(coupling.systems, ", "))")
-    elseif coupling isa CouplingCouple
-        push!(lines, "# Coupling (couple): bidirectional coupling of $(join(coupling.systems, ", "))")
-    elseif coupling isa CouplingVariableMap
-        push!(lines, "# Coupling (variable_map): $(coupling.from) → $(coupling.to) via $(coupling.transform)")
-    elseif coupling isa CouplingOperatorApply
-        push!(lines, "# Coupling (operator_apply): register operator $(coupling.operator)")
-    elseif coupling isa CouplingCallback
-        push!(lines, "# Coupling (callback): $(coupling.callback_id)")
-    elseif coupling isa CouplingEvent
-        push!(lines, "# Coupling (event): $(coupling.event_type) with $(length(coupling.affects)) affect(s)")
-    else
-        push!(lines, "# Coupling: $(typeof(coupling))")
-    end
-    if !isnothing(coupling.description)
-        push!(lines, "#   $(coupling.description)")
-    end
-    return lines
-end
-
-function generate_python_domain_placeholder(name::String, domain::Domain)
-    lines = String[]
-    push!(lines, "# Domain: $name")
-    if !isnothing(domain.temporal)
-        temporal = domain.temporal
-        tstart = get(temporal, "start", nothing)
-        tend = get(temporal, "end", nothing)
-        if !isnothing(tstart) && !isnothing(tend)
-            push!(lines, "#   Temporal range: $tstart to $tend")
-        end
-    end
     return lines
 end
 
@@ -644,11 +706,18 @@ function format_python_expression_node(node::OpExpr)
     op = node.op
     args = node.args
 
+    # Format one operand with precedence-aware parenthesization (Python table).
+    fmt(arg, is_right::Bool=false) = begin
+        s = format_python_expression(arg)
+        _codegen_needs_parens(_PYTHON_CODEGEN_PRECEDENCE, op, arg, is_right) ? "($s)" : s
+    end
+    fmt_chain(sep) = join([fmt(args[1]); [fmt(a, true) for a in args[2:end]]], sep)
+
     # Apply expression mappings for Python
     if op == "+"
-        return join(map(format_python_expression, args), " + ")
+        return fmt_chain(" + ")
     elseif op == "*"
-        return join(map(format_python_expression, args), " * ")
+        return fmt_chain(" * ")
     elseif op == "D"
         # D(x,t) → Derivative(x(t), t)
         if length(args) >= 1
@@ -670,7 +739,7 @@ function format_python_expression_node(node::OpExpr)
     elseif op == "Pre"
         return "Function('Pre')($(join(map(format_python_expression, args), ", ")))"
     elseif op == "^"
-        return join(map(format_python_expression, args), " ** ")
+        return fmt_chain(" ** ")
     elseif op == "grad"
         # grad(x,y) → sp.Derivative(x, y)
         if length(args) >= 2
@@ -683,18 +752,18 @@ function format_python_expression_node(node::OpExpr)
         return "sp.Derivative()"
     elseif op == "-"
         if length(args) == 1
-            return "-$(format_python_expression(args[1]))"
+            return "-$(_format_unary_minus_operand(args[1], _PYTHON_CODEGEN_PRECEDENCE, format_python_expression))"
         else
-            return join(map(format_python_expression, args), " - ")
+            return fmt_chain(" - ")
         end
     elseif op == "/"
-        return join(map(format_python_expression, args), " / ")
+        return fmt_chain(" / ")
     elseif op in ["<", ">", "<=", ">=", "==", "!="]
-        return join(map(format_python_expression, args), " $op ")
+        return fmt_chain(" $op ")
     elseif op == "and"
-        return join(map(format_python_expression, args), " & ")
+        return fmt_chain(" & ")
     elseif op == "or"
-        return join(map(format_python_expression, args), " | ")
+        return fmt_chain(" | ")
     elseif op == "not"
         return "~($(format_python_expression(args[1])))"
     else

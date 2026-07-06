@@ -56,9 +56,9 @@ Edge representing dependency between variables.
 struct DependencyEdge
     source::String
     target::String
-    relationship::String  # 'additive' | 'multiplicative' | 'rate' | 'stoichiometric'
+    relationship::String  # 'additive' | 'rate' | 'stoichiometric' | 'coupling'
     equation_index::Union{Int, Nothing}
-    expression::Union{EarthSciSerialization.Expr, Nothing}
+    expression::Union{Expr, Nothing}
 end
 
 # Graph analysis methods
@@ -140,11 +140,11 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # Create nodes for models
     if file.models !== nothing
         for (name, model) in file.models
-        metadata = Dict{String, Any}(
-            "var_count" => length(model.variables),
-            "eq_count" => length(model.equations),
-            "species_count" => 0
-        )
+            metadata = Dict{String, Any}(
+                "var_count" => length(model.variables),
+                "eq_count" => length(model.equations),
+                "species_count" => 0
+            )
 
             node = ComponentNode(
                 name,
@@ -162,11 +162,11 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # Create nodes for reaction systems
     if file.reaction_systems !== nothing
         for (name, rxn_sys) in file.reaction_systems
-        metadata = Dict{String, Any}(
-            "var_count" => length(rxn_sys.parameters),
-            "eq_count" => length(rxn_sys.reactions),
-            "species_count" => length(rxn_sys.species)
-        )
+            metadata = Dict{String, Any}(
+                "var_count" => length(rxn_sys.parameters),
+                "eq_count" => length(rxn_sys.reactions),
+                "species_count" => length(rxn_sys.species)
+            )
 
             node = ComponentNode(
                 name,
@@ -184,11 +184,11 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # Create nodes for data loaders
     if file.data_loaders !== nothing
         for (name, loader) in file.data_loaders
-        metadata = Dict{String, Any}(
-            "var_count" => 0,
-            "eq_count" => 0,
-            "species_count" => 0
-        )
+            metadata = Dict{String, Any}(
+                "var_count" => 0,
+                "eq_count" => 0,
+                "species_count" => 0
+            )
 
             node = ComponentNode(
                 name,
@@ -275,7 +275,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
                         to_system,
                         "variable_map",
                         "[$variable_name]",
-                        "Variable mapping: \$(coupling.from) -> \$(coupling.to)",
+                        "Variable mapping: $(coupling.from) -> $(coupling.to)",
                         coupling
                     )
                     push!(edges, (source=from_node, target=to_node, data=edge))
@@ -285,7 +285,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
         elseif coupling isa CouplingOperatorApply
             # CouplingOperatorApply just registers an operator, no edges needed
             # The operator itself should be in the operators section, not as a system node
-            @info "Operator application registered: $(coupling.operator)"
+            @debug "Operator application registered: $(coupling.operator)"
         end
     end
 
@@ -365,12 +365,16 @@ function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
         end
     end
 
-    for (model_name, model) in file.models
-        add_scoped_subgraph!(model_name, expression_graph(model))
+    if file.models !== nothing
+        for (model_name, model) in file.models
+            add_scoped_subgraph!(model_name, expression_graph(model))
+        end
     end
 
-    for (rxn_name, rxn_sys) in file.reaction_systems
-        add_scoped_subgraph!(rxn_name, expression_graph(rxn_sys))
+    if file.reaction_systems !== nothing
+        for (rxn_name, rxn_sys) in file.reaction_systems
+            add_scoped_subgraph!(rxn_name, expression_graph(rxn_sys))
+        end
     end
 
     # Add cross-system coupling edges
@@ -630,7 +634,7 @@ function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdg
     return Graph{VariableNode, DependencyEdge}(nodes, edges)
 end
 
-function expression_graph(expr::EarthSciSerialization.Expr)::Graph{VariableNode, DependencyEdge}
+function expression_graph(expr::Expr)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
     edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
 
@@ -654,7 +658,11 @@ end
     render_chemical_formula(formula::String) -> String
 
 Convert chemical formula to format with subscripts for visualization.
-Replaces numeric digits with Unicode subscript characters.
+
+Thin wrapper over display.jl's element-aware
+[`format_chemical_subscripts`](@ref) (`:unicode` form), so graph exports render
+species exactly like the display formatters: digits become subscripts only when
+they follow a recognized chemical element symbol.
 
 # Examples
 ```julia
@@ -663,51 +671,38 @@ render_chemical_formula("H2SO4") # "H₂SO₄"
 render_chemical_formula("CH3OH") # "CH₃OH"
 ```
 """
-function render_chemical_formula(formula::String)::String
-    # Mapping of digits to Unicode subscript characters
-    subscript_map = Dict(
-        '0' => '₀',
-        '1' => '₁',
-        '2' => '₂',
-        '3' => '₃',
-        '4' => '₄',
-        '5' => '₅',
-        '6' => '₆',
-        '7' => '₇',
-        '8' => '₈',
-        '9' => '₉'
-    )
-
-    result = ""
-    for char in formula
-        if haskey(subscript_map, char)
-            result *= subscript_map[char]
-        else
-            result *= char
-        end
-    end
-
-    return result
-end
+render_chemical_formula(formula::String)::String =
+    format_chemical_subscripts(formula, :unicode)
 
 """
-    format_node_label(name::String, node_type::String="") -> String
+    format_node_label(name::String) -> String
 
 Format node label with chemical subscript rendering if applicable.
 Detects chemical formulas and applies subscript formatting.
 """
-function format_node_label(name::String, node_type::String="")::String
+function format_node_label(name::String)::String
     # Check if this looks like a chemical formula (has letters followed by digits)
     if occursin(r"[A-Za-z]+\d+", name)
-        formatted_name = render_chemical_formula(name)
-    else
-        formatted_name = name
+        return render_chemical_formula(name)
     end
-
-    return formatted_name
+    return name
 end
 
 # Export formats
+
+# Mermaid node ids must be plain identifiers: dotted names like `model.x`
+# are invalid/ambiguous in Mermaid syntax. Deterministically map every
+# non-[A-Za-z0-9_] character to `_`.
+_mermaid_id(name::AbstractString)::String = replace(String(name), r"[^A-Za-z0-9_]" => "_")
+
+# Mermaid labels are emitted inside double quotes; escape embedded quotes
+# using the Mermaid entity form.
+_mermaid_label(label::AbstractString)::String = replace(String(label), "\"" => "#quot;")
+
+# DOT ids/labels are emitted inside double quotes; escape backslashes and
+# embedded quotes so arbitrary names cannot break the quoting.
+_dot_escape(s::AbstractString)::String =
+    replace(String(s), "\\" => "\\\\", "\"" => "\\\"")
 
 """
 Export graph to DOT format for Graphviz rendering.
@@ -727,8 +722,8 @@ function to_dot(graph::Graph{ComponentNode, CouplingEdge})::String
             "lightgray"
         end
 
-        label = format_node_label(node.name, node.type)
-        push!(lines, "  \"$(node.id)\" [label=\"$label\", fillcolor=$color, style=filled];")
+        label = format_node_label(node.name)
+        push!(lines, "  \"$(_dot_escape(node.id))\" [label=\"$(_dot_escape(label))\", fillcolor=$color, style=filled];")
     end
 
     # Add edges with colors based on coupling type
@@ -743,7 +738,7 @@ function to_dot(graph::Graph{ComponentNode, CouplingEdge})::String
             "black"
         end
 
-        push!(lines, "  \"$(edge.data.from)\" -> \"$(edge.data.to)\" [label=\"$(edge.data.label)\", color=$edge_color];")
+        push!(lines, "  \"$(_dot_escape(edge.data.from))\" -> \"$(_dot_escape(edge.data.to))\" [label=\"$(_dot_escape(edge.data.label))\", color=$edge_color];")
     end
 
     push!(lines, "}")
@@ -765,8 +760,8 @@ function to_dot(graph::Graph{VariableNode, DependencyEdge})::String
             "diamond"
         end
 
-        label = format_node_label(node.name, node.kind)
-        push!(lines, "  \"$(node.name)\" [label=\"$label\", shape=$shape];")
+        label = format_node_label(node.name)
+        push!(lines, "  \"$(_dot_escape(node.name))\" [label=\"$(_dot_escape(label))\", shape=$shape];")
     end
 
     # Add edges with styles based on relationship
@@ -779,7 +774,7 @@ function to_dot(graph::Graph{VariableNode, DependencyEdge})::String
             "solid"
         end
 
-        push!(lines, "  \"$(edge.data.source)\" -> \"$(edge.data.target)\" [label=\"$(edge.data.relationship)\", style=$style];")
+        push!(lines, "  \"$(_dot_escape(edge.data.source))\" -> \"$(_dot_escape(edge.data.target))\" [label=\"$(_dot_escape(edge.data.relationship))\", style=$style];")
     end
 
     push!(lines, "}")
@@ -788,6 +783,9 @@ end
 
 """
 Export graph to Mermaid format for markdown embedding.
+
+Node ids are sanitized to plain identifiers (`model.x` → `model_x`) and
+labels are quoted, so dotted/scoped names render correctly.
 """
 function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
     lines = ["graph TD"]
@@ -804,8 +802,8 @@ function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
             "((", "))"
         end
 
-        label = format_node_label(node.name, node.type)
-        push!(lines, "    $(node.id)$shape_open$label$shape_close")
+        label = format_node_label(node.name)
+        push!(lines, "    $(_mermaid_id(node.id))$shape_open\"$(_mermaid_label(label))\"$shape_close")
     end
 
     # Add edges
@@ -816,7 +814,7 @@ function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
             "-->"
         end
 
-        push!(lines, "    $(edge.data.from) $arrow $(edge.data.to)")
+        push!(lines, "    $(_mermaid_id(edge.data.from)) $arrow $(_mermaid_id(edge.data.to))")
     end
 
     return join(lines, "\n")
@@ -835,8 +833,8 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
             "((", "))"
         end
 
-        label = format_node_label(node.name, node.kind)
-        push!(lines, "    $(node.name)$shape_open$label$shape_close")
+        label = format_node_label(node.name)
+        push!(lines, "    $(_mermaid_id(node.name))$shape_open\"$(_mermaid_label(label))\"$shape_close")
     end
 
     # Add edges
@@ -847,7 +845,7 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
             "-->"
         end
 
-        push!(lines, "    $(edge.data.source) $arrow $(edge.data.target)")
+        push!(lines, "    $(_mermaid_id(edge.data.source)) $arrow $(_mermaid_id(edge.data.target))")
     end
 
     return join(lines, "\n")
@@ -856,41 +854,36 @@ end
 """
 Export graph to JSON adjacency list format.
 """
-function to_json(graph::Graph{N, E})::String where {N, E}
-    # Build adjacency list
+function to_json(graph::Graph{ComponentNode, CouplingEdge})::String
     adj_list = Dict{String, Vector{String}}()
-
-    if N == ComponentNode
-        # Component graph
-        for node in graph.nodes
-            adj_list[node.id] = String[]
-        end
-
-        for edge in graph.edges
-            push!(adj_list[edge.data.from], edge.data.to)
-        end
-
-        result = Dict(
-            "nodes" => [Dict("id" => node.id, "name" => node.name, "type" => node.type) for node in graph.nodes],
-            "edges" => [Dict("from" => edge.data.from, "to" => edge.data.to, "type" => edge.data.type, "label" => edge.data.label) for edge in graph.edges],
-            "adjacency" => adj_list
-        )
-    else
-        # Variable graph
-        for node in graph.nodes
-            adj_list[node.name] = String[]
-        end
-
-        for edge in graph.edges
-            push!(adj_list[edge.data.source], edge.data.target)
-        end
-
-        result = Dict(
-            "nodes" => [Dict("name" => node.name, "kind" => node.kind, "system" => node.system) for node in graph.nodes],
-            "edges" => [Dict("source" => edge.data.source, "target" => edge.data.target, "relationship" => edge.data.relationship) for edge in graph.edges],
-            "adjacency" => adj_list
-        )
+    for node in graph.nodes
+        adj_list[node.id] = String[]
+    end
+    for edge in graph.edges
+        push!(adj_list[edge.data.from], edge.data.to)
     end
 
+    result = Dict(
+        "nodes" => [Dict("id" => node.id, "name" => node.name, "type" => node.type) for node in graph.nodes],
+        "edges" => [Dict("from" => edge.data.from, "to" => edge.data.to, "type" => edge.data.type, "label" => edge.data.label) for edge in graph.edges],
+        "adjacency" => adj_list
+    )
+    return JSON3.write(result, pretty=true)
+end
+
+function to_json(graph::Graph{VariableNode, DependencyEdge})::String
+    adj_list = Dict{String, Vector{String}}()
+    for node in graph.nodes
+        adj_list[node.name] = String[]
+    end
+    for edge in graph.edges
+        push!(adj_list[edge.data.source], edge.data.target)
+    end
+
+    result = Dict(
+        "nodes" => [Dict("name" => node.name, "kind" => node.kind, "system" => node.system) for node in graph.nodes],
+        "edges" => [Dict("source" => edge.data.source, "target" => edge.data.target, "relationship" => edge.data.relationship) for edge in graph.edges],
+        "adjacency" => adj_list
+    )
     return JSON3.write(result, pretty=true)
 end

@@ -7,11 +7,6 @@ expressions, equations, and models as specified in ESM Libraries Spec Section 3.
 
 using Unitful
 
-"""
-Parse a unit string into a Unitful.Units object.
-
-Handles common scientific units and compositions used in Earth system models.
-"""
 # ESM-specific dimensionless mole-fraction units (see docs/units-standard.md).
 # All elements are dimensionally-equivalent to Unitful.NoUnits; the scale factor
 # listed in the canonical doc is applied only during conversion, not dimensional
@@ -20,6 +15,15 @@ const _ESM_DIMENSIONLESS_UNITS = Set([
     "mol/mol", "ppm", "ppmv", "ppb", "ppbv", "ppt", "pptv",
 ])
 
+# Unit strings we have already warned about. `parse_units` is called inside
+# per-reaction / per-equation loops, so warn only once per distinct string.
+const _WARNED_UNIT_STRINGS = Set{String}()
+
+"""
+Parse a unit string into a Unitful.Units object.
+
+Handles common scientific units and compositions used in Earth system models.
+"""
 function parse_units(unit_str::String)::Union{Unitful.Units, Nothing}
     if isempty(unit_str) || unit_str == "dimensionless" || unit_str == "1"
         return Unitful.NoUnits
@@ -52,7 +56,10 @@ function parse_units(unit_str::String)::Union{Unitful.Units, Nothing}
             return unit(parsed)  # Extract units from quantity
         end
     catch e
-        @warn "Unable to parse unit string: '$unit_str'" exception=e
+        if !(unit_str in _WARNED_UNIT_STRINGS)
+            push!(_WARNED_UNIT_STRINGS, unit_str)
+            @warn "Unable to parse unit string: '$unit_str'" exception=e
+        end
         return nothing
     end
 end
@@ -62,14 +69,21 @@ Get the dimensions of an expression by propagating units through operations.
 
 This performs dimensional analysis to determine the units that result from
 evaluating an expression, assuming all variables have known units.
+
+Returns `nothing` when the dimensions cannot be determined — in particular for
+variables absent from `var_units` (unknown, NOT assumed dimensionless) and for
+operators without a dimensional rule; `nothing` propagates so callers can skip
+rather than emit false warnings.
 """
-function get_expression_dimensions(expr::EarthSciSerialization.Expr, var_units::Dict{String, String})::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(expr::Expr, var_units::Dict{String, String})::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
         # Numbers are dimensionless unless specified otherwise
         return Unitful.NoUnits
     elseif expr isa VarExpr
-        # Look up variable units
-        unit_str = get(var_units, expr.name, "")
+        # Look up variable units; a variable we know nothing about has
+        # *unknown* dimensions, not dimensionless ones.
+        unit_str = get(var_units, expr.name, nothing)
+        unit_str === nothing && return nothing
         return parse_units(unit_str)
     elseif expr isa OpExpr
         # Handle different operators
@@ -159,7 +173,9 @@ function get_expression_dimensions(expr::EarthSciSerialization.Expr, var_units::
 
             return nothing
 
-        elseif expr.op in ["sin", "cos", "tan", "exp", "log", "ln", "sqrt"]
+        elseif expr.op in ["sin", "cos", "tan", "exp", "log", "ln", "sqrt",
+                           "log10", "log2", "tanh", "sinh", "cosh",
+                           "asin", "acos", "atan", "expm1"]
             # Transcendental functions: argument should be dimensionless, result is dimensionless
             if length(expr.args) != 1
                 @warn "Function $(expr.op) requires exactly 1 argument"
@@ -173,6 +189,44 @@ function get_expression_dimensions(expr::EarthSciSerialization.Expr, var_units::
             end
 
             return Unitful.NoUnits
+
+        elseif expr.op == "min" || expr.op == "max"
+            # min/max (esm-spec §4.2): all arguments must share dimensions;
+            # the result carries them.
+            arg_dims = [get_expression_dimensions(arg, var_units) for arg in expr.args]
+            valid_dims = filter(d -> d !== nothing, arg_dims)
+            isempty(valid_dims) && return nothing
+
+            first_dim = valid_dims[1]
+            for dim in valid_dims[2:end]
+                if dimension(dim) != dimension(first_dim)
+                    @warn "Dimensional inconsistency in $(expr.op): $(dimension(first_dim)) vs $(dimension(dim))"
+                    return nothing
+                end
+            end
+            return first_dim
+
+        elseif expr.op == "ifelse"
+            # ifelse(cond, a, b): branches must share dimensions; the condition
+            # is boolean and dimensionally irrelevant.
+            length(expr.args) == 3 || return nothing
+            t_dim = get_expression_dimensions(expr.args[2], var_units)
+            f_dim = get_expression_dimensions(expr.args[3], var_units)
+            (t_dim === nothing || f_dim === nothing) && return nothing
+            if dimension(t_dim) != dimension(f_dim)
+                @warn "Dimensional inconsistency in ifelse branches: $(dimension(t_dim)) vs $(dimension(f_dim))"
+                return nothing
+            end
+            return t_dim
+
+        elseif expr.op == "sign"
+            # sign() strips dimensions: result is a dimensionless -1/0/+1.
+            return Unitful.NoUnits
+
+        elseif expr.op == "abs"
+            # abs() preserves dimensions.
+            length(expr.args) == 1 || return nothing
+            return get_expression_dimensions(expr.args[1], var_units)
 
         elseif expr.op == "D"
             # Derivative: check if it's a time derivative
@@ -196,7 +250,10 @@ function get_expression_dimensions(expr::EarthSciSerialization.Expr, var_units::
             return nothing
 
         else
-            @warn "Unknown operator: $(expr.op)"
+            # Operator without a dimensional rule (comparisons, aggregate ops,
+            # registered-function calls, …): degrade silently — the result is
+            # unknown, not an authoring error worth a warning per evaluation.
+            @debug "No dimensional rule for operator: $(expr.op)"
             return nothing
         end
     else
@@ -256,99 +313,18 @@ end
 """
 Validate dimensions for all reactions in a reaction system.
 
-For reactions, validates that rate expressions have appropriate dimensions
-(typically concentration/time for elementary reactions).
+Enforces the mass-action dimensional constraint from spec §7.4 by delegating
+to [`validate_reaction_rate_units`](@ref) in validate.jl — the single shared
+implementation of the rule (also used by `validate_structural`) — so the two
+entry points cannot drift apart. Each finding is logged as a warning; returns
+`true` when no dimensional inconsistencies are found.
 """
 function validate_reaction_system_dimensions(rxn_sys::ReactionSystem)::Bool
-    # Build units dictionary
-    var_units = Dict{String, String}()
-
-    # Add species units
-    for species in rxn_sys.species
-        # Use species units field if available, otherwise default to concentration units
-        var_units[species.name] = species.units !== nothing ? species.units : "mol/L"
+    errors = validate_reaction_rate_units(rxn_sys, "/reaction_system")
+    for err in errors
+        @warn err.message
     end
-
-    # Add parameter units
-    for param in rxn_sys.parameters
-        var_units[param.name] = param.units !== nothing ? param.units : ""
-    end
-
-    # Validate each reaction rate
-    all_valid = true
-    for (i, reaction) in enumerate(rxn_sys.reactions)
-        rate_dim = get_expression_dimensions(reaction.rate, var_units)
-
-        if rate_dim !== nothing
-            # For mass action kinetics, rate should have dimensions of concentration/time
-            # multiplied by concentration^(total_reactant_order - 1)
-
-            # Calculate total reaction order from substrates (reactants).
-            # v0.2.x allows fractional stoichiometries; skip the dimensional
-            # rate-expression check when a substrate is fractional because
-            # Unitful's dimension exponents must be integer / rational.
-            total_order = 0.0
-            fractional_substrate = false
-            if reaction.substrates !== nothing
-                for substrate in reaction.substrates
-                    if !isinteger(substrate.stoichiometry)
-                        fractional_substrate = true
-                        break
-                    end
-                    total_order += substrate.stoichiometry
-                end
-            end
-            if fractional_substrate
-                continue
-            end
-            total_order_int = Int(total_order)
-
-            # Expected dimensions for rate constant: concentration/time / concentration^total_order
-            # = concentration^(1-total_order) / time
-            # For zero-order: concentration/time
-            # For first-order: 1/time
-            # For second-order: 1/(concentration*time)
-            expected_conc_power = 1 - total_order_int
-
-            @debug "Reaction $i rate dimensions: $(dimension(rate_dim))"
-            @debug "Reaction $i total order: $total_order, expected concentration power: $expected_conc_power"
-
-            # Derive the reference concentration unit from the first substrate
-            # species (falling back to the first species in the system). Only
-            # run the stoichiometric dimension check when that unit carries a
-            # real dimension — dimensionless mole-fraction species (mol/mol,
-            # ppm, …) leave the rate-constant convention ambiguous because
-            # authors commonly bake a number-density factor into the rate
-            # expression, and we would otherwise emit false positives for
-            # well-formed atmospheric-chemistry fixtures.
-            conc_ref_unit_str = ""
-            if reaction.substrates !== nothing && !isempty(reaction.substrates)
-                conc_ref_unit_str = get(var_units, reaction.substrates[1].species, "")
-            end
-            if isempty(conc_ref_unit_str) && !isempty(rxn_sys.species)
-                first_sp = rxn_sys.species[1]
-                conc_ref_unit_str = first_sp.units !== nothing ? first_sp.units : ""
-            end
-            conc_unit = parse_units(conc_ref_unit_str)
-            time_unit = parse_units("s")
-
-            if conc_unit !== nothing && time_unit !== nothing &&
-               dimension(conc_unit) != dimension(Unitful.NoUnits)
-                expected_rate_dim = conc_unit^expected_conc_power / time_unit
-                if dimension(rate_dim) != dimension(expected_rate_dim)
-                    @warn "Reaction $i ($(reaction.id)) rate expression has incompatible units for reaction stoichiometry"
-                    @warn "  Observed rate dimensions: $(dimension(rate_dim))"
-                    @warn "  Expected rate dimensions: $(dimension(expected_rate_dim)) (total order $total_order)"
-                    all_valid = false
-                end
-            end
-        else
-            @warn "Cannot determine dimensions for reaction $i rate expression"
-            all_valid = false
-        end
-    end
-
-    return all_valid
+    return isempty(errors)
 end
 
 """

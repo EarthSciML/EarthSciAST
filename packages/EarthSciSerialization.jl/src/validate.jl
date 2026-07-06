@@ -36,12 +36,17 @@ end
 
 Combined validation result containing schema errors, structural errors,
 unit warnings, and overall validation status.
+
+`unit_warnings` mirrors the TS/Python bindings' `ValidationResult` shape:
+unit findings appear both here (as human-readable strings) and as promoted
+`unit_inconsistency` entries in `structural_errors`. Unit warnings never
+affect `is_valid` on their own — the promoted structural errors do.
 """
 struct ValidationResult
     is_valid::Bool
     schema_errors::Vector{SchemaError}
     structural_errors::Vector{StructuralError}
-    unit_warnings::Vector{String}  # Future implementation
+    unit_warnings::Vector{String}
 end
 
 # Constructor for ValidationResult
@@ -79,12 +84,25 @@ else
     nothing
 end
 
+# JSONSchema.jl formats issue paths as "[a][b][3]"; convert to a
+# JSON-Pointer-style "/a/b/3" (root → "/").
+function _issue_pointer(path::AbstractString)::String
+    isempty(path) && return "/"
+    segments = [String(m.captures[1]) for m in eachmatch(r"\[([^\]]*)\]", path)]
+    isempty(segments) && return "/"
+    return "/" * join(segments, "/")
+end
+
 """
     validate_schema(data::Any) -> Vector{SchemaError}
 
 Validate data against the ESM schema.
 Returns empty vector if valid, otherwise returns validation errors.
 Each error contains the path, message, and keyword for debugging.
+
+Note: JSONSchema.jl reports only the *first* failing issue it encounters, so
+at most one `SchemaError` is returned per call; its path (JSON-Pointer style)
+and keyword are extracted from that issue.
 """
 function validate_schema(data::Any)::Vector{SchemaError}
     if ESM_SCHEMA === nothing
@@ -96,9 +114,11 @@ function validate_schema(data::Any)::Vector{SchemaError}
         result = JSONSchema.validate(ESM_SCHEMA, data)
         if result === nothing
             return SchemaError[]
+        elseif result isa JSONSchema.SingleIssue
+            # Extract the issue's location and failing keyword instead of
+            # collapsing everything to "/" / "unknown".
+            return [SchemaError(_issue_pointer(result.path), string(result), result.reason)]
         else
-            # Convert validation result to SchemaError format
-            # JSONSchema.jl returns validation error objects - need to extract info
             return [SchemaError("/", string(result), "unknown")]
         end
     catch e
@@ -112,6 +132,10 @@ end
 Validate structural consistency of ESM file according to spec Section 3.2.
 Checks equation-unknown balance, reference integrity, reaction consistency,
 and event consistency.
+
+Error paths use 0-based JSON-Pointer slash style (e.g.
+`/models/M/equations/0`), matching the shared cross-language fixtures in
+`tests/invalid/expected_errors.json` and the TS/Python bindings.
 """
 function validate_structural(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
@@ -119,7 +143,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 1. Validate model equation-unknown balance
     if file.models !== nothing
         for (model_name, model) in file.models
-            append!(errors, validate_model_balance(model, "models.$model_name"))
+            append!(errors, validate_model_balance(model, "/models/$model_name"))
         end
     end
 
@@ -129,7 +153,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 3. Validate reaction system consistency
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
-            append!(errors, validate_reaction_consistency(rs, "reaction_systems.$rs_name"))
+            append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name"))
             append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$rs_name"))
         end
     end
@@ -137,7 +161,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 4. Validate event consistency
     if file.models !== nothing
         for (model_name, model) in file.models
-            append!(errors, validate_event_consistency(model, "models.$model_name"))
+            append!(errors, validate_event_consistency(model, "/models/$model_name"))
             append!(errors, validate_model_gradient_units(file, model, "/models/$model_name"))
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
@@ -176,7 +200,10 @@ function validate(file::EsmFile)::ValidationResult
 
     schema_errors = validate_schema(data)
     structural_errors = validate_structural(file)
-    unit_warnings = String[]  # Future implementation
+    # Mirror the TS binding (validate.ts): unit findings are surfaced both as
+    # `unit_warnings` strings and as promoted `unit_inconsistency` structural
+    # errors, so neither channel is dead.
+    unit_warnings = [e.message for e in structural_errors if e.error_type == "unit_inconsistency"]
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
 end
@@ -184,6 +211,18 @@ end
 # ============================================================================
 # Helper Functions for Structural Validation
 # ============================================================================
+
+"""
+    model_subsystems(model::Model)
+
+Iterator over the `(name, subsystem)` pairs of `model.subsystems` whose value
+is itself a `Model`. Model subsystems may also hold DataLoader / SubsystemRef
+entries (RFC pure-io-data-loaders §4.3), which carry no model semantics for
+the model-specific validators — this helper skips them once, instead of every
+recursion site repeating the `subsys isa Model || continue` boilerplate.
+"""
+model_subsystems(model::Model) =
+    (pair for pair in model.subsystems if pair.second isa Model)
 
 """
     validate_model_balance(model::Model, path::String) -> Vector{StructuralError}
@@ -219,7 +258,7 @@ function validate_model_balance(model::Model, path::String)::Vector{StructuralEr
     for var in state_vars
         if var ∉ equation_vars
             push!(errors, StructuralError(
-                "$path.equations",
+                "$path/equations",
                 "State variable '$var' has no defining equation",
                 "missing_equation"
             ))
@@ -227,11 +266,8 @@ function validate_model_balance(model::Model, path::String)::Vector{StructuralEr
     end
 
     # Recursively check subsystems
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
-        append!(errors, validate_model_balance(subsys, "$path.subsystems.$subsys_name"))
+    for (subsys_name, subsys) in model_subsystems(model)
+        append!(errors, validate_model_balance(subsys, "$path/subsystems/$subsys_name"))
     end
 
     return errors
@@ -248,13 +284,13 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
     # Validate model variable references
     if file.models !== nothing
         for (model_name, model) in file.models
-            append!(errors, validate_model_references(file, model, "models.$model_name"))
+            append!(errors, validate_model_references(file, model, "/models/$model_name"))
         end
     end
 
     # Validate coupling references
     for (i, coupling_entry) in enumerate(file.coupling)
-        append!(errors, validate_coupling_references(file, coupling_entry, "coupling[$i]"))
+        append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i-1)"))
     end
 
     return errors
@@ -270,26 +306,23 @@ function validate_model_references(file::EsmFile, model::Model, path::String)::V
 
     # Validate equation references
     for (i, eq) in enumerate(model.equations)
-        append!(errors, validate_expression_references(file, eq.lhs, "$path.equations[$i].lhs"))
-        append!(errors, validate_expression_references(file, eq.rhs, "$path.equations[$i].rhs"))
+        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"))
+        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"))
     end
 
     # Validate discrete event references
     for (i, event) in enumerate(model.discrete_events)
-        append!(errors, validate_event_references(file, event, "$path.discrete_events[$i]"))
+        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i-1)"))
     end
 
     # Validate continuous event references
     for (i, event) in enumerate(model.continuous_events)
-        append!(errors, validate_event_references(file, event, "$path.continuous_events[$i]"))
+        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i-1)"))
     end
 
     # Recursively check subsystems
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
-        append!(errors, validate_model_references(file, subsys, "$path.subsystems.$subsys_name"))
+    for (subsys_name, subsys) in model_subsystems(model)
+        append!(errors, validate_model_references(file, subsys, "$path/subsystems/$subsys_name"))
     end
 
     return errors
@@ -298,19 +331,23 @@ end
 """
     validate_expression_references(file::EsmFile, expr::Expr, path::String) -> Vector{StructuralError}
 
-Validate that all variable references in an expression can be resolved.
+Validate that operator references in an expression can be resolved.
+
+Limitation: bare `VarExpr` references are accepted unconditionally — full
+scoped variable resolution (deciding whether a name is a local variable, a
+subsystem-qualified reference, or undefined in context) is out of scope for
+this validator today. Only `operator_apply` operator names are checked.
 """
 function validate_expression_references(file::EsmFile, expr::Expr, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(expr, VarExpr)
-        # Simple variable reference - check if it exists in current context
-        # For now, we'll accept all VarExpr as they could be local or qualified
-        # TODO: More sophisticated scoped resolution
+        # Simple variable reference — accepted as-is; see the docstring's
+        # limitation note on scoped resolution.
     elseif isa(expr, OpExpr)
         # Recursively check arguments
         for (i, arg) in enumerate(expr.args)
-            append!(errors, validate_expression_references(file, arg, "$path.args[$i]"))
+            append!(errors, validate_expression_references(file, arg, "$path/args/$(i-1)"))
         end
 
         # Check operator_apply references
@@ -333,6 +370,28 @@ function validate_expression_references(file::EsmFile, expr::Expr, path::String)
     return errors
 end
 
+# Try to resolve `ref` as a qualified reference; on failure push a
+# StructuralError at `path` whose message is "<desc> '<ref>': <cause>".
+# Non-QualifiedReferenceError exceptions are rethrown.
+function _check_resolvable!(errors::Vector{StructuralError}, file::EsmFile,
+                            ref::String, path::String, desc::String,
+                            error_type::String)
+    try
+        resolve_qualified_reference(file, ref)
+    catch e
+        if isa(e, QualifiedReferenceError)
+            push!(errors, StructuralError(
+                path,
+                "$desc '$ref': $(e.message)",
+                error_type
+            ))
+        else
+            rethrow()
+        end
+    end
+    return errors
+end
+
 """
     validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String) -> Vector{StructuralError}
 
@@ -347,7 +406,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         for (i, system_name) in enumerate(coupling_entry.systems)
             if !system_exists_in_file(file, system_name)
                 push!(errors, StructuralError(
-                    "$path.systems[$i]",
+                    "$path/systems/$(i-1)",
                     "System '$system_name' referenced in operator_compose coupling not found",
                     "undefined_system"
                 ))
@@ -359,7 +418,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         for (i, system_name) in enumerate(coupling_entry.systems)
             if !system_exists_in_file(file, system_name)
                 push!(errors, StructuralError(
-                    "$path.systems[$i]",
+                    "$path/systems/$(i-1)",
                     "System '$system_name' referenced in couple coupling not found",
                     "undefined_system"
                 ))
@@ -370,52 +429,32 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Validate 'from' reference
         if !validate_reference_syntax(coupling_entry.from)
             push!(errors, StructuralError(
-                "$path.from",
+                "$path/from",
                 "Invalid reference syntax: '$(coupling_entry.from)'",
                 "invalid_reference_syntax"
             ))
         else
-            # Try to resolve the 'from' reference
-            try
-                resolve_qualified_reference(file, coupling_entry.from)
-            catch e
-                if isa(e, QualifiedReferenceError)
-                    push!(errors, StructuralError(
-                        "$path.from",
-                        "Cannot resolve 'from' reference '$(coupling_entry.from)': $(e.message)",
-                        "unresolved_reference"
-                    ))
-                end
-            end
+            _check_resolvable!(errors, file, coupling_entry.from, "$path/from",
+                               "Cannot resolve 'from' reference", "unresolved_reference")
         end
 
         # Validate 'to' reference
         if !validate_reference_syntax(coupling_entry.to)
             push!(errors, StructuralError(
-                "$path.to",
+                "$path/to",
                 "Invalid reference syntax: '$(coupling_entry.to)'",
                 "invalid_reference_syntax"
             ))
         else
-            # Try to resolve the 'to' reference
-            try
-                resolve_qualified_reference(file, coupling_entry.to)
-            catch e
-                if isa(e, QualifiedReferenceError)
-                    push!(errors, StructuralError(
-                        "$path.to",
-                        "Cannot resolve 'to' reference '$(coupling_entry.to)': $(e.message)",
-                        "unresolved_reference"
-                    ))
-                end
-            end
+            _check_resolvable!(errors, file, coupling_entry.to, "$path/to",
+                               "Cannot resolve 'to' reference", "unresolved_reference")
         end
 
     elseif isa(coupling_entry, CouplingOperatorApply)
         # Validate that the referenced operator exists
         if file.operators === nothing || !haskey(file.operators, coupling_entry.operator)
             push!(errors, StructuralError(
-                "$path.operator",
+                "$path/operator",
                 "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
                 "undefined_operator"
             ))
@@ -425,7 +464,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Basic validation - callback_id should be a non-empty string
         if isempty(coupling_entry.callback_id)
             push!(errors, StructuralError(
-                "$path.callback_id",
+                "$path/callback_id",
                 "Callback ID cannot be empty",
                 "empty_callback_id"
             ))
@@ -434,54 +473,30 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
     elseif isa(coupling_entry, CouplingEvent)
         # Validate affect equations
         for (i, affect) in enumerate(coupling_entry.affects)
-            # Try to resolve the affect target as a qualified reference
-            try
-                resolve_qualified_reference(file, affect.lhs)
-            catch e
-                if isa(e, QualifiedReferenceError)
-                    push!(errors, StructuralError(
-                        "$path.affects[$i].lhs",
-                        "Cannot resolve affect target '$(affect.lhs)': $(e.message)",
-                        "unresolved_affect_target"
-                    ))
-                end
-            end
-
-            # Validate the affect expression references
-            append!(errors, validate_expression_references(file, affect.rhs, "$path.affects[$i].rhs"))
+            _check_resolvable!(errors, file, affect.lhs, "$path/affects/$(i-1)/lhs",
+                               "Cannot resolve affect target", "unresolved_affect_target")
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"))
         end
 
         # Validate negative affect equations if present
         if coupling_entry.affect_neg !== nothing
             for (i, affect) in enumerate(coupling_entry.affect_neg)
-                # Try to resolve the affect target as a qualified reference
-                try
-                    resolve_qualified_reference(file, affect.lhs)
-                catch e
-                    if isa(e, QualifiedReferenceError)
-                        push!(errors, StructuralError(
-                            "$path.affect_neg[$i].lhs",
-                            "Cannot resolve negative affect target '$(affect.lhs)': $(e.message)",
-                            "unresolved_affect_target"
-                        ))
-                    end
-                end
-
-                # Validate the affect expression references
-                append!(errors, validate_expression_references(file, affect.rhs, "$path.affect_neg[$i].rhs"))
+                _check_resolvable!(errors, file, affect.lhs, "$path/affect_neg/$(i-1)/lhs",
+                                   "Cannot resolve negative affect target", "unresolved_affect_target")
+                append!(errors, validate_expression_references(file, affect.rhs, "$path/affect_neg/$(i-1)/rhs"))
             end
         end
 
         # Validate condition expressions if present (for continuous events)
         if coupling_entry.conditions !== nothing
             for (i, condition) in enumerate(coupling_entry.conditions)
-                append!(errors, validate_expression_references(file, condition, "$path.conditions[$i]"))
+                append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"))
             end
         end
 
         # Validate trigger expression if present (for discrete events)
         if coupling_entry.trigger !== nothing && isa(coupling_entry.trigger, ConditionTrigger)
-            append!(errors, validate_expression_references(file, coupling_entry.trigger.expression, "$path.trigger.expression"))
+            append!(errors, validate_expression_references(file, coupling_entry.trigger.expression, "$path/trigger/expression"))
         end
     end
 
@@ -499,25 +514,25 @@ function validate_event_references(file::EsmFile, event::EventType, path::String
     if isa(event, ContinuousEvent)
         # Validate condition expressions
         for (i, condition) in enumerate(event.conditions)
-            append!(errors, validate_expression_references(file, condition, "$path.conditions[$i]"))
+            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"))
         end
 
         # Validate affect references
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path.affects[$i].rhs"))
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"))
             # affect.lhs is a string (variable name) - would need model context to validate
         end
 
     elseif isa(event, DiscreteEvent)
         # Validate functional affect references
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.expression, "$path.affects[$i].expression"))
+            append!(errors, validate_expression_references(file, affect.expression, "$path/affects/$(i-1)/expression"))
             # affect.target is a string (variable name) - would need model context to validate
         end
 
         # Validate trigger references (if condition-based)
         if isa(event.trigger, ConditionTrigger)
-            append!(errors, validate_expression_references(file, event.trigger.expression, "$path.trigger.expression"))
+            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"))
         end
     end
 
@@ -536,12 +551,9 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
     # Get set of declared species
     species_names = Set(sp.name for sp in rs.species)
 
-    # Get set of declared parameters
-    param_names = Set(p.name for p in rs.parameters)
-
     # Validate each reaction
     for (i, reaction) in enumerate(rs.reactions)
-        reaction_path = "$path.reactions[$i]"
+        reaction_path = "$path/reactions/$(i-1)"
 
         # Check substrates (reactants) are declared species
         # Use getfield to access the actual Vector{StoichiometryEntry} instead of backward-compatibility Dict
@@ -550,7 +562,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
             for entry in substrates_field
                 if entry.species ∉ species_names
                     push!(errors, StructuralError(
-                        "$reaction_path.substrates",
+                        "$reaction_path/substrates",
                         "Species '$(entry.species)' not declared",
                         "undefined_species"
                     ))
@@ -559,7 +571,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
                     push!(errors, StructuralError(
-                        "$reaction_path.substrates",
+                        "$reaction_path/substrates",
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
                         "invalid_stoichiometry"
                     ))
@@ -574,7 +586,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
             for entry in products_field
                 if entry.species ∉ species_names
                     push!(errors, StructuralError(
-                        "$reaction_path.products",
+                        "$reaction_path/products",
                         "Species '$(entry.species)' not declared",
                         "undefined_species"
                     ))
@@ -583,7 +595,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
                     push!(errors, StructuralError(
-                        "$reaction_path.products",
+                        "$reaction_path/products",
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
                         "invalid_stoichiometry"
                     ))
@@ -602,24 +614,14 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
             ))
         end
 
-        # Validate rate expression references
-        # This is simplified - a full implementation would check all variable references in rate
-        if isa(reaction.rate, VarExpr)
-            rate_var = reaction.rate.name
-            if rate_var ∉ param_names && rate_var ∉ species_names
-                # Could be a qualified reference - for now just warn
-                # push!(errors, StructuralError(
-                #     "$reaction_path.rate",
-                #     "Rate variable '$rate_var' not found in parameters or species",
-                #     "undefined_rate_variable"
-                # ))
-            end
-        end
+        # Rate expression references: a bare-variable rate not found in
+        # parameters or species may be a qualified cross-system reference,
+        # so it is intentionally not flagged here.
     end
 
     # Recursively check subsystems
     for (subsys_name, subsys) in rs.subsystems
-        append!(errors, validate_reaction_consistency(subsys, "$path.subsystems.$subsys_name"))
+        append!(errors, validate_reaction_consistency(subsys, "$path/subsystems/$subsys_name"))
     end
 
     return errors
@@ -766,15 +768,12 @@ function validate_model_gradient_units(file::EsmFile, model::Model, path::String
     if coord_units !== nothing
         for (i, eq) in enumerate(model.equations)
             eq_path = "$path/equations/$(i-1)"
-            append!(errors, _check_gradient_ops(eq.lhs, coord_units, eq_path, i-1))
-            append!(errors, _check_gradient_ops(eq.rhs, coord_units, eq_path, i-1))
+            append!(errors, _check_gradient_ops(eq.lhs, coord_units, eq_path))
+            append!(errors, _check_gradient_ops(eq.rhs, coord_units, eq_path))
         end
     end
 
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
+    for (subsys_name, subsys) in model_subsystems(model)
         append!(errors, validate_model_gradient_units(file, subsys, "$path/subsystems/$subsys_name"))
     end
 
@@ -800,7 +799,7 @@ function _collect_coordinate_units(file::EsmFile, model::Model)::Union{Dict{Stri
 end
 
 function _check_gradient_ops(expr::Expr, coord_units::Dict{String,Union{String,Nothing}},
-                             eq_path::String, eq_index::Int)::Vector{StructuralError}
+                             eq_path::String)::Vector{StructuralError}
     errors = StructuralError[]
     if expr isa OpExpr
         if expr.op in ("grad", "div", "laplacian") && expr.dim !== nothing
@@ -824,7 +823,7 @@ function _check_gradient_ops(expr::Expr, coord_units::Dict{String,Union{String,N
             end
         end
         for arg in expr.args
-            append!(errors, _check_gradient_ops(arg, coord_units, eq_path, eq_index))
+            append!(errors, _check_gradient_ops(arg, coord_units, eq_path))
         end
     end
     return errors
@@ -871,22 +870,19 @@ function validate_event_consistency(model::Model, path::String)::Vector{Structur
 
     # Validate discrete events
     for (i, event) in enumerate(model.discrete_events)
-        event_path = "$path.discrete_events[$i]"
+        event_path = "$path/discrete_events/$(i-1)"
         append!(errors, validate_single_event_consistency(model, event, event_path))
     end
 
     # Validate continuous events
     for (i, event) in enumerate(model.continuous_events)
-        event_path = "$path.continuous_events[$i]"
+        event_path = "$path/continuous_events/$(i-1)"
         append!(errors, validate_single_event_consistency(model, event, event_path))
     end
 
     # Recursively check subsystems
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
-        append!(errors, validate_event_consistency(subsys, "$path.subsystems.$subsys_name"))
+    for (subsys_name, subsys) in model_subsystems(model)
+        append!(errors, validate_event_consistency(subsys, "$path/subsystems/$subsys_name"))
     end
 
     return errors
@@ -901,38 +897,38 @@ function validate_single_event_consistency(model::Model, event::EventType, event
     errors = StructuralError[]
 
     if isa(event, ContinuousEvent)
-            # Continuous event conditions should be mathematical expressions (zero-crossing)
-            # This is automatically satisfied by the type system (Vector{Expr})
+        # Continuous event conditions should be mathematical expressions (zero-crossing)
+        # This is automatically satisfied by the type system (Vector{Expr})
 
-            # Validate affect variable declarations
-            for (j, affect) in enumerate(event.affects)
-                if !haskey(model.variables, affect.lhs)
-                    push!(errors, StructuralError(
-                        "$event_path.affects[$j]",
-                        "Affect target variable '$(affect.lhs)' not declared in model",
-                        "undefined_affect_variable"
-                    ))
-                end
-            end
-
-        elseif isa(event, DiscreteEvent)
-            # For condition triggers, ensure expression could produce boolean
-            if isa(event.trigger, ConditionTrigger)
-                # In practice, we'd need more sophisticated analysis to ensure boolean result
-                # For now, accept all expressions as they could evaluate to boolean
-            end
-
-            # Validate functional affect targets
-            for (j, affect) in enumerate(event.affects)
-                if !haskey(model.variables, affect.target)
-                    push!(errors, StructuralError(
-                        "$event_path.affects[$j]",
-                        "Functional affect target '$(affect.target)' not declared in model",
-                        "undefined_affect_target"
-                    ))
-                end
+        # Validate affect variable declarations
+        for (j, affect) in enumerate(event.affects)
+            if !haskey(model.variables, affect.lhs)
+                push!(errors, StructuralError(
+                    "$event_path/affects/$(j-1)",
+                    "Affect target variable '$(affect.lhs)' not declared in model",
+                    "undefined_affect_variable"
+                ))
             end
         end
+
+    elseif isa(event, DiscreteEvent)
+        # For condition triggers, ensure expression could produce boolean
+        if isa(event.trigger, ConditionTrigger)
+            # In practice, we'd need more sophisticated analysis to ensure boolean result
+            # For now, accept all expressions as they could evaluate to boolean
+        end
+
+        # Validate functional affect targets
+        for (j, affect) in enumerate(event.affects)
+            if !haskey(model.variables, affect.target)
+                push!(errors, StructuralError(
+                    "$event_path/affects/$(j-1)",
+                    "Functional affect target '$(affect.target)' not declared in model",
+                    "undefined_affect_target"
+                ))
+            end
+        end
+    end
 
     return errors
 end
@@ -1030,10 +1026,7 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
     end
 
     # Recurse into subsystems
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
+    for (subsys_name, subsys) in model_subsystems(model)
         append!(errors, validate_physical_constant_units(subsys, "$path/subsystems/$subsys_name"))
     end
 
@@ -1116,10 +1109,7 @@ function validate_conversion_factor_consistency(model::Model, path::String)::Vec
     end
 
     # Recurse into subsystems
-    for (subsys_name, subsys) in model.subsystems
-        # Model-specific validators; DataLoader / SubsystemRef subsystems
-        # (RFC pure-io-data-loaders §4.3) carry no model semantics to check here.
-        subsys isa Model || continue
+    for (subsys_name, subsys) in model_subsystems(model)
         append!(errors, validate_conversion_factor_consistency(subsys, "$path/subsystems/$subsys_name"))
     end
 
