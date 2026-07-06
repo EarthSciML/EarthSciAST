@@ -198,105 +198,6 @@ def validate(esm_file) -> ValidationResult:
     )
 
 
-def validate_raw(esm_data: Union[str, Dict[str, Any]]) -> ValidationResult:
-    """
-    Validate ESM data from raw JSON string or dictionary.
-
-    This function provides backward compatibility by parsing the data first,
-    then calling the main validate function.
-
-    Args:
-        esm_data: Either a JSON string or a dictionary containing ESM data
-
-    Returns:
-        ValidationResult containing validation status and any errors found
-    """
-    schema_errors = []
-    structural_errors = []
-
-    try:
-        # Parse the data if it's a string
-        if isinstance(esm_data, str):
-            try:
-                data = json.loads(esm_data)
-            except json.JSONDecodeError as e:
-                return ValidationResult(
-                    is_valid=False,
-                    schema_errors=[ValidationError(
-                        path="$",
-                        message=f"Invalid JSON: {e.msg}",
-                        code="json_decode_error",
-                        details={"line": e.lineno, "column": e.colno}
-                    )],
-                    structural_errors=[],
-                    unit_warnings=[]
-                )
-        else:
-            data = esm_data
-
-        # Validate against JSON schema first
-        schema = _get_schema()
-        try:
-            jsonschema.validate(data, schema)
-        except JsonSchemaValidationError as e:
-            # Collect all schema validation errors
-            validator = jsonschema.Draft7Validator(schema)
-            for error in validator.iter_errors(data):
-                schema_errors.append(_convert_jsonschema_error(error))
-
-        # If schema validation passed, parse and do structural validation
-        if not schema_errors:
-            try:
-                # Parse to EsmFile and perform structural validation
-                esm_file = load(json.dumps(data))
-                result = validate(esm_file)
-                # Merge schema errors if any occurred during parsing
-                result.schema_errors.extend(schema_errors)
-                return result
-            except (SchemaValidationError, UnsupportedVersionError, ValueError) as e:
-                structural_errors.append(ValidationError(
-                    path="$",
-                    message=str(e),
-                    code=type(e).__name__.lower().replace("error", ""),
-                    details={"exception_type": type(e).__name__}
-                ))
-            except Exception as e:
-                # Catch any other parsing errors
-                structural_errors.append(ValidationError(
-                    path="$",
-                    message=f"Structural validation failed: {str(e)}",
-                    code="structural_error",
-                    details={
-                        "exception_type": type(e).__name__,
-                        "traceback": traceback.format_exc()
-                    }
-                ))
-
-    except Exception as e:
-        # Catch-all for unexpected errors
-        return ValidationResult(
-            is_valid=False,
-            schema_errors=[ValidationError(
-                path="$",
-                message=f"Validation failed with unexpected error: {str(e)}",
-                code="unexpected_error",
-                details={
-                    "exception_type": type(e).__name__,
-                    "traceback": traceback.format_exc()
-                }
-            )],
-            structural_errors=[],
-            unit_warnings=[]
-        )
-
-    return ValidationResult(
-        is_valid=len(schema_errors) == 0 and len(structural_errors) == 0,
-        schema_errors=schema_errors,
-        structural_errors=structural_errors,
-        unit_warnings=[]
-    )
-
-
 def _validate_content_presence(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
     """
     Validate that at least one of models, reaction_systems, or data_loaders is
@@ -370,68 +271,10 @@ def _validate_equation_balance_enhanced(esm_file: EsmFile, error_collector: Erro
             error_collector.add_error(error)
 
 
-def _validate_equation_balance(esm_file: EsmFile, structural_errors: List[ValidationError]) -> None:
-    """
-    Validate equation-unknown balance in models.
-
-    Ensures each model has the right number of equations for the number of unknowns (state variables).
-    """
-    for i, model in enumerate(esm_file.models):
-        path = f"/models/{i}"
-
-        # Count state variables (unknowns)
-        state_vars = [name for name, var in model.variables.items() if var.type == 'state']
-        num_unknowns = len(state_vars)
-
-        # Count governing equations only; `ic` equations pin initial conditions,
-        # not unknowns (see `_is_initial_condition_equation`).
-        num_equations = sum(
-            1 for eq in model.equations if not _is_initial_condition_equation(eq)
-        )
-
-        if num_equations != num_unknowns:
-            structural_errors.append(ValidationError(
-                path=path,
-                message=f"Equation-unknown balance error: {num_equations} equations for {num_unknowns} unknowns (state variables: {', '.join(state_vars)})",
-                code="equation_unknown_imbalance",
-                details={
-                    "model_name": model.name,
-                    "num_equations": num_equations,
-                    "num_unknowns": num_unknowns,
-                    "state_variables": state_vars
-                }
-            ))
-
-
 def _validate_reference_integrity_enhanced(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
     """Enhanced reference integrity validation with smart suggestions."""
-    # Build comprehensive variable lookup for smart suggestions
-    all_variables = {}
-    all_models = {}
-    all_reaction_systems = {}
-    all_operators = {}
-
-    # Collect all models and their variables
-    for model in esm_file.models.values():
-        all_models[model.name] = model
-        for var_name, var in model.variables.items():
-            scoped_name = f"{model.name}.{var_name}"
-            all_variables[scoped_name] = var
-            all_variables[var_name] = var  # Also allow unscoped references within model
-
-    # Collect all reaction systems and their species/parameters
-    for rs in esm_file.reaction_systems.values():
-        all_reaction_systems[rs.name] = rs
-        for species in rs.species:
-            scoped_name = f"{rs.name}.{species.name}"
-            all_variables[scoped_name] = species
-        for param in rs.parameters:
-            scoped_name = f"{rs.name}.{param.name}"
-            all_variables[scoped_name] = param
-
-    # Collect all operators
-    for op in esm_file.operators:
-        all_operators[op.operator_id] = op
+    all_models = {model.name: model for model in esm_file.models.values()}
+    all_reaction_systems = {rs.name: rs for rs in esm_file.reaction_systems.values()}
 
     # Validate coupling references with enhanced error handling
     for i, coupling in enumerate(esm_file.coupling):

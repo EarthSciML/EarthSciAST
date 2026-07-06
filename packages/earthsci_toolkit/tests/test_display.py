@@ -9,7 +9,7 @@ import pytest
 import json
 from pathlib import Path
 
-from earthsci_toolkit.display import to_unicode, to_latex, explore
+from earthsci_toolkit.display import to_unicode, to_latex
 from earthsci_toolkit.parse import load
 
 
@@ -309,60 +309,6 @@ class TestDisplayFunctions:
 
             latex_result = to_latex(expr)
             assert "x" in latex_result
-
-
-class TestExploreFunction:
-    """Test the explore function for interactive display."""
-
-    def test_explore_simple_model(self):
-        """Test explore function with a simple model."""
-        esm_content = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test Model"},
-            "models": {
-                "simple": {
-                    "variables": {"x": {"type": "state"}},
-                    "equations": [{"lhs": "x", "rhs": 1}]
-                }
-            }
-        }
-
-        # explore might return formatted output or an explorer object
-        result = explore(esm_content)
-        assert result is not None
-
-    def test_explore_reaction_system(self):
-        """Test explore function with a reaction system."""
-        esm_content = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test Reactions"},
-            "reaction_systems": {
-                "simple": {
-                    "species": {"A": {}, "B": {}},
-                    "parameters": {"k": {"default": 0.1}},
-                    "reactions": [{
-                        "id": "R1",
-                        "substrates": [{"species": "A", "stoichiometry": 1}],
-                        "products": [{"species": "B", "stoichiometry": 1}],
-                        "rate": "k"
-                    }]
-                }
-            }
-        }
-
-        result = explore(esm_content)
-        assert result is not None
-
-    def test_explore_empty_model(self):
-        """Test explore function with an empty model."""
-        esm_content = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Empty Model"},
-            "models": {}
-        }
-
-        result = explore(esm_content)
-        assert result is not None
 
 
 class TestDisplayErrorHandling:

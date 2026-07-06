@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from earthsci_toolkit import (
-    load, save, validate, substitute, explore
+    load, save, validate, substitute
 )
 from earthsci_toolkit.display import to_unicode, to_latex
 from earthsci_toolkit.parse import SchemaValidationError
@@ -191,9 +191,9 @@ class TestFullWorkflowIntegration:
         # Schema validation should pass (structural warnings may exist)
         assert len(validation_result.schema_errors) == 0
 
-        # Try to explore the model
-        explorer_result = explore(loaded_model)
-        assert explorer_result is not None
+        # Rendering the model as text must work end-to-end
+        rendered = to_unicode(loaded_model)
+        assert rendered
 
         # Save and reload
         saved_content = save(loaded_model)
@@ -244,9 +244,9 @@ class TestWorkflowRobustness:
         # Empty models may or may not be considered valid depending on validation rules
         assert validation_result is not None
 
-        # Should be able to explore empty model
-        explorer_result = explore(loaded_model)
-        assert explorer_result is not None
+        # Should be able to render an empty model
+        rendered = to_unicode(loaded_model)
+        assert rendered
 
     def test_large_model_workflow_performance(self):
         """Test workflow performance with larger models."""
@@ -329,8 +329,8 @@ class TestWorkflowRobustness:
         assert validation_result.is_valid
 
         # Display should preserve Unicode
-        explorer_result = explore(loaded_model)
-        assert explorer_result is not None
+        rendered = to_unicode(loaded_model)
+        assert rendered
 
 
 class TestWorkflowErrorHandling:

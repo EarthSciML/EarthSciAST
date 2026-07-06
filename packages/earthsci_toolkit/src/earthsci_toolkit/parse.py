@@ -2206,54 +2206,6 @@ def _check_temporal_resolution(data: Dict[str, Any], errors: List[str]) -> None:
                 )
 
 
-def _check_subsystem_refs(data: Dict[str, Any], errors: List[str], file_path) -> None:
-    """Check that subsystem ref points to an existing file with a single top-level system."""
-    base_dirs = []
-    if file_path is not None:
-        base = Path(file_path).parent if not isinstance(file_path, Path) else file_path.parent
-        base_dirs.append(base)
-    # Always include CWD as a fallback
-    base_dirs.append(Path.cwd())
-
-    def check_subsystems(parent_path, subsystems):
-        for sname, sub in subsystems.items():
-            ref = sub.get("ref") if isinstance(sub, dict) else None
-            if not ref:
-                continue
-            # Try to resolve against any base dir
-            target = None
-            for bd in base_dirs:
-                candidate = (bd / ref).resolve()
-                if candidate.exists():
-                    target = candidate
-                    break
-            if target is None:
-                errors.append(
-                    f"{parent_path}/subsystems/{sname}: ref '{ref}' file not found"
-                )
-                continue
-            try:
-                with open(target) as f:
-                    sub_data = json.load(f)
-            except Exception as e:
-                errors.append(f"{parent_path}/subsystems/{sname}: cannot parse ref '{ref}': {e}")
-                continue
-            top_systems = list(sub_data.get("models", {}).keys()) + list(
-                sub_data.get("reaction_systems", {}).keys()
-            )
-            if len(top_systems) != 1:
-                errors.append(
-                    f"{parent_path}/subsystems/{sname}: ref '{ref}' is ambiguous — expected exactly one top-level system, found {len(top_systems)}"
-                )
-
-    for mname, m in data.get("models", {}).items():
-        if "subsystems" in m:
-            check_subsystems(f"models/{mname}", m["subsystems"])
-    for rsname, rs in data.get("reaction_systems", {}).items():
-        if "subsystems" in rs:
-            check_subsystems(f"reaction_systems/{rsname}", rs["subsystems"])
-
-
 def _collect_var_units(tables: Dict[str, Any]) -> Dict[str, str]:
     """Build {var_name: units} map for plain (unscoped) variable refs."""
     var_units = {}

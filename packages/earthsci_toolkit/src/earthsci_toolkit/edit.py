@@ -102,25 +102,6 @@ class ESMEditor:
                 errors=[f"Edit operation failed: {e}"]
             )
 
-    def add_model(self, esm_file: EsmFile, model: Model) -> EditResult:
-        """Add a model to an ESM file."""
-        operation = EditOperation(
-            operation_type="add",
-            target_type="model",
-            target_id=model.name,
-            data={"model": model}
-        )
-        return self.apply_operation(esm_file, operation)
-
-    def remove_model(self, esm_file: EsmFile, model_name: str) -> EditResult:
-        """Remove a model from an ESM file."""
-        operation = EditOperation(
-            operation_type="remove",
-            target_type="model",
-            target_id=model_name
-        )
-        return self.apply_operation(esm_file, operation)
-
     def remove_variable(self, model: Model, var_name: str) -> EditResult:
         """Remove a variable from a model."""
         operation = EditOperation(
@@ -299,48 +280,6 @@ class ESMEditor:
         )
         return self.apply_operation(target, operation)
 
-    def compose(self, esm_file: EsmFile, system_a: str, system_b: str) -> EditResult:
-        """
-        Create an operator_compose coupling between two systems.
-
-        Args:
-            esm_file: The ESM file to modify
-            system_a: Name of the first system
-            system_b: Name of the second system
-
-        Returns:
-            EditResult with the modified ESM file
-        """
-        # This would create a coupling entry - implementation depends on CouplingEntry structure
-        operation = EditOperation(
-            operation_type="compose",
-            target_type="systems",
-            target_id=f"{system_a}-{system_b}",
-            data={"system_a": system_a, "system_b": system_b}
-        )
-        return self.apply_operation(esm_file, operation)
-
-    def map_variable(self, esm_file: EsmFile, from_var: str, to_var: str, transform: Optional[Expr] = None) -> EditResult:
-        """
-        Create a variable mapping coupling entry.
-
-        Args:
-            esm_file: The ESM file to modify
-            from_var: Source variable reference
-            to_var: Target variable reference
-            transform: Optional transformation expression
-
-        Returns:
-            EditResult with the modified ESM file
-        """
-        operation = EditOperation(
-            operation_type="map_variable",
-            target_type="variables",
-            target_id=f"{from_var}->{to_var}",
-            data={"from_var": from_var, "to_var": to_var, "transform": transform}
-        )
-        return self.apply_operation(esm_file, operation)
-
     def merge(self, file_a: EsmFile, file_b: EsmFile) -> EditResult:
         """
         Merge two ESM files.
@@ -485,63 +424,7 @@ class ESMEditor:
 
     def _apply_esm_file_operation(self, esm_file: EsmFile, operation: EditOperation) -> EditResult:
         """Apply an operation to an ESM file."""
-        if operation.target_type == "model":
-            if operation.operation_type == "add":
-                model = operation.data.get("model")
-                if not model:
-                    return EditResult(success=False, errors=["No model data provided"])
-
-                if not esm_file.models:
-                    esm_file.models = []
-
-                # Check for duplicate names
-                if any(m.name == model.name for m in esm_file.models):
-                    return EditResult(success=False, errors=[f"Model '{model.name}' already exists"])
-
-                esm_file.models.append(model)
-                return EditResult(success=True, modified_object=esm_file)
-
-            elif operation.operation_type == "remove":
-                if not esm_file.models:
-                    return EditResult(success=False, errors=["No models to remove"])
-
-                original_count = len(esm_file.models)
-                esm_file.models = [m for m in esm_file.models if m.name != operation.target_id]
-
-                if len(esm_file.models) == original_count:
-                    return EditResult(success=False, errors=[f"Model '{operation.target_id}' not found"])
-
-                return EditResult(success=True, modified_object=esm_file)
-
-        elif operation.target_type == "reaction_system":
-            if operation.operation_type == "add":
-                rs = operation.data.get("reaction_system")
-                if not rs:
-                    return EditResult(success=False, errors=["No reaction system data provided"])
-
-                if not esm_file.reaction_systems:
-                    esm_file.reaction_systems = []
-
-                # Check for duplicate names
-                if any(r.name == rs.name for r in esm_file.reaction_systems):
-                    return EditResult(success=False, errors=[f"Reaction system '{rs.name}' already exists"])
-
-                esm_file.reaction_systems.append(rs)
-                return EditResult(success=True, modified_object=esm_file)
-
-            elif operation.operation_type == "remove":
-                if not esm_file.reaction_systems:
-                    return EditResult(success=False, errors=["No reaction systems to remove"])
-
-                original_count = len(esm_file.reaction_systems)
-                esm_file.reaction_systems = [r for r in esm_file.reaction_systems if r.name != operation.target_id]
-
-                if len(esm_file.reaction_systems) == original_count:
-                    return EditResult(success=False, errors=[f"Reaction system '{operation.target_id}' not found"])
-
-                return EditResult(success=True, modified_object=esm_file)
-
-        elif operation.target_type == "coupling":
+        if operation.target_type == "coupling":
             if operation.operation_type == "add":
                 coupling = operation.data.get("coupling")
                 if not coupling:
@@ -778,12 +661,6 @@ class ESMEditor:
 
 
 # Convenience functions
-def add_model_to_file(esm_file: EsmFile, model: Model, validate: bool = True) -> EditResult:
-    """Add a model to an ESM file."""
-    editor = ESMEditor(validate_after_edit=validate)
-    return editor.add_model(esm_file, model)
-
-
 def add_variable_to_model(model: Model, var_name: str, var_info: ModelVariable, validate: bool = True) -> EditResult:
     """Add a variable to a model."""
     editor = ESMEditor(validate_after_edit=validate)
@@ -866,18 +743,6 @@ def remove_coupling_from_file(esm_file: EsmFile, index: int, validate: bool = Tr
     """Remove a coupling entry from an ESM file."""
     editor = ESMEditor(validate_after_edit=validate)
     return editor.remove_coupling(esm_file, index)
-
-
-def compose_systems(esm_file: EsmFile, system_a: str, system_b: str, validate: bool = True) -> EditResult:
-    """Create an operator_compose coupling between two systems."""
-    editor = ESMEditor(validate_after_edit=validate)
-    return editor.compose(esm_file, system_a, system_b)
-
-
-def map_variable_in_file(esm_file: EsmFile, from_var: str, to_var: str, transform: Optional[Expr] = None, validate: bool = True) -> EditResult:
-    """Create a variable mapping coupling entry."""
-    editor = ESMEditor(validate_after_edit=validate)
-    return editor.map_variable(esm_file, from_var, to_var, transform)
 
 
 def merge_esm_files(file_a: EsmFile, file_b: EsmFile, validate: bool = True) -> EditResult:

@@ -143,12 +143,11 @@ pub(crate) fn validate_model(
     check_physical_constant_units(model_name, model, errors);
 
     // Validate continuous events
-    // TODO: Implement validate_continuous_event function
-    // if let Some(ref continuous_events) = model.continuous_events {
-    //     for (event_idx, event) in continuous_events.iter().enumerate() {
-    //         validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
-    //     }
-    // }
+    if let Some(ref continuous_events) = model.continuous_events {
+        for (event_idx, event) in continuous_events.iter().enumerate() {
+            validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
+        }
+    }
 }
 
 /// Well-known physical constants whose declared units can be dimensionally
@@ -914,41 +913,110 @@ fn validate_discrete_event(
 
     // Validate affects
     if let Some(ref affects) = event.affects {
-        for affect in affects {
-            // Check LHS variable exists
-            if !defined_vars.contains(&affect.lhs) {
-                errors.push(StructuralError {
-                    path: event_path.clone(),
-                    code: StructuralErrorCode::EventVarUndeclared,
-                    message: format!("Variable '{}' in event affects is not declared", affect.lhs),
-                    details: serde_json::json!({
-                        "variable": affect.lhs,
-                        "event_name": event.name.as_deref().unwrap_or("unnamed"),
-                        "event_type": "discrete",
-                        "location": "affects",
-                        "expected_in": "variables"
-                    }),
-                });
-            }
-
-            // Validate RHS expression
-            validate_event_expression(
-                &affect.rhs,
-                defined_vars,
-                &event_path,
-                "affects",
-                event.name.as_deref().unwrap_or("unnamed"),
-                "discrete",
-                errors,
-            );
-        }
+        validate_event_affects(
+            affects,
+            defined_vars,
+            &event_path,
+            "affects",
+            event.name.as_deref().unwrap_or("unnamed"),
+            "discrete",
+            errors,
+        );
     }
 
     // Note: discrete_parameters field validation would go here when DiscreteEvent type supports it
 }
 
-// Note: ContinuousEvent validation would be implemented when types support it
+/// Structural checks for a continuous event (esm-spec §6.3): every zero-cross
+/// `conditions` expression and every `affects`/`affect_neg` equation must
+/// reference only declared variables. Mirrors [`validate_discrete_event`].
+fn validate_continuous_event(
+    event: &crate::ContinuousEvent,
+    event_idx: usize,
+    parent_path: &str,
+    defined_vars: &HashSet<String>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let event_path = format!("{parent_path}/continuous_events/{event_idx}");
+    let event_name = event.name.as_deref().unwrap_or("unnamed");
 
+    for condition in &event.conditions {
+        validate_event_expression(
+            condition,
+            defined_vars,
+            &event_path,
+            "condition",
+            event_name,
+            "continuous",
+            errors,
+        );
+    }
+    validate_event_affects(
+        &event.affects,
+        defined_vars,
+        &event_path,
+        "affects",
+        event_name,
+        "continuous",
+        errors,
+    );
+    if let Some(ref affect_neg) = event.affect_neg {
+        validate_event_affects(
+            affect_neg,
+            defined_vars,
+            &event_path,
+            "affect_neg",
+            event_name,
+            "continuous",
+            errors,
+        );
+    }
+}
+
+/// Shared affect-equation checks for discrete and continuous events: each
+/// LHS must be a declared variable, and each RHS expression must reference
+/// only declared names.
+#[allow(clippy::too_many_arguments)]
+fn validate_event_affects(
+    affects: &[crate::AffectEquation],
+    defined_vars: &HashSet<String>,
+    event_path: &str,
+    location: &str,
+    event_name: &str,
+    event_type: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    for affect in affects {
+        if !defined_vars.contains(&affect.lhs) {
+            errors.push(StructuralError {
+                path: event_path.to_string(),
+                code: StructuralErrorCode::EventVarUndeclared,
+                message: format!(
+                    "Variable '{}' in event {location} is not declared",
+                    affect.lhs
+                ),
+                details: serde_json::json!({
+                    "variable": affect.lhs,
+                    "event_name": event_name,
+                    "event_type": event_type,
+                    "location": location,
+                    "expected_in": "variables"
+                }),
+            });
+        }
+        validate_event_expression(
+            &affect.rhs,
+            defined_vars,
+            event_path,
+            location,
+            event_name,
+            event_type,
+            errors,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn validate_event_expression(
     expr: &crate::Expr,
     defined_vars: &HashSet<String>,
@@ -980,7 +1048,7 @@ fn validate_event_expression(
             }
         }
         crate::Expr::Operator(op_node) => {
-            for arg in &op_node.args {
+            op_node.for_each_child(&mut |arg| {
                 validate_event_expression(
                     arg,
                     defined_vars,
@@ -989,8 +1057,8 @@ fn validate_event_expression(
                     event_name,
                     event_type,
                     errors,
-                );
-            }
+                )
+            });
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {
             // Numbers are always valid

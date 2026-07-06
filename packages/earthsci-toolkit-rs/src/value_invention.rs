@@ -521,20 +521,32 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
     let op = node_op(node)
         .ok_or_else(|| ValueInventionError("value-invention node has no `op`".into()))?;
     let args = node_args(node);
+    // Arity guard: `args` comes straight from user JSON (schema-valid files
+    // may still carry too few operands), so a missing operand must surface
+    // as a diagnostic, never a slice-index panic.
+    let arg = |i: usize| -> Result<&Value, ValueInventionError> {
+        args.get(i).ok_or_else(|| {
+            ValueInventionError(format!(
+                "op {op:?} expects at least {} operand(s), found {}",
+                i + 1,
+                args.len()
+            ))
+        })
+    };
     match op {
         "index" => vi_index(node, ctx, bindings),
         "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
         "true" => Ok(Val::Bool(true)),
         "false" => Ok(Val::Bool(false)),
         "floor" => Ok(Val::Int(
-            vi_eval(&args[0], ctx, bindings)?.as_f64()?.floor() as i64,
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.floor() as i64,
         )),
         "ceil" => Ok(Val::Int(
-            vi_eval(&args[0], ctx, bindings)?.as_f64()?.ceil() as i64
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.ceil() as i64
         )),
         "/" => Ok(Val::Float(
-            vi_eval(&args[0], ctx, bindings)?.as_f64()?
-                / vi_eval(&args[1], ctx, bindings)?.as_f64()?,
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?
+                / vi_eval(arg(1)?, ctx, bindings)?.as_f64()?,
         )),
         "*" => {
             let mut acc = 1.0;
@@ -552,17 +564,17 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         }
         "-" => {
             if args.len() == 1 {
-                Ok(Val::Float(-vi_eval(&args[0], ctx, bindings)?.as_f64()?))
+                Ok(Val::Float(-vi_eval(arg(0)?, ctx, bindings)?.as_f64()?))
             } else {
                 Ok(Val::Float(
-                    vi_eval(&args[0], ctx, bindings)?.as_f64()?
-                        - vi_eval(&args[1], ctx, bindings)?.as_f64()?,
+                    vi_eval(arg(0)?, ctx, bindings)?.as_f64()?
+                        - vi_eval(arg(1)?, ctx, bindings)?.as_f64()?,
                 ))
             }
         }
         "<" | ">" | "<=" | ">=" | "==" | "!=" => {
-            let a = vi_eval(&args[0], ctx, bindings)?.as_f64()?;
-            let b = vi_eval(&args[1], ctx, bindings)?.as_f64()?;
+            let a = vi_eval(arg(0)?, ctx, bindings)?.as_f64()?;
+            let b = vi_eval(arg(1)?, ctx, bindings)?.as_f64()?;
             Ok(Val::Bool(match op {
                 "<" => a < b,
                 ">" => a > b,
@@ -887,16 +899,29 @@ fn vi_join_ok(
     for clause in join {
         if let Some(on) = clause.get("on").and_then(|v| v.as_array()) {
             for pair in on {
-                let cols = pair.as_array().ok_or_else(|| {
+                let cols = pair.as_array().filter(|c| c.len() == 2).ok_or_else(|| {
                     ValueInventionError("join.on entry must be a [left, right] pair".into())
                 })?;
                 let lname = cols[0].as_str().unwrap_or_default();
                 let rname = cols[1].as_str().unwrap_or_default();
                 let ls = vi_join_index_sym(lname, producer_ranges, ctx)?;
                 let rs = vi_join_index_sym(rname, producer_ranges, ctx)?;
-                let lval = ctx.maps[lname].get(&bindings[&ls]);
-                let rval = ctx.maps[rname].get(&bindings[&rs]);
-                if lval != rval {
+                // `join.on` names and index symbols come from user JSON, so a
+                // missing map buffer or unbound symbol is a diagnostic, not a
+                // panicking `Index` lookup.
+                let missing_map = |name: &str| {
+                    ValueInventionError(format!(
+                        "join key {name:?} has no materialised map buffer"
+                    ))
+                };
+                let unbound = |sym: &str| {
+                    ValueInventionError(format!("join index symbol {sym:?} is not bound"))
+                };
+                let lmap = ctx.maps.get(lname).ok_or_else(|| missing_map(lname))?;
+                let rmap = ctx.maps.get(rname).ok_or_else(|| missing_map(rname))?;
+                let lbind = bindings.get(&ls).ok_or_else(|| unbound(&ls))?;
+                let rbind = bindings.get(&rs).ok_or_else(|| unbound(&rs))?;
+                if lmap.get(lbind) != rmap.get(rbind) {
                     return Ok(false);
                 }
             }

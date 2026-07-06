@@ -4154,12 +4154,17 @@ fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> ArrayD<f64> {
     let a_padded = pad_trailing(a, max_rank);
     let b_padded = pad_trailing(b, max_rank);
     let target_shape = broadcast_shape(a_padded.shape(), b_padded.shape());
-    let av = a_padded
-        .broadcast(IxDyn(&target_shape))
-        .expect("broadcast failed");
-    let bv = b_padded
-        .broadcast(IxDyn(&target_shape))
-        .expect("broadcast failed");
+    // Incompatible operand shapes come from user model data
+    // (`broadcast_shape` marks the clashing dimension with extent 0). Follow
+    // the module's runtime convention for unevaluable nodes — a NaN sentinel
+    // the solver treats as step failure — rather than panicking.
+    let (Some(av), Some(bv)) = (
+        a_padded.broadcast(IxDyn(&target_shape)),
+        b_padded.broadcast(IxDyn(&target_shape)),
+    ) else {
+        let nan_shape: Vec<usize> = target_shape.iter().map(|&d| d.max(1)).collect();
+        return ArrayD::<f64>::from_elem(IxDyn(&nan_shape), f64::NAN);
+    };
     let mut out = ArrayD::<f64>::zeros(IxDyn(&target_shape));
     ndarray::Zip::from(&mut out)
         .and(&av)

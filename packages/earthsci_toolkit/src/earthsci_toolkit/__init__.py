@@ -122,22 +122,6 @@ from .reactions import (
     product_matrix,
 )
 
-# Analysis tier - graph representations
-from .graph import (
-    component_graph,
-    expression_graph,
-    to_dot,
-    to_mermaid,
-    to_json_graph,
-    Graph,
-    GraphNode,
-    GraphEdge,
-    ComponentNode,
-    VariableNode,
-    CouplingEdge,
-    DependencyEdge,
-)
-
 # Analysis tier - reference resolution (semiring-FAQ node addressing, RFC §6.1)
 from .reference_resolution import (
     build_reference_graph,
@@ -217,7 +201,6 @@ from .edit import (
     ESMEditor,
     EditOperation,
     EditResult,
-    add_model_to_file,
     add_variable_to_model,
     rename_variable_in_model,
     remove_variable_from_model,
@@ -232,8 +215,6 @@ from .edit import (
     remove_event_from_model,
     add_coupling_to_file,
     remove_coupling_from_file,
-    compose_systems,
-    map_variable_in_file,
     merge_esm_files,
     extract_component_from_file,
 )
@@ -250,14 +231,12 @@ try:
         SimulationError,
     )
     _has_simulation = True
-except (ImportError, ValueError, Exception):
-    # scipy not available or compatibility issues, skip simulation functionality
+except ImportError:
+    # scipy not available, skip simulation functionality
     pass
 
 # Display and pretty-printing (Core tier requirement)
 from .display import (
-    explore,
-    ESMExplorer,
     to_unicode,
     to_latex,
     to_ascii,
@@ -269,12 +248,9 @@ from .codegen import (
     to_python_code,
 )
 
-# Migration functionality
+# Migration functionality (v0.1 → v0.2 dict-level transform behind esm-migrate)
 from .migration import (
-    migrate,
     migrate_file_0_1_to_0_2,
-    can_migrate,
-    get_supported_migration_targets,
     MigrationError,
 )
 
@@ -311,23 +287,6 @@ from .data_loaders import (
     DataLoaderDispatchError,
     load_data,
     resolve_files,
-)
-
-# Operator registry functionality (Core tier requirement)
-from .operator_registry import (
-    register_operator,
-    has_operator,
-    get_operator_registry,
-    create_operator,
-    create_operator_by_name,
-    list_all_operators,
-    get_operator_info,
-    unregister_operator,
-    OperatorRegistry,
-    OperatorSignature,
-    RegisteredOperator,
-    OperatorRegistryError,
-    OperatorValidationError,
 )
 
 __version__ = "0.1.0"
@@ -434,20 +393,6 @@ __all__ = [
     "substrate_matrix",
     "product_matrix",
 
-    # Graph representations
-    "component_graph",
-    "expression_graph",
-    "to_dot",
-    "to_mermaid",
-    "to_json_graph",
-    "Graph",
-    "GraphNode",
-    "GraphEdge",
-    "ComponentNode",
-    "VariableNode",
-    "CouplingEdge",
-    "DependencyEdge",
-
     # Reference resolution (semiring-FAQ node addressing, RFC §6.1)
     "build_reference_graph",
     "resolve_references",
@@ -498,7 +443,6 @@ __all__ = [
     "ESMEditor",
     "EditOperation",
     "EditResult",
-    "add_model_to_file",
     "add_variable_to_model",
     "rename_variable_in_model",
     "remove_variable_from_model",
@@ -513,15 +457,10 @@ __all__ = [
     "remove_event_from_model",
     "add_coupling_to_file",
     "remove_coupling_from_file",
-    "compose_systems",
-    "map_variable_in_file",
     "merge_esm_files",
     "extract_component_from_file",
 
-
     # Display and pretty-printing
-    "explore",
-    "ESMExplorer",
     "to_unicode",
     "to_latex",
     "to_ascii",
@@ -531,25 +470,8 @@ __all__ = [
     "to_python_code",
 
     # Migration functionality
-    "migrate",
-    "can_migrate",
-    "get_supported_migration_targets",
+    "migrate_file_0_1_to_0_2",
     "MigrationError",
-
-    # Operator registry functionality
-    "register_operator",
-    "has_operator",
-    "get_operator_registry",
-    "create_operator",
-    "create_operator_by_name",
-    "list_all_operators",
-    "get_operator_info",
-    "unregister_operator",
-    "OperatorRegistry",
-    "OperatorSignature",
-    "RegisteredOperator",
-    "OperatorRegistryError",
-    "OperatorValidationError",
 
     # Runtime data loaders
     "UrlTemplateError",

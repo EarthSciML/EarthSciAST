@@ -657,23 +657,6 @@ def reject_expression_templates_pre_v04(view: Any) -> None:
         )
 
 
-def _has_match_rules(file: dict) -> bool:
-    """True if any component declares an ``expression_templates`` entry carrying
-    a ``match`` (i.e. an auto-applied rewrite rule that fires without an explicit
-    ``apply_expression_template`` invocation)."""
-    for compkind in ("models", "reaction_systems"):
-        comps = file.get(compkind)
-        if not _is_object(comps):
-            continue
-        for comp in comps.values():
-            tplraw = _is_object(comp) and comp.get("expression_templates")
-            if _is_object(tplraw) and any(
-                _is_object(d) and "match" in d for d in tplraw.values()
-            ):
-                return True
-    return False
-
-
 def _has_template_machinery(file: dict) -> bool:
     """True if the document carries anything the §9.6.3 engine must process: any
     component with a NON-EMPTY ``expression_templates`` block (so match-less
