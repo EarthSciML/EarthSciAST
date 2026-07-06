@@ -10,8 +10,12 @@ It provides a simulate() function with SciPy backend that:
 - Calls scipy.integrate.solve_ivp()
 
 Event handling via SciPy events parameter and manual stepping.
-Limitations: 0D box model only, no spatial operators, limited event support.
-This enables atmospheric chemistry simulation in Python.
+Discretized PDEs simulate through this entry point too: once spatial
+operators are rewritten to `arrayop` stencils, the spatial axis folds
+into array dimensions (`independent_variables == ["t"]`) and the array pathway
+integrates the system. The guard rejects only *undiscretized* spatial operators,
+not PDEs. Remaining limitation: limited event support.
+This enables atmospheric chemistry and discretized-PDE simulation in Python.
 """
 
 import numpy as np
@@ -242,8 +246,11 @@ def simulate(
     Raises
     ------
     UnsupportedDimensionalityError
-        If the flattened system has any spatial independent variable. ODE-only
-        backends must reject PDE inputs per spec §4.7.6.12.
+        If the flattened system still has a spatial independent variable — a
+        spatial operator that was never discretized into an ``arrayop`` stencil
+        (spec §4.7.6.12). Discretized PDEs fold the spatial axis into array
+        dimensions, leaving ``independent_variables == ["t"]``,
+        and simulate normally through the array pathway.
 
     Notes
     -----
@@ -267,11 +274,13 @@ def simulate(
     if len(flat.independent_variables) > 1:
         spatial = [v for v in flat.independent_variables if v != "t"]
         raise UnsupportedDimensionalityError(
-            f"unlowered_operator: Python's simulate() backend handles ODE-only "
-            f"systems (independent variables: ['t']), but the flattened system "
-            f"has spatial independent variables {spatial} — an unlowered spatial "
-            f"operator. Use a PDE-capable backend such as Julia "
-            f"EarthSciSerialization."
+            f"unlowered_operator: simulate() integrates systems whose only "
+            f"independent variable is time (['t']), but the flattened system "
+            f"still has spatial independent variables {spatial} — a spatial "
+            f"operator that was not discretized. Apply the discretization "
+            f"template (an `expression_templates` `match` rewrite) that lowers "
+            f"it to an `arrayop` stencil, then simulate; discretized "
+            f"PDEs run natively here."
         )
 
     parameters = parameters or {}

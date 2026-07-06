@@ -101,7 +101,7 @@ the trajectory at each declared output time, keyed by the **bare** element name
 ## Scope
 
 **Go and TypeScript are excluded.** They implement only the rewrite half (no
-`makearray`/spatial lowering, no simulator) and cannot run PDEs. Extending this
+`arrayop`/`makearray` evaluator, no simulator) and cannot run PDEs. Extending this
 tier to them would first require their own PDE-simulation tiers (a future
 extension, explicitly out of scope here).
 

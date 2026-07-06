@@ -93,10 +93,10 @@ class CyclicPromotionError(FlattenError):
 class UnsupportedDimensionalityError(FlattenError):
     """The flattened system has a dimensionality the simulator cannot handle.
 
-    Raised by simulate() (and any ODE-only backend) when the flattened system
-    contains spatial independent variables. Such a system carries unlowered
-    spatial operators (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar)
-    that no discretization rule reduced to a stencil, so it surfaces the uniform
+    Raised by simulate() when the flattened system still contains a spatial
+    independent variable. Such a system carries an *undiscretized* spatial
+    operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
+    discretization rule reduced to a stencil, so it surfaces the uniform
     cross-binding ``code = "unlowered_operator"`` diagnostic (esm-spec §4.2 /
     §9.6.8, RFC open-op-namespace-fixpoint-rewrite Change B/C) — superseding the
     old per-binding UnsupportedDimensionality / UnreachableSpatialOperator codes.
@@ -1251,7 +1251,8 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
 
     # Step 5: domain pass-through. The Python tier does not currently apply
     # dimension-promotion rules from §4.7.6 — only the spatial-rejection check
-    # in simulate() distinguishes ODE-only flattened systems from PDE inputs.
+    # in simulate() distinguishes discretized systems (time-only) from an
+    # undiscretized spatial operator that survived into the flattened system.
     if esm_file.domain is not None:
         # Single shared domain (v0.8.0): pass it through unchanged.
         flat.domain = esm_file.domain

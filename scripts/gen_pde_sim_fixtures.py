@@ -483,7 +483,7 @@ def main():
             "(reference), Python, and Rust evaluate the SAME pre-discretized "
             "method-of-lines fixtures and must agree on the discretized RHS f(u,t) "
             "and the integrated trajectory within numeric tolerance. Go and TS are "
-            "out of scope (no makearray/spatial lowering, no simulator)."
+            "out of scope (no arrayop/makearray evaluator, no simulator)."
         ),
         "reference_binding": "julia",
         "bindings_required": ["julia", "python", "rust"],

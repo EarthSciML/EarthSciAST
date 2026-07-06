@@ -61,29 +61,33 @@ contract is: if your system has a spatial axis, **discretize it first**.
 
 ### What "discretize" means here
 
-Spatial discretization is performed by **EarthSciDiscretizations** (ESD), the
-companion package that owns the rule engine. ESD takes a continuous-form
-ESM document — equations using `grad`, `div`, `laplacian`, `flux_1d_ppm`,
-and the rest of the spatial-operator vocabulary — and rewrites them into the
-canonical post-discretize form:
+Spatial discretization is expressed as **template expressions** —
+`expression_templates` carrying `match` rewrite rules, applied via
+`apply_expression_template`. A continuous-form ESM document — equations using
+`grad`, `div`, `laplacian`, `flux_1d_ppm`, and the rest of the spatial-operator
+vocabulary — carries the discretization templates (authored inline or imported
+from a discretization template library such as the EarthSciDiscretizations
+catalog) that rewrite those operators into the canonical post-discretize form:
 
 - spatial operators are replaced with explicit stencils built from `arrayop`,
   `index`, and the elementwise op set;
 - the spatial axis becomes an array dimension on each state variable;
 - the only remaining independent variable is `t`.
 
-The discretized document is what `simulate()` consumes. Inside the Python
-binding, the array-op path is `_simulate_with_numpy` in
-`simulation.py` (delegates to the NumPy AST interpreter in
-`numpy_interpreter.py`). It walks the AST per cell against a flat state
-vector and integrates with SciPy's `solve_ivp`. The interpreter has been
+As of schema v0.8.0 this is **not** a separate external pass: the binding runs
+the template rewrite itself, at load time (the §9.6 rewrite fixpoint), and
+Python, Julia, and Rust all do it identically. The discretized document is what
+`simulate()` consumes. Inside the Python binding, the array-op path is
+`_simulate_with_numpy` in `simulation.py` (delegates to the NumPy AST
+interpreter in `numpy_interpreter.py`). It walks the AST per cell against a flat
+state vector and integrates with SciPy's `solve_ivp`. The interpreter has been
 exercised at scales up to ~10⁶ cells.
 
 > The `discretize` function exported from `earthsci_toolkit` itself
 > (`from earthsci_toolkit import discretize`) handles only the RFC §12 DAE
 > binding contract — algebraic-equation factoring, not spatial discretization.
-> Spatial discretization is the ESD pass that runs **before** you call
-> `simulate()`.
+> Spatial discretization is a template-expression rewrite the binding applies
+> at load, before you call `simulate()`.
 
 ### What you do not do
 
@@ -97,8 +101,9 @@ exercised at scales up to ~10⁶ cells.
 
 ### Worked example: 1-D advection (post-discretize)
 
-This example skips the ESD step (assume the document has already been run
-through ESD) and shows the shape `simulate()` actually consumes. The model
+This example uses an already-discretized document (assume the discretization
+templates have already been applied) and shows the shape `simulate()` actually
+consumes. The model
 is a 1-D diffusion stencil on a 10-cell grid where the spatial axis has
 been folded into the array index of `u`:
 
@@ -134,8 +139,8 @@ spatial term is an explicit `arrayop`, no `grad` / `div` / `laplacian`
 nodes survive. The full pipeline for a user-authored continuous PDE is:
 
 ```
-.esm (continuous form, with grad/div/laplacian)
-  → ESD discretize (rule engine rewrites spatial ops into arrayop stencils)
+.esm (continuous form + discretization templates, with grad/div/laplacian)
+  → load-time template rewrite (§9.6 fixpoint lowers spatial ops to arrayop stencils)
   → earthsci_toolkit.simulate()  (NumPy interpreter integrates with SciPy)
 ```
 

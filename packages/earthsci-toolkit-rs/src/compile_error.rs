@@ -25,10 +25,12 @@ pub enum CompileError {
         message: String,
     },
 
-    /// The flattened system has independent variables other than `["t"]`
-    /// (i.e. is a hybrid spatial / temporal system, not a pure ODE).
+    /// The flattened system still carries a spatial independent variable — a
+    /// spatial operator that was never discretized into an `arrayop` stencil.
+    /// Discretized PDEs fold their spatial axis into array dimensions, leaving
+    /// `independent_variables == ["t"]`, and simulate fine.
     #[error(
-        "Unsupported dimensionality {independent_variables:?}: v1 only supports pure ODEs (independent_variables == [\"t\"]). Spatial / hybrid systems require the future Rust PDE bead."
+        "Unsupported dimensionality {independent_variables:?}: the simulator integrates systems whose only independent variable is time (independent_variables == [\"t\"]). A remaining spatial independent variable means a spatial operator was not discretized — apply the discretization template (an `expression_templates` `match` rewrite) that lowers it to an `arrayop` stencil, then simulate. Discretized PDEs run natively in this backend."
     )]
     UnsupportedDimensionalityError {
         /// The actual independent variables found.

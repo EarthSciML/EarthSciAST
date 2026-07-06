@@ -220,7 +220,7 @@ from .edit import (
     extract_component_from_file,
 )
 
-# Simulation tier - box model simulation (optional - requires scipy)
+# Simulation tier - box-model ODE and discretized-PDE simulation (optional - requires scipy)
 _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below

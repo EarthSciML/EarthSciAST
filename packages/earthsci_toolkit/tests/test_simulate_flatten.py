@@ -1,7 +1,9 @@
 """End-to-end tests for simulate() consuming a FlattenedSystem.
 
 These cover the new spec-§4.7.5 contract: simulate() routes through flatten()
-and rejects PDE inputs with UnsupportedDimensionalityError.
+and rejects *undiscretized* spatial operators (a spatial independent variable
+surviving into the flattened system) with UnsupportedDimensionalityError.
+Discretized PDEs simulate normally.
 """
 
 import numpy as np
@@ -102,7 +104,7 @@ def test_simulate_flatten_round_trip_matches_esm_file_path():
 
 
 # ----------------------------------------------------------------------------
-# PDE rejection: simulate() raises on spatial independent variables
+# Undiscretized-operator rejection: simulate() raises on a surviving spatial independent variable
 # ----------------------------------------------------------------------------
 
 

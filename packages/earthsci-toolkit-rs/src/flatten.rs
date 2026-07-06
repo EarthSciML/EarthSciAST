@@ -10,14 +10,19 @@
 //! `project`, or `regrid`. Unlowered rewrite-target operators (the sugar ops
 //! `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
 //! `wrt != "t"`) raise [`FlattenError::UnloweredOperator`] with the uniform
-//! `unlowered_operator` code (esm-spec §4.2 / §9.6.8): they must be lowered to a
-//! stencil by a `match` rewrite rule before evaluation, and the downstream
-//! diffsol-backed ODE solver has no evaluator for them. Higher tiers will be
-//! added when Rust gains PDE capability.
+//! `unlowered_operator` code (esm-spec §4.2 / §9.6.8): they must first be
+//! discretized into an `arrayop` stencil by a `match` rewrite rule (an
+//! `expression_templates` discretization, applied during the load-time rewrite
+//! fixpoint). Once discretized, the spatial axis folds into the array index
+//! (`independent_variables == ["t"]`) and the system simulates natively through
+//! the array-op backend — Rust runs discretized PDEs alongside Julia and Python
+//! (CONFORMANCE_SPEC §5.9). The error fires only for a spatial operator that
+//! reached flatten without being discretized.
 
 use crate::types::{
-    ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
-    IndexSet, Model, ModelVariable, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
+    ContinuousEvent, CouplingEntry, DataLoader, DiscreteEvent, Domain, Equation, EsmFile, Expr,
+    ExpressionNode, IndexSet, Model, ModelVariable, RangeSpec, ReactionSystem,
+    VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -152,7 +157,7 @@ pub enum FlattenError {
 /// `broadcast` or `identity` mapping rewrites a variable onto a different
 /// spatial domain. Rust Core tier currently only populates this for
 /// `broadcast` (identity is a no-op) and only if the source file defines
-/// matching spatial domains — a practical no-op for the ODE-only Rust v1.
+/// matching spatial domains — rarely populated at Rust's Core flatten tier.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DimensionPromotionRecord {
     pub variable: String,
@@ -185,8 +190,11 @@ pub struct FlattenMetadata {
 /// deterministic iteration, and full provenance metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlattenedSystem {
-    /// Independent variables. `["t"]` for pure ODE — Rust v1 only ever
-    /// produces this, since PDE output raises [`FlattenError::UnsupportedMapping`].
+    /// Independent variables. Always `["t"]`: a discretized system — whether a
+    /// pure ODE or a PDE with its spatial axis folded into `arrayop`
+    /// dimensions — has time as its only independent variable. An
+    /// *undiscretized* spatial operator never reaches this struct; it is
+    /// rejected earlier with [`FlattenError::UnloweredOperator`].
     pub independent_variables: Vec<String>,
     /// Dot-namespaced state variables with full metadata.
     pub state_variables: IndexMap<String, ModelVariable>,

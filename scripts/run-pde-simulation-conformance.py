@@ -38,7 +38,7 @@ Two phases, one harness (mirrors run-geometry-conformance.py):
 ``golden/<id>.json`` from its output — the reproducible golden-generation path.
 
 Scope: Go and TypeScript are excluded — they implement only the rewrite half
-(no makearray/spatial lowering, no simulator) and cannot run PDEs.
+(no arrayop/makearray evaluator, no simulator) and cannot run PDEs.
 
 Usage:
     python scripts/run-pde-simulation-conformance.py --self-test

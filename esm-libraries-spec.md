@@ -1641,12 +1641,12 @@ solution.plot()       # matplotlib integration
 **Implementation approach:**
 
 1. Call `flatten(file)` to obtain the canonical `FlattenedSystem`. This pre-resolves all coupling rules — `operator_compose` (LHS-match + sum, with `_var` placeholder expansion), `couple` connectors, and `variable_map` substitutions — and lowers reaction systems to ODEs via `derive_odes()`.
-2. Reject PDE inputs: if `len(flat.independent_variables) > 1`, raise `UnsupportedDimensionalityError` (see §5.4.6 for the cross-language origin of this error name in the Rust simulator). The Python ODE-only path is not capable of integrating systems with spatial independent variables.
+2. Reject *undiscretized* spatial operators: if `len(flat.independent_variables) > 1`, raise `UnsupportedDimensionalityError` (see §5.4.6 for the cross-language origin of this error name in the Rust simulator). A surviving spatial independent variable means a spatial operator was never discretized into an `arrayop` stencil. Once discretized, the spatial axis folds into array dimensions, so `independent_variables == ["t"]` and `simulate()` integrates the PDE through the array-op interpreter like any other system.
 3. Convert each flattened equation's RHS to a SymPy expression using the dot-namespaced symbol map.
 4. Substitute parameter values, then `sympy.lambdify()` to create a fast NumPy-callable RHS function.
 5. Call `scipy.integrate.solve_ivp()`.
 
-**Dimension promotion tier (§4.7.6).** The Python library is **Core tier** for dimension promotion: it handles broadcast and identity mappings (a flattened system whose independent variables are exactly `["t"]`). Slice, project, and regrid mappings raise `UnsupportedMappingError`. PDE inputs (any spatial independent variable in the flattened system) raise `UnsupportedDimensionalityError`, with a message directing users to a PDE-capable backend such as Julia EarthSciSerialization.
+**Dimension promotion tier (§4.7.6).** The Python library is **Core tier** for dimension promotion: it handles broadcast and identity mappings (a flattened system whose independent variables are exactly `["t"]`). Slice, project, and regrid mappings raise `UnsupportedMappingError`. An *undiscretized* spatial operator (a spatial independent variable surviving in the flattened system) raises `UnsupportedDimensionalityError`, with a message telling the user to apply the discretization template that lowers it to an `arrayop` stencil. This is not a PDE-capability limit: once discretized, Python simulates the PDE natively (§5.9 cross-language PDE-simulation conformance).
 
 **Conflict and validation errors.** `flatten()` exposes the full Rust `FlattenError` taxonomy as Python exception classes (cross-language error-name parity per §4.7.5 and §4.7.6):
 
@@ -1675,7 +1675,7 @@ Since SciPy's event handling is less sophisticated than DifferentialEquations.jl
 - Direction-dependent affects (`affect_neg`) require custom zero-crossing direction detection.
 - Discrete events with complex triggers require manual integration loop management.
 - Functional affects are not supported (they are runtime-specific).
-- Spatial operators (`grad`, `div`, `laplacian`) cause `simulate()` to raise `UnsupportedDimensionalityError` — simulation is limited to 0D (box model) ODE systems. Use Julia for PDE work.
+- An *undiscretized* spatial operator (`grad`, `div`, `laplacian`) causes `simulate()` to raise `UnsupportedDimensionalityError`: it must first be rewritten to an `arrayop` stencil by a discretization template (`expression_templates` / `apply_expression_template`), which the Python binding applies at load time like every other binding. Once discretized, `simulate()` integrates the PDE natively — Python is one of the three PDE-simulation bindings (§5.9), not a 0D-only box-model solver.
 
 #### 5.3.6 Jupyter Integration
 
@@ -1695,7 +1695,7 @@ esm.explore(file)  # widget showing models, reactions, coupling graph
 
 Rust provides a high-performance, memory-safe implementation suitable for CLI tools, WASM compilation (for web), and embedding in other systems.
 
-**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `grad`, `div`, `laplacian`, `D(_, x)`, etc.) for anything beyond that. This scope limit is deliberate: the downstream Rust simulator (`earthsci-toolkit-rs` → diffsol) is ODE-only and cannot consume PDE output, so implementing slice/project/regrid in Rust v1 would be wasted work. Higher tiers will be added when Rust gains PDE capability. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
+**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `grad`, `div`, `laplacian`, `D(_, x)`, etc.) for anything beyond that. This scope limit is a flatten-tier decision, not a simulation limit: the Rust array simulator does run discretized PDEs (`arrayop` systems — see §5.9 cross-language PDE-simulation conformance). The `slice`/`project`/`regrid` dimension-mapping rewrites are simply not yet implemented in Rust `flatten()`. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
 
 #### 5.4.1 Dependencies
 
@@ -1806,11 +1806,11 @@ esm convert model.esm --to=messagepack  # future binary format
 
 #### 5.4.6 Native Simulation (`simulate()`, gt-5ws)
 
-The Rust crate exposes a native, correctness-first ODE simulator built on `diffsol`. v1 is intentionally limited:
+The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator plus a vectorized array-op runtime that integrates discretized PDEs. v1 is intentionally limited in these ways:
 
-- **0D ODE only.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]`. Hybrid spatial / temporal systems return `CompileError::UnsupportedDimensionalityError` and are routed to the future Rust PDE bead.
+- **Time-integration domain.** The simulator consumes a `FlattenedSystem` whose `independent_variables` is exactly `["t"]` — which *includes* discretized PDEs, whose spatial axis is folded into `arrayop` dimensions and integrated natively by the array-op runtime (see §5.9). A system that still carries a spatial independent variable holds an *undiscretized* spatial operator and returns `CompileError::UnsupportedDimensionalityError`; discretize it first (apply the `expression_templates` stencil rewrite).
 - **No event handling.** Models with non-empty `continuous_events` or `discrete_events` return `CompileError::UnsupportedFeatureError` and are routed to the future Rust events bead.
-- **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
+- **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, *undiscretized* spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
 - **Native only.** The whole `simulate` module is gated behind `cfg(not(target_arch = "wasm32"))`, so the WASM build (which has a separate follow-up bead for simulator exposure) does not pull in `diffsol`.
 - **Compiled API for parameter sweeps.** A `Compiled` value is built once via `Compiled::from_flattened` / `from_model` / `from_file` and then reused across many `Compiled::simulate(...)` calls with different `params` and `initial_conditions` HashMaps. A one-shot `simulate(file, tspan, params, ic, opts)` convenience wrapper exists for the common single-run case.
 - **Solver options.** `SimulateOptions` selects between `SolverChoice::Bdf` (default — implicit BDF, the canonical stiff solver), `SolverChoice::Sdirk` (TR-BDF2 SDIRK), and `SolverChoice::Erk` (explicit Tsitouras 5(4) for non-stiff problems), plus tolerances (`abstol` / `reltol`), `max_steps`, and an optional dense `output_times` grid.
@@ -2141,7 +2141,7 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Catalyst ↔ ESM conversion | ✓ | — | — | — | — | — |
 | Coupled system assembly | ✓ | — | — | — | — | — |
 | 0D simulation (box model) | ✓ | — | — | ✓ | 0D stiff ODEs (diffsol backend; events and coupling deferred) | — |
-| Spatial simulation | ✓ | — | — | — | — | — |
+| Spatial (discretized-PDE) simulation | ✓ | — | — | ✓ | ✓ (arrayop runtime; §5.9) | — |
 | Event simulation | ✓ | — | — | partial | — | — |
 | WASM target | — | — | — | — | ✓ | — |
 | CLI tool | — | — | — | — | ✓ | — |

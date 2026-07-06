@@ -1339,7 +1339,7 @@ agree, on a **numeric-tolerance** basis, when they evaluate and integrate shared
 driven by `scripts/run-pde-simulation-conformance.py`; bead ess-fmw).
 
 Go and TypeScript are **out of scope** — they implement only the rewrite half
-(no `makearray`/spatial lowering, no simulator).
+(no `arrayop`/`makearray` evaluator, no simulator).
 
 #### 5.9.1 What is compared
 
