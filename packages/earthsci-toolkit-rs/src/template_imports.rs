@@ -821,6 +821,12 @@ fn collect_ref_names(
 /// Runs after `bindings` instantiation and `only` filtering, before the
 /// §9.7.4/§9.7.5 merge, so dedup and conflict detection operate on post-rename
 /// names. Pure load-time substitution. Mirrors the Julia `_apply_edge_renames!`.
+///
+/// The edge is processed as a sequence of named phases (each a helper below,
+/// in this exact order): rename-key typo protection, final-name map
+/// construction, per-namespace uniqueness, free/bound name inventory,
+/// rebind-key occurs-check, freshness (capture) guard, then the one
+/// simultaneous substitution.
 fn apply_edge_renames(
     scope: &mut TemplateScope,
     entry: &Map<String, Value>,
@@ -850,11 +856,48 @@ fn apply_edge_renames(
         return Ok(());
     }
 
-    // --- `rename` keys must name a surviving exported name (typo protection) ---
+    let exported = exported_names(scope);
+    check_rename_keys_exported(&rename, &exported, &where_)?;
+
+    let maps = build_final_name_maps(scope, &rename, prefix.as_deref());
+    check_final_name_uniqueness(&maps, &where_)?;
+
+    let inventory = collect_name_inventory(scope);
+    check_rebind_keys(&rebind, &exported, &inventory, &where_)?;
+    check_new_name_freshness(&rebind, &maps.metamap, &inventory, &where_)?;
+
+    apply_scope_substitution(scope, &maps, &rebind);
+    Ok(())
+}
+
+/// The per-namespace original → final name maps for one import edge
+/// (esm-spec §9.7.7): every surviving template / index-set / metaparameter
+/// name mapped through `rename` (highest precedence) or `prefix`, identity
+/// otherwise. Built by [`build_final_name_maps`].
+struct EdgeNameMaps {
+    tplmap: IndexMap<String, String>,
+    isetmap: IndexMap<String, String>,
+    metamap: IndexMap<String, String>,
+}
+
+/// Every name the target exports at this edge — templates after `only`, all
+/// index sets, and metaparameters left open by this edge's `bindings`. This
+/// is the domain `rename` keys must address (and `rebind` keys must NOT).
+fn exported_names(scope: &TemplateScope) -> std::collections::HashSet<String> {
     let mut exported: std::collections::HashSet<String> = std::collections::HashSet::new();
     exported.extend(scope.templates.keys().cloned());
     exported.extend(scope.index_sets.keys().cloned());
     exported.extend(scope.metaparams.keys().cloned());
+    exported
+}
+
+/// `rename` keys must name a surviving exported name (typo protection,
+/// esm-spec §9.7.7) — `template_import_rename_unknown_name` otherwise.
+fn check_rename_keys_exported(
+    rename: &IndexMap<String, String>,
+    exported: &std::collections::HashSet<String>,
+    where_: &str,
+) -> Result<(), ExpressionTemplateError> {
     for k in rename.keys() {
         if !exported.contains(k) {
             return Err(err(
@@ -867,37 +910,55 @@ fn apply_edge_renames(
             ));
         }
     }
+    Ok(())
+}
 
+/// Map every surviving exported name to its final name: an explicit `rename`
+/// entry wins, else `prefix.name`, else identity (esm-spec §9.7.7).
+fn build_final_name_maps(
+    scope: &TemplateScope,
+    rename: &IndexMap<String, String>,
+    prefix: Option<&str>,
+) -> EdgeNameMaps {
     let final_name = |n: &str| -> String {
         if let Some(t) = rename.get(n) {
             t.clone()
-        } else if let Some(p) = &prefix {
+        } else if let Some(p) = prefix {
             format!("{p}.{n}")
         } else {
             n.to_string()
         }
     };
-    let tplmap: IndexMap<String, String> = scope
-        .templates
-        .keys()
-        .map(|n| (n.clone(), final_name(n)))
-        .collect();
-    let isetmap: IndexMap<String, String> = scope
-        .index_sets
-        .keys()
-        .map(|n| (n.clone(), final_name(n)))
-        .collect();
-    let metamap: IndexMap<String, String> = scope
-        .metaparams
-        .keys()
-        .map(|n| (n.clone(), final_name(n)))
-        .collect();
+    EdgeNameMaps {
+        tplmap: scope
+            .templates
+            .keys()
+            .map(|n| (n.clone(), final_name(n)))
+            .collect(),
+        isetmap: scope
+            .index_sets
+            .keys()
+            .map(|n| (n.clone(), final_name(n)))
+            .collect(),
+        metamap: scope
+            .metaparams
+            .keys()
+            .map(|n| (n.clone(), final_name(n)))
+            .collect(),
+    }
+}
 
-    // --- per-namespace final-name uniqueness ---
+/// Per-namespace final-name uniqueness: two distinct original names mapping
+/// to the same final name is `template_import_rename_collision` (esm-spec
+/// §9.7.7).
+fn check_final_name_uniqueness(
+    maps: &EdgeNameMaps,
+    where_: &str,
+) -> Result<(), ExpressionTemplateError> {
     for (what, m) in [
-        ("template", &tplmap),
-        ("index set", &isetmap),
-        ("metaparameter", &metamap),
+        ("template", &maps.tplmap),
+        ("index set", &maps.isetmap),
+        ("metaparameter", &maps.metamap),
     ] {
         let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for (o, n) in m {
@@ -913,8 +974,27 @@ fn apply_edge_renames(
             seen.insert(n.clone(), o.clone());
         }
     }
+    Ok(())
+}
 
-    // --- free / bound name inventory over the surviving declarations ---
+/// Free / bound / param name inventory over a scope's surviving declarations
+/// (esm-spec §9.7.7), consulted by the `rebind` occurs-check and the
+/// freshness (collision) guard.
+struct NameInventory {
+    /// Bare strings in variable-reference positions, minus each template's
+    /// own `params` shadow set and the declared metaparameter names.
+    free: std::collections::HashSet<String>,
+    /// Bound index symbols (aggregate `output_idx` entries / `ranges` keys).
+    bound: std::collections::HashSet<String>,
+    /// The union of every template's declared `params`.
+    params_all: std::collections::HashSet<String>,
+}
+
+/// Build the [`NameInventory`]: free names come from the variable-reference
+/// positions of every surviving template (shadowed by that template's own
+/// `params`) plus index-set `offsets` / `values` producer refs; declared
+/// metaparameter names are never free.
+fn collect_name_inventory(scope: &TemplateScope) -> NameInventory {
     let mut free: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut params_all: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -941,8 +1021,23 @@ fn apply_edge_renames(
     for k in scope.metaparams.keys() {
         free.remove(k); // declared names are not free
     }
+    NameInventory {
+        free,
+        bound,
+        params_all,
+    }
+}
 
-    // --- `rebind` keys must denote free names (typo protection) ---
+/// `rebind` keys must denote free names (typo protection, esm-spec §9.7.7):
+/// a declared name is `template_import_rebind_unknown_name` (use `rename`
+/// for those), a bound index symbol is `template_import_rename_invalid`, and
+/// a name not occurring free is `template_import_rebind_unknown_name`.
+fn check_rebind_keys(
+    rebind: &IndexMap<String, String>,
+    exported: &std::collections::HashSet<String>,
+    inventory: &NameInventory,
+    where_: &str,
+) -> Result<(), ExpressionTemplateError> {
     for k in rebind.keys() {
         if exported.contains(k) {
             return Err(err(
@@ -954,7 +1049,7 @@ fn apply_edge_renames(
                 ),
             ));
         }
-        if bound.contains(k) {
+        if inventory.bound.contains(k) {
             return Err(err(
                 "template_import_rename_invalid",
                 format!(
@@ -963,7 +1058,7 @@ fn apply_edge_renames(
                 ),
             ));
         }
-        if !free.contains(k) {
+        if !inventory.free.contains(k) {
             return Err(err(
                 "template_import_rebind_unknown_name",
                 format!(
@@ -973,24 +1068,35 @@ fn apply_edge_renames(
             ));
         }
     }
+    Ok(())
+}
 
-    // --- freshness guard: new bare names must not capture / merge ---
+/// Freshness guard: every renamed metaparameter and rebound free name must
+/// be fresh — colliding with a remaining free name, a bound index symbol, a
+/// template param, or another rename/rebind target would capture or merge
+/// distinct names (`template_import_rename_collision`, esm-spec §9.7.7).
+fn check_new_name_freshness(
+    rebind: &IndexMap<String, String>,
+    metamap: &IndexMap<String, String>,
+    inventory: &NameInventory,
+    where_: &str,
+) -> Result<(), ExpressionTemplateError> {
     let rebind_keys: std::collections::HashSet<&str> = rebind.keys().map(String::as_str).collect();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for f in &free {
+    for f in &inventory.free {
         if !rebind_keys.contains(f.as_str()) {
             taken.insert(f.clone());
         }
     }
-    taken.extend(bound.iter().cloned());
-    taken.extend(params_all.iter().cloned());
+    taken.extend(inventory.bound.iter().cloned());
+    taken.extend(inventory.params_all.iter().cloned());
     let mut newnames: Vec<String> = Vec::new();
-    for (o, n) in &metamap {
+    for (o, n) in metamap {
         if o != n {
             newnames.push(n.clone());
         }
     }
-    for (o, n) in &rebind {
+    for (o, n) in rebind {
         if o != n {
             newnames.push(n.clone());
         }
@@ -1008,25 +1114,38 @@ fn apply_edge_renames(
         }
         taken.insert(t.clone());
     }
+    Ok(())
+}
 
-    // --- apply (identity entries dropped; one simultaneous substitution) ---
+/// Apply the edge's renames as ONE simultaneous substitution (identity
+/// entries dropped): rekey the scope's templates / index sets /
+/// metaparameters to their final names and rewrite every occurrence inside
+/// the surviving declarations ([`rename_decl`] / [`rename_walk`]), including
+/// derived index-set `of` member lists.
+fn apply_scope_substitution(
+    scope: &mut TemplateScope,
+    maps: &EdgeNameMaps,
+    rebind: &IndexMap<String, String>,
+) {
     let mut varmap: IndexMap<String, String> = IndexMap::new();
-    for (o, n) in &metamap {
+    for (o, n) in &maps.metamap {
         if o != n {
             varmap.insert(o.clone(), n.clone());
         }
     }
-    for (o, n) in &rebind {
+    for (o, n) in rebind {
         if o != n {
             varmap.insert(o.clone(), n.clone());
         }
     }
-    let iset_changed: IndexMap<String, String> = isetmap
+    let iset_changed: IndexMap<String, String> = maps
+        .isetmap
         .iter()
         .filter(|(o, n)| o != n)
         .map(|(o, n)| (o.clone(), n.clone()))
         .collect();
-    let tpl_changed: IndexMap<String, String> = tplmap
+    let tpl_changed: IndexMap<String, String> = maps
+        .tplmap
         .iter()
         .filter(|(o, n)| o != n)
         .map(|(o, n)| (o.clone(), n.clone()))
@@ -1036,7 +1155,10 @@ fn apply_edge_renames(
     for (n, d) in &scope.templates {
         let nd = rename_decl(d, &varmap, &iset_changed, &tpl_changed);
         newt.insert(
-            tplmap.get(n).expect("tplmap covers every template").clone(),
+            maps.tplmap
+                .get(n)
+                .expect("tplmap covers every template")
+                .clone(),
             nd,
         );
     }
@@ -1063,7 +1185,7 @@ fn apply_edge_renames(
             }
         }
         newi.insert(
-            isetmap
+            maps.isetmap
                 .get(n)
                 .expect("isetmap covers every index set")
                 .clone(),
@@ -1075,7 +1197,7 @@ fn apply_edge_renames(
     let mut newm = Map::new();
     for (n, d) in &scope.metaparams {
         newm.insert(
-            metamap
+            maps.metamap
                 .get(n)
                 .expect("metamap covers every metaparameter")
                 .clone(),
@@ -1083,7 +1205,6 @@ fn apply_edge_renames(
         );
     }
     scope.metaparams = newm;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1520,6 +1641,11 @@ fn has_import_machinery(raw: &Value) -> bool {
 /// `expression_templates` consumed (Option A round-trip: none survives
 /// `parse → emit`), or `Ok(None)` when the document carries no §9.7
 /// machinery (the legacy fast path).
+///
+/// The document is processed as six named phases (each a helper below, in
+/// this exact order): top-level scope resolution, per-component imports,
+/// metaparameter close, name-collision check, expression-position
+/// substitution, and structural-site folding.
 pub fn resolve_template_machinery(
     raw_data: &Value,
     base_path: &Path,
@@ -1554,60 +1680,125 @@ pub fn resolve_template_machinery(
 
     // --- top-level templates + imports (root template-library file) ---
     let is_library = root.contains_key("expression_templates");
-    let mut top_templates: Map<String, Value> = Map::new();
-    if is_library {
-        let mut top_scope = TemplateScope::default();
-        if let Some(imports) = root
-            .get("expression_template_imports")
-            .and_then(|v| v.as_array())
-            .cloned()
-        {
-            for entry in &imports {
-                let sub = resolve_import_entry(entry, base_path, &mut stack, "document")?;
-                merge_scope(&mut top_scope, sub, "document")?;
-            }
-        }
-        let mut own = Map::new();
-        if let Some(tpl) = root.get("expression_templates").and_then(|v| v.as_object()) {
-            for (n, d) in tpl {
-                own.insert(n.clone(), d.clone());
-            }
-        }
-        validate_templates(&own, "document")?;
-        for (n, d) in own {
-            merge_named(
-                &mut top_scope.templates,
-                &n,
-                d,
-                "template_import_name_conflict",
-                "template",
-                "document",
-            )?;
-        }
-        for (n, d) in top_scope.index_sets {
-            merge_named(
-                &mut doc_isets,
-                &n,
-                d,
-                "template_import_index_set_conflict",
-                "index set",
-                "document",
-            )?;
-        }
-        for (n, d) in top_scope.metaparams {
-            merge_named(
-                &mut doc_meta,
-                &n,
-                d,
-                "template_import_name_conflict",
-                "metaparameter",
-                "document",
-            )?;
-        }
-        top_templates = top_scope.templates;
-    }
+    let mut top_templates =
+        resolve_top_level_scope(&root, base_path, &mut stack, &mut doc_meta, &mut doc_isets)?;
 
     // --- per-component imports (models / reaction systems, esm-spec §9.7.2) ---
+    resolve_component_imports(
+        &mut root,
+        base_path,
+        &mut stack,
+        &mut doc_meta,
+        &mut doc_isets,
+    )?;
+
+    // --- close this document's metaparameters (§9.7.6 sites 4-5) ---
+    let values = close_document_metaparams(&doc_meta, metaparameters)?;
+
+    // --- §9.7.6 name-collision check: no shadowing of visible names ---
+    check_metaparam_collisions(&root, &doc_meta, &doc_isets)?;
+
+    // --- expression-position substitution of the closed values ---
+    substitute_closed_metaparams(&mut root, &mut top_templates, &mut doc_isets, &values);
+
+    // --- fold structural sites on the closed document ---
+    fold_closed_document(&mut root, &mut top_templates, &mut doc_isets)?;
+
+    // --- root library file: compose bodies (validation), then strip; no
+    //     §9.7 construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+    if is_library {
+        compose_template_bodies(&mut top_templates, "document")?;
+        root.remove("expression_templates");
+    }
+    root.remove("expression_template_imports");
+    root.remove("metaparameters");
+    if !doc_isets.is_empty() {
+        root.insert("index_sets".to_string(), Value::Object(doc_isets));
+    }
+    Ok(Some(Value::Object(root)))
+}
+
+/// Phase 1 of [`resolve_template_machinery`]: resolve the ROOT document's own
+/// top-level `expression_templates` + `expression_template_imports` (a root
+/// template-library file, esm-spec §9.7.4) into its effective template
+/// sequence, merging the imported index sets and still-open metaparameters
+/// into the document registries. Returns the effective top-level templates
+/// (empty for a non-library root).
+fn resolve_top_level_scope(
+    root: &Map<String, Value>,
+    base_path: &Path,
+    stack: &mut Vec<String>,
+    doc_meta: &mut Map<String, Value>,
+    doc_isets: &mut Map<String, Value>,
+) -> Result<Map<String, Value>, ExpressionTemplateError> {
+    if !root.contains_key("expression_templates") {
+        return Ok(Map::new());
+    }
+    let mut top_scope = TemplateScope::default();
+    if let Some(imports) = root
+        .get("expression_template_imports")
+        .and_then(|v| v.as_array())
+        .cloned()
+    {
+        for entry in &imports {
+            let sub = resolve_import_entry(entry, base_path, stack, "document")?;
+            merge_scope(&mut top_scope, sub, "document")?;
+        }
+    }
+    let mut own = Map::new();
+    if let Some(tpl) = root.get("expression_templates").and_then(|v| v.as_object()) {
+        for (n, d) in tpl {
+            own.insert(n.clone(), d.clone());
+        }
+    }
+    validate_templates(&own, "document")?;
+    for (n, d) in own {
+        merge_named(
+            &mut top_scope.templates,
+            &n,
+            d,
+            "template_import_name_conflict",
+            "template",
+            "document",
+        )?;
+    }
+    for (n, d) in top_scope.index_sets {
+        merge_named(
+            doc_isets,
+            &n,
+            d,
+            "template_import_index_set_conflict",
+            "index set",
+            "document",
+        )?;
+    }
+    for (n, d) in top_scope.metaparams {
+        merge_named(
+            doc_meta,
+            &n,
+            d,
+            "template_import_name_conflict",
+            "metaparameter",
+            "document",
+        )?;
+    }
+    Ok(top_scope.templates)
+}
+
+/// Phase 2 of [`resolve_template_machinery`]: per-component imports (models /
+/// reaction systems, esm-spec §9.7.2). Each component's effective sequence
+/// (imports depth-first post-order, then local declarations) replaces its
+/// `expression_templates` block — the preserve_order Map key order IS the
+/// §9.6.3 declaration order — and its `expression_template_imports` is
+/// consumed. Imported index sets and still-open metaparameters merge into
+/// the document registries.
+fn resolve_component_imports(
+    root: &mut Map<String, Value>,
+    base_path: &Path,
+    stack: &mut Vec<String>,
+    doc_meta: &mut Map<String, Value>,
+    doc_isets: &mut Map<String, Value>,
+) -> Result<(), ExpressionTemplateError> {
     for compkind in COMPONENT_KINDS {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
             continue;
@@ -1624,7 +1815,7 @@ pub fn resolve_template_machinery(
             let mut cscope = TemplateScope::default();
             if let Some(entries) = imports.as_array() {
                 for entry in entries {
-                    let sub = resolve_import_entry(entry, base_path, &mut stack, &corigin)?;
+                    let sub = resolve_import_entry(entry, base_path, stack, &corigin)?;
                     merge_scope(&mut cscope, sub, &corigin)?;
                 }
             }
@@ -1647,7 +1838,7 @@ pub fn resolve_template_machinery(
             }
             for (n, d) in cscope.index_sets {
                 merge_named(
-                    &mut doc_isets,
+                    doc_isets,
                     &n,
                     d,
                     "template_import_index_set_conflict",
@@ -1657,7 +1848,7 @@ pub fn resolve_template_machinery(
             }
             for (n, d) in cscope.metaparams {
                 merge_named(
-                    &mut doc_meta,
+                    doc_meta,
                     &n,
                     d,
                     "template_import_name_conflict",
@@ -1678,8 +1869,18 @@ pub fn resolve_template_machinery(
             }
         }
     }
+    Ok(())
+}
 
-    // --- close this document's metaparameters (§9.7.6 sites 4-5) ---
+/// Phase 3 of [`resolve_template_machinery`]: close the document's
+/// metaparameters (§9.7.6 sites 4-5). Loader-API bindings win, then
+/// declaration defaults; a loader-API binding for an undeclared name is
+/// `template_import_unknown_name`, and any name still open afterwards is
+/// `metaparameter_unbound`. Returns the closed name → value map.
+fn close_document_metaparams(
+    doc_meta: &Map<String, Value>,
+    metaparameters: &BTreeMap<String, i64>,
+) -> Result<BTreeMap<String, i64>, ExpressionTemplateError> {
     for k in metaparameters.keys() {
         if !doc_meta.contains_key(k) {
             return Err(err(
@@ -1693,7 +1894,7 @@ pub fn resolve_template_machinery(
     }
     let mut values: BTreeMap<String, i64> = BTreeMap::new();
     let mut open_names: Vec<String> = Vec::new();
-    for (name, decl) in &doc_meta {
+    for (name, decl) in doc_meta {
         if let Some(v) = metaparameters.get(name) {
             values.insert(name.clone(), *v);
         } else {
@@ -1715,79 +1916,112 @@ pub fn resolve_template_machinery(
             ),
         ));
     }
+    Ok(values)
+}
 
-    // --- §9.7.6 name-collision check: no shadowing of visible names ---
-    if !doc_meta.is_empty() {
-        let mut visible: std::collections::HashSet<String> = doc_isets.keys().cloned().collect();
-        for compkind in COMPONENT_KINDS {
-            if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
-                for (_, comp) in comps {
-                    let Some(comp_obj) = comp.as_object() else {
-                        continue;
-                    };
-                    for blk in ["variables", "species", "parameters"] {
-                        if let Some(b) = comp_obj.get(blk).and_then(|v| v.as_object()) {
-                            visible.extend(b.keys().cloned());
-                        }
-                    }
-                }
-            }
-        }
-        for name in doc_meta.keys() {
-            if visible.contains(name) {
-                return Err(err(
-                    "metaparameter_name_conflict",
-                    format!(
-                        "metaparameter '{name}' collides with a visible \
-                         variable/parameter/species/index-set name (esm-spec §9.7.6)"
-                    ),
-                ));
-            }
-        }
+/// Phase 4 of [`resolve_template_machinery`]: the §9.7.6 name-collision
+/// check — a declared metaparameter must not shadow any visible variable /
+/// parameter / species / index-set name (`metaparameter_name_conflict`).
+fn check_metaparam_collisions(
+    root: &Map<String, Value>,
+    doc_meta: &Map<String, Value>,
+    doc_isets: &Map<String, Value>,
+) -> Result<(), ExpressionTemplateError> {
+    if doc_meta.is_empty() {
+        return Ok(());
     }
-
-    // --- expression-position substitution of the closed values ---
-    if !values.is_empty() {
-        for compkind in COMPONENT_KINDS {
-            let Some(Value::Object(comps)) = root.get_mut(compkind) else {
-                continue;
-            };
-            for (_, comp_value) in comps.iter_mut() {
-                let Value::Object(comp) = comp_value else {
+    let mut visible: std::collections::HashSet<String> = doc_isets.keys().cloned().collect();
+    for compkind in COMPONENT_KINDS {
+        if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
+            for (_, comp) in comps {
+                let Some(comp_obj) = comp.as_object() else {
                     continue;
                 };
-                let keys: Vec<String> = comp.keys().cloned().collect();
-                for k in keys {
-                    if k == "expression_templates"
-                        && comp.get(&k).map(Value::is_object).unwrap_or(false)
-                    {
-                        if let Some(Value::Object(tpl)) = comp.get_mut(&k) {
-                            let tnames: Vec<String> = tpl.keys().cloned().collect();
-                            for tn in tnames {
-                                let nd = substitute_metaparams_decl(&tpl[&tn], &values);
-                                tpl.insert(tn, nd);
-                            }
-                        }
-                    } else if let Some(v) = comp.get(&k) {
-                        let nv = substitute_metaparams(v, &values);
-                        comp.insert(k, nv);
+                for blk in ["variables", "species", "parameters"] {
+                    if let Some(b) = comp_obj.get(blk).and_then(|v| v.as_object()) {
+                        visible.extend(b.keys().cloned());
                     }
                 }
             }
         }
-        let tnames: Vec<String> = top_templates.keys().cloned().collect();
-        for tn in tnames {
-            let nd = substitute_metaparams_decl(&top_templates[&tn], &values);
-            top_templates.insert(tn, nd);
-        }
-        let mut new_isets = Map::new();
-        for (n, d) in &doc_isets {
-            new_isets.insert(n.clone(), substitute_metaparams(d, &values));
-        }
-        doc_isets = new_isets;
     }
+    for name in doc_meta.keys() {
+        if visible.contains(name) {
+            return Err(err(
+                "metaparameter_name_conflict",
+                format!(
+                    "metaparameter '{name}' collides with a visible \
+                     variable/parameter/species/index-set name (esm-spec §9.7.6)"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
 
-    // --- fold structural sites on the closed document ---
+/// Phase 5 of [`resolve_template_machinery`]: expression-position
+/// substitution of the closed metaparameter values (esm-spec §9.7.6)
+/// throughout every component (template declarations get the param-shadowing
+/// walk, [`substitute_metaparams_decl`]), the top-level templates, and the
+/// index-set registry. No-op when no values closed.
+fn substitute_closed_metaparams(
+    root: &mut Map<String, Value>,
+    top_templates: &mut Map<String, Value>,
+    doc_isets: &mut Map<String, Value>,
+    values: &BTreeMap<String, i64>,
+) {
+    if values.is_empty() {
+        return;
+    }
+    for compkind in COMPONENT_KINDS {
+        let Some(Value::Object(comps)) = root.get_mut(compkind) else {
+            continue;
+        };
+        for (_, comp_value) in comps.iter_mut() {
+            let Value::Object(comp) = comp_value else {
+                continue;
+            };
+            let keys: Vec<String> = comp.keys().cloned().collect();
+            for k in keys {
+                if k == "expression_templates"
+                    && comp.get(&k).map(Value::is_object).unwrap_or(false)
+                {
+                    if let Some(Value::Object(tpl)) = comp.get_mut(&k) {
+                        let tnames: Vec<String> = tpl.keys().cloned().collect();
+                        for tn in tnames {
+                            let nd = substitute_metaparams_decl(&tpl[&tn], values);
+                            tpl.insert(tn, nd);
+                        }
+                    }
+                } else if let Some(v) = comp.get(&k) {
+                    let nv = substitute_metaparams(v, values);
+                    comp.insert(k, nv);
+                }
+            }
+        }
+    }
+    let tnames: Vec<String> = top_templates.keys().cloned().collect();
+    for tn in tnames {
+        let nd = substitute_metaparams_decl(&top_templates[&tn], values);
+        top_templates.insert(tn, nd);
+    }
+    let mut new_isets = Map::new();
+    for (n, d) in doc_isets.iter() {
+        new_isets.insert(n.clone(), substitute_metaparams(d, values));
+    }
+    *doc_isets = new_isets;
+}
+
+/// Phase 6 of [`resolve_template_machinery`]: fold the structural integer
+/// sites of the now-closed document — aggregate `ranges` / makearray
+/// `regions` bounds in every component and top-level template
+/// ([`fold_structural_sites`]), then index-set `size` expressions in strict
+/// mode (a remaining open name is `metaparameter_unbound`).
+fn fold_closed_document(
+    root: &mut Map<String, Value>,
+    top_templates: &mut Map<String, Value>,
+    doc_isets: &mut Map<String, Value>,
+) -> Result<(), ExpressionTemplateError> {
     for compkind in COMPONENT_KINDS {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
             continue;
@@ -1802,20 +2036,7 @@ pub fn resolve_template_machinery(
         fold_structural_sites(&mut td, &format!("document.expression_templates.{tn}"))?;
         top_templates.insert(tn, td);
     }
-    fold_index_set_sizes(&mut doc_isets, "document", true)?;
-
-    // --- root library file: compose bodies (validation), then strip; no
-    //     §9.7 construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
-    if is_library {
-        compose_template_bodies(&mut top_templates, "document")?;
-        root.remove("expression_templates");
-    }
-    root.remove("expression_template_imports");
-    root.remove("metaparameters");
-    if !doc_isets.is_empty() {
-        root.insert("index_sets".to_string(), Value::Object(doc_isets));
-    }
-    Ok(Some(Value::Object(root)))
+    fold_index_set_sizes(doc_isets, "document", true)
 }
 
 // ===================================================================
@@ -2086,4 +2307,69 @@ pub fn apply_scope_injections(
     apply_subsystem_ref_injection(root, injected);
     apply_coupling_injections(root)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn dotted_name_grammar_accepts_scoped_refs_and_rejects_malformed() {
+        // §4.6 scoped-reference shape: [A-Za-z_][A-Za-z0-9_]* segments joined
+        // by single dots (esm-spec §9.7.7).
+        assert!(is_valid_dotted_name("a"));
+        assert!(is_valid_dotted_name("lib.stencil_1"));
+        assert!(is_valid_dotted_name("_x.y_2.z"));
+        assert!(!is_valid_dotted_name(""));
+        assert!(!is_valid_dotted_name("1abc"));
+        assert!(!is_valid_dotted_name("a..b"));
+        assert!(!is_valid_dotted_name("a."));
+        assert!(!is_valid_dotted_name("a-b"));
+    }
+
+    #[test]
+    fn lexical_normalize_collapses_dot_components_without_io() {
+        // The cycle-detection key must be stable for not-yet-read paths, so
+        // normalization is purely lexical (esm-spec §9.7.2, as §4.7).
+        assert_eq!(
+            lexical_normalize(Path::new("a/./b/../c")),
+            PathBuf::from("a/c")
+        );
+        assert_eq!(
+            lexical_normalize(Path::new("./lib/tpl.json")),
+            PathBuf::from("lib/tpl.json")
+        );
+        // A leading `..` that cannot be popped is preserved.
+        assert_eq!(lexical_normalize(Path::new("../x")), PathBuf::from("../x"));
+    }
+
+    #[test]
+    fn try_fold_folds_closed_arithmetic_and_leaves_open_names_symbolic() {
+        // Closed integer expressions fold exactly (esm-spec §9.7.6).
+        assert_eq!(try_fold(&json!(3), "t").unwrap(), Some(3));
+        assert_eq!(
+            try_fold(&json!({"op": "+", "args": [1, 2, 3]}), "t").unwrap(),
+            Some(6)
+        );
+        assert_eq!(
+            try_fold(&json!({"op": "-", "args": [5]}), "t").unwrap(),
+            Some(-5)
+        );
+        assert_eq!(
+            try_fold(&json!({"op": "/", "args": [8, 2]}), "t").unwrap(),
+            Some(4)
+        );
+        // A bare name anywhere leaves the site symbolic for a later binding.
+        assert_eq!(try_fold(&json!("N"), "t").unwrap(), None);
+        assert_eq!(
+            try_fold(&json!({"op": "*", "args": ["N", 2]}), "t").unwrap(),
+            None
+        );
+        // Inexact division and non-integer literals are type errors.
+        let e = try_fold(&json!({"op": "/", "args": [7, 2]}), "t").unwrap_err();
+        assert_eq!(e.code, "metaparameter_type_error");
+        let e = try_fold(&json!(2.5), "t").unwrap_err();
+        assert_eq!(e.code, "metaparameter_type_error");
+    }
 }

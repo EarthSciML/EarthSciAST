@@ -468,8 +468,10 @@ const MAX_REWRITE_PASSES: usize = 64;
 struct MatchRule {
     /// Template id (for diagnostics).
     name: String,
-    /// Metavariable names (wildcards in `pattern`, slots in `body`).
-    params: Vec<String>,
+    /// Metavariable names (wildcards in `pattern`, slots in `body`), as a
+    /// set for O(1) membership checks in `try_match` — precomputed once at
+    /// registration ([`collect_match_rules`]) instead of per rule per node.
+    param_set: std::collections::HashSet<String>,
     /// The pattern Expression a node is matched against.
     pattern: Value,
     /// The replacement Expression instantiated with the bound metavariables.
@@ -643,7 +645,7 @@ fn collect_match_rules(
         let Some(pattern) = obj.get("match") else {
             continue;
         };
-        let params: Vec<String> = obj
+        let param_set: std::collections::HashSet<String> = obj
             .get("params")
             .and_then(|p| p.as_array())
             .map(|arr| {
@@ -656,7 +658,7 @@ fn collect_match_rules(
         let where_c = registered_where(obj, iset_names, scope, name)?;
         rules.push(MatchRule {
             name: name.clone(),
-            params,
+            param_set,
             pattern: pattern.clone(),
             body,
             priority: rule_priority(obj),
@@ -678,7 +680,7 @@ fn collect_match_rules(
 fn try_match(
     pattern: &Value,
     target: &Value,
-    params: &std::collections::HashSet<&str>,
+    params: &std::collections::HashSet<String>,
     binds: &mut Map<String, Value>,
 ) -> bool {
     match pattern {
@@ -805,8 +807,8 @@ fn expand_apply(
 /// that freshly-produced body during this pass (it is revisited next pass). If
 /// nothing fires, the walk descends into the node's children. Returns the
 /// rewritten node and whether any rewrite occurred in this subtree; `last`
-/// records the op of the most recent rewrite, for the non-convergence
-/// diagnostic.
+/// records the op (and the firing rule's name) of the most recent rewrite,
+/// for the non-convergence diagnostic.
 fn rewrite_pass(
     node: &Value,
     ctx: &RewriteCtx,
@@ -832,18 +834,15 @@ fn rewrite_pass(
                 return Ok((expand_apply(obj, ctx.templates, scope)?, true));
             }
             for rule in ctx.rules {
-                let param_set: std::collections::HashSet<&str> =
-                    rule.params.iter().map(String::as_str).collect();
                 let mut binds = Map::new();
                 // Constraint filtering is part of match ELIGIBILITY (esm-spec
                 // §9.6.3 constraint 2): a `where`-excluded rule is treated
                 // exactly like a non-matching rule at this node, so the scan
                 // proceeds to the next candidate in priority / declaration order.
-                if try_match(&rule.pattern, node, &param_set, &mut binds)
+                if try_match(&rule.pattern, node, &rule.param_set, &mut binds)
                     && where_satisfied(&rule.where_c, &binds, ctx.shape_env)
                 {
-                    let _ = &rule.name; // retained for diagnostics / future tracing
-                    *last = op.unwrap_or("").to_string();
+                    *last = format!("{} (rule '{}')", op.unwrap_or(""), rule.name);
                     return Ok((substitute(&rule.body, &binds), true));
                 }
             }

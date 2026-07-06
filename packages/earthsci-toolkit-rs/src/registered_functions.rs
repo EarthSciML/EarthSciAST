@@ -91,7 +91,10 @@ impl ClosedArg {
             ClosedArg::Array(v) => Ok(v.as_slice()),
             ClosedArg::Scalar(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
                 "closed_function_arg_type",
-                format!("{name}: arg #{} must be 1-D array, got other shape", position + 1),
+                format!(
+                    "{name}: arg #{} must be 1-D array, got other shape",
+                    position + 1
+                ),
             )),
         }
     }
@@ -105,7 +108,10 @@ impl ClosedArg {
             ClosedArg::Array2D(v) => Ok(v.as_slice()),
             ClosedArg::Scalar(_) | ClosedArg::Array(_) => Err(ClosedFunctionError::new(
                 "closed_function_arg_type",
-                format!("{name}: arg #{} must be 2-D array, got other shape", position + 1),
+                format!(
+                    "{name}: arg #{} must be 2-D array, got other shape",
+                    position + 1
+                ),
             )),
         }
     }

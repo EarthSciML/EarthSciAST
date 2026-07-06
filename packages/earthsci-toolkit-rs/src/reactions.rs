@@ -254,13 +254,12 @@ fn enhance_rate_with_mass_action(
         if coeff == 1.0 {
             concentration_factors.push(species_var);
         } else {
-            let exponent = if coeff.fract() == 0.0
-                && (i64::MIN as f64..=i64::MAX as f64).contains(&coeff)
-            {
-                Expr::Integer(coeff as i64)
-            } else {
-                Expr::Number(coeff)
-            };
+            let exponent =
+                if coeff.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&coeff) {
+                    Expr::Integer(coeff as i64)
+                } else {
+                    Expr::Number(coeff)
+                };
             concentration_factors.push(Expr::Operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![species_var, exponent],

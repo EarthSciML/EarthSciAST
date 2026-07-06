@@ -438,8 +438,8 @@ impl Compiled {
     /// integrator's own state vector is untouched.
     fn make_rhs_closure(
         &self,
-    ) -> impl Fn(&diffsol::FaerVec<f64>, &diffsol::FaerVec<f64>, f64, &mut diffsol::FaerVec<f64>)
-    + use<> {
+    ) -> impl Fn(&diffsol::FaerVec<f64>, &diffsol::FaerVec<f64>, f64, &mut diffsol::FaerVec<f64>) + use<>
+    {
         let state_kinds = self.state_kinds.clone();
         let observed_exprs = self.observed_exprs.clone();
         let algebraic_topo = self.algebraic_topo.clone();
@@ -746,15 +746,14 @@ fn classify_equations(
 
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {
-            let idx =
-                state_index
-                    .get(&state_name)
-                    .ok_or_else(|| CompileError::InterpreterBuildError {
-                        details: format!(
-                            "Equation defines D({state_name}, t) but '{state_name}' \
+            let idx = state_index.get(&state_name).ok_or_else(|| {
+                CompileError::InterpreterBuildError {
+                    details: format!(
+                        "Equation defines D({state_name}, t) but '{state_name}' \
                              is not in flat.state_variables"
-                        ),
-                    })?;
+                    ),
+                }
+            })?;
             state_diff_raw[*idx] = Some(eq.rhs.clone());
         } else if let Some(name) = observed_lhs_name(&eq.lhs) {
             if let Some(idx) = state_index.get(&name) {
@@ -798,6 +797,11 @@ fn classify_equations(
     })
 }
 
+/// Output of [`resolve_observed`]: observed names in evaluation order, the
+/// matching name -> index table, and the resolved defining expressions
+/// (parallel to the ordered names).
+type ResolvedObserved = (Vec<String>, HashMap<String, usize>, Vec<ResolvedExpr>);
+
 /// Topologically sort observed variables and resolve their defining
 /// expressions to typed indices. Each observed expression may only reference
 /// state, params, time, or *earlier* observed variables; the dependency set
@@ -810,7 +814,7 @@ fn resolve_observed(
     observed_rhs_raw: &[Option<Expr>],
     state_index: &HashMap<String, usize>,
     param_index: &HashMap<String, usize>,
-) -> Result<(Vec<String>, HashMap<String, usize>, Vec<ResolvedExpr>), CompileError> {
+) -> Result<ResolvedObserved, CompileError> {
     let mut obs_deps: Vec<HashSet<usize>> = vec![HashSet::new(); observed_names_raw.len()];
     for (i, raw) in observed_rhs_raw.iter().enumerate() {
         if let Some(expr) = raw {
