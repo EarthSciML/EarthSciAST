@@ -16,6 +16,81 @@ transparently extends the folder.
 """
 
 # ========================================
+# 0. Shared sub-expression traversal
+# ========================================
+
+"""
+    child_exprs(e::Expr) -> Vector{Expr}
+
+All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
+`OpExpr` field — not just `args`. This is the ONE shared traversal used by
+[`free_variables`](@ref), [`Base.contains`](@ref contains), and (field-wise)
+[`substitute`](@ref), so dependency analysis sees variables nested inside
+aggregate/arrayop bodies (`expr_body`), filter predicates (`filter`), integral
+bounds (`lower`/`upper`), makearray `values`, table-lookup axis inputs
+(`table_axes`), expression-valued dense `ranges` bounds, and value-invention
+`key` expressions.
+
+Non-expression fields (`wrt`, `dim`, `int_var`, `output_idx`, `join`,
+`regions`, `shape`, `perm`, `axis`, `fn`, `name`, `value`, `table`, `output`,
+`id`, `manifold`, `distinct`, …) carry strings/ints/const data, not `Expr`
+sub-trees, and are not traversed. `wrt` names a variable and is handled
+separately by `free_variables`/`contains`. Literal and variable leaves have no
+children.
+"""
+child_exprs(::NumExpr) = Expr[]
+child_exprs(::IntExpr) = Expr[]
+child_exprs(::VarExpr) = Expr[]
+
+function child_exprs(e::OpExpr)::Vector{Expr}
+    out = Expr[]
+    append!(out, e.args)
+    for f in (e.lower, e.upper, e.expr_body, e.filter, e.key)
+        f === nothing || push!(out, f)
+    end
+    if e.values !== nothing
+        append!(out, e.values)
+    end
+    if e.table_axes !== nothing
+        for k in sort!(collect(keys(e.table_axes)))
+            push!(out, e.table_axes[k])
+        end
+    end
+    if e.ranges !== nothing
+        # A `ranges` entry is an `IndexSetRef` (no sub-expressions) or a dense
+        # bound vector whose entries may be expression-valued.
+        for k in sort!(collect(keys(e.ranges)))
+            v = e.ranges[k]
+            if v isa AbstractVector
+                for x in v
+                    x isa Expr && push!(out, x)
+                end
+            end
+        end
+    end
+    return out
+end
+
+# Index/loop symbols BOUND by this node itself (aggregate/arrayop range keys,
+# `output_idx` axis names, an integral's `int_var`). These are node-local
+# binders, not references to enclosing-scope variables.
+function _bound_symbols(e::OpExpr)::Vector{String}
+    out = String[]
+    e.int_var === nothing || push!(out, e.int_var::String)
+    if e.ranges !== nothing
+        for k in keys(e.ranges)
+            push!(out, String(k))
+        end
+    end
+    if e.output_idx !== nothing
+        for x in e.output_idx
+            x isa AbstractString && push!(out, String(x))
+        end
+    end
+    return out
+end
+
+# ========================================
 # 1. Variable Substitution
 # ========================================
 
@@ -59,23 +134,31 @@ end
 function substitute(expr::OpExpr, bindings::Dict{String,Expr})::Expr
     # Substitute into EVERY sub-expression the node carries — not just `args` —
     # so substitution is complete inside aggregate/arrayop bodies, filter
-    # predicates, integral bounds, makearray values, and table_lookup axis
-    # inputs. `reconstruct` then preserves all other fields (semiring, ranges,
-    # output_idx, table, manifold, id, join, …) that earlier hand-listed
-    # rebuilds silently dropped. Bound locals (index vars, `int_var`) are short
-    # local symbols never present in `bindings` (whose keys are namespaced
-    # globals / parameter names), so recursing cannot capture them.
+    # predicates, integral bounds, makearray values, table_lookup axis
+    # inputs, value-invention `key` expressions, and expression-valued dense
+    # `ranges` bounds. The field set mirrors [`child_exprs`](@ref), the shared
+    # traversal `free_variables`/`contains` walk. `reconstruct` then preserves
+    # all other fields (semiring, output_idx, table, manifold, id, join, …)
+    # that earlier hand-listed rebuilds silently dropped. Bound locals (index
+    # vars, `int_var`) are short local symbols never present in `bindings`
+    # (whose keys are namespaced globals / parameter names), so recursing
+    # cannot capture them.
     sub(x) = x === nothing ? nothing : substitute(x, bindings)
     new_args = Expr[substitute(arg, bindings) for arg in expr.args]
     new_values = expr.values === nothing ? nothing :
         Expr[substitute(v, bindings) for v in expr.values]
     new_table_axes = expr.table_axes === nothing ? nothing :
         Dict{String,Expr}(k => substitute(v, bindings) for (k, v) in expr.table_axes)
+    new_ranges = expr.ranges === nothing ? nothing :
+        Dict{String,Any}(k => (v isa AbstractVector ?
+                Any[x isa Expr ? substitute(x, bindings) : x for x in v] : v)
+            for (k, v) in expr.ranges)
     return reconstruct(expr;
         args = new_args,
         lower = sub(expr.lower), upper = sub(expr.upper),
         expr_body = sub(expr.expr_body), filter = sub(expr.filter),
-        values = new_values, table_axes = new_table_axes)
+        values = new_values, table_axes = new_table_axes,
+        ranges = new_ranges, key = sub(expr.key))
 end
 
 # ========================================
@@ -112,10 +195,19 @@ function free_variables(expr::VarExpr)::Set{String}
 end
 
 function free_variables(expr::OpExpr)::Set{String}
-    # Union of free variables from all arguments
+    # Union of free variables from EVERY expression-bearing field (via the
+    # shared `child_exprs` traversal), so dependency analysis sees references
+    # inside aggregate/arrayop bodies, filter predicates, integral bounds,
+    # makearray values, and table-lookup axis inputs.
     result = Set{String}()
-    for arg in expr.args
-        union!(result, free_variables(arg))
+    for c in child_exprs(expr)
+        union!(result, free_variables(c))
+    end
+
+    # Symbols bound by THIS node (aggregate/arrayop loop indices, an
+    # integral's `int_var`) are local binders, not free references.
+    for b in _bound_symbols(expr)
+        delete!(result, b)
     end
 
     # Add variables from wrt field if present
@@ -131,10 +223,17 @@ end
 # ========================================
 
 """
-    contains(expr::Expr, var::String)::Bool
+    Base.contains(expr::Expr, var::String)::Bool
 
 Check if an expression contains a specific variable name.
-Returns true if the variable appears anywhere in the expression.
+Returns true if the variable appears anywhere in the expression — including
+inside aggregate/arrayop bodies, filter predicates, integral bounds,
+makearray values, and table-lookup axis inputs (the shared `child_exprs`
+traversal). Unlike [`free_variables`](@ref), node-local binder symbols are
+NOT subtracted: this is a pure containment check.
+
+Defined as methods of `Base.contains` (haystack/needle semantics match);
+there is no package-local `contains` function shadowing `Base`.
 
 # Examples
 ```julia
@@ -145,22 +244,22 @@ contains(sum_expr, "x")  # true
 contains(sum_expr, "z")  # false
 ```
 """
-function contains(expr::IntExpr, var::String)::Bool
+function Base.contains(expr::IntExpr, var::String)::Bool
     return false  # Integer literals don't contain variables
 end
 
-function contains(expr::NumExpr, var::String)::Bool
+function Base.contains(expr::NumExpr, var::String)::Bool
     return false  # Numeric literals don't contain variables
 end
 
-function contains(expr::VarExpr, var::String)::Bool
+function Base.contains(expr::VarExpr, var::String)::Bool
     return expr.name == var
 end
 
-function contains(expr::OpExpr, var::String)::Bool
-    # Check if any argument contains the variable
-    for arg in expr.args
-        if contains(arg, var)
+function Base.contains(expr::OpExpr, var::String)::Bool
+    # Check every expression-bearing field via the shared traversal.
+    for c in child_exprs(expr)
+        if contains(c, var)
             return true
         end
     end
@@ -191,7 +290,8 @@ struct UnboundVariableError <: Exception
     message::String
 end
 
-Base.show(io::IO, e::UnboundVariableError) = print(io, "UnboundVariableError: $(e.message)")
+Base.showerror(io::IO, e::UnboundVariableError) =
+    print(io, "UnboundVariableError: ", e.message)
 
 # ========================================
 # 5. Expression Simplification

@@ -25,7 +25,7 @@
 
 # Output shape (vector of index-set / dim names; empty = scalar) of an expression
 # under the current per-variable shape map.
-function _infer_expr_shape(expr::EarthSciSerialization.Expr,
+function _infer_expr_shape(expr::Expr,
                            shapes::Dict{String,Vector{String}})::Vector{String}
     if expr isa NumExpr || expr isa IntExpr
         return String[]
@@ -52,7 +52,10 @@ function _infer_expr_shape(expr::EarthSciSerialization.Expr,
                 if isempty(sh)
                     sh = s
                 elseif sh != s
-                    throw(ArgumentError(
+                    # Typed error from the flatten taxonomy (§4.7.6): a shape
+                    # conflict is a failed dimension promotion, not a generic
+                    # argument error.
+                    throw(DimensionPromotionError(
                         "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
                         "in op '$(op)' — array sources must resolve to one grid shape"))
                 end
@@ -75,11 +78,11 @@ end
 # `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
 # multiplies that array elementwise. A genuine scalar reduction (empty
 # `output_idx`) and an `index` gather stay untouched — they are already scalar.
-function _index_array_leaves(expr::EarthSciSerialization.Expr,
-                             arrayvars::Set{String}, loops::Vector{String})::EarthSciSerialization.Expr
+function _index_array_leaves(expr::Expr,
+                             arrayvars::Set{String}, loops::Vector{String})::Expr
     if expr isa VarExpr
         if expr.name in arrayvars
-            idx = EarthSciSerialization.Expr[VarExpr(expr.name)]
+            idx = Expr[VarExpr(expr.name)]
             for l in loops
                 push!(idx, VarExpr(l))
             end
@@ -88,7 +91,7 @@ function _index_array_leaves(expr::EarthSciSerialization.Expr,
         return expr
     elseif expr isa OpExpr
         if _is_array_producer(expr)
-            idx = EarthSciSerialization.Expr[expr]
+            idx = Expr[expr]
             for l in loops
                 push!(idx, VarExpr(l))
             end
@@ -96,7 +99,7 @@ function _index_array_leaves(expr::EarthSciSerialization.Expr,
         end
         (expr.op == "aggregate" || expr.op == "arrayop" || expr.op == "makearray" ||
          expr.op == "index") && return expr
-        new_args = EarthSciSerialization.Expr[_index_array_leaves(a, arrayvars, loops) for a in expr.args]
+        new_args = Expr[_index_array_leaves(a, arrayvars, loops) for a in expr.args]
         return reconstruct(expr; args=new_args)
     end
     return expr
@@ -105,7 +108,7 @@ end
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
 # `aggregate`/`arrayop` with a non-empty `output_idx` (a scalar reduction has an
 # empty `output_idx` and produces a scalar).
-function _is_array_producer(expr::EarthSciSerialization.Expr)::Bool
+function _is_array_producer(expr::Expr)::Bool
     expr isa OpExpr || return false
     expr.op == "makearray" && return true
     (expr.op == "aggregate" || expr.op == "arrayop") || return false
@@ -118,12 +121,12 @@ end
 # which may be dotted/namespaced. Each shape axis ranges over the index set it
 # names (`{from: …}`); dimension sizes are declared via `index_sets` since the
 # removal of the Domain.spatial spec, so the domain contributes none here.
-function _lift_to_arrayop(expr::EarthSciSerialization.Expr, shape::Vector{String},
+function _lift_to_arrayop(expr::Expr, shape::Vector{String},
                           arrayvars::Set{String})::OpExpr
     loops = String["_p$(i-1)" for i in 1:length(shape)]
     ranges = Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
     body = _index_array_leaves(expr, arrayvars, loops)
-    return OpExpr("arrayop", EarthSciSerialization.Expr[];
+    return OpExpr("arrayop", Expr[];
                   output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
 end
 
@@ -154,18 +157,13 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     new_obs = OrderedDict{String,ModelVariable}(flat.observed_variables)
     for (k, v) in flat.state_variables
         if (k in alg_defined) && !(k in diff_states)
-            new_obs[k] = ModelVariable(ObservedVariable; default=v.default, units=v.units,
-                default_units=v.default_units, description=v.description,
-                expression=v.expression, shape=v.shape, location=v.location,
-                noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+            new_obs[k] = reconstruct(v; type=ObservedVariable)
         else
             new_states[k] = v
         end
     end
-    return FlattenedSystem(flat.independent_variables, new_states, flat.parameters,
-                           new_obs, flat.equations, flat.continuous_events,
-                           flat.discrete_events, flat.domain, flat.metadata,
-                           flat.index_sets, flat.function_tables)
+    return FlattenedSystem(flat; state_variables=new_states,
+                           observed_variables=new_obs)
 end
 
 """
@@ -193,7 +191,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
     is_elementwise(rhs) = !(rhs isa OpExpr &&
         ((rhs::OpExpr).op == "arrayop" || (rhs::OpExpr).op == "aggregate" ||
          (rhs::OpExpr).op == "makearray"))
-    targets = Dict{String,EarthSciSerialization.Expr}()
+    targets = Dict{String,Expr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         nm = (eq.lhs::VarExpr).name
@@ -201,7 +199,9 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
     end
     isempty(targets) && return flat
 
-    # Dependency order (the chain is feed-forward; a cycle is a real authoring error).
+    # Dependency order (the chain is feed-forward; a cycle is a real authoring
+    # error). `free_variables` walks the shared `child_exprs` traversal, so a
+    # dependency nested in an aggregate body / filter / bound is seen too.
     order = String[]; done = Set{String}()
     while length(order) < length(targets)
         progressed = false
@@ -211,10 +211,11 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
                 push!(order, nm); push!(done, nm); progressed = true
             end
         end
-        progressed || throw(ArgumentError(
-            "inline_elementwise_array_observeds: cyclic elementwise array-observed dependency"))
+        progressed || throw(DimensionPromotionError(
+            "inline_elementwise_array_observeds: cyclic elementwise " *
+            "array-observed dependency among $(sort!(collect(setdiff(keys(targets), done))))"))
     end
-    resolved = Dict{String,EarthSciSerialization.Expr}()
+    resolved = Dict{String,Expr}()
     for nm in order
         resolved[nm] = substitute(targets[nm], resolved)
     end
@@ -227,9 +228,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
         push!(new_eqs, Equation(eq.lhs, substitute(eq.rhs, resolved);
                                 _comment=eq._comment))
     end
-    return FlattenedSystem(flat.independent_variables, flat.state_variables, flat.parameters,
-                           new_obs, new_eqs, flat.continuous_events, flat.discrete_events,
-                           flat.domain, flat.metadata, flat.index_sets, flat.function_tables)
+    return FlattenedSystem(flat; observed_variables=new_obs, equations=new_eqs)
 end
 
 """
@@ -258,7 +257,7 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
 
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
-    defs = Dict{String,EarthSciSerialization.Expr}()
+    defs = Dict{String,Expr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
@@ -317,10 +316,8 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
         end
     end
 
-    return FlattenedSystem(flat.independent_variables, new_states, new_params,
-                           new_observeds, new_eqs, flat.continuous_events,
-                           flat.discrete_events, flat.domain, flat.metadata,
-                           flat.index_sets, flat.function_tables)
+    return FlattenedSystem(flat; state_variables=new_states, parameters=new_params,
+                           observed_variables=new_observeds, equations=new_eqs)
 end
 
 """
@@ -421,8 +418,5 @@ end
 # the single source of truth (flatten always emits an equation per observed), so a
 # stale scalar expression at an array shape can't be mistaken for the definition.
 function _with_shape(v::ModelVariable, shape::Vector{String})::ModelVariable
-    return ModelVariable(v.type; default=v.default, units=v.units,
-        default_units=v.default_units, description=v.description,
-        expression=nothing, shape=copy(shape), location=v.location,
-        noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+    return reconstruct(v; expression=nothing, shape=copy(shape))
 end

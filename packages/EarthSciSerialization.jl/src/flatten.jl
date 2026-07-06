@@ -244,12 +244,38 @@ FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta) =
     FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta,
                     OrderedDict{String, IndexSet}(), Dict{String, FunctionTable}())
 
+"""
+    FlattenedSystem(flat::FlattenedSystem; kwargs...) -> FlattenedSystem
+
+Keyword copy-constructor: rebuild a `FlattenedSystem`, copying every field from
+`flat` by default and overriding only the keywords explicitly passed. Route all
+copy-with-changes transforms (e.g. the shape-promotion passes) through this so
+a newly added field is preserved by default instead of silently dropped by an
+11-positional-argument re-listing.
+"""
+FlattenedSystem(flat::FlattenedSystem;
+        independent_variables = flat.independent_variables,
+        state_variables = flat.state_variables,
+        parameters = flat.parameters,
+        observed_variables = flat.observed_variables,
+        equations = flat.equations,
+        continuous_events = flat.continuous_events,
+        discrete_events = flat.discrete_events,
+        domain = flat.domain,
+        metadata = flat.metadata,
+        index_sets = flat.index_sets,
+        function_tables = flat.function_tables) =
+    FlattenedSystem(independent_variables, state_variables, parameters,
+                    observed_variables, equations, continuous_events,
+                    discrete_events, domain, metadata, index_sets,
+                    function_tables)
+
 # ========================================
 # Reaction Lowering Helper (§4.6 + §4.7.6)
 # ========================================
 
 """
-    lower_reactions_to_equations(reactions, species, domain=nothing) -> Vector{Equation}
+    lower_reactions_to_equations(reactions, species) -> Vector{Equation}
 
 Produce the ODE equations induced by a set of reactions using standard
 mass-action kinetics: `d[X]/dt = Σ (stoich_ij * rate_j)`.
@@ -257,14 +283,12 @@ mass-action kinetics: `d[X]/dt = Σ (stoich_ij * rate_j)`.
 Shared by `derive_odes` (reaction → Model) and `flatten` (EsmFile → FlattenedSystem)
 so there is exactly one place that turns stoichiometry into equations.
 
-On a 0D domain (`domain === nothing`), the LHS is `D(X, t)`. On a PDE domain,
-the LHS is still `D(X, t)` symbolically — dimension promotion (§4.7.6) is
-applied by `flatten`, not here. The resulting equation lives on the caller's
-domain; spatial operators are added downstream when coupling adds them.
+The LHS is always `D(X, t)` symbolically, regardless of the document's
+domain — dimension promotion (§4.7.6) is applied by `flatten`, not here.
+Spatial operators are added downstream when coupling adds them.
 """
 function lower_reactions_to_equations(reactions::Vector{Reaction},
-                                      species::Vector{Species},
-                                      domain::Union{Domain, Nothing}=nothing)::Vector{Equation}
+                                      species::Vector{Species})::Vector{Equation}
     equations = Equation[]
     if isempty(species)
         return equations
@@ -297,8 +321,8 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
     end
 
     for (i, name) in enumerate(species_names)
-        lhs = OpExpr("D", EarthSciSerialization.Expr[VarExpr(name)], wrt="t")
-        terms = EarthSciSerialization.Expr[]
+        lhs = OpExpr("D", Expr[VarExpr(name)], wrt="t")
+        terms = Expr[]
         for (j, rxn) in enumerate(reactions)
             stoich = S[i, j]
             stoich == 0 && continue
@@ -306,10 +330,10 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
             if stoich == 1
                 push!(terms, rate_expr)
             elseif stoich == -1
-                push!(terms, OpExpr("-", EarthSciSerialization.Expr[rate_expr]))
+                push!(terms, OpExpr("-", Expr[rate_expr]))
             else
                 push!(terms, OpExpr("*",
-                    EarthSciSerialization.Expr[NumExpr(Float64(stoich)), rate_expr]))
+                    Expr[NumExpr(Float64(stoich)), rate_expr]))
             end
         end
         rhs = if isempty(terms)
@@ -339,17 +363,17 @@ subsystem), the whole dotted path is prefixed; otherwise the reference is
 already external and is left unchanged. Numeric literals are unchanged.
 """
 function namespace_expr(expr::NumExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::EarthSciSerialization.Expr
+                        idx_names::Set{String}=Set{String}())::Expr
     return expr
 end
 
 function namespace_expr(expr::IntExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::EarthSciSerialization.Expr
+                        idx_names::Set{String}=Set{String}())::Expr
     return expr
 end
 
 function namespace_expr(expr::VarExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::EarthSciSerialization.Expr
+                        idx_names::Set{String}=Set{String}())::Expr
     if occursin('.', expr.name)
         first_part = String(split(expr.name, '.')[1])
         if first_part in local_names
@@ -376,7 +400,7 @@ function _namespace_ranges(ranges, prefix::String, local_names::Set{String},
             newfrom = v.from in idx_names ? "$(prefix).$(v.from)" : v.from
             out[k] = IndexSetRef(newfrom; of=v.of)
         elseif v isa AbstractVector
-            out[k] = Any[x isa EarthSciSerialization.Expr ?
+            out[k] = Any[x isa Expr ?
                          namespace_expr(x, prefix, local_names, idx_names) : x for x in v]
         else
             out[k] = v
@@ -411,9 +435,9 @@ function _namespace_join(join, prefix::String, local_names::Set{String})
 end
 
 function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
-                        idx_names::Set{String}=Set{String}())::EarthSciSerialization.Expr
+                        idx_names::Set{String}=Set{String}())::Expr
     ns(x) = x === nothing ? nothing : namespace_expr(x, prefix, local_names, idx_names)
-    new_args = EarthSciSerialization.Expr[namespace_expr(a, prefix, local_names, idx_names) for a in expr.args]
+    new_args = Expr[namespace_expr(a, prefix, local_names, idx_names) for a in expr.args]
     # Recurse into EVERY variable-bearing sub-expression so prefix rewrites reach
     # arrayop / makearray bodies, filter predicates (M2 §7.2), integral bounds
     # (`lower`/`upper`), and table_lookup per-axis input expressions. `reconstruct`
@@ -422,9 +446,9 @@ function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
     # and silently dropped int_var/lower/upper/table/table_axes/output. `join`/
     # `join_gates` carry only index-symbol / position data, so they pass through.
     new_values = expr.values === nothing ? nothing :
-        EarthSciSerialization.Expr[namespace_expr(v, prefix, local_names, idx_names) for v in expr.values]
+        Expr[namespace_expr(v, prefix, local_names, idx_names) for v in expr.values]
     new_table_axes = expr.table_axes === nothing ? nothing :
-        Dict{String,EarthSciSerialization.Expr}(
+        Dict{String,Expr}(
             k => namespace_expr(v, prefix, local_names, idx_names) for (k, v) in expr.table_axes)
     # Namespace index-set references so a flattened component's private
     # geometry/index names don't collide with a sibling's after merge: the `id`
@@ -457,7 +481,7 @@ end
 Extract the dependent variable name from an equation LHS. For `D(x, t)`, returns
 `"x"`. For a bare `VarExpr("x")`, returns `"x"`. Otherwise returns `nothing`.
 """
-function lhs_dependent_variable(expr::EarthSciSerialization.Expr)::Union{String, Nothing}
+function lhs_dependent_variable(expr::Expr)::Union{String, Nothing}
     if expr isa VarExpr
         return expr.name
     elseif expr isa OpExpr && expr.op == "D" && !isempty(expr.args) && expr.args[1] isa VarExpr
@@ -472,7 +496,7 @@ end
 True if the expression contains any spatial operator (`grad`, `div`,
 `laplacian`, or `D` with `wrt != "t"`).
 """
-function has_spatial_operator(expr::EarthSciSerialization.Expr)::Bool
+function has_spatial_operator(expr::Expr)::Bool
     if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
         return false
     end
@@ -495,13 +519,13 @@ end
 
 Collect all spatial dimension names referenced by spatial operators in `expr`.
 """
-function spatial_dims_in_expr(expr::EarthSciSerialization.Expr)::Set{Symbol}
+function spatial_dims_in_expr(expr::Expr)::Set{Symbol}
     dims = Set{Symbol}()
     _collect_spatial_dims!(dims, expr)
     return dims
 end
 
-function _collect_spatial_dims!(dims::Set{Symbol}, expr::EarthSciSerialization.Expr)
+function _collect_spatial_dims!(dims::Set{Symbol}, expr::Expr)
     if expr isa OpExpr
         if expr.op in ("grad", "div") && expr.dim !== nothing
             push!(dims, Symbol(expr.dim))
@@ -530,10 +554,7 @@ function _namespace_var_shape(var::ModelVariable, prefix::String, idx_names::Set
     var.shape === nothing && return var
     any(s -> s in idx_names, var.shape) || return var
     new_shape = String[s in idx_names ? "$(prefix).$(s)" : s for s in var.shape]
-    return ModelVariable(var.type; default=var.default, units=var.units,
-        default_units=var.default_units, description=var.description,
-        expression=var.expression, shape=new_shape, location=var.location,
-        noise_kind=var.noise_kind, correlation_group=var.correlation_group)
+    return reconstruct(var; shape=new_shape)
 end
 
 # ========================================
@@ -543,10 +564,10 @@ end
 """
 Collect a Model's variables and equations into the flattener accumulators,
 recursing through subsystems. All names are rewritten to `prefix.local_name`.
-Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single shared
-registry seeded once by `flatten` into `index_sets_acc` — so their references
-inside equations (`shape`, `ranges` `from`, producer `id` / `from_faq`) keep
-their plain document-level names and are NOT namespaced here.
+Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single
+shared registry seeded once by `flatten` — so their references inside
+equations (`shape`, `ranges` `from`, producer `id` / `from_faq`) keep their
+plain document-level names and are NOT namespaced here.
 """
 function _collect_model!(states::OrderedDict{String, ModelVariable},
                          params::OrderedDict{String, ModelVariable},
@@ -554,9 +575,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
                          equations::Vector{Equation},
                          continuous_events::Vector{ContinuousEvent},
                          discrete_events::Vector{DiscreteEvent},
-                         model::Model, prefix::String,
-                         index_sets_acc::OrderedDict{String, IndexSet}=
-                             OrderedDict{String, IndexSet}())
+                         model::Model, prefix::String)
     local_names = Set{String}(keys(model.variables))
     # Also include subsystem-qualified names from this level's subsystems so
     # that references inside the model to subsystem variables get namespaced.
@@ -565,7 +584,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     end
 
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
-    # into `index_sets_acc` once, in `flatten`) with plain names shared by every
+    # once by `flatten` from the top-level object) with plain names shared by every
     # component — no longer per-`Model` and no longer namespaced. So index-set
     # references (`shape` entries, `ranges[*]` `{from}`, producer `id`s and their
     # `from_faq` edges) stay as plain document-level names and must NOT be
@@ -590,11 +609,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # the prefixed variable keys — rewrite it here so the flattened observed
         # is self-consistent with its key, shape, and equation form.
         if v.expression !== nothing
-            v = ModelVariable(v.type; default=v.default, units=v.units,
-                default_units=v.default_units, description=v.description,
-                expression=namespace_expr(v.expression, prefix, local_names, idx_names),
-                shape=v.shape, location=v.location,
-                noise_kind=v.noise_kind, correlation_group=v.correlation_group)
+            v = reconstruct(v;
+                expression=namespace_expr(v.expression, prefix, local_names, idx_names))
         end
         if v.type == StateVariable
             states[namespaced] = v
@@ -632,7 +648,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     end
 
     for ev in model.continuous_events
-        new_conds = EarthSciSerialization.Expr[namespace_expr(c, prefix, local_names, idx_names) for c in ev.conditions]
+        new_conds = Expr[namespace_expr(c, prefix, local_names, idx_names) for c in ev.conditions]
         new_affects = AffectEquation[
             AffectEquation(startswith(a.lhs, prefix * ".") || occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
                            namespace_expr(a.rhs, prefix, local_names, idx_names))
@@ -656,7 +672,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
             ev.trigger
         end
         push!(discrete_events,
-              DiscreteEvent(new_trigger, new_affects; description=ev.description))
+              DiscreteEvent(new_trigger, new_affects; description=ev.description,
+                            functional_affect=ev.functional_affect))
     end
 
     for (sub_name, sub_model) in model.subsystems
@@ -667,7 +684,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         sub_model isa Model || continue
         _collect_model!(states, params, observeds, equations,
                         continuous_events, discrete_events,
-                        sub_model, "$(prefix).$(sub_name)", index_sets_acc)
+                        sub_model, "$(prefix).$(sub_name)")
     end
 end
 
@@ -680,8 +697,7 @@ variables are then namespaced by `prefix`.
 function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                                    params::OrderedDict{String, ModelVariable},
                                    equations::Vector{Equation},
-                                   rsys::ReactionSystem, prefix::String,
-                                   file_domain::Union{Domain, Nothing})
+                                   rsys::ReactionSystem, prefix::String)
     local_names = Set{String}()
     for sp in rsys.species
         push!(local_names, sp.name)
@@ -706,7 +722,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
 
     # v0.8.0: every component shares the document's single `domain`; a system
     # is spatial iff its variables are shaped over index sets, 0-D otherwise.
-    raw_eqs = lower_reactions_to_equations(rsys.reactions, rsys.species, file_domain)
+    raw_eqs = lower_reactions_to_equations(rsys.reactions, rsys.species)
     for eq in raw_eqs
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(eq.rhs, prefix, local_names)
@@ -715,7 +731,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
 
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(states, params, equations,
-                                  sub_rsys, "$(prefix).$(sub_name)", file_domain)
+                                  sub_rsys, "$(prefix).$(sub_name)")
     end
 end
 
@@ -820,7 +836,7 @@ transforms are exempt: `conversion_factor` declares the conversion explicitly;
 `param_to_var` replaces a parameter with a variable and does not imply unit
 equivalence at the mapping site (units are still validated elsewhere).
 """
-function _check_variable_map_units!(file::EsmFile)
+function _check_variable_map_units(file::EsmFile)
     isempty(file.coupling) && return
     for entry in file.coupling
         entry isa CouplingVariableMap || continue
@@ -900,8 +916,7 @@ equations across the listed systems and sum their RHS terms. In the flattened
 representation, "matching" means "has the same namespaced dependent variable".
 """
 function _apply_operator_compose!(equations::Vector{Equation},
-                                  entry::CouplingOperatorCompose,
-                                  file::EsmFile)
+                                  entry::CouplingOperatorCompose)
     translate = entry.translate === nothing ? Dict{String, Any}() : entry.translate
 
     # Build placeholder targets: if any equation's LHS uses VarExpr("_var"),
@@ -966,7 +981,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
         # Sum all RHS terms into a single equation; keep the first equation's LHS.
         first_idx = indices[1]
         lhs = equations[first_idx].lhs
-        terms = EarthSciSerialization.Expr[equations[i].rhs for i in indices]
+        terms = Expr[equations[i].rhs for i in indices]
         new_rhs = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
         push!(merged, Equation(lhs, new_rhs))
         for i in indices
@@ -1009,9 +1024,9 @@ function _collect_target_state_vars(equations::Vector{Equation},
     return vars
 end
 
-function _substitute_placeholder(expr::EarthSciSerialization.Expr,
+function _substitute_placeholder(expr::Expr,
                                  placeholder::Union{String, Nothing},
-                                 target::String)::EarthSciSerialization.Expr
+                                 target::String)::Expr
     placeholder === nothing && return expr
     if expr isa NumExpr || expr isa IntExpr
         return expr
@@ -1022,23 +1037,32 @@ function _substitute_placeholder(expr::EarthSciSerialization.Expr,
         end
         return expr
     elseif expr isa OpExpr
-        new_args = EarthSciSerialization.Expr[_substitute_placeholder(a, placeholder, target) for a in expr.args]
-        new_expr_body = expr.expr_body === nothing ? nothing :
-            _substitute_placeholder(expr.expr_body, placeholder, target)
+        # Recurse into EVERY expression-bearing field (the same field set as
+        # `substitute`/`child_exprs`) and rebuild via `reconstruct`, which
+        # preserves all other fields (table/table_axes, int_var, join, id,
+        # manifold, key, …) that a hand-listed keyword subset used to drop.
+        sub(x) = x === nothing ? nothing : _substitute_placeholder(x, placeholder, target)
+        new_args = Expr[
+            _substitute_placeholder(a, placeholder, target) for a in expr.args]
         new_values = expr.values === nothing ? nothing :
-            EarthSciSerialization.Expr[_substitute_placeholder(v, placeholder, target) for v in expr.values]
-        return OpExpr(expr.op, new_args;
-            wrt=expr.wrt, dim=expr.dim,
-            output_idx=expr.output_idx,
-            expr_body=new_expr_body,
-            reduce=expr.reduce,
-            ranges=expr.ranges,
-            regions=expr.regions,
-            values=new_values,
-            shape=expr.shape,
-            perm=expr.perm,
-            axis=expr.axis,
-            fn=expr.fn)
+            Expr[
+                _substitute_placeholder(v, placeholder, target) for v in expr.values]
+        new_table_axes = expr.table_axes === nothing ? nothing :
+            Dict{String,Expr}(
+                k => _substitute_placeholder(v, placeholder, target)
+                for (k, v) in expr.table_axes)
+        new_ranges = expr.ranges === nothing ? nothing :
+            Dict{String,Any}(k => (v isa AbstractVector ?
+                    Any[x isa Expr ?
+                        _substitute_placeholder(x, placeholder, target) : x
+                        for x in v] : v)
+                for (k, v) in expr.ranges)
+        return reconstruct(expr;
+            args=new_args,
+            lower=sub(expr.lower), upper=sub(expr.upper),
+            expr_body=sub(expr.expr_body), filter=sub(expr.filter),
+            values=new_values, table_axes=new_table_axes,
+            ranges=new_ranges, key=sub(expr.key))
     end
     return expr
 end
@@ -1047,11 +1071,19 @@ end
 Apply a `CouplingCouple` entry: attach the connector equations to the
 flattened equation list. The connector.equations field may contain full
 equation structures; we accept both raw Equation objects and dict-shaped
-connector entries.
+connector entries whose `lhs`/`rhs` are already-parsed `Expr`s.
+
+A dict-shaped connector equation that cannot be coerced (no parsed `Expr`
+lhs/rhs) is NOT silently degraded into a bogus placeholder equation; it is
+recorded in `opaque_refs` (the `metadata.opaque_coupling_refs` channel used
+for the other couplings the flattener cannot lower) so callers can see the
+entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
+cross-language parity) has no matching typed error, and adding a ninth is
+forbidden — the opaque-refs channel is the designated fallback.
 """
 function _apply_couple!(equations::Vector{Equation},
                         entry::CouplingCouple,
-                        file::EsmFile)
+                        opaque_refs::Vector{String})
     connector = entry.connector
     if haskey(connector, "equations")
         raw = connector["equations"]
@@ -1060,29 +1092,21 @@ function _apply_couple!(equations::Vector{Equation},
                 if item isa Equation
                     push!(equations, item)
                 elseif item isa AbstractDict
-                    # If the connector equation is a dict-shaped entry (spec
-                    # form) record it as a comment equation placeholder — we
-                    # cannot parse expressions here without the full parser.
-                    # The typical call path constructs full Equation objects.
-                    push!(equations, _coerce_connector_equation(item))
+                    lhs = get(item, "lhs", nothing)
+                    rhs = get(item, "rhs", nothing)
+                    if lhs isa Expr &&
+                       rhs isa Expr
+                        push!(equations, Equation(lhs, rhs; _comment="couple"))
+                    else
+                        push!(opaque_refs, string(
+                            "couple:unparsed_connector_equation:",
+                            join(entry.systems, "<->")))
+                    end
                 end
             end
         end
     end
     return
-end
-
-function _coerce_connector_equation(entry::AbstractDict)::Equation
-    # Minimal coercion: accept already-parsed Expr fields if present; otherwise
-    # emit a placeholder that carries the raw dict as a comment so downstream
-    # code can still see it was applied.
-    lhs = get(entry, "lhs", nothing)
-    rhs = get(entry, "rhs", nothing)
-    if lhs isa EarthSciSerialization.Expr && rhs isa EarthSciSerialization.Expr
-        return Equation(lhs, rhs; _comment="couple")
-    end
-    return Equation(VarExpr("__coupling_placeholder__"), NumExpr(0.0);
-                    _comment=string("couple: ", entry))
 end
 
 """
@@ -1105,27 +1129,6 @@ loader variable — e.g. `-Meteorology.u_wind * grad(...)` would not be lifted t
 `-index(Meteorology.u_wind, i, j) * …`. (esm-spec §11.5 "BCs from data" +
 §10.4 `param_to_var`.)
 """
-# Does `expr` reference the variable `name` anywhere — including inside
-# aggregate bodies, filter predicates, integral bounds, makearray values, and
-# table-lookup axis inputs? (The traversal mirrors `substitute`'s field set;
-# `Base.contains`-style helpers in expression.jl only walk `args`/`wrt`.)
-_expr_references_variable(expr::NumExpr, name::String)::Bool = false
-_expr_references_variable(expr::IntExpr, name::String)::Bool = false
-_expr_references_variable(expr::VarExpr, name::String)::Bool = expr.name == name
-function _expr_references_variable(expr::OpExpr, name::String)::Bool
-    any(_expr_references_variable(a, name) for a in expr.args) && return true
-    for sub in (expr.lower, expr.upper, expr.expr_body, expr.filter)
-        sub !== nothing && _expr_references_variable(sub, name) && return true
-    end
-    if expr.values !== nothing
-        any(_expr_references_variable(v, name) for v in expr.values) && return true
-    end
-    if expr.table_axes !== nothing
-        any(_expr_references_variable(v, name) for (_, v) in expr.table_axes) && return true
-    end
-    return false
-end
-
 function _apply_variable_map!(equations::Vector{Equation},
                               params::OrderedDict{String, ModelVariable},
                               entry::CouplingVariableMap,
@@ -1144,8 +1147,11 @@ function _apply_variable_map!(equations::Vector{Equation},
     # variable reference inside the transform is (by contract) a fully-scoped
     # reference, so no namespacing is applied; the expression MUST reference
     # the entry's `from` variable — it is the data-flow edge the entry declares.
-    if transform isa EarthSciSerialization.Expr
-        if !_expr_references_variable(transform, from)
+    if transform isa Expr
+        # `contains` (expression.jl) walks EVERY expression-bearing field —
+        # aggregate bodies, filter predicates, bounds, table-lookup axes — so
+        # the reference check is not blind to nested aggregate transforms.
+        if !contains(transform, from)
             throw(ArgumentError(
                 "variable_map($(from) -> $(to)): expression transform does not " *
                 "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"))
@@ -1174,13 +1180,13 @@ function _apply_variable_map!(equations::Vector{Equation},
     # so all three bindings agree — Julia/Rust previously scaled only for
     # `conversion_factor`, silently dropping it for additive/multiplicative while
     # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
-    replacement::EarthSciSerialization.Expr = VarExpr(from)
+    replacement::Expr = VarExpr(from)
     if entry.factor !== nothing && entry.factor != 1.0
         replacement = OpExpr("*",
-            EarthSciSerialization.Expr[NumExpr(entry.factor::Float64), VarExpr(from)])
+            Expr[NumExpr(entry.factor::Float64), VarExpr(from)])
     end
 
-    bindings = Dict{String, EarthSciSerialization.Expr}(to => replacement)
+    bindings = Dict{String, Expr}(to => replacement)
     for (i, eq) in enumerate(equations)
         equations[i] = Equation(
             substitute(eq.lhs, bindings),
@@ -1214,8 +1220,7 @@ end
 # Independent-variable detection
 # ========================================
 
-function _compute_independent_variables(equations::Vector{Equation},
-                                        file_domain::Union{Domain, Nothing})::Vector{Symbol}
+function _compute_independent_variables(equations::Vector{Equation})::Vector{Symbol}
     ivs = Symbol[:t]
     seen = Set{Symbol}([:t])
 
@@ -1254,7 +1259,7 @@ end
 # pointwise on the grid through the existing arrayop evaluator.
 
 # Collect every `makearray` OpExpr node reachable from `expr`.
-function _collect_makearrays!(acc::Vector{OpExpr}, expr::EarthSciSerialization.Expr)
+function _collect_makearrays!(acc::Vector{OpExpr}, expr::Expr)
     expr isa OpExpr || return acc
     expr.op == "makearray" && push!(acc, expr)
     for a in expr.args
@@ -1271,7 +1276,7 @@ end
 
 # First VarExpr leaf name in an index-argument expression (the loop variable of
 # that index position), or `nothing` for a constant position.
-function _index_arg_loop(expr::EarthSciSerialization.Expr)::Union{String,Nothing}
+function _index_arg_loop(expr::Expr)::Union{String,Nothing}
     if expr isa VarExpr
         return expr.name
     elseif expr isa OpExpr
@@ -1288,9 +1293,9 @@ end
 # every position carries a loop variable (the interior stencil). Returns the loop
 # names in index-position (dim) order, or `nothing` if none is found.
 function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int)
-    result = Union{Vector{String},Nothing}[nothing]
+    result = Ref{Union{Vector{String},Nothing}}(nothing)
     function walk(e)
-        result[1] === nothing || return
+        result[] === nothing || return
         e isa OpExpr || return
         if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
            ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
@@ -1301,7 +1306,7 @@ function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int)
                 lv === nothing && (ok = false; break)
                 push!(loops, lv)
             end
-            ok && (result[1] = loops; return)
+            ok && (result[] = loops; return)
         end
         for a in e.args; walk(a); end
         e.expr_body === nothing || walk(e.expr_body)
@@ -1310,7 +1315,7 @@ function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int)
         end
     end
     walk(ma)
-    return result[1]
+    return result[]
 end
 
 # Per-dimension grid extent of a lowered spatial operator: the largest cell index
@@ -1335,22 +1340,22 @@ end
 # `index(makearray, loops…)` (its region values already index per cell).
 # Self-contained nodes (index / aggregate / arrayop) are left untouched;
 # elementwise ops recurse.
-function _lift_rhs_to_cell(expr::EarthSciSerialization.Expr, arrayvars::Set{String},
-                           loops::Vector{String})::EarthSciSerialization.Expr
+function _lift_rhs_to_cell(expr::Expr, arrayvars::Set{String},
+                           loops::Vector{String})::Expr
     if expr isa VarExpr
         if expr.name in arrayvars
-            return OpExpr("index", EarthSciSerialization.Expr[VarExpr(expr.name),
+            return OpExpr("index", Expr[VarExpr(expr.name),
                           (VarExpr(l) for l in loops)...])
         end
         return expr
     elseif expr isa OpExpr
         if expr.op == "makearray"
-            return OpExpr("index", EarthSciSerialization.Expr[expr,
+            return OpExpr("index", Expr[expr,
                           (VarExpr(l) for l in loops)...])
         elseif expr.op == "index" || expr.op == "aggregate" || expr.op == "arrayop"
             return expr
         end
-        new_args = EarthSciSerialization.Expr[_lift_rhs_to_cell(a, arrayvars, loops)
+        new_args = Expr[_lift_rhs_to_cell(a, arrayvars, loops)
                                               for a in expr.args]
         return reconstruct(expr; args=new_args)
     end
@@ -1436,6 +1441,14 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
             else
                 # No unique index set of this size — fall back to a dense range and
                 # a synthetic shape axis (still a valid non-scalar shape).
+                if length(cands) > 1
+                    @warn "pointwise lift: grid dimension $(d) of species " *
+                          "'$(species)' (extent $(extents[d])) matches multiple " *
+                          "declared index sets $(sort(cands)) by size; the lift " *
+                          "cannot pick one, so a synthetic dense axis " *
+                          "'_liftdim$(d)_$(extents[d])' is used instead of an " *
+                          "index-set reference."
+                end
                 axname = "_liftdim$(d)_$(extents[d])"
                 push!(gaxes, axname)
                 ranges[loops[d]] = Any[1, extents[d]]
@@ -1446,12 +1459,12 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         # discovery, and evaluator all see an array state.
         haskey(states, species) && (states[species] = _with_shape(states[species], gaxes))
         oidx = Any[l for l in loops]
-        idx_species = OpExpr("index", EarthSciSerialization.Expr[VarExpr(species),
+        idx_species = OpExpr("index", Expr[VarExpr(species),
                              (VarExpr(l) for l in loops)...])
-        new_lhs = OpExpr("aggregate", EarthSciSerialization.Expr[];
+        new_lhs = OpExpr("aggregate", Expr[];
                          output_idx=oidx, ranges=ranges,
-                         expr_body=OpExpr("D", EarthSciSerialization.Expr[idx_species], wrt="t"))
-        new_rhs = OpExpr("aggregate", EarthSciSerialization.Expr[];
+                         expr_body=OpExpr("D", Expr[idx_species], wrt="t"))
+        new_rhs = OpExpr("aggregate", Expr[];
                          output_idx=oidx, ranges=ranges,
                          expr_body=_lift_rhs_to_cell(eq.rhs, arrayvars, loops))
         equations[n] = Equation(new_lhs, new_rhs; _comment=eq._comment)
@@ -1480,7 +1493,7 @@ function flatten(file::EsmFile)::FlattenedSystem
     # cross-domain-coverage checks (a document has one shared domain and
     # cross-grid coupling is an ordinary regridding `transform`); the
     # variable-map unit check remains.
-    _check_variable_map_units!(file)
+    _check_variable_map_units(file)
 
     states = OrderedDict{String, ModelVariable}()
     params = OrderedDict{String, ModelVariable}()
@@ -1502,7 +1515,7 @@ function flatten(file::EsmFile)::FlattenedSystem
             push!(source_systems, name)
             _collect_model!(states, params, observeds, equations,
                             continuous_events, discrete_events,
-                            model, name, index_sets)
+                            model, name)
         end
     end
 
@@ -1511,7 +1524,7 @@ function flatten(file::EsmFile)::FlattenedSystem
         for (name, rsys) in file.reaction_systems
             push!(source_systems, name)
             _collect_reaction_system!(states, params, equations,
-                                      rsys, name, file_domain)
+                                      rsys, name)
         end
     end
 
@@ -1528,9 +1541,9 @@ function flatten(file::EsmFile)::FlattenedSystem
     for entry in file.coupling
         push!(coupling_rules_applied, describe_coupling_entry(entry))
         if entry isa CouplingOperatorCompose
-            _apply_operator_compose!(equations, entry, file)
+            _apply_operator_compose!(equations, entry)
         elseif entry isa CouplingCouple
-            _apply_couple!(equations, entry, file)
+            _apply_couple!(equations, entry, opaque_refs)
         elseif entry isa CouplingVariableMap
             _apply_variable_map!(equations, params, entry, loader_names, observeds)
         elseif entry isa CouplingOperatorApply
@@ -1549,7 +1562,7 @@ function flatten(file::EsmFile)::FlattenedSystem
     _apply_pointwise_lift!(equations, states, params, observeds, index_sets, file.coupling)
 
     # Step 4: Compute independent variables.
-    ivs = _compute_independent_variables(equations, file_domain)
+    ivs = _compute_independent_variables(equations)
 
     # Step 5: Assemble FlattenedSystem. v0.8.0: the document carries at most one
     # shared domain, used directly as the target.
@@ -1583,7 +1596,7 @@ name) and run the full flattener. This is the call path used by
 `ModelingToolkit.System(::Model)` in the Julia extension (see gt-fpw).
 """
 function flatten(model::Model; name::String="anonymous")::FlattenedSystem
-    file = EsmFile("0.1.0", Metadata(name);
+    file = EsmFile(ESM_FORMAT_VERSION, Metadata(name);
                    models=Dict{String, Model}(name => model))
     return flatten(file)
 end
@@ -1594,7 +1607,7 @@ end
 Convenience: wrap a ReactionSystem in a synthetic EsmFile and flatten.
 """
 function flatten(rsys::ReactionSystem; name::String="anonymous")::FlattenedSystem
-    file = EsmFile("0.1.0", Metadata(name);
+    file = EsmFile(ESM_FORMAT_VERSION, Metadata(name);
                    reaction_systems=Dict{String, ReactionSystem}(name => rsys))
     return flatten(file)
 end
@@ -1604,7 +1617,7 @@ end
 # ========================================
 
 """
-    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version="0.5.0") -> Dict{String,Any}
+    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=ESM_FORMAT_VERSION) -> Dict{String,Any}
 
 Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
 (`Dict{String,Any}`) that can be run directly: `build_evaluator(doc)` for a 0-D /
@@ -1633,7 +1646,7 @@ fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
 """
 function flattened_to_esm(flat::FlattenedSystem;
                           name::AbstractString="Flattened",
-                          esm_version::AbstractString="0.5.0")::Dict{String,Any}
+                          esm_version::AbstractString=ESM_FORMAT_VERSION)::Dict{String,Any}
     sname = String(name)
 
     variables = Dict{String,Any}()
@@ -1641,13 +1654,7 @@ function flattened_to_esm(flat::FlattenedSystem;
     # earlier one (flatten guarantees disjoint names), so merge is unambiguous.
     for partition in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in partition
-            vv = v.expression === nothing ? v :
-                ModelVariable(v.type; default=v.default, units=v.units,
-                    default_units=v.default_units, description=v.description,
-                    expression=v.expression,
-                    shape=v.shape, location=v.location,
-                    noise_kind=v.noise_kind, correlation_group=v.correlation_group)
-            variables[k] = serialize_model_variable(vv)
+            variables[k] = serialize_model_variable(v)
         end
     end
 
@@ -1690,56 +1697,42 @@ end
     describe_coupling_entry(entry::CouplingEntry) -> String
 
 Produce a human-readable description of a coupling entry for the flattened
-system's metadata.
+system's metadata. One method per concrete coupling type; the
+`CouplingEntry` fallback covers any future/unknown subtype.
 """
-function describe_coupling_entry(entry::CouplingEntry)::String
-    if entry isa CouplingOperatorCompose
-        systems_str = join(entry.systems, " + ")
-        desc = "operator_compose($(systems_str))"
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    elseif entry isa CouplingCouple
-        systems_str = join(entry.systems, " <-> ")
-        desc = "couple($(systems_str))"
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    elseif entry isa CouplingVariableMap
-        transform_str = entry.transform isa EarthSciSerialization.Expr ?
-            "expression" : entry.transform
-        desc = "variable_map($(entry.from) -> $(entry.to), transform=$(transform_str))"
-        if entry.factor !== nothing
-            desc *= " [factor=$(entry.factor)]"
-        end
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    elseif entry isa CouplingOperatorApply
-        desc = "operator_apply($(entry.operator))"
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    elseif entry isa CouplingCallback
-        desc = "callback($(entry.callback_id))"
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    elseif entry isa CouplingEvent
-        desc = "event($(entry.event_type))"
-        if entry.description !== nothing
-            desc *= " -- $(entry.description)"
-        end
-        return desc
-    else
-        return "unknown_coupling($(typeof(entry)))"
+describe_coupling_entry(entry::CouplingEntry)::String =
+    "unknown_coupling($(typeof(entry)))"
+
+# Append the optional free-text description shared by every coupling type.
+_with_coupling_description(desc::String, description) =
+    description === nothing ? desc : desc * " -- $(description)"
+
+describe_coupling_entry(entry::CouplingOperatorCompose)::String =
+    _with_coupling_description(
+        "operator_compose($(join(entry.systems, " + ")))", entry.description)
+
+describe_coupling_entry(entry::CouplingCouple)::String =
+    _with_coupling_description(
+        "couple($(join(entry.systems, " <-> ")))", entry.description)
+
+function describe_coupling_entry(entry::CouplingVariableMap)::String
+    transform_str = entry.transform isa Expr ?
+        "expression" : entry.transform
+    desc = "variable_map($(entry.from) -> $(entry.to), transform=$(transform_str))"
+    if entry.factor !== nothing
+        desc *= " [factor=$(entry.factor)]"
     end
+    return _with_coupling_description(desc, entry.description)
 end
+
+describe_coupling_entry(entry::CouplingOperatorApply)::String =
+    _with_coupling_description("operator_apply($(entry.operator))", entry.description)
+
+describe_coupling_entry(entry::CouplingCallback)::String =
+    _with_coupling_description("callback($(entry.callback_id))", entry.description)
+
+describe_coupling_entry(entry::CouplingEvent)::String =
+    _with_coupling_description("event($(entry.event_type))", entry.description)
 
 # ========================================
 # Array-variable shape inference (gt-vt3)

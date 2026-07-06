@@ -5,6 +5,15 @@ This module implements the conversion of ReactionSystem objects to ODE-based Mod
 using standard mass action kinetics as specified in Libraries Spec Section 7.4.
 """
 
+# Fallback initial concentration / units for a species that declares no scalar
+# `default`. esm-spec §7.4 pins a species' initial value to `species.default`
+# ("Initial conditions. A species' initial value is its scalar
+# `species.default`") but specifies NO fallback value or unit system when it is
+# absent — `1.0` in `"mol/L"` is this library's historical convention, kept for
+# backward compatibility of `derive_odes` output.
+const DEFAULT_SPECIES_CONCENTRATION = 1.0
+const DEFAULT_SPECIES_UNITS = "mol/L"
+
 """
     derive_odes(rxn_sys::ReactionSystem) -> Model
 
@@ -50,10 +59,10 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
             StateVariable,
             # Honor the species' declared scalar `default` (matching the main
             # flatten path in flatten.jl `_collect_reaction_system!`); fall back
-            # to 1.0 mol/L only when no default is declared.
-            default=something(species.default, 1.0),
+            # to the library convention only when no default is declared.
+            default=something(species.default, DEFAULT_SPECIES_CONCENTRATION),
             description="Concentration of species $(species.name)",
-            units="mol/L"
+            units=DEFAULT_SPECIES_UNITS
         )
     end
 
@@ -175,7 +184,7 @@ coefficient unchanged.
 # Returns: k
 ```
 """
-function mass_action_rate(reaction::Reaction, species::Vector{Species})::EarthSciSerialization.Expr
+function mass_action_rate(reaction::Reaction, species::Vector{Species})::Expr
     rate_expr = reaction.rate
 
     # Source reactions (no substrates): the rate expression IS the full rate.
@@ -184,7 +193,7 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::EarthSc
     end
 
     # Always multiply the rate coefficient by ∏[substrate]^stoich (spec §7.4).
-    mass_action_terms = EarthSciSerialization.Expr[rate_expr]
+    mass_action_terms = Expr[rate_expr]
     for entry in reaction.substrates
         species_expr = VarExpr(entry.species)
         if entry.stoichiometry == 1
@@ -194,7 +203,7 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::EarthSc
                 IntExpr(Int64(entry.stoichiometry)) :
                 NumExpr(entry.stoichiometry)
             push!(mass_action_terms, OpExpr("^",
-                EarthSciSerialization.Expr[species_expr, exponent_expr]))
+                Expr[species_expr, exponent_expr]))
         end
     end
 

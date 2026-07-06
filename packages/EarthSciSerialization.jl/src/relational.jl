@@ -231,6 +231,9 @@ cell table on the shared ID to recover the *edges of cell i*. Join keys must be
 non-float (rule 1).
 """
 function equijoin(left, right; on_left=identity, on_right=identity)
+    # Dict{Any,...}/abstract containers are acceptable here: this module is
+    # build-time-only (one-shot setup, off the per-timestep hot path), where
+    # generality over key/row types beats container specialization.
     buckets = Dict{Any,Vector{Any}}()
     for r in right
         k = _assert_key(on_right(r))

@@ -154,3 +154,21 @@ end
         @test du[vmap["psi[$i]"]] ≈ expect
     end
 end
+
+@testset "shape promotion errors use the typed flatten taxonomy" begin
+    # Conflicting operand shapes -> DimensionPromotionError (was ArgumentError).
+    d = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"X"),
+      "index_sets"=>Dict{String,Any}(
+        "c"=>Dict{String,Any}("kind"=>"interval","size"=>3),
+        "d"=>Dict{String,Any}("kind"=>"interval","size"=>4)),
+      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
+        "variables"=>Dict{String,Any}(
+          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
+          "g"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["d"]),
+          "a"=>Dict{String,Any}("type"=>"observed","expression"=>op("+","f","g")),
+          "s"=>Dict{String,Any}("type"=>"state")),
+        "equations"=>Any[Dict{String,Any}(
+          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>"a")])))
+    flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
+    @test_throws E.DimensionPromotionError E.promote_downstream_shapes(flat)
+end

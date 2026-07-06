@@ -3,10 +3,11 @@ using EarthSciSerialization: Expr as ESMExpr
 using Test
 import ModelingToolkit
 
-# Helpers for building expressions inside tests.
+include("testutils.jl")  # _op builder + TESTUTILS_REPO_ROOT
+
+# Helpers for building expressions inside tests (on top of testutils.jl's _op).
 const _N = EarthSciSerialization.NumExpr
 const _V = EarthSciSerialization.VarExpr
-_op(op, args...; kwargs...) = EarthSciSerialization.OpExpr(op, EarthSciSerialization.Expr[args...]; kwargs...)
 _deriv(name) = _op("D", _V(name); wrt="t")
 
 # Locate a flattened equation whose LHS dependent variable matches `dep`.
@@ -513,32 +514,92 @@ end
         @test "callback:cb1" in flat.metadata.opaque_coupling_refs
     end
 
+    @testset "couple: unparsed dict connector equation goes to opaque refs" begin
+        v1 = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
+        m1 = Model(v1, Equation[Equation(_deriv("x"), _V("x"))])
+        v2 = Dict{String, ModelVariable}("y" => ModelVariable(StateVariable))
+        m2 = Model(v2, Equation[Equation(_deriv("y"), _V("y"))])
+        # Dict-shaped connector equation whose lhs/rhs are NOT parsed Exprs.
+        connector = Dict{String, Any}("equations" =>
+            Any[Dict{String, Any}("lhs" => "A.x", "rhs" => "B.y")])
+        coupling = CouplingEntry[CouplingCouple(["A", "B"], connector)]
+        file = EarthSciSerialization.EsmFile("0.8.0",
+            EarthSciSerialization.Metadata("t8b"),
+            models=Dict("A" => m1, "B" => m2),
+            coupling=coupling)
+        flat = flatten(file)
+        # No bogus `__coupling_placeholder__ = 0.0` equation is fabricated...
+        @test !any(eq -> eq.lhs isa EarthSciSerialization.VarExpr &&
+                         eq.lhs.name == "__coupling_placeholder__", flat.equations)
+        # ...the skipped entry is visible on the opaque-coupling channel instead.
+        @test any(r -> occursin("unparsed_connector_equation", r),
+                  flat.metadata.opaque_coupling_refs)
+    end
+
+    @testset "placeholder substitution preserves non-args fields (regression)" begin
+        E = EarthSciSerialization
+        # A `_var` template whose RHS carries a table_lookup (table/table_axes)
+        # and an aggregate with filter/bounds — fields the old hand-listed
+        # rebuild dropped and never recursed into.
+        tl = E.OpExpr("table_lookup", E.Expr[]; table="fuel", output=1,
+            table_axes=Dict{String,E.Expr}("code" => _V("_var")))
+        agg = E.OpExpr("aggregate", E.Expr[];
+            output_idx=Any[],
+            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
+            expr_body=_op("*", _V("_var"), _V("w")),
+            filter=_op(">", _V("_var"), _N(0.0)),
+            lower=_V("_var"), upper=_N(1.0))
+        tmpl = _op("+", tl, agg)
+        out = E._substitute_placeholder(tmpl, "_var", "Chem.O3")
+        otl, oagg = out.args[1], out.args[2]
+        # table/table_axes survive AND the axis input was substituted.
+        @test otl.table == "fuel" && otl.output == 1
+        @test otl.table_axes["code"] == _V("Chem.O3")
+        # filter / bounds / body recursed; ranges preserved.
+        @test _uses_var(oagg.expr_body, "Chem.O3")
+        @test _uses_var(oagg.filter, "Chem.O3")
+        @test oagg.lower == _V("Chem.O3")
+        @test oagg.ranges["i"] isa E.IndexSetRef
+    end
+
+    @testset "flatten preserves DiscreteEvent.functional_affect (regression)" begin
+        E = EarthSciSerialization
+        fa = Dict{String,Any}("handler" => "reset", "args" => Any["x"])
+        ev = DiscreteEvent(
+            PeriodicTrigger(1.0),
+            [FunctionalAffect("x", _N(0.0))];
+            description="periodic reset", functional_affect=fa)
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable, default=1.0))
+        model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events=[ev])
+        flat = flatten(model; name="M")
+        @test length(flat.discrete_events) == 1
+        @test flat.discrete_events[1].functional_affect == fa
+        @test flat.discrete_events[1].description == "periodic reset"
+    end
+
+    @testset "current-format version defaults (ESM_FORMAT_VERSION)" begin
+        E = EarthSciSerialization
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable, default=1.0))
+        model = Model(vars, [Equation(_deriv("x"), _V("x"))])
+        flat = flatten(model; name="V")
+        @test flat isa FlattenedSystem
+        doc = E.flattened_to_esm(flat)
+        @test doc["esm"] == E.ESM_FORMAT_VERSION
+        @test E.ESM_FORMAT_VERSION == "0.8.0"
+    end
+
     @testset "Flatten valid fixtures smoke test" begin
-        valid_fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
-        if isdir(valid_fixtures_dir)
-            valid_files = filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
-            for filename in valid_files[1:min(5, length(valid_files))]
-                filepath = joinpath(valid_fixtures_dir, filename)
-                @testset "Flatten fixture: $filename" begin
-                    try
-                        esm_data = EarthSciSerialization.load(filepath)
-                        flat = flatten(esm_data)
-                        @test flat isa FlattenedSystem
-                    catch e
-                        if e isa EarthSciSerialization.SchemaValidationError ||
-                           e isa EarthSciSerialization.ParseError ||
-                           e isa ConflictingDerivativeError ||
-                           e isa UnmappedDomainError ||
-                           e isa UnsupportedMappingError ||
-                           e isa DimensionPromotionError ||
-                           e isa DomainUnitMismatchError
-                            @test_broken false
-                        else
-                            @warn "Flatten test failed for $filename: $e"
-                            @test false
-                        end
-                    end
-                end
+        # Every shared valid fixture must load and flatten cleanly (verified:
+        # none currently throws, so failures here are genuine regressions and
+        # propagate with their full stack trace).
+        valid_fixtures_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
+        @test isdir(valid_fixtures_dir)
+        for filename in filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
+            filepath = joinpath(valid_fixtures_dir, filename)
+            @testset "Flatten fixture: $filename" begin
+                esm_data = EarthSciSerialization.load(filepath)
+                flat = flatten(esm_data)
+                @test flat isa FlattenedSystem
             end
         end
     end

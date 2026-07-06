@@ -9,9 +9,18 @@
 """
     CanonicalizeError(code::String, message::String)
 
-Error raised by [`canonicalize`](@ref). The `code` field carries one of the
-RFC §5.4.6 / §5.4.7 stable error codes (`E_CANONICAL_NONFINITE`,
-`E_CANONICAL_DIVBY_ZERO`).
+Error raised by [`canonicalize`](@ref) / [`canonical_json`](@ref). The `code`
+field carries a stable error code:
+
+- `E_CANONICAL_NONFINITE`, `E_CANONICAL_DIVBY_ZERO` — the RFC §5.4.6 / §5.4.7
+  cross-language codes.
+- `E_CANONICAL_UNSUPPORTED_FIELD` — Julia-local: the node carries an
+  expression field outside the RFC-pinned emissible set (`op`/`args`/`wrt`/
+  `dim`/`fn`/`name`/`value`), so no faithful canonical JSON exists (see
+  [`canonical_json`](@ref)).
+- `E_CANONICAL_BAD_CONST` — Julia-local: a `const`-op `value` payload of an
+  unsupported Julia type reached the canonical emitter (internal misuse, not
+  an authoring error).
 """
 struct CanonicalizeError <: Exception
     code::String
@@ -27,6 +36,17 @@ Base.showerror(io::IO, e::CanonicalizeError) =
 Canonicalize an expression tree per discretization RFC §5.4. Returns a new
 tree; the input is not mutated. Throws [`CanonicalizeError`](@ref) for
 NaN/Inf or `0/0`.
+
+Field handling (cross-binding parity): like the TypeScript (`{...node}`),
+Python (`dataclasses.replace`), and Rust (`node.clone()`) canonicalizers,
+every `OpExpr` field is PRESERVED on the rebuilt node (via `reconstruct`),
+and canonicalization recurses into `args` only — sub-expressions carried by
+aggregate fields (`expr_body`, `filter`, `lower`/`upper`, `values`,
+`table_axes`, …) pass through verbatim, exactly as in the other bindings.
+RFC §5.4 pins rewrite rules only for the scalar arithmetic subset
+(`+ * - / neg`); all other ops are structure-preserving pass-throughs.
+Emission of such aggregate-carrying nodes is the restricted step — see
+[`canonical_json`](@ref).
 """
 function canonicalize end
 
@@ -45,13 +65,11 @@ function canonicalize(e::OpExpr)
     for (i, a) in enumerate(e.args)
         new_args[i] = canonicalize(a)
     end
-    work = OpExpr(e.op, new_args;
-                  wrt=e.wrt, dim=e.dim, output_idx=e.output_idx,
-                  expr_body=e.expr_body, reduce=e.reduce, ranges=e.ranges,
-                  regions=e.regions, values=e.values, shape=e.shape,
-                  perm=e.perm, axis=e.axis, fn=e.fn,
-                  name=e.name, value=e.value,
-                  int_var=e.int_var, lower=e.lower, upper=e.upper)
+    # `reconstruct` copies EVERY OpExpr field (semiring, table/table_axes,
+    # output, join, filter, join_gates, id, manifold, distinct, key, …) —
+    # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
+    # A hand-listed keyword subset here previously dropped ~11 fields.
+    work = reconstruct(e; args=new_args)
     if work.op == "+"
         return _canon_add(work)
     elseif work.op == "*"
@@ -252,6 +270,20 @@ Emit the canonical on-wire JSON form of an expression per RFC §5.4.6: keys
 sorted, no extraneous whitespace, shortest round-trip floats with trailing-`.0`
 disambiguation for integer-valued magnitudes, exponent-form (`1e25`, `5e-324`)
 outside `[1e-6, 1e21)`, signed zero preserved.
+
+Emissible node fields: every binding (TS/Python/Rust/Julia) serializes exactly
+`op`, `args`, `wrt`, `dim`, `fn`, `name`, `value` — the field set the
+cross-language canonical fixtures (`tests/conformance/canonical/`) pin.
+A node carrying any OTHER set field (aggregate `expr_body`/`ranges`/
+`output_idx`/`semiring`, `table`/`table_axes`/`output`, `join`/`filter`,
+geometry `id`/`manifold`, …) has NO faithful canonical JSON in this format:
+emitting only the pinned fields would make structurally-different aggregates
+byte-identical (the defect class behind the `fn` bc-node bug). Rather than
+emit ambiguous bytes — or diverge unilaterally from the other bindings by
+emitting more fields — such nodes throw
+`CanonicalizeError("E_CANONICAL_UNSUPPORTED_FIELD", …)`. The one in-package
+caller (tree-walk CSE `_cse_key`) treats any `CanonicalizeError` as "decline
+sharing", which is exactly the safe behavior.
 """
 function canonical_json(expr::Expr)::String
     return _emit_json(canonicalize(expr))
@@ -270,7 +302,28 @@ function _emit_json(e::Expr)::String
     error("cannot canonicalize value of type $(typeof(e))")
 end
 
+# OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node
+# encoding (see `canonical_json` docstring). If any is set, the node cannot be
+# emitted faithfully and `_emit_node_json` throws E_CANONICAL_UNSUPPORTED_FIELD.
+const _NON_EMISSIBLE_FIELDS = (
+    :int_var, :lower, :upper, :output_idx, :expr_body, :reduce, :semiring,
+    :ranges, :regions, :values, :shape, :perm, :axis,
+    :table, :table_axes, :output,
+    :join, :filter, :join_gates,
+    :id, :manifold, :distinct, :key,
+)
+
 function _emit_node_json(n::OpExpr)::String
+    offending = String[]
+    for f in _NON_EMISSIBLE_FIELDS
+        getfield(n, f) === nothing || push!(offending, String(f))
+    end
+    if !isempty(offending)
+        throw(CanonicalizeError("E_CANONICAL_UNSUPPORTED_FIELD",
+            "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
+            "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value); " *
+            "emitting them would be lossy and non-portable (RFC §5.4.6)"))
+    end
     entries = Tuple{String,String}[]
     push!(entries, ("op", _json_string(n.op)))
     args_str = "[" * join((_emit_json(a) for a in n.args), ",") * "]"
@@ -308,21 +361,41 @@ end
 
 # Canonical JSON for `const`-op values. Values are JSON-typed (integer,
 # Float64, AbstractString, or nested arrays thereof per esm-spec §4.2 / §9.2).
-# Floats use the same canonical-float formatter as `NumExpr`; integers emit
-# as bare digit-only tokens; arrays recurse element-wise.
+# Integers emit as bare digit-only tokens; arrays recurse element-wise.
+#
+# Floats: CONFORMANCE_SPEC §5.5.3.1 rule 1 (integral-float normalization)
+# applies — a const `value` payload is JSON DATA, not an AST literal, so its
+# number type is a property of the VALUE, not of the reader-inferred storage
+# (Julia's JSON3 can materialise the token `1` as `Float64` inside nested
+# documents, and a `[1, 2.5]` Julia literal is a `Vector{Float64}`). An
+# integral, Int64-representable float therefore emits as an integer token
+# (`1.0` → `1`, `-0.0` → `0`), byte-matching JSON3's read→write round trip and
+# the Rust/Python const-value emitters for integer-token sources. Non-integral
+# (or out-of-Int64-range) floats keep the RFC §5.4.6 canonical-float layout,
+# like every other binding's const-value emitter. RFC §5.4.6's trailing-`.0`
+# int/float disambiguation applies to AST literal NODES (IntExpr/NumExpr),
+# never to this data payload.
 function _emit_canonical_value(v)::String
     if v isa Bool
         return v ? "true" : "false"
     elseif v isa Integer
         return string(v)
     elseif v isa AbstractFloat
-        return format_canonical_float(Float64(v))
+        f = Float64(v)
+        if isfinite(f) && isinteger(f) &&
+           -9.223372036854776e18 <= f < 9.223372036854776e18
+            return string(Int64(f))
+        end
+        return format_canonical_float(f)
     elseif v isa AbstractString
         return _json_string(v)
     elseif v isa AbstractArray
         return "[" * join((_emit_canonical_value(x) for x in v), ",") * "]"
     end
-    throw(CanonicalizeError("E_CANONICAL_NONFINITE",
+    # Julia-local code: an unsupported-TYPE payload is internal misuse, not a
+    # non-finite float — reusing E_CANONICAL_NONFINITE here would corrupt the
+    # RFC §5.4.6/§5.4.7 stable-code contract for that code.
+    throw(CanonicalizeError("E_CANONICAL_BAD_CONST",
         "unsupported `const` value type: $(typeof(v))"))
 end
 
@@ -391,24 +464,17 @@ function _normalize_julia_exp(s::String)::String
 end
 
 function _expand_to_plain(f::Float64)::String
-    # Julia's @sprintf with %.17g preserves precision; then trim trailing zeros.
-    # Simpler: convert via string and special-case the rare path.
+    # Expand Julia's shortest-round-trip exponent form (e.g. "1.5e6",
+    # "1.0e-5") to plain decimal by shifting the mantissa's decimal point.
+    # This is fully deterministic; an earlier BigFloat re-parse detour was
+    # dead code (`string(::BigFloat)` always kept exponent form here) and was
+    # removed after verifying byte-identical output on the plain range.
     s = repr(f)
     if !occursin('e', lowercase(s))
         return s
     end
-    # Use BigFloat to get a clean expansion then trim.
-    b = BigFloat(s)
-    # Render without exponent — use printf format.
-    out = string(b)
-    # `string(BigFloat)` may still use scientific. Fallback: format manually.
-    if occursin('e', lowercase(out))
-        # Manual: split mantissa and exponent, shift decimal.
-        parts = split(lowercase(s), 'e')
-        mant = parts[1]
-        exp = parse(Int, parts[2])
-        out = _shift_decimal(mant, exp)
-    end
+    parts = split(lowercase(s), 'e')
+    out = _shift_decimal(parts[1], parse(Int, parts[2]))
     if occursin('.', out)
         out = rstrip(out, '0')
         out = rstrip(out, '.')

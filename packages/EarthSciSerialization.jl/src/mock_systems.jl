@@ -58,10 +58,12 @@ Fields:
 - `parameters::Vector{String}`: namespaced parameter names.
 - `observed_variables::Vector{String}`: namespaced observed-variable names.
 - `equations::Vector{String}`: string dump of the flattened PDE equations.
-- `boundary_conditions::Vector{String}`: string dump of BCs derived from
-  the domain and slice-based coupling patterns.
-- `initial_conditions::Vector{String}`: string dump of ICs from variable
+- `boundary_conditions::Vector{String}`: reserved; currently always empty
+  (the mock derives no BCs from the domain or coupling patterns).
+- `initial_conditions::Vector{String}`: string dump of ICs from state-variable
   defaults.
+- `events::Vector{String}`: string summaries of continuous/discrete events
+  (same format as `MockMTKSystem.events`).
 - `domain::Union{Domain,Nothing}`: the target domain of the flattened system.
 - `metadata::Dict{String,Any}`: provenance.
 """
@@ -74,6 +76,7 @@ struct MockPDESystem
     equations::Vector{String}
     boundary_conditions::Vector{String}
     initial_conditions::Vector{String}
+    events::Vector{String}
     domain::Union{Domain,Nothing}
     metadata::Dict{String,Any}
 end
@@ -111,15 +114,33 @@ _sym_name(name::Symbol) = name
 _sym_name(name::AbstractString) = Symbol(name)
 
 """
-    _pde_independent_vars(flat::FlattenedSystem) -> Bool
+    _has_spatial_ivs(flat::FlattenedSystem) -> Bool
 
 Return true when the flattened system has spatial independent variables
 (i.e. needs a PDESystem rather than an ODESystem). A FlattenedSystem with
 `[:t]` only is a pure ODE; anything else is a PDE.
 """
-function _pde_independent_vars(flat::FlattenedSystem)
+function _has_spatial_ivs(flat::FlattenedSystem)
     return !(length(flat.independent_variables) == 1 &&
              flat.independent_variables[1] == :t)
+end
+
+"""
+    _event_summaries(flat::FlattenedSystem) -> Vector{String}
+
+String summaries of the flattened system's continuous and discrete events.
+Shared by `MockMTKSystem` and `MockPDESystem`, which both store the result in
+their `events` struct field.
+"""
+function _event_summaries(flat::FlattenedSystem)::Vector{String}
+    events = String[]
+    for (i, ev) in enumerate(flat.continuous_events)
+        push!(events, "continuous_event_$i: $(length(ev.conditions)) condition(s)")
+    end
+    for (i, ev) in enumerate(flat.discrete_events)
+        push!(events, "discrete_event_$i: trigger=$(typeof(ev.trigger))")
+    end
+    return events
 end
 
 """
@@ -172,7 +193,7 @@ independent variables (i.e. is actually a PDE).
 """
 function MockMTKSystem(flat::FlattenedSystem;
                        name::Union{Symbol,AbstractString}=:anonymous)
-    if _pde_independent_vars(flat)
+    if _has_spatial_ivs(flat)
         throw(ArgumentError(
             "Flattened system has independent variables $(flat.independent_variables), " *
             "which indicates a PDE. Use MockPDESystem(...) instead of MockMTKSystem(...)."
@@ -184,13 +205,7 @@ function MockMTKSystem(flat::FlattenedSystem;
     obs_vars = collect(keys(flat.observed_variables))
     equations = [_equation_string(eq) for eq in flat.equations]
 
-    events = String[]
-    for (i, ev) in enumerate(flat.continuous_events)
-        push!(events, "continuous_event_$i: $(length(ev.conditions)) condition(s)")
-    end
-    for (i, ev) in enumerate(flat.discrete_events)
-        push!(events, "discrete_event_$i: trigger=$(typeof(ev.trigger))")
-    end
+    events = _event_summaries(flat)
 
     metadata = Dict{String,Any}(
         "creation_time" => string(Dates.now()),
@@ -228,7 +243,7 @@ redirect to `MockMTKSystem` when the flattened system is a pure ODE
 """
 function MockPDESystem(flat::FlattenedSystem;
                        name::Union{Symbol,AbstractString}=:anonymous)
-    if !_pde_independent_vars(flat)
+    if !_has_spatial_ivs(flat)
         throw(ArgumentError(
             "Flattened system has independent variables [t] only — this is a " *
             "pure ODE system. Use MockMTKSystem(...) instead of MockPDESystem(...)."
@@ -240,36 +255,33 @@ function MockPDESystem(flat::FlattenedSystem;
     obs_vars = collect(keys(flat.observed_variables))
     equations = [_equation_string(eq) for eq in flat.equations]
 
+    # `boundary_conditions` is reserved: the mock derives no BCs (see the
+    # struct docstring), so it is always empty.
     bcs = String[]
+    # Initial conditions from state-variable defaults. These come from the
+    # variables themselves, so they are emitted whether or not the flattened
+    # system carries an explicit `domain` (the previous `domain !== nothing`
+    # gate silently dropped them for domain-less spatial systems, whose
+    # spatial axes come from operator `dim`s alone).
     ics = String[]
-    if flat.domain !== nothing
-        # Initial conditions from state-variable defaults
-        for (vname, mvar) in flat.state_variables
-            if mvar.default !== nothing
-                push!(ics, "$vname(t=0) = $(mvar.default)")
-            end
+    for (vname, mvar) in flat.state_variables
+        if mvar.default !== nothing
+            push!(ics, "$vname(t=0) = $(mvar.default)")
         end
     end
 
-    events = String[]
-    for (i, ev) in enumerate(flat.continuous_events)
-        push!(events, "continuous_event_$i: $(length(ev.conditions)) condition(s)")
-    end
-    for (i, ev) in enumerate(flat.discrete_events)
-        push!(events, "discrete_event_$i: trigger=$(typeof(ev.trigger))")
-    end
+    events = _event_summaries(flat)
 
     metadata = Dict{String,Any}(
         "creation_time" => string(Dates.now()),
         "source_systems" => flat.metadata.source_systems,
         "coupling_rules_applied" => flat.metadata.coupling_rules_applied,
-        "events" => events,
         "mock_system" => true,
     )
 
     return MockPDESystem(_sym_name(name), flat.independent_variables,
                          state_vars, params, obs_vars,
-                         equations, bcs, ics, flat.domain, metadata)
+                         equations, bcs, ics, events, flat.domain, metadata)
 end
 
 """
@@ -298,20 +310,18 @@ function MockCatalystSystem(rsys::ReactionSystem;
     species = [sp.name for sp in rsys.species]
     params = [p.name for p in rsys.parameters]
 
+    # Render one side of a reaction from the ORDERED StoichiometryEntry vector
+    # (`getfield` bypasses the backward-compat `getproperty` that converts
+    # :reactants/:products into an unordered Dict — Dict iteration order made
+    # the rendered string nondeterministic).
+    side_str(entries) = (entries === nothing || isempty(entries)) ? "∅" :
+        join([e.stoichiometry > 1 ? "$(e.stoichiometry) $(e.species)" : e.species
+              for e in entries], " + ")
+
     reactions = String[]
     for rxn in rsys.reactions
-        reactant_str = if isempty(rxn.reactants)
-            "∅"
-        else
-            join([stoich > 1 ? "$stoich $spec" : spec
-                  for (spec, stoich) in rxn.reactants], " + ")
-        end
-        product_str = if isempty(rxn.products)
-            "∅"
-        else
-            join([stoich > 1 ? "$stoich $spec" : spec
-                  for (spec, stoich) in rxn.products], " + ")
-        end
+        reactant_str = side_str(getfield(rxn, :substrates))
+        product_str = side_str(getfield(rxn, :products))
         rate_str = _expr_to_string(rxn.rate)
         arrow = rxn.reversible ? " ⇌ " : " → "
         push!(reactions, "$reactant_str$arrow$product_str, rate: $rate_str")

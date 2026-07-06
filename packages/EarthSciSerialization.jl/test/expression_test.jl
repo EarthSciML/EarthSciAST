@@ -301,4 +301,81 @@ using JSON3
         partial_bindings = Dict("x" => 2.0)  # missing "y"
         @test_throws UnboundVariableError EarthSciSerialization.evaluate_expr(expr, partial_bindings)
     end
+
+    @testset "shared traversal covers nested aggregate fields (child_exprs)" begin
+        E = EarthSciSerialization
+        # aggregate whose body/filter/bounds/table-axes/key carry variables
+        # invisible to an args-only traversal.
+        agg = OpExpr("aggregate", E.Expr[];
+            output_idx=Any["i"],
+            ranges=Dict{String,Any}(
+                "i" => E.IndexSetRef("cells"),
+                "j" => Any[IntExpr(1), VarExpr("n_upper")]),
+            expr_body=OpExpr("*", E.Expr[
+                OpExpr("index", E.Expr[VarExpr("A"), VarExpr("i")]),
+                VarExpr("w")]),
+            filter=OpExpr(">", E.Expr[VarExpr("thresh"), NumExpr(0.0)]),
+            key=VarExpr("keyvar"))
+        outer = OpExpr("+", E.Expr[VarExpr("base"), agg])
+
+        @testset "free_variables sees nested bodies, subtracts binders" begin
+            fv = free_variables(outer)
+            @test "A" in fv && "w" in fv && "thresh" in fv
+            @test "base" in fv
+            @test "n_upper" in fv          # expression-valued dense range bound
+            @test "keyvar" in fv           # value-invention key expression
+            @test !("i" in fv)             # loop index bound by the aggregate
+            @test !("j" in fv)
+        end
+
+        @testset "contains sees nested bodies" begin
+            @test EarthSciSerialization.contains(outer, "A")
+            @test EarthSciSerialization.contains(outer, "w")
+            @test EarthSciSerialization.contains(outer, "thresh")
+            @test EarthSciSerialization.contains(outer, "n_upper")
+            @test EarthSciSerialization.contains(outer, "keyvar")
+            @test !EarthSciSerialization.contains(outer, "zzz")
+            # containment (not free-ness): binder symbols still "appear".
+            @test EarthSciSerialization.contains(outer, "i")
+            # contains is now Base.contains — no shadowing function.
+            @test EarthSciSerialization.contains === Base.contains
+            @test Base.contains(agg, "A")
+        end
+
+        @testset "substitute rewrites key and range-bound expressions" begin
+            bindings = Dict{String,E.Expr}(
+                "w" => NumExpr(2.0), "n_upper" => IntExpr(10),
+                "keyvar" => VarExpr("keyvar2"))
+            r = substitute(agg, bindings)
+            @test r.expr_body.args[2] == NumExpr(2.0)
+            @test r.ranges["j"][2] == IntExpr(10)
+            @test r.key == VarExpr("keyvar2")
+            # untouched fields preserved (reconstruct-backed rewrite)
+            @test r.output_idx == Any["i"]
+            @test r.ranges["i"] isa E.IndexSetRef
+        end
+
+        @testset "integral int_var is a binder for free_variables" begin
+            integ = OpExpr("integrate", E.Expr[];
+                int_var="s",
+                lower=NumExpr(0.0), upper=VarExpr("T"),
+                expr_body=OpExpr("*", E.Expr[VarExpr("s"), VarExpr("k")]))
+            fv = free_variables(integ)
+            @test fv == Set(["T", "k"])
+            @test EarthSciSerialization.contains(integ, "s")  # containment still true
+        end
+
+        @testset "table_lookup axis inputs traversed" begin
+            tl = OpExpr("table_lookup", E.Expr[]; table="fuel",
+                table_axes=Dict{String,E.Expr}(
+                    "code" => OpExpr("+", E.Expr[VarExpr("fm"), IntExpr(1)])))
+            @test free_variables(tl) == Set(["fm"])
+            @test EarthSciSerialization.contains(tl, "fm")
+        end
+    end
+
+    @testset "UnboundVariableError uses showerror" begin
+        err = UnboundVariableError("x", "variable 'x' is unbound")
+        @test sprint(showerror, err) == "UnboundVariableError: variable 'x' is unbound"
+    end
 end

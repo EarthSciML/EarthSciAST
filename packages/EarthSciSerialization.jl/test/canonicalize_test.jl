@@ -95,6 +95,95 @@ const ESM_Expr = EarthSciSerialization.Expr
         @test_throws CanonicalizeError canonicalize(op("/", Any[0, 0]))
     end
 
+    @testset "canonicalize preserves ALL OpExpr fields (reconstruct-backed)" begin
+        E = EarthSciSerialization
+        agg = OpExpr("aggregate", ESM_Expr[];
+            semiring="sum_product", output_idx=Any[],
+            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
+            expr_body=OpExpr("*", ESM_Expr[VarExpr("A"), VarExpr("F")]),
+            join=Any[[("a", "b")]],
+            filter=OpExpr(">", ESM_Expr[VarExpr("A"), NumExpr(0.0)]),
+            id="prod", manifold="planar", distinct=true, key=VarExpr("k"),
+            table="tbl", table_axes=Dict{String,ESM_Expr}("code" => VarExpr("fm")),
+            output=2)
+        c = canonicalize(agg)
+        # Previously ~11 of these were silently dropped by a hand-listed rebuild.
+        @test c.semiring == "sum_product"
+        @test c.table == "tbl" && haskey(c.table_axes, "code") && c.output == 2
+        @test c.join == agg.join && c.filter !== nothing
+        @test c.id == "prod" && c.manifold == "planar"
+        @test c.distinct === true && c.key == VarExpr("k")
+        @test c.expr_body !== nothing && c.ranges !== nothing
+    end
+
+    @testset "canonical_json refuses out-of-encoding nodes (no ambiguous bytes)" begin
+        E = EarthSciSerialization
+        mkagg(body) = OpExpr("aggregate", ESM_Expr[];
+            output_idx=Any[],
+            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
+            expr_body=body)
+        a1 = mkagg(VarExpr("x"))
+        a2 = mkagg(VarExpr("y"))
+        # Regression: with only op/args emitted, a1 and a2 (differing only in
+        # expr_body) produced byte-identical canonical JSON — same defect class
+        # as the fixed `fn` bc-node bug. Now both throw the typed coded error.
+        for a in (a1, a2)
+            err = try
+                canonical_json(a)
+                nothing
+            catch e
+                e
+            end
+            @test err isa CanonicalizeError
+            @test err.code == "E_CANONICAL_UNSUPPORTED_FIELD"
+        end
+        # ... and the same when such a node is nested inside emissible args.
+        err = try
+            canonical_json(OpExpr("sin", ESM_Expr[a1]))
+            nothing
+        catch e
+            e
+        end
+        @test err isa CanonicalizeError
+        @test err.code == "E_CANONICAL_UNSUPPORTED_FIELD"
+
+        # Emissible field set is untouched: wrt/dim/fn/name/value still emit.
+        d = OpExpr("D", ESM_Expr[VarExpr("u")]; wrt="t")
+        @test canonical_json(d) == "{\"args\":[\"u\"],\"op\":\"D\",\"wrt\":\"t\"}"
+        bc = OpExpr("bc", ESM_Expr[VarExpr("u")]; fn="dirichlet", dim="x")
+        @test occursin("\"fn\":\"dirichlet\"", canonical_json(bc))
+    end
+
+    @testset "E_CANONICAL_BAD_CONST for unsupported const value types" begin
+        n = OpExpr("const", EarthSciSerialization.Expr[]; value=Dict("a" => 1))
+        err = try
+            canonical_json(n)
+            nothing
+        catch e
+            e
+        end
+        @test err isa CanonicalizeError
+        @test err.code == "E_CANONICAL_BAD_CONST"
+        # supported payloads still emit canonically
+        okv = OpExpr("const", EarthSciSerialization.Expr[]; value=Any[1, 2.5])
+        @test canonical_json(okv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
+    end
+
+    @testset "const value integral-float narrowing (CONFORMANCE_SPEC §5.5.3.1)" begin
+        # A const `value` payload is DATA: number type is by VALUE, not by
+        # Julia storage. `[1, 2.5]` is a Vector{Float64} — the integral 1.0
+        # must still emit as the integer token `1` (mirroring JSON3's numeric
+        # narrowing and the Rust/Python emitters for integer-token sources).
+        fv = OpExpr("const", EarthSciSerialization.Expr[]; value=[1, 2.5])
+        @test canonical_json(fv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
+        # -0.0 narrows to 0 (JSON3.read("-0.0") == Int64 0); out-of-Int64-range
+        # integral floats keep the RFC float layout; AST NumExpr literals keep
+        # the trailing-.0 disambiguation (§5.4.6) — narrowing is const-data-only.
+        edge = OpExpr("const", EarthSciSerialization.Expr[]; value=Any[-0.0, 1.0e21])
+        @test canonical_json(edge) == "{\"args\":[],\"op\":\"const\",\"value\":[0,1e21]}"
+        @test canonical_json(NumExpr(1.0)) == "1.0"
+    end
+
     @testset "cross-binding conformance fixtures" begin
         # tests/conformance/canonical/*.json — same fixtures every binding runs.
         using JSON3
