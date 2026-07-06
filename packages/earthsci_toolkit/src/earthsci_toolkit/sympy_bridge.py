@@ -3,14 +3,17 @@
 Bridges ESM AST expressions to SymPy and compiles them to NumPy callables
 via :func:`sympy.lambdify`. This module owns:
 
-* :class:`_ess_numeric_abs` — the ``sp.Abs`` workaround that keeps
-  lambdified RHS expressions in pure-real form (esm-5gk).
-* :func:`_expr_to_sympy` — ESM ``Expr`` → SymPy expression.
 * :func:`_flat_to_sympy_rhs` / :func:`_observed_to_sympy_value_exprs` —
   build per-state / per-observed SymPy expressions from a
   :class:`FlattenedSystem` with scalar algebraic-equation elimination.
 * :class:`_CompiledRhs` and :func:`_compile_flat_rhs` — the lambdify +
   CSE compile that dominates ``simulate()`` wall time on large mechanisms.
+
+The ESM ``Expr`` → SymPy converter itself (:func:`_expr_to_sympy`), the
+NaN-safe abs placeholder (:class:`_ess_numeric_abs`, esm-5gk), and
+:class:`SimulationError` live in :mod:`.expression` — the single shared
+converter for both the public ``to_sympy`` API and this simulation tier —
+and are re-imported here so existing ``sympy_bridge`` imports keep working.
 
 ``simulation.py`` imports from this module and handles the SciPy
 ``solve_ivp`` wiring, event handling, and array-op interpreter path.
@@ -22,77 +25,12 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import numpy as np
 import sympy as sp
 
-from .esm_types import Expr, ExprNode
+from .esm_types import ExprNode
+# _ess_numeric_abs is re-exported for existing importers (tests, simulation
+# diagnostics) even though this module only references it by name inside
+# _LAMBDIFY_MODULES.
+from .expression import SimulationError, _ess_numeric_abs, _expr_to_sympy  # noqa: F401
 from .flatten import FlattenedSystem
-from .numpy_interpreter import UnreachableSpatialOperatorError
-from .registered_functions import (
-    INTERP_CONST_ARG_POSITIONS,
-    closed_function_names,
-    evaluate_closed_function,
-    extract_const_array,
-)
-
-
-class SimulationError(Exception):
-    """Exception raised during the SymPy bridge or simulation.
-
-    Defined here (rather than in ``simulation.py``) because the bridge
-    itself raises it for malformed expressions and cyclic algebraic
-    equations. ``simulation.py`` re-exports the name to keep the public
-    ``earthsci_toolkit.simulation.SimulationError`` symbol stable.
-    """
-    pass
-
-
-class _ess_numeric_abs(sp.Function):
-    """``|x|`` with construction-time canonical rewrites disabled (esm-5gk).
-
-    SymPy's ``sp.Abs.eval`` applies decompositions like
-    ``Abs(exp(z) * w) → exp(re(z)) * Abs(w)`` and ``Abs(0.41**((log(N*T**(-8))
-    - C)**2 + 1)) → 0.41**((log|...|**2 - arg(...)**2)/log10**2 + 1)``
-    whenever the inner expression's domain cannot be proven real. Those
-    decompositions look mathematically equivalent on the positive real
-    branch but the ``log|...|**2 * arg(...)**2`` cross term in the second
-    one evaluates to ``inf * 0 = NaN`` whenever a species concentration
-    touches 0 — exactly the cse=False non-finite-derivative failure on
-    geoschem_fullchem this whole bead targets.
-
-    A subclass of :class:`sympy.Function` with a strictly numeric
-    ``.eval`` rule sidesteps the decomposition entirely:
-
-    * Symbolic argument → returns ``None`` from ``eval``, leaving an
-      opaque ``_ess_numeric_abs(arg)`` node in the tree. SymPy never
-      reasons about modulus/phase of the inner expression, so the
-      complex-domain rewrites cannot fire.
-    * Numeric argument (``Float``/``Integer``/``Rational``) → returns
-      the literal absolute value, so substitution-based evaluation
-      (e.g. tests doing ``expr.subs(x, 3.5)``) keeps working.
-
-    At lambdify time we pass ``modules=[{"_ess_numeric_abs": numpy.abs},
-    "numpy"]``, so the opaque calls resolve to ``numpy.abs`` on real
-    floats — correct for any sign of the runtime argument. This is why
-    the fix is sign-agnostic: it makes no positivity assumption about
-    state or parameters and stays correct on models whose state goes
-    negative.
-
-    Class of risk this addresses: ``sp.Abs.eval`` is the SymPy operator
-    whose canonical rewrites produced the chemistry-fatal decomposition
-    path (``Abs(exp(z)*w)``, ``Abs(b**z)`` chains). If a future SymPy
-    version adds a new rewrite-on-eval to another operator
-    (``sign``, ``floor``, ``ceiling``, etc.) that emits ``re``/``im``/
-    ``arg`` on real-but-symbolically-unprovable inputs, the same
-    opacity treatment may need to be extended to that operator. Audit
-    by checking ``inspect.getsource`` of a lambdified RHS on a fresh
-    model that uses the suspected operator and grepping for ``real(``,
-    ``imag(``, ``angle(``.
-    """
-
-    @classmethod
-    def eval(cls, arg):
-        if arg.is_number and getattr(arg, "is_real", None):
-            return abs(arg)
-        return None
-
 
 # Module-mapping handed to every ``sp.lambdify`` call in this module so
 # the ``_ess_numeric_abs`` calls emitted by ``_expr_to_sympy`` resolve to
@@ -100,357 +38,36 @@ class _ess_numeric_abs(sp.Function):
 _LAMBDIFY_MODULES = [{"_ess_numeric_abs": np.abs}, "numpy"]
 
 
-def _make_fn_callable(
-    name: str,
-    total_arity: int,
-    const_args_by_position: Dict[int, list],
-) -> Callable:
-    """Build a Python callable for a single ``fn``-op call site.
+def _topo_sort(names: List[str], deps: Dict[str, List[str]], label: str) -> List[str]:
+    """Depth-first topological sort (leaves first) of ``names`` by ``deps``.
 
-    SymPy's :func:`lambdify` cannot route Python list/array literals through
-    its symbolic argument list, so the table / axis arguments to closed
-    functions like ``interp.bilinear`` cannot become :class:`sympy.Expr` nodes.
-    Instead, each ``fn``-op call site emits a unique synthetic
-    :class:`sympy.Function` placeholder over only its dynamic (state-/
-    parameter-/time-dependent) arguments; the const arrays are baked into a
-    Python closure that is registered in ``modules`` for that specific
-    placeholder. At runtime the lambdified RHS calls into this closure, which
-    reconstructs the original argument vector and dispatches through
-    :func:`registered_functions.evaluate_closed_function`.
-
-    Always returns ``float`` so the result composes with NumPy arithmetic
-    inside ``solve_ivp`` regardless of whether the registry returned an int
-    (``datetime.year``) or a float (``interp.bilinear``).
+    Detects cycles (including self-reference) and raises with the offending
+    chain so authors can fix the model; ``label`` names the equation class in
+    the diagnostic ("algebraic" / "observed").
     """
+    sorted_out: List[str] = []
+    visited: Set[str] = set()
+    in_progress: Set[str] = set()
 
-    def _fn_call(*dynamic_args):
-        all_args: List = [None] * total_arity
-        for i, v in const_args_by_position.items():
-            all_args[i] = v
-        di = 0
-        for i in range(total_arity):
-            if all_args[i] is None:
-                all_args[i] = float(dynamic_args[di])
-                di += 1
-        return float(evaluate_closed_function(name, all_args))
-
-    return _fn_call
-
-
-def _expr_to_sympy(
-    expr: Expr,
-    symbol_map: Dict[str, sp.Symbol],
-    fn_callable_map: Optional[Dict[str, Callable]] = None,
-) -> sp.Expr:
-    """
-    Convert ESM Expr to SymPy expression.
-
-    The ``'abs'`` op is converted to a placeholder
-    :class:`sympy.Function` rather than :class:`sympy.Abs` so SymPy's
-    construction-time canonical rewrites for absolute value do not fire
-    (esm-5gk). See ``_ess_numeric_abs`` for the full rationale; in
-    short, ``sp.Abs`` over a product of ``exp``/``log``/rational-power
-    composites decomposes into a complex-domain form whose
-    ``log|x|**2 * arg(x)**2`` term evaluates to ``inf*0 = NaN`` at any
-    boundary value (e.g. species concentration of 0). The placeholder
-    :class:`sympy.Function` has no ``.eval``, so the decomposition cannot
-    fire and the lambdified RHS stays in pure-real form.
-
-    The ``'fn'`` op (closed-function registry, esm-spec §9.2) and its
-    companion ``'const'`` op are handled by extracting the inline-const
-    array arguments (table / axis data) at conversion time and emitting a
-    unique :class:`sympy.Function` placeholder over only the dynamic
-    arguments. The const arrays are baked into a Python closure registered
-    in ``fn_callable_map`` keyed by the placeholder name; the caller threads
-    that map into :data:`_LAMBDIFY_MODULES` at lambdify time so the RHS can
-    call into the registry at runtime. (esm-6ka)
-
-    Args:
-        expr: Expression to convert
-        symbol_map: Mapping from variable names to SymPy symbols
-        fn_callable_map: Mutable map populated with ``synthetic_name → callable``
-            for every ``fn``-op call site encountered. Required when ``expr``
-            contains ``fn`` ops; ``None`` raises with a clear diagnostic.
-
-    Returns:
-        SymPy expression
-    """
-    if isinstance(expr, (int, float)):
-        return sp.Float(expr)
-    elif isinstance(expr, str):
-        if expr in symbol_map:
-            return symbol_map[expr]
-        else:
-            # Try to parse as a number
-            try:
-                return sp.Float(float(expr))
-            except ValueError:
-                # Create a new symbol if not found.
-                symbol_map[expr] = sp.Symbol(expr)
-                return symbol_map[expr]
-    elif isinstance(expr, ExprNode):
-        # Unlowered rewrite-target operators (esm-spec §4.2 / §9.6.8) must be
-        # rewritten to a stencil by a discretization rule before reaching the
-        # SymPy/lambdify path: a spatial/right-hand-side `D`, or the
-        # `grad`/`div`/`laplacian` sugar ops. `D` in an equation LHS is consumed
-        # structurally by `_flat_to_sympy_rhs` (never routed here), so any `D`
-        # this recursion sees is an unlowered RHS derivative. Surface the uniform
-        # `unlowered_operator` diagnostic instead of letting SymPy invent a
-        # symbolic placeholder.
-        if expr.op in ('grad', 'div', 'laplacian', 'D'):
-            raise UnreachableSpatialOperatorError(expr.op)
-
-        # Closed-function registry (esm-spec §9.2 / §9.3) and inline const
-        # values must be handled before the generic argument recursion below,
-        # because ``fn`` calls take materialized const arrays in some argument
-        # positions (table / axis data) that have no sensible SymPy
-        # representation, and the bare ``const`` op carries the value in
-        # ``expr.value`` rather than ``expr.args``. (esm-6ka)
-        if expr.op == 'const':
-            v = expr.value
-            if isinstance(v, bool):
-                # bool subclasses int — treat as numeric scalar (0 or 1) only
-                # via explicit float conversion to avoid sp.Float(True)
-                # producing a Boolean atom.
-                return sp.Float(float(v))
-            if isinstance(v, (int, float)):
-                return sp.Float(v)
-            # Inline arrays only have meaning as positional arguments to a
-            # ``fn`` op (the closed-function registry consumes them as raw
-            # Python lists). A standalone array-valued ``const`` reaching this
-            # path would mean someone tried to lambdify an array literal as
-            # an ODE RHS subterm, which is not supported.
+    def _visit(name: str, path: List[str]) -> None:
+        if name in visited:
+            return
+        if name in in_progress:
+            cycle = path[path.index(name):] + [name]
             raise SimulationError(
-                f"`const` op with non-scalar value (type "
-                f"{type(v).__name__}) cannot appear outside of a closed-"
-                f"function `fn` argument slot in the SymPy simulator path"
+                f"Cyclic {label} equations detected: "
+                + " -> ".join(cycle)
             )
-        if expr.op == 'fn':
-            if expr.name is None:
-                raise SimulationError("`fn` op requires a `name` field")
-            if expr.name not in closed_function_names():
-                raise SimulationError(
-                    f"`fn` name `{expr.name}` is not in the closed function "
-                    f"registry (esm-spec §9.2)"
-                )
-            if fn_callable_map is None:
-                raise SimulationError(
-                    "internal: `fn` op encountered without a fn_callable_map "
-                    "to register the closure into. The simulator entry point "
-                    "must construct one and thread it through "
-                    "_expr_to_sympy."
-                )
-            const_positions = INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
-            const_args_by_position: Dict[int, list] = {}
-            dynamic_sympy_args: List[sp.Expr] = []
-            for i, a in enumerate(expr.args):
-                if i in const_positions:
-                    if not (isinstance(a, ExprNode) and a.op == 'const'):
-                        raise SimulationError(
-                            f"`{expr.name}` argument {i} must be an inline "
-                            f"`const` array (esm-spec §9.2 ``interp.*``)"
-                        )
-                    const_args_by_position[i] = extract_const_array(a)
-                else:
-                    dynamic_sympy_args.append(
-                        _expr_to_sympy(a, symbol_map, fn_callable_map)
-                    )
-            synthetic_name = f"_ess_fn_{len(fn_callable_map)}"
-            fn_callable_map[synthetic_name] = _make_fn_callable(
-                expr.name, len(expr.args), const_args_by_position,
-            )
-            placeholder = sp.Function(synthetic_name)
-            return placeholder(*dynamic_sympy_args)
-        if expr.op == 'enum':
-            raise SimulationError(
-                "`enum` op encountered in SymPy bridge — `lower_enums(file)` "
-                "should have run during load (esm-spec §9.3)"
-            )
+        in_progress.add(name)
+        for dep in deps[name]:
+            _visit(dep, path + [name])
+        in_progress.discard(name)
+        visited.add(name)
+        sorted_out.append(name)
 
-        # Convert arguments recursively
-        sympy_args = [
-            _expr_to_sympy(arg, symbol_map, fn_callable_map)
-            for arg in expr.args
-        ]
-
-        # Handle different operations
-        if expr.op == '+':
-            return sum(sympy_args) if sympy_args else 0
-        elif expr.op == '-':
-            if len(sympy_args) == 1:
-                return -sympy_args[0]
-            elif len(sympy_args) == 2:
-                return sympy_args[0] - sympy_args[1]
-            else:
-                raise SimulationError(f"Invalid number of arguments for subtraction: {len(sympy_args)}")
-        elif expr.op == '*':
-            result = 1
-            for arg in sympy_args:
-                result *= arg
-            return result
-        elif expr.op == '/':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Division requires exactly 2 arguments, got {len(sympy_args)}")
-            return sympy_args[0] / sympy_args[1]
-        elif expr.op in ('^', '**', 'pow'):
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Power requires exactly 2 arguments, got {len(sympy_args)}")
-            base, exp_arg = sympy_args
-            # SymPy treats ``x**Float(2.0)`` as a non-integer rational power
-            # (``exp(2.0*log(x))``) which forces the lambdified RHS into
-            # complex-domain code paths (``re(...)``, ``im(...)``,
-            # ``angle(...)``) under cse=False — even when ``x`` is provably
-            # real. Integer-valued Float exponents from ESM JSON (``"2.0"``,
-            # ``"3.0"``) are by author intent integer powers, so canonicalize
-            # them to ``sp.Integer`` and keep sympy on its real-domain
-            # simplification path. See esm-5gk for the geoschem_fullchem
-            # non-finite-derivative failure this prevents.
-            if (
-                isinstance(exp_arg, sp.Float)
-                and exp_arg.is_finite
-                and float(exp_arg) == int(exp_arg)
-            ):
-                exp_arg = sp.Integer(int(exp_arg))
-            return base ** exp_arg
-        elif expr.op == 'exp':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"Exponential requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.exp(sympy_args[0])
-        elif expr.op == 'log':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"Logarithm requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.log(sympy_args[0])
-        elif expr.op == 'log10':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"log10 requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.log(sympy_args[0], 10)
-        elif expr.op == 'sqrt':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"sqrt requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sqrt(sympy_args[0])
-        elif expr.op == 'abs':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"abs requires exactly 1 argument, got {len(sympy_args)}")
-            # See ``_ess_numeric_abs`` definition — using ``sp.Abs`` here
-            # would trigger the construction-time decomposition that
-            # esm-5gk fixes.
-            return _ess_numeric_abs(sympy_args[0])
-        elif expr.op == 'sign':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"sign requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sign(sympy_args[0])
-        elif expr.op == 'floor':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"floor requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.floor(sympy_args[0])
-        elif expr.op == 'ceil':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"ceil requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.ceiling(sympy_args[0])
-        elif expr.op == 'min':
-            if not sympy_args:
-                raise SimulationError("min requires at least 1 argument")
-            return sp.Min(*sympy_args)
-        elif expr.op == 'max':
-            if not sympy_args:
-                raise SimulationError("max requires at least 1 argument")
-            return sp.Max(*sympy_args)
-        elif expr.op == 'sin':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"Sine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sin(sympy_args[0])
-        elif expr.op == 'cos':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"Cosine requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.cos(sympy_args[0])
-        elif expr.op == 'tan':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"tan requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.tan(sympy_args[0])
-        elif expr.op == 'asin':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"asin requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.asin(sympy_args[0])
-        elif expr.op == 'acos':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"acos requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.acos(sympy_args[0])
-        elif expr.op == 'atan':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"atan requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.atan(sympy_args[0])
-        elif expr.op == 'atan2':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"atan2 requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.atan2(sympy_args[0], sympy_args[1])
-        elif expr.op == 'sinh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"sinh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.sinh(sympy_args[0])
-        elif expr.op == 'cosh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"cosh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.cosh(sympy_args[0])
-        elif expr.op == 'tanh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"tanh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.tanh(sympy_args[0])
-        elif expr.op == 'asinh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"asinh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.asinh(sympy_args[0])
-        elif expr.op == 'acosh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"acosh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.acosh(sympy_args[0])
-        elif expr.op == 'atanh':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"atanh requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.atanh(sympy_args[0])
-        elif expr.op == 'ifelse':
-            if len(sympy_args) != 3:
-                raise SimulationError(f"ifelse requires exactly 3 arguments, got {len(sympy_args)}")
-            return sp.Piecewise((sympy_args[1], sympy_args[0]), (sympy_args[2], True))
-        elif expr.op == 'and':
-            if len(sympy_args) < 2:
-                raise SimulationError(f"and requires at least 2 arguments, got {len(sympy_args)}")
-            return sp.And(*sympy_args)
-        elif expr.op == 'or':
-            if len(sympy_args) < 2:
-                raise SimulationError(f"or requires at least 2 arguments, got {len(sympy_args)}")
-            return sp.Or(*sympy_args)
-        elif expr.op == 'not':
-            if len(sympy_args) != 1:
-                raise SimulationError(f"not requires exactly 1 argument, got {len(sympy_args)}")
-            return sp.Not(sympy_args[0])
-        elif expr.op == '>':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Greater than requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.StrictGreaterThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '<':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Less than requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.StrictLessThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '>=':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Greater than or equal requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.GreaterThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '<=':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Less than or equal requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.LessThan(sympy_args[0], sympy_args[1])
-        elif expr.op == '==':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Equality requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.Eq(sympy_args[0], sympy_args[1])
-        elif expr.op == '!=':
-            if len(sympy_args) != 2:
-                raise SimulationError(f"Inequality requires exactly 2 arguments, got {len(sympy_args)}")
-            return sp.Ne(sympy_args[0], sympy_args[1])
-        else:
-            raise SimulationError(f"Unsupported operation: {expr.op}")
-    else:
-        raise SimulationError(f"Unsupported expression type: {type(expr)}")
+    for n in names:
+        _visit(n, [])
+    return sorted_out
 
 
 def _flat_to_sympy_rhs(
@@ -607,28 +224,7 @@ def _flat_to_sympy_rhs(
         free = getattr(alg_rhs[n], "free_symbols", set()) or set()
         alg_deps[n] = [str(s) for s in free if str(s) in alg_set]
 
-    sorted_alg: List[str] = []
-    visited: Set[str] = set()
-    in_progress: Set[str] = set()
-
-    def _topo_visit(name: str, path: List[str]) -> None:
-        if name in visited:
-            return
-        if name in in_progress:
-            cycle = path[path.index(name):] + [name]
-            raise SimulationError(
-                "Cyclic algebraic equations detected: "
-                + " -> ".join(cycle)
-            )
-        in_progress.add(name)
-        for dep in alg_deps[name]:
-            _topo_visit(dep, path + [name])
-        in_progress.discard(name)
-        visited.add(name)
-        sorted_alg.append(name)
-
-    for n in algebraic_state_names:
-        _topo_visit(n, [])
+    sorted_alg = _topo_sort(algebraic_state_names, alg_deps, "algebraic")
 
     # Eager alg-into-alg and alg-into-diff substitutions are intentionally
     # omitted.  For models with many Piecewise algebraic bodies (e.g.
@@ -730,28 +326,7 @@ def _observed_to_sympy_value_exprs(
         free = getattr(obs_rhs[n], "free_symbols", set()) or set()
         obs_deps[n] = [str(s) for s in free if str(s) in obs_set]
 
-    sorted_obs: List[str] = []
-    obs_visited: Set[str] = set()
-    obs_in_progress: Set[str] = set()
-
-    def _obs_topo_visit(name: str, path: List[str]) -> None:
-        if name in obs_visited:
-            return
-        if name in obs_in_progress:
-            cycle = path[path.index(name):] + [name]
-            raise SimulationError(
-                "Cyclic observed equations detected: "
-                + " -> ".join(cycle)
-            )
-        obs_in_progress.add(name)
-        for dep in obs_deps[name]:
-            _obs_topo_visit(dep, path + [name])
-        obs_in_progress.discard(name)
-        obs_visited.add(name)
-        sorted_obs.append(name)
-
-    for n in observed_with_eq:
-        _obs_topo_visit(n, [])
+    sorted_obs = _topo_sort(observed_with_eq, obs_deps, "observed")
 
     for n in sorted_obs:
         # Fold earlier observed bodies into later ones so each obs_rhs[n]

@@ -3,11 +3,12 @@ Expression substitution and variable replacement functions.
 """
 
 from dataclasses import replace
-from typing import Dict, Union, List
+from typing import Dict, List
 from .esm_types import (
-    Expr, ExprNode, Model, ReactionSystem, ModelVariable, Equation,
-    AffectEquation, Parameter, Reaction, EsmFile, CouplingType, OperatorComposeCoupling
+    Expr, ExprNode, Model, Equation,
+    EsmFile, CouplingType, OperatorComposeCoupling
 )
+from .expr_walk import any_child, map_children
 
 
 def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
@@ -30,55 +31,36 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
         # Numbers are unchanged
         return expr
     elif isinstance(expr, ExprNode):
-        # Recursively substitute in all arguments
-        # ``substitute(None, ...)`` returns ``None``, so no per-field None guard
-        # is needed; only ``values`` needs one because it is iterated.
-        substituted_args = [substitute(arg, bindings) for arg in expr.args]
-        substituted_body = substitute(expr.expr, bindings)
-        substituted_values = (
-            [substitute(v, bindings) for v in expr.values]
-            if expr.values is not None else None
-        )
-        substituted_lower = substitute(expr.lower, bindings)
-        substituted_upper = substitute(expr.upper, bindings)
-        # Aggregate (arrayop) carries semiring/join/filter/distinct/key beside
-        # output_idx/reduce/ranges; preserve all of them so a substituted
-        # aggregate keeps its full semantics (RFC §5.1/§5.3/§5.5). ``filter``
-        # and ``key`` are nested Expressions and must themselves be substituted.
-        substituted_filter = substitute(expr.filter, bindings)
-        substituted_key = substitute(expr.key, bindings)
-        # Use ``replace`` so closed-function / lookup metadata (``name``,
-        # ``value``, ``id``, ``manifold``, ``handler_id``, ``table``,
-        # ``table_axes``, ``output``) is carried verbatim. The previous explicit
-        # field list silently dropped them, so a ``const`` table substituted
-        # through a ``param_to_var`` coupling lost its ``value`` and the
-        # discretized document failed schema validation with an empty
-        # ``{"op": "const", "args": []}`` node.
-        return replace(
-            expr,
-            args=substituted_args,
-            expr=substituted_body,
-            filter=substituted_filter,
-            key=substituted_key,
-            values=substituted_values,
-            lower=substituted_lower,
-            upper=substituted_upper,
-        )
+        # Recursively substitute in every child expression via the canonical
+        # walker: ``args``, aggregate body/``filter``/``key``, integral
+        # ``lower``/``upper``, ``makearray`` values, and ``table_lookup`` axes
+        # (RFC §5.1/§5.3/§5.5). ``map_children`` rebuilds with ``replace`` so
+        # closed-function / lookup metadata (``name``, ``value``, ``id``,
+        # ``manifold``, ``handler_id``, ``table``, ``output``) is carried
+        # verbatim. A previous explicit field list silently dropped them, so a
+        # ``const`` table substituted through a ``param_to_var`` coupling lost
+        # its ``value`` and the discretized document failed schema validation
+        # with an empty ``{"op": "const", "args": []}`` node.
+        return map_children(expr, lambda child: substitute(child, bindings))
     elif isinstance(expr, dict):
-        # Handle dict-form expression nodes (e.g. {"op": "+", "args": ["x", "y"]})
-        if "op" in expr and "args" in expr:
-            substituted_args = [substitute(arg, bindings) for arg in expr["args"]]
-            result = {"op": expr["op"], "args": substituted_args}
-            if "wrt" in expr:
-                result["wrt"] = expr["wrt"]
-            if "dim" in expr:
-                result["dim"] = expr["dim"]
-            if "var" in expr:
-                result["var"] = expr["var"]
-            if "lower" in expr:
-                result["lower"] = substitute(expr["lower"], bindings)
-            if "upper" in expr:
-                result["upper"] = substitute(expr["upper"], bindings)
+        # Handle dict-form expression nodes (e.g. {"op": "+", "args": ["x", "y"]}).
+        # Copy ALL keys verbatim — hand-listing keys silently dropped
+        # expr/values/filter/key/name/value/... — recursing only into the
+        # expression-bearing keys (the dict-form mirror of expr_walk's
+        # canonical child set; ``axes`` is table_lookup's per-axis input map).
+        if "op" in expr:
+            result = dict(expr)
+            for k in ("expr", "filter", "key", "lower", "upper"):
+                if k in result:
+                    result[k] = substitute(result[k], bindings)
+            for k in ("args", "values"):
+                if k in result and isinstance(result[k], list):
+                    result[k] = [substitute(v, bindings) for v in result[k]]
+            if "axes" in result and isinstance(result["axes"], dict):
+                result["axes"] = {
+                    ak: substitute(av, bindings)
+                    for ak, av in result["axes"].items()
+                }
             return result
         # For other dicts, return unchanged
         return expr
@@ -110,35 +92,28 @@ def substitute_in_model(model, bindings: Dict[str, Expr]):
         return result
 
     # Typed Model object
-    # Substitute in model variables
-    new_variables = {}
-    for name, var in model.variables.items():
-        new_expression = None
-        if var.expression is not None:
-            new_expression = substitute(var.expression, bindings)
+    # Substitute in model variables. ``replace`` keeps every other field
+    # (shape, default_units, location, noise_kind, ...) — the previous
+    # hand-listed ModelVariable(...) rebuild silently dropped them.
+    new_variables = {
+        name: replace(var, expression=substitute(var.expression, bindings))
+        for name, var in model.variables.items()
+    }
 
-        # Create new variable with substituted expression
-        new_var = ModelVariable(
-            type=var.type,
-            units=var.units,
-            default=var.default,
-            description=var.description,
-            expression=new_expression
-        )
-        new_variables[name] = new_var
+    # Substitute in equations (``replace`` preserves _comment).
+    new_equations = [
+        replace(eq, lhs=substitute(eq.lhs, bindings), rhs=substitute(eq.rhs, bindings))
+        for eq in model.equations
+    ]
 
-    # Substitute in equations
-    new_equations = []
-    for eq in model.equations:
-        new_lhs = substitute(eq.lhs, bindings)
-        new_rhs = substitute(eq.rhs, bindings)
-        new_equations.append(Equation(lhs=new_lhs, rhs=new_rhs))
-
-    return Model(
-        name=model.name,
+    # ``replace`` carries subsystems, tests, examples, initialization_equations,
+    # guesses, system_kind, continuous_events/discrete_events (and any future
+    # Model field) — the previous hand-listed Model(...) rebuild dropped them.
+    return replace(
+        model,
         variables=new_variables,
         equations=new_equations,
-        metadata=model.metadata.copy()  # Shallow copy metadata
+        metadata=model.metadata.copy(),  # Shallow copy metadata
     )
 
 
@@ -170,22 +145,15 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
         return result
 
     # Typed ReactionSystem object
-    # Substitute in parameters
+    # Substitute in parameters. ``replace`` keeps default_units (and any
+    # future Parameter field) — the previous hand-listed rebuild dropped it.
     new_parameters = []
     for param in system.parameters:
         new_value = param.value
         if not isinstance(param.value, (int, float)):
             # Parameter value is an expression
             new_value = substitute(param.value, bindings)
-
-        new_param = Parameter(
-            name=param.name,
-            value=new_value,
-            units=param.units,
-            description=param.description,
-            uncertainty=param.uncertainty
-        )
-        new_parameters.append(new_param)
+        new_parameters.append(replace(param, value=new_value))
 
     # Substitute in reactions
     new_reactions = []
@@ -195,21 +163,22 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
             # Rate constant is an expression
             new_rate_constant = substitute(reaction.rate_constant, bindings)
 
-        new_reaction = Reaction(
-            name=reaction.name,
-            id=reaction.id,
+        new_reactions.append(replace(
+            reaction,
             reactants=reaction.reactants.copy(),
             products=reaction.products.copy(),
             rate_constant=new_rate_constant,
-            conditions=reaction.conditions.copy()
-        )
-        new_reactions.append(new_reaction)
+            conditions=reaction.conditions.copy(),
+        ))
 
-    return ReactionSystem(
-        name=system.name,
+    # ``replace`` carries constraint_equations, subsystems, tolerance, tests,
+    # examples, continuous_events/discrete_events (and any future field) —
+    # the previous hand-listed ReactionSystem(...) rebuild dropped them.
+    return replace(
+        system,
         species=system.species.copy(),  # Species don't contain expressions typically
         parameters=new_parameters,
-        reactions=new_reactions
+        reactions=new_reactions,
     )
 
 
@@ -272,8 +241,11 @@ def has_var_placeholder(expr: Expr) -> bool:
     if isinstance(expr, str):
         return expr == "_var"
     elif isinstance(expr, ExprNode):
-        # Check recursively in all arguments
-        return any(has_var_placeholder(arg) for arg in expr.args)
+        # Check recursively in every child expression — including aggregate
+        # bodies, filter predicates, integral bounds, makearray values, and
+        # table_lookup axes, where a ``_var`` hidden from the old args-only
+        # walk escaped flatten's operator_compose expansion.
+        return any_child(expr, has_var_placeholder)
     else:
         # Numbers and other types don't contain placeholders
         return False
@@ -322,12 +294,13 @@ def expand_model_placeholders(model: Model, state_variables: List[str]) -> Model
             # Keep equation unchanged
             new_equations.append(equation)
 
-    # Return new model with expanded equations
-    return Model(
-        name=model.name,
+    # Return new model with expanded equations (``replace`` carries every
+    # other Model field — subsystems, tests, events, ... — verbatim).
+    return replace(
+        model,
         variables=model.variables.copy(),
         equations=new_equations,
-        metadata=model.metadata.copy()
+        metadata=model.metadata.copy(),
     )
 
 
@@ -388,15 +361,8 @@ def process_operator_compose_placeholders(esm_file: EsmFile) -> EsmFile:
                         expanded_model = expand_model_placeholders(model, unique_state_variables)
                         new_models[system_name] = expanded_model
 
-    # Create a new ESM file with the modified models
-    return EsmFile(
-        version=esm_file.version,
-        metadata=esm_file.metadata,
-        models=new_models,
-        reaction_systems=esm_file.reaction_systems,
-        coupling=esm_file.coupling,
-        data_loaders=esm_file.data_loaders,
-        operators=esm_file.operators,
-        events=esm_file.events,
-        domain=esm_file.domain,
-    )
+    # Create a new ESM file with the modified models. ``replace`` carries
+    # registered_functions, enums, function_tables, index_sets (and any
+    # future EsmFile field) — the previous hand-listed EsmFile(...) rebuild
+    # dropped them.
+    return replace(esm_file, models=new_models)

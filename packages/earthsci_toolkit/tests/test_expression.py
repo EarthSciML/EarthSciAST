@@ -11,7 +11,7 @@ import pytest
 import sympy as sp
 from earthsci_toolkit.expression import (
     free_variables, free_parameters, contains, simplify,
-    to_sympy, from_sympy, symbolic_jacobian
+    to_sympy, from_sympy, symbolic_jacobian, SimulationError
 )
 from earthsci_toolkit.numpy_interpreter import fold_constant_expr
 from earthsci_toolkit.esm_types import ExprNode, Model, ModelVariable, Equation
@@ -130,8 +130,14 @@ class TestSymPyBridge:
     """Test SymPy bridge functions."""
 
     def test_to_sympy_numbers(self):
-        """Test to_sympy with numbers."""
-        assert to_sympy(5) == 5
+        """Test to_sympy with numbers.
+
+        The unified converter (shared with the simulation bridge) emits
+        ``sp.Float`` for every numeric literal, so compare against Float —
+        ``sp.Float(5) == sp.Integer(5)`` is structurally False in SymPy.
+        """
+        assert to_sympy(5) == sp.Float(5)
+        assert to_sympy(5).equals(5)
         assert to_sympy(3.14) == sp.sympify(3.14)
 
     def test_to_sympy_variables(self):
@@ -243,9 +249,13 @@ class TestSymPyBridge:
         assert back_to_esm.op == "+"
 
     def test_to_sympy_unsupported_operation(self):
-        """Test to_sympy with unsupported operations."""
+        """Test to_sympy with unsupported operations.
+
+        The unified converter raises ``SimulationError`` (the shared
+        bridge semantics), not ``TypeError``.
+        """
         expr = ExprNode(op="unsupported_op", args=["x"])
-        with pytest.raises(TypeError, match="Unsupported operation"):
+        with pytest.raises(SimulationError, match="Unsupported operation"):
             to_sympy(expr)
 
     def test_from_sympy_unsupported_type(self):
@@ -375,13 +385,17 @@ class TestErrorHandling:
     """Test error handling in expression functions."""
 
     def test_to_sympy_invalid_arg_count(self):
-        """Test to_sympy handles invalid argument counts."""
+        """Test to_sympy handles invalid argument counts.
+
+        The unified converter raises ``SimulationError`` (the shared
+        bridge semantics), not ``TypeError``.
+        """
         expr = ExprNode(op="exp", args=["x", "y"])  # exp takes 1 arg
-        with pytest.raises(TypeError, match="Exponential requires exactly 1 argument"):
+        with pytest.raises(SimulationError, match="Exponential requires exactly 1 argument"):
             to_sympy(expr)
 
         expr = ExprNode(op="/", args=["x"])  # division takes 2 args
-        with pytest.raises(TypeError, match="Division requires exactly 2 arguments"):
+        with pytest.raises(SimulationError, match="Division requires exactly 2 arguments"):
             to_sympy(expr)
 
 
@@ -400,9 +414,13 @@ class TestNAryMinMax:
         s = to_sympy(ExprNode(op="max", args=["x", "y", "z"]))
         assert s == sp.Max(sp.Symbol("x"), sp.Symbol("y"), sp.Symbol("z"))
 
-    def test_to_sympy_min_single_arg_rejected(self):
-        with pytest.raises(TypeError, match="Min requires at least 2 arguments"):
-            to_sympy(ExprNode(op="min", args=["x"]))
+    def test_to_sympy_min_single_arg_collapses(self):
+        # Unified converter semantics (shared with the simulation bridge):
+        # a single-argument min is degenerate but tolerated — sp.Min(x)
+        # collapses to x. Only an empty argument list is rejected.
+        assert to_sympy(ExprNode(op="min", args=["x"])) == sp.Symbol("x")
+        with pytest.raises(SimulationError, match="min requires at least 1 argument"):
+            to_sympy(ExprNode(op="min", args=[]))
 
 
 class TestPublicEvaluate:

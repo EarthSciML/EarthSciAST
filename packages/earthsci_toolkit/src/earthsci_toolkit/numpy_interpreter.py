@@ -35,7 +35,8 @@ import numpy as np
 
 from .cadence import Partition
 from .cadence import partition as _partition_model
-from .esm_types import Expr, ExprNode
+from .esm_types import ARRAY_OPS, Expr, ExprNode
+from .expr_walk import any_child
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
 )
@@ -1876,26 +1877,9 @@ def evaluate(expr: Expr, bindings: Dict[str, float]) -> float:
 
 
 def expr_contains_array_op(expr: Expr) -> bool:
-    """Return True if ``expr`` contains any array op node."""
-    if expr is None or isinstance(expr, (int, float, str)):
-        return False
+    """Return True if ``expr`` contains any array op node (esm_types.ARRAY_OPS)."""
     if isinstance(expr, ExprNode):
-        if expr.op in {
-            "aggregate", "makearray", "index", "broadcast",
-            "reshape", "transpose", "concat", "intersect_polygon",
-            # Fused geometry leaf (esm-spec.md §8.6.1): scalar-valued but its
-            # polygon-ring operands are array-valued, so it routes to the NumPy
-            # path. Mirrors flatten._ARRAY_OPS.
-            "polygon_intersection_area",
-        }:
+        if expr.op in ARRAY_OPS:
             return True
-        for a in expr.args:
-            if expr_contains_array_op(a):
-                return True
-        if expr.expr is not None and expr_contains_array_op(expr.expr):
-            return True
-        if expr.values is not None:
-            for v in expr.values:
-                if expr_contains_array_op(v):
-                    return True
+        return any_child(expr, expr_contains_array_op)
     return False

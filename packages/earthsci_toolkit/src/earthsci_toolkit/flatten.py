@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .esm_types import (
+    ARRAY_OPS,
     AffectEquation,
     CallbackCoupling,
     ContinuousEvent,
@@ -31,6 +32,7 @@ from .esm_types import (
     ReactionSystem,
     VariableMapCoupling,
 )
+from .expr_walk import any_child, iter_children, map_children, walk
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -263,21 +265,10 @@ class FlattenedSystem:
 
 
 _SPATIAL_OPS = {"grad", "div", "laplacian", "curl"}
-_ARRAY_OPS = {
-    "aggregate", "makearray", "index", "broadcast",
-    "reshape", "transpose", "concat",
-    # The conservative-regridding geometry kernel leaf (RFC §8.1): its clipped
-    # overlap ring is array-valued, so a model carrying only an intersect_polygon
-    # observed (no aggregate) must still route to the NumPy simulate path. Mirrors
-    # numpy_interpreter.expr_contains_array_op, which lists it too.
-    "intersect_polygon",
-    # The fused geometry leaf (esm-spec.md §8.6.1): a scalar-valued
-    # polygon_area(intersect_polygon(a, b)), but its polygon-ring operands are
-    # array-valued, so a model carrying only a polygon_intersection_area observed
-    # must likewise route to the NumPy path (the SymPy path cannot clip/area a
-    # vertex ring). Mirrors numpy_interpreter.expr_contains_array_op.
-    "polygon_intersection_area",
-}
+# The canonical array-op set lives in esm_types (shared with
+# numpy_interpreter.expr_contains_array_op); keep the module-local alias for
+# existing references.
+_ARRAY_OPS = ARRAY_OPS
 
 
 def _is_number(x: Any) -> bool:
@@ -368,7 +359,10 @@ def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = N
         return f"{prefix}.{expr}"
     if isinstance(expr, ExprNode):
         # For aggregate / arrayop, index symbols (output_idx and ranges keys) are
-        # local to the expression body and must not be namespaced.
+        # local to the expression body and must not be namespaced. They are
+        # binder NAMES, not child expressions — expr_walk never visits them —
+        # so the only special handling needed is adding them to ``leave_alone``
+        # for the children that may reference them.
         local_leave = set(leave_alone)
         if expr.op == "aggregate":
             if expr.output_idx:
@@ -378,17 +372,6 @@ def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = N
             if expr.ranges:
                 for sym in expr.ranges.keys():
                     local_leave.add(sym)
-        new_args = [_namespace_expr(a, prefix, local_leave, subsystem_keys)
-                    for a in expr.args]
-        new_body = (
-            _namespace_expr(expr.expr, prefix, local_leave, subsystem_keys)
-            if expr.expr is not None else None
-        )
-        new_values = (
-            [_namespace_expr(v, prefix, local_leave, subsystem_keys)
-             for v in expr.values]
-            if expr.values is not None else None
-        )
         # Aggregate filter / key sub-nodes reference the SAME model-local
         # variables the body does (a sliver ``filter rg_A[a,o] > rg_atol``, a
         # ``key`` skolem), so they must be namespaced identically — otherwise the
@@ -403,21 +386,16 @@ def _namespace_expr(expr: Expr, prefix: str, leave_alone: Optional[Set[str]] = N
         # a model-local value-invention buffer (``rg_src_bin``) is instead
         # reconciled bare-vs-namespaced at join-resolution time
         # (numpy_interpreter._resolve_join_key_column), which has the buffer set.
-        new_filter = (
-            _namespace_expr(expr.filter, prefix, local_leave, subsystem_keys)
-            if expr.filter is not None else None
-        )
-        new_key = (
-            _namespace_expr(expr.key, prefix, local_leave, subsystem_keys)
-            if expr.key is not None else None
-        )
-        # Use ``replace`` so closed-function metadata (``name``, ``value``,
-        # ``handler_id``, ``table``, ``table_axes``, ``output``) is preserved
-        # automatically. Hand-listing fields silently drops any new
+        #
+        # ``map_children`` rebuilds via ``replace`` so closed-function metadata
+        # (``name``, ``value``, ``handler_id``, ``table``, ``output``) is
+        # preserved automatically. Hand-listing fields silently drops any new
         # ExprNode attribute and cost the SymPy bridge ``fn``-op support
         # before this fix (esm-6ka).
-        return replace(expr, args=new_args, expr=new_body, values=new_values,
-                       filter=new_filter, key=new_key)
+        return map_children(
+            expr,
+            lambda c: _namespace_expr(c, prefix, local_leave, subsystem_keys),
+        )
     return expr
 
 
@@ -454,20 +432,10 @@ def _lhs_dependent_var(lhs: Expr) -> Optional[str]:
 
 def _has_array_op(expr: Expr) -> bool:
     """Return True if ``expr`` contains any array op node."""
-    if _is_number(expr) or isinstance(expr, str) or expr is None:
-        return False
     if isinstance(expr, ExprNode):
         if expr.op in _ARRAY_OPS:
             return True
-        for a in expr.args:
-            if _has_array_op(a):
-                return True
-        if expr.expr is not None and _has_array_op(expr.expr):
-            return True
-        if expr.values is not None:
-            for v in expr.values:
-                if _has_array_op(v):
-                    return True
+        return any_child(expr, _has_array_op)
     return False
 
 
@@ -502,23 +470,19 @@ def _expand_range(r: List[int]) -> List[int]:
 
 def _has_spatial_operator(expr: Expr) -> bool:
     """Return True if ``expr`` contains a spatial derivative operator."""
-    if _is_number(expr) or isinstance(expr, str) or expr is None:
-        return False
     if isinstance(expr, ExprNode):
         if expr.op in _SPATIAL_OPS:
             return True
-        return any(_has_spatial_operator(a) for a in expr.args)
+        return any_child(expr, _has_spatial_operator)
     return False
 
 
 def _spatial_dims_in_expr(expr: Expr) -> Set[str]:
     """Return the set of spatial dimension labels referenced by spatial ops."""
     out: Set[str] = set()
-    if isinstance(expr, ExprNode):
-        if expr.op in _SPATIAL_OPS and expr.dim:
-            out.add(expr.dim)
-        for arg in expr.args:
-            out.update(_spatial_dims_in_expr(arg))
+    for node in walk(expr):
+        if isinstance(node, ExprNode) and node.op in _SPATIAL_OPS and node.dim:
+            out.add(node.dim)
     return out
 
 
@@ -967,22 +931,15 @@ def _expr_references_var(expr: Expr, name: str) -> bool:
 
     Recursively walks every Expression-valued slot of the AST — ``args``,
     integral bounds (``lower``/``upper``), aggregate body/``filter``/``key``,
-    ``makearray`` values, and ``table_lookup`` per-axis inputs. ``ranges``
-    (integer index-range / index-set specs) are NOT variable references and are
-    excluded, as are scalar metadata fields (``wrt``, ``dim``, ``fn``, …).
+    ``makearray`` values, and ``table_lookup`` per-axis inputs (the canonical
+    :mod:`.expr_walk` child set). ``ranges`` (integer index-range / index-set
+    specs) are NOT variable references and are excluded, as are scalar
+    metadata fields (``wrt``, ``dim``, ``fn``, …).
     """
     if isinstance(expr, str):
         return expr == name
     if isinstance(expr, ExprNode):
-        children: List[Expr] = list(expr.args or [])
-        for child in (expr.lower, expr.upper, expr.expr, expr.filter, expr.key):
-            if child is not None:
-                children.append(child)
-        if expr.values:
-            children.extend(expr.values)
-        if expr.table_axes:
-            children.extend(expr.table_axes.values())
-        return any(_expr_references_var(c, name) for c in children)
+        return any_child(expr, lambda c: _expr_references_var(c, name))
     return False
 
 
@@ -1075,10 +1032,13 @@ def _namespace_event_expr(expr: Expr, system_var_names: Dict[str, str]) -> Expr:
     if isinstance(expr, str):
         return system_var_names.get(expr, expr)
     if isinstance(expr, ExprNode):
-        new_args = [_namespace_event_expr(a, system_var_names) for a in expr.args]
-        # See _namespace_expr: use ``replace`` to preserve closed-function
-        # metadata that hand-listing fields would silently drop. (esm-6ka)
-        return replace(expr, args=new_args)
+        # See _namespace_expr: ``map_children`` rebuilds via ``replace`` to
+        # preserve closed-function metadata that hand-listing fields would
+        # silently drop (esm-6ka), and covers every child slot (aggregate
+        # bodies, bounds, values, filter/key, table axes), not just ``args``.
+        return map_children(
+            expr, lambda c: _namespace_event_expr(c, system_var_names)
+        )
     return expr
 
 
@@ -1330,18 +1290,11 @@ def _expand_operator_compose_placeholders(
 
 
 def _collect_makearrays(expr: Expr, acc: List[ExprNode]) -> List[ExprNode]:
-    """Collect every ``makearray`` node reachable from ``expr``."""
-    if not isinstance(expr, ExprNode):
-        return acc
-    if expr.op == "makearray":
-        acc.append(expr)
-    for a in expr.args:
-        _collect_makearrays(a, acc)
-    if expr.expr is not None:
-        _collect_makearrays(expr.expr, acc)
-    if expr.values is not None:
-        for v in expr.values:
-            _collect_makearrays(v, acc)
+    """Collect every ``makearray`` node reachable from ``expr`` (pre-order)."""
+    acc.extend(
+        node for node in walk(expr)
+        if isinstance(node, ExprNode) and node.op == "makearray"
+    )
     return acc
 
 
@@ -1365,12 +1318,9 @@ def _detect_lift_loops(
     an ``index(<lifted species>, a1, …, aRank)`` gather whose every position
     carries a loop variable (the interior stencil). Returns the loop names in
     index-position order, or ``None`` if none is found."""
-    found: List[Optional[List[str]]] = [None]
-
-    def walk(e: Expr) -> None:
-        if found[0] is not None or not isinstance(e, ExprNode):
-            return
-        if (e.op == "index" and e.args and isinstance(e.args[0], str)
+    for e in walk(ma):
+        if (isinstance(e, ExprNode) and e.op == "index" and e.args
+                and isinstance(e.args[0], str)
                 and e.args[0] in lifted and len(e.args) - 1 == rank):
             loops: List[str] = []
             ok = True
@@ -1381,18 +1331,8 @@ def _detect_lift_loops(
                     break
                 loops.append(lv)
             if ok:
-                found[0] = loops
-                return
-        for a in e.args:
-            walk(a)
-        if e.expr is not None:
-            walk(e.expr)
-        if e.values is not None:
-            for v in e.values:
-                walk(v)
-
-    walk(ma)
-    return found[0]
+                return loops
+    return None
 
 
 def _makearray_extents(ma: ExprNode) -> List[int]:
@@ -1625,11 +1565,11 @@ def _collect_index_uses(
                     tup.append(v)
                 if ok and tup:
                     out.setdefault(head, []).append(tup)
-            # Regardless, recurse into args (e.g. indices may themselves have
-            # sub-expressions — shouldn't contain further `index` ops for
+            # Regardless, recurse into children (e.g. indices may themselves
+            # have sub-expressions — shouldn't contain further `index` ops for
             # state vars in practice, but be safe).
-            for a in expr.args:
-                _collect_index_uses(a, state_vars, out, bound_indices)
+            for child in iter_children(expr):
+                _collect_index_uses(child, state_vars, out, bound_indices)
             return
 
         if expr.op == "aggregate":
@@ -1654,13 +1594,9 @@ def _collect_index_uses(
                 value_lists = [_expand_range(ranges[s]) for s in idx_syms]
                 def rec(pos: int, current: Dict[str, int]) -> None:
                     if pos == len(idx_syms):
-                        if expr.expr is not None:
+                        for child in iter_children(expr):
                             _collect_index_uses(
-                                expr.expr, state_vars, out, current
-                            )
-                        for a in expr.args:
-                            _collect_index_uses(
-                                a, state_vars, out, current
+                                child, state_vars, out, current
                             )
                         return
                     sym = idx_syms[pos]
@@ -1671,20 +1607,13 @@ def _collect_index_uses(
                 rec(0, dict(bound_indices))
             else:
                 # Fall back: just walk children without bound indices.
-                if expr.expr is not None:
-                    _collect_index_uses(expr.expr, state_vars, out, bound_indices)
-                for a in expr.args:
-                    _collect_index_uses(a, state_vars, out, bound_indices)
+                for child in iter_children(expr):
+                    _collect_index_uses(child, state_vars, out, bound_indices)
             return
 
-        # Default recursion: walk all subtrees.
-        for a in expr.args:
-            _collect_index_uses(a, state_vars, out, bound_indices)
-        if expr.expr is not None:
-            _collect_index_uses(expr.expr, state_vars, out, bound_indices)
-        if expr.values is not None:
-            for v in expr.values:
-                _collect_index_uses(v, state_vars, out, bound_indices)
+        # Default recursion: walk all children.
+        for child in iter_children(expr):
+            _collect_index_uses(child, state_vars, out, bound_indices)
 
 
 def infer_variable_shapes(flat: FlattenedSystem) -> Dict[str, Tuple[int, ...]]:

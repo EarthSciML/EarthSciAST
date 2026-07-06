@@ -52,6 +52,7 @@ from .numpy_interpreter import (
     eval_expr,
     ragged_factor_scope,
 )
+from .expr_walk import map_children
 from .reactions import lower_reactions_to_equations
 from .sympy_bridge import (
     SimulationError,
@@ -1000,88 +1001,29 @@ def _substitute_algebraic(
     subs: Dict[str, Tuple[List[str], Expr]],
 ) -> Expr:
     """Replace ``index(v, ...)`` with the algebraic body of ``v`` where defined."""
-    if expr is None or isinstance(expr, (int, float)) and not isinstance(expr, bool):
+    if not isinstance(expr, ExprNode):
         return expr
-    if isinstance(expr, str):
-        return expr
-    if isinstance(expr, ExprNode):
-        new_args = [_substitute_algebraic(a, subs) for a in expr.args]
-        new_body = _substitute_algebraic(expr.expr, subs) if expr.expr is not None else None
-        new_values = (
-            [_substitute_algebraic(v, subs) for v in expr.values]
-            if expr.values is not None else None
-        )
-        # If this is index(v, e1, e2, ...) with v eliminated, inline the body.
-        if expr.op == "index" and new_args:
-            head = new_args[0]
-            if isinstance(head, str) and head in subs:
-                idx_syms, body = subs[head]
-                caller_idx = new_args[1:]
-                if len(caller_idx) == len(idx_syms):
-                    bindings = {sym: idx_expr for sym, idx_expr in zip(idx_syms, caller_idx)}
-                    return _rebind_index_syms(body, bindings)
-        return ExprNode(
-            op=expr.op,
-            args=new_args,
-            wrt=expr.wrt,
-            dim=expr.dim,
-            output_idx=expr.output_idx,
-            expr=new_body,
-            reduce=expr.reduce,
-            semiring=expr.semiring,
-            ranges=expr.ranges,
-            join=expr.join,
-            filter=_substitute_algebraic(expr.filter, subs) if expr.filter is not None else None,
-            distinct=expr.distinct,
-            key=_substitute_algebraic(expr.key, subs) if expr.key is not None else None,
-            regions=expr.regions,
-            values=new_values,
-            shape=expr.shape,
-            perm=expr.perm,
-            axis=expr.axis,
-            fn=expr.fn,
-        )
-    return expr
+    node = map_children(expr, lambda c: _substitute_algebraic(c, subs))
+    # If this is index(v, e1, e2, ...) with v eliminated, inline the body.
+    if node.op == "index" and node.args:
+        head = node.args[0]
+        if isinstance(head, str) and head in subs:
+            idx_syms, body = subs[head]
+            caller_idx = node.args[1:]
+            if len(caller_idx) == len(idx_syms):
+                bindings = {sym: idx_expr for sym, idx_expr in zip(idx_syms, caller_idx)}
+                return _rebind_index_syms(body, bindings)
+    return node
 
 
 def _rebind_index_syms(
     expr: Expr, bindings: Dict[str, Expr]
 ) -> Expr:
     """Replace bare string references to index symbols with their target expressions."""
-    if expr is None or isinstance(expr, (int, float)):
-        return expr
     if isinstance(expr, str):
         return bindings.get(expr, expr)
     if isinstance(expr, ExprNode):
-        new_args = [_rebind_index_syms(a, bindings) for a in expr.args]
-        new_body = (
-            _rebind_index_syms(expr.expr, bindings) if expr.expr is not None else None
-        )
-        new_values = (
-            [_rebind_index_syms(v, bindings) for v in expr.values]
-            if expr.values is not None else None
-        )
-        return ExprNode(
-            op=expr.op,
-            args=new_args,
-            wrt=expr.wrt,
-            dim=expr.dim,
-            output_idx=expr.output_idx,
-            expr=new_body,
-            reduce=expr.reduce,
-            semiring=expr.semiring,
-            ranges=expr.ranges,
-            join=expr.join,
-            filter=_rebind_index_syms(expr.filter, bindings) if expr.filter is not None else None,
-            distinct=expr.distinct,
-            key=_rebind_index_syms(expr.key, bindings) if expr.key is not None else None,
-            regions=expr.regions,
-            values=new_values,
-            shape=expr.shape,
-            perm=expr.perm,
-            axis=expr.axis,
-            fn=expr.fn,
-        )
+        return map_children(expr, lambda c: _rebind_index_syms(c, bindings))
     return expr
 
 

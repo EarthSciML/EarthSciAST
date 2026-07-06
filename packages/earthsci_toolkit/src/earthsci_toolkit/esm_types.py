@@ -112,6 +112,26 @@ def is_aggregate_op(op: Any) -> bool:
     return op in AGGREGATE_OPS
 
 
+# Ops whose presence anywhere in an expression routes the model to the NumPy
+# array simulation path (the SymPy/lambdify path is scalar-only). Shared by
+# flatten's equation classification and numpy_interpreter's containment check
+# so the set is defined exactly once.
+ARRAY_OPS = frozenset({
+    "aggregate", "makearray", "index", "broadcast",
+    "reshape", "transpose", "concat",
+    # The conservative-regridding geometry kernel leaf (RFC §8.1): its clipped
+    # overlap ring is array-valued, so a model carrying only an intersect_polygon
+    # observed (no aggregate) must still route to the NumPy simulate path.
+    "intersect_polygon",
+    # The fused geometry leaf (esm-spec.md §8.6.1): a scalar-valued
+    # polygon_area(intersect_polygon(a, b)), but its polygon-ring operands are
+    # array-valued, so a model carrying only a polygon_intersection_area observed
+    # must likewise route to the NumPy path (the SymPy path cannot clip/area a
+    # vertex ring).
+    "polygon_intersection_area",
+})
+
+
 @dataclass
 class Equation:
     """Mathematical equation with left and right hand sides."""
