@@ -20,17 +20,9 @@ using DiffEqCallbacks            # loads EarthSciSerializationDataRefreshExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (cf. scripts/pde_simulation_adapter.jl)
 
-include("zero_alloc_harness.jl")
+include("testutils.jl")  # builder quartet + zero_alloc_harness.jl
 
 const ESM = EarthSciSerialization
-
-# ---- AST builder helpers (mirror tree_walk_param_gather_test.jl) ----
-_n(x) = NumExpr(Float64(x))
-_i(x) = IntExpr(Int64(x))
-_v(s) = VarExpr(String(s))
-_op(o, a...; k...) = OpExpr(String(o), ESM.Expr[a...]; k...)
-_idx(v, is...) = _op("index", _v(v), is...)
-_D(v) = _op("D", _v(v); wrt="t")
 
 # ---- A mock Provider implementing the ESS consumer protocol ----
 # A DISCRETE provider has non-empty `times` and a per-tick (var => field) table;

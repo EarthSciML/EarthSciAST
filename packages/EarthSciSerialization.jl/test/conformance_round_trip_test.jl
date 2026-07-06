@@ -8,8 +8,9 @@ using Test
 using JSON3
 using EarthSciSerialization
 
-const _REPO_ROOT       = normpath(joinpath(@__DIR__, "..", "..", ".."))
-const _TESTS_DIR       = joinpath(_REPO_ROOT, "tests")
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
+
+const _TESTS_DIR       = joinpath(TESTUTILS_REPO_ROOT, "tests")
 const _MANIFEST_PATH   = joinpath(_TESTS_DIR, "conformance", "round_trip", "manifest.json")
 
 """
@@ -50,14 +51,13 @@ end
         fixture_path = joinpath(_TESTS_DIR, String(fixture.path))
 
         @testset "$(id)" begin
-            if !isfile(fixture_path)
-                @warn "Conformance fixture not found, skipping" id=id path=fixture_path
-                @test_broken isfile(fixture_path)
-                continue
+            # Several manifest entries reference fixtures that do not exist on
+            # disk yet (the discretizations/ set and regrid_point_missing_value)
+            # — recorded as standardized skips, never silently green.
+            if _require_fixture(fixture_path)
+                first_json, second_json = _idempotent_roundtrip(fixture_path)
+                @test first_json == second_json
             end
-
-            first_json, second_json = _idempotent_roundtrip(fixture_path)
-            @test first_json == second_json
         end
     end
 end

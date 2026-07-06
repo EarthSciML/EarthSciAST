@@ -111,18 +111,13 @@
         write(ref_path, ref_content)
 
         try
+            # The minimal fixture is schema-valid, so this must load cleanly;
+            # any exception propagates as a genuine failure.
             visited = Set{String}()
             loaded = EarthSciSerialization._load_ref("referenced.esm", tmp_dir, visited)
             @test loaded isa EsmFile
             @test loaded.metadata.name == "Referenced Model"
             @test haskey(loaded.models, "SubModel")
-        catch e
-            # Schema validation may fail if the test fixture doesn't pass the full schema
-            if e isa EarthSciSerialization.SchemaValidationError || e isa EarthSciSerialization.SubsystemRefError
-                @test_broken false  # Expected schema issue with minimal fixture
-            else
-                rethrow(e)
-            end
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -151,16 +146,12 @@
         write(esm_path, esm_content)
 
         try
-            # This should call resolve_subsystem_refs! automatically
+            # This should call resolve_subsystem_refs! automatically. The
+            # minimal fixture is schema-valid, so load must succeed; any
+            # exception propagates as a genuine failure.
             loaded = EarthSciSerialization.load(esm_path)
             @test loaded isa EsmFile
             @test loaded.metadata.name == "Test File"
-        catch e
-            if e isa EarthSciSerialization.SchemaValidationError || e isa EarthSciSerialization.ParseError
-                @test_broken false  # Schema validation with minimal fixture
-            else
-                rethrow(e)
-            end
         finally
             rm(tmp_dir, recursive=true, force=true)
         end

@@ -23,7 +23,9 @@ import GeometryOps
 import GeoInterface
 
 const _PIA = EarthSciSerialization
-const _PIA_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _PIA_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _PIA_VALID_GEOM = joinpath(_PIA_REPO_ROOT, "tests", "valid", "geometry")
 
 # Two unit-aligned squares overlapping in the [1,2]×[1,2] box → overlap area 1.0.

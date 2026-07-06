@@ -26,7 +26,9 @@ using EarthSciSerialization
 import JSON3
 
 const ESS = EarthSciSerialization
-const _VI_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _VI_REPO_ROOT = TESTUTILS_REPO_ROOT
 _vi_fixture(rel) = joinpath(_VI_REPO_ROOT, rel)
 _vi_raw(rel) = JSON3.read(read(_vi_fixture(rel), String))
 

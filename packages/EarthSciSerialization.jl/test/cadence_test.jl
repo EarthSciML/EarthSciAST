@@ -1,7 +1,12 @@
 using Test
 using EarthSciSerialization
-const C = EarthSciSerialization.Cadence
 import JSON3
+
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+# Collision-safe alias for the Cadence submodule (an unprefixed `const C`
+# would pollute the shared Main namespace under runtests.jl).
+const _Cadence = EarthSciSerialization.Cadence
 
 # The dependency-partition (cadence) pass — CONFORMANCE_SPEC.md §5.7, the
 # normative form of RFC `semiring-faq-unified-ir` §6.1 (bead ess-my4.3.7).
@@ -13,16 +18,15 @@ import JSON3
 # negative controls that must REJECT non-conforming input. It mirrors the
 # checks in scripts/run-cadence-conformance.py --self-test.
 
-const REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
-const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", "manifest.json")
+const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "cadence", "manifest.json")
 
 @testset "Cadence-partition pass (CONFORMANCE_SPEC §5.7 / RFC §6.1)" begin
 
-    manifest = C.to_native(JSON3.read(read(CADENCE_MANIFEST, String)))
+    manifest = _Cadence.to_native(JSON3.read(read(CADENCE_MANIFEST, String)))
 
     @testset "golden agreement — $(fx["id"])" for fx in manifest["fixtures"]
-        model = C.load_model_json(joinpath(REPO_ROOT, fx["fixture"]), fx["model"])
-        r = C.partition_model(model)
+        model = _Cadence.load_model_json(joinpath(TESTUTILS_REPO_ROOT, fx["fixture"]), fx["model"])
+        r = _Cadence.partition_model(model)
 
         # (a) class summary — annotated nodes by DERIVED class == golden.
         for (cls, n) in fx["class_summary"]
@@ -44,30 +48,30 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
         cf = get(fx, "const_fold", Dict{String,Any}())
         inputs = get(cf, "inputs", Dict{String,Any}())
         for (label, spec) in get(cf, "expected", Dict{String,Any}())
-            bytes = C.canonical_serialize(C.compute_fold(label, spec, inputs))
+            bytes = _Cadence.canonical_serialize(_Cadence.compute_fold(label, spec, inputs))
             @test bytes == spec["serialized"]
         end
 
         # (d) guards hold on a valid fixture (no false positives).
-        @test (C.run_guards(model); true)
+        @test (_Cadence.run_guards(model); true)
     end
 
     @testset "gather rule splits the stencil (§5.7.3)" begin
-        model = C.load_model_json(
-            joinpath(REPO_ROOT, "tests", "valid", "cadence", "mixed_stencil.esm"),
+        model = _Cadence.load_model_json(
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "mixed_stencil.esm"),
             "MixedStencilDiffusion")
         # index(u, index(nbr,i,k)): outer value load is CONTINUOUS, while the
         # inner topology selection index(nbr,i,k) is CONST — classed
         # independently of the array.
         inner = Dict{String,Any}("op" => "index", "args" => Any["nbr", "i", "k"])
         outer = Dict{String,Any}("op" => "index", "args" => Any["u", inner])
-        @test C.classify(inner, model) == "const"
-        @test C.classify(outer, model) == "continuous"
+        @test _Cadence.classify(inner, model) == "const"
+        @test _Cadence.classify(outer, model) == "continuous"
         # Kdiff (discrete variable) gather is DISCRETE; a state load is CONTINUOUS.
-        @test C.classify(Dict{String,Any}("op" => "index", "args" => Any["Kdiff", "i"]), model) == "discrete"
-        @test C.classify(Dict{String,Any}("op" => "index", "args" => Any["u", "i"]), model) == "continuous"
+        @test _Cadence.classify(Dict{String,Any}("op" => "index", "args" => Any["Kdiff", "i"]), model) == "discrete"
+        @test _Cadence.classify(Dict{String,Any}("op" => "index", "args" => Any["u", "i"]), model) == "continuous"
         # the analytic continuous-t forcing stays CONTINUOUS, not DISCRETE.
-        @test C.classify(Dict{String,Any}("op" => "*", "args" => Any["omega", "t"]),
+        @test _Cadence.classify(Dict{String,Any}("op" => "*", "args" => Any["omega", "t"]),
             Dict{String,Any}("variables" => Dict{String,Any}("omega" => Dict{String,Any}("type" => "parameter")))) == "continuous"
     end
 
@@ -86,20 +90,20 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
         with_temporal = Dict{String,Any}("variables" => variables,
             "data_loaders" => Dict{String,Any}("bc_loader" =>
                 Dict{String,Any}("kind" => "grid", "temporal" => Dict{String,Any}("frequency" => "PT6H"))))
-        @test C.classify(bc, with_temporal) == "discrete"
+        @test _Cadence.classify(bc, with_temporal) == "discrete"
 
         # Loader WITHOUT temporal -> CONST (non-time-varying, folds at bind).
         no_temporal = Dict{String,Any}("variables" => variables,
             "data_loaders" => Dict{String,Any}("bc_loader" => Dict{String,Any}("kind" => "static")))
-        @test C.classify(bc, no_temporal) == "const"
+        @test _Cadence.classify(bc, no_temporal) == "const"
 
         # No loaders attached / unresolvable source -> keeps the declared discrete seed.
-        @test C.classify(bc, Dict{String,Any}("variables" => variables)) == "discrete"
+        @test _Cadence.classify(bc, Dict{String,Any}("variables" => variables)) == "discrete"
 
         # load_model_json attaches the document's top-level data_loaders so the
         # refinement can resolve the source loader.
-        m = C.load_model_json(
-            joinpath(REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
+        m = _Cadence.load_model_json(
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
             "LoaderTemporalSeed")
         @test haskey(m, "data_loaders") && haskey(m["data_loaders"], "bc_loader")
     end
@@ -112,7 +116,7 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
         bad = Dict{String,Any}("op" => "index", "args" => Any["p", "i"],
             "expect_cadence" => "continuous")
         problems = String[]
-        C.check_expect_cadence!(bad, model, problems)
+        _Cadence.check_expect_cadence!(bad, model, problems)
         @test !isempty(problems)
     end
 
@@ -127,8 +131,8 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
             "key" => Dict{String,Any}("op" => "skolem",
                 "args" => Any["edge", Dict{String,Any}("op" => "index", "args" => Any["u", "f"])]),
             "expr" => Dict{String,Any}("op" => "true", "args" => Any[]))
-        @test C.classify(rhs, model) == "continuous"
-        @test_throws C.CadenceError C.assert_no_continuous_relational(rhs, model)
+        @test _Cadence.classify(rhs, model) == "continuous"
+        @test_throws _Cadence.CadenceError _Cadence.assert_no_continuous_relational(rhs, model)
     end
 
     @testset "neg: continuous relational FIXTURE rejected (guard 2)" begin
@@ -137,9 +141,9 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
         # partition guard. The same fixture is rejected by the Rust and Python
         # siblings, so all three evaluators agree (bead ess-my4.3.11). In Julia the
         # guard lives in run_guards (not partition_model).
-        fixture = joinpath(REPO_ROOT, "tests", "invalid", "aggregate", "continuous_relational_node.esm")
-        model = C.load_model_json(fixture, "ContinuousRelationalNode")
-        @test_throws C.CadenceError C.run_guards(model)
+        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "aggregate", "continuous_relational_node.esm")
+        model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
+        @test_throws _Cadence.CadenceError _Cadence.run_guards(model)
     end
 
     @testset "neg: from_faq cycle rejected (guard 1)" begin
@@ -159,10 +163,10 @@ const CADENCE_MANIFEST = joinpath(REPO_ROOT, "tests", "conformance", "cadence", 
                         "semiring" => "bool_and_or", "output_idx" => Any["x"],
                         "ranges" => Dict{String,Any}("y" => Dict{String,Any}("from" => "setA")),
                         "expr" => Dict{String,Any}("op" => "true", "args" => Any[])))])
-        @test_throws C.CadenceError C.assert_acyclic_index_sets(cyclic)
+        @test_throws _Cadence.CadenceError _Cadence.assert_acyclic_index_sets(cyclic)
     end
 
     @testset "neg: float topology key rejected (§5.5 rule 1)" begin
-        @test_throws C.CadenceError C.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
+        @test_throws _Cadence.CadenceError _Cadence.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
     end
 end

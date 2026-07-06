@@ -11,7 +11,9 @@ using Test
 using JSON3
 using EarthSciSerialization
 
-const _CF_REPO_ROOT  = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _CF_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _CF_FIX_ROOT   = joinpath(_CF_REPO_ROOT, "tests", "closed_functions")
 
 # Convert a JSON3-decoded scenario input to the value the closed function

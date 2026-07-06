@@ -61,7 +61,9 @@ using EarthSciSerialization
 import JSON3
 
 const ESS = EarthSciSerialization
-const _ASM_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _ASM_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _ASM_FIXTURE = joinpath(_ASM_REPO_ROOT, "tests", "valid", "geometry",
                               "conservative_regrid_assembly.esm")
 

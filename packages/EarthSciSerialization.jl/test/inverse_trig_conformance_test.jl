@@ -23,7 +23,9 @@
 using Test
 using EarthSciSerialization
 
-const _INVTRIG_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _INVTRIG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate the shared scalar-leaf fixture and return (du, vmap), seeding every
 # state element to zero (the constant-RHS worked examples start from rest).

@@ -27,7 +27,9 @@ import GeometryOps as GO
 import GeoInterface as GI
 
 const ESS = EarthSciSerialization
-const _GEOM_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _GEOM_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _VALID_GEOM = joinpath(_GEOM_REPO_ROOT, "tests", "valid", "geometry")
 
 # Two unit-aligned squares overlapping in the [1,2]×[1,2] box → overlap area 1.0.

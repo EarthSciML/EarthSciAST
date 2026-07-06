@@ -8,6 +8,8 @@ using EarthSciSerialization: lower_expression_templates,
     reject_expression_templates_pre_v04, ExpressionTemplateError, OpExpr,
     NumExpr, IntExpr, VarExpr
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
+
 const ARRHENIUS_FIXTURE_JSON = """
 {
   "esm": "0.4.0",
@@ -192,7 +194,7 @@ const ARRHENIUS_FIXTURE_JSON = """
     @testset "conformance fixture matches the canonical expanded form" begin
         # Drives the cross-binding `tests/conformance/expression_templates/`
         # arrhenius_smoke fixture against its pinned expanded.esm form.
-        repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
+        repo_root = TESTUTILS_REPO_ROOT
         fixture_path = joinpath(repo_root, "tests", "conformance",
             "expression_templates", "arrhenius_smoke", "fixture.esm")
         expanded_path = joinpath(repo_root, "tests", "conformance",
@@ -200,18 +202,9 @@ const ARRHENIUS_FIXTURE_JSON = """
         raw = JSON3.read(read(fixture_path, String))
         expanded_via_pass = lower_expression_templates(raw)
         expanded_dict = JSON3.read(read(expanded_path, String))
-        # Compare reactions arrays as JSON-normalised strings.
-        function _norm(x)
-            if x isa AbstractDict || x isa JSON3.Object
-                return Dict{String,Any}(string(k) => _norm(v) for (k, v) in pairs(x))
-            elseif x isa AbstractVector || x isa JSON3.Array
-                return Any[_norm(v) for v in x]
-            else
-                return x
-            end
-        end
-        got = _norm(expanded_via_pass.data["reaction_systems"]["chem"]["reactions"])
-        want = _norm(expanded_dict.reaction_systems.chem.reactions)
+        # Compare reactions arrays in JSON-normalised (testutils.jl _normj) form.
+        got = _normj(expanded_via_pass.data["reaction_systems"]["chem"]["reactions"])
+        want = _normj(expanded_dict.reaction_systems.chem.reactions)
         @test got == want
     end
 
@@ -220,25 +213,16 @@ const ARRHENIUS_FIXTURE_JSON = """
         # §10.4/§10.5): a coupling `transform` invoking a template declared by
         # the RECEIVING component expands at load against that component's
         # registry (§9.6.4).
-        repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
+        repo_root = TESTUTILS_REPO_ROOT
         case = joinpath(repo_root, "tests", "conformance",
             "expression_templates", "coupling_transform_expression")
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
         expanded_via_pass = lower_expression_templates(raw)
         expanded_dict = JSON3.read(read(joinpath(case, "expanded.esm"), String))
-        function _norm2(x)
-            if x isa AbstractDict || x isa JSON3.Object
-                return Dict{String,Any}(string(k) => _norm2(v) for (k, v) in pairs(x))
-            elseif x isa AbstractVector || x isa JSON3.Array
-                return Any[_norm2(v) for v in x]
-            else
-                return x
-            end
-        end
-        @test _norm2(expanded_via_pass.data["coupling"]) ==
-              _norm2(expanded_dict.coupling)
-        @test _norm2(expanded_via_pass.data["models"]) ==
-              _norm2(expanded_dict.models)
+        @test _normj(expanded_via_pass.data["coupling"]) ==
+              _normj(expanded_dict.coupling)
+        @test _normj(expanded_via_pass.data["models"]) ==
+              _normj(expanded_dict.models)
         # Typed load: the expanded transform arrives as an Expr operator node.
         f = EarthSciSerialization.load(joinpath(case, "fixture.esm"))
         entry = f.coupling[1]
@@ -272,14 +256,8 @@ const ARRHENIUS_FIXTURE_JSON = """
 end
 
 @testset "expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint" begin
-    _repo_root() = abspath(joinpath(@__DIR__, "..", "..", ".."))
-    _conf(fix) = joinpath(_repo_root(), "tests", "conformance",
+    _conf(fix) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                           "expression_templates", fix)
-    _normj(x) =
-        (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _normj(v) for (k, v) in pairs(x)) :
-        (x isa AbstractVector || x isa JSON3.Array) ?
-            Any[_normj(v) for v in x] : x
 
     function _lower_conf(fix)
         raw = JSON3.read(read(joinpath(_conf(fix), "fixture.esm"), String))
@@ -375,12 +353,6 @@ end
 end
 
 @testset "scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5)" begin
-    _n(x) =
-        (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _n(v) for (k, v) in pairs(x)) :
-        (x isa AbstractVector || x isa JSON3.Array) ?
-            Any[_n(v) for v in x] : x
-
     # A parameter name appearing as the string value of a scalar Expression-node
     # field in `body` is a substitution site (the mirror of the match-side
     # scalar-field binding rule). `manifold` is the exemplar field: the document
@@ -412,7 +384,7 @@ end
         }
         """
         out = lower_expression_templates(JSON3.read(src))
-        expr = _n(out.data["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
         @test expr == Dict{String,Any}(
             "op" => "polygon_intersection_area",
             "manifold" => "planar",
@@ -452,7 +424,7 @@ end
         }
         """
         out = lower_expression_templates(JSON3.read(src))
-        expr = _n(out.data["models"]["M"]["variables"]["scaled"]["expression"])
+        expr = _normj(out.data["models"]["M"]["variables"]["scaled"]["expression"])
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[
             Dict{String,Any}("op" => "polygon_intersection_area",
                              "manifold" => "spherical",
@@ -524,7 +496,7 @@ end
         }
         """
         out = lower_expression_templates(JSON3.read(src))
-        expr = _n(out.data["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(out.data["models"]["M"]["variables"]["area"]["expression"])
         @test expr["manifold"] == "spherical"
     end
 end
@@ -533,19 +505,13 @@ end
     # Drives tests/conformance/expression_templates/scalar_field_param — the
     # scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
     # (planar / spherical) — against its pinned Julia-generated expanded.esm.
-    repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
-    case = joinpath(repo_root, "tests", "conformance",
+    case = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
         "expression_templates", "scalar_field_param")
-    _n(x) =
-        (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _n(v) for (k, v) in pairs(x)) :
-        (x isa AbstractVector || x isa JSON3.Array) ?
-            Any[_n(v) for v in x] : x
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
     out = lower_expression_templates(raw)
     expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
-    @test _n(out.data["models"]) == _n(expanded.models)
-    vars = _n(out.data["models"]["Overlap"]["variables"])
+    @test _normj(out.data["models"]) == _normj(expanded.models)
+    vars = _normj(out.data["models"]["Overlap"]["variables"])
     @test vars["area_planar"]["expression"]["manifold"] == "planar"
     @test vars["area_spherical"]["expression"]["manifold"] == "spherical"
 end
@@ -555,8 +521,7 @@ end
     # index-set/shape scoping of `match` rules. Constraint evaluation reads
     # declared variable shapes only and filters BEFORE the §9.6.3
     # priority/declaration-order selection.
-    _repo_root2() = abspath(joinpath(@__DIR__, "..", "..", ".."))
-    _conf2(fix) = joinpath(_repo_root2(), "tests", "conformance",
+    _conf2(fix) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                            "expression_templates", fix)
     _nw(x) =
         (x isa AbstractDict || x isa JSON3.Object) ?

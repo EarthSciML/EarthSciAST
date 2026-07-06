@@ -11,15 +11,12 @@ using EarthSciSerialization
 using EarthSciSerialization: serialize_esm_file, ExpressionTemplateError,
     _ephemeral_injected_file
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
+
 @testset "scope-directed template injection (esm-spec §9.7.10)" begin
-    repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
-    conf(parts...) = joinpath(repo_root, "tests", "conformance",
+    conf(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                               "expression_templates", parts...)
 
-    _normj(x) =
-        (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _normj(v) for (k, v) in pairs(x)) :
-        (x isa AbstractVector || x isa JSON3.Array) ? Any[_normj(v) for v in x] : x
     _golden(path) = _normj(JSON3.read(read(path, String)))
     _err_code(f) = try
         f(); nothing

@@ -40,7 +40,7 @@ using DiffEqCallbacks            # loads EarthSciSerializationDataRefreshExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 
-include("zero_alloc_harness.jl")  # rhs_alloc_bytes — the JL-J0 zero-alloc probe
+include("testutils.jl")  # rhs_alloc_bytes (via zero_alloc_harness.jl) — the JL-J0 zero-alloc probe
 
 const ESM = EarthSciSerialization
 

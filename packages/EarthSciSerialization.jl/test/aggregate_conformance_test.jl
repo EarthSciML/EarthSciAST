@@ -21,7 +21,9 @@
 using Test
 using EarthSciSerialization
 
-const _AGG_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _AGG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate a shared aggregate fixture and return (du, vmap), seeding every
 # state element to zero (the constant-RHS worked examples start from rest).

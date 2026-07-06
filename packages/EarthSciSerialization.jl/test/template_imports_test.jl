@@ -13,16 +13,13 @@ using EarthSciSerialization: lower_expression_templates, resolve_template_machin
     _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
     _canonical_ref, _URL_FETCHER
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
+
 @testset "template-library imports + metaparameters (esm-spec §9.7)" begin
-    repo_root = abspath(joinpath(@__DIR__, "..", "..", ".."))
+    repo_root = TESTUTILS_REPO_ROOT
     conf(parts...) = joinpath(repo_root, "tests", "conformance",
                               "expression_templates", parts...)
     invalid_dir = joinpath(repo_root, "tests", "invalid", "template_imports")
-
-    _normj(x) =
-        (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _normj(v) for (k, v) in pairs(x)) :
-        (x isa AbstractVector || x isa JSON3.Array) ? Any[_normj(v) for v in x] : x
 
     # Raw §9.7 pipeline (resolve → lower), mirroring the golden generator.
     function _expand_raw(path)

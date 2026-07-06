@@ -12,6 +12,12 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `MockMTKSystem`, `MockPDESystem`, and `MockCatalystSystem`
 give plain-Julia snapshots of the flattened system with the same ODE/PDE split.
+
+Two features live in namespaced submodules rather than the flat namespace:
+`EarthSciSerialization.Cadence` (loader-cadence classification and model
+partitioning, spec §5.7) and `EarthSciSerialization.Relational` (build-time
+relational kernels). Their generic names (`classify`, `partition_model`,
+`equijoin`, …) are deliberately not re-exported — reach them qualified.
 """
 module EarthSciSerialization
 
@@ -20,17 +26,22 @@ using JSON3
 using JSONSchema
 using Tullio
 
+# Core data model + validation
 include("types.jl")
 include("validate.jl")
+# Flattening pipeline (reactions → equations, subsystem flattening, shapes)
 include("reactions.jl")
 include("flatten.jl")
 include("shape_promotion.jl")
 include("mock_systems.jl")
+# Load-time lowering passes (closed registry, templates, imports)
 include("registered_functions.jl")
 include("lower_expression_templates.jl")
 include("template_imports.jl")
+# Wire I/O
 include("parse.jl")
 include("serialize.jl")
+# Expression operations, rendering, and tooling
 include("expression.jl")
 include("display.jl")
 include("graph.jl")
@@ -38,16 +49,19 @@ include("units.jl")
 include("edit.jl")
 include("codegen.jl")
 include("canonicalize.jl")
+# Build-time kernels, MTK-export glue, geometry
 include("relational.jl")
 include("mtk_export.jl")
 include("geometry.jl")
 include("area_faq.jl")
+# MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
 include("data_refresh.jl")
 include("simulate.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
+# Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
 include("pde_inline_tests.jl")
 
@@ -90,7 +104,7 @@ export
     FunctionTable, FunctionTableAxis,
     # JSON functionality
     load, save, ParseError, SchemaValidationError, SchemaError, validate_schema,
-    parse_expression,
+    parse_expression, ESM_FORMAT_VERSION,
     # Subsystem reference resolution
     resolve_subsystem_refs!, SubsystemRefError,
     # Coupling serialization functions
@@ -98,8 +112,9 @@ export
     # Structural validation
     StructuralError, ValidationResult, validate_structural, validate,
     validate_reaction_rate_units, validate_model_gradient_units,
-    # Expression operations
-    substitute, free_variables, contains, simplify, UnboundVariableError,
+    # Expression operations. Expression containment extends `Base.contains`
+    # (always in scope for consumers), so `contains` is not re-exported.
+    substitute, free_variables, simplify, UnboundVariableError,
     # Qualified reference resolution
     resolve_qualified_reference, QualifiedReferenceError, ReferenceResolution,
     validate_reference_syntax, is_valid_identifier,
@@ -117,13 +132,15 @@ export
     parse_units, get_expression_dimensions, validate_equation_dimensions,
     validate_model_dimensions, validate_reaction_system_dimensions, validate_file_dimensions,
     infer_variable_units,
-    # Editing operations (Section 4)
+    # Editing operations (Section 4). EsmFile merging extends `Base.merge`
+    # (always in scope for consumers), so `merge` is not re-exported.
+    EditError,
     add_variable, remove_variable, rename_variable,
     add_equation, remove_equation, substitute_in_equations,
     add_reaction, remove_reaction, add_species, remove_species,
     add_continuous_event, add_discrete_event, remove_event,
     add_coupling, remove_coupling, compose, map_variable,
-    merge, extract,
+    extract,
     # Code generation
     to_julia_code, to_python_code,
     # ASCII display format
@@ -142,7 +159,7 @@ export
     provider_refresh_times, provider_is_const, provider_sample,
     # One-call run entry (load → discretize → build_evaluator → seed → refresh →
     # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
-    simulate, SimulationResult, seed_expression_ic!,
+    simulate, SimulationResult, SimulateError, seed_expression_ic!, final_state,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,

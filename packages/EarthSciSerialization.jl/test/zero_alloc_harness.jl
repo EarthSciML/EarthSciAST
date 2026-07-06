@@ -9,6 +9,12 @@
 # evaluator / vectorization work: pass any built `f!` (or a `Model` to build one)
 # and assert the returned byte count is 0. They depend only on the built-in
 # `@allocated`, so they add no test dependencies.
+#
+# Include guard (mirrors testutils.jl): normally pulled in once via
+# `include("testutils.jl")`, but a direct include stays harmless.
+if !isdefined(Main, :ESM_ZERO_ALLOC_HARNESS_LOADED)
+
+const ESM_ZERO_ALLOC_HARNESS_LOADED = true
 
 using EarthSciSerialization
 
@@ -46,3 +52,5 @@ function built_rhs_alloc_bytes(model; t=0.0, kwargs...)
     du = similar(u0)
     return rhs_alloc_bytes(f!, du, u0, p, t)
 end
+
+end # ESM_ZERO_ALLOC_HARNESS_LOADED guard

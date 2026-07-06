@@ -15,7 +15,9 @@ using EarthSciSerialization
 using JSON3
 const ESS = EarthSciSerialization
 
-const _EXPRIC_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 @testset "expression initial-condition golden loads (ess-gjn)" begin
     path = joinpath(_EXPRIC_REPO_ROOT, "tests", "valid", "initial_conditions",

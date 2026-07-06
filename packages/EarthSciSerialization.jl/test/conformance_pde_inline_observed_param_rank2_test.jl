@@ -21,7 +21,9 @@ using JSON3
 using EarthSciSerialization
 import OrdinaryDiffEqTsit5
 
-const _OPR2_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _OPR2_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _OPR2_CAT_DIR   = joinpath(_OPR2_REPO_ROOT, "tests", "conformance",
                                  "pde_inline_observed_param_rank2")
 const _OPR2_MANIFEST  = joinpath(_OPR2_CAT_DIR, "manifest.json")

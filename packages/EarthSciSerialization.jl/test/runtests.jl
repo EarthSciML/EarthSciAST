@@ -2,8 +2,13 @@ using Test
 using EarthSciSerialization
 using JSON3
 
+include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _require_fixture
+
 @testset "EarthSciSerialization.jl Tests" begin
 
+    # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
+    #      validate.jl, structural_validation.jl, display.jl, graph.jl) ----
+    include("types_test.jl")
     include("parse_test.jl")
     include("validate_test.jl")
     include("structural_validation_test.jl")
@@ -11,7 +16,14 @@ using JSON3
     include("reactions_test.jl")
     include("display_test.jl")
     include("units_test.jl")
+    include("graph_test.jl")
+
+    # ---- Serialization round-trips (src/serialize.jl + conformance adapter) ----
+    include("round_trip_regression_test.jl")
     include("conformance_round_trip_test.jl")
+
+    # ---- MTK / Catalyst integration (ext/EarthSciSerializationMTKExt.jl,
+    #      ext/EarthSciSerializationCatalystExt.jl) ----
     include("mtk_catalyst_test.jl")
     include("real_mtk_integration_test.jl")
     include("mtk_metadata_test.jl")
@@ -21,10 +33,14 @@ using JSON3
     include("units_fixture_consumption_test.jl")
     include("array_ops_test.jl")
     include("catalyst_extension_test.jl")
+
+    # ---- References, codegen, flatten, editing (src/reference_resolution.jl,
+    #      codegen.jl, flatten.jl, mock_systems.jl, editing.jl) ----
     include("reference_resolution_test.jl")
-    include("test_codegen.jl")
+    include("codegen_test.jl")
     include("flatten_test.jl")
     include("flattened_to_esm_test.jl")
+    include("mock_systems_test.jl")
     include("shape_promotion_test.jl")
     include("subsystem_ref_test.jl")
     include("editing_test.jl")
@@ -32,10 +48,14 @@ using JSON3
     include("arrayed_vars_test.jl")
     include("canonicalize_test.jl")
     include("relational_test.jl")
+
+    # ---- End-to-end simulation runs + MTK export ----
     include("simulate_run_test.jl")
     include("loaded_ic_bc_simulation_test.jl")
     include("wildfire_simulation_test.jl")
     include("mtk_export_test.jl")
+
+    # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
     include("tree_walk_test.jl")
     include("tree_walk_arrayop_test.jl")
     include("tree_walk_vectorized_test.jl")
@@ -46,9 +66,18 @@ using JSON3
     include("tree_walk_cse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")
     include("tree_walk_semiring_test.jl")
+    include("tree_walk_join_test.jl")
+    include("tree_walk_binning_alias_test.jl")
+    include("tree_walk_op_table_test.jl")
+    include("tree_walk_audit_fixes_test.jl")
+
+    # ---- Analysis passes (src/reference_graph.jl, src/cadence.jl,
+    #      value invention) ----
     include("reference_graph_test.jl")
     include("cadence_test.jl")
     include("value_invention_frontdoor_test.jl")
+
+    # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
     include("aggregate_conformance_test.jl")
     include("expression_ic_conformance_test.jl")
     include("inverse_trig_conformance_test.jl")
@@ -56,346 +85,120 @@ using JSON3
     include("geometry_polygon_intersection_area_test.jl")
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
-    include("treewalk_binning_alias_test.jl")
     include("geometry_ranged_clip_test.jl")
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
-    include("tree_walk_join_test.jl")
     include("closed_functions_test.jl")
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+
+    # ---- Expression templates & scoped imports (src/expression_templates.jl,
+    #      template machinery) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
     include("scope_injection_test.jl")
 
-    # Comprehensive test suite for full verification
-    @testset "Comprehensive Test Suite" begin
+    # ---- Shared fixture sweeps (tests/valid, tests/invalid, tests/display) ----
+    # Smoke coverage across the shared fixture tree. Deeper checks live in the
+    # dedicated files: manifest-driven round-trip idempotence in
+    # conformance_round_trip_test.jl, expected-error assertions for specific
+    # invalid fixtures in validate_test.jl / structural_validation_test.jl,
+    # and rendering assertions in display_test.jl. (The former inline
+    # "Round-trip Tests" subset was deleted as redundant with
+    # conformance_round_trip_test.jl, which round-trips a superset of those
+    # fixtures with a stronger save→load→save idempotence check.)
+    @testset "Fixture sweeps" begin
 
-        @testset "Valid Fixture Parse Tests" begin
-            # Test loading and parsing all valid test fixtures
-            valid_fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
-
-            if isdir(valid_fixtures_dir)
-                valid_files = filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
-                @info "Testing $(length(valid_files)) valid fixture files"
-
-                for filename in valid_files
-                    filepath = joinpath(valid_fixtures_dir, filename)
-                    @testset "Valid fixture: $filename" begin
-                        try
-                            esm_data = EarthSciSerialization.load(filepath)
-                            @test esm_data isa EarthSciSerialization.EsmFile
-                            @test !isnothing(esm_data.esm)
-                            @test !isnothing(esm_data.metadata)
-                            @info "✓ Successfully loaded $filename"
-                        catch e
-                            @warn "Failed to load valid fixture $filename: $e"
-                            @test false
-                        end
-                    end
+        @testset "Valid fixtures load" begin
+            valid_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
+            @test isdir(valid_dir)
+            for filename in filter(f -> endswith(f, ".esm"), readdir(valid_dir))
+                @testset "load: $filename" begin
+                    esm_data = EarthSciSerialization.load(joinpath(valid_dir, filename))
+                    @test esm_data isa EarthSciSerialization.EsmFile
+                    @test !isnothing(esm_data.esm)
+                    @test !isnothing(esm_data.metadata)
                 end
-            else
-                @warn "Valid fixtures directory not found: $valid_fixtures_dir"
             end
         end
 
-        @testset "Round-trip Tests" begin
-            # Test that load(save(load(file))) == load(file) for all valid fixtures
-            valid_fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
-
-            if isdir(valid_fixtures_dir)
-                valid_files = filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
-
-                for filename in valid_files[1:min(5, length(valid_files))]  # Test first 5 for performance
-                    filepath = joinpath(valid_fixtures_dir, filename)
-                    @testset "Round-trip: $filename" begin
-                        try
-                            # Load original
-                            original = EarthSciSerialization.load(filepath)
-
-                            # Create temp file for round-trip test
-                            temp_file = tempname() * ".esm"
-
-                            try
-                                # Save and reload
-                                EarthSciSerialization.save(temp_file, original)
-                                reloaded = EarthSciSerialization.load(temp_file)
-
-                                # Compare key fields
-                                @test original.esm == reloaded.esm
-                                @test original.metadata.name == reloaded.metadata.name
-
-                                # For files with models, compare model count
-                                if !isnothing(original.models) && !isnothing(reloaded.models)
-                                    @test length(original.models) == length(reloaded.models)
-                                end
-
-                                @info "✓ Round-trip test passed for $filename"
-                            finally
-                                # Clean up temp file
-                                isfile(temp_file) && rm(temp_file)
-                            end
-                        catch e
-                            @warn "Round-trip test failed for $filename: $e"
-                            @test false
-                        end
+        @testset "Invalid fixtures rejected" begin
+            invalid_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid")
+            @test isdir(invalid_dir)
+            for filename in filter(f -> endswith(f, ".esm"), readdir(invalid_dir))
+                filepath = joinpath(invalid_dir, filename)
+                @testset "reject: $filename" begin
+                    # A fixture counts as rejected when load throws a documented
+                    # rejection error or validate() reports errors. Any OTHER
+                    # exception propagates with its full stack trace.
+                    rejected = try
+                        result = EarthSciSerialization.validate(
+                            EarthSciSerialization.load(filepath))
+                        !result.is_valid
+                    catch e
+                        (e isa EarthSciSerialization.ParseError ||
+                         e isa EarthSciSerialization.SchemaValidationError ||
+                         e isa EarthSciSerialization.SubsystemRefError) || rethrow()
+                        true
+                    end
+                    if rejected
+                        @test rejected
+                    else
+                        # Known gap: some shared invalid fixtures (several
+                        # units_* dimensional checks, undefined-variable rate
+                        # references, ...) are rejected by other language
+                        # bindings but pass Julia's load+validate. Kept broken
+                        # (not skipped) so a src-side fix flips them visibly.
+                        @test_broken rejected
                     end
                 end
             end
         end
 
-        @testset "Invalid Fixture Schema Tests" begin
-            # Test that invalid fixtures produce expected schema errors
-            invalid_fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid")
-
-            if isdir(invalid_fixtures_dir)
-                invalid_files = filter(f -> endswith(f, ".esm"), readdir(invalid_fixtures_dir))
-                @info "Testing $(length(invalid_files)) invalid fixture files"
-
-                for filename in invalid_files[1:min(10, length(invalid_files))]  # Test first 10 for performance
-                    filepath = joinpath(invalid_fixtures_dir, filename)
-                    @testset "Invalid fixture: $filename" begin
-                        # Should either throw ParseError or produce validation errors
-                        error_found = false
-                        try
-                            esm_data = EarthSciSerialization.load(filepath)
-                            result = EarthSciSerialization.validate(esm_data)
-                            if !result.is_valid
-                                @test !isempty(result.schema_errors) || !isempty(result.structural_errors)
-                                error_found = true
-                                @info "✓ Invalid fixture $filename correctly produced validation errors"
+        @testset "Display fixtures parse" begin
+            display_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "display")
+            @test isdir(display_dir)
+            for filename in filter(f -> endswith(f, ".json"), readdir(display_dir))
+                @testset "display: $filename" begin
+                    display_data = JSON3.read(read(joinpath(display_dir, filename), String))
+                    # Fixture shape varies: flat arrays of cases, or objects
+                    # keyed by "chemical_formulas" / "test_cases"; a few (e.g.
+                    # model_summary.json) carry no case list at all.
+                    cases = if display_data isa JSON3.Array
+                        display_data
+                    elseif display_data isa JSON3.Object && haskey(display_data, :chemical_formulas)
+                        display_data[:chemical_formulas]
+                    elseif display_data isa JSON3.Object && haskey(display_data, :test_cases)
+                        display_data[:test_cases]
+                    else
+                        nothing
+                    end
+                    if cases === nothing
+                        @test !isempty(display_data)
+                    else
+                        @test !isempty(cases)
+                        # Every expression-shaped "input" must parse. Inputs may
+                        # also be plain strings (chemical formulas), and nested
+                        # {description, tests: [...]} groups keep their shape.
+                        for case in cases
+                            if case isa JSON3.Object && haskey(case, :input) &&
+                               case[:input] isa JSON3.Object
+                                expr = EarthSciSerialization.parse_expression(case[:input])
+                                @test expr isa EarthSciSerialization.Expr
+                            elseif case isa JSON3.Object && haskey(case, :tests)
+                                @test case[:tests] isa JSON3.Array
                             end
-                        catch e
-                            if e isa EarthSciSerialization.ParseError || e isa EarthSciSerialization.SchemaValidationError
-                                error_found = true
-                                @info "✓ Invalid fixture $filename correctly threw error: $(typeof(e))"
-                            else
-                                @warn "Unexpected error for $filename: $e"
-                            end
-                        end
-                        if !error_found
-                            @test_broken false # Expected validation error for invalid fixture $filename
-                        else
-                            @test true
                         end
                     end
                 end
-            else
-                @warn "Invalid fixtures directory not found: $invalid_fixtures_dir"
-            end
-        end
-
-        @testset "Display Format Tests" begin
-            # Test pretty-printing matches display fixtures
-            display_fixtures_dir = joinpath(@__DIR__, "..", "..", "..", "tests", "display")
-
-            if isdir(display_fixtures_dir)
-                display_files = filter(f -> endswith(f, ".json"), readdir(display_fixtures_dir))
-                @info "Testing $(length(display_files)) display fixture files"
-
-                for filename in display_files[1:min(3, length(display_files))]  # Test first 3
-                    filepath = joinpath(display_fixtures_dir, filename)
-                    @testset "Display format: $filename" begin
-                        try
-                            display_data = JSON3.read(read(filepath, String))
-
-                            # Fixture shape varies: some are flat arrays of cases, some are
-                            # objects with a "chemical_formulas" key. Walk whatever structure
-                            # we actually get and verify that any "input" expression parses.
-                            cases = if display_data isa JSON3.Array
-                                display_data
-                            elseif display_data isa JSON3.Object && haskey(display_data, :chemical_formulas)
-                                display_data[:chemical_formulas]
-                            else
-                                []
-                            end
-
-                            # Walk cases, handling both flat {input, ...} objects
-                            # and nested {description, tests: [...]} groups. Inputs
-                            # may be either expression objects or plain strings
-                            # (chemical formulas) — parse the expression form only.
-                            for case in cases
-                                if case isa JSON3.Object && haskey(case, :input)
-                                    if case[:input] isa JSON3.Object
-                                        expr = EarthSciSerialization.parse_expression(case[:input])
-                                        @test expr isa EarthSciSerialization.Expr
-                                    end
-                                elseif case isa JSON3.Object && haskey(case, :tests)
-                                    # Nested group — each sub-test has input/unicode/latex.
-                                    # No expression parsing needed; just confirm the group
-                                    # shape is what the fixture documents.
-                                    @test case[:tests] isa JSON3.Array
-                                end
-                            end
-                            # Sanity check the fixture wasn't empty
-                            @test !isempty(cases)
-
-                            @info "✓ Display format test passed for $filename"
-                        catch e
-                            @warn "Display format test failed for $filename: $e"
-                            @test false
-                        end
-                    end
-                end
-            else
-                @warn "Display fixtures directory not found: $display_fixtures_dir"
             end
         end
 
         # Substitution fixture tests live in expression_test.jl, where they
         # assert each case's expected output (not just that substitute runs).
-    end
-
-    @testset "Expression Types" begin
-        # Test NumExpr
-        num_expr = NumExpr(3.14)
-        @test num_expr.value == 3.14
-        @test num_expr isa EarthSciSerialization.Expr
-
-        # Test VarExpr
-        var_expr = VarExpr("x")
-        @test var_expr.name == "x"
-        @test var_expr isa EarthSciSerialization.Expr
-
-        # Test OpExpr
-        op_expr = OpExpr("+", EarthSciSerialization.Expr[NumExpr(1.0), VarExpr("x")])
-        @test op_expr.op == "+"
-        @test length(op_expr.args) == 2
-        @test op_expr.wrt === nothing
-        @test op_expr.dim === nothing
-        @test op_expr isa EarthSciSerialization.Expr
-
-        # Test OpExpr with optional parameters
-        diff_expr = OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t", dim="time")
-        @test diff_expr.wrt == "t"
-        @test diff_expr.dim == "time"
-    end
-
-    @testset "Equation Types" begin
-        # Test Equation. Qualify ESM.Equation: under MTK 11 + Pkg.test
-        # extras the test session has both ESS and MTK loaded into Main,
-        # which makes the bare `Equation` reference ambiguous.
-        lhs = OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t")
-        rhs = OpExpr("*", EarthSciSerialization.Expr[NumExpr(2.0), VarExpr("x")])
-        eq = EarthSciSerialization.Equation(lhs, rhs)
-        @test eq.lhs == lhs
-        @test eq.rhs == rhs
-
-        # Test AffectEquation
-        affect_eq = AffectEquation("x", NumExpr(0.0))
-        @test affect_eq.lhs == "x"
-        @test affect_eq.rhs isa NumExpr
-    end
-
-    @testset "ModelVariable Types" begin
-        # Test ModelVariableType enum
-        @test StateVariable isa ModelVariableType
-        @test ParameterVariable isa ModelVariableType
-        @test ObservedVariable isa ModelVariableType
-
-        # Test ModelVariable
-        mv = ModelVariable(StateVariable, default=1.0, description="Test variable")
-        @test mv.type == StateVariable
-        @test mv.default == 1.0
-        @test mv.description == "Test variable"
-        @test mv.expression === nothing
-    end
-
-    @testset "Model Component Types" begin
-        # Test Species
-        species = Species("CO2", units="mol/m^3", default=1e-6)
-        @test species.name == "CO2"
-        @test species.units == "mol/m^3"
-        @test species.default == 1e-6
-        @test species.description === nothing
-
-        # Test Parameter
-        param = Parameter("k", 0.1, description="Rate constant", units="1/s")
-        @test param.name == "k"
-        @test param.default == 0.1
-        @test param.description == "Rate constant"
-        @test param.units == "1/s"
-
-        # Test Reaction
-        reactants = Dict("A" => 1, "B" => 1)
-        products = Dict("C" => 1)
-        rate = OpExpr("*", EarthSciSerialization.Expr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
-        reaction = Reaction(reactants, products, rate)
-        @test reaction.reactants == reactants
-        @test reaction.products == products
-        @test reaction.rate == rate
-        @test reaction.reversible == false
-    end
-
-    @testset "Event System Types" begin
-        # Test DiscreteEventTrigger types
-        cond_trigger = ConditionTrigger(VarExpr("x"))
-        @test cond_trigger isa DiscreteEventTrigger
-        @test cond_trigger.expression isa VarExpr
-
-        periodic_trigger = PeriodicTrigger(10.0, phase=2.0)
-        @test periodic_trigger isa DiscreteEventTrigger
-        @test periodic_trigger.period == 10.0
-        @test periodic_trigger.phase == 2.0
-
-        preset_trigger = PresetTimesTrigger([1.0, 5.0, 10.0])
-        @test preset_trigger isa DiscreteEventTrigger
-        @test preset_trigger.times == [1.0, 5.0, 10.0]
-
-        # Test FunctionalAffect
-        affect = FunctionalAffect("x", NumExpr(1.0), operation="add")
-        @test affect.target == "x"
-        @test affect.expression isa NumExpr
-        @test affect.operation == "add"
-    end
-
-    @testset "System Configuration Types" begin
-        # Test Reference
-        ref = Reference(doi="10.1000/test", citation="Test paper")
-        @test ref.doi == "10.1000/test"
-        @test ref.citation == "Test paper"
-        @test ref.url === nothing
-        @test ref.notes === nothing
-
-        # Test Metadata
-        metadata = Metadata("test_model",
-                          description="A test model",
-                          authors=["Test Author"],
-                          license="MIT")
-        @test metadata.name == "test_model"
-        @test metadata.description == "A test model"
-        @test metadata.authors == ["Test Author"]
-        @test metadata.license == "MIT"
-
-        # Test Domain (esm-spec v0.8.0: temporal-only; the spatial table was removed)
-        domain = Domain(temporal=Dict("t" => [0.0, 100.0]))
-        @test domain.temporal isa Dict
-
-        # Test EsmFile
-        esm_file = EsmFile("0.1.0", metadata)
-        @test esm_file.esm == "0.1.0"
-        @test esm_file.metadata == metadata
-        @test esm_file.models === nothing
-        @test esm_file.coupling == []
-    end
-
-    @testset "Type Hierarchy" begin
-        # Test that all expression types are subtypes of Expr
-        @test NumExpr <: EarthSciSerialization.Expr
-        @test VarExpr <: EarthSciSerialization.Expr
-        @test OpExpr <: EarthSciSerialization.Expr
-
-        # Test that trigger types are subtypes of DiscreteEventTrigger
-        @test ConditionTrigger <: DiscreteEventTrigger
-        @test PeriodicTrigger <: DiscreteEventTrigger
-        @test PresetTimesTrigger <: DiscreteEventTrigger
-
-        # Test that event types are subtypes of EventType
-        @test ContinuousEvent <: EarthSciSerialization.EventType
-        @test DiscreteEvent <: EarthSciSerialization.EventType
     end
 end

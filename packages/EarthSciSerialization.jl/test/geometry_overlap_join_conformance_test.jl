@@ -29,7 +29,9 @@ using EarthSciSerialization
 import JSON3
 
 const ESS = EarthSciSerialization
-const _OJ_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
+const _OJ_REPO_ROOT = TESTUTILS_REPO_ROOT
 const _OJ_FIXTURE = joinpath(_OJ_REPO_ROOT, "tests", "valid", "geometry",
                              "conservative_regrid_overlap_join.esm")
 
