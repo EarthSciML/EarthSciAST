@@ -274,6 +274,15 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): boolean {
     )
   }
 
+  // Try to find in data loaders (RFC pure-io-data-loaders): a loader-scoped
+  // reference like "InitialConditions.O3_init" names a variable the loader
+  // exposes. Loaders have no subsystems, so only a single-segment path
+  // resolves.
+  const loader = esmFile.data_loaders?.[systemName]
+  if (loader && pathParts.length === 0) {
+    return !!loader.variables && variableName in loader.variables
+  }
+
   return false
 }
 
