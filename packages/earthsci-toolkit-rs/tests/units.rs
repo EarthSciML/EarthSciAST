@@ -8,10 +8,10 @@ use earthsci_toolkit::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+mod common;
+
 fn fixture_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/valid")
-        .join(name)
+    common::repo_fixture(&format!("valid/{name}"))
 }
 
 #[test]
@@ -83,7 +83,6 @@ fn propagate_dh_equals_v() {
     let eq = Equation {
         lhs: dh,
         rhs: Expr::Variable("v".to_string()),
-        ..Default::default()
     };
 
     validate_equation_dimensions(&eq, &env).expect("D(h)/dt should match v (both are m/s)");

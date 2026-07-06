@@ -20,14 +20,10 @@ use earthsci_toolkit::registered_functions::{ClosedArg, ClosedValue, evaluate_cl
 use earthsci_toolkit::{EsmFile, Expr, ExpressionNode, load_path};
 use serde_json::Value;
 
+mod common;
+
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root above packages/earthsci-toolkit-rs")
-        .join("tests")
-        .join("conformance")
-        .join("function_tables")
+    common::repo_fixture("conformance/function_tables")
 }
 
 fn nested_to_1d(v: &Value) -> Vec<f64> {

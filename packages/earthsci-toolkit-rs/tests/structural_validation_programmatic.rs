@@ -1,6 +1,11 @@
-//! Structural validation error code tests
+//! Structural validation tests over PROGRAMMATICALLY constructed models
+//! (typed struct literals rather than fixture files).
 //!
-//! Tests the structural validation logic that goes beyond JSON schema validation.
+//! The fixture-driven counterpart is `structural_validation.rs`; this file
+//! covers the same validator through direct construction, which exercises
+//! shapes the shared fixture tree does not carry. (Formerly named
+//! `structural_validation_fixed.rs` — the suffix was a naming accident, not
+//! a superseding copy.)
 
 use earthsci_toolkit::*;
 use std::collections::HashMap;
@@ -36,7 +41,6 @@ fn test_undefined_variable_in_model() {
         equations: vec![Equation {
             lhs: Expr::Variable("y".to_string()), // 'y' is not defined
             rhs: Expr::Number(1.0),
-            ..Default::default()
         }],
         discrete_events: None,
         continuous_events: None,
@@ -138,12 +142,10 @@ fn test_equation_count_mismatch() {
             Equation {
                 lhs: Expr::Variable("x".to_string()),
                 rhs: Expr::Number(1.0),
-                ..Default::default()
             },
             Equation {
                 lhs: Expr::Variable("x".to_string()),
                 rhs: Expr::Number(2.0),
-                ..Default::default()
             },
         ],
         discrete_events: None,

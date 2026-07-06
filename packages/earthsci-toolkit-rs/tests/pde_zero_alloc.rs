@@ -206,7 +206,10 @@ fn measure_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
     let mut probe = RhsStats::default();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut probe);
     assert_eq!(probe.vectorized_rules, 1, "{label}: RHS did not vectorize");
-    assert_eq!(probe.scalar_rules, 0, "{label}: RHS fell back to the oracle");
+    assert_eq!(
+        probe.scalar_rules, 0,
+        "{label}: RHS fell back to the oracle"
+    );
 
     let iters = 200usize;
     let before = ALLOC_COUNT.load(Ordering::Relaxed);

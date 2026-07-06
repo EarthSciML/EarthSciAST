@@ -570,7 +570,11 @@ mod tests {
             (1.5, 3.5),
         ];
         let ring = intersect_polygon(&a, &b, Manifold::Planar).expect("padded planar clip");
-        assert!((shoelace_area(&ring) - 1.0).abs() < TOL, "area {}", shoelace_area(&ring));
+        assert!(
+            (shoelace_area(&ring) - 1.0).abs() < TOL,
+            "area {}",
+            shoelace_area(&ring)
+        );
     }
 
     #[test]
@@ -589,10 +593,19 @@ mod tests {
         // The s2bindings octant example, each operand padded with a repeated
         // trailing vertex — the exact degenerate-edge input that failed before.
         let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0), (0.0, 90.0)];
-        let b = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0), (45.0, 90.0), (45.0, 90.0)];
+        let b = [
+            (45.0, 0.0),
+            (135.0, 0.0),
+            (45.0, 90.0),
+            (45.0, 90.0),
+            (45.0, 90.0),
+        ];
         let ring = intersect_polygon(&a, &b, Manifold::Spherical)
             .expect("padded spherical clip must succeed (S2 no longer sees the degenerate edge)");
-        assert!(ring.len() >= 3, "expected a non-empty spherical overlap ring");
+        assert!(
+            ring.len() >= 3,
+            "expected a non-empty spherical overlap ring"
+        );
         let area = spherical_area(&ring).expect("spherical area");
         assert!(
             (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
@@ -602,9 +615,7 @@ mod tests {
         let a_u = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
         let b_u = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
         let ring_u = intersect_polygon(&a_u, &b_u, Manifold::Spherical).expect("unpadded");
-        assert!(
-            (spherical_area(&ring).unwrap() - spherical_area(&ring_u).unwrap()).abs() < 1e-12
-        );
+        assert!((spherical_area(&ring).unwrap() - spherical_area(&ring_u).unwrap()).abs() < 1e-12);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

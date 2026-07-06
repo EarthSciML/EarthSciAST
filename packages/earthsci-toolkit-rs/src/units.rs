@@ -1222,7 +1222,6 @@ mod tests {
         let eq = Equation {
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("v".into()),
-            ..Default::default()
         };
         validate_equation_dimensions(&eq, &env).unwrap();
     }
@@ -1234,7 +1233,6 @@ mod tests {
         let eq = Equation {
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("h".into()),
-            ..Default::default()
         };
         assert!(validate_equation_dimensions(&eq, &env).is_err());
     }

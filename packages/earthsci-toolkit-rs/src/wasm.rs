@@ -65,7 +65,8 @@ fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) ->
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn load(json_str: &str) -> Result<JsValue, JsValue> {
-    let esm_file = rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
+    let esm_file =
+        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
     to_js(&esm_file)
 }
 

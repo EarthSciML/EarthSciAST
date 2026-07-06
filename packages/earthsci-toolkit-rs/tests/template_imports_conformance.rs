@@ -19,7 +19,7 @@ use earthsci_toolkit::template_imports::{
     reject_template_imports_pre_v08, resolve_template_machinery,
 };
 use earthsci_toolkit::types::Expr;
-use earthsci_toolkit::{load_path, load_path_with_options, load_with_options, LoadOptions};
+use earthsci_toolkit::{LoadOptions, load_path, load_path_with_options, load_with_options};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -122,7 +122,10 @@ fn import_diamond_dedups_and_matches_golden() {
         golden(&conf(&["import_diamond", "expanded.esm"]))
     );
     let f = load_path(conf(&["import_diamond", "fixture.esm"])).expect("typed load");
-    assert_eq!(f.index_sets.as_ref().expect("index_sets")["cells"].size, Some(10));
+    assert_eq!(
+        f.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(10)
+    );
 }
 
 /// import_order_determinism: equal-priority rules on the same pattern — the
@@ -131,10 +134,16 @@ fn import_diamond_dedups_and_matches_golden() {
 /// (§9.6.3).
 #[test]
 fn import_order_pins_tie_break_and_priority_flips_it() {
-    let d1 = expand_raw(&conf(&["import_order_determinism", "fixture_import_order.esm"]));
+    let d1 = expand_raw(&conf(&[
+        "import_order_determinism",
+        "fixture_import_order.esm",
+    ]));
     assert_eq!(
         d1,
-        golden(&conf(&["import_order_determinism", "expanded_import_order.esm"]))
+        golden(&conf(&[
+            "import_order_determinism",
+            "expanded_import_order.esm"
+        ]))
     );
     let d2 = expand_raw(&conf(&[
         "import_order_determinism",
@@ -149,8 +158,14 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     );
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
-    assert_eq!(d1["models"]["M"]["variables"]["y"]["expression"]["args"][0], json!(2));
-    assert_eq!(d2["models"]["M"]["variables"]["y"]["expression"]["args"][0], json!(5));
+    assert_eq!(
+        d1["models"]["M"]["variables"]["y"]["expression"]["args"][0],
+        json!(2)
+    );
+    assert_eq!(
+        d2["models"]["M"]["variables"]["y"]["expression"]["args"][0],
+        json!(5)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +193,10 @@ fn import_where_rename_two_instances_matches_golden() {
     let d = expand_raw(&conf(&["import_where_rename_two_instances", "fixture.esm"]));
     assert_eq!(
         d,
-        golden(&conf(&["import_where_rename_two_instances", "expanded.esm"]))
+        golden(&conf(&[
+            "import_where_rename_two_instances",
+            "expanded.esm"
+        ]))
     );
     let vars = &d["models"]["TwoGrids"]["variables"];
     let va = &vars["div_A"]["expression"];
@@ -197,8 +215,11 @@ fn import_where_rename_two_instances_matches_golden() {
 /// registration — the fix does not paper over genuine typos.
 #[test]
 fn import_where_rename_unknown_index_set_rejected() {
-    let e = load_path(conf(&["import_where_rename_unknown_index_set", "fixture.esm"]))
-        .expect_err("bad where set must fail to load");
+    let e = load_path(conf(&[
+        "import_where_rename_unknown_index_set",
+        "fixture.esm",
+    ]))
+    .expect_err("bad where set must fail to load");
     let msg = e.to_string();
     assert!(
         msg.contains("[template_constraint_unknown_index_set]"),
@@ -299,22 +320,21 @@ fn json_float_literals_round_trip_bit_exact() {
 
     // End-to-end through the crate load→emit: a const carrying the full-precision
     // coordinates survives parse→emit verbatim (AST byte identity).
-    let doc = format!(
-        r#"{{
+    let doc = r#"{
       "esm": "0.8.0",
-      "metadata": {{"name": "ulp"}},
-      "models": {{"M": {{
-        "variables": {{
-          "x": {{"type": "state", "units": "1", "default": 0.5}},
-          "pt": {{"type": "observed", "units": "1",
-                  "expression": {{"op": "const", "args": [],
-                                 "value": [-104.52369275835723, 42.059133583516356]}}}}
-        }},
-        "equations": [{{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}},
-                       "rhs": {{"op": "-", "args": ["x"]}}}}]
-      }}}}
-    }}"#
-    );
+      "metadata": {"name": "ulp"},
+      "models": {"M": {
+        "variables": {
+          "x": {"type": "state", "units": "1", "default": 0.5},
+          "pt": {"type": "observed", "units": "1",
+                  "expression": {"op": "const", "args": [],
+                                 "value": [-104.52369275835723, 42.059133583516356]}}
+        },
+        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                       "rhs": {"op": "-", "args": ["x"]}}]
+      }}
+    }"#
+    .to_string();
     let f = earthsci_toolkit::load(&doc).expect("load ulp doc");
     let text = earthsci_toolkit::save(&f).expect("save ulp doc");
     assert!(
@@ -343,7 +363,10 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let mut v: Value = serde_json::from_str(&src).expect("parse wrapper");
         earthsci_toolkit::resolve_subsystem_refs(&mut v, wrapper_path.parent().unwrap())
             .expect("resolve subsystem refs");
-        assert_eq!(v, golden(&conf(&["metaparameter_resolutions", golden_name])));
+        assert_eq!(
+            v,
+            golden(&conf(&["metaparameter_resolutions", golden_name]))
+        );
 
         // Typed anchors through the full load.
         let f = load_path(&wrapper_path).expect("typed load");
@@ -404,17 +427,26 @@ fn valid_suite_library_and_minimal_consumer() {
     let valid = repo_root().join("tests/valid");
     let lib = load_path(valid.join("template_import_lib.esm")).expect("library load");
     assert!(lib.models.is_none());
-    assert_eq!(lib.index_sets.as_ref().expect("index_sets")["cells"].size, Some(8));
+    assert_eq!(
+        lib.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(8)
+    );
 
     // Loader-API binding overrides the default on the library itself.
     let mut api = BTreeMap::new();
     api.insert("N".to_string(), 12i64);
     let lib12 =
         load_path_with_options(valid.join("template_import_lib.esm"), &api).expect("N=12 load");
-    assert_eq!(lib12.index_sets.as_ref().expect("index_sets")["cells"].size, Some(12));
+    assert_eq!(
+        lib12.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(12)
+    );
 
     let m = load_path(valid.join("template_import_minimal.esm")).expect("consumer load");
-    assert_eq!(m.index_sets.as_ref().expect("index_sets")["cells"].size, Some(8));
+    assert_eq!(
+        m.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(8)
+    );
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
     let y = m.models.as_ref().expect("models")["M"].variables["y"]
@@ -525,8 +557,10 @@ fn model_json(extra_model_fields: &str, top_fields: &str) -> String {
     )
 }
 
-fn load_in(dir: &Path, text: &str) -> Result<earthsci_toolkit::EsmFile, earthsci_toolkit::EsmError>
-{
+fn load_in(
+    dir: &Path,
+    text: &str,
+) -> Result<earthsci_toolkit::EsmFile, earthsci_toolkit::EsmError> {
     let options = LoadOptions {
         base_path: Some(dir.to_path_buf()),
         metaparameters: BTreeMap::new(),
@@ -660,7 +694,10 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
         ),
     )
     .expect("equal diamond loads");
-    assert_eq!(f.index_sets.as_ref().expect("index_sets")["cells"].size, Some(4));
+    assert_eq!(
+        f.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(4)
+    );
 }
 
 #[test]
@@ -734,7 +771,10 @@ fn metaparameter_fold_ranges_regions_size_exact() {
     "#,
     )
     .expect("fold load");
-    assert_eq!(f.index_sets.as_ref().expect("index_sets")["cells"].size, Some(12));
+    assert_eq!(
+        f.index_sets.as_ref().expect("index_sets")["cells"].size,
+        Some(12)
+    );
     let m = &f.models.as_ref().expect("models")["M"];
     let agg = serde_json::to_value(m.variables["agg"].expression.as_ref().unwrap()).unwrap();
     assert_eq!(agg["ranges"]["i"], json!([1, 5]));

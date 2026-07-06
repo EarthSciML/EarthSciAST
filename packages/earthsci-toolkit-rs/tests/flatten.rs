@@ -210,7 +210,6 @@ fn flatten_mixed_model_and_reaction_system() {
             equations: vec![Equation {
                 lhs: ddt("y"),
                 rhs: Expr::Number(1.0),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -397,7 +396,6 @@ fn flatten_conflicting_derivative_raises_error() {
             equations: vec![Equation {
                 lhs: ddt("X"),
                 rhs: Expr::Number(0.0),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -508,7 +506,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
             equations: vec![Equation {
                 lhs: ddt("u"),
                 rhs: var("k"),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -537,7 +534,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
                     ..Default::default()
                 }),
                 rhs: var("k"),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -655,7 +651,6 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
             equations: vec![Equation {
                 lhs: ddt("u"),
                 rhs: var("T"),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -751,7 +746,6 @@ fn flatten_couple_includes_connector_equations() {
             equations: vec![Equation {
                 lhs: ddt("x"),
                 rhs: Expr::Number(0.0),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -827,7 +821,6 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
         equations: vec![Equation {
             lhs: ddt("q"),
             rhs: Expr::Number(1.0),
-            ..Default::default()
         }],
         discrete_events: None,
         continuous_events: None,
@@ -882,7 +875,6 @@ fn flatten_rejects_spatial_operators() {
                     dim: Some("x".to_string()),
                     ..Default::default()
                 }),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,
@@ -954,7 +946,6 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
                     dim: None,
                     ..Default::default()
                 }),
-                ..Default::default()
             }],
             discrete_events: None,
             continuous_events: None,

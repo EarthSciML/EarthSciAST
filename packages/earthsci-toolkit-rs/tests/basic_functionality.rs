@@ -88,7 +88,6 @@ fn test_structural_validation() {
         equations: vec![Equation {
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
-            ..Default::default()
         }],
         discrete_events: None,
         continuous_events: None,

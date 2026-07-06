@@ -17,17 +17,10 @@ use earthsci_toolkit::registered_functions::{
 };
 use serde_json::Value;
 
+mod common;
+
 fn fixtures_root() -> PathBuf {
-    // Walk up from the crate dir (CARGO_MANIFEST_DIR is the crate root) to the
-    // repo root, then into `tests/closed_functions/`. The tree is
-    // `<repo>/packages/earthsci-toolkit-rs/<crate root>` — three pops.
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    crate_root
-        .ancestors()
-        .nth(2)
-        .expect("repo root above packages/earthsci-toolkit-rs")
-        .join("tests")
-        .join("closed_functions")
+    common::repo_fixture("closed_functions")
 }
 
 fn decode_input(v: &Value) -> ClosedArg {

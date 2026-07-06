@@ -4,11 +4,10 @@
 //! Julia/Python/Rust/TypeScript/Go and exist specifically to drive
 //! cross-binding agreement on units handling.
 //!
-//! Rust currently has no expression-level dimension propagation
-//! (tracked separately under gt-rust-propagation), so this suite asserts
-//! only that each fixture parses and that every variable's declared unit
-//! string round-trips through `parse_unit`. Equation-level dimensional
-//! checks are deferred until propagation lands.
+//! Asserts that each fixture parses, that every variable's declared unit
+//! string round-trips through `parse_unit`, and — now that expression-level
+//! dimension propagation exists (`units::propagate` via `validate_complete`)
+//! — that every fixture passes full validation with zero unit warnings.
 
 use earthsci_toolkit::*;
 
@@ -64,5 +63,44 @@ fn units_fixtures_variable_units_parse_or_log() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn units_fixtures_dimensional_propagation() {
+    // Expression-level dimensional propagation over every equation, pinning
+    // the exact expected warning set per fixture. The fixtures are
+    // deliberately not equation-balanced (they showcase unit relationships,
+    // not complete ODE systems), so structural validity is not asserted.
+    //
+    // `units_dimensional_analysis.esm` carries one KNOWN inconsistency: its
+    // Thermodynamics relaxation equation divides by the bare number 1.0
+    // rather than a `tau: s` constant, so D(T,t) [K/s] != RHS [K]. The
+    // propagator is right to flag it; the sibling bindings assert only that
+    // validation completes, so the shared fixture stays as is and this test
+    // pins the detection instead.
+    let expected_warning_counts = [
+        ("units_conversions.esm", 0usize),
+        ("units_dimensional_analysis.esm", 1),
+        ("units_propagation.esm", 0),
+    ];
+    for (name, content) in UNITS_FIXTURES {
+        let result = validate_complete(content);
+        assert!(
+            result.schema_errors.is_empty(),
+            "{name}: unexpected schema errors: {:?}",
+            result.schema_errors
+        );
+        let expected = expected_warning_counts
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        assert_eq!(
+            result.unit_warnings.len(),
+            expected,
+            "{name}: expected {expected} unit warning(s), got {:?}",
+            result.unit_warnings
+        );
     }
 }

@@ -326,8 +326,7 @@ fn shared_valid_aggregate_fixture_parses_and_resolves() {
     // The resolver accepts the fixture's `{from:"cells"}` references (interval
     // size 5) without error — the undeclared-from guard does not false-positive.
     let mut resolved = model;
-    resolve_aggregate_ranges(&mut resolved, index_sets)
-        .expect("fixture `{from}` ranges resolve");
+    resolve_aggregate_ranges(&mut resolved, index_sets).expect("fixture `{from}` ranges resolve");
 }
 
 /// Cross-bead invalid fixture (bead ess-my4.1.6): the shared resolver-level

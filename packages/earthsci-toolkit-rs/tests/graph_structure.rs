@@ -269,7 +269,6 @@ fn test_model_expression_graph() {
                 dim: None,
                 ..Default::default()
             }),
-            ..Default::default()
         }],
         discrete_events: None,
         continuous_events: None,

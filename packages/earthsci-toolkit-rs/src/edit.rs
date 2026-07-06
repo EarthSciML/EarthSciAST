@@ -518,7 +518,10 @@ pub fn remove_continuous_event(model: &Model, index: usize) -> EditResult<Model>
 /// * `EditResult<EsmFile>` - New ESM file with the added coupling entry
 pub fn add_coupling(esm_file: &EsmFile, coupling: CouplingEntry) -> EditResult<EsmFile> {
     let mut new_file = esm_file.clone();
-    new_file.coupling.get_or_insert_with(Vec::new).push(coupling);
+    new_file
+        .coupling
+        .get_or_insert_with(Vec::new)
+        .push(coupling);
     Ok(new_file)
 }
 
@@ -534,11 +537,7 @@ pub fn add_coupling(esm_file: &EsmFile, coupling: CouplingEntry) -> EditResult<E
 /// * `EditResult<EsmFile>` - New ESM file without the coupling entry
 pub fn remove_coupling(esm_file: &EsmFile, index: usize) -> EditResult<EsmFile> {
     let mut new_file = esm_file.clone();
-    remove_from_optional_vec(
-        &mut new_file.coupling,
-        index,
-        EditError::CouplingIndexError,
-    )?;
+    remove_from_optional_vec(&mut new_file.coupling, index, EditError::CouplingIndexError)?;
     Ok(new_file)
 }
 
@@ -719,7 +718,6 @@ mod tests {
         let equation = Equation {
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
-            ..Default::default()
         };
 
         let result = add_equation(&model, equation);
@@ -735,7 +733,6 @@ mod tests {
         model.equations.push(Equation {
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
-            ..Default::default()
         });
 
         let result = remove_equation(&model, 0);

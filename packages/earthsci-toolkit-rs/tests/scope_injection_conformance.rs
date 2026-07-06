@@ -146,7 +146,10 @@ fn form_b_coupling_entry_injection() {
         adv_rhs["args"][1]["op"], "makearray",
         "the coupling-entry injection must lower Advection's lon-derivative"
     );
-    assert_eq!(f.index_sets.as_ref().expect("index_sets")["lon"].size, Some(288));
+    assert_eq!(
+        f.index_sets.as_ref().expect("index_sets")["lon"].size,
+        Some(288)
+    );
 
     // Emit (the 0-D partner) named no key and stays untouched (D(e)/dt intact).
     let emit_lhs = serde_json::to_value(&models["Emit"].equations[0].lhs).unwrap();
@@ -156,7 +159,9 @@ fn form_b_coupling_entry_injection() {
     // the emitted document matches the golden.
     let ser = loaded_as_value(&fixture);
     assert!(
-        ser["coupling"][0].get("expression_template_imports").is_none(),
+        ser["coupling"][0]
+            .get("expression_template_imports")
+            .is_none(),
         "the coupling-entry injection map must not survive parse → emit"
     );
     assert_json_eq(
@@ -207,7 +212,9 @@ fn form_c_test_block_injection() {
     let tests = adv.tests.as_ref().expect("tests");
     assert_eq!(tests.len(), 2);
     assert!(
-        tests.iter().all(|t| !t.expression_template_imports.is_empty()),
+        tests
+            .iter()
+            .all(|t| !t.expression_template_imports.is_empty()),
         "each test keeps its injected discretization imports"
     );
 
@@ -241,15 +248,25 @@ fn form_c_test_block_injection() {
 
     let e1v = serde_json::to_value(&e1).unwrap();
     let e2v = serde_json::to_value(&e2).unwrap();
-    assert_eq!(e1v["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"], "makearray");
-    assert_eq!(e2v["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"], "makearray");
-    assert_eq!(e1.index_sets.as_ref().expect("e1 index_sets")["lon"].size, Some(288));
-    assert_eq!(e2.index_sets.as_ref().expect("e2 index_sets")["lon"].size, Some(144));
+    assert_eq!(
+        e1v["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"],
+        "makearray"
+    );
+    assert_eq!(
+        e2v["models"]["Advection"]["equations"][0]["rhs"]["args"][1]["op"],
+        "makearray"
+    );
+    assert_eq!(
+        e1.index_sets.as_ref().expect("e1 index_sets")["lon"].size,
+        Some(288)
+    );
+    assert_eq!(
+        e2.index_sets.as_ref().expect("e2 index_sets")["lon"].size,
+        Some(144)
+    );
 
     // The persisted file is untouched by the ephemeral builds.
-    let adv_rhs_after = serde_json::to_value(
-        &f.models.as_ref().unwrap()["Advection"].equations[0].rhs,
-    )
-    .unwrap();
+    let adv_rhs_after =
+        serde_json::to_value(&f.models.as_ref().unwrap()["Advection"].equations[0].rhs).unwrap();
     assert_eq!(adv_rhs_after["args"][1]["op"], "D");
 }

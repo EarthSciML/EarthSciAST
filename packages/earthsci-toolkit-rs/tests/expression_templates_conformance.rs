@@ -166,7 +166,10 @@ fn scalar_field_param_conformance_fixture_matches_expanded() {
     assert_eq!(out["models"], expanded["models"]);
     let vars = &out["models"]["Overlap"]["variables"];
     assert_eq!(vars["area_planar"]["expression"]["manifold"], "planar");
-    assert_eq!(vars["area_spherical"]["expression"]["manifold"], "spherical");
+    assert_eq!(
+        vars["area_spherical"]["expression"]["manifold"],
+        "spherical"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +218,10 @@ fn two_div_two_meshes_matches_golden() {
 /// the stable `template_constraint_unknown_index_set` code (esm-spec §9.6.6).
 #[test]
 fn constraint_unknown_index_set_rejected() {
-    let err = lower_fixture("constraint_unknown_index_set").expect_err("must reject at registration");
-    assert_eq!(err.code, "template_constraint_unknown_index_set", "got: {err}");
+    let err =
+        lower_fixture("constraint_unknown_index_set").expect_err("must reject at registration");
+    assert_eq!(
+        err.code, "template_constraint_unknown_index_set",
+        "got: {err}"
+    );
 }

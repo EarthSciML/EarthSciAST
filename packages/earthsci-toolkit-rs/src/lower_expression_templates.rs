@@ -183,8 +183,7 @@ pub(crate) fn validate_templates(
                         ),
                     )
                 })?;
-                let is_only_shape =
-                    cobj_obj.len() == 1 && cobj_obj.contains_key("shape");
+                let is_only_shape = cobj_obj.len() == 1 && cobj_obj.contains_key("shape");
                 if !is_only_shape {
                     let mut kinds: Vec<&str> = cobj_obj.keys().map(String::as_str).collect();
                     kinds.sort_unstable();
@@ -522,7 +521,9 @@ fn rule_priority(decl: &Map<String, Value>) -> i64 {
 /// reaction systems (which carry no `shape` field): a shape-constrained rule
 /// can only fire on a declared, shaped model variable. Mirrors the Julia
 /// reference `_component_shape_env`.
-fn component_shape_env(comp: &Map<String, Value>) -> std::collections::BTreeMap<String, Vec<String>> {
+fn component_shape_env(
+    comp: &Map<String, Value>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut env = std::collections::BTreeMap::new();
     let Some(vars) = comp.get("variables").and_then(|v| v.as_object()) else {
         return env;
@@ -1046,11 +1047,13 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                     comp.insert(k, rewritten);
                 }
             }
-            registries.entry(cname.clone()).or_insert_with(|| CompRegistry {
-                templates: templates.clone(),
-                rules: rules.clone(),
-                shape_env: shape_env.clone(),
-            });
+            registries
+                .entry(cname.clone())
+                .or_insert_with(|| CompRegistry {
+                    templates: templates.clone(),
+                    rules: rules.clone(),
+                    shape_env: shape_env.clone(),
+                });
         }
     }
 

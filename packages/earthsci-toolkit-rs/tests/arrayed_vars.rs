@@ -1,23 +1,11 @@
 //! Arrayed-variable shape/location tests (discretization RFC §10.2).
 
 use earthsci_toolkit::*;
-use std::fs;
-use std::path::PathBuf;
 
-fn fixture_dir() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop(); // packages/earthsci-toolkit-rs -> packages
-    p.pop(); // packages -> repo root
-    p.push("tests");
-    p.push("fixtures");
-    p.push("arrayed_vars");
-    p
-}
+mod common;
 
 fn load_fixture(name: &str) -> EsmFile {
-    let path = fixture_dir().join(name);
-    let raw = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    load(&raw).unwrap_or_else(|e| panic!("parse {name}: {e:?}"))
+    common::load_repo_fixture(&format!("fixtures/arrayed_vars/{name}"))
 }
 
 fn roundtrip(name: &str) -> (EsmFile, EsmFile) {

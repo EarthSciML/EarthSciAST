@@ -54,7 +54,10 @@ fn map_exprs_in_trigger(
     }
 }
 
-fn map_exprs_in_affect(affect: &AffectEquation, m: &mut dyn FnMut(&Expr) -> Expr) -> AffectEquation {
+fn map_exprs_in_affect(
+    affect: &AffectEquation,
+    m: &mut dyn FnMut(&Expr) -> Expr,
+) -> AffectEquation {
     AffectEquation {
         lhs: affect.lhs.clone(), // LHS is a variable name string, not an expression
         rhs: m(&affect.rhs),

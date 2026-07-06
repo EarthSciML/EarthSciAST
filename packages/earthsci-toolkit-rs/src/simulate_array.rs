@@ -454,8 +454,7 @@ impl RhsScratch {
     /// allocated once here (zero-filled); subsequent RHS calls only overwrite
     /// their contents. Observed value arrays are materialized lazily.
     fn new(var_shapes: &IndexMap<String, VarShape>) -> Self {
-        let mut state_arrays =
-            ArrMap::with_capacity_and_hasher(var_shapes.len(), FxBuildHasher);
+        let mut state_arrays = ArrMap::with_capacity_and_hasher(var_shapes.len(), FxBuildHasher);
         for (name, vs) in var_shapes {
             state_arrays.insert(name.clone(), ArrayD::<f64>::zeros(IxDyn(&vs.shape)));
         }
@@ -1687,7 +1686,10 @@ impl ArrayCompiled {
         let prefix = format!("{ns}.");
         m.iter()
             .map(|(k, v)| {
-                let key = k.strip_prefix(&prefix).map(str::to_string).unwrap_or_else(|| k.clone());
+                let key = k
+                    .strip_prefix(&prefix)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| k.clone());
                 (key, *v)
             })
             .collect()
@@ -2299,10 +2301,7 @@ fn dependency_order_observed(rules: Vec<AlgebraicRule>) -> Vec<AlgebraicRule> {
 /// Build per-variable ndarray views from the flat state vector (owned copies —
 /// fast enough at fixture sizes). A scalar variable becomes a 0-D array; an
 /// array variable is read column-major over its inferred shape.
-fn build_state_arrays(
-    var_shapes: &IndexMap<String, VarShape>,
-    state: &[f64],
-) -> ArrMap {
+fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state: &[f64]) -> ArrMap {
     let mut state_arrays: ArrMap = ArrMap::default();
     for (name, vs) in var_shapes {
         let total = vs.shape.iter().copied().product::<usize>().max(1);
@@ -4423,10 +4422,7 @@ pub fn eval_expression(
     // input maps are small (a clipped ring, a couple of coordinate arrays) and
     // this runs once per call (per-cell IC recompute was removed — see
     // `resolve_field_ics`), so the shallow re-map is negligible.
-    let inputs: ArrMap = inputs
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     // Standalone expression evaluation (FAQ rings, area integrands) carries no
     // loader forcing — an empty buffer keeps the channel byte-identical here.
@@ -4607,9 +4603,7 @@ fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 // not apply and we release and fall through.
                 let covers = match vv.shape() {
                     None => true,
-                    Some(s) => {
-                        s == &shp[..] && vv.origin().map(|o| o == &lo[..]).unwrap_or(false)
-                    }
+                    Some(s) => s == &shp[..] && vv.origin().map(|o| o == &lo[..]).unwrap_or(false),
                 };
                 if covers {
                     let out = match &vv {
@@ -4869,9 +4863,7 @@ fn collect_algebraic_defined(equations: &[crate::types::Equation]) -> HashSet<St
 fn expr_contains_skolem(expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
-        Expr::Operator(node) => {
-            node.op == "skolem" || node.any_child(&mut expr_contains_skolem)
-        }
+        Expr::Operator(node) => node.op == "skolem" || node.any_child(&mut expr_contains_skolem),
     }
 }
 
@@ -5250,8 +5242,7 @@ fn collect_derivative_targets(equations: &[crate::types::Equation]) -> HashSet<S
         if let Some((name, _)) = extract_derivative_scalar(&eq.lhs) {
             out.insert(name);
         }
-        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs)
-        {
+        if let Some(DerivArrayop { var: name, .. }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs) {
             out.insert(name);
         }
     }
@@ -5738,8 +5729,6 @@ fn cartesian_range(ranges: &[(i64, i64)]) -> Vec<Vec<i64>> {
     }
     out
 }
-
-
 
 #[cfg(test)]
 mod geometry_eval_tests {
@@ -6687,14 +6676,8 @@ mod elementwise_array_observed_tests {
             }}
         });
         let file = typed(doc);
-        let sol = simulate(
-            &file,
-            (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &erk(),
-        )
-        .expect("simulates");
+        let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &erk())
+            .expect("simulates");
         let ti = sol.time.len() - 1;
         let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
         assert_eq!(cells.len(), 3);

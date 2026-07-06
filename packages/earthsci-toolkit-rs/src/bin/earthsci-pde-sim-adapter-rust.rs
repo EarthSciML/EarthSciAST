@@ -24,9 +24,9 @@ use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report
 
 use earthsci_toolkit::flatten::flatten;
 use earthsci_toolkit::simulate_array::ArrayCompiled;
-use earthsci_toolkit::{load, simulate, SimulateOptions, SolverChoice};
+use earthsci_toolkit::{SimulateOptions, SolverChoice, load, simulate};
 use ndarray::{ArrayD, IxDyn};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Strip a leading `Model.` namespace so element names match across bindings.
 fn bare(name: &str) -> &str {
@@ -108,7 +108,8 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         max_steps: 1_000_000,
         output_times: Some(out_times.clone()),
     };
-    let sol = simulate(&file, (t0, t1), &params, &ics, &opts).map_err(|e| format!("simulate: {e:?}"))?;
+    let sol =
+        simulate(&file, (t0, t1), &params, &ics, &opts).map_err(|e| format!("simulate: {e:?}"))?;
 
     let mut traj = Map::new();
     for &t in &out_times {
@@ -146,7 +147,10 @@ fn json_to_field(v: &Value) -> Result<ArrayD<f64>, String> {
     let arr = v.as_array().ok_or("input field is not an array")?;
     if arr.first().map(Value::is_array).unwrap_or(false) {
         let nrow = arr.len();
-        let ncol = arr[0].as_array().ok_or("input grid row is not an array")?.len();
+        let ncol = arr[0]
+            .as_array()
+            .ok_or("input grid row is not an array")?
+            .len();
         let mut data = Vec::with_capacity(nrow * ncol);
         for row in arr {
             let r = row.as_array().ok_or("ragged input grid")?;
@@ -180,8 +184,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
     let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
     let file = load(&json_str).map_err(|e| format!("load: {e:?}"))?;
     let flat = flatten(&file).map_err(|e| format!("flatten: {e:?}"))?;
-    let compiled =
-        ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
+    let compiled = ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
 
     // Install the static stub provider: materialize every manifest input into the
     // forcing buffer under its declared `<Loader>.<var>` name. No field is

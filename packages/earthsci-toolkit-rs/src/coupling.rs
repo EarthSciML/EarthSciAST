@@ -124,7 +124,8 @@ pub(crate) fn validate_coupling(
                     } else if let Some(op) = operators.get(operator) {
                         // Validate operator variables against the union of
                         // every system's declared names.
-                        let (available_vars, available_sorted) = collect_available_vars(system_refs);
+                        let (available_vars, available_sorted) =
+                            collect_available_vars(system_refs);
                         check_operator_vars(
                             operator,
                             &op.needed_vars,
@@ -162,7 +163,14 @@ pub(crate) fn validate_coupling(
                 }
             }
             crate::CouplingEntry::Couple { systems, .. } => {
-                validate_pairwise_systems(systems, "Couple", "couple", &coupling_path, system_refs, errors);
+                validate_pairwise_systems(
+                    systems,
+                    "Couple",
+                    "couple",
+                    &coupling_path,
+                    system_refs,
+                    errors,
+                );
             }
             crate::CouplingEntry::OperatorCompose { systems, .. } => {
                 validate_pairwise_systems(

@@ -545,7 +545,7 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         "true" => Ok(Val::Bool(true)),
         "false" => Ok(Val::Bool(false)),
         "floor" => Ok(Val::Int(
-            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.floor() as i64,
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.floor() as i64
         )),
         "ceil" => Ok(Val::Int(
             vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.ceil() as i64
@@ -916,9 +916,7 @@ fn vi_join_ok(
                 // missing map buffer or unbound symbol is a diagnostic, not a
                 // panicking `Index` lookup.
                 let missing_map = |name: &str| {
-                    ValueInventionError(format!(
-                        "join key {name:?} has no materialised map buffer"
-                    ))
+                    ValueInventionError(format!("join key {name:?} has no materialised map buffer"))
                 };
                 let unbound = |sym: &str| {
                     ValueInventionError(format!("join index symbol {sym:?} is not bound"))
@@ -1843,7 +1841,10 @@ mod tests {
         let file = crate::parse::load(EDGE_FIXTURE).expect("fixture loads");
         // v0.8.0: the `index_sets` registry is document-scoped, so it is threaded
         // in and rewritten in place rather than living on the model.
-        let mut registry = file.index_sets.clone().expect("fixture declares index_sets");
+        let mut registry = file
+            .index_sets
+            .clone()
+            .expect("fixture declares index_sets");
         let model = file
             .models
             .as_ref()
@@ -1852,9 +1853,7 @@ mod tests {
             .unwrap();
 
         // Without the rewrite: the derived output index is rejected.
-        assert!(
-            crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err()
-        );
+        assert!(crate::aggregate::resolve_aggregate_ranges(&mut model.clone(), &registry).is_err());
 
         // With the rewrite: the derived `edges` set resolves to the dense [1, 5].
         rewrite_derived_index_sets(&mut registry, &vi.extents);

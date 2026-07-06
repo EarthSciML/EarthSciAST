@@ -1132,8 +1132,7 @@ fn perform_deep_coupling_analysis(esm_file: &earthsci_toolkit::EsmFile) {
     // Find strongly connected components; a component is a genuine cycle iff
     // it has more than one node or a self-edge.
     let sccs = find_strongly_connected_components(&graph);
-    let has_self_edge =
-        |id: &str| graph.edges.iter().any(|e| e.from == id && e.to == id);
+    let has_self_edge = |id: &str| graph.edges.iter().any(|e| e.from == id && e.to == id);
     let cycles: Vec<&Vec<String>> = sccs
         .iter()
         .filter(|c| c.len() > 1 || (c.len() == 1 && has_self_edge(&c[0])))
@@ -1783,9 +1782,7 @@ fn print_complexity_analysis(esm_file: &earthsci_toolkit::EsmFile) {
                     walk(expr, 1, &mut nodes, &mut max_depth, &mut ops);
                 }
             }
-            println!(
-                "  Model {model_id}: {nodes} expression nodes, max depth {max_depth}"
-            );
+            println!("  Model {model_id}: {nodes} expression nodes, max depth {max_depth}");
             total_nodes += nodes;
             total_max_depth = total_max_depth.max(max_depth);
         }
@@ -3306,7 +3303,6 @@ fn exercise_graph_esm_source(
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3322,8 +3318,8 @@ mod tests {
             ("coupling", TEMPLATE_COUPLING),
         ] {
             let content = template.replace("{name}", "demo_project");
-            let esm_file = load(&content)
-                .unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
+            let esm_file =
+                load(&content).unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
             let result = validate(&esm_file);
             assert!(
                 result.is_valid,

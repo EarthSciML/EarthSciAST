@@ -24,7 +24,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_toolkit::simulate::Solution;
-use earthsci_toolkit::{load, simulate, EsmFile, Model, ModelTest, SimulateOptions, SolverChoice};
+use earthsci_toolkit::{EsmFile, Model, ModelTest, SimulateOptions, SolverChoice, load, simulate};
 use std::collections::HashMap;
 use std::fs;
 
@@ -124,7 +124,10 @@ fn wildfire_ocean_inline_tests() {
             checked += 1;
         }
     }
-    assert!(checked >= 6, "expected >= 6 inline assertions, got {checked}");
+    assert!(
+        checked >= 6,
+        "expected >= 6 inline assertions, got {checked}"
+    );
 }
 
 /// The conservatively-regridded flux drives SST to exactly the hand-derived
@@ -143,8 +146,14 @@ fn wildfire_regrid_trajectory_and_constant_states() {
         max_steps: 1_000_000,
         output_times: Some(vec![0.0, 3600.0]),
     };
-    let sol = simulate(&file, (0.0, 3600.0), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("simulate the coupled regrid fixture");
+    let sol = simulate(
+        &file,
+        (0.0, 3600.0),
+        &HashMap::new(),
+        &HashMap::new(),
+        &opts,
+    )
+    .expect("simulate the coupled regrid fixture");
 
     // SST(3600) = 290 + 3600 * surface_heat_flux / 4_180_000.
     let expected_sst = [290.0861244019, 290.2440191388, 290.3014354067];
@@ -185,11 +194,26 @@ fn wildfire_regrid_trajectory_and_constant_states() {
     );
 
     // Coupled 0-D / ic-only states are held constant.
-    assert!((lookup(&sol, "T", 3600.0) - 288.0).abs() <= 1e-9, "T drifted");
-    assert!((lookup(&sol, "phi", 3600.0) - 1.0).abs() <= 1e-9, "phi drifted");
-    assert!((lookup(&sol, "fuel", 3600.0) - 10.0).abs() <= 1e-9, "fuel drifted");
-    assert!((lookup(&sol, "wind_u", 3600.0)).abs() <= 1e-9, "wind_u drifted");
-    assert!((lookup(&sol, "wind_v", 3600.0)).abs() <= 1e-9, "wind_v drifted");
+    assert!(
+        (lookup(&sol, "T", 3600.0) - 288.0).abs() <= 1e-9,
+        "T drifted"
+    );
+    assert!(
+        (lookup(&sol, "phi", 3600.0) - 1.0).abs() <= 1e-9,
+        "phi drifted"
+    );
+    assert!(
+        (lookup(&sol, "fuel", 3600.0) - 10.0).abs() <= 1e-9,
+        "fuel drifted"
+    );
+    assert!(
+        (lookup(&sol, "wind_u", 3600.0)).abs() <= 1e-9,
+        "wind_u drifted"
+    );
+    assert!(
+        (lookup(&sol, "wind_v", 3600.0)).abs() <= 1e-9,
+        "wind_v drifted"
+    );
     for o in 1..=3 {
         assert!(
             lookup(&sol, &format!("u_ocean[{o}]"), 3600.0).abs() <= 1e-9,

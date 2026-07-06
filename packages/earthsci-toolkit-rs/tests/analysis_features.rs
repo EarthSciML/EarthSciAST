@@ -73,7 +73,6 @@ fn test_analysis_features_integration() {
                 dim: None,
                 ..Default::default()
             }),
-            ..Default::default()
         }],
         discrete_events: None,
         continuous_events: None,
@@ -259,7 +258,6 @@ fn test_editing_operations() {
     let new_eq = Equation {
         lhs: Expr::Variable("test_var".to_string()),
         rhs: Expr::Number(42.0),
-        ..Default::default()
     };
 
     let model_with_eq = add_equation(&updated_model, new_eq).expect("Failed to add equation");

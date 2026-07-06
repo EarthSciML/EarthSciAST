@@ -490,7 +490,6 @@ mod tests {
                         ..Default::default()
                     }),
                     rhs: Expr::Variable("undefined_var".to_string()), // This should cause an error
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,
@@ -598,7 +597,6 @@ mod tests {
                             ..Default::default()
                         }),
                         rhs: Expr::Variable("x".to_string()),
-                        ..Default::default()
                     },
                 ],
                 discrete_events: None,
@@ -856,7 +854,6 @@ mod tests {
                         ..Default::default()
                     }),
                     rhs: Expr::Variable("rate".to_string()),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,
@@ -1029,7 +1026,6 @@ mod tests {
                         dim: None,
                         ..Default::default()
                     }),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,
@@ -1140,7 +1136,6 @@ mod tests {
                         ..Default::default()
                     }),
                     rhs: Expr::Variable("k".to_string()), // Just k, not k*x
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,
@@ -1250,7 +1245,6 @@ mod tests {
                         ..Default::default()
                     }),
                     rhs: Expr::Variable("velocity".to_string()),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,
@@ -1349,7 +1343,6 @@ mod tests {
                         dim: None,
                         ..Default::default()
                     }),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,

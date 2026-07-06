@@ -1660,7 +1660,6 @@ mod tests {
                         ..Default::default()
                     }),
                     rhs: Expr::Variable("k".to_string()),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,

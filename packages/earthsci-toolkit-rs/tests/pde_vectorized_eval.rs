@@ -131,7 +131,10 @@ fn vectorized_matches_per_cell_oracle() {
         let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
         let (dy_scalar, sstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
         assert_eq!(vstats.vectorized_rules, 1, "{name}: not vectorized");
-        assert_eq!(vstats.scalar_rules, 0, "{name}: vectorized run hit the oracle");
+        assert_eq!(
+            vstats.scalar_rules, 0,
+            "{name}: vectorized run hit the oracle"
+        );
         assert_eq!(
             sstats.scalar_rules, 1,
             "{name}: force_scalar did not use oracle"

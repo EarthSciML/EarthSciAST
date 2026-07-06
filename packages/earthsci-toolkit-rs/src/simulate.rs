@@ -1097,17 +1097,16 @@ fn resolve_expr(
             // arguments survive to evaluation (a plain `Op` drops both — the
             // root cause of `fn` ops NaN-ing on the scalar path).
             if node.op == "fn" {
-                let name = node.name.clone().ok_or_else(|| {
-                    CompileError::InterpreterBuildError {
-                        details: "`fn` op is missing its required `name` field".to_string(),
-                    }
-                })?;
+                let name =
+                    node.name
+                        .clone()
+                        .ok_or_else(|| CompileError::InterpreterBuildError {
+                            details: "`fn` op is missing its required `name` field".to_string(),
+                        })?;
                 let args = node
                     .args
                     .iter()
-                    .map(|a| {
-                        resolve_fn_arg(a, state_index, param_index, observed_index, obs_limit)
-                    })
+                    .map(|a| resolve_fn_arg(a, state_index, param_index, observed_index, obs_limit))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(ResolvedExpr::Fn { name, args });
             }
@@ -1365,9 +1364,7 @@ fn eval_fn(
     let closed_args: Vec<ClosedArg> = args
         .iter()
         .map(|a| match a {
-            ResolvedFnArg::Scalar(e) => {
-                ClosedArg::Scalar(interpret(e, state, params, observed, t))
-            }
+            ResolvedFnArg::Scalar(e) => ClosedArg::Scalar(interpret(e, state, params, observed, t)),
             ResolvedFnArg::Array(v) => ClosedArg::Array(v.clone()),
             ResolvedFnArg::Array2D(v) => ClosedArg::Array2D(v.clone()),
         })

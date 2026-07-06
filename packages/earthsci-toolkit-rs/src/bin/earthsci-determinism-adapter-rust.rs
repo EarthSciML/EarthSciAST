@@ -13,11 +13,11 @@
 //!
 //! Invoked as `earthsci-determinism-adapter-rust --manifest <m.json> --output <r.json>`.
 
+use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report};
 use earthsci_toolkit::relational::{
     Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct, group_aggregate, rank,
     serialize_pairs, skolem, skolem_edge,
 };
-use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 use std::process::ExitCode;

@@ -10,8 +10,8 @@
 //!
 //! Invoked as `earthsci-cadence-adapter-rust --manifest <m.json> --output <r.json>`.
 
-use earthsci_toolkit::cadence::{self, MaterializationPoint};
 use earthsci_toolkit::adapter_support::{parse_manifest_output_args, write_report};
+use earthsci_toolkit::cadence::{self, MaterializationPoint};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 use std::process::ExitCode;

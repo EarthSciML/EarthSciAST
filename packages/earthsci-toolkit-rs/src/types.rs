@@ -603,21 +603,21 @@ impl ExpressionNode {
             self.expr.as_deref(),
             self.filter.as_deref(),
         ] {
-            if let Some(e) = opt {
-                if f(e) {
-                    return true;
-                }
-            }
-        }
-        if let Some(vs) = &self.values {
-            if vs.iter().any(&mut *f) {
+            if let Some(e) = opt
+                && f(e)
+            {
                 return true;
             }
         }
-        if let Some(axes) = &self.axes {
-            if axes.values().any(&mut *f) {
-                return true;
-            }
+        if let Some(vs) = &self.values
+            && vs.iter().any(&mut *f)
+        {
+            return true;
+        }
+        if let Some(axes) = &self.axes
+            && axes.values().any(&mut *f)
+        {
+            return true;
         }
         false
     }

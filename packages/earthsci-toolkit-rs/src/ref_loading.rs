@@ -113,7 +113,10 @@ fn walk_top_level(
             walk_subsystems(system, base_path, visited, Some(&mut registry))?;
         }
     }
-    if let Some(map) = obj.get_mut("reaction_systems").and_then(|v| v.as_object_mut()) {
+    if let Some(map) = obj
+        .get_mut("reaction_systems")
+        .and_then(|v| v.as_object_mut())
+    {
         for (_name, system) in map.iter_mut() {
             walk_subsystems(system, base_path, visited, None)?;
         }
@@ -183,9 +186,10 @@ fn inline_toplevel_model_refs(
                  download {ref_str:?} to a local file first"
             ));
         }
-        let canonical = base_path.join(ref_str).canonicalize().map_err(|e| {
-            format!("failed to resolve top-level model ref {ref_str:?}: {e}")
-        })?;
+        let canonical = base_path
+            .join(ref_str)
+            .canonicalize()
+            .map_err(|e| format!("failed to resolve top-level model ref {ref_str:?}: {e}"))?;
         if visited.contains(&canonical) {
             return Err(format!(
                 "circular top-level model reference detected: {}",
@@ -197,10 +201,18 @@ fn inline_toplevel_model_refs(
 
         let result: Result<(Value, Value), String> = (|| {
             let content = std::fs::read_to_string(&canonical).map_err(|e| {
-                format!("failed to read top-level model ref {}: {}", canonical.display(), e)
+                format!(
+                    "failed to read top-level model ref {}: {}",
+                    canonical.display(),
+                    e
+                )
             })?;
             let mut comp: Value = serde_json::from_str(&content).map_err(|e| {
-                format!("failed to parse top-level model ref {}: {}", canonical.display(), e)
+                format!(
+                    "failed to parse top-level model ref {}: {}",
+                    canonical.display(),
+                    e
+                )
             })?;
             // Component-of-component: inline the leaf's own top-level model-refs.
             if let Some(comp_obj) = comp.as_object_mut() {
@@ -283,7 +295,11 @@ fn extract_toplevel_model(
             avail.sort();
             format!(
                 "top-level model ref '{ref_str}' has no model '{name}' (available: {})",
-                avail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                avail
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         }),
         None => {
@@ -296,7 +312,11 @@ fn extract_toplevel_model(
                     "top-level model ref '{ref_str}' resolves to {} models; add a \"model\" \
                      selector to choose one (available: {})",
                     models.len(),
-                    avail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    avail
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             }
         }
@@ -497,12 +517,9 @@ fn resolve_value(
                 .unwrap_or_default();
             crate::template_imports::apply_scope_injections(&mut parsed, &injected)
                 .map_err(|e| e.to_string())?;
-            if let Some(mut resolved) = crate::template_imports::resolve_template_machinery(
-                &parsed,
-                &parent_dir,
-                &bindings,
-            )
-            .map_err(|e| e.to_string())?
+            if let Some(mut resolved) =
+                crate::template_imports::resolve_template_machinery(&parsed, &parent_dir, &bindings)
+                    .map_err(|e| e.to_string())?
             {
                 crate::lower_expression_templates::lower_expression_templates(&mut resolved)
                     .map_err(|e| e.to_string())?;

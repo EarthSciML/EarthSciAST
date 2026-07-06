@@ -156,10 +156,7 @@ pub fn lower_reactions_to_equations(
             ..Default::default()
         });
 
-        equations.push(Equation {
-            lhs,
-            rhs,
-        });
+        equations.push(Equation { lhs, rhs });
     }
 
     Ok(equations)

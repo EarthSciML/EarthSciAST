@@ -44,8 +44,13 @@ const COMPONENT_KINDS: [&str; 2] = ["models", "reaction_systems"];
 const APPLY_OP: &str = "apply_expression_template";
 
 /// A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
-const LIBRARY_FORBIDDEN_KEYS: [&str; 5] =
-    ["models", "reaction_systems", "data_loaders", "coupling", "domain"];
+const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
+    "models",
+    "reaction_systems",
+    "data_loaders",
+    "coupling",
+    "domain",
+];
 
 /// Keys whose VALUES are never expression positions: metaparameter names are
 /// substituted as bare variable-reference strings, so structural string
@@ -207,7 +212,9 @@ fn collect_metaparam_decls(
         let Some(decl) = v.as_object() else {
             return Err(err(
                 "metaparameter_type_error",
-                format!("{origin}: metaparameters.{name} must be an object with `type: \"integer\"`"),
+                format!(
+                    "{origin}: metaparameters.{name} must be an object with `type: \"integer\"`"
+                ),
             ));
         };
         if decl.get("type").and_then(|t| t.as_str()) != Some("integer") {
@@ -238,9 +245,11 @@ fn substitute_metaparams(x: &Value, values: &BTreeMap<String, i64>) -> Value {
             Some(v) => Value::from(*v),
             None => x.clone(),
         },
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| substitute_metaparams(v, values)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| substitute_metaparams(v, values))
+                .collect(),
+        ),
         Value::Object(obj) => {
             let mut out = Map::new();
             for (k, v) in obj {
@@ -299,26 +308,34 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     if x.is_number() {
         return Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: non-integer literal {x} in a structural integer site (esm-spec §9.7.6)"),
+            format!(
+                "{ctx}: non-integer literal {x} in a structural integer site (esm-spec §9.7.6)"
+            ),
         ));
     }
     let Some(obj) = x.as_object() else {
         return Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})"),
+            format!(
+                "{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})"
+            ),
         ));
     };
     let (Some(op_raw), Some(args)) = (obj.get("op"), obj.get("args").and_then(|a| a.as_array()))
     else {
         return Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"),
+            format!(
+                "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
+            ),
         ));
     };
     if args.is_empty() {
         return Err(err(
             "metaparameter_type_error",
-            format!("{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"),
+            format!(
+                "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
+            ),
         ));
     }
     let mut vals: Vec<i64> = Vec::with_capacity(args.len());
@@ -445,7 +462,8 @@ fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTempl
                             if as_int(entry).is_some() {
                                 continue;
                             }
-                            if let Some(f) = try_fold(entry, &format!("{ctx}: makearray regions bound"))?
+                            if let Some(f) =
+                                try_fold(entry, &format!("{ctx}: makearray regions bound"))?
                             {
                                 *entry = Value::from(f);
                             }
@@ -545,7 +563,9 @@ fn name_map(
     let Some(obj) = raw.as_object() else {
         return Err(err(
             "template_import_rename_invalid",
-            format!("{where_}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)"),
+            format!(
+                "{where_}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)"
+            ),
         ));
     };
     for (k, v) in obj {
@@ -599,9 +619,11 @@ fn rename_walk(
             Some(n) => Value::String(n.clone()),
             None => x.clone(),
         },
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| rename_walk(v, varmap, isetmap, tplmap)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| rename_walk(v, varmap, isetmap, tplmap))
+                .collect(),
+        ),
         Value::Object(obj) => {
             let is_apply = obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP);
             let mut out = Map::new();
@@ -708,7 +730,11 @@ fn rename_decl(
     let pset: std::collections::HashSet<String> = decl
         .get("params")
         .and_then(|p| p.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     if pset.is_empty() {
         return rename_walk(decl, varmap, isetmap, tplmap);
@@ -851,12 +877,21 @@ fn apply_edge_renames(
             n.to_string()
         }
     };
-    let tplmap: IndexMap<String, String> =
-        scope.templates.keys().map(|n| (n.clone(), final_name(n))).collect();
-    let isetmap: IndexMap<String, String> =
-        scope.index_sets.keys().map(|n| (n.clone(), final_name(n))).collect();
-    let metamap: IndexMap<String, String> =
-        scope.metaparams.keys().map(|n| (n.clone(), final_name(n))).collect();
+    let tplmap: IndexMap<String, String> = scope
+        .templates
+        .keys()
+        .map(|n| (n.clone(), final_name(n)))
+        .collect();
+    let isetmap: IndexMap<String, String> = scope
+        .index_sets
+        .keys()
+        .map(|n| (n.clone(), final_name(n)))
+        .collect();
+    let metamap: IndexMap<String, String> = scope
+        .metaparams
+        .keys()
+        .map(|n| (n.clone(), final_name(n)))
+        .collect();
 
     // --- per-namespace final-name uniqueness ---
     for (what, m) in [
@@ -940,8 +975,7 @@ fn apply_edge_renames(
     }
 
     // --- freshness guard: new bare names must not capture / merge ---
-    let rebind_keys: std::collections::HashSet<&str> =
-        rebind.keys().map(String::as_str).collect();
+    let rebind_keys: std::collections::HashSet<&str> = rebind.keys().map(String::as_str).collect();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     for f in &free {
         if !rebind_keys.contains(f.as_str()) {
@@ -1001,7 +1035,10 @@ fn apply_edge_renames(
     let mut newt = Map::new();
     for (n, d) in &scope.templates {
         let nd = rename_decl(d, &varmap, &iset_changed, &tpl_changed);
-        newt.insert(tplmap.get(n).expect("tplmap covers every template").clone(), nd);
+        newt.insert(
+            tplmap.get(n).expect("tplmap covers every template").clone(),
+            nd,
+        );
     }
     scope.templates = newt;
 
@@ -1012,9 +1049,12 @@ fn apply_edge_renames(
             let new_of: Vec<Value> = of
                 .iter()
                 .map(|e| match e.as_str() {
-                    Some(s) => {
-                        Value::String(iset_changed.get(s).cloned().unwrap_or_else(|| s.to_string()))
-                    }
+                    Some(s) => Value::String(
+                        iset_changed
+                            .get(s)
+                            .cloned()
+                            .unwrap_or_else(|| s.to_string()),
+                    ),
                     None => e.clone(),
                 })
                 .collect();
@@ -1022,14 +1062,23 @@ fn apply_edge_renames(
                 o.insert("of".to_string(), Value::Array(new_of));
             }
         }
-        newi.insert(isetmap.get(n).expect("isetmap covers every index set").clone(), nd);
+        newi.insert(
+            isetmap
+                .get(n)
+                .expect("isetmap covers every index set")
+                .clone(),
+            nd,
+        );
     }
     scope.index_sets = newi;
 
     let mut newm = Map::new();
     for (n, d) in &scope.metaparams {
         newm.insert(
-            metamap.get(n).expect("metamap covers every metaparameter").clone(),
+            metamap
+                .get(n)
+                .expect("metamap covers every metaparameter")
+                .clone(),
             d.clone(),
         );
     }
@@ -1225,7 +1274,9 @@ fn resolve_import_entry(
     let Some(entry_obj) = entry.as_object() else {
         return Err(err(
             "template_import_unresolved",
-            format!("{origin}: expression_template_imports entries must be objects with a `ref` field"),
+            format!(
+                "{origin}: expression_template_imports entries must be objects with a `ref` field"
+            ),
         ));
     };
     let ref_str = match entry_obj.get("ref").and_then(|v| v.as_str()) {
@@ -1306,7 +1357,10 @@ fn resolve_import_entry(
             }
             values.insert(
                 name.clone(),
-                require_int(v, &format!("{origin}: import of '{ref_str}', binding '{name}'"))?,
+                require_int(
+                    v,
+                    &format!("{origin}: import of '{ref_str}', binding '{name}'"),
+                )?,
             );
         }
     }
@@ -1365,7 +1419,10 @@ fn process_library(
     origin: &str,
 ) -> Result<TemplateScope, ExpressionTemplateError> {
     let mut scope = TemplateScope::default();
-    if let Some(imports) = raw.get("expression_template_imports").and_then(|v| v.as_array()) {
+    if let Some(imports) = raw
+        .get("expression_template_imports")
+        .and_then(|v| v.as_array())
+    {
         for entry in imports {
             let sub = resolve_import_entry(entry, dir, stack, origin)?;
             merge_scope(&mut scope, sub, origin)?;
@@ -1661,8 +1718,7 @@ pub fn resolve_template_machinery(
 
     // --- §9.7.6 name-collision check: no shadowing of visible names ---
     if !doc_meta.is_empty() {
-        let mut visible: std::collections::HashSet<String> =
-            doc_isets.keys().cloned().collect();
+        let mut visible: std::collections::HashSet<String> = doc_isets.keys().cloned().collect();
         for compkind in COMPONENT_KINDS {
             if let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) {
                 for (_, comp) in comps {

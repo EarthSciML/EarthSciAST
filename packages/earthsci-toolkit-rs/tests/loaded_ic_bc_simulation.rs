@@ -22,7 +22,7 @@ use earthsci_toolkit::flatten::flatten;
 use earthsci_toolkit::load_path;
 use earthsci_toolkit::provider::{CadenceProvider, NativeField, ProviderError};
 use earthsci_toolkit::simulate_array::ArrayCompiled;
-use earthsci_toolkit::{SimulateOptions, SolverChoice, Solution};
+use earthsci_toolkit::{SimulateOptions, Solution, SolverChoice};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
@@ -67,8 +67,14 @@ fn manifest_inputs() -> HashMap<String, ArrayD<f64>> {
         "Meteorology.u_wind".to_string(),
         grid(&[[2.0, 2.2], [2.1, 2.3], [2.2, 2.4], [2.3, 2.5]]),
     );
-    m.insert("BoundaryConditions.O3_inflow".to_string(), line(&[35.0, 36.0]));
-    m.insert("BoundaryConditions.NO_inflow".to_string(), line(&[0.20, 0.25]));
+    m.insert(
+        "BoundaryConditions.O3_inflow".to_string(),
+        line(&[35.0, 36.0]),
+    );
+    m.insert(
+        "BoundaryConditions.NO_inflow".to_string(),
+        line(&[0.20, 0.25]),
+    );
     m.insert(
         "BoundaryConditions.NO2_inflow".to_string(),
         line(&[1.5, 1.6]),
@@ -109,12 +115,7 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
         .time
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            (**a - t)
-                .abs()
-                .partial_cmp(&(**b - t).abs())
-                .unwrap()
-        })
+        .min_by(|(_, a), (_, b)| (**a - t).abs().partial_cmp(&(**b - t).abs()).unwrap())
         .map(|(i, _)| i)
         .expect("solution has output times");
     sol.state[vi][ti]

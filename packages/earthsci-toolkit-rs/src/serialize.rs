@@ -145,7 +145,6 @@ mod tests {
                 equations: vec![Equation {
                     lhs: Expr::Variable("d(x)/dt".to_string()),
                     rhs: Expr::Number(1.0),
-                    ..Default::default()
                 }],
                 discrete_events: None,
                 continuous_events: None,

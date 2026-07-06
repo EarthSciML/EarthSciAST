@@ -231,7 +231,10 @@ fn test_ic_in_reaction_system() {
         validation_result.errors()
     );
     let err = &ic_errors[0];
-    assert_eq!(err.path, "/reaction_systems/Chemistry/constraint_equations/0");
+    assert_eq!(
+        err.path,
+        "/reaction_systems/Chemistry/constraint_equations/0"
+    );
     assert_eq!(err.details["system"], "Chemistry");
     assert_eq!(err.details["species"], "O3");
     assert_eq!(err.details["constraint_equation_index"], 0);

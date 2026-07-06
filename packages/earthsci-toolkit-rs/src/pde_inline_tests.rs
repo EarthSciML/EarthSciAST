@@ -876,10 +876,16 @@ fn run_model_tests(
             );
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
-                Ok(sol) => {
-                    eval_assertion(sol, a, model_name, run_index_sets, run_file, &insp, base_dir)
-                        .map_err(|msg| format!("assertion evaluation failed: {msg}"))
-                }
+                Ok(sol) => eval_assertion(
+                    sol,
+                    a,
+                    model_name,
+                    run_index_sets,
+                    run_file,
+                    &insp,
+                    base_dir,
+                )
+                .map_err(|msg| format!("assertion evaluation failed: {msg}")),
             };
             let (actual, passed, message) = match outcome {
                 Err(msg) => (None, false, msg),
@@ -1753,8 +1759,14 @@ mod tests {
         let hi = by_id["t_hi"].actual.expect("t_hi actual recorded");
         // Each override must flow through to M2.k = 5·T, distinct per test —
         // not M1.k (= 2·T = 20) and not a single shared value.
-        assert!((lo - 50.0).abs() <= 1e-9 * 50.0, "t_lo actual {lo}, want 50");
-        assert!((hi - 100.0).abs() <= 1e-9 * 100.0, "t_hi actual {hi}, want 100");
+        assert!(
+            (lo - 50.0).abs() <= 1e-9 * 50.0,
+            "t_lo actual {lo}, want 50"
+        );
+        assert!(
+            (hi - 100.0).abs() <= 1e-9 * 100.0,
+            "t_hi actual {hi}, want 100"
+        );
         assert_ne!(lo, hi);
         assert!(
             results.iter().all(|r| r.passed),
