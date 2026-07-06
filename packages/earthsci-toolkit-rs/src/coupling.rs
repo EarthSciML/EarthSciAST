@@ -10,6 +10,58 @@ use crate::EsmFile;
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
 
+/// Union of every system's declared variable/species/parameter names, plus a
+/// sorted copy for embedding in diagnostics — error `details` must be
+/// deterministic, so the HashSet is never serialized directly.
+fn collect_available_vars(
+    system_refs: &HashMap<String, SystemInfo>,
+) -> (HashSet<String>, Vec<String>) {
+    let mut available_vars = HashSet::new();
+    for system_info in system_refs.values() {
+        available_vars.extend(system_info.variables.iter().cloned());
+        available_vars.extend(system_info.species.iter().cloned());
+        available_vars.extend(system_info.parameters.iter().cloned());
+    }
+    let mut sorted: Vec<String> = available_vars.iter().cloned().collect();
+    sorted.sort();
+    (available_vars, sorted)
+}
+
+/// Flag every name in `vars` (an operator's `needed_vars` or `modifies` list)
+/// that no system declares.
+fn check_operator_vars(
+    operator: &str,
+    vars: &[String],
+    field: &str,
+    available: &HashSet<String>,
+    available_sorted: &[String],
+    coupling_path: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let verb = if field == "needed_vars" {
+        "requires"
+    } else {
+        "modifies"
+    };
+    for var in vars {
+        if !available.contains(var) {
+            errors.push(StructuralError {
+                path: format!("{coupling_path}.{field}"),
+                code: StructuralErrorCode::OperatorVariableMissing,
+                message: format!(
+                    "Operator '{operator}' {verb} variable '{var}' which is not available"
+                ),
+                details: serde_json::json!({
+                    "operator": operator,
+                    "variable": var,
+                    "field": field,
+                    "available_variables": available_sorted,
+                }),
+            });
+        }
+    }
+}
+
 pub(crate) fn validate_coupling(
     coupling: &[crate::CouplingEntry],
     system_refs: &HashMap<String, SystemInfo>,
@@ -69,52 +121,29 @@ pub(crate) fn validate_coupling(
                                 "expected_in": "operators"
                             }),
                         });
-                    } else {
-                        // Validate operator variables
-                        if let Some(op) = operators.get(operator) {
-                            // Collect all available variables from all systems
-                            let mut available_vars = HashSet::new();
-                            for system_info in system_refs.values() {
-                                available_vars.extend(system_info.variables.iter().cloned());
-                                available_vars.extend(system_info.species.iter().cloned());
-                                available_vars.extend(system_info.parameters.iter().cloned());
-                            }
-
-                            // Check needed_vars
-                            for needed_var in &op.needed_vars {
-                                if !available_vars.contains(needed_var) {
-                                    errors.push(StructuralError {
-                                        path: format!("{coupling_path}.needed_vars"),
-                                        code: StructuralErrorCode::OperatorVariableMissing,
-                                        message: format!("Operator '{operator}' requires variable '{needed_var}' which is not available"),
-                                        details: serde_json::json!({
-                                            "operator": operator,
-                                            "variable": needed_var,
-                                            "field": "needed_vars",
-                                            "available_variables": available_vars.clone().into_iter().collect::<Vec<_>>()
-                                        }),
-                                    });
-                                }
-                            }
-
-                            // Check modifies variables (if specified)
-                            if let Some(ref modifies) = op.modifies {
-                                for modified_var in modifies {
-                                    if !available_vars.contains(modified_var) {
-                                        errors.push(StructuralError {
-                                            path: format!("{coupling_path}.modifies"),
-                                            code: StructuralErrorCode::OperatorVariableMissing,
-                                            message: format!("Operator '{operator}' modifies variable '{modified_var}' which is not available"),
-                                            details: serde_json::json!({
-                                                "operator": operator,
-                                                "variable": modified_var,
-                                                "field": "modifies",
-                                                "available_variables": available_vars.clone().into_iter().collect::<Vec<_>>()
-                                            }),
-                                        });
-                                    }
-                                }
-                            }
+                    } else if let Some(op) = operators.get(operator) {
+                        // Validate operator variables against the union of
+                        // every system's declared names.
+                        let (available_vars, available_sorted) = collect_available_vars(system_refs);
+                        check_operator_vars(
+                            operator,
+                            &op.needed_vars,
+                            "needed_vars",
+                            &available_vars,
+                            &available_sorted,
+                            &coupling_path,
+                            errors,
+                        );
+                        if let Some(ref modifies) = op.modifies {
+                            check_operator_vars(
+                                operator,
+                                modifies,
+                                "modifies",
+                                &available_vars,
+                                &available_sorted,
+                                &coupling_path,
+                                errors,
+                            );
                         }
                     }
                 } else {

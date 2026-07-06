@@ -255,28 +255,43 @@ pub fn group_by_reduce(
 /// integer (`5`, not `5.0`; `-0.0`→`0`) so the form matches integer-semiring
 /// goldens exactly.
 pub fn canonical_serialize_kv(rows: &[(Vec<JoinKey>, f64)]) -> String {
-    let arr: Vec<Value> = rows
-        .iter()
-        .map(|(key, val)| {
-            let mut comps: Vec<Value> = key.iter().map(JoinKey::to_json).collect();
-            comps.push(num_to_json(*val));
-            Value::Array(comps)
-        })
-        .collect();
-    // serde_json's compact formatter emits no spaces and raw UTF-8 (it escapes
-    // only control chars / `"` / `\`), matching the harness's
-    // json.dumps(separators=(",",":"), ensure_ascii=False).
-    serde_json::to_string(&Value::Array(arr)).unwrap_or_default()
+    // Tokens are assembled by hand (rather than through one serde_json pass)
+    // so the reduced-value component can use the canonical float form below;
+    // key components still go through serde_json's compact formatter, which
+    // emits no spaces and raw UTF-8 (it escapes only control chars / `"` /
+    // `\`), matching the harness's json.dumps(separators=(",",":"),
+    // ensure_ascii=False).
+    let mut out = String::from("[");
+    for (i, (key, val)) in rows.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        for k in key {
+            out.push_str(&serde_json::to_string(&k.to_json()).unwrap_or_default());
+            out.push(',');
+        }
+        out.push_str(&num_token(*val));
+        out.push(']');
+    }
+    out.push(']');
+    out
 }
 
-/// Render a reduced value as the canonical JSON number: an exact integer when
-/// the value is integral and i64-representable (normalizing `-0.0`→`0`),
-/// otherwise the float. Keeps integer-semiring outputs free of a spurious `.0`.
-fn num_to_json(v: f64) -> Value {
+/// Render a reduced value as the canonical JSON number token: an exact
+/// integer when the value is integral and i64-representable (normalizing
+/// `-0.0`→`0`, keeping integer-semiring outputs free of a spurious `.0`),
+/// otherwise the RFC §5.4.6 canonical float form
+/// ([`crate::canonicalize::format_canonical_float`]). The canonical form —
+/// not serde's Ryu shortest-round-trip, which switches to exponent notation
+/// at different magnitudes — is what Python's `_emit_token` and
+/// [`crate::relational`]'s `Num` token writer emit, so all three canonical
+/// serializers agree byte-for-byte on float-valued reductions.
+fn num_token(v: f64) -> String {
     if v.is_finite() && v.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&v) {
-        Value::from(v as i64)
+        (v as i64).to_string()
     } else {
-        Value::from(v)
+        crate::canonicalize::format_canonical_float(v)
     }
 }
 

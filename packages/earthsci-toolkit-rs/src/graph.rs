@@ -61,20 +61,29 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
+    // Node order is part of the rendered output (`to_dot`/`to_mermaid`/
+    // `to_json_graph`), so iterate every component map in sorted-key order
+    // rather than nondeterministic HashMap order.
+    fn sorted_keys<V>(map: &std::collections::HashMap<String, V>) -> Vec<&String> {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        keys
+    }
+
     // Add model nodes
     if let Some(ref models) = esm_file.models {
-        for (id, model) in models {
+        for id in sorted_keys(models) {
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::Model,
-                name: model.name.clone(),
+                name: models[id].name.clone(),
             });
         }
     }
 
     // Add reaction system nodes
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
-        for id in reaction_systems.keys() {
+        for id in sorted_keys(reaction_systems) {
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::ReactionSystem,
@@ -85,7 +94,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
 
     // Add data loader nodes
     if let Some(ref data_loaders) = esm_file.data_loaders {
-        for id in data_loaders.keys() {
+        for id in sorted_keys(data_loaders) {
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::DataLoader,
@@ -96,7 +105,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
 
     // Add operator nodes
     if let Some(ref operators) = esm_file.operators {
-        for id in operators.keys() {
+        for id in sorted_keys(operators) {
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::Operator,
@@ -333,10 +342,14 @@ impl ExpressionGraphInput for crate::EsmFile {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 
+        // Sorted-key iteration: node/edge order feeds rendered output and
+        // must not depend on HashMap ordering.
         // Process all models
         if let Some(ref models) = self.models {
-            for (model_id, model) in models {
-                let (model_nodes, model_edges) = extract_from_model(model, model_id);
+            let mut ids: Vec<&String> = models.keys().collect();
+            ids.sort();
+            for model_id in ids {
+                let (model_nodes, model_edges) = extract_from_model(&models[model_id], model_id);
                 merge_variable_nodes(&mut nodes, model_nodes);
                 edges.extend(model_edges);
             }
@@ -344,8 +357,11 @@ impl ExpressionGraphInput for crate::EsmFile {
 
         // Process all reaction systems
         if let Some(ref reaction_systems) = self.reaction_systems {
-            for (rs_id, rs) in reaction_systems {
-                let (rs_nodes, rs_edges) = extract_from_reaction_system(rs, rs_id);
+            let mut ids: Vec<&String> = reaction_systems.keys().collect();
+            ids.sort();
+            for rs_id in ids {
+                let (rs_nodes, rs_edges) =
+                    extract_from_reaction_system(&reaction_systems[rs_id], rs_id);
                 merge_variable_nodes(&mut nodes, rs_nodes);
                 edges.extend(rs_edges);
             }
@@ -401,27 +417,18 @@ impl ExpressionGraphInput for crate::Equation {
             }
         }
 
-        // Create edges from RHS variables to LHS variables
+        // Create edges from RHS variables to LHS variables (self-references,
+        // e.g. D(x)/dt = -x, produce an edge like any other dependency). A
+        // standalone equation has no equation list, hence index 0.
         for lhs_var in &lhs_vars {
             for rhs_var in &rhs_vars {
-                if lhs_var != rhs_var {
-                    edges.push(DependencyEdge {
-                        source: rhs_var.clone(),
-                        target: lhs_var.clone(),
-                        relationship: DependencyRelationship::Additive,
-                        equation_index: Some(0),
-                        expression: Some(self.rhs.clone()),
-                    });
-                } else {
-                    // Self-reference (e.g., D(x)/dt = -x)
-                    edges.push(DependencyEdge {
-                        source: rhs_var.clone(),
-                        target: lhs_var.clone(),
-                        relationship: DependencyRelationship::Additive,
-                        equation_index: Some(0),
-                        expression: Some(self.rhs.clone()),
-                    });
-                }
+                edges.push(DependencyEdge {
+                    source: rhs_var.clone(),
+                    target: lhs_var.clone(),
+                    relationship: DependencyRelationship::Additive,
+                    equation_index: Some(0),
+                    expression: Some(self.rhs.clone()),
+                });
             }
         }
 
@@ -546,8 +553,12 @@ fn extract_from_model(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
-    // Add variable declarations as nodes with proper types
-    for (var_name, var_def) in &model.variables {
+    // Add variable declarations as nodes with proper types (sorted so node
+    // order is deterministic).
+    let mut var_names: Vec<&String> = model.variables.keys().collect();
+    var_names.sort();
+    for var_name in var_names {
+        let var_def = &model.variables[var_name];
         let kind = match var_def.var_type {
             crate::VariableType::State => VariableKind::State,
             crate::VariableType::Parameter => VariableKind::Parameter,
@@ -605,12 +616,14 @@ fn extract_from_reaction_system(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
-    // Add species as nodes
-    for (species_name, species) in &rs.species {
+    // Add species as nodes (sorted so node order is deterministic)
+    let mut species_names: Vec<&String> = rs.species.keys().collect();
+    species_names.sort();
+    for species_name in species_names {
         nodes.push(VariableNode {
             name: species_name.clone(),
             kind: VariableKind::Species,
-            units: species.units.clone(),
+            units: rs.species[species_name].units.clone(),
             system: system_id.to_string(),
         });
     }
