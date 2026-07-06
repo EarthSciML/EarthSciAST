@@ -35,12 +35,21 @@ end
 """
     serialize_index_set(is::IndexSet) -> Dict{String,Any}
 
-Serialize one `index_sets` registry entry (RFC §5.2). Mirrors `coerce_index_set`.
+Serialize one `index_sets` registry entry (RFC §5.2). Mirrors `coerce_index_set`:
+when a categorical set carries non-string members, `coerce_index_set` retains
+the originally-typed values in `members_raw` (the string-coerced `members` view
+is a lossy convenience), so `members_raw` — not `members` — is what round-trips
+back to the wire `members` key. String-only sets have `members_raw === nothing`
+and emit `members` unchanged.
 """
 function serialize_index_set(is::IndexSet)::Dict{String,Any}
     d = Dict{String,Any}("kind" => is.kind)
     is.size !== nothing && (d["size"] = is.size)
-    is.members !== nothing && (d["members"] = is.members)
+    if is.members_raw !== nothing
+        d["members"] = is.members_raw
+    elseif is.members !== nothing
+        d["members"] = is.members
+    end
     is.of !== nothing && (d["of"] = is.of)
     is.offsets !== nothing && (d["offsets"] = is.offsets)
     is.values !== nothing && (d["values"] = is.values)
@@ -245,15 +254,25 @@ Serialize DiscreteEvent to the schema shape. Julia stores event affects as a
 Vector{FunctionalAffect}(target, expression, operation) for legacy reasons,
 but the schema requires discrete_events[].affects to be an array of
 AffectEquation objects ({lhs, rhs}). Emit the schema shape.
+
+A handler-based event (parsed from a schema `functional_affect` descriptor)
+re-emits its raw descriptor verbatim under `functional_affect`; the schema's
+oneOf admits exactly one of `affects` / `functional_affect`, so an event
+carrying both is rejected here.
 """
 function serialize_discrete_event(event::DiscreteEvent)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "trigger" => serialize_trigger(event.trigger),
-        "affects" => [Dict{String,Any}(
+    result = Dict{String,Any}("trigger" => serialize_trigger(event.trigger))
+    if event.functional_affect !== nothing
+        isempty(event.affects) || throw(ArgumentError(
+            "DiscreteEvent cannot carry both symbolic `affects` and a " *
+            "`functional_affect` descriptor (schema DiscreteEvent oneOf)"))
+        result["functional_affect"] = event.functional_affect
+    else
+        result["affects"] = [Dict{String,Any}(
             "lhs" => a.target,
             "rhs" => serialize_expression(a.expression),
         ) for a in event.affects]
-    )
+    end
     if event.description !== nothing
         result["description"] = event.description
     end
@@ -286,22 +305,6 @@ function serialize_affect_equation(affect::AffectEquation)::Dict{String,Any}
         "lhs" => affect.lhs,
         "rhs" => serialize_expression(affect.rhs)
     )
-end
-
-"""
-    serialize_functional_affect(affect::FunctionalAffect) -> Dict{String,Any}
-
-Serialize FunctionalAffect to JSON-compatible format.
-"""
-function serialize_functional_affect(affect::FunctionalAffect)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "target" => affect.target,
-        "expression" => serialize_expression(affect.expression)
-    )
-    if affect.operation != "set"
-        result["operation"] = affect.operation
-    end
-    return result
 end
 
 """
@@ -429,7 +432,7 @@ function serialize_model(model::Model)::Dict{String,Any}
     if !isempty(model.guesses)
         guesses_out = Dict{String,Any}()
         for (k, v) in model.guesses
-            guesses_out[k] = v isa EarthSciSerialization.Expr ?
+            guesses_out[k] = v isa Expr ?
                 serialize_expression(v) : v
         end
         result["guesses"] = guesses_out
@@ -731,66 +734,11 @@ function serialize_data_loader(loader::DataLoader)::Dict{String,Any}
     return result
 end
 
-"""
-    serialize_operator(op::Operator) -> Dict{String,Any}
-
-Serialize Operator to JSON-compatible format.
-"""
-function serialize_operator(op::Operator)::Dict{String,Any}
-    result = Dict{String,Any}(
-        "operator_id" => op.operator_id,
-        "needed_vars" => op.needed_vars
-    )
-    if op.reference !== nothing
-        result["reference"] = serialize_reference(op.reference)
-    end
-    if op.config !== nothing
-        result["config"] = op.config
-    end
-    if op.modifies !== nothing
-        result["modifies"] = op.modifies
-    end
-    if op.description !== nothing
-        result["description"] = op.description
-    end
-    return result
-end
-
-"""
-    serialize_registered_function(rf::RegisteredFunction) -> Dict{String,Any}
-
-Serialize RegisteredFunction to JSON-compatible format (esm-spec §9.2).
-"""
-function serialize_registered_function(rf::RegisteredFunction)::Dict{String,Any}
-    sig = Dict{String,Any}("arg_count" => rf.signature.arg_count)
-    if rf.signature.arg_types !== nothing
-        sig["arg_types"] = rf.signature.arg_types
-    end
-    if rf.signature.return_type !== nothing
-        sig["return_type"] = rf.signature.return_type
-    end
-
-    result = Dict{String,Any}(
-        "id" => rf.id,
-        "signature" => sig,
-    )
-    if rf.units !== nothing
-        result["units"] = rf.units
-    end
-    if rf.arg_units !== nothing
-        result["arg_units"] = Any[u === nothing ? nothing : u for u in rf.arg_units]
-    end
-    if rf.description !== nothing
-        result["description"] = rf.description
-    end
-    if !isempty(rf.references)
-        result["references"] = [serialize_reference(r) for r in rf.references]
-    end
-    if rf.config !== nothing
-        result["config"] = rf.config
-    end
-    return result
-end
+# NOTE: `serialize_operator` / `serialize_registered_function` were removed
+# along with the `operators` / `registered_functions` emit path (esm-spec
+# v0.3.0 §9 closure): `serialize_esm_file` now refuses to write those blocks,
+# so the per-entry serializers had no remaining callers. The `Operator` /
+# `RegisteredFunction` types themselves remain exported for in-memory use.
 
 """
     serialize_coupling_entry(entry::CouplingEntry) -> Dict{String,Any}
@@ -870,7 +818,7 @@ function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
         "type" => "variable_map",
         "from" => entry.from,
         "to" => entry.to,
-        "transform" => entry.transform isa EarthSciSerialization.Expr ?
+        "transform" => entry.transform isa Expr ?
             serialize_expression(entry.transform) : entry.transform
     )
 
@@ -1045,11 +993,22 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.data_loaders !== nothing
         result["data_loaders"] = Dict(k => serialize_data_loader(v) for (k, v) in file.data_loaders)
     end
-    if file.operators !== nothing
-        result["operators"] = Dict(k => serialize_operator(v) for (k, v) in file.operators)
+    # The top-level `operators` / `registered_functions` blocks were removed
+    # in esm-spec v0.3.0 (§9 closure) and `load` rejects them as hard errors,
+    # so emitting them would produce a file parse refuses. The typed fields
+    # remain on `EsmFile` (legacy in-memory use), but they cannot reach the
+    # wire: refuse loudly instead of writing an unloadable document.
+    if file.operators !== nothing && !isempty(file.operators)
+        throw(ArgumentError("`operators` cannot be serialized: the top-level " *
+                            "`operators` block was removed in esm-spec v0.3.0 " *
+                            "(§9 closure) and `load` rejects it. Migrate per " *
+                            "`docs/rfcs/closed-function-registry.md` §6."))
     end
-    if file.registered_functions !== nothing
-        result["registered_functions"] = Dict(k => serialize_registered_function(v) for (k, v) in file.registered_functions)
+    if file.registered_functions !== nothing && !isempty(file.registered_functions)
+        throw(ArgumentError("`registered_functions` cannot be serialized: the " *
+                            "block was removed in esm-spec v0.3.0 (§9 closure). " *
+                            "Use the closed function registry via `fn` ops with " *
+                            "spec-defined names."))
     end
     if file.enums !== nothing
         # esm-spec §9.3 — enum names map to objects mapping symbol → positive

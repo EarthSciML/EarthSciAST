@@ -54,14 +54,14 @@ using JSON3
 
     @testset "ModelVariableType Parsing" begin
         # Test schema values
-        @test EarthSciSerialization.parse_model_variable_type("state") == StateVariable
-        @test EarthSciSerialization.parse_model_variable_type("parameter") == ParameterVariable
-        @test EarthSciSerialization.parse_model_variable_type("observed") == ObservedVariable
+        @test EarthSciSerialization.coerce_model_variable_type("state") == StateVariable
+        @test EarthSciSerialization.coerce_model_variable_type("parameter") == ParameterVariable
+        @test EarthSciSerialization.coerce_model_variable_type("observed") == ObservedVariable
 
         # Test Julia enum values for compatibility
-        @test EarthSciSerialization.parse_model_variable_type("StateVariable") == StateVariable
-        @test EarthSciSerialization.parse_model_variable_type("ParameterVariable") == ParameterVariable
-        @test EarthSciSerialization.parse_model_variable_type("ObservedVariable") == ObservedVariable
+        @test EarthSciSerialization.coerce_model_variable_type("StateVariable") == StateVariable
+        @test EarthSciSerialization.coerce_model_variable_type("ParameterVariable") == ParameterVariable
+        @test EarthSciSerialization.coerce_model_variable_type("ObservedVariable") == ObservedVariable
     end
 
     @testset "Simple ESM File Loading" begin
@@ -241,8 +241,110 @@ using JSON3
         invalid_esm = """{"esm": "0.1.0"}"""  # Missing metadata
         @test_throws SchemaValidationError load(IOBuffer(invalid_esm))
 
+        # The schema-validation diagnostic uses REAL newlines (a regression
+        # once emitted literal backslash-n characters).
+        err = try
+            load(IOBuffer(invalid_esm))
+            nothing
+        catch e
+            e
+        end
+        @test err isa SchemaValidationError
+        @test occursin('\n', err.message)
+        @test !occursin("\\n", err.message)
+
         # Test invalid expression format
         @test_throws ParseError EarthSciSerialization.parse_expression(Dict("invalid" => "data"))
+    end
+
+    @testset "Legacy model `events` path (coerce_event dispatch regression)" begin
+        # Regression: a `coerce_event(::AbstractDict)::CouplingEvent` method
+        # used to shadow `coerce_event(::Any)::EventType` for JSON3.Object
+        # input (JSON3.Object <: AbstractDict), so a legacy model-level
+        # `events` array failed with "event requires 'event_type' field".
+        model_json = """
+        {
+          "variables": {
+            "x": { "type": "state", "default": 1.0 },
+            "thresh": { "type": "parameter", "default": 0.5 }
+          },
+          "equations": [
+            { "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+              "rhs": {"op": "*", "args": [-0.1, "x"]} }
+          ],
+          "events": [
+            { "conditions": [ {"op": "-", "args": ["x", "thresh"]} ],
+              "affects": [ {"lhs": "x", "rhs": 1.5} ] },
+            { "trigger": {"type": "periodic", "interval": 10.5},
+              "affects": [ {"lhs": "x", "rhs": 0.25} ] }
+          ]
+        }
+        """
+        model = EarthSciSerialization.coerce_model(JSON3.read(model_json))
+        @test model isa Model
+        @test length(model.continuous_events) == 1
+        @test length(model.discrete_events) == 1
+        cev = model.continuous_events[1]
+        @test cev.conditions[1] isa OpExpr
+        @test cev.affects[1].lhs == "x"
+        dev = model.discrete_events[1]
+        @test dev.trigger isa PresetTimesTrigger || dev.trigger isa PeriodicTrigger
+        @test dev.trigger isa PeriodicTrigger
+        @test dev.trigger.period == 10.5
+        @test dev.affects[1].target == "x"
+
+        # The same events also parse when handed native Dicts (the second
+        # dict-like carrier the legacy path can see).
+        model2 = EarthSciSerialization.coerce_model(
+            JSON3.read(JSON3.write(JSON3.read(model_json))))
+        @test length(model2.events) == 2
+    end
+
+    @testset "is_valid_identifier is Unicode-safe" begin
+        @test is_valid_identifier("αβγ")        # leading multi-byte letter
+        @test is_valid_identifier("θ_1")
+        @test is_valid_identifier("_x")
+        @test !is_valid_identifier("1abc")
+        @test !is_valid_identifier("α-β")
+        @test !is_valid_identifier("")
+        # Regression: used to throw StringIndexError via byte-indexed
+        # `name[2:end]` when the first character was multi-byte.
+        @test validate_reference_syntax("αmodel.β")
+    end
+
+    @testset "coerce_esm_file accepts a plain native Dict document" begin
+        doc = Dict{String,Any}(
+            "esm" => "0.8.0",
+            "metadata" => Dict{String,Any}("name" => "native_dict_doc"),
+            "models" => Dict{String,Any}(
+                "M" => Dict{String,Any}(
+                    "variables" => Dict{String,Any}(
+                        "x" => Dict{String,Any}("type" => "state", "default" => 2.5),
+                        "k" => Dict{String,Any}("type" => "parameter", "default" => 0.1),
+                    ),
+                    "equations" => Any[Dict{String,Any}(
+                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                        "rhs" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]),
+                    )],
+                ),
+            ),
+        )
+        file = EarthSciSerialization.coerce_esm_file(doc)
+        @test file isa EsmFile
+        @test file.esm == "0.8.0"
+        @test file.metadata.name == "native_dict_doc"
+        @test haskey(file.models, "M")
+        m = file.models["M"]
+        @test m.variables["x"].default == 2.5
+        @test m.equations[1].lhs isa OpExpr
+        @test m.equations[1].lhs.op == "D"
+        @test m.equations[1].rhs.args[1] == VarExpr("k")
+
+        # Missing required fields surface as ParseError, not property errors.
+        @test_throws ParseError EarthSciSerialization.coerce_esm_file(
+            Dict{String,Any}("metadata" => Dict{String,Any}("name" => "x")))
+        @test_throws ParseError EarthSciSerialization.coerce_esm_file(
+            Dict{String,Any}("esm" => "0.8.0"))
     end
 
     @testset "v0.5.0 inline multi-series y (plots.y array form)" begin

@@ -9,6 +9,17 @@ matching the JSON schema definitions for language-agnostic model interchange.
 # guard: `_maybe(string, get(data, key, nothing))`).
 _maybe(f, x) = x === nothing ? nothing : f(x)
 
+"""
+    ESM_FORMAT_VERSION
+
+The ESM format version (semver string) this implementation targets — the value
+written into the `esm` field of freshly constructed files. Files loaded from
+disk keep whatever version they declare; this constant is only the default for
+documents the library itself creates (flatten wrappers, MTK/Catalyst export).
+Must track the version on the first line of `esm-spec.md`.
+"""
+const ESM_FORMAT_VERSION = "0.8.0"
+
 # ========================================
 # 1. Expression Type Hierarchy
 # ========================================
@@ -24,9 +35,13 @@ abstract type Expr end
 """
     NumExpr(value::Float64)
 
-Floating-point numeric literal expression. Represents a JSON-number token that
-contains `.` or `e`/`E` on the wire (per discretization RFC §5.4.6 round-trip
-parse rule). For integer literals use `IntExpr`.
+Floating-point numeric literal expression. Represents a JSON number whose
+mathematical value is **non-integral** (or integral but not `Int64`-
+representable): literal type is decided by *value*, not by the token's source
+spelling (CONFORMANCE_SPEC §5.5.3.1 rules 1/3). A JSON number whose value is
+integral and `Int64`-representable — however it was spelled (`1`, `1.0`,
+`2.5e1`) — parses as an `IntExpr`, so `parse_expression` never produces
+`NumExpr(1.0)`; such a node can only be built directly in Julia code.
 """
 struct NumExpr <: Expr
     value::Float64
@@ -35,11 +50,13 @@ end
 """
     IntExpr(value::Int64)
 
-Integer numeric literal expression. Represents a JSON-number token that matches
-the integer grammar `-?(0|[1-9][0-9]*)` on the wire (per discretization RFC
-§5.4.6 round-trip parse rule). The AST distinguishes integer and float nodes:
-`IntExpr(1)` and `NumExpr(1.0)` are different values, and canonicalization
-never auto-promotes one to the other (RFC §5.4.1).
+Integer numeric literal expression. Represents a JSON number whose
+mathematical value is integral and `Int64`-representable, **regardless of how
+the source document spelled the token** (`0.0` → `IntExpr(0)`, `2.5e1` →
+`IntExpr(25)`; CONFORMANCE_SPEC §5.5.3.1 rules 1/3). The AST distinguishes
+integer and float nodes: `IntExpr(1)` and `NumExpr(1.0)` are different values,
+and canonicalization never auto-promotes one to the other (RFC §5.4.1); on the
+wire an `IntExpr` serializes as an integer literal (no `.`/`e`).
 """
 struct IntExpr <: Expr
     value::Int64
@@ -217,14 +234,6 @@ function OpExpr(op::String, args::AbstractVector; kwargs...)
     return OpExpr(op, widened; kwargs...)
 end
 
-# `handler_id` was the removed v0.2.x identifier for the closed `call` op.
-# A few internal builders still read `expr.handler_id`; report `nothing`
-# uniformly so those paths gracefully degrade.
-function Base.getproperty(e::OpExpr, name::Symbol)
-    name === :handler_id && return nothing
-    return getfield(e, name)
-end
-
 """
     reconstruct(e::OpExpr; op=…, args=…, <any OpExpr field>=…) -> OpExpr
 
@@ -391,15 +400,24 @@ end
     DiscreteEvent <: EventType
 
 Event triggered by discrete triggers with functional affects.
+
+`functional_affect` carries the raw schema `functional_affect` handler
+descriptor (`handler_id`, `read_vars`, `read_params`, optional
+`modified_params` / `config`) verbatim, so a handler-based event survives a
+parse → serialize round trip instead of degrading into a bogus `{lhs, rhs}`
+affect equation. The schema (`DiscreteEvent` oneOf) requires exactly one of
+symbolic `affects` or a `functional_affect` descriptor.
 """
 struct DiscreteEvent <: EventType
     trigger::DiscreteEventTrigger
     affects::Vector{FunctionalAffect}
     description::Union{String,Nothing}
+    functional_affect::Union{Dict{String,Any},Nothing}
 
-    # Constructor with optional description
-    DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{FunctionalAffect}; description=nothing) =
-        new(trigger, affects, description)
+    # Constructor with optional description / handler descriptor
+    DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{FunctionalAffect};
+                  description=nothing, functional_affect=nothing) =
+        new(trigger, affects, description, functional_affect)
 end
 
 # ========================================
@@ -466,6 +484,33 @@ struct ModelVariable
 end
 
 """
+    reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
+
+Rebuild a `ModelVariable`, copying every field from `v` by default and
+overriding only the keywords explicitly passed. The `ModelVariable` analogue of
+[`reconstruct(::OpExpr)`](@ref): route all copy-with-changes sites through this
+helper so a newly added field is preserved by default instead of silently
+dropped by a hand-listed subset.
+"""
+function reconstruct(v::ModelVariable;
+        type::ModelVariableType = v.type,
+        default = v.default,
+        description = v.description,
+        expression = v.expression,
+        units = v.units,
+        default_units = v.default_units,
+        shape = v.shape,
+        location = v.location,
+        noise_kind = v.noise_kind,
+        correlation_group = v.correlation_group)
+    return ModelVariable(type;
+        default=default, description=description, expression=expression,
+        units=units, default_units=default_units, shape=shape,
+        location=location, noise_kind=noise_kind,
+        correlation_group=correlation_group)
+end
+
+"""
     TimeSpan(start::Float64, stop::Float64)
 
 Simulation time interval for inline model tests and examples (§gt-cc1).
@@ -516,15 +561,15 @@ struct Assertion
                        reduce=nothing,
                        reference=nothing)
         if coords !== nothing && reduce !== nothing
-            error("Assertion: `coords` and `reduce` are mutually exclusive")
+            throw(ArgumentError("Assertion: `coords` and `reduce` are mutually exclusive"))
         end
         if reduce !== nothing && (reduce == "L2_error" || reduce == "Linf_error") &&
                 reference === nothing
-            error("Assertion: `reduce=$(reduce)` requires `reference`")
+            throw(ArgumentError("Assertion: `reduce=$(reduce)` requires `reference`"))
         end
         if reference !== nothing && reduce !== nothing &&
                 !(reduce in ("L2_error", "Linf_error"))
-            error("Assertion: `reference` is only meaningful for error-norm reductions")
+            throw(ArgumentError("Assertion: `reference` is only meaningful for error-norm reductions"))
         end
         coords_typed = coords === nothing ? nothing :
             Dict{String,Float64}(string(k) => Float64(v) for (k, v) in coords)
@@ -711,7 +756,7 @@ struct Model
                 elseif event isa ContinuousEvent
                     push!(continuous_events, event)
                 else
-                    error("Unknown event type: $(typeof(event))")
+                    throw(ArgumentError("Unknown event type: $(typeof(event))"))
                 end
             end
         end
@@ -741,7 +786,7 @@ function create_model_with_mixed_events(variables::Dict{String,ModelVariable},
         elseif isa(event, ContinuousEvent)
             push!(continuous, event)
         else
-            error("Unknown event type: $(typeof(event))")
+            throw(ArgumentError("Unknown event type: $(typeof(event))"))
         end
     end
 
@@ -1524,13 +1569,16 @@ function is_valid_identifier(name::String)::Bool
         return false
     end
 
-    # Must start with letter or underscore
-    if !isletter(name[1]) && name[1] != '_'
+    # Must start with letter or underscore. Iterate by character (not byte
+    # index): `name[2:end]` byte-indexes and throws `StringIndexError` when the
+    # identifier starts with a multi-byte (non-ASCII) letter.
+    first_char = first(name)
+    if !isletter(first_char) && first_char != '_'
         return false
     end
 
     # Rest can be letters, digits, or underscores
-    for c in name[2:end]
+    for c in Iterators.drop(name, 1)
         if !isletter(c) && !isdigit(c) && c != '_'
             return false
         end
@@ -1563,14 +1611,41 @@ function stoichiometry_entries_to_dict(entries::Vector{StoichiometryEntry})::Dic
     return Dict(entry.species => entry.stoichiometry for entry in entries)
 end
 
+# Deterministic 64-bit FNV-1a hash. Used for content-derived ids; unlike
+# `Base.hash`, its value is stable across Julia versions and sessions.
+function _fnv1a64(s::AbstractString)::UInt64
+    h = 0xcbf29ce484222325
+    for b in codeunits(s)
+        h = (h ⊻ UInt64(b)) * 0x00000100000001b3
+    end
+    return h
+end
+
+# Render a JSON-compatible value (as produced by `serialize_expression`) to a
+# deterministic string: object keys are emitted in sorted order, so the result
+# depends only on content, never on Dict iteration order.
+_stable_json(x::AbstractDict) =
+    "{" * join(sort!([string(repr(String(string(k))), ":", _stable_json(v))
+                      for (k, v) in pairs(x)]), ",") * "}"
+_stable_json(x::AbstractVector) = "[" * join([_stable_json(v) for v in x], ",") * "]"
+_stable_json(x::AbstractString) = repr(String(x))
+_stable_json(x) = string(x)
+
 """
     Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::Expr; reversible=false) -> Reaction
 
-Legacy constructor for backward compatibility. Creates a reaction with auto-generated ID.
+Legacy constructor for backward compatibility. Creates a reaction with an
+auto-generated, content-derived id: the same reactants, products, and rate
+always produce the same id (deterministic across sessions and Julia versions,
+unlike `Base.hash`).
 """
 function Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::Expr; reversible=false)
-    # Generate a simple ID based on the reactants and products
-    id = "reaction_$(hash(string(reactants, products, rate)))"
+    # Content-derived id: sorted species:stoichiometry lists plus a
+    # deterministic rendering of the rate AST, digested with FNV-1a.
+    fmt(d) = join(sort!(["$(k):$(Float64(v))" for (k, v) in d]), ",")
+    content = fmt(reactants) * "=>" * fmt(products) * "|" *
+              _stable_json(serialize_expression(rate))
+    id = "reaction_" * string(_fnv1a64(content), base=16, pad=16)
 
     substrates = isempty(reactants) ? nothing : dict_to_stoichiometry_entries(reactants)
     products_vec = isempty(products) ? nothing : dict_to_stoichiometry_entries(products)
@@ -1608,8 +1683,14 @@ function get_products_dict(reaction::Reaction)::Dict{String,Float64}
     end
 end
 
-# Add property access for backward compatibility
-# Only override specific properties that are needed for backward compatibility
+# Backward-compatibility property shim. `.reactants` / `.products` return the
+# legacy Dict{String,Float64} view (NOT the ordered Vector{StoichiometryEntry}
+# stored in the `substrates` / `products` fields — use
+# `getfield(reaction, :products)` or `get_products_dict` explicitly for the
+# raw field). The shim CANNOT be retired yet: Dict-style `.reactants` /
+# `.products` access remains throughout src/codegen.jl, src/graph.jl,
+# src/edit.jl, src/mock_systems.jl, and ext/EarthSciSerializationCatalystExt.jl
+# (their migration to getfield-based ordered access is tracked separately).
 Base.getproperty(reaction::Reaction, name::Symbol) = begin
     if name == :reactants
         return get_reactants_dict(reaction)
@@ -1622,11 +1703,14 @@ Base.getproperty(reaction::Reaction, name::Symbol) = begin
     end
 end
 
-# Add a separate property for old-style products access
-Base.propertynames(::Type{Reaction}, private::Bool=false) = begin
+# Advertise the compat properties. Defined on the INSTANCE (not the type
+# object) so `propertynames(reaction)` actually reflects the getproperty
+# override above. `:products` is already a field name, so only the two extra
+# names are appended.
+Base.propertynames(::Reaction, private::Bool=false) = begin
     names = fieldnames(Reaction)
     if private
-        return (names..., :reactants, :products, :reversible)
+        return (names..., :reactants, :reversible)
     else
         return names
     end
@@ -1642,7 +1726,9 @@ Base.getproperty(model::Model, name::Symbol) = begin
     end
 end
 
-Base.propertynames(::Type{Model}, private::Bool=false) = begin
+# Defined on the INSTANCE (not the type object) so `propertynames(model)`
+# reflects the getproperty override above.
+Base.propertynames(::Model, private::Bool=false) = begin
     names = fieldnames(Model)
     if private
         return (names..., :events)
