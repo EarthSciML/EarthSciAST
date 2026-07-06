@@ -814,15 +814,17 @@ describe('Graph export functions', () => {
 
       const graph = expressionGraph(model);
 
-      // Test DOT format - should show variable names with subscripts
+      // Test DOT format - should show variable names with subscripts.
+      // "Ca2plus" is not a pure chemical formula ("plus" is not an element),
+      // so the element-aware formatter leaves it unchanged.
       const dotOutput = toDot(graph);
       expect(dotOutput).toContain('H₂SO₄');
-      expect(dotOutput).toContain('Ca₂plus');
+      expect(dotOutput).toContain('Ca2plus');
 
       // Test Mermaid format
       const mermaidOutput = toMermaid(graph);
       expect(mermaidOutput).toContain('H₂SO₄');
-      expect(mermaidOutput).toContain('Ca₂plus');
+      expect(mermaidOutput).toContain('Ca2plus');
 
       // JSON format should preserve original names in node data
       const jsonOutput = toJsonGraph(graph);

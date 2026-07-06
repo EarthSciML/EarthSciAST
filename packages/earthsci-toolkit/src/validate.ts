@@ -1301,30 +1301,19 @@ function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * Promote unit validation errors to structural errors for invalid files.
- * Units warnings become errors when they indicate incompatible assignments or additions.
+ * Promote dimensional-consistency warnings to structural errors for invalid
+ * files. The classification is carried on the warning itself
+ * (UnitWarning.code, assigned in units.ts beside the message definitions).
  */
 function promoteUnitWarningsToErrors(warnings: UnitWarning[]): StructuralError[] {
-    const errors: StructuralError[] = [];
-    for (const warning of warnings) {
-        const msg = warning.message?.toLowerCase() || '';
-        // Promote dimensional mismatches and incompatible operations
-        if (
-            msg.includes('mismatch') ||
-            msg.includes('incompatible') ||
-            msg.includes('inconsistent') ||
-            msg.includes('requires same dimensions') ||
-            msg.includes('same dimensions')
-        ) {
-            errors.push({
-                path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
-                message: warning.message,
-                code: 'unit_error',
-                details: { equation: warning.equation || '' }
-            });
-        }
-    }
-    return errors;
+    return warnings
+        .filter((warning) => warning.code === 'dimensional_mismatch')
+        .map((warning) => ({
+            path: warning.location ? `/${warning.location.replace(/\./g, '/')}` : '$',
+            message: warning.message,
+            code: 'unit_error',
+            details: { equation: warning.equation || '' }
+        }));
 }
 
 function performStructuralValidation(esmFile: EsmFile): StructuralError[] {

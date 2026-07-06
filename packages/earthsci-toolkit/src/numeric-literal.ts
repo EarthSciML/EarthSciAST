@@ -373,27 +373,39 @@ function stringifyValue(v: unknown, path: string): string {
   throw new TypeError(`Cannot stringify ${typeof v} at ${path}`)
 }
 
-function formatNumericLiteral(lit: NumericLiteral, path: string): string {
-  const { kind, value } = lit
+/**
+ * Emit an integer-tagged token per RFC §5.4.6. Shared by the document
+ * serializer (`save`), `losslessJsonStringify`, and `canonicalJson` so the
+ * integer-token guards live in exactly one place.
+ */
+export function formatIntToken(value: number, path: string): string {
   if (!Number.isFinite(value)) throw new CanonicalNonfiniteError(value, path)
-  if (kind === 'int') {
-    if (!Number.isInteger(value)) {
-      throw new TypeError(`int NumericLiteral holds non-integer value ${value} at ${path}`)
-    }
-    if (Object.is(value, -0)) {
-      // Integer nodes cannot hold negative zero (RFC §5.4.6).
-      throw new TypeError(`int NumericLiteral cannot hold -0 at ${path}`)
-    }
-    // Emit as plain decimal — JS toString on finite integers in the
-    // safe-integer range produces the JSON-integer grammar already.
-    // For out-of-safe-range floats that ended up tagged int, we still
-    // defensively drop any exponent.
-    const s = String(value)
-    if (s.includes('.') || s.includes('e') || s.includes('E')) {
-      throw new TypeError(`int NumericLiteral produced non-integer token ${s} at ${path}`)
-    }
-    return s
+  if (!Number.isInteger(value)) {
+    throw new TypeError(`int NumericLiteral holds non-integer value ${value} at ${path}`)
   }
+  if (Object.is(value, -0)) {
+    // Integer nodes cannot hold negative zero (RFC §5.4.6).
+    throw new TypeError(`int NumericLiteral cannot hold -0 at ${path}`)
+  }
+  // Emit as plain decimal — JS toString on finite integers in the
+  // safe-integer range produces the JSON-integer grammar already.
+  // For out-of-safe-range floats that ended up tagged int, we still
+  // defensively drop any exponent.
+  const s = String(value)
+  if (s.includes('.') || s.includes('e') || s.includes('E')) {
+    throw new TypeError(`int NumericLiteral produced non-integer token ${s} at ${path}`)
+  }
+  return s
+}
+
+/**
+ * Emit a `NumericLiteral` leaf as its RFC §5.4.6 token: an integer token for
+ * int-tagged leaves, `formatFloatToken` for float-tagged ones.
+ */
+export function formatNumericLiteral(lit: NumericLiteral, path: string): string {
+  const { kind, value } = lit
+  if (kind === 'int') return formatIntToken(value, path)
+  if (!Number.isFinite(value)) throw new CanonicalNonfiniteError(value, path)
   return formatFloatToken(value)
 }
 

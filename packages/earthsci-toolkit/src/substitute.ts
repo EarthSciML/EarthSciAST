@@ -20,9 +20,15 @@ export interface SubstitutionContext {
  * Handles scoped references (Model.Subsystem.var) by splitting on '.' and matching
  * path through system hierarchy per format spec Section 4.3.
  *
+ * NOTE: when a `context` is supplied, any dotted reference NOT covered by
+ * `bindings` is resolved through the file hierarchy and replaced with the
+ * referenced variable's DECLARED DEFAULT VALUE. Callers that only want to
+ * rename/replace bound names must omit `context`.
+ *
  * @param expr - Expression to substitute into
  * @param bindings - Variable name to expression mappings
- * @param context - Optional context for resolving scoped references
+ * @param context - Optional context; enables default-value inlining for
+ *   scoped references (see note above)
  * @returns New expression with substitutions applied (immutable)
  */
 export function substitute(
@@ -38,8 +44,9 @@ export function substitute(
 
   // String case: variable reference
   if (typeof expr === 'string') {
-    // Check for direct binding
-    if (bindings.hasOwnProperty(expr)) {
+    // Check for direct binding (guarded lookup: `bindings` is caller data,
+    // so do not trust its own hasOwnProperty)
+    if (Object.prototype.hasOwnProperty.call(bindings, expr)) {
       return bindings[expr]!
     }
 
@@ -82,16 +89,18 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
   const [systemName, ...pathParts] = parts
   const variableName = pathParts.pop()!
 
-  // Try to find in models
-  if (esmFile.models && esmFile.models[systemName]) {
-    let current: Model = esmFile.models[systemName]
+  // Try to find in models (unresolved refs cannot be navigated)
+  const rootModel = esmFile.models?.[systemName]
+  if (rootModel && !('ref' in rootModel)) {
+    let current: Model = rootModel as Model
 
-    // Navigate through subsystems
+    // Navigate through inline-model subsystems
     for (const pathPart of pathParts) {
-      if (!current.subsystems || !current.subsystems[pathPart]) {
+      const next = current.subsystems?.[pathPart]
+      if (!next || 'ref' in next || 'kind' in next) {
         return null
       }
-      current = current.subsystems[pathPart]
+      current = next as Model
     }
 
     // Check if variable exists and return its default value
@@ -102,15 +111,17 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
   }
 
   // Try to find in reaction systems
-  if (esmFile.reaction_systems && esmFile.reaction_systems[systemName]) {
-    let current: ReactionSystem = esmFile.reaction_systems[systemName]
+  const rootSystem = esmFile.reaction_systems?.[systemName]
+  if (rootSystem) {
+    let current: ReactionSystem = rootSystem
 
-    // Navigate through subsystems
+    // Navigate through inline subsystems (unresolved refs cannot be navigated)
     for (const pathPart of pathParts) {
-      if (!current.subsystems || !current.subsystems[pathPart]) {
+      const next = current.subsystems?.[pathPart]
+      if (!next || 'ref' in next) {
         return null
       }
-      current = current.subsystems[pathPart]
+      current = next as ReactionSystem
     }
 
     // Check if species exists and return its default value
@@ -153,7 +164,7 @@ export function substituteInModel(
   context?: SubstitutionContext
 ): Model {
   // Substitute in all equations
-  const equations = model.equations.map(eq => ({
+  const equations = (model.equations || []).map(eq => ({
     ...eq,
     lhs: substitute(eq.lhs, bindings, context),
     rhs: substitute(eq.rhs, bindings, context)
@@ -161,7 +172,7 @@ export function substituteInModel(
 
   // Substitute in variable expressions (for observed variables)
   const variables = Object.fromEntries(
-    Object.entries(model.variables).map(([name, variable]) => [
+    Object.entries(model.variables || {}).map(([name, variable]) => [
       name,
       {
         ...variable,
@@ -172,12 +183,15 @@ export function substituteInModel(
     ])
   )
 
-  // Substitute in subsystems recursively
+  // Substitute in inline-model subsystems recursively; data loaders and
+  // unresolved refs pass through unchanged.
   const subsystems = model.subsystems
     ? Object.fromEntries(
         Object.entries(model.subsystems).map(([name, subsystem]) => [
           name,
-          substituteInModel(subsystem, bindings, context)
+          'ref' in subsystem || 'kind' in subsystem
+            ? subsystem
+            : substituteInModel(subsystem as Model, bindings, context)
         ])
       )
     : undefined
@@ -217,12 +231,15 @@ export function substituteInReactionSystem(
     rhs: substitute(eq.rhs, bindings, context)
   }))
 
-  // Substitute in subsystems recursively
+  // Substitute in inline subsystems recursively; unresolved refs pass
+  // through unchanged.
   const subsystems = system.subsystems
     ? Object.fromEntries(
         Object.entries(system.subsystems).map(([name, subsystem]) => [
           name,
-          substituteInReactionSystem(subsystem, bindings, context)
+          'ref' in subsystem
+            ? subsystem
+            : substituteInReactionSystem(subsystem as ReactionSystem, bindings, context)
         ])
       )
     : undefined

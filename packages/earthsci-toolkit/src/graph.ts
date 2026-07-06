@@ -7,6 +7,7 @@
 
 import type { EsmFile, CouplingEntry, Model, ReactionSystem, Equation, Reaction, Expr, ExpressionNode, Reference } from './types.js';
 import { freeVariables } from './expression.js';
+import { formatChemicalName } from './pretty-print.js';
 
 /** Graph node representing a component in the system */
 export interface ComponentNode {
@@ -648,28 +649,10 @@ export function expressionGraph(
   };
 }
 
-/**
- * Convert a node name to include chemical subscripts where appropriate.
- * Handles common chemical formulas like H2O, CO2, O3, NO2, etc.
- */
-function formatChemicalSubscripts(text: string): string {
-  // Common chemical formulas that need subscript formatting
-  const subscriptMap: Record<string, string> = {
-    '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-    '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
-  };
-
-  let result = text;
-
-  // Replace digits with subscript versions for chemical formulas
-  // Only replace digits that follow letters (chemical element symbols)
-  result = result.replace(/([A-Za-z])(\d+)/g, (match, element, digits) => {
-    const subscriptDigits = digits.split('').map(d => subscriptMap[d] || d).join('');
-    return element + subscriptDigits;
-  });
-
-  return result;
-}
+// Chemical subscript formatting for node/edge labels delegates to the
+// element-aware formatter in pretty-print.ts so the same species renders
+// identically everywhere.
+const formatChemicalSubscripts = formatChemicalName;
 
 /**
  * Export graph as Graphviz DOT format.

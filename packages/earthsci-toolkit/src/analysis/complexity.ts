@@ -9,6 +9,7 @@ import type { Expr } from '../types.js';
 import type { ComplexityMetrics } from './types.js';
 import { freeVariables } from '../expression.js';
 import { numericValue } from '../numeric-literal.js';
+import { opCost } from '../op-registry.js';
 
 /**
  * Analyze the complexity of an expression
@@ -67,77 +68,14 @@ function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, dept
 }
 
 /**
- * Calculate estimated computational cost based on operation types
+ * Calculate estimated computational cost based on operation types. Per-op
+ * cost weights come from the central op registry (op-registry.ts).
  */
 function calculateComputationalCost(metrics: ComplexityMetrics): number {
-  // Cost weights for different operations (relative to addition)
-  const operationCosts: Record<string, number> = {
-    // Basic arithmetic
-    '+': 1,
-    '-': 1,
-    '*': 2,
-    '/': 4,
-    '^': 8,
-    'sqrt': 6,
-    'abs': 1,
-
-    // Transcendental functions (expensive)
-    'exp': 20,
-    'log': 15,
-    'log10': 15,
-    'sin': 12,
-    'cos': 12,
-    'tan': 15,
-    'asin': 18,
-    'acos': 18,
-    'atan': 18,
-    'atan2': 20,
-    'sinh': 15,
-    'cosh': 15,
-    'tanh': 15,
-    'asinh': 18,
-    'acosh': 18,
-    'atanh': 18,
-
-    // Logic operations
-    '>': 2,
-    '<': 2,
-    '>=': 2,
-    '<=': 2,
-    '==': 2,
-    '!=': 2,
-    'and': 2,
-    'or': 2,
-    'not': 1,
-    'ifelse': 3,
-
-    // Statistical operations
-    'min': 3,
-    'max': 3,
-    'floor': 2,
-    'ceil': 2,
-    'sign': 1,
-
-    // Rewrite-target / calculus ops (expensive; lowered to stencils before
-    // evaluation — see esm-spec §4.2)
-    'D': 30,
-    'grad': 50,
-    'div': 40,
-    'laplacian': 80,
-    'integral': 50,
-
-    // Event operations
-    'Pre': 5,
-
-    // Default for unknown operations
-    'default': 10
-  };
-
   let totalCost = 0;
 
   for (const [operation, count] of Object.entries(metrics.operationTypes)) {
-    const cost = operationCosts[operation] || operationCosts.default;
-    totalCost += cost * count;
+    totalCost += opCost(operation) * count;
   }
 
   // Add cost for variable lookups

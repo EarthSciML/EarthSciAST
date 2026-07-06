@@ -18,6 +18,7 @@ import {
   isFloatLit,
   isIntLit,
   isNumericLiteral,
+  formatIntToken,
 } from './numeric-literal.js'
 
 export class CanonicalizeError extends Error {
@@ -324,12 +325,9 @@ function compareExprs(
 
 function emitJson(e: Expr | unknown): string {
   if (isIntLit(e)) {
-    // Value is guaranteed integer-valued and finite by intLit().
-    const s = String(e.value)
-    if (s.includes('.') || s.includes('e') || s.includes('E')) {
-      throw new TypeError(`int NumericLiteral produced non-integer token ${s}`)
-    }
-    return s
+    // Value is guaranteed integer-valued and finite by intLit(); the shared
+    // token emitter re-checks defensively.
+    return formatIntToken(e.value, '$')
   }
   if (isFloatLit(e)) {
     if (!Number.isFinite(e.value)) throw new CanonicalizeError(E_CANONICAL_NONFINITE)

@@ -34,7 +34,7 @@
 import type { EsmFile } from './types.js'
 import {
   isNumericLiteral,
-  formatFloatToken,
+  formatNumericLiteral,
   CanonicalNonfiniteError,
 } from './numeric-literal.js'
 
@@ -135,19 +135,7 @@ function emitValue(
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   if (typeof v === 'string') return JSON.stringify(v)
   if (isNumericLiteral(v)) {
-    if (!Number.isFinite(v.value)) {
-      throw new CanonicalNonfiniteError(v.value, path || '$')
-    }
-    if (v.kind === 'int') {
-      const s = String(v.value)
-      if (s.includes('.') || s.includes('e') || s.includes('E')) {
-        throw new TypeError(
-          `int NumericLiteral produced non-integer token ${s} at ${path || '$'}`,
-        )
-      }
-      return s
-    }
-    return formatFloatToken(v.value)
+    return formatNumericLiteral(v, path || '$')
   }
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) {

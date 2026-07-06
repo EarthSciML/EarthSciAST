@@ -33,8 +33,26 @@ export interface UnitResult {
  */
 export interface UnitWarning {
   message: string
+  /**
+   * Structured warning kind. `dimensional_mismatch` marks a
+   * dimensional-consistency violation (promoted to a structural error by
+   * `validate()`); `analysis` covers informational diagnostics (unknown
+   * variables, arity problems, internal errors).
+   */
+  code: 'dimensional_mismatch' | 'analysis'
   location?: string
   equation?: string
+}
+
+/**
+ * Classify a `checkDimensions()` warning message. This lives beside the
+ * message definitions in this module so the classification and the message
+ * wording cannot drift apart in separate files.
+ */
+function warningCode(message: string): UnitWarning['code'] {
+  return /same dimensions|incompatible|mismatch|inconsisten/i.test(message)
+    ? 'dimensional_mismatch'
+    : 'analysis'
 }
 
 function dimensionless(): ParsedUnit {
@@ -377,6 +395,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             ) {
               warnings.push({
                 message: `Dimensional mismatch in equation: LHS has ${formatDims(lhsResult.dimensions.dims)}, RHS has ${formatDims(rhsResult.dimensions.dims)}`,
+                code: 'dimensional_mismatch',
                 location: `models.${modelName}`,
                 equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
               })
@@ -385,12 +404,14 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
             for (const warning of allSubWarnings) {
               warnings.push({
                 message: warning,
+                code: warningCode(warning),
                 location: `models.${modelName}`,
               })
             }
           } catch (error) {
             warnings.push({
               message: `Error checking equation dimensions: ${error instanceof Error ? error.message : String(error)}`,
+              code: 'analysis',
               location: `models.${modelName}`,
             })
           }
@@ -416,6 +437,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               ) {
                 warnings.push({
                   message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
+                  code: 'dimensional_mismatch',
                   location: `models.${modelName}.variables.${varName}`,
                 })
               }
@@ -423,12 +445,14 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
               for (const warning of exprResult.warnings) {
                 warnings.push({
                   message: warning,
+                  code: warningCode(warning),
                   location: `models.${modelName}.variables.${varName}`,
                 })
               }
             } catch (error) {
               warnings.push({
                 message: `Error checking observed variable dimensions: ${error instanceof Error ? error.message : String(error)}`,
+                code: 'analysis',
                 location: `models.${modelName}.variables.${varName}`,
               })
             }

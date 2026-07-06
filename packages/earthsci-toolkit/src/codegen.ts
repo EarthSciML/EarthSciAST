@@ -9,6 +9,7 @@
 import type { Expr, ExpressionNode } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { dispatchClosedFunction } from './registered_functions.js'
+import { getOpInfo, checkArity } from './op-registry.js'
 
 /**
  * Compiled expression closure produced by {@link compileExpression}.
@@ -136,130 +137,17 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
       )
     }
 
-    const args: number[] = node.args.map((arg: any) => evalExprNode(arg, bindings))
-
-    switch (node.op) {
-      case '+':
-        return args.reduce((sum, val) => sum + val, 0)
-      case '-':
-        if (args.length === 1) return -args[0]
-        return args.reduce((diff, val, idx) => idx === 0 ? val : diff - val)
-      case '*':
-        return args.reduce((prod, val) => prod * val, 1)
-      case '/':
-        if (args.length !== 2) throw new Error('Division requires exactly 2 arguments')
-        if (args[1] === 0) throw new Error('Division by zero')
-        return args[0] / args[1]
-      case '^':
-        if (args.length !== 2) throw new Error('Exponentiation requires exactly 2 arguments')
-        return Math.pow(args[0], args[1])
-      case 'exp':
-        if (args.length !== 1) throw new Error('exp requires exactly 1 argument')
-        return Math.exp(args[0])
-      case 'log':
-        if (args.length !== 1) throw new Error('log requires exactly 1 argument')
-        if (args[0] <= 0) throw new Error('log argument must be positive')
-        return Math.log(args[0])
-      case 'log10':
-        if (args.length !== 1) throw new Error('log10 requires exactly 1 argument')
-        if (args[0] <= 0) throw new Error('log10 argument must be positive')
-        return Math.log10(args[0])
-      case 'sqrt':
-        if (args.length !== 1) throw new Error('sqrt requires exactly 1 argument')
-        if (args[0] < 0) throw new Error('sqrt argument must be non-negative')
-        return Math.sqrt(args[0])
-      case 'abs':
-        if (args.length !== 1) throw new Error('abs requires exactly 1 argument')
-        return Math.abs(args[0])
-      case 'sin':
-        if (args.length !== 1) throw new Error('sin requires exactly 1 argument')
-        return Math.sin(args[0])
-      case 'cos':
-        if (args.length !== 1) throw new Error('cos requires exactly 1 argument')
-        return Math.cos(args[0])
-      case 'tan':
-        if (args.length !== 1) throw new Error('tan requires exactly 1 argument')
-        return Math.tan(args[0])
-      case 'asin':
-        if (args.length !== 1) throw new Error('asin requires exactly 1 argument')
-        if (args[0] < -1 || args[0] > 1) throw new Error('asin argument must be in [-1, 1]')
-        return Math.asin(args[0])
-      case 'acos':
-        if (args.length !== 1) throw new Error('acos requires exactly 1 argument')
-        if (args[0] < -1 || args[0] > 1) throw new Error('acos argument must be in [-1, 1]')
-        return Math.acos(args[0])
-      case 'atan':
-        if (args.length !== 1) throw new Error('atan requires exactly 1 argument')
-        return Math.atan(args[0])
-      case 'atan2':
-        if (args.length !== 2) throw new Error('atan2 requires exactly 2 arguments')
-        return Math.atan2(args[0], args[1])
-      case 'sinh':
-        if (args.length !== 1) throw new Error('sinh requires exactly 1 argument')
-        return Math.sinh(args[0])
-      case 'cosh':
-        if (args.length !== 1) throw new Error('cosh requires exactly 1 argument')
-        return Math.cosh(args[0])
-      case 'tanh':
-        if (args.length !== 1) throw new Error('tanh requires exactly 1 argument')
-        return Math.tanh(args[0])
-      case 'asinh':
-        if (args.length !== 1) throw new Error('asinh requires exactly 1 argument')
-        return Math.asinh(args[0])
-      case 'acosh':
-        if (args.length !== 1) throw new Error('acosh requires exactly 1 argument')
-        if (args[0] < 1) throw new Error('acosh argument must be >= 1')
-        return Math.acosh(args[0])
-      case 'atanh':
-        if (args.length !== 1) throw new Error('atanh requires exactly 1 argument')
-        if (args[0] <= -1 || args[0] >= 1) throw new Error('atanh argument must be in (-1, 1)')
-        return Math.atanh(args[0])
-      case 'min':
-        if (args.length < 2) throw new Error('min requires at least 2 arguments')
-        return Math.min(...args)
-      case 'max':
-        if (args.length < 2) throw new Error('max requires at least 2 arguments')
-        return Math.max(...args)
-      case 'floor':
-        if (args.length !== 1) throw new Error('floor requires exactly 1 argument')
-        return Math.floor(args[0])
-      case 'ceil':
-        if (args.length !== 1) throw new Error('ceil requires exactly 1 argument')
-        return Math.ceil(args[0])
-      case 'sign':
-        if (args.length !== 1) throw new Error('sign requires exactly 1 argument')
-        return Math.sign(args[0])
-      case '>':
-        if (args.length !== 2) throw new Error('> requires exactly 2 arguments')
-        return args[0] > args[1] ? 1 : 0
-      case '<':
-        if (args.length !== 2) throw new Error('< requires exactly 2 arguments')
-        return args[0] < args[1] ? 1 : 0
-      case '>=':
-        if (args.length !== 2) throw new Error('>= requires exactly 2 arguments')
-        return args[0] >= args[1] ? 1 : 0
-      case '<=':
-        if (args.length !== 2) throw new Error('<= requires exactly 2 arguments')
-        return args[0] <= args[1] ? 1 : 0
-      case '==':
-        if (args.length !== 2) throw new Error('== requires exactly 2 arguments')
-        return args[0] === args[1] ? 1 : 0
-      case '!=':
-        if (args.length !== 2) throw new Error('!= requires exactly 2 arguments')
-        return args[0] !== args[1] ? 1 : 0
-      case 'and':
-        return args.every(x => x !== 0) ? 1 : 0
-      case 'or':
-        return args.some(x => x !== 0) ? 1 : 0
-      case 'not':
-        if (args.length !== 1) throw new Error('not requires exactly 1 argument')
-        return args[0] === 0 ? 1 : 0
-      case 'ifelse':
-        if (args.length !== 3) throw new Error('ifelse requires exactly 3 arguments')
-        return args[0] !== 0 ? args[1] : args[2]
-      default:
-        throw new Error(`Unsupported operator: ${node.op}`)
+    // Scalar operators dispatch through the central op registry: arity
+    // bounds and the evaluator body live in ONE table (op-registry.ts), so
+    // adding an operator is a single registry entry.
+    const info = getOpInfo(node.op)
+    if (!info || !info.evaluate) {
+      throw new Error(`Unsupported operator: ${node.op}`)
     }
+
+    const args: number[] = node.args.map((arg: any) => evalExprNode(arg, bindings))
+    checkArity(node.op, args.length)
+    return info.evaluate(args)
   }
 
   throw new Error('Invalid expression type')

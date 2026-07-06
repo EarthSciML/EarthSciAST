@@ -11,6 +11,7 @@
 
 import type { Expr, Equation, Model, EsmFile, ReactionSystem, ExprNode } from './types.js'
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
+import { opPrecedence, isFunctionCallOp } from './op-registry.js'
 
 // Element lookup table for chemical subscript detection (118 elements)
 const ELEMENTS = new Set([
@@ -437,41 +438,21 @@ function formatNumber(num: number, format: 'unicode' | 'latex' | 'ascii'): strin
 }
 
 /**
- * Get operator precedence for proper parenthesization
- */
-function getOperatorPrecedence(op: string): number {
-  switch (op) {
-    case 'or': return 1
-    case 'and': return 2
-    case '=': case '==': case '!=': case '<': case '>': case '<=': case '>=': return 3
-    case '+': case '-': return 4
-    case '*': case '/': return 5
-    case 'not': return 6  // Unary
-    case '^': return 7
-    default: return 8  // Functions get highest precedence
-  }
-}
-
-/**
- * Check if parentheses are needed around a subexpression
+ * Check if parentheses are needed around a subexpression. Precedence and
+ * function-call classification come from the central op registry
+ * (op-registry.ts).
  */
 function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false): boolean {
   if (typeof child === 'number' || typeof child === 'string' || isNumericLiteral(child)) {
     return false
   }
 
-  const parentPrec = getOperatorPrecedence(parent.op)
-  const childPrec = getOperatorPrecedence(child.op)
+  const parentPrec = opPrecedence(parent.op)
+  const childPrec = opPrecedence(child.op)
 
-  // Special cases for function arguments - avoid parentheses for simple expressions
-  if (['sin', 'cos', 'tan', 'exp', 'log', 'sqrt', 'abs', 'asin', 'acos', 'atan', 'floor', 'ceil', 'sign', 'log10'].includes(parent.op)) {
-    // For function arguments, be much more permissive - only parenthesize logical operations
-    return childPrec <= 1
-  }
-
-  // Special case for ifelse function - don't add unnecessary parens to arguments
-  if (parent.op === 'ifelse') {
-    // For function arguments, be much more permissive - only parenthesize logical operations
+  // Function arguments already sit inside the call's own parentheses — only
+  // parenthesize the loosest-binding (logical-or) child expressions.
+  if (isFunctionCallOp(parent.op)) {
     return childPrec <= 1
   }
 
@@ -491,125 +472,78 @@ function needsParentheses(parent: ExprNode, child: Expr, isRightOperand = false)
   return false
 }
 
+type TextFormat = 'unicode' | 'latex' | 'ascii'
+
+/**
+ * Shared type-dispatch for the three text formats: numeric leaf, variable
+ * name, expression node, equation, or a file/model/reaction-system summary.
+ */
+function formatAny(expr: Expr | Equation | Model | ReactionSystem | EsmFile, format: TextFormat): string {
+  if (typeof expr === 'number' || isNumericLiteral(expr)) {
+    return formatNumber(numericValue(expr)!, format)
+  }
+
+  if (typeof expr === 'string') {
+    if (format === 'ascii') return convertGreekLetters(expr, 'ascii')
+    return convertGreekLetters(formatChemicalSubscripts(expr, format), format)
+  }
+
+  if ('op' in expr && 'args' in expr) {
+    return formatExpressionNode(expr as ExprNode, format)
+  }
+
+  if ('lhs' in expr && 'rhs' in expr) {
+    const equation = expr as Equation
+    return `${formatAny(equation.lhs, format)} = ${formatAny(equation.rhs, format)}`
+  }
+
+  // Summaries (spec Section 6.3) render as text: unicode keeps unicode
+  // symbols; latex falls back to plain ascii text.
+  const summaryFormat = format === 'unicode' ? 'unicode' : 'ascii'
+
+  if ('models' in expr || 'metadata' in expr) {
+    return formatEsmFileSummary(expr as EsmFile)
+  }
+
+  if ('variables' in expr && 'equations' in expr) {
+    return formatModelSummary(expr as Model, summaryFormat)
+  }
+
+  if ('species' in expr && 'reactions' in expr) {
+    return formatReactionSystemSummary(expr as ReactionSystem)
+  }
+
+  throw new Error(`Unsupported expression type: ${typeof expr}`)
+}
+
 /**
  * Format an expression as Unicode mathematical notation
  */
 export function toUnicode(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
-  if (typeof expr === 'number' || isNumericLiteral(expr)) {
-    return formatNumber(numericValue(expr)!, 'unicode')
-  }
-
-  if (typeof expr === 'string') {
-    return convertGreekLetters(formatChemicalSubscripts(expr, 'unicode'), 'unicode')
-  }
-
-  if ('op' in expr && 'args' in expr) {
-    return formatExpressionNode(expr as ExprNode, 'unicode')
-  }
-
-  if ('lhs' in expr && 'rhs' in expr) {
-    // Equation
-    const equation = expr as Equation
-    return `${toUnicode(equation.lhs)} = ${toUnicode(equation.rhs)}`
-  }
-
-  if ('models' in expr || 'metadata' in expr) {
-    // EsmFile - model summary display (spec Section 6.3)
-    return formatEsmFileSummary(expr as EsmFile, 'unicode')
-  }
-
-  if ('variables' in expr && 'equations' in expr) {
-    // Model summary
-    return formatModelSummary(expr as Model, 'unicode')
-  }
-
-  if ('species' in expr && 'reactions' in expr) {
-    // ReactionSystem summary
-    return formatReactionSystemSummary(expr as ReactionSystem, 'unicode')
-  }
-
-  throw new Error(`Unsupported expression type: ${typeof expr}`)
+  return formatAny(expr, 'unicode')
 }
 
 /**
  * Format an expression as LaTeX mathematical notation
  */
 export function toLatex(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
-  if (typeof expr === 'number' || isNumericLiteral(expr)) {
-    return formatNumber(numericValue(expr)!, 'latex')
-  }
-
-  if (typeof expr === 'string') {
-    const chemicalFormatted = formatChemicalSubscripts(expr, 'latex')
-    return convertGreekLetters(chemicalFormatted, 'latex')
-  }
-
-  if ('op' in expr && 'args' in expr) {
-    return formatExpressionNode(expr as ExprNode, 'latex')
-  }
-
-  if ('lhs' in expr && 'rhs' in expr) {
-    // Equation
-    const equation = expr as Equation
-    return `${toLatex(equation.lhs)} = ${toLatex(equation.rhs)}`
-  }
-
-  if ('models' in expr || 'metadata' in expr) {
-    // EsmFile - not typically formatted as LaTeX, return plain text
-    return formatEsmFileSummary(expr as EsmFile, 'ascii')
-  }
-
-  if ('variables' in expr && 'equations' in expr) {
-    // Model - not typically formatted as LaTeX, return plain text
-    return formatModelSummary(expr as Model, 'ascii')
-  }
-
-  if ('species' in expr && 'reactions' in expr) {
-    // ReactionSystem - not typically formatted as LaTeX, return plain text
-    return formatReactionSystemSummary(expr as ReactionSystem, 'ascii')
-  }
-
-  throw new Error(`Unsupported expression type: ${typeof expr}`)
+  return formatAny(expr, 'latex')
 }
 
 /**
  * Format an expression as plain ASCII text
  */
 export function toAscii(expr: Expr | Equation | Model | ReactionSystem | EsmFile): string {
-  if (typeof expr === 'number' || isNumericLiteral(expr)) {
-    return formatNumber(numericValue(expr)!, 'ascii')
-  }
+  return formatAny(expr, 'ascii')
+}
 
-  if (typeof expr === 'string') {
-    return convertGreekLetters(expr, 'ascii')
-  }
-
-  if ('op' in expr && 'args' in expr) {
-    return formatExpressionNode(expr as ExprNode, 'ascii')
-  }
-
-  if ('lhs' in expr && 'rhs' in expr) {
-    // Equation
-    const equation = expr as Equation
-    return `${toAscii(equation.lhs)} = ${toAscii(equation.rhs)}`
-  }
-
-  if ('models' in expr || 'metadata' in expr) {
-    // EsmFile
-    return formatEsmFileSummary(expr as EsmFile, 'ascii')
-  }
-
-  if ('variables' in expr && 'equations' in expr) {
-    // Model
-    return formatModelSummary(expr as Model, 'ascii')
-  }
-
-  if ('species' in expr && 'reactions' in expr) {
-    // ReactionSystem
-    return formatReactionSystemSummary(expr as ReactionSystem, 'ascii')
-  }
-
-  throw new Error(`Unsupported expression type: ${typeof expr}`)
+/**
+ * Apply element-aware chemical subscript formatting to a bare variable /
+ * species name using Unicode subscript digits (e.g. "H2SO4" → "H₂SO₄").
+ * Exported for graph rendering (toDot / toMermaid labels).
+ */
+export function formatChemicalName(name: string): string {
+  return formatChemicalSubscripts(name, 'unicode')
 }
 
 /**
@@ -636,7 +570,7 @@ export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFil
 
   if ('models' in expr || 'metadata' in expr) {
     // EsmFile - return plain text in MathML text element
-    return `<math><mtext>${formatEsmFileSummary(expr as EsmFile, 'ascii')}</mtext></math>`
+    return `<math><mtext>${formatEsmFileSummary(expr as EsmFile)}</mtext></math>`
   }
 
   if ('variables' in expr && 'equations' in expr) {
@@ -646,7 +580,7 @@ export function toMathML(expr: Expr | Equation | Model | ReactionSystem | EsmFil
 
   if ('species' in expr && 'reactions' in expr) {
     // ReactionSystem - return plain text in MathML text element
-    return `<math><mtext>${formatReactionSystemSummary(expr as ReactionSystem, 'ascii')}</mtext></math>`
+    return `<math><mtext>${formatReactionSystemSummary(expr as ReactionSystem)}</mtext></math>`
   }
 
   throw new Error(`Unsupported expression type: ${typeof expr}`)
@@ -1320,21 +1254,23 @@ function formatModelSummary(model: Model, format: 'unicode' | 'ascii'): string {
 }
 
 /**
- * Format reaction system summary (implementation placeholder)
+ * Format reaction system summary. `species` is a keyed map in the schema, so
+ * the count comes from its keys.
  */
-function formatReactionSystemSummary(reactionSystem: ReactionSystem, format: 'unicode' | 'ascii'): string {
-  const name = (reactionSystem as any).name || 'unnamed'  // name might not be in ReactionSystem type yet
-  return `ReactionSystem: ${name} (${reactionSystem.species?.length || 0} species, ${reactionSystem.reactions?.length || 0} reactions)`
+function formatReactionSystemSummary(reactionSystem: ReactionSystem): string {
+  const speciesCount = Object.keys(reactionSystem.species || {}).length
+  const reactionCount = reactionSystem.reactions?.length || 0
+  return `ReactionSystem (${speciesCount} species, ${reactionCount} reactions)`
 }
 
 /**
- * Format ESM file summary (implementation placeholder)
+ * Format ESM file summary
  */
-function formatEsmFileSummary(esmFile: EsmFile, format: 'unicode' | 'ascii'): string {
+function formatEsmFileSummary(esmFile: EsmFile): string {
   const models = Object.keys(esmFile.models || {}).length
   const reactionSystems = Object.keys(esmFile.reaction_systems || {}).length
   const dataLoaders = Object.keys(esmFile.data_loaders || {}).length
-  const title = (esmFile.metadata as any)?.title || 'Untitled'  // title might not be in Metadata type yet
+  const name = esmFile.metadata?.name || 'Untitled'
 
-  return `ESM v${esmFile.esm}: ${title} (${models} models, ${reactionSystems} reaction systems, ${dataLoaders} data loaders)`
+  return `ESM v${esmFile.esm}: ${name} (${models} models, ${reactionSystems} reaction systems, ${dataLoaders} data loaders)`
 }
