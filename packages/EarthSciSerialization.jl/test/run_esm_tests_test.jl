@@ -19,6 +19,22 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
         @test issorted(found)
     end
 
+    @testset "root keyword resolves relative roots (no esm_root override)" begin
+        found = discover_esm_files(["inline_tests"];
+                                   root=joinpath(@__DIR__, "fixtures"))
+        @test length(found) == 3
+        @test all(endswith(f, ".esm") for f in found)
+    end
+
+    @testset "zero-file discovery warns" begin
+        @test_logs (:warn, r"discovered no \.esm files") begin
+            results, exit_code = run_esm_tests(["no_such_dir_anywhere"];
+                                                verbose=false)
+            @test isempty(results)
+            @test exit_code == 0
+        end
+    end
+
     @testset "discover_esm_files honours exclude" begin
         kw = discover_esm_files([_inline_dir]; exclude=["failing_decay"])
         @test length(kw) == 2
@@ -88,6 +104,41 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
             @test occursin("<testsuites", content)
             @test occursin("FailingDecay", content)
             @test occursin("<failure", content)
+        end
+    end
+
+    @testset "per-test duration split evenly across assertions (no N-fold overcount)" begin
+        results, _ = run_esm_tests([_inline_dir];
+                                    verbose=false,
+                                    exclude=["failing_decay",
+                                             "subsystem_composed"])
+        by_test = Dict{Tuple{String,String,String},Vector{Float64}}()
+        for r in results
+            push!(get!(by_test, (r.file, r.container_name, r.test_id),
+                        Float64[]), r.duration_s)
+        end
+        @test !isempty(by_test)
+        # Every assertion of one test carries the SAME even share of the
+        # test's wall time (the pre-fix code stamped cumulative elapsed time,
+        # strictly increasing across a test's assertions).
+        for durations in values(by_test)
+            @test all(d -> d == durations[1], durations)
+            @test all(d -> d >= 0.0, durations)
+        end
+    end
+
+    @testset "junit testcase time == sum of per-assertion durations" begin
+        # Synthetic results with known durations: the testcase `time` must be
+        # exactly the sum of its assertions' duration_s.
+        mk(i, dur) = EarthSciSerialization.AssertionResult(
+            "f.esm", :model, "M", "t1", i, "x", 0.0, 1.0, 1.0,
+            EarthSciSerialization.PASS, "", dur)
+        results = [mk(1, 0.125), mk(2, 0.125), mk(3, 0.125)]
+        mktempdir() do tmp
+            xml_path = joinpath(tmp, "durations.xml")
+            write_junit_xml(results, xml_path)
+            content = read(xml_path, String)
+            @test occursin("time=\"0.375\"", content)
         end
     end
 

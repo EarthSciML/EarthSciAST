@@ -52,6 +52,21 @@ exists, so sub-`atol` areas are treated as equal-to-zero.
 const SLIVER_ATOL_FACTOR = 1e-15
 
 """
+np.allclose-matching point-comparison tolerances (`atol + rtol·|b|` per
+coordinate) so the closing-vertex drop and consecutive-dedup decisions match
+the Python sibling exactly (np.allclose defaults).
+"""
+const PT_ALLCLOSE_ATOL = 1e-8
+const PT_ALLCLOSE_RTOL = 1e-5
+
+"""
+Degeneracy floor for the clip-line × subject-segment denominator: a |denom|
+below this is treated as parallel/degenerate and the intersection falls back
+to the in-half-plane endpoint (see `_segment_intersection`).
+"""
+const SEGMENT_DENOM_FLOOR = 1e-300
+
+"""
     GeometryError(msg)
 
 A polygon-clip / area evaluation failed (bad operand, degenerate input, or a
@@ -92,10 +107,12 @@ function _to_matrix(poly)::Matrix{Float64}
     throw(GeometryError("cannot coerce polygon operand of type $(typeof(poly)) to an [n, 2] lon-lat ring"))
 end
 
-# np.allclose-matching point comparison (atol=1e-8, rtol=1e-5) so the closing-vertex
-# drop and consecutive-dedup decisions match the Python sibling exactly.
+# np.allclose-matching point comparison (see PT_ALLCLOSE_ATOL / PT_ALLCLOSE_RTOL)
+# so the closing-vertex drop and consecutive-dedup decisions match the Python
+# sibling exactly.
 @inline _allclose_pt(ax, ay, bx, by) =
-    abs(ax - bx) <= 1e-8 + 1e-5 * abs(bx) && abs(ay - by) <= 1e-8 + 1e-5 * abs(by)
+    abs(ax - bx) <= PT_ALLCLOSE_ATOL + PT_ALLCLOSE_RTOL * abs(bx) &&
+    abs(ay - by) <= PT_ALLCLOSE_ATOL + PT_ALLCLOSE_RTOL * abs(by)
 
 """
     _as_ring(poly, who) -> Matrix{Float64}
@@ -138,7 +155,7 @@ end
     rx = b[1] - a[1]; ry = b[2] - a[2]
     sx = q[1] - p[1]; sy = q[2] - p[2]
     denom = rx * sy - ry * sx
-    if abs(denom) < 1e-300
+    if abs(denom) < SEGMENT_DENOM_FLOOR
         # Parallel / degenerate: fall back to the segment endpoint inside the
         # half-plane (the caller only reaches here when p,q straddle the line).
         return q
@@ -226,6 +243,12 @@ end
 # Public clip entry point
 # --------------------------------------------------------------------------- #
 
+# True when the GeometryOps backend (the `EarthSciSerializationGeometryOpsExt`
+# extension) is loaded, so the spherical / geodesic clip is callable. The area FAQ
+# needs no backend — only the spherical *clip* does.
+_spherical_clip_available() =
+    hasmethod(_spherical_clip_geometryops, Tuple{Matrix{Float64},Matrix{Float64},String})
+
 """
     intersect_polygon(poly_a, poly_b, manifold) -> Matrix{Float64}
 
@@ -239,12 +262,6 @@ empty `0×2` array when the cells do not overlap. `planar` is dependency-free;
 `spherical` / `geodesic` delegate the clip to `GeometryOps.jl` via the
 `EarthSciSerializationGeometryOpsExt` extension.
 """
-# True when the GeometryOps backend (the `EarthSciSerializationGeometryOpsExt`
-# extension) is loaded, so the spherical / geodesic clip is callable. The area FAQ
-# needs no backend — only the spherical *clip* does.
-_spherical_clip_available() =
-    hasmethod(_spherical_clip_geometryops, Tuple{Matrix{Float64},Matrix{Float64},String})
-
 function intersect_polygon(poly_a, poly_b, manifold::AbstractString)::Matrix{Float64}
     manifold in GEOMETRY_MANIFOLDS || throw(GeometryError(
         "unknown manifold $(repr(manifold)); the closed set is $(GEOMETRY_MANIFOLDS)"))

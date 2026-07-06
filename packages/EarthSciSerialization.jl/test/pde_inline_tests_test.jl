@@ -107,6 +107,7 @@ end
     @test length(results) == 6
     for r in results
         @test r.passed
+        @test r.status == EarthSciSerialization.PASS   # shared AssertionStatus enum
         @test r.reduce === nothing
     end
     @test results[1].actual == results[2].actual
@@ -121,6 +122,10 @@ end
     results = _pit_run(file)
     @test length(results) == 3
     @test all(r -> !r.passed && r.actual === nothing, results)
+    # Evaluation failures are ERROR (not FAIL) and surface the typed
+    # PdeTestError through showerror.
+    @test all(r -> r.status == EarthSciSerialization.ERROR, results)
+    @test occursin("PdeTestError", results[1].message)
     @test occursin("names unknown dimension 'y'", results[1].message)
     @test occursin("outside 1..8", results[2].message)
     @test occursin("resolves to index 0", results[2].message)
@@ -419,6 +424,37 @@ end
     @test length(results) == 1
     @test results[1].passed
     @test results[1].actual < 1e-12
+end
+
+@testset "PdeAssertionResult status enum + JUnit emission" begin
+    # A doc with one passing and one failing assertion: statuses must be the
+    # shared AssertionStatus values, `passed` must mirror `status == PASS`,
+    # and the results must ride the same JUnit path as the MTK runner.
+    u3 = cos(pi * 2.5 / _PIT_N)
+    file = _pit_load(_pit_decay_doc(Any[
+        _pit_coords_assert(["x" => 3]; expected=u3),          # PASS
+        _pit_coords_assert(["x" => 3]; expected=u3 + 1.0),    # FAIL (wrong value)
+        _pit_coords_assert(["y" => 1.0]),                     # ERROR (bad coords)
+    ]))
+    results = _pit_run(file)
+    @test length(results) == 3
+    @test results[1].status == EarthSciSerialization.PASS
+    @test results[1].passed
+    @test results[2].status == EarthSciSerialization.FAIL
+    @test !results[2].passed
+    @test results[2].actual !== nothing
+    @test results[3].status == EarthSciSerialization.ERROR
+    @test !results[3].passed
+
+    mktempdir() do tmp
+        xml_path = joinpath(tmp, "pde_report.xml")
+        write_junit_xml(results, xml_path; file="pde_inline_decay.esm")
+        content = read(xml_path, String)
+        @test occursin("<testsuites", content)
+        @test occursin("pde_inline_decay.esm::M", content)
+        @test occursin("<failure", content)
+        @test occursin("<error", content)
+    end
 end
 
 @testset "shared fixture — tests/spatial/pde_inline_assertions_exec.esm" begin

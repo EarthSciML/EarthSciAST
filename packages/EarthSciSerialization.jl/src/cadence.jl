@@ -61,10 +61,11 @@ The guards ([`assert_no_continuous_relational`](@ref),
 module Cadence
 
 import JSON3
-using ..Relational: skolem_edge, distinct, rank
+using ..Relational: skolem_edge, distinct
 
 export CadenceError, partition_model, compute_fold, canonical_serialize,
-    classify, assert_no_continuous_relational, assert_acyclic_index_sets,
+    classify, run_guards,
+    assert_no_continuous_relational, assert_acyclic_index_sets,
     load_model_json
 
 # The cadence lattice (§5.7.1): const ⊏ discrete ⊏ continuous. `class(node) =
@@ -204,27 +205,41 @@ function child_exprs(node::AbstractDict)
     return out
 end
 
+# Per-pass class memo: operator node (by identity) → derived class. Threaded
+# through [`partition_model`](@ref) / [`run_guards`](@ref) so each node is
+# classified exactly once per pass instead of re-running the recursive
+# `classify` from scratch at every visit (quadratic-plus on deep trees).
+const ClassMemo = IdDict{Any,String}
+
 """
-    classify(node, model) -> String
+    classify(node, model[, memo::ClassMemo]) -> String
 
 Derive a node's cadence class. A leaf is seeded ([`seed_leaf`](@ref)); an
 operator node is `max` over its child classes — which, for a gather
 `index(A, e…)`, is `max(class(A), class(e…))`: the index expressions are
 classed independently of the array, so a stencil splits (§5.7.3 gather rule).
+
+`memo` caches the derived class per operator node (by identity); the walkers
+in one pass share a single memo so classification is linear in tree size.
 """
-function classify(node, model)
+function classify(node, model, memo::ClassMemo=ClassMemo())
     isa(node, AbstractDict) || return seed_leaf(node, model)
+    cached = get(memo, node, nothing)
+    cached !== nothing && return cached
     children = child_exprs(node)
-    isempty(children) && return "const"
-    return _join(String[classify(c, model) for c in children])
+    cls = isempty(children) ? "const" :
+          _join(String[classify(c, model, memo) for c in children])
+    memo[node] = cls
+    return cls
 end
 
 """Walk the tree; wherever a node carries `expect_cadence`, assert the derived
 class agrees (§5.7.6 guard 3). Appends a message per disagreement to `problems`."""
-function check_expect_cadence!(node, model, problems::Vector{String})
+function check_expect_cadence!(node, model, problems::Vector{String},
+                               memo::ClassMemo=ClassMemo())
     isa(node, AbstractDict) || return
     if haskey(node, "expect_cadence")
-        derived = classify(node, model)
+        derived = classify(node, model, memo)
         want = node["expect_cadence"]
         if derived != want
             push!(problems,
@@ -233,21 +248,22 @@ function check_expect_cadence!(node, model, problems::Vector{String})
         end
     end
     for c in child_exprs(node)
-        check_expect_cadence!(c, model, problems)
+        check_expect_cadence!(c, model, problems, memo)
     end
     return
 end
 
 """Count annotated nodes (those carrying `expect_cadence`) by derived class —
 the golden `class_summary`."""
-function tally_classes!(node, model, counts::Dict{String,Int})
+function tally_classes!(node, model, counts::Dict{String,Int},
+                        memo::ClassMemo=ClassMemo())
     isa(node, AbstractDict) || return
     if haskey(node, "expect_cadence")
-        c = classify(node, model)
+        c = classify(node, model, memo)
         counts[c] = get(counts, c, 0) + 1
     end
     for c in child_exprs(node)
-        tally_classes!(c, model, counts)
+        tally_classes!(c, model, counts, memo)
     end
     return
 end
@@ -259,29 +275,30 @@ strictly lower than its parent's is a materialization point (the maximal
 lower-cadence sub-DAG below that edge is cut, stored in a buffer, referenced by
 the parent). We record the boundary and do NOT recurse into it. A bare
 scalar-constant leaf is not a buffer, so scalar inlining is excluded."""
-function materialization_frontier!(node, model, out::Vector{Any})
+function materialization_frontier!(node, model, out::Vector{Any},
+                                   memo::ClassMemo=ClassMemo())
     isa(node, AbstractDict) || return
-    parent = classify(node, model)
+    parent = classify(node, model, memo)
     for c in child_exprs(node)
         isa(c, AbstractDict) || continue
-        cc = classify(c, model)
+        cc = classify(c, model, memo)
         if CLASS_RANK[cc] < CLASS_RANK[parent]
             push!(out, Dict{String,Any}(
                 "threshold" => "$(cc)->$(parent)",
                 "kind" => "expr_edge",
                 "op" => get(c, "op", nothing)))
         else
-            materialization_frontier!(c, model, out)
+            materialization_frontier!(c, model, out, memo)
         end
     end
     return
 end
 
 """True iff any value under `node` is `continuous` (drives hot-tree emptiness)."""
-function has_continuous(node, model)
+function has_continuous(node, model, memo::ClassMemo=ClassMemo())
     if isa(node, AbstractDict)
-        classify(node, model) == "continuous" && return true
-        return any(has_continuous(c, model) for c in child_exprs(node))
+        classify(node, model, memo) == "continuous" && return true
+        return any(has_continuous(c, model, memo) for c in child_exprs(node))
     end
     return seed_leaf(node, model) == "continuous"
 end
@@ -295,19 +312,19 @@ end
 aggregate) that classifies `continuous` is rejected — state-dependent topology
 may not run on the per-step hot path in v1. Throws [`CadenceError`](@ref).
 """
-function assert_no_continuous_relational(node, model)
+function assert_no_continuous_relational(node, model, memo::ClassMemo=ClassMemo())
     isa(node, AbstractDict) || return
     op = get(node, "op", nothing)
     is_relational = (op in RELATIONAL_OPS) ||
                     (op == "aggregate" && get(node, "distinct", false) == true)
-    if is_relational && classify(node, model) == "continuous"
+    if is_relational && classify(node, model, memo) == "continuous"
         throw(CadenceError(
             "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
             "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
             "distinct/join/skolem/rank is out of scope for v1."))
     end
     for c in child_exprs(node)
-        assert_no_continuous_relational(c, model)
+        assert_no_continuous_relational(c, model, memo)
     end
     return
 end
@@ -427,22 +444,25 @@ function partition_model(model::AbstractDict)
     problems = String[]
     points = Any[]
     rhss = model_nodes(model)
+    # One shared memo across every walker: each node's class is derived once
+    # per pass (see ClassMemo).
+    memo = ClassMemo()
     for rhs in rhss
-        check_expect_cadence!(rhs, model, problems)
-        tally_classes!(rhs, model, counts)
-        materialization_frontier!(rhs, model, points)
+        check_expect_cadence!(rhs, model, problems, memo)
+        tally_classes!(rhs, model, counts, memo)
+        materialization_frontier!(rhs, model, points, memo)
         # Output-buffer cut: an equation whose RHS classifies below `continuous`
         # folds out of the per-step hot path entirely (the observed-variable
         # elimination) — into the artifact (`const`) or the per-event handler
         # (`discrete`). That whole RHS is a materialization point.
-        rc = classify(rhs, model)
+        rc = classify(rhs, model, memo)
         if CLASS_RANK[rc] < CLASS_RANK["continuous"]
             push!(points, Dict{String,Any}(
                 "threshold" => "$(rc)->artifact",
                 "kind" => "output_buffer"))
         end
     end
-    hot_tree_empty = !any(has_continuous(rhs, model) for rhs in rhss)
+    hot_tree_empty = !any(has_continuous(rhs, model, memo) for rhs in rhss)
     event_handler_empty = !any(startswith(p["threshold"], "discrete") for p in points)
     return (class_summary=counts, materialization_points=points,
         hot_tree_empty=hot_tree_empty, event_handler_empty=event_handler_empty,
@@ -458,9 +478,10 @@ Apply the §5.7.6 checked guards over a model: the `expect_cadence` assertion
 """
 function run_guards(model)
     problems = String[]
+    memo = ClassMemo()
     for rhs in model_nodes(model)
-        check_expect_cadence!(rhs, model, problems)
-        assert_no_continuous_relational(rhs, model)
+        check_expect_cadence!(rhs, model, problems, memo)
+        assert_no_continuous_relational(rhs, model, memo)
     end
     isempty(problems) || throw(CadenceError(first(problems)))
     assert_acyclic_index_sets(model)

@@ -32,7 +32,7 @@
 #      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
 
 """
-    RefreshError(message)
+    RefreshError(msg)
 
 Thrown by the data-refresh surface: an unimplemented Provider/RegridApplier
 protocol method, a buffer that is not a dense `Array{Float64}`, a
@@ -41,9 +41,9 @@ shape/length mismatch at refresh time, or a call to
 extension is loaded.
 """
 struct RefreshError <: Exception
-    message::String
+    msg::String
 end
-Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.message)
+Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 
 # --------------------------------------------------------------------------- #
 # Provider protocol (consumer-side; concrete impls live in the data binding)

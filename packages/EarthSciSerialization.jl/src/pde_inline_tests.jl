@@ -48,7 +48,27 @@
 # - `run_pde_tests(input; model_name, alg, reltol, abstol)` — run every inline
 #   test of the selected model(s); returns per-assertion results carrying the
 #   ACTUAL reduction values (conformance runners record these).
+#
+# SHARED helpers: tolerance resolution (`_resolve_tolerance`), the pass
+# predicate (`_check_assertion`), the solver-tolerance defaults
+# (`DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`), and the `AssertionStatus`
+# enum live in run_tests.jl's "SHARED §6.6 assertion helpers" section — the
+# two runners' assertion semantics are deliberately identical.
 # ===========================================================================
+
+"""
+    PdeTestError(msg)
+
+A §6.6.5 inline-test evaluation failed: an ill-formed `coords` / `reduce`
+assertion, a `from_file` reference that is missing or shape-mismatched, an
+asserted variable with no field, or a per-test discretization injection
+(§9.7.10 form C) that could not build. `run_pde_tests` catches it per
+assertion and records the message on the failing [`PdeAssertionResult`](@ref).
+"""
+struct PdeTestError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::PdeTestError) = print(io, "PdeTestError: ", e.msg)
 
 """
     PdeAssertionResult
@@ -57,6 +77,11 @@ Outcome of one §6.6.5 inline-test assertion evaluated through the tree-walk
 simulation pathway. `actual` is the computed reduction value (`nothing` when
 the simulation or reduction itself failed); `message` carries the diff or
 error text for non-passing results.
+
+`status` uses the same [`AssertionStatus`](@ref) enum as the MTK runner's
+`AssertionResult`: `PASS`, `FAIL` (value outside tolerance), or `ERROR` (the
+simulation or the assertion evaluation raised). The virtual property
+`r.passed` (`status == PASS`) is kept for backwards compatibility.
 """
 struct PdeAssertionResult
     model::String
@@ -69,9 +94,19 @@ struct PdeAssertionResult
     actual::Union{Float64,Nothing}
     rtol::Float64
     atol::Float64
-    passed::Bool
+    status::AssertionStatus
     message::String
 end
+
+# Backcompat: `r.passed` predates the `status` field; keep it as a virtual
+# property so existing callers (and the cross-binding conformance suites'
+# expectations) continue to work.
+function Base.getproperty(r::PdeAssertionResult, name::Symbol)
+    name === :passed && return getfield(r, :status) == PASS
+    return getfield(r, name)
+end
+Base.propertynames(::PdeAssertionResult) =
+    (fieldnames(PdeAssertionResult)..., :passed)
 
 """
     evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict(),
@@ -165,10 +200,11 @@ function _state_cells(var_map::AbstractDict, variable::AbstractString,
     exact = Tuple{Vector{Int},Int}[]
     fallback = Tuple{Vector{Int},Int}[]
     for (name, slot) in var_map
-        m = match(r"^(.+)\[([0-9,]+)\]$", String(name))
-        m === nothing && continue
-        stem = String(m.captures[1])
-        cell = [parse(Int, x) for x in split(m.captures[2], ",")]
+        # `_parse_cell_key` (tree_walk.jl) is the single inverse of
+        # `_cell_key`'s "name[i,j]" encoding — no local regex.
+        parsed = _parse_cell_key(String(name))
+        parsed === nothing && continue
+        stem, cell = parsed
         if stem == qualified || stem == String(variable)
             push!(exact, (cell, Int(slot)))
         else
@@ -283,11 +319,12 @@ end
 function _variable_shape(file::EsmFile, mname::AbstractString,
                          variable::AbstractString)::Vector{String}
     model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
-    model === nothing && error("model '$(mname)' not found")
+    model === nothing && throw(PdeTestError("model '$(mname)' not found"))
     v = get(model.variables, String(variable), nothing)
-    v === nothing && error("variable '$(variable)' is not declared in model '$(mname)'")
-    (v.shape === nothing || isempty(v.shape)) &&
-        error("`coords` requires a spatially-shaped variable; '$(variable)' is scalar")
+    v === nothing && throw(PdeTestError(
+        "variable '$(variable)' is not declared in model '$(mname)'"))
+    (v.shape === nothing || isempty(v.shape)) && throw(PdeTestError(
+        "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
     return String[String(s) for s in v.shape]
 end
 
@@ -301,28 +338,28 @@ function _coords_cell(coords::AbstractDict, shape::Vector{String},
                       index_sets::AbstractDict)::Vector{Int}
     for k in keys(coords)
         String(k) in shape ||
-            error("`coords` names unknown dimension '$(k)' " *
-                  "(field dimensions: $(join(shape, ", ")))")
+            throw(PdeTestError("`coords` names unknown dimension '$(k)' " *
+                  "(field dimensions: $(join(shape, ", ")))"))
     end
     cell = Int[]
     for s in shape
         iset = get(index_sets, s, nothing)
         (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            error("`coords` sampling requires interval index sets with a " *
-                  "declared size; '$(s)' is not one")
+            throw(PdeTestError("`coords` sampling requires interval index sets " *
+                  "with a declared size; '$(s)' is not one"))
         n = Int(iset.size)
         if haskey(coords, s)
             c = Float64(coords[s])
             idx = ceil(Int, c - 0.5)  # nearest index; exact ties round DOWN
             (1 <= idx <= n) ||
-                error("`coords` position $(c) along '$(s)' resolves to index " *
-                      "$(idx), outside 1..$(n)")
+                throw(PdeTestError("`coords` position $(c) along '$(s)' resolves " *
+                      "to index $(idx), outside 1..$(n)"))
             push!(cell, idx)
         else
             n == 1 ||
-                error("`coords` leaves dimension '$(s)' unpinned with $(n) " *
-                      "samples; a strict subset pins only when every " *
-                      "remaining dimension is singleton")
+                throw(PdeTestError("`coords` leaves dimension '$(s)' unpinned " *
+                      "with $(n) samples; a strict subset pins only when every " *
+                      "remaining dimension is singleton"))
             push!(cell, 1)
         end
     end
@@ -337,16 +374,16 @@ function _nested_at(data, cell::Vector{Int}, exts::Vector{Int})::Float64
     node = data
     for (d, i) in enumerate(cell)
         node isa AbstractVector ||
-            error("from_file reference shape mismatch along dimension $(d): " *
-                  "expected a nested array of length $(exts[d])")
+            throw(PdeTestError("from_file reference shape mismatch along " *
+                  "dimension $(d): expected a nested array of length $(exts[d])"))
         length(node) == exts[d] ||
-            error("from_file reference shape mismatch along dimension $(d): " *
-                  "expected length $(exts[d]), found $(length(node))")
+            throw(PdeTestError("from_file reference shape mismatch along " *
+                  "dimension $(d): expected length $(exts[d]), found $(length(node))"))
         node = node[i]
     end
     (node isa Real && !(node isa Bool)) ||
-        error("from_file reference shape mismatch at cell " *
-              "[$(join(cell, ","))]: expected a number")
+        throw(PdeTestError("from_file reference shape mismatch at cell " *
+              "[$(join(cell, ","))]: expected a number"))
     return Float64(node)
 end
 
@@ -360,15 +397,17 @@ function _from_file_reference(ref::AbstractDict, base_dir::AbstractString,
     fmt_raw = get(ref, "format", nothing)
     fmt = fmt_raw === nothing ? "json" : lowercase(String(fmt_raw))
     fmt == "json" ||
-        error("from_file reference format '$(fmt)' is not supported " *
-              "(v1 supports \"json\" only)")
+        throw(PdeTestError("from_file reference format '$(fmt)' is not supported " *
+              "(v1 supports \"json\" only)"))
     path_raw = get(ref, "path", nothing)
-    path_raw === nothing && error("from_file reference is missing `path`")
+    path_raw === nothing && throw(PdeTestError("from_file reference is missing `path`"))
     p = String(path_raw)
     resolved = isabspath(p) ? p : joinpath(String(base_dir), p)
-    isfile(resolved) || error("from_file reference file not found: $(resolved)")
+    isfile(resolved) ||
+        throw(PdeTestError("from_file reference file not found: $(resolved)"))
     data = JSON3.read(read(resolved, String))
-    isempty(cell_tuples) && error("from_file reference: field has no cells")
+    isempty(cell_tuples) &&
+        throw(PdeTestError("from_file reference: field has no cells"))
     nd = length(cell_tuples[1])
     exts = Int[maximum(c[d] for c in cell_tuples) for d in 1:nd]
     return Float64[_nested_at(data, c, exts) for c in cell_tuples]
@@ -408,15 +447,85 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
         injected = true
         break
     end
-    injected || error("component '$(mname)' not found for per-test injection (esm-spec §9.7.10)")
+    injected || throw(PdeTestError(
+        "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
     f = load(IOBuffer(JSON3.write(raw)); base_path=String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
     return f
 end
 
+# ---------------------------------------------------------------------------
+# Per-assertion evaluation — the §6.6.5 scalar-selection / reduction machinery,
+# split out of `run_pde_tests` so the driver stays a flat loop. Returns the
+# scalar `actual`; throws [`PdeTestError`](@ref) on any spec-relevant failure
+# (the driver records it as an `ERROR` result).
+# ---------------------------------------------------------------------------
+function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
+                             mname::AbstractString,
+                             resolved_base::AbstractString)::Float64
+    ti = argmin(abs.(sim.t .- a.time))
+    abs(sim.t[ti] - a.time) <= 1e-9 * max(1.0, abs(a.time)) ||
+        throw(PdeTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
+    state = sim.u[ti]
+
+    if a.coords === nothing && a.reduce === nothing
+        slot = _scalar_slot(sim.var_map, a.variable, String(mname))
+        slot == 0 && throw(PdeTestError("scalar state '$(a.variable)' not found"))
+        return state[slot]
+    end
+
+    # `coords` validation runs BEFORE field materialization so a coords
+    # assertion on a scalar variable fails with the §6.6.5 coords-specific
+    # message.
+    coords_target = nothing
+    if a.coords !== nothing
+        shape = _variable_shape(eval_file, String(mname), String(a.variable))
+        coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
+    end
+
+    cells = _state_cells(sim.var_map, a.variable, String(mname))
+    local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
+    if !isempty(cells)
+        field = Float64[state[slot] for (_, slot) in cells]
+        cell_tuples = [c for (c, _) in cells]
+    else
+        # No ODE slots: try a state-free ARRAY OBSERVED (a rule output
+        # asserted directly, §6.6.5).
+        obs = _observed_field(insp, eval_file, String(mname), String(a.variable))
+        obs === nothing && throw(PdeTestError(
+            "array state '$(a.variable)' has no cells in var_map"))
+        field, cell_tuples = obs
+    end
+
+    if coords_target !== nothing
+        pos = findfirst(==(coords_target), cell_tuples)
+        pos === nothing && throw(PdeTestError("no grid sample at cell " *
+            "[$(join(coords_target, ","))] of '$(a.variable)'"))
+        return field[pos]
+    end
+
+    ref = nothing
+    if a.reference !== nothing
+        if a.reference isa Expr
+            # Model parameters (load-time constants) are in scope for a §6.6.5
+            # analytic `reference`; state is not. `insp.params` carries the
+            # build's resolved scalar params (override-or-default).
+            ref = evaluate_cellwise(a.reference, cell_tuples;
+                                    const_arrays=insp.const_arrays,
+                                    params=_param_scope_with_aliases(insp.params))
+        elseif a.reference isa AbstractDict &&
+               string(get(a.reference, "type", "")) == "from_file"
+            ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
+        else
+            throw(PdeTestError("unsupported `reference` shape $(typeof(a.reference))"))
+        end
+    end
+    return field_reduce(a.reduce, field; reference=ref)
+end
+
 """
     run_pde_tests(input; model_name=nothing, alg=nothing,
-                  reltol=1e-10, abstol=1e-12,
+                  reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
                   base_dir=nothing) -> Vector{PdeAssertionResult}
 
 Run every inline test (esm-spec §6.6, including the §6.6.5 PDE assertions) of
@@ -440,11 +549,16 @@ directory when `input` is a path, else the working directory.
 
 Tolerances resolve per esm-spec §6.6.4 (assertion > test > model > default
 `rel=1e-6`); the pass predicate is the same `isapprox` check `run_esm_tests`
-uses. `alg` is REQUIRED (e.g. `Tsit5()` with OrdinaryDiffEqTsit5 loaded) — the
-solve runs in the SciMLBase extension.
+uses (shared helpers in run_tests.jl), and each result carries the same
+[`AssertionStatus`](@ref) (`PASS`/`FAIL`/`ERROR`) as the MTK runner's results.
+`alg` is REQUIRED (e.g. `Tsit5()` with OrdinaryDiffEqTsit5 loaded) — the
+solve runs in the SciMLBase extension. `reltol`/`abstol` default to the shared
+inline-test solver tolerances `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
 """
 function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
-                       alg=nothing, reltol::Float64=1e-10, abstol::Float64=1e-12,
+                       alg=nothing,
+                       reltol::Float64=DEFAULT_TEST_RELTOL,
+                       abstol::Float64=DEFAULT_TEST_ABSTOL,
                        base_dir::Union{Nothing,AbstractString}=nothing)
     file = input isa AbstractString ? load(String(input)) : input
     file isa EsmFile ||
@@ -474,8 +588,8 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                         t.expression_template_imports, resolved_base)
                     rm = run_file.models === nothing ? nothing :
                         get(run_file.models, String(mname), nothing)
-                    rm === nothing &&
-                        error("component '$(mname)' vanished from the ephemeral build")
+                    rm === nothing && throw(PdeTestError(
+                        "component '$(mname)' vanished from the ephemeral build"))
                     run_model = rm
                 catch err
                     sim_err = "per-test discretization injection failed: " *
@@ -509,92 +623,55 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                 if sim === nothing
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, nothing,
-                        rtol, atol, false, sim_err))
+                        rtol, atol, ERROR, sim_err))
                     continue
                 end
                 actual::Union{Float64,Nothing} = nothing
                 msg = ""
                 try
-                    ti = argmin(abs.(sim.t .- a.time))
-                    abs(sim.t[ti] - a.time) <= 1e-9 * max(1.0, abs(a.time)) ||
-                        error("no saved state at t=$(a.time) (nearest $(sim.t[ti]))")
-                    state = sim.u[ti]
-                    if a.coords === nothing && a.reduce === nothing
-                        slot = _scalar_slot(sim.var_map, a.variable, String(mname))
-                        slot == 0 && error("scalar state '$(a.variable)' not found")
-                        actual = state[slot]
-                    else
-                        # `coords` validation runs BEFORE field materialization
-                        # so a coords assertion on a scalar variable fails with
-                        # the §6.6.5 coords-specific message.
-                        coords_target = nothing
-                        if a.coords !== nothing
-                            shape = _variable_shape(eval_file, String(mname),
-                                                    String(a.variable))
-                            coords_target = _coords_cell(a.coords, shape,
-                                                         eval_file.index_sets)
-                        end
-                        cells = _state_cells(sim.var_map, a.variable, String(mname))
-                        local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
-                        if !isempty(cells)
-                            field = Float64[state[slot] for (_, slot) in cells]
-                            cell_tuples = [c for (c, _) in cells]
-                        else
-                            # No ODE slots: try a state-free ARRAY OBSERVED (a
-                            # rule output asserted directly, §6.6.5).
-                            obs = _observed_field(insp, eval_file, String(mname),
-                                                  String(a.variable))
-                            obs === nothing &&
-                                error("array state '$(a.variable)' has no cells in var_map")
-                            field, cell_tuples = obs
-                        end
-                        if coords_target !== nothing
-                            pos = findfirst(==(coords_target), cell_tuples)
-                            pos === nothing &&
-                                error("no grid sample at cell " *
-                                      "[$(join(coords_target, ","))] of '$(a.variable)'")
-                            actual = field[pos]
-                        else
-                            ref = nothing
-                            if a.reference !== nothing
-                                if a.reference isa Expr
-                                    # Model parameters (load-time constants) are in
-                                    # scope for a §6.6.5 analytic `reference`; state
-                                    # is not. `insp.params` carries the build's
-                                    # resolved scalar params (override-or-default).
-                                    ref = evaluate_cellwise(a.reference, cell_tuples;
-                                                            const_arrays=insp.const_arrays,
-                                                            params=_param_scope_with_aliases(insp.params))
-                                elseif a.reference isa AbstractDict &&
-                                       string(get(a.reference, "type", "")) == "from_file"
-                                    ref = _from_file_reference(a.reference,
-                                                               resolved_base,
-                                                               cell_tuples)
-                                else
-                                    error("unsupported `reference` shape " *
-                                          "$(typeof(a.reference))")
-                                end
-                            end
-                            actual = field_reduce(a.reduce, field; reference=ref)
-                        end
-                    end
+                    actual = _evaluate_assertion(a, sim, insp, eval_file,
+                                                 String(mname), resolved_base)
                 catch err
                     msg = "assertion evaluation failed: $(sprint(showerror, err))"
                 end
                 if actual === nothing
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, nothing,
-                        rtol, atol, false, msg))
+                        rtol, atol, ERROR, msg))
                 else
                     ok = _check_assertion(actual, a.expected, rtol, atol)
                     ok || (msg = "actual=$(actual) expected=$(a.expected) " *
                                  "(rtol=$(rtol), atol=$(atol))")
                     push!(results, PdeAssertionResult(String(mname), t.id, i,
                         a.variable, a.time, a.reduce, a.expected, actual,
-                        rtol, atol, ok, msg))
+                        rtol, atol, ok ? PASS : FAIL, msg))
                 end
             end
         end
     end
     return results
 end
+
+# ---------------------------------------------------------------------------
+# JUnit wiring — PDE results ride the MTK runner's summary/emission path by
+# converting to `AssertionResult`. The PDE runner does not track per-assertion
+# source file or wall time, so `file` labels the whole batch (testcase
+# classname) and `duration_s` is 0.0.
+# ---------------------------------------------------------------------------
+AssertionResult(r::PdeAssertionResult; file::AbstractString="") =
+    AssertionResult(String(file), :model, r.model, r.test_id, r.assertion_idx,
+                    r.variable, r.time, r.expected, r.actual, r.status,
+                    r.message, 0.0)
+
+"""
+    write_junit_xml(results::Vector{PdeAssertionResult}, path; file="")
+
+Emit the same junit-compatible XML report as the MTK runner's
+[`write_junit_xml`](@ref) from PDE inline-test results: each result converts
+to an [`AssertionResult`](@ref) (`container_kind = :model`, `duration_s = 0.0`;
+`file` labels the source document in the testcase classnames).
+"""
+write_junit_xml(results::Vector{PdeAssertionResult}, path::AbstractString;
+                file::AbstractString="") =
+    write_junit_xml(AssertionResult[AssertionResult(r; file=file) for r in results],
+                    String(path))

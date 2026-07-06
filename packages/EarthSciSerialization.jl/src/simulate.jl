@@ -31,7 +31,7 @@ The outcome of a [`simulate`](@ref) run.
 * `message::String` — a human-readable status line.
 
 Index a single state element's trajectory with `result["name"]`, and read the
-final state with `final(result)`.
+final state with `final_state(result)`.
 """
 struct SimulationResult
     t::Vector{Float64}
@@ -49,14 +49,32 @@ function Base.getindex(r::SimulationResult, name::AbstractString)
     return Float64[u[i] for u in r.u]
 end
 
-"The final state vector (empty if the solve produced no points)."
-final(r::SimulationResult) = isempty(r.u) ? Float64[] : r.u[end]
+"""
+    final_state(r::SimulationResult) -> Vector{Float64}
+
+The final state vector (empty if the solve produced no points).
+"""
+final_state(r::SimulationResult) = isempty(r.u) ? Float64[] : r.u[end]
+
+"""
+    nelements(r::SimulationResult) -> Int
+
+Number of flat state elements in the result (`length(r.var_map)`).
+"""
 nelements(r::SimulationResult) = length(r.var_map)
 
 struct SimulateError <: Exception
     msg::String
 end
 Base.showerror(io::IO, e::SimulateError) = print(io, "SimulateError: ", e.msg)
+
+# --------------------------------------------------------------------------- #
+# Default solver tolerances for `simulate`. Shared with the SciMLBase solve
+# extension (ext/EarthSciSerializationSimulateExt.jl), which references these
+# consts instead of duplicating the literals.
+# --------------------------------------------------------------------------- #
+const DEFAULT_SIM_RELTOL = 1e-4
+const DEFAULT_SIM_ABSTOL = 1e-6
 
 # --------------------------------------------------------------------------- #
 # Input coercion: path | EsmFile | FlattenedSystem | native Dict → a runnable
@@ -95,10 +113,12 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
             continue
         end
         # Broadcast: `name` names an array → set every `name[...]` element.
-        prefix = key * "["
+        # `_parse_cell_key` (tree_walk.jl) is the single inverse of
+        # `_cell_key`'s "name[i,j]" element encoding.
         hit = false
         for (vname, idx) in var_map
-            if startswith(vname, prefix)
+            parsed = _parse_cell_key(String(vname))
+            if parsed !== nothing && parsed[1] == key
                 u0[idx] = Float64(value)
                 hit = true
             end
@@ -210,8 +230,8 @@ function simulate(input, tspan;
                   providers::Union{Nothing,AbstractDict} = nothing,
                   regrid::RegridApplier = IdentityRegrid(),
                   model_name::Union{Nothing,AbstractString} = nothing,
-                  reltol::Float64 = 1e-4,
-                  abstol::Float64 = 1e-6,
+                  reltol::Float64 = DEFAULT_SIM_RELTOL,
+                  abstol::Float64 = DEFAULT_SIM_ABSTOL,
                   saveat = nothing,
                   inspect::Union{Nothing,BuildInspection} = nothing)
     doc = _prepare_run_doc(input)
@@ -252,7 +272,7 @@ function simulate(input, tspan;
     cb = nothing
     tstops = Float64[]
     if !isempty(discrete_providers)
-        file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
+        file = coerce_esm_file(doc)
         model = _select_model(file, model_name)
         cb, tstops = build_refresh_callback(model;
             providers = discrete_providers,
