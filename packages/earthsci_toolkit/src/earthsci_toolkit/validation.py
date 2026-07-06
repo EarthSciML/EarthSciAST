@@ -109,13 +109,13 @@ def validate(esm_file) -> ValidationResult:
         except SchemaValidationError as e:
             return ValidationResult(
                 is_valid=False,
-                schema_errors=[ValidationError(path="$", message=str(e), code="schema")],
+                schema_errors=[ValidationError(path="$", message=str(e), code=ErrorCode.SCHEMA.value)],
                 structural_errors=[]
             )
         except Exception as e:
             return ValidationResult(
                 is_valid=False,
-                schema_errors=[ValidationError(path="$", message=str(e), code="parse")],
+                schema_errors=[ValidationError(path="$", message=str(e), code=ErrorCode.PARSE.value)],
                 structural_errors=[]
             )
 
@@ -181,7 +181,7 @@ def validate(esm_file) -> ValidationResult:
         structural_errors.append(ValidationError(
             path="$",
             message=f"Validation failed with unexpected error: {str(e)}",
-            code="validation_error",
+            code=ErrorCode.VALIDATION_ERROR.value,
             details={
                 "exception_type": type(e).__name__,
                 "traceback": traceback.format_exc()
@@ -340,7 +340,7 @@ def _validate_reaction_consistency(esm_file: EsmFile, structural_errors: List[Va
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/reactants/{species_name}",
                         message=f"Reactant species '{species_name}' not declared in reaction system '{rs.name}'",
-                        code="undeclared_species",
+                        code=ErrorCode.UNDECLARED_SPECIES.value,
                         details={"species": species_name, "reaction_system": rs.name, "available_species": list(species_names)}
                     ))
 
@@ -348,21 +348,21 @@ def _validate_reaction_consistency(esm_file: EsmFile, structural_errors: List[Va
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/reactants/{species_name}",
                         message=f"Reactant stoichiometry must be a number, got {type(stoich).__name__}",
-                        code="invalid_stoichiometry_type",
+                        code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
                         details={"species": species_name, "stoichiometry": stoich, "stoichiometry_type": type(stoich).__name__}
                     ))
                 elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/reactants/{species_name}",
                         message=f"Reactant stoichiometry must be finite, got {stoich}",
-                        code="invalid_stoichiometry",
+                        code=ErrorCode.INVALID_STOICHIOMETRY.value,
                         details={"species": species_name, "stoichiometry": stoich}
                     ))
                 elif stoich <= 0:
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/reactants/{species_name}",
                         message=f"Reactant stoichiometry must be positive, got {stoich}",
-                        code="negative_stoichiometry",
+                        code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
                         details={"species": species_name, "stoichiometry": stoich}
                     ))
 
@@ -372,7 +372,7 @@ def _validate_reaction_consistency(esm_file: EsmFile, structural_errors: List[Va
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/products/{species_name}",
                         message=f"Product species '{species_name}' not declared in reaction system '{rs.name}'",
-                        code="undeclared_species",
+                        code=ErrorCode.UNDECLARED_SPECIES.value,
                         details={"species": species_name, "reaction_system": rs.name, "available_species": list(species_names)}
                     ))
 
@@ -380,21 +380,21 @@ def _validate_reaction_consistency(esm_file: EsmFile, structural_errors: List[Va
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/products/{species_name}",
                         message=f"Product stoichiometry must be a number, got {type(stoich).__name__}",
-                        code="invalid_stoichiometry_type",
+                        code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
                         details={"species": species_name, "stoichiometry": stoich, "stoichiometry_type": type(stoich).__name__}
                     ))
                 elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/products/{species_name}",
                         message=f"Product stoichiometry must be finite, got {stoich}",
-                        code="invalid_stoichiometry",
+                        code=ErrorCode.INVALID_STOICHIOMETRY.value,
                         details={"species": species_name, "stoichiometry": stoich}
                     ))
                 elif stoich <= 0:
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/products/{species_name}",
                         message=f"Product stoichiometry must be positive, got {stoich}",
-                        code="negative_stoichiometry",
+                        code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
                         details={"species": species_name, "stoichiometry": stoich}
                     ))
 
@@ -430,7 +430,7 @@ def _validate_reaction_system_ics(esm_file: EsmFile, structural_errors: List[Val
                     "(ICs are model-hosted: species.default, or a scoped-reference "
                     "ic equation in a model, spec §11.4.1)"
                 ),
-                code="ic_in_reaction_system",
+                code=ErrorCode.IC_IN_REACTION_SYSTEM.value,
                 details={
                     "system": rs_name,
                     "species": species,
@@ -460,7 +460,7 @@ def _validate_rate_expression(rate_expr, param_names: Set[str], species_names: S
             structural_errors.append(ValidationError(
                 path=f"{reaction_path}/rate_constant",
                 message=f"Rate constant parameter '{rate_expr}' not declared in reaction system '{reaction_system_name}'",
-                code="undeclared_parameter",
+                code=ErrorCode.UNDECLARED_PARAMETER.value,
                 details={
                     "parameter": rate_expr,
                     "reaction_system": reaction_system_name,
@@ -482,7 +482,7 @@ def _validate_rate_expression(rate_expr, param_names: Set[str], species_names: S
                     structural_errors.append(ValidationError(
                         path=f"{reaction_path}/rate_constant",
                         message=f"Rate expression references undeclared variable '{var}' in reaction system '{reaction_system_name}'",
-                        code="undeclared_rate_variable",
+                        code=ErrorCode.UNDECLARED_RATE_VARIABLE.value,
                         details={
                             "variable": var,
                             "reaction_system": reaction_system_name,
@@ -497,7 +497,7 @@ def _validate_rate_expression(rate_expr, param_names: Set[str], species_names: S
             structural_errors.append(ValidationError(
                 path=f"{reaction_path}/rate_constant",
                 message=f"Could not parse rate expression in reaction system '{reaction_system_name}': {str(e)}",
-                code="invalid_rate_expression",
+                code=ErrorCode.INVALID_RATE_EXPRESSION.value,
                 details={
                     "reaction_system": reaction_system_name,
                     "rate_expression": str(rate_expr),
@@ -524,7 +524,7 @@ def _validate_reaction_rate_dimensions(esm_file: EsmFile, structural_errors: Lis
         import pint
     except ImportError:
         return
-    from .parse import _normalize_unit, _BUILTIN_SYMBOLS
+    from .structural_checks import _normalize_unit, _BUILTIN_SYMBOLS
 
     ureg = pint.UnitRegistry()
     time_dim = ureg("second").dimensionality
@@ -606,7 +606,7 @@ def _validate_reaction_rate_dimensions(esm_file: EsmFile, structural_errors: Lis
                 structural_errors.append(ValidationError(
                     path=reaction_path,
                     message="Reaction rate expression has incompatible units for reaction stoichiometry",
-                    code="unit_inconsistency",
+                    code=ErrorCode.UNIT_INCONSISTENCY.value,
                     details={
                         "reaction_id": rxn_label,
                         "rate_units": rate_units_str or "",
@@ -764,7 +764,7 @@ def _validate_event_consistency(esm_file: EsmFile, structural_errors: List[Valid
                         structural_errors.append(ValidationError(
                             path=f"{affect_path}/read_params/{param_idx}",
                             message=f"Functional affect read parameter '{read_param}' not declared",
-                            code="undeclared_read_parameter",
+                            code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
                             details={"parameter": read_param, "available_parameters": sorted(list(all_parameters))}
                         ))
 
@@ -774,7 +774,7 @@ def _validate_event_consistency(esm_file: EsmFile, structural_errors: List[Valid
                         structural_errors.append(ValidationError(
                             path=f"{affect_path}/modified_params/{param_idx}",
                             message=f"Functional affect modified parameter '{mod_param}' not declared",
-                            code="undeclared_modified_parameter",
+                            code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
                             details={"parameter": mod_param, "available_parameters": sorted(list(all_parameters))}
                         ))
 
@@ -816,7 +816,7 @@ def _validate_event_consistency(esm_file: EsmFile, structural_errors: List[Valid
                             structural_errors.append(ValidationError(
                                 path=f"{affect_path}/read_params/{param_idx}",
                                 message=f"Affect_neg functional affect read parameter '{read_param}' not declared",
-                                code="undeclared_read_parameter",
+                                code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
                                 details={"parameter": read_param, "available_parameters": sorted(list(all_parameters))}
                             ))
 
@@ -825,7 +825,7 @@ def _validate_event_consistency(esm_file: EsmFile, structural_errors: List[Valid
                             structural_errors.append(ValidationError(
                                 path=f"{affect_path}/modified_params/{param_idx}",
                                 message=f"Affect_neg functional affect modified parameter '{mod_param}' not declared",
-                                code="undeclared_modified_parameter",
+                                code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
                                 details={"parameter": mod_param, "available_parameters": sorted(list(all_parameters))}
                             ))
 

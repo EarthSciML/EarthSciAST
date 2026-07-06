@@ -45,6 +45,17 @@ import copy
 import re
 from typing import Any, Iterable
 
+from .diagnostics import (
+    APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+    APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+    APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+    GEOMETRY_MANIFOLD_INVALID,
+    MAKEARRAY_REGION_INVERTED,
+    REWRITE_RULE_NONTERMINATING,
+    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+)
+
 APPLY_OP = "apply_expression_template"
 
 # Geometry-kernel ops whose `manifold` scalar field is restricted to the closed
@@ -87,6 +98,10 @@ class ExpressionTemplateError(Exception):
     ``template_import_rename_unknown_name``,
     ``template_import_rebind_unknown_name``,
     ``template_import_rename_collision``, ``template_import_rename_invalid``.
+
+    The code constants themselves are defined in
+    :mod:`earthsci_toolkit.diagnostics`; their string values are part of the
+    cross-binding contract and must never change.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -112,7 +127,7 @@ def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
     if _is_object(body):
         if body.get("op") == APPLY_OP:
             raise ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 f"expression_templates.{template_name}: `match` contains an "
                 f"'apply_expression_template' node at {path}; match patterns "
                 "MUST NOT reference templates (esm-spec §9.7.3)",
@@ -125,7 +140,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
     for name, decl in templates.items():
         if not _is_object(decl):
             raise ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 f"{scope}.expression_templates.{name}: entry must be an object "
                 "with params + body",
             )
@@ -134,7 +149,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
         params = decl.get("params")
         if not isinstance(params, list):
             raise ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 f"{scope}.expression_templates.{name}: 'params' must be an "
                 "array of strings",
             )
@@ -142,20 +157,20 @@ def _validate_templates(templates: dict, scope: str) -> None:
         for p in params:
             if not isinstance(p, str) or not p:
                 raise ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     f"{scope}.expression_templates.{name}: param names must "
                     "be non-empty strings",
                 )
             if p in seen:
                 raise ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     f"{scope}.expression_templates.{name}: param '{p}' is "
                     "declared twice",
                 )
             seen.add(p)
         if "body" not in decl:
             raise ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 f"{scope}.expression_templates.{name}: 'body' is required",
             )
         # A body MAY reference other match-less in-scope templates via
@@ -173,7 +188,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
             match = decl["match"]
             if not (isinstance(match, str) or _is_object(match)):
                 raise ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     f"{scope}.expression_templates.{name}: 'match' must be a "
                     "pattern Expression (a metavariable string or an op node)",
                 )
@@ -188,7 +203,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
             whr = decl["where"]
             if "match" not in decl:
                 raise ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     f"{scope}.expression_templates.{name}: 'where' is only "
                     "admissible alongside 'match' — constraints scope an "
                     "auto-applied rewrite rule, not a named fragment "
@@ -196,7 +211,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 )
             if not (_is_object(whr) and whr):
                 raise ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     f"{scope}.expression_templates.{name}: 'where' must be a "
                     "non-empty object mapping declared params to constraint "
                     "objects",
@@ -205,14 +220,14 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 ps = str(p)
                 if ps not in seen:
                     raise ExpressionTemplateError(
-                        "apply_expression_template_invalid_declaration",
+                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         f"{scope}.expression_templates.{name}: 'where' "
                         f"constrains '{ps}', which is not a declared param "
                         "(esm-spec §9.6.1)",
                     )
                 if not _is_object(cobj):
                     raise ExpressionTemplateError(
-                        "apply_expression_template_invalid_declaration",
+                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         f"{scope}.expression_templates.{name}: where.{ps} must "
                         "be a constraint object (v1 admits exactly the 'shape' "
                         "kind)",
@@ -221,7 +236,7 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 if ckeys != {"shape"}:
                     kinds = ", ".join(sorted(ckeys))
                     raise ExpressionTemplateError(
-                        "apply_expression_template_invalid_declaration",
+                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         f"{scope}.expression_templates.{name}: where.{ps} "
                         f"carries constraint kind(s) {kinds}; the v1 constraint "
                         "vocabulary is exactly {shape} (esm-spec §9.6.1)",
@@ -229,14 +244,14 @@ def _validate_templates(templates: dict, scope: str) -> None:
                 shp = cobj.get("shape")
                 if not (_is_array(shp) and shp):
                     raise ExpressionTemplateError(
-                        "apply_expression_template_invalid_declaration",
+                        APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         f"{scope}.expression_templates.{name}: where.{ps}.shape "
                         "must be a non-empty array of index-set names",
                     )
                 for s in shp:
                     if not (isinstance(s, str) and s):
                         raise ExpressionTemplateError(
-                            "apply_expression_template_invalid_declaration",
+                            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                             f"{scope}.expression_templates.{name}: "
                             f"where.{ps}.shape entries must be non-empty strings",
                         )
@@ -338,7 +353,7 @@ def _registered_where(decl: dict, iset_names: set, scope: str,
         for s in req:
             if s not in iset_names:
                 raise ExpressionTemplateError(
-                    "template_constraint_unknown_index_set",
+                    TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
                     f"{scope}.expression_templates.{tname}: where.{p}.shape "
                     f"names index set '{s}', which the consuming document's "
                     "index_sets registry does not declare "
@@ -470,20 +485,20 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     name = node.get("name")
     if not isinstance(name, str) or not name:
         raise ExpressionTemplateError(
-            "apply_expression_template_invalid_declaration",
+            APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             f"{scope}: apply_expression_template node missing or empty 'name'",
         )
     decl = templates.get(name)
     if decl is None:
         raise ExpressionTemplateError(
-            "apply_expression_template_unknown_template",
+            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             f"{scope}: apply_expression_template references undeclared "
             f"template '{name}'",
         )
     bindings = node.get("bindings")
     if not _is_object(bindings):
         raise ExpressionTemplateError(
-            "apply_expression_template_bindings_mismatch",
+            APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
             f"{scope}: apply_expression_template '{name}' missing 'bindings' "
             "object",
         )
@@ -492,14 +507,14 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     for p in decl["params"]:
         if p not in provided:
             raise ExpressionTemplateError(
-                "apply_expression_template_bindings_mismatch",
+                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 f"{scope}: apply_expression_template '{name}' missing binding "
                 f"for param '{p}'",
             )
     for p in provided:
         if p not in declared:
             raise ExpressionTemplateError(
-                "apply_expression_template_bindings_mismatch",
+                APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 f"{scope}: apply_expression_template '{name}' supplies unknown "
                 f"param '{p}'",
             )
@@ -595,7 +610,7 @@ def _rewrite_to_fixpoint(node: Any, templates: dict, sorted_rules: list,
         if not changed:
             return current  # fixpoint reached
     raise ExpressionTemplateError(
-        "rewrite_rule_nonterminating",
+        REWRITE_RULE_NONTERMINATING,
         f"{scope}: expression-template rewriting did not converge within "
         f"MAX_REWRITE_PASSES={MAX_REWRITE_PASSES} passes (last rewritten op "
         f"'{last[0]}'). A `match` rule likely re-introduces its own pattern "
@@ -651,7 +666,7 @@ def reject_expression_templates_pre_v04(view: Any) -> None:
 
     if offences:
         raise ExpressionTemplateError(
-            "apply_expression_template_version_too_old",
+            APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
             f"expression_templates / apply_expression_template require esm >= "
             f"0.4.0; file declares {esm}. Offending paths: {', '.join(offences)}",
         )
@@ -769,7 +784,7 @@ def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
         m = tree["manifold"]
         if not (isinstance(m, str) and m in _GEOMETRY_MANIFOLD_VALUES):
             raise ExpressionTemplateError(
-                "geometry_manifold_invalid",
+                GEOMETRY_MANIFOLD_INVALID,
                 f"{path}: `{tree.get('op')}` carries manifold {m!r}, not a "
                 "member of the closed set {planar, spherical, geodesic}. The "
                 "manifold enum is enforced on the expanded form (esm-spec "
@@ -818,7 +833,7 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
                         continue
                     if hi < lo - 1:
                         raise ExpressionTemplateError(
-                            "makearray_region_inverted",
+                            MAKEARRAY_REGION_INVERTED,
                             f"{path}: makearray regions[{ri}] dimension {di} "
                             f"bound pair [{lo}, {hi}] is inverted (stop < "
                             "start - 1). An empty bound is spelled "
@@ -907,7 +922,7 @@ def lower_expression_templates(file: dict) -> dict:
     leftover = _find_apply_paths(out)
     if leftover:
         raise ExpressionTemplateError(
-            "apply_expression_template_unknown_template",
+            APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             f"apply_expression_template ops remain after expansion at: "
             f"{', '.join(leftover)} — likely referenced from a component lacking "
             "an expression_templates block",

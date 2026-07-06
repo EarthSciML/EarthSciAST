@@ -46,6 +46,19 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Sequence, Union
 
+from .diagnostics import (
+    CLOSED_FUNCTION_ARITY,
+    CLOSED_FUNCTION_OVERFLOW,
+    INTERP_AXIS_LENGTH_MISMATCH,
+    INTERP_AXIS_TOO_SHORT,
+    INTERP_NAN_IN_AXIS,
+    INTERP_NON_MONOTONIC_AXIS,
+    SEARCHSORTED_NAN_IN_TABLE,
+    SEARCHSORTED_NON_MONOTONIC,
+    UNKNOWN_CLOSED_FUNCTION,
+    UNKNOWN_ENUM,
+    UNKNOWN_ENUM_SYMBOL,
+)
 from .esm_types import DataLoader, EsmFile, ExprNode, Equation, Model, ReactionSystem
 
 
@@ -65,6 +78,10 @@ class ClosedFunctionError(Exception):
     - ``closed_function_overflow`` — integer-typed result would overflow Int32.
     - ``searchsorted_non_monotonic`` — ``xs`` is not non-decreasing.
     - ``searchsorted_nan_in_table`` — ``xs`` contains a NaN entry.
+
+    The code constants themselves are defined in
+    :mod:`earthsci_toolkit.diagnostics`; their string values are part of the
+    cross-binding contract and must never change.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -125,7 +142,7 @@ _INT32_MAX = (1 << 31) - 1
 def _check_int32(name: str, v: int) -> int:
     if v < _INT32_MIN or v > _INT32_MAX:
         raise ClosedFunctionError(
-            "closed_function_overflow",
+            CLOSED_FUNCTION_OVERFLOW,
             f"{name}: result {v} overflows Int32",
         )
     return v
@@ -134,7 +151,7 @@ def _check_int32(name: str, v: int) -> int:
 def _expect_arity(name: str, args: Sequence[Any], n: int) -> None:
     if len(args) != n:
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"{name} expects {n} argument(s), got {len(args)}",
         )
 
@@ -149,7 +166,7 @@ def _to_datetime(t_utc: Any) -> datetime:
     seconds = float(t_utc)
     if not math.isfinite(seconds):
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"datetime.*: t_utc must be finite, got {seconds}",
         )
     # `datetime.fromtimestamp(..., tz=utc)` accepts negative values for
@@ -221,7 +238,7 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     """
     if not isinstance(xs, (list, tuple)):
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"{name}: xs argument must be an array (got {type(xs).__name__})",
         )
     n = len(xs)
@@ -235,12 +252,12 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
         v = float(raw)
         if math.isnan(v):
             raise ClosedFunctionError(
-                "searchsorted_nan_in_table",
+                SEARCHSORTED_NAN_IN_TABLE,
                 f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
             )
         if i > 0 and v < prev:
             raise ClosedFunctionError(
-                "searchsorted_non_monotonic",
+                SEARCHSORTED_NON_MONOTONIC,
                 f"{name}: xs is not non-decreasing (xs[{i + 1}]={v} < xs[{i}]={prev})",
             )
         prev = v
@@ -264,14 +281,14 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> Li
     """
     if not isinstance(axis, (list, tuple)):
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"{name}: {axis_label} must be an inline `const` array (got "
             f"{type(axis).__name__})",
         )
     n = len(axis)
     if n < 2:
         raise ClosedFunctionError(
-            "interp_axis_too_short",
+            INTERP_AXIS_TOO_SHORT,
             f"{name}: {axis_label} has {n} entries; need ≥ 2 to define a cell",
         )
     out: List[float] = []
@@ -280,13 +297,13 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> Li
         v = float(raw)
         if math.isnan(v):
             raise ClosedFunctionError(
-                "interp_nan_in_axis",
+                INTERP_NAN_IN_AXIS,
                 f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes "
                 f"are forbidden",
             )
         if i > 0 and v <= prev:
             raise ClosedFunctionError(
-                "interp_non_monotonic_axis",
+                INTERP_NON_MONOTONIC_AXIS,
                 f"{name}: {axis_label} is not strictly increasing "
                 f"({axis_label}[{i + 1}]={v} ≤ {axis_label}[{i}]={prev})",
             )
@@ -302,7 +319,7 @@ def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     """
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"{name}: table must be an inline `const` array (got "
             f"{type(table).__name__})",
         )
@@ -310,7 +327,7 @@ def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     n = len(axis_vals)
     if len(table) != n:
         raise ClosedFunctionError(
-            "interp_axis_length_mismatch",
+            INTERP_AXIS_LENGTH_MISMATCH,
             f"{name}: len(table)={len(table)} != len(axis)={n}",
         )
     table_vals = [float(t) for t in table]
@@ -331,7 +348,7 @@ def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
             return table_vals[i] + w * (table_vals[i + 1] - table_vals[i])
     # Unreachable: strict monotonicity + clamps cover every finite x.
     raise ClosedFunctionError(
-        "closed_function_arity",
+        CLOSED_FUNCTION_ARITY,
         f"{name}: failed to locate cell for x={x} (internal error)",
     )
 
@@ -351,7 +368,7 @@ def _interp_bilinear(
     """
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
-            "closed_function_arity",
+            CLOSED_FUNCTION_ARITY,
             f"{name}: table must be an inline `const` 2-D array (got "
             f"{type(table).__name__})",
         )
@@ -360,20 +377,20 @@ def _interp_bilinear(
     nx, ny = len(ax), len(ay)
     if len(table) != nx:
         raise ClosedFunctionError(
-            "interp_axis_length_mismatch",
+            INTERP_AXIS_LENGTH_MISMATCH,
             f"{name}: outer len(table)={len(table)} != len(axis_x)={nx}",
         )
     table_rows: List[List[float]] = []
     for i, row in enumerate(table):
         if not isinstance(row, (list, tuple)):
             raise ClosedFunctionError(
-                "interp_axis_length_mismatch",
+                INTERP_AXIS_LENGTH_MISMATCH,
                 f"{name}: table row {i + 1} is not an array (got "
                 f"{type(row).__name__})",
             )
         if len(row) != ny:
             raise ClosedFunctionError(
-                "interp_axis_length_mismatch",
+                INTERP_AXIS_LENGTH_MISMATCH,
                 f"{name}: table row {i + 1} has length {len(row)} != "
                 f"len(axis_y)={ny}",
             )
@@ -425,7 +442,7 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> Union[int, float
     """
     if name not in _CLOSED_FUNCTION_NAMES:
         raise ClosedFunctionError(
-            "unknown_closed_function",
+            UNKNOWN_CLOSED_FUNCTION,
             f"`fn` name `{name}` is not in the v0.3.0 closed function "
             f"registry (esm-spec §9.2). Adding a primitive requires a spec rev.",
         )
@@ -470,7 +487,7 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> Union[int, float
         )
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
     raise ClosedFunctionError(
-        "unknown_closed_function",
+        UNKNOWN_CLOSED_FUNCTION,
         f"internal: `fn` name `{name}` is in the registry but has no dispatch arm",
     )
 
@@ -496,7 +513,7 @@ def extract_const_array(node: Any) -> List[Any]:
     if isinstance(node, (list, tuple)):
         return list(node)
     raise ClosedFunctionError(
-        "closed_function_arity",
+        CLOSED_FUNCTION_ARITY,
         "interp.*: table / axis argument must be an inline `const` array",
     )
 
@@ -579,13 +596,13 @@ def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
         enum_name, symbol_name = node.args[0], node.args[1]
         if enum_name not in enums:
             raise ValueError(
-                f"unknown_enum: enum `{enum_name}` is not declared in the file's "
+                f"{UNKNOWN_ENUM}: enum `{enum_name}` is not declared in the file's "
                 f"`enums` block"
             )
         mapping = enums[enum_name]
         if symbol_name not in mapping:
             raise ValueError(
-                f"unknown_enum_symbol: symbol `{symbol_name}` is not declared "
+                f"{UNKNOWN_ENUM_SYMBOL}: symbol `{symbol_name}` is not declared "
                 f"under enum `{enum_name}`"
             )
         return ExprNode(op="const", args=[], value=mapping[symbol_name])

@@ -9,7 +9,13 @@ from typing import Optional, Dict, Any
 
 
 class ErrorCode(Enum):
-    """Error codes for ESM validation."""
+    """Error codes for ESM validation.
+
+    The values are stable machine-readable diagnostic strings shared across
+    the language bindings (see also ``earthsci_toolkit.diagnostics`` for the
+    template / closed-function code families): they are part of the
+    cross-binding contract and must never change.
+    """
     SCHEMA_VALIDATION_ERROR = "schema_validation_error"
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch"
     UNDEFINED_VARIABLE = "undefined_variable"
@@ -24,6 +30,23 @@ class ErrorCode(Enum):
     EVENT_VAR_UNDECLARED = "event_var_undeclared"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
+    # Codes emitted by earthsci_toolkit.validation (previously ad-hoc string
+    # literals at the raise sites; the enum is the single source of truth).
+    UNDECLARED_SPECIES = "undeclared_species"
+    INVALID_STOICHIOMETRY_TYPE = "invalid_stoichiometry_type"
+    INVALID_STOICHIOMETRY = "invalid_stoichiometry"
+    NEGATIVE_STOICHIOMETRY = "negative_stoichiometry"
+    IC_IN_REACTION_SYSTEM = "ic_in_reaction_system"
+    UNDECLARED_PARAMETER = "undeclared_parameter"
+    UNDECLARED_RATE_VARIABLE = "undeclared_rate_variable"
+    INVALID_RATE_EXPRESSION = "invalid_rate_expression"
+    UNIT_INCONSISTENCY = "unit_inconsistency"
+    UNDECLARED_READ_PARAMETER = "undeclared_read_parameter"
+    UNDECLARED_MODIFIED_PARAMETER = "undeclared_modified_parameter"
+    # Phase markers used when load()/validate() fails wholesale.
+    SCHEMA = "schema"
+    PARSE = "parse"
+    VALIDATION_ERROR = "validation_error"
 
 
 class Severity(Enum):
