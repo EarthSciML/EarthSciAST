@@ -55,7 +55,8 @@ end
 function ESS.build_refresh_callback(model::Model;
                                     providers::AbstractDict,
                                     buffers::RefreshBuffers,
-                                    regrid::RegridApplier = IdentityRegrid())
+                                    regrid::RegridApplier = IdentityRegrid(),
+                                    post_refresh::Function = () -> nothing)
     groups = _group_discrete_providers(providers, buffers)
 
     # tstops = sorted, de-duplicated union of the DISCRETE providers' refresh
@@ -80,6 +81,12 @@ function ESS.build_refresh_callback(model::Model;
     # the trajectory — `u` is untouched, only the derivative cache is refreshed.
     # Runs only at the rare cadence boundaries; the hot per-step RHS path stays
     # zero-alloc because it only READS the (now-refreshed) aliased buffers.
+    # `post_refresh` — the discrete-cadence materialization hook (the middle cadence
+    # phase; see DiscreteMaterializer). After the RAW forcing buffers are refreshed,
+    # it recomputes every derived discrete-cadence cache (the regrid→physics stack)
+    # from them, ONCE per boundary. Runs before `u_modified!` so the recomputed
+    # derivative sees the fresh caches. Defaults to a no-op (a model with no
+    # discrete-materialize var, or a caller who wired none).
     function affect!(integrator)
         t = integrator.t
         for (prov, vars) in groups
@@ -88,6 +95,7 @@ function ESS.build_refresh_callback(model::Model;
                 apply_regrid!(regrid, buffers[var], var, sample)
             end
         end
+        post_refresh()
         u_modified!(integrator, true)
         return nothing
     end

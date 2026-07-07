@@ -222,7 +222,8 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
 # --------------------------------------------------------------------------- #
 
 """
-    build_refresh_callback(model::Model; providers, buffers, regrid = IdentityRegrid())
+    build_refresh_callback(model::Model; providers, buffers, regrid = IdentityRegrid(),
+                           post_refresh = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
 Build the discrete-cadence loader-refresh callback for `model` and its tstops,
@@ -257,6 +258,14 @@ object; it is then sampled once per cadence boundary.
 * **CONST** providers ([`provider_is_const`](@ref)) are materialized once into
   `const_arrays` at `build_evaluator` time; they contribute no tstops and are
   absent from the callback.
+
+`post_refresh` is a `() -> nothing` hook the `affect!` calls at each boundary
+AFTER the raw forcing buffers are refreshed and BEFORE `u_modified!` — the
+discrete-cadence materialization seam (the middle phase of the `const ⊏ discrete
+⊏ continuous` cadence partition). [`simulate`](@ref) wires it to the
+[`DiscreteMaterializer`](@ref)'s `materialize!` so a state-free derived field (a
+regrid→physics stack over the forcing) is recomputed once per boundary into its
+cache buffer instead of on every continuous step. Defaults to a no-op.
 
 `cb` is a `PresetTimeCallback`; `tstops` is the sorted, de-duplicated union of
 the DISCRETE providers' refresh times. Returns an empty-tstops no-op callback

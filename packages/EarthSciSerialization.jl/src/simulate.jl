@@ -244,7 +244,8 @@ function simulate(input, tspan;
                   reltol::Float64 = DEFAULT_SIM_RELTOL,
                   abstol::Float64 = DEFAULT_SIM_ABSTOL,
                   saveat = nothing,
-                  inspect::Union{Nothing,BuildInspection} = nothing)
+                  inspect::Union{Nothing,BuildInspection} = nothing,
+                  materialize_out::Union{Nothing,DiscreteMaterializer} = nothing)
     doc = _prepare_run_doc(input)
 
     overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in parameters)
@@ -270,12 +271,19 @@ function simulate(input, tspan;
         end
     end
 
+    # Discrete-cadence materialization sink (the middle cadence phase): opt IN so a
+    # state-free derived field over a live forcing buffer (a regrid→physics stack) is
+    # cut out of the per-step RHS into a cache filled once per refresh, not recomputed
+    # on every continuous step. Empty (no discrete-materialize var) ⇒ no effect. A
+    # caller-supplied `materialize_out` is reused (and thus inspectable), else fresh.
+    dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
     f!, u0, p, _tspan, var_map = build_evaluator(doc;
         model_name = model_name,
         parameter_overrides = overrides,
         const_arrays = merged_const,
         param_arrays = Dict{String,Any}(String(k) => v for (k, v) in param_arrays),
-        inspect = inspect)
+        inspect = inspect,
+        materialize_out = dm)
 
     isempty(initial_conditions) || _apply_initial_conditions!(u0, var_map, initial_conditions)
     seed_ic! === nothing || seed_ic!(u0, var_map)
@@ -288,7 +296,8 @@ function simulate(input, tspan;
         cb, tstops = build_refresh_callback(model;
             providers = discrete_providers,
             buffers = RefreshBuffers(Dict{String,Any}(String(k) => v for (k, v) in param_arrays)),
-            regrid = regrid)
+            regrid = regrid,
+            post_refresh = dm.materialize!)   # recompute discrete caches per boundary
     end
 
     return _simulate_solve(f!, u0, (Float64(tspan[1]), Float64(tspan[2])), p, alg, var_map;

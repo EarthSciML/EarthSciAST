@@ -50,6 +50,44 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,Expr}(),
                                     Dict{String,Float64}())
 
+"""
+    DiscreteMaterializer()
+
+The **discrete-cadence materialization** sink — the middle phase of the
+three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`).
+Pass one via the `materialize_out` keyword of [`build_evaluator`](@ref) to
+OPT IN to the cut; without it, discrete-cadence derived fields stay inlined into
+the per-step RHS (the pre-cut behavior; every existing build is byte-identical).
+
+A derived ARRAY observed whose value depends (transitively) on a live
+`param_arrays` forcing buffer but NOT on any continuous `state` (nor the
+independent variable `t`) changes only at the discrete refresh cadence. Inlining
+it into the hot RHS recomputes the whole met→physics stack every step — and, for
+a deep chain (a regrid feeding the Rothermel fire-physics), collapses into an
+enormous per-cell expression the compiler cannot lower in bounded time. The cut
+materializes each such field ONCE PER REFRESH into a dense cache buffer that the
+hot RHS gathers via the existing zero-alloc `_NK_PARAM_GATHER` path — exactly as
+it gathers a raw forcing buffer. The build fills it:
+
+* `caches::Dict{String,Array{Float64}}` — var name → its cache buffer (the SAME
+  object aliased into `_pgather`, captured by reference; a `materialize!` write
+  shows through to the RHS with zero reallocation).
+* `materialize!::Function` — a `() -> nothing` closure that recomputes every
+  cache from the (already-refreshed) raw forcing buffers + const arrays + upstream
+  caches, in dependency order. `build_evaluator` runs it ONCE at build (so u0
+  seeding and the first RHS evaluation read valid caches); the caller re-runs it
+  after each in-place forcing refresh. [`simulate`](@ref) wires it as the
+  refresh callback's `post_refresh` hook automatically.
+* `var_order::Vector{String}` — the dependency order the fills run in.
+"""
+mutable struct DiscreteMaterializer
+    caches::Dict{String,Array{Float64}}
+    materialize!::Function
+    var_order::Vector{String}
+end
+DiscreteMaterializer() =
+    DiscreteMaterializer(Dict{String,Array{Float64}}(), () -> nothing, String[])
+
 # ============================================================
 # 2b. Build-pipeline stages
 # ============================================================
@@ -369,7 +407,8 @@ function _partition_variables(model::Model, vi_vars, geom_setup_vars,
                               folded_array_obs, pia_operand_vars,
                               const_obs_vars, geom_ring_vars,
                               const_arrays::AbstractDict,
-                              param_arrays::AbstractDict)
+                              param_arrays::AbstractDict,
+                              discrete_vars=Set{String}())
     param_names = String[]
     observed_names = String[]
     state_var_names = Set{String}()
@@ -384,6 +423,10 @@ function _partition_variables(model::Model, vi_vars, geom_setup_vars,
         # inlined into their readers (ess-14f.4 / shape-promotion); no partition slot.
         name in geom_inline_vars && continue
         name in array_inline_vars && continue
+        # Discrete-cadence materialized array observeds: cut out of the per-step RHS
+        # into a cache buffer (filled per refresh) and gathered via `_pgather`; like
+        # an inline var, they carry no ODE partition slot.
+        name in discrete_vars && continue
         # Elementwise array observeds folded into their readers (WS4): their
         # defining equation is gone and their value lives inline in the state RHS.
         name in folded_array_obs && continue
@@ -813,6 +856,164 @@ function _seed_arrayop_init_u0!(u0::Vector{Float64}, init_equations,
     return nothing
 end
 
+# ---- Stage: discrete-cadence materialization split (the middle cadence phase) ----
+# From the set of INLINE-candidate array observeds (the geometry live-field taint
+# `_geom_inline_vars` ∪ the promoted-arrayop `_array_inline_vars`), pick the
+# DISCRETE-cadence ones. A field is discrete-cadence iff BOTH:
+#   • it is PARAM-TAINTED — its defining expression (transitively, through the
+#     equation defs) reads a live `param_arrays` forcing buffer. A field over only
+#     const/parameter data is CONST-cadence, not discrete: it must stay on its
+#     existing inline/const path (making it a per-refresh cache would be wrong and
+#     changes the byte-exact inline numerics). This is also what keeps the cut
+#     disjoint from the setup/const-obs vars — a param-tainted var is never a
+#     build-once setup const, so its arrayop def always survives to the extraction.
+#   • it is STATE-FREE — it does NOT (transitively) read a continuous `state`
+#     variable or the independent variable `t`; the rest of the taint cone (anything
+#     reaching a state) is genuinely continuous and stays inlined.
+# Such a field changes only at the refresh cadence, so it is materialized once per
+# refresh into a cache buffer instead of inlined into the hot RHS.
+function _discrete_materialize_split(equations::Vector{Equation},
+                                     inline_candidates, state_var_names, param_names)
+    (isempty(inline_candidates) || isempty(param_names)) && return Set{String}()
+    defs = Dict{String,Expr}()
+    for eq in equations
+        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    _closure(seed_set) = begin
+        reached = Set{String}()
+        changed = true
+        while changed
+            changed = false
+            for (n, rhs) in defs
+                n in reached && continue
+                refs = _referenced_var_names(rhs)
+                if any(r -> (r in seed_set) || (r in reached), refs)
+                    push!(reached, n); changed = true
+                end
+            end
+        end
+        reached
+    end
+    # PARAM-TAINTED: transitively reads a live forcing buffer name.
+    param_tainted = _closure(Set{String}(param_names))
+    # STATE-REACHING: transitively reads a continuous state (seeded with the states
+    # themselves so a direct reader is caught) or `t`.
+    state_seed = Set{String}(state_var_names); push!(state_seed, "t")
+    state_reaching = _closure(state_seed)
+    return Set{String}(n for n in inline_candidates
+                       if (n in param_tainted) && !(n in state_reaching))
+end
+
+# Dependency order over the discrete-materialize vars (a cache that gathers another
+# cache must fill AFTER it). Mirrors `_geom_setup_order`.
+function _discrete_fill_order(discrete_vars, discrete_defs)
+    order = String[]; done = Set{String}()
+    remaining = collect(discrete_vars)
+    while length(order) < length(discrete_vars)
+        progressed = false
+        for n in remaining
+            n in done && continue
+            deps = intersect(_referenced_var_names(discrete_defs[n]), discrete_vars)
+            if all(d -> d in done, deps)
+                push!(order, n); push!(done, n); progressed = true
+            end
+        end
+        progressed || throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+            "cyclic dependency among discrete-cadence vars: $(setdiff(discrete_vars, done))"))
+    end
+    return order
+end
+
+# ---- Stage: discrete-cadence cache buffers + fill kernels ----
+# Allocate a dense cache buffer per discrete var, register it in `pgather` (so a
+# reader's `index(var, j…)` gathers the cache via `_NK_PARAM_GATHER` — the SAME
+# zero-alloc live-buffer path a raw forcing read uses, NOT an inline beta-reduction),
+# and precompile a per-cell fill node list. `materialize!` evaluates every node into
+# its cache in dependency order — reusing the proven `_seed_arrayop_init_u0!`
+# per-cell (`_sub_preserving` → `_resolve_indices` → `_compile` → `_eval_node`)
+# pattern, but writing a cache buffer instead of a u0 slot, and reading the live raw
+# buffers + const arrays + upstream caches. Runs once here (initial fill) and again
+# per refresh. `mut` is the caller's `DiscreteMaterializer` sink; it is populated in
+# place. Mutates `pgather` (adds the caches).
+function _build_discrete_materializer!(mut::DiscreteMaterializer,
+        discrete_vars, discrete_defs::Dict{String,Expr}, resolved_obs::Dict{String,Expr},
+        array_var_info, var_map::Dict{String,Int}, const_arrays::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs, p, n_states::Int)
+    isempty(discrete_vars) && return nothing
+    order = _discrete_fill_order(discrete_vars, discrete_defs)
+    caches = Dict{String,Array{Float64}}()
+    cells_of = Dict{String,Tuple{Vector{String},Vector{Vector{Int}}}}()
+    # 1. Allocate + register EVERY cache first, so a fill body that gathers another
+    #    discrete cache resolves to a pgather over it (values filled later, in order).
+    for name in order
+        rhs = discrete_defs[name]
+        (rhs isa OpExpr && _is_aggregate_op((rhs::OpExpr).op)) ||
+            throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+                "discrete-cadence var '$name' must be an arrayop/aggregate producer"))
+        rop = rhs::OpExpr
+        idx_names = rop.output_idx === nothing ? String[] :
+            String[String(s) for s in rop.output_idx if s isa AbstractString || s isa String]
+        ranges = rop.ranges === nothing ? Dict{String,Any}() : rop.ranges
+        rngs = Vector{Int}[collect(_expand_int_range(ranges[n])) for n in idx_names]
+        for (d, r) in enumerate(rngs)
+            (!isempty(r) && r == collect(1:length(r))) || throw(TreeWalkError(
+                "E_TREEWALK_DISCRETE_MATERIALIZE",
+                "discrete-cadence var '$name' dim $d range must be 1..n (got $(r)); " *
+                "the cache gather is 1-based column-major"))
+        end
+        dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
+        cache = zeros(Float64, dims...)
+        caches[name] = cache
+        pgather[name] = _PGatherArray(vec(cache), collect(size(cache)))
+        cells_of[name] = (idx_names, rngs)
+    end
+    # 2. Precompile per-cell fill nodes: (cache_vec, linear_index, node). Each cell is
+    #    compiled as `index(<the defining aggregate>, j0…)` and resolved through the
+    #    SAME `_resolve_index_of_arrayop` expansion the inline reader uses — so a
+    #    reduction over CONTRACTED indices (the conservative regrid Σ_i A_ij·F_src/A_j,
+    #    whose sum-over-source `i` lives in the aggregate's ranges, not the body) is
+    #    expanded, not silently dropped. Scalar observeds are inlined into the
+    #    aggregate first via `resolved_obs` (the inline reader gets them the same way);
+    #    an `index(other_discrete, i)` stays a pgather over that cache (other discrete
+    #    vars are excluded from `resolved_obs`).
+    fills = Tuple{Vector{Float64},Int,_Node}[]
+    for name in order
+        rop = discrete_defs[name]::OpExpr
+        rop_res = isempty(resolved_obs) ? rop : _sub_preserving(rop, resolved_obs)
+        rop_res isa OpExpr ||
+            throw(TreeWalkError("E_TREEWALK_DISCRETE_MATERIALIZE",
+                "discrete-cadence var '$name' resolved to a non-arrayop expression"))
+        idx_names, rngs = cells_of[name]
+        cvec = vec(caches[name])
+        dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
+        lin = LinearIndices(Tuple(dims))
+        for idx_tuple in Iterators.product(rngs...)
+            gather = OpExpr("index", Expr[rop_res::OpExpr,
+                (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_names))...])
+            g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
+            node = _compile(g_r, var_map, param_sym_set, reg_funcs)
+            l = isempty(idx_tuple) ? 1 : lin[idx_tuple...]
+            push!(fills, (cvec, l, node))
+        end
+    end
+    # 3. `materialize!`: eval every fill into its cache (dep order preserved by the
+    #    build order). Discrete vars are state-free, so the zero `u` / `t=0` passed to
+    #    `_eval_node` is never read; `p` carries the scalar params a fill may use.
+    uz = zeros(Float64, n_states)
+    pp = isnothing(p) ? NamedTuple() : p
+    function materialize!()
+        @inbounds for (cv, l, node) in fills
+            cv[l] = _eval_node(node, uz, pp, 0.0)
+        end
+        return nothing
+    end
+    materialize!()          # initial fill — valid caches for u0 seeding + first step
+    mut.caches = caches
+    mut.materialize! = materialize!
+    mut.var_order = order
+    return nothing
+end
+
 function _build_evaluator_impl(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
                          parameter_overrides::AbstractDict=Dict{String,Float64}(),
@@ -862,7 +1063,15 @@ function _build_evaluator_impl(model::Model;
                          # geometry arrays, the const-array registry, and the
                          # resolved observed substitution map. Never changes the
                          # build itself.
-                         inspect::Union{Nothing,BuildInspection}=nothing)
+                         inspect::Union{Nothing,BuildInspection}=nothing,
+                         # Discrete-cadence materialization sink (opt-in; see
+                         # DiscreteMaterializer). When non-nothing, a state-free
+                         # live-field array observed is cut out of the per-step RHS
+                         # into a cache buffer filled once per refresh, and the sink
+                         # is populated with the caches + `materialize!` closure. When
+                         # nothing (every existing caller), such fields stay inlined —
+                         # the pre-cut behavior, byte-identical.
+                         materialize_out::Union{Nothing,DiscreteMaterializer}=nothing)
     _has_value_invention = !isempty(_vi_vars)
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
@@ -884,6 +1093,23 @@ function _build_evaluator_impl(model::Model;
     _array_inline_vars = _collect_array_inline_vars(model, _model_equations,
         _geom_setup_vars, _geom_ring_vars, _geom_inline_vars)
 
+    # ---- Discrete-cadence materialization split (the middle cadence phase) ----
+    # OPT-IN (gated on the `materialize_out` sink): pull the STATE-FREE live-field
+    # array observeds out of the inline sets — they change only at the refresh
+    # cadence and are materialized once per refresh into cache buffers (below),
+    # rather than recomputed on every continuous step. Without the sink `_discrete_vars`
+    # is empty and the inline sets are untouched (byte-identical to the pre-cut build).
+    _discrete_vars = Set{String}()
+    if materialize_out !== nothing
+        _pre_state = Set{String}(n for (n, v) in model.variables
+                                 if v.type == StateVariable && !(n in _vi_vars))
+        _discrete_vars = _discrete_materialize_split(_model_equations,
+            union(_geom_inline_vars, _array_inline_vars), _pre_state,
+            Set{String}(String(k) for k in keys(param_arrays)))
+        setdiff!(_geom_inline_vars, _discrete_vars)
+        setdiff!(_array_inline_vars, _discrete_vars)
+    end
+
     # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
     _pia_operand_vars, _pia_operand_arrays =
         _collect_pia_operand_arrays(model, _model_equations, const_arrays, _geo.has_pia)
@@ -903,7 +1129,7 @@ function _build_evaluator_impl(model::Model;
     param_names, observed_names, state_var_names = _partition_variables(model,
         _vi_vars, _geom_setup_vars, _geom_inline_vars, _array_inline_vars,
         _folded_array_obs, _pia_operand_vars, _const_obs_vars, _geom_ring_vars,
-        const_arrays, param_arrays)
+        const_arrays, param_arrays, _discrete_vars)
 
     # ---- Scalar parameter scope (load-time constants) ----
     param_scope = _resolve_param_scope(model, param_names, parameter_overrides)
@@ -1007,6 +1233,26 @@ function _build_evaluator_impl(model::Model;
                              if !(_vi_typed_lhs_base(eq.lhs) in _vi_vars)]
         init_equations = Equation[eq for eq in init_equations
                                   if !(_vi_typed_lhs_base(eq.lhs) in _vi_vars)]
+    end
+
+    # ---- Extract discrete-cadence materialize defs (RANGE-RESOLVED) + drop them ----
+    # The discrete-cadence array observeds were kept through join-gate + index-set
+    # range resolution so their arrayop `ranges` lower to concrete `[1, n]`. Capture
+    # their resolved defining aggregates now (for the per-refresh fill kernels below)
+    # and remove their equations from the ODE stream — they are materialized into
+    # cache buffers, never compiled as observeds/derivatives. Empty (no-op) unless
+    # the `materialize_out` sink opted in.
+    _discrete_defs = Dict{String,Expr}()
+    if !isempty(_discrete_vars)
+        _kept = Equation[]
+        for eq in equations
+            if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in _discrete_vars
+                _discrete_defs[(eq.lhs::VarExpr).name] = eq.rhs
+            else
+                push!(_kept, eq)
+            end
+        end
+        equations = _kept
     end
 
     # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec v0.8.0) ----
@@ -1118,9 +1364,21 @@ function _build_evaluator_impl(model::Model;
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
     _pgather = _build_pgather(param_arrays)
+    param_sym_set = Set(p_syms)
+
+    # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
+    # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
+    # cache buffer added to `_pgather`, so a downstream reader (a state RHS or a
+    # later discrete fill) GATHERS it live instead of inlining the whole met→physics
+    # stack. Runs BEFORE u0 seeding + derivative compile so both read the caches; the
+    # initial fill (inside) makes them valid immediately. No-op without the sink.
+    if materialize_out !== nothing
+        _build_discrete_materializer!(materialize_out, _discrete_vars, _discrete_defs,
+            resolved_obs, array_var_info, var_map, _const_arrays, _pgather,
+            param_sym_set, reg_funcs, p, length(all_state_names))
+    end
 
     # ---- Evaluate arrayop-valued initialization_equations into u0 ----
-    param_sym_set = Set(p_syms)
     _seed_arrayop_init_u0!(u0, init_equations, initial_conditions, var_map,
                            array_var_info, _const_arrays, _pgather,
                            param_sym_set, reg_funcs, p)

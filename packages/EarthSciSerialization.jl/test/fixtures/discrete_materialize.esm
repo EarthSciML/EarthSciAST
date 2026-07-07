@@ -1,0 +1,61 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "discrete_materialize",
+    "description": "Discrete-cadence materialization (the middle cadence phase) fixture. `g[j] = sum_i W[i,j]*src[i]` is a conservative-regrid-shaped CONTRACTION mixing a CONST weight matrix W (const_arrays) with a live forcing buffer src (param_arrays): state-free + PARAM-TAINTED -> a discrete cache filled once per refresh. `k[j] = sum_i W[i,j]*offset` reads only const data (W, the scalar param offset): state-free but NOT param-tainted -> it is CONST-cadence and MUST stay on the inline path, never a per-refresh cache (the regression guard against an over-broad cut). D(c[j]) = g[j] + k[j] couples both into the continuous state."
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "c": { "type": "state", "shape": ["j"], "default": 0.0 },
+        "offset": { "type": "parameter", "default": 1.0 },
+        "g": {
+          "type": "observed", "shape": ["j"],
+          "expression": {
+            "op": "aggregate", "args": [], "output_idx": ["j"],
+            "ranges": { "j": [1, 3], "i": [1, 2] }, "reduce": "+",
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["W", "i", "j"] },
+                { "op": "index", "args": ["src", "i"] }
+              ]
+            }
+          }
+        },
+        "k": {
+          "type": "observed", "shape": ["j"],
+          "expression": {
+            "op": "aggregate", "args": [], "output_idx": ["j"],
+            "ranges": { "j": [1, 3], "i": [1, 2] }, "reduce": "+",
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["W", "i", "j"] },
+                "offset"
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "aggregate", "args": [], "output_idx": ["j"], "ranges": { "j": [1, 3] },
+            "expr": { "op": "D", "args": [{ "op": "index", "args": ["c", "j"] }], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "aggregate", "args": [], "output_idx": ["j"], "ranges": { "j": [1, 3] },
+            "expr": {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["g", "j"] },
+                { "op": "index", "args": ["k", "j"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
