@@ -263,6 +263,19 @@ _SCALAR_FUNCS: Dict[str, Callable] = {
 }
 
 
+#: Comparison ops → numpy ufunc. Hoisted to module scope (was rebuilt per
+#: comparison inside eval_expr) so both the tree walker and the compiled
+#: closure share one table.
+_CMP_UFUNCS: Dict[str, Callable] = {
+    ">": np.greater,
+    "<": np.less,
+    ">=": np.greater_equal,
+    "<=": np.less_equal,
+    "==": np.equal,
+    "!=": np.not_equal,
+}
+
+
 def _broadcast_fn(fn: str) -> Callable:
     table = {
         "+": np.add,
@@ -615,15 +628,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
             raise NumpyInterpreterError(f"{op} expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        ops = {
-            ">": np.greater,
-            "<": np.less,
-            ">=": np.greater_equal,
-            "<=": np.less_equal,
-            "==": np.equal,
-            "!=": np.not_equal,
-        }
-        return ops[op](a, b).astype(float)
+        return _CMP_UFUNCS[op](a, b).astype(float)
     if op == "D":
         # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role (consumed by
@@ -671,6 +676,209 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
         return 0.0
 
     raise NumpyInterpreterError(f"Unsupported op in NumPy interpreter: {op!r}")
+
+
+#: Ops the expression compiler lowers to closures. Everything else (aggregate,
+#: makearray, fn, broadcast/reshape/transpose/concat, the geometry leaves,
+#: skolem, const, the unlowered-operator gates …) is left to :func:`eval_expr`
+#: verbatim — the compiler only removes the per-node dispatch of the scalar
+#: arithmetic / index / elementwise-math layer that a discretized stencil body
+#: is overwhelmingly made of.
+_COMPILED_OPS: frozenset = frozenset(
+    {"index", "+", "-", "*", "/", "^", "**", "pow", "atan2", "and", "or", "not",
+     "min", "max", "ifelse", "true", "false"}
+    | set(_SCALAR_FUNCS)
+    | set(_CMP_UFUNCS)
+)
+
+
+def _compile_delegate(node: Expr) -> Callable[["EvalContext"], Any]:
+    """Closure that re-evaluates ``node`` through the tree walker unchanged — the
+    compiler's escape hatch for every op it does not lower (so behaviour, errors
+    and numerics are byte-identical to :func:`eval_expr`)."""
+    return lambda ctx: eval_expr(node, ctx)
+
+
+def _compile_expr(expr: Expr) -> Callable[["EvalContext"], Any]:
+    """Compile an expression AST into a ``ctx -> value`` closure that reproduces
+    :func:`eval_expr` exactly but pre-dispatches each node's op and pre-compiles
+    its children ONCE, so a hot per-step body — the level-set front stencils, a
+    ~600-node tree re-walked every implicit-solver step — skips the eval_expr
+    ``op ==`` chain, the leaf ``isinstance`` ladder and the per-node ``getattr``
+    on every evaluation. The compiled closure performs the identical NumPy
+    operations in the identical order (structural ops delegate to
+    :func:`eval_expr`), so results are bit-for-bit identical to the tree walker;
+    only the Python dispatch overhead is removed.
+
+    The closure is cached on the ExprNode (``_compiled_fn``) so each node compiles
+    once per process and every solver step reuses it. Leaves (bare symbol / number)
+    are not cached (they are not nodes) but compile to a trivial closure.
+    """
+    if not isinstance(expr, ExprNode):
+        if isinstance(expr, str):
+            name = expr
+            return lambda ctx: _resolve_symbol(name, ctx)
+        if isinstance(expr, bool):
+            fv = float(expr)
+            return lambda ctx: fv
+        if isinstance(expr, (int, float)):
+            fv = float(expr)
+            return lambda ctx: fv
+        return _compile_delegate(expr)  # unknown leaf → same error as eval_expr
+
+    cached = getattr(expr, "_compiled_fn", None)
+    if cached is not None:
+        return cached
+    fn = _build_compiled_node(expr)
+    expr._compiled_fn = fn
+    return fn
+
+
+def _build_compiled_node(expr: ExprNode) -> Callable[["EvalContext"], Any]:
+    """Compile one ExprNode (see :func:`_compile_expr`). Mirrors the corresponding
+    eval_expr branch exactly; delegates any op outside ``_COMPILED_OPS`` and any
+    wrong-arity node (so the tree walker raises the identical error)."""
+    op = expr.op
+    if op not in _COMPILED_OPS:
+        return _compile_delegate(expr)
+    args = expr.args or []
+
+    if op == "index":
+        if not args:
+            return _compile_delegate(expr)  # eval_expr raises the arity error
+        arr_c = _compile_expr(args[0])
+        idx_c = [_compile_expr(a) for a in args[1:]]
+        if not idx_c:
+            return lambda ctx: _gather_index(arr_c(ctx), [])
+
+        def f_index(ctx):
+            return _gather_index(arr_c(ctx), [c(ctx) for c in idx_c])
+
+        return f_index
+
+    if op in _SCALAR_FUNCS:
+        if len(args) != 1:
+            return _compile_delegate(expr)
+        fn = _SCALAR_FUNCS[op]
+        c0 = _compile_expr(args[0])
+        return lambda ctx: fn(c0(ctx))
+
+    if op in _CMP_UFUNCS:
+        if len(args) != 2:
+            return _compile_delegate(expr)
+        uf = _CMP_UFUNCS[op]
+        ac = _compile_expr(args[0])
+        bc = _compile_expr(args[1])
+        return lambda ctx: uf(ac(ctx), bc(ctx)).astype(float)
+
+    if op == "+":
+        if not args:
+            return lambda ctx: 0.0
+        cs = [_compile_expr(a) for a in args]
+
+        def f_add(ctx):
+            vals = [c(ctx) for c in cs]
+            acc = vals[0]
+            for v in vals[1:]:
+                acc = acc + v
+            return acc
+
+        return f_add
+
+    if op == "-":
+        cs = [_compile_expr(a) for a in args]
+
+        def f_sub(ctx):
+            vals = [c(ctx) for c in cs]
+            if len(vals) == 1:
+                return -vals[0]
+            acc = vals[0]
+            for v in vals[1:]:
+                acc = acc - v
+            return acc
+
+        return f_sub
+
+    if op == "*":
+        if not args:
+            return lambda ctx: 1.0
+        cs = [_compile_expr(a) for a in args]
+
+        def f_mul(ctx):
+            vals = [c(ctx) for c in cs]
+            acc = vals[0]
+            for v in vals[1:]:
+                acc = acc * v
+            return acc
+
+        return f_mul
+
+    if op == "/":
+        if len(args) != 2:
+            return _compile_delegate(expr)
+        ac = _compile_expr(args[0])
+        bc = _compile_expr(args[1])
+        return lambda ctx: ac(ctx) / bc(ctx)
+
+    if op in ("^", "**", "pow"):
+        if len(args) != 2:
+            return _compile_delegate(expr)
+        ac = _compile_expr(args[0])
+        bc = _compile_expr(args[1])
+        return lambda ctx: ac(ctx) ** bc(ctx)
+
+    if op == "atan2":
+        if len(args) != 2:
+            return _compile_delegate(expr)
+        ac = _compile_expr(args[0])
+        bc = _compile_expr(args[1])
+        return lambda ctx: np.arctan2(ac(ctx), bc(ctx))
+
+    if op in ("and", "or"):
+        if len(args) < 2:
+            return _compile_delegate(expr)
+        uf = np.logical_and if op == "and" else np.logical_or
+        cs = [_compile_expr(a) for a in args]
+
+        def f_bool(ctx):
+            vals = [c(ctx) for c in cs]
+            r = vals[0]
+            for v in vals[1:]:
+                r = uf(r, v)
+            return r.astype(float)
+
+        return f_bool
+
+    if op == "not":
+        if len(args) != 1:
+            return _compile_delegate(expr)
+        c0 = _compile_expr(args[0])
+        return lambda ctx: np.logical_not(c0(ctx)).astype(float)
+
+    if op in ("min", "max"):
+        uf = np.minimum if op == "min" else np.maximum
+        cs = [_compile_expr(a) for a in args]
+
+        def f_minmax(ctx):
+            vals = [c(ctx) for c in cs]
+            return functools.reduce(uf, vals) if len(vals) > 1 else vals[0]
+
+        return f_minmax
+
+    if op == "ifelse":
+        if len(args) != 3:
+            return _compile_delegate(expr)
+        cc = _compile_expr(args[0])
+        ac = _compile_expr(args[1])
+        bc = _compile_expr(args[2])
+        return lambda ctx: np.where(cc(ctx), ac(ctx), bc(ctx))
+
+    if op == "true":
+        return lambda ctx: 1.0
+    if op == "false":
+        return lambda ctx: 0.0
+
+    return _compile_delegate(expr)  # unreachable (op in _COMPILED_OPS covers all)
 
 
 def _skolem_atom(value: float) -> Tuple[str, Any]:
@@ -823,11 +1031,13 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
     return float(polygon_area_via_faq(ring, manifold))
 
 
-def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
-    if not expr.args:
-        raise NumpyInterpreterError("index requires at least 1 arg (the array)")
-    arr_val = eval_expr(expr.args[0], ctx)
-    idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
+def _gather_index(
+    arr_val: Union[float, np.ndarray], idxs: List[Union[float, np.ndarray]]
+) -> Union[float, np.ndarray]:
+    """The gather at the core of an ``index`` node: ``arr_val`` already evaluated
+    to a value and ``idxs`` to its (1-based) subscripts. Factored out of
+    :func:`_eval_index` so the compiled ``index`` closure (:func:`_compile_expr`)
+    performs the byte-identical gather and the two paths can never drift."""
     if not isinstance(arr_val, np.ndarray):
         # Scalar passed through: if no indices, return it; otherwise that's an error.
         if not idxs:
@@ -860,6 +1070,14 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
     if np.ndim(sub) == 0:
         return float(sub)
     return np.asarray(sub, dtype=float)
+
+
+def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
+    if not expr.args:
+        raise NumpyInterpreterError("index requires at least 1 arg (the array)")
+    arr_val = eval_expr(expr.args[0], ctx)
+    idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
+    return _gather_index(arr_val, idxs)
 
 
 def _decompose_body_as_scaled_product(
@@ -1067,7 +1285,10 @@ def _materialize_makearray_vectorized(
                     ctx, out_syms[axis], np.arange(lo_i, hi_i + 1, dtype=float), axis, ndim
                 )
                 slicer.append(slice(lo_i - 1, hi_i))
-            out[tuple(slicer)] = eval_expr(val_expr, ctx)
+            # Compiled body: this region value is the per-step front stencil,
+            # re-evaluated every implicit-solver step, so lower it once to a
+            # closure and skip the eval_expr dispatch walk on each step.
+            out[tuple(slicer)] = _compile_expr(val_expr)(ctx)
     finally:
         ctx.locals = prev
     return out
@@ -1114,7 +1335,7 @@ def _materialize_map(
                 _bind_broadcast_range(
                     ctx, s, np.asarray(out_ranges_exp[axis], dtype=float), axis, len(out_syms)
                 )
-            val = eval_expr(body, ctx)
+            val = _compile_expr(body)(ctx)
         finally:
             ctx.locals = prev
         res = np.asarray(val, dtype=float)
@@ -1890,10 +2111,10 @@ def _eval_arrayop_reduce_vectorized(
             # value is immediately discarded by the mask, so silence the transient
             # divide/invalid warnings (mirrors the batched-leaf kernel).
             with np.errstate(divide="ignore", invalid="ignore"):
-                term = np.asarray(eval_expr(expr.expr, ctx), dtype=float)
+                term = np.asarray(_compile_expr(expr.expr)(ctx), dtype=float)
                 term = np.broadcast_to(term, combined_shape)
                 if filter_expr is not None:
-                    mask = np.asarray(eval_expr(filter_expr, ctx))
+                    mask = np.asarray(_compile_expr(filter_expr)(ctx))
                     term = np.where(mask.astype(bool), term, empty_zero)
         except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
             return None
