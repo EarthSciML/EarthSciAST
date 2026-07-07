@@ -106,27 +106,25 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // ndarray path as `+`/`*`.
         "min" | "max" => eval_arith(&node.op, &node.args, ctx),
 
-        // Scalar comparison operators — return 1.0 (true) or 0.0 (false),
-        // via the same [`scalar_compare`] kernel the vectorized overlay uses
-        // (the bit-identity the vectorized path's doc claims is now
-        // guaranteed by construction).
+        // Comparison operators — return 1.0 (true) or 0.0 (false) via the same
+        // [`scalar_compare`] kernel the vectorized overlay uses (bit-identity by
+        // construction). BROADCAST when either operand is an array, so a per-cell
+        // predicate like `code >= 1` over an [x,y] fuel grid yields an [x,y] mask
+        // rather than collapsing to a scalar NaN.
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
             if node.args.len() != 2 {
                 return Value::Scalar(f64::NAN);
             }
-            let a = eval(&node.args[0], ctx).as_scalar().unwrap_or(f64::NAN);
-            let b = eval(&node.args[1], ctx).as_scalar().unwrap_or(f64::NAN);
-            Value::Scalar(scalar_compare(&node.op, a, b))
+            eval_binary(&node.op, &node.args, ctx)
         }
 
-        "ifelse" => {
-            let c = eval(&node.args[0], ctx).as_scalar().unwrap_or(0.0);
-            if c != 0.0 {
-                eval(&node.args[1], ctx)
-            } else {
-                eval(&node.args[2], ctx)
-            }
-        }
+        // Logical connectives (esm-spec §4.2): nonzero is true, the result is a
+        // strict 1.0/0.0 flag, broadcast over array operands like arithmetic —
+        // e.g. `and(code >= 1, code <= 13)` over an [x,y] fuel grid.
+        "and" | "or" => eval_arith(&node.op, &node.args, ctx),
+        "not" => eval_unary(&node.op, &node.args, ctx),
+
+        "ifelse" => eval_ifelse(node, ctx),
 
         // Derivative operator: only meaningful on LHS. On RHS we treat
         // D(anything) = 0 for parity with the scalar interpreter.
@@ -194,9 +192,35 @@ pub(super) fn eval_fn(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let Some(name) = node.name.as_deref() else {
         return Value::Scalar(f64::NAN);
     };
-    let mut args: Vec<ClosedArg> = Vec::with_capacity(node.args.len());
-    for a in &node.args {
-        let arg = match eval(a, ctx) {
+    let vals: ValVec = node.args.iter().map(|a| eval(a, ctx)).collect();
+
+    // Broadcast the 1-D interpolation kernel over an ARRAY query: the table +
+    // axis (args 0,1) stay fixed as the lookup table, only the query point
+    // (arg 2) varies per cell, so `interp.linear(y, x, code)` over an [x,y] fuel
+    // grid returns that same [x,y] shape. (`interp.bilinear`'s queries are 2-D
+    // corner blends — they are not array-broadcast here.)
+    if name == "interp.linear"
+        && vals.len() == 3
+        && let Value::Array(q) = &vals[2]
+    {
+        let table: Vec<f64> = value_flat(&vals[0]);
+        let axis: Vec<f64> = value_flat(&vals[1]);
+        let out = q.mapv(|x| {
+            let call = [
+                ClosedArg::Array(table.clone()),
+                ClosedArg::Array(axis.clone()),
+                ClosedArg::Scalar(x),
+            ];
+            evaluate_closed_function("interp.linear", &call)
+                .map(|v| v.as_f64())
+                .unwrap_or(f64::NAN)
+        });
+        return Value::Array(out);
+    }
+
+    let mut args: Vec<ClosedArg> = Vec::with_capacity(vals.len());
+    for v in vals {
+        let arg = match v {
             Value::Scalar(s) => ClosedArg::Scalar(s),
             Value::Array(arr) => match arr.ndim() {
                 0 => ClosedArg::Scalar(arr[IxDyn(&[])]),
@@ -293,6 +317,9 @@ pub(super) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
                 vs.iter().copied().fold(f64::NEG_INFINITY, f64::max)
             }
         }
+        // n-ary logical connectives (the all-scalar fast path of `eval_arith`).
+        "and" => vs.iter().all(|&v| v != 0.0) as i32 as f64,
+        "or" => vs.iter().any(|&v| v != 0.0) as i32 as f64,
         _ => f64::NAN,
     }
 }
@@ -301,6 +328,71 @@ pub(super) fn negate(v: Value) -> Value {
     match v {
         Value::Scalar(s) => Value::Scalar(-s),
         Value::Array(a) => Value::Array(a.mapv(|x| -x)),
+    }
+}
+
+/// `ifelse(cond, a, b)`. A scalar `cond` picks a branch and returns it verbatim
+/// (scalar OR array). An ARRAY `cond` SELECTS elementwise — `a`/`b` (scalar or
+/// array) are broadcast to the common shape and chosen per cell — so a per-cell
+/// fuel-model lookup `ifelse(and(code>=1, code<=13), interp.linear(...), default)`
+/// materializes at `code`'s [x,y] shape instead of collapsing to a scalar. A
+/// true select (not a `cond*a + (1-cond)*b` blend) keeps a `NaN` in the
+/// *unchosen* branch — e.g. an out-of-table `interp.linear` — from contaminating
+/// the result.
+pub(super) fn eval_ifelse(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    if node.args.len() != 3 {
+        return Value::Scalar(f64::NAN);
+    }
+    let cond = match eval(&node.args[0], ctx) {
+        Value::Scalar(c) => {
+            return if c != 0.0 {
+                eval(&node.args[1], ctx)
+            } else {
+                eval(&node.args[2], ctx)
+            };
+        }
+        Value::Array(c) => c,
+    };
+    let a = eval(&node.args[1], ctx);
+    let b = eval(&node.args[2], ctx);
+    let mut target = cond.shape().to_vec();
+    if let Value::Array(aa) = &a {
+        target = broadcast_shape(&target, aa.shape());
+    }
+    if let Value::Array(bb) = &b {
+        target = broadcast_shape(&target, bb.shape());
+    }
+    let cond_b = broadcast_value(&Value::Array(cond), &target);
+    let a_b = broadcast_value(&a, &target);
+    let b_b = broadcast_value(&b, &target);
+    let mut out = ArrayD::<f64>::zeros(IxDyn(&target));
+    ndarray::Zip::from(&mut out)
+        .and(&cond_b)
+        .and(&a_b)
+        .and(&b_b)
+        .for_each(|o, &c, &av, &bv| *o = if c != 0.0 { av } else { bv });
+    Value::Array(out)
+}
+
+/// Row-major flatten of a [`Value`] to a `Vec<f64>` (a scalar → one element) —
+/// used to snapshot a fixed interpolation table/axis.
+pub(super) fn value_flat(v: &Value) -> Vec<f64> {
+    match v {
+        Value::Scalar(s) => vec![*s],
+        Value::Array(a) => a.iter().copied().collect(),
+    }
+}
+
+/// Broadcast a [`Value`] to `target` shape: a scalar fills; an array is
+/// trailing-padded (Julia alignment) then broadcast. An incompatible array
+/// yields a `NaN` fill — the module's runtime-error convention.
+pub(super) fn broadcast_value(v: &Value, target: &[usize]) -> ArrayD<f64> {
+    match v {
+        Value::Scalar(s) => ArrayD::<f64>::from_elem(IxDyn(target), *s),
+        Value::Array(a) => match pad_trailing(a, target.len()).broadcast(IxDyn(target)) {
+            Some(b) => b.to_owned(),
+            None => ArrayD::<f64>::from_elem(IxDyn(target), f64::NAN),
+        },
     }
 }
 
@@ -326,6 +418,11 @@ pub(super) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "atan2" => x.atan2(y),
         "min" => x.min(y),
         "max" => x.max(y),
+        // Comparison + logical kernels, so the broadcast paths (`combine` /
+        // `broadcast_binary`) carry array operands elementwise.
+        "==" | "!=" | "<" | "<=" | ">" | ">=" => scalar_compare(op, x, y),
+        "and" => (x != 0.0 && y != 0.0) as i32 as f64,
+        "or" => (x != 0.0 || y != 0.0) as i32 as f64,
         _ => f64::NAN,
     }
 }
@@ -435,6 +532,7 @@ pub(super) fn apply_unary(op: &str, x: f64) -> f64 {
         "asinh" => x.asinh(),
         "acosh" => x.acosh(),
         "atanh" => x.atanh(),
+        "not" => (x == 0.0) as i32 as f64,
         _ => f64::NAN,
     }
 }
