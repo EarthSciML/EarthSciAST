@@ -1,0 +1,35 @@
+{
+  "category": "discrete_materialize_consumption",
+  "version": "1.0",
+  "description": "Cross-language conformance for DISCRETE-CADENCE MATERIALIZATION — the middle cadence phase (const ⊏ discrete ⊏ continuous; CONFORMANCE_SPEC.md §5.13). A state-free array observed that mixes a CONST weight (`M.W`) with a DISCRETE forcing field (`M.src`) inside a contraction `g[j] = sum_i W[i,j]*src[i]` changes ONLY when the forcing is refreshed at a cadence boundary: a DISCRETE field a materializing binding caches once per refresh and gathers into the hot RHS, while a sibling `k[j] = sum_i W[i,j]*offset` reads only const/parameter data and stays CONST-cadence (build-once/inline). Each binding drives a segmented solve of `D(c[j]) = g[j] + k[j]`, writing `src` from the golden's `forcing.by_anchor` snapshots at `refresh_times` and threading state across segments; the piecewise-constant forcing makes the trajectory analytic and exact. Complements `tests/conformance/build_once_spatial_field/` (the CONST tier of the same materialize⇄gather seam, no refresh) and `tests/conformance/refresh/` (the full loader→regrid→refresh capstone). This set isolates the const-vs-discrete cadence classification inside a contraction, with NO regrid (src delivered directly on the sim index) and NO providers (offline snapshots driven by the adapter).",
+  "reference_binding": "analytic",
+  "bindings_required": ["julia", "python", "rust"],
+  "bindings_optional": [],
+  "scope_excluded": {
+    "go": "rewrite-only port; no array/ODE simulator",
+    "typescript": "rewrite-only port; no array/ODE simulator"
+  },
+  "tolerances": {
+    "field_rtol": 1e-09,
+    "field_atol": 1e-11,
+    "traj_rtol": 1e-04,
+    "traj_atol": 1e-06
+  },
+  "integrators": {
+    "julia": {"solver": "Tsit5", "reltol": 1e-10, "abstol": 1e-12},
+    "python": {"solver": "LSODA", "reltol": 1e-10, "abstol": 1e-12},
+    "rust": {"solver": "Bdf", "reltol": 1e-10, "abstol": 1e-12}
+  },
+  "fixtures": [
+    {
+      "id": "discrete_materialize_contraction",
+      "fixture": "fixtures/discrete_materialize_contraction.esm",
+      "golden": "golden/discrete_materialize_contraction.json",
+      "forcing_key": "M.src",
+      "const_field": "M.k",
+      "discrete_field": "M.g",
+      "state_order": ["M.c[1]", "M.c[2]", "M.c[3]"],
+      "tags": ["discrete-cadence", "materialization", "contraction", "forcing-buffer", "segmented-refresh", "const+discrete", "gather", "array-ode", "non-pde", "offline"]
+    }
+  ]
+}

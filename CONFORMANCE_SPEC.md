@@ -1607,6 +1607,100 @@ setup pass, so the numeric result matches Julia's setup-materialized path). Rust
 drives the composed path through its `simulate_array` runtime with no source
 changes required to enable it.
 
+### 5.13 Discrete-Cadence Materialization Consumption (normative)
+
+§5.12 governs the CONST tier of the materialize ⇄ gather seam (a field derived
+once at setup, gathered into an ODE, never refreshed); §5.10 governs the full
+loader → regrid → refresh capstone. This section governs the **middle cadence
+phase** between them — the DISCRETE tier of the `const ⊏ discrete ⊏ continuous`
+partition. A state-free array observed that mixes a **CONST** weight with a
+**DISCRETE** forcing field changes neither build-once nor per-continuous-step: it
+materializes **once per refresh** and is gathered into the RHS across the segment.
+The three simulation bindings — **Julia, Python, Rust** — must agree, on a
+**numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/discrete_materialize/`.
+
+Relative to §5.10 it **drops the regrid** (`src` is delivered directly on the sim
+index) and the provider/loader stack (the adapter drives the segments from the
+golden's offline snapshots), isolating the one thing §5.10 and §5.12 do not pin on
+their own: the **const-vs-discrete cadence classification inside a contraction**.
+Two sibling contractions of identical shape sit on opposite sides of the cut:
+
+1. **The DISCRETE contraction.** `g[j] = sum_i W[i,j]·src[i]` mixes the const
+   weight `W` with the DISCRETE forcing `src`, so it is state-free yet
+   forcing-tainted — it changes only at a cadence boundary. A materializing
+   binding (Julia's `DiscreteMaterializer`) caches it once per refresh and gathers
+   the cache into the hot RHS; a re-evaluating binding (Python, Rust) recomputes
+   the state-free `g` once per segment with the forcing frozen. Both land the same
+   value.
+2. **The CONST sibling (the regression guard).** `k[j] = sum_i W[i,j]·offset`
+   reads only const `W` and the scalar parameter `offset` — state-free AND
+   forcing-free — so it is CONST-cadence and MUST stay on the build-once/inline
+   path. It MUST NOT become a per-refresh cache; an over-broad cut that captures it
+   is a conformance failure.
+
+Go and TypeScript are **out of scope** (no array simulator / refresh executor).
+
+#### 5.13.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it (asserting `W`/`g`/`k`
+are observeds, not integrated state slots), and drives a **segmented solve** of
+`D(c[j]) = g[j] + k[j]` over the golden's `refresh_times` ∩ `tspan` — writing
+`src` from `forcing.by_anchor` at each boundary (forcing frozen within a segment →
+RHS pure), threading state across segments — comparing each golden `trajectory`
+point's `M.c[j]`. Julia **additionally** asserts the **field band**: the
+`DiscreteMaterializer` caches `g` (not `k`), and its cache equals
+`golden.discrete_field` at each anchor. The DISCRETE forcing is piecewise-constant
+across segments, so the trajectory (and the per-anchor `g`) is analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Discrete-cache / const field (vs analytic) | 1e-9 | 1e-11 |
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+The field band is tight — a contraction on exact integer weights is exact up to
+floating-point. The trajectory band matches §5.10 / §5.12, absorbing integrator
+truncation.
+
+#### 5.13.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.10 / §5.12, trajectories MUST NOT be asserted byte-identical; the
+integrator is pinned per binding in `manifest.json` (`integrators`). The forcing
+snapshots come from the golden's `forcing.by_anchor` — **no providers, no network,
+no file I/O** — driven by each binding's forcing primitive (Julia
+`build_evaluator(…; param_arrays)` + a `build_refresh_callback` whose
+`post_refresh = dm.materialize!` fires per anchor; Python
+`_simulate_with_numpy(…, loader_arrays=…)`; Rust
+`ArrayCompiled::forcing_handle()`), so the suite is deterministic and CI-safe. The
+per-anchor `src` snapshots are distinct, so a stale (un-refreshed) forcing yields a
+visibly wrong trajectory slope — the refresh is load-bearing.
+
+#### 5.13.3 Coverage
+
+The fixture `discrete_materialize_contraction` is a 0-D-per-cell array ODE whose
+model `M` declares a const weight matrix `W`, a scalar parameter `offset`, and a
+bare DISCRETE forcing name `src`; derives the DISCRETE contraction `g` and the
+CONST sibling `k`; and forces `D(c[j]) = g[j] + k[j]` over `j ∈ [1,3]`. It
+exercises: the DISCRETE-tier materialize ⇄ gather seam (a state-free forcing-tainted
+array refreshed at cadence boundaries), the const-vs-discrete classification
+(`g` cached, `k` inline), cross-segment state threading, and the closed-form check
+the piecewise-constant forcing affords.
+
+#### 5.13.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`packages/EarthSciSerialization.jl/test/discrete_materialize_conformance_test.jl`;
+**Python** —
+`packages/earthsci_toolkit/tests/test_discrete_materialize_conformance.py`;
+**Rust** —
+`packages/earthsci-toolkit-rs/tests/discrete_materialize_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]` (Julia is where the
+discrete-materialization cut lives — the `DiscreteMaterializer` sink + the refresh
+callback's `post_refresh` hook — so it additionally gates the field band; Python
+and Rust re-materialize the state-free contraction at each segment's RHS, forcing
+frozen, so the numeric result matches Julia's materialized path).
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
