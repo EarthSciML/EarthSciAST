@@ -202,7 +202,8 @@ describe('ExpressionPalette', () => {
 
       expect(onInsert).toHaveBeenCalledWith({
         op: 'D',
-        args: ['_placeholder_', 't']
+        args: ['_placeholder_'],
+        wrt: 't'
       });
     });
 
@@ -239,7 +240,7 @@ describe('ExpressionPalette', () => {
         'application/json',
         JSON.stringify({
           type: 'expression-template',
-          expression: { op: 'D', args: ['_placeholder_', 't'] },
+          expression: { op: 'D', args: ['_placeholder_'], wrt: 't' },
           templateId: 'derivative'
         })
       );
@@ -280,6 +281,85 @@ describe('ExpressionPalette', () => {
 
       const palette = document.querySelector('.expression-palette');
       expect(palette).toHaveClass('custom-class');
+    });
+  });
+
+  describe('Op set coverage (esm-spec §4.2)', () => {
+    it('no longer offers the open-tier sugar ops grad / div / laplacian', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      expect(screen.queryByText('grad(_, x)')).not.toBeInTheDocument();
+      expect(screen.queryByText('div(_)')).not.toBeInTheDocument();
+      expect(screen.queryByText('laplacian(_)')).not.toBeInTheDocument();
+    });
+
+    it('inserts D with the differentiation variable in the `wrt` field (arity-1 args)', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      fireEvent.click(screen.getByText('D(_, t)'));
+
+      expect(onInsert).toHaveBeenCalledWith({ op: 'D', args: ['_placeholder_'], wrt: 't' });
+    });
+
+    it('offers the newly added elementary functions and comparisons', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      for (const label of ['log10(_)', 'sign(_)', 'tan(_)', 'floor(_)', 'ceil(_)', 'atan2(_, _)', 'tanh(_)']) {
+        expect(screen.getByText(label)).toBeInTheDocument();
+      }
+      for (const label of ['_ >= _', '_ <= _', '_ != _']) {
+        expect(screen.getByText(label)).toBeInTheDocument();
+      }
+    });
+
+    it('shows the Arrays & Queries category with structural ops', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      expect(screen.getByText('Arrays & Queries')).toBeInTheDocument();
+      expect(screen.getByText('const')).toBeInTheDocument();
+      expect(screen.getByText('aggregate')).toBeInTheDocument();
+      expect(screen.getByText('table_lookup')).toBeInTheDocument();
+    });
+
+    it('inserts a const op with default value and empty args', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      fireEvent.click(screen.getByText('const'));
+
+      expect(onInsert).toHaveBeenCalledWith({ op: 'const', args: [], value: 0 });
+    });
+
+    it('inserts an aggregate op with default query fields', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      fireEvent.click(screen.getByText('aggregate'));
+
+      expect(onInsert).toHaveBeenCalledWith({
+        op: 'aggregate',
+        args: ['_placeholder_'],
+        output_idx: ['i'],
+        reduce: '+',
+        expr: '_placeholder_'
+      });
+    });
+
+    it('inserts an intersect_polygon op with a declared manifold', () => {
+      const onInsert = vi.fn();
+      render(() => <ExpressionPalette onInsertExpression={onInsert} />);
+
+      fireEvent.click(screen.getByText('intersect_polygon(_, _)'));
+
+      expect(onInsert).toHaveBeenCalledWith({
+        op: 'intersect_polygon',
+        args: ['_placeholder_', '_placeholder_'],
+        manifold: 'spherical'
+      });
     });
   });
 });

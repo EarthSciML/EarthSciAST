@@ -13,6 +13,7 @@ import { Component, Accessor, createSignal, createMemo, Show, Switch, Match, Ind
 import type { Expression, ExpressionNode as ExprNode } from 'earthsci-toolkit';
 import { useMaybeStructuralEditingContext, DraggableExpression, StructuralEditingMenu, COMMUTATIVE_OPERATORS } from '../primitives/structural-editing';
 import { renderChemicalName } from '../primitives/chemical-formula';
+import { NodeFieldEditor, opHasFieldEditor } from './NodeFieldEditor';
 import { Fraction } from '../layout/Fraction';
 import { Superscript } from '../layout/Superscript';
 import { Radical } from '../layout/Radical';
@@ -212,6 +213,7 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   const [isHovered, setIsHovered] = createSignal(false);
   const [showStructuralMenu, setShowStructuralMenu] = createSignal(false);
   const [menuPosition, setMenuPosition] = createSignal({ x: 0, y: 0 });
+  const [showFieldEditor, setShowFieldEditor] = createSignal(false);
 
   // Structural editing context is optional (non-throwing accessor)
   const structuralEditing = useMaybeStructuralEditingContext();
@@ -307,6 +309,20 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
   const isOperatorNode = () =>
     typeof props.expr === 'object' && props.expr !== null && 'op' in props.expr;
 
+  // Op name when this node is an operator (empty otherwise).
+  const opName = () => (isOperatorNode() ? (props.expr as ExprNode).op : '');
+
+  // Whether this operator exposes editable non-`args` fields (e.g. D's `wrt`,
+  // const's `value`, aggregate's reduce/semiring/…).
+  const canEditFields = createMemo(() => isOperatorNode() && opHasFieldEditor(opName()));
+
+  const openFieldEditor = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    props.onSelect(props.path); // Select the node first
+    setShowFieldEditor(true);
+  };
+
   const content = (
     <>
       <span
@@ -346,6 +362,26 @@ export const ExpressionNode: Component<ExpressionNodeProps> = (props) => {
           </Match>
         </Switch>
       </span>
+
+      <Show when={canEditFields() && (isSelected() || isHovered() || showFieldEditor())}>
+        <button
+          class="esm-edit-fields-btn"
+          onClick={openFieldEditor}
+          title={`Edit ${opName()} fields`}
+          aria-label={`Edit fields of ${opName()}`}
+        >
+          ⚙
+        </button>
+      </Show>
+
+      <Show when={showFieldEditor() && isOperatorNode()}>
+        <NodeFieldEditor
+          node={props.expr as ExprNode}
+          path={props.path}
+          onReplace={props.onReplace}
+          onClose={() => setShowFieldEditor(false)}
+        />
+      </Show>
 
       <Show when={showStructuralMenu() && structuralEditing}>
         <StructuralEditingMenu

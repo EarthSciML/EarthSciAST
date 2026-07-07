@@ -11,6 +11,7 @@
 
 import { Component, createSignal, createMemo, For, Show } from 'solid-js';
 import type { Expression, Model } from 'earthsci-toolkit';
+import { CLOSED_FUNCTION_NAMES } from 'earthsci-toolkit';
 import { EXPRESSION_PLACEHOLDER } from '../constants';
 
 export interface ExpressionPaletteProps {
@@ -46,8 +47,11 @@ interface ExpressionTemplate {
   description: string;
   expression: Expression;
   keywords: string[];
-  category: 'calculus' | 'arithmetic' | 'functions' | 'logic';
+  category: 'calculus' | 'arithmetic' | 'functions' | 'logic' | 'array';
 }
+
+/** First closed function name, used as the default `fn` op template value. */
+const DEFAULT_FN_NAME = CLOSED_FUNCTION_NAMES[0] ?? 'datetime.year';
 
 // Predefined expression templates
 const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
@@ -56,32 +60,18 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     id: 'derivative',
     label: 'D(_, t)',
     description: 'Time derivative',
-    expression: { op: 'D', args: [EXPRESSION_PLACEHOLDER, 't'] },
+    // The differentiation variable lives in the `wrt` field (esm-schema.json);
+    // the toolkit's arity for `D` is exactly one operand.
+    expression: { op: 'D', args: [EXPRESSION_PLACEHOLDER], wrt: 't' },
     keywords: ['derivative', 'time', 'differential', 'd', 'dt'],
     category: 'calculus'
   },
   {
-    id: 'gradient',
-    label: 'grad(_, x)',
-    description: 'Spatial gradient',
-    expression: { op: 'grad', args: [EXPRESSION_PLACEHOLDER, 'x'] },
-    keywords: ['gradient', 'spatial', 'grad', 'nabla'],
-    category: 'calculus'
-  },
-  {
-    id: 'divergence',
-    label: 'div(_)',
-    description: 'Divergence operator',
-    expression: { op: 'div', args: [EXPRESSION_PLACEHOLDER] },
-    keywords: ['divergence', 'div'],
-    category: 'calculus'
-  },
-  {
-    id: 'laplacian',
-    label: 'laplacian(_)',
-    description: 'Laplacian operator',
-    expression: { op: 'laplacian', args: [EXPRESSION_PLACEHOLDER] },
-    keywords: ['laplacian', 'laplace', 'del2'],
+    id: 'integral',
+    label: '∫(_) dx',
+    description: 'Definite integral',
+    expression: { op: 'integral', args: [EXPRESSION_PLACEHOLDER], var: 'x', lower: 0, upper: 1 },
+    keywords: ['integral', 'integrate', 'antiderivative', 'pide'],
     category: 'calculus'
   },
 
@@ -153,6 +143,22 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     category: 'functions'
   },
   {
+    id: 'log10',
+    label: 'log10(_)',
+    description: 'Base-10 logarithm',
+    expression: { op: 'log10', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['log10', 'logarithm', 'base 10', 'common'],
+    category: 'functions'
+  },
+  {
+    id: 'sign',
+    label: 'sign(_)',
+    description: 'Sign function',
+    expression: { op: 'sign', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['sign', 'signum', 'sgn'],
+    category: 'functions'
+  },
+  {
     id: 'sqrt',
     label: 'sqrt(_)',
     description: 'Square root',
@@ -182,6 +188,110 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     description: 'Cosine function',
     expression: { op: 'cos', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['cosine', 'cos', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'tangent',
+    label: 'tan(_)',
+    description: 'Tangent function',
+    expression: { op: 'tan', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['tangent', 'tan', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'arcsine',
+    label: 'asin(_)',
+    description: 'Inverse sine',
+    expression: { op: 'asin', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['arcsine', 'asin', 'inverse sine', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'arccosine',
+    label: 'acos(_)',
+    description: 'Inverse cosine',
+    expression: { op: 'acos', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['arccosine', 'acos', 'inverse cosine', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'arctangent',
+    label: 'atan(_)',
+    description: 'Inverse tangent',
+    expression: { op: 'atan', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['arctangent', 'atan', 'inverse tangent', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'arctangent2',
+    label: 'atan2(_, _)',
+    description: 'Two-argument arctangent',
+    expression: { op: 'atan2', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['atan2', 'arctangent', 'angle', 'trigonometry'],
+    category: 'functions'
+  },
+  {
+    id: 'sinh',
+    label: 'sinh(_)',
+    description: 'Hyperbolic sine',
+    expression: { op: 'sinh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['sinh', 'hyperbolic sine', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'cosh',
+    label: 'cosh(_)',
+    description: 'Hyperbolic cosine',
+    expression: { op: 'cosh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['cosh', 'hyperbolic cosine', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'tanh',
+    label: 'tanh(_)',
+    description: 'Hyperbolic tangent',
+    expression: { op: 'tanh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['tanh', 'hyperbolic tangent', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'asinh',
+    label: 'asinh(_)',
+    description: 'Inverse hyperbolic sine',
+    expression: { op: 'asinh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['asinh', 'inverse hyperbolic sine', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'acosh',
+    label: 'acosh(_)',
+    description: 'Inverse hyperbolic cosine',
+    expression: { op: 'acosh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['acosh', 'inverse hyperbolic cosine', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'atanh',
+    label: 'atanh(_)',
+    description: 'Inverse hyperbolic tangent',
+    expression: { op: 'atanh', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['atanh', 'inverse hyperbolic tangent', 'hyperbolic'],
+    category: 'functions'
+  },
+  {
+    id: 'floor',
+    label: 'floor(_)',
+    description: 'Round down to integer',
+    expression: { op: 'floor', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['floor', 'round down', 'integer'],
+    category: 'functions'
+  },
+  {
+    id: 'ceil',
+    label: 'ceil(_)',
+    description: 'Round up to integer',
+    expression: { op: 'ceil', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['ceil', 'ceiling', 'round up', 'integer'],
     category: 'functions'
   },
   {
@@ -227,11 +337,35 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     category: 'logic'
   },
   {
+    id: 'greater_equal',
+    label: '_ >= _',
+    description: 'Greater than or equal comparison',
+    expression: { op: '>=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['greater', 'equal', '>=', 'gte', 'compare'],
+    category: 'logic'
+  },
+  {
+    id: 'less_equal',
+    label: '_ <= _',
+    description: 'Less than or equal comparison',
+    expression: { op: '<=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['less', 'equal', '<=', 'lte', 'compare'],
+    category: 'logic'
+  },
+  {
     id: 'equals',
     label: '_ == _',
     description: 'Equality comparison',
     expression: { op: '==', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
     keywords: ['equals', 'equal', '==', 'compare'],
+    category: 'logic'
+  },
+  {
+    id: 'not_equals',
+    label: '_ != _',
+    description: 'Inequality comparison',
+    expression: { op: '!=', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['not', 'equal', '!=', 'inequality', 'compare'],
     category: 'logic'
   },
   {
@@ -257,6 +391,152 @@ const EXPRESSION_TEMPLATES: ExpressionTemplate[] = [
     expression: { op: 'not', args: [EXPRESSION_PLACEHOLDER] },
     keywords: ['not', 'logical', '!', 'negate'],
     category: 'logic'
+  },
+
+  // Array / query tier ops (esm-spec §4.2). Each is insertable with sensible
+  // default field values; a node field editor (⚙ on a selected node) edits the
+  // non-`args` fields.
+  {
+    id: 'const',
+    label: 'const',
+    description: 'Inline literal value',
+    expression: { op: 'const', args: [], value: 0 },
+    keywords: ['const', 'constant', 'literal', 'value'],
+    category: 'array'
+  },
+  {
+    id: 'true',
+    label: 'true',
+    description: 'Boolean true literal',
+    expression: { op: 'true', args: [] },
+    keywords: ['true', 'boolean', 'literal'],
+    category: 'array'
+  },
+  {
+    id: 'fn',
+    label: 'fn(_)',
+    description: 'Closed-registry function call',
+    expression: { op: 'fn', name: DEFAULT_FN_NAME, args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['fn', 'function', 'closed', 'datetime', 'interp'],
+    category: 'array'
+  },
+  {
+    id: 'enum',
+    label: 'enum',
+    description: 'Enum member reference',
+    expression: { op: 'enum', args: ['Type', 'member'] },
+    keywords: ['enum', 'enumeration', 'member'],
+    category: 'array'
+  },
+  {
+    id: 'index',
+    label: 'index(_, _)',
+    description: 'Array indexing',
+    expression: { op: 'index', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['index', 'array', 'element', 'subscript'],
+    category: 'array'
+  },
+  {
+    id: 'broadcast',
+    label: 'broadcast(_, _)',
+    description: 'Element-wise scalar op over arrays',
+    expression: { op: 'broadcast', fn: '+', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER] },
+    keywords: ['broadcast', 'elementwise', 'map', 'array'],
+    category: 'array'
+  },
+  {
+    id: 'makearray',
+    label: 'makearray',
+    description: 'Build an array from regions and values',
+    expression: { op: 'makearray', args: [], regions: [], values: [] },
+    keywords: ['makearray', 'array', 'build', 'regions', 'values'],
+    category: 'array'
+  },
+  {
+    id: 'reshape',
+    label: 'reshape(_)',
+    description: 'Reshape an array',
+    expression: { op: 'reshape', args: [EXPRESSION_PLACEHOLDER], shape: [1] },
+    keywords: ['reshape', 'shape', 'array', 'dimensions'],
+    category: 'array'
+  },
+  {
+    id: 'transpose',
+    label: 'transpose(_)',
+    description: 'Transpose / permute array axes',
+    expression: { op: 'transpose', args: [EXPRESSION_PLACEHOLDER] },
+    keywords: ['transpose', 'permute', 'axes', 'array'],
+    category: 'array'
+  },
+  {
+    id: 'concat',
+    label: 'concat(_, _)',
+    description: 'Concatenate arrays along an axis',
+    expression: { op: 'concat', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], axis: 0 },
+    keywords: ['concat', 'concatenate', 'join', 'array'],
+    category: 'array'
+  },
+  {
+    id: 'aggregate',
+    label: 'aggregate',
+    description: 'Functional aggregate query (FAQ)',
+    expression: {
+      op: 'aggregate',
+      args: [EXPRESSION_PLACEHOLDER],
+      output_idx: ['i'],
+      reduce: '+',
+      expr: EXPRESSION_PLACEHOLDER
+    },
+    keywords: ['aggregate', 'faq', 'reduce', 'einsum', 'sum', 'query'],
+    category: 'array'
+  },
+  {
+    id: 'argmin',
+    label: 'argmin',
+    description: 'Arg-witness minimizer',
+    expression: { op: 'argmin', args: [EXPRESSION_PLACEHOLDER], arg: 'g', expr: EXPRESSION_PLACEHOLDER },
+    keywords: ['argmin', 'argument', 'minimum', 'witness', 'nearest'],
+    category: 'array'
+  },
+  {
+    id: 'argmax',
+    label: 'argmax',
+    description: 'Arg-witness maximizer',
+    expression: { op: 'argmax', args: [EXPRESSION_PLACEHOLDER], arg: 'g', expr: EXPRESSION_PLACEHOLDER },
+    keywords: ['argmax', 'argument', 'maximum', 'witness'],
+    category: 'array'
+  },
+  {
+    id: 'intersect_polygon',
+    label: 'intersect_polygon(_, _)',
+    description: 'Clip two polygons',
+    expression: { op: 'intersect_polygon', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], manifold: 'spherical' },
+    keywords: ['intersect', 'polygon', 'clip', 'geometry', 'manifold'],
+    category: 'array'
+  },
+  {
+    id: 'polygon_intersection_area',
+    label: 'polygon_intersection_area(_, _)',
+    description: 'Area of polygon overlap',
+    expression: { op: 'polygon_intersection_area', args: [EXPRESSION_PLACEHOLDER, EXPRESSION_PLACEHOLDER], manifold: 'spherical' },
+    keywords: ['polygon', 'intersection', 'area', 'overlap', 'geometry', 'manifold'],
+    category: 'array'
+  },
+  {
+    id: 'table_lookup',
+    label: 'table_lookup',
+    description: 'Sampled function table lookup',
+    expression: { op: 'table_lookup', args: [], table: 'table_id', axes: {} },
+    keywords: ['table_lookup', 'table', 'lookup', 'interpolate', 'sampled'],
+    category: 'array'
+  },
+  {
+    id: 'apply_expression_template',
+    label: 'apply_expression_template',
+    description: 'Invoke an in-file expression template',
+    expression: { op: 'apply_expression_template', args: [], name: 'template_id', bindings: {} },
+    keywords: ['apply', 'expression', 'template', 'macro'],
+    category: 'array'
   }
 ];
 
@@ -281,6 +561,11 @@ const CATEGORY_CONFIG = {
     title: 'Logic',
     description: 'Logical operators and comparisons',
     icon: '∧'
+  },
+  array: {
+    title: 'Arrays & Queries',
+    description: 'Array, aggregate, and geometry ops',
+    icon: '⊞'
   }
 };
 

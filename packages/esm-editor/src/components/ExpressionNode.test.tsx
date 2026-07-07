@@ -179,4 +179,53 @@ describe('ExpressionNode', () => {
     const genericFunction = container.querySelector('.esm-generic-function');
     expect(genericFunction).not.toBeInTheDocument();
   });
+
+  describe('Field editor integration', () => {
+    it('shows the edit-fields button for a selected op that has editable fields', () => {
+      render(() => (
+        <ExpressionNode
+          expr={{ op: 'D', args: ['u'], wrt: 't' }}
+          {...mockProps}
+          path={['test']}
+          selectedPath={['test']}
+        />
+      ));
+
+      expect(screen.getByTitle('Edit D fields')).toBeInTheDocument();
+    });
+
+    it('does not show the edit-fields button for a plain arithmetic op', () => {
+      render(() => (
+        <ExpressionNode
+          expr={{ op: '+', args: [1, 2] }}
+          {...mockProps}
+          path={['test']}
+          selectedPath={['test']}
+        />
+      ));
+
+      expect(screen.queryByTitle('Edit + fields')).not.toBeInTheDocument();
+    });
+
+    it('opens the field editor and round-trips an edit to onReplace', () => {
+      const onReplace = vi.fn();
+      render(() => (
+        <ExpressionNode
+          expr={{ op: 'D', args: ['u'], wrt: 't' }}
+          {...mockProps}
+          path={['test']}
+          selectedPath={['test']}
+          onReplace={onReplace}
+        />
+      ));
+
+      fireEvent.click(screen.getByTitle('Edit D fields'));
+
+      const input = screen.getByDisplayValue('t');
+      fireEvent.input(input, { target: { value: 'x' } });
+      fireEvent.click(screen.getByText('Apply'));
+
+      expect(onReplace).toHaveBeenCalledWith(['test'], { op: 'D', args: ['u'], wrt: 'x' });
+    });
+  });
 });
