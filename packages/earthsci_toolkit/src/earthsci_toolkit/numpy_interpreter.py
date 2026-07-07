@@ -1342,6 +1342,27 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 "supported; equi-join keys are dense interval / categorical index "
                 "sets (RFC semiring-faq-unified-ir §5.3)"
             )
+        # Filter-only (no equi-join): the whole (out × reduce) box + its filter
+        # mask evaluate in one vectorized pass, collapsing the dense per-(i,j)
+        # Python loop of the conservative-regrid APPLY reductions (A_j row-sums,
+        # weighted field regrids) to a handful of numpy ops. A join keeps the
+        # scalar path (key coding); the vectorized reduce declines (→ None) on
+        # anything it cannot broadcast, so the scalar loop still covers it.
+        if not join_clauses:
+            vec = _eval_arrayop_reduce_vectorized(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+                filter_expr,
+            )
+            if vec is not None:
+                return vec
         return _eval_arrayop_scalar(
             expr,
             ctx,
@@ -1785,6 +1806,104 @@ def _filter_admits(filter_expr: Expr, ctx: EvalContext) -> bool:
             "index combination (RFC semiring-faq-unified-ir §5.3)"
         )
     return bool(val.reshape(-1)[0])
+
+
+#: ⊕ operators this vectorized reduction path can fold, and the numpy ufunc whose
+#: ``.reduce`` carries the contraction. Every entry's semiring identity 0̄
+#: (``empty_zero``) doubles as the ufunc ``initial`` AND the value a filtered-out
+#: term is masked to — so a masked term is a genuine no-op under ⊕ (RFC §5.1),
+#: giving an empty admitted set the identity exactly as the scalar path does.
+_REDUCE_UFUNCS: Dict[str, Any] = {
+    "+": np.add,
+    "*": np.multiply,
+    "max": np.maximum,
+    "min": np.minimum,
+}
+
+
+def _eval_arrayop_reduce_vectorized(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+    reduce_syms: List[str],
+    resolved: Dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Optional[Expr],
+) -> Optional[np.ndarray]:
+    """Vectorized fast path for a (possibly filtered) NON-join reducing aggregate.
+
+    The general counterpart of :func:`_materialize_map` (which only handles the
+    non-reducing pure map): bind EVERY index symbol — output AND contracted — to
+    its 1-based ``arange`` reshaped to broadcast on its own axis of the combined
+    ``[out… , reduce…]`` box, evaluate the body ONCE over that whole box (so each
+    ``index(var, i, j, …)`` factor becomes one vectorized gather via
+    :func:`_eval_index`, resolving state / params / loader ``input_arrays`` /
+    materialized ``derived_rings`` alike), then ⊕-reduce over the trailing
+    contracted axes. A ``filter`` predicate is evaluated over the same box to a
+    boolean mask; a non-admitted cell is set to the semiring identity 0̄
+    (``empty_zero``) so it is a no-op under ⊕ — identical to the scalar path
+    skipping it (RFC semiring-faq-unified-ir §5.3 / §7.2).
+
+    This is what lets the conservative-regrid APPLY reductions — the row-sums
+    ``A_j[j] = Σ_{i:A_ij>atol} A_ij`` and the weighted regrids
+    ``field_tgt[j] = Σ_i A_ij·field_i / A_j`` — evaluate as a handful of numpy
+    ops over the already-materialized ``A_ij`` matrix instead of a Python loop
+    over every (source, target) pair (the dense ``_eval_arrayop_scalar`` walk).
+
+    Per-cell values are computed by the SAME gather the scalar path uses, so only
+    the contraction's summation order changes (numpy pairwise vs sequential), on a
+    par with the existing einsum fast path (:func:`_eval_arrayop_vectorized`).
+    Returns ``None`` — caller falls back to the scalar loop — for an unsupported
+    ⊕, an empty index box, or any body / filter that does not evaluate + broadcast
+    cleanly over the box (e.g. a ragged bound or a non-array gather).
+
+    The caller guarantees no ``join`` clause (equi-join key coding stays on the
+    scalar path); ⊗ is folded by the body evaluation itself, so the semiring's ⊗
+    need not be ×.
+    """
+    ufunc = _REDUCE_UFUNCS.get(reducer)
+    if ufunc is None or not reduce_syms:
+        return None
+    from .flatten import _expand_range  # local import to avoid cycle
+
+    red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
+    all_syms = list(out_syms) + list(reduce_syms)
+    ndim = len(all_syms)
+    if ndim == 0:
+        return None
+    combined_shape = tuple(list(out_shape) + [len(r) for r in red_ranges_exp])
+    if 0 in out_shape:
+        # No output cells — nothing to compute; the scalar path returns the same
+        # empty array. Cheap to hand back so the reduce logic below stays simple.
+        return np.zeros(out_shape, dtype=float)
+
+    prev = dict(ctx.locals)
+    try:
+        for axis, s in enumerate(all_syms):
+            rng = out_ranges_exp[axis] if axis < len(out_syms) else red_ranges_exp[axis - len(out_syms)]
+            _bind_broadcast_range(ctx, s, np.asarray(rng, dtype=float), axis, ndim)
+        try:
+            # A filtered-out / masked term divides by A_j=0 in the regrid body; that
+            # value is immediately discarded by the mask, so silence the transient
+            # divide/invalid warnings (mirrors the batched-leaf kernel).
+            with np.errstate(divide="ignore", invalid="ignore"):
+                term = np.asarray(eval_expr(expr.expr, ctx), dtype=float)
+                term = np.broadcast_to(term, combined_shape)
+                if filter_expr is not None:
+                    mask = np.asarray(eval_expr(filter_expr, ctx))
+                    term = np.where(mask.astype(bool), term, empty_zero)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+            return None
+    finally:
+        ctx.locals = prev
+
+    red_axes = tuple(range(len(out_syms), ndim))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
+    return np.asarray(out, dtype=float).reshape(out_shape)
 
 
 def _eval_arrayop_scalar(
