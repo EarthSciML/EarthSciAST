@@ -28,6 +28,7 @@ Design notes
 from __future__ import annotations
 
 import functools
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
@@ -1253,6 +1254,36 @@ def _bind_broadcast_range(
     ctx.locals[sym] = np.asarray(values, dtype=float).reshape(shp)
 
 
+@contextmanager
+def _bound_index_box(
+    ctx: EvalContext, syms: List[str], ranges: List[List[int]]
+) -> Iterator[None]:
+    """Bind each index symbol to its 1-based ``range`` reshaped to broadcast on
+    its own axis of the ``len(syms)``-D box (so a body evaluates over the whole
+    box in one pass), restoring ``ctx.locals`` on exit. The shared save / bind /
+    restore of the whole-box vectorized paths (:func:`_materialize_map`,
+    :func:`_eval_arrayop_reduce_vectorized`)."""
+    prev = dict(ctx.locals)
+    try:
+        ndim = len(syms)
+        for axis, s in enumerate(syms):
+            _bind_broadcast_range(ctx, s, np.asarray(ranges[axis], dtype=float), axis, ndim)
+        yield
+    finally:
+        ctx.locals = prev
+
+
+def _expand_reduce_ranges(
+    resolved: Dict[str, Any], reduce_syms: List[str]
+) -> List[List[int]]:
+    """Dense 1-based value list for each contracted range, in ``reduce_syms``
+    order (``_expand_range`` of each resolved reduce spec) — the one line every
+    scalar / vectorized reduction path repeats to expand its contracted box."""
+    from .flatten import _expand_range  # local import to avoid cycle
+
+    return [_expand_range(resolved[s]) for s in reduce_syms]
+
+
 def _materialize_makearray_vectorized(
     ma: ExprNode,
     ctx: EvalContext,
@@ -1329,15 +1360,8 @@ def _materialize_map(
         ):
             return _materialize_makearray_vectorized(body.args[0], ctx, out_syms, out_shape)
 
-        prev = dict(ctx.locals)
-        try:
-            for axis, s in enumerate(out_syms):
-                _bind_broadcast_range(
-                    ctx, s, np.asarray(out_ranges_exp[axis], dtype=float), axis, len(out_syms)
-                )
+        with _bound_index_box(ctx, out_syms, out_ranges_exp):
             val = _compile_expr(body)(ctx)
-        finally:
-            ctx.locals = prev
         res = np.asarray(val, dtype=float)
         if res.shape == tuple(out_shape):
             return res
@@ -1611,7 +1635,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             empty_zero,
         )
 
-    red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
+    red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
 
     # Pre-compute 0-based index lists for the fast path.
     sym_0based: Dict[str, List[int]] = {}
@@ -1696,7 +1720,6 @@ def _reduce_over(
         body, ctx, local_binding, reduce_syms, cartesian_red, reducer, empty_zero,
         gates=[], filter_expr=None,
     )
-    return acc if acc is not None else empty_zero
 
 
 def _eval_arrayop_ragged(
@@ -2088,9 +2111,8 @@ def _eval_arrayop_reduce_vectorized(
     ufunc = _REDUCE_UFUNCS.get(reducer)
     if ufunc is None or not reduce_syms:
         return None
-    from .flatten import _expand_range  # local import to avoid cycle
 
-    red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
+    red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
     all_syms = list(out_syms) + list(reduce_syms)
     ndim = len(all_syms)
     if ndim == 0:
@@ -2101,12 +2123,8 @@ def _eval_arrayop_reduce_vectorized(
         # empty array. Cheap to hand back so the reduce logic below stays simple.
         return np.zeros(out_shape, dtype=float)
 
-    prev = dict(ctx.locals)
     try:
-        for axis, s in enumerate(all_syms):
-            rng = out_ranges_exp[axis] if axis < len(out_syms) else red_ranges_exp[axis - len(out_syms)]
-            _bind_broadcast_range(ctx, s, np.asarray(rng, dtype=float), axis, ndim)
-        try:
+        with _bound_index_box(ctx, all_syms, list(out_ranges_exp) + red_ranges_exp):
             # A filtered-out / masked term divides by A_j=0 in the regrid body; that
             # value is immediately discarded by the mask, so silence the transient
             # divide/invalid warnings (mirrors the batched-leaf kernel).
@@ -2116,10 +2134,8 @@ def _eval_arrayop_reduce_vectorized(
                 if filter_expr is not None:
                     mask = np.asarray(_compile_expr(filter_expr)(ctx))
                     term = np.where(mask.astype(bool), term, empty_zero)
-        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
-            return None
-    finally:
-        ctx.locals = prev
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        return None
 
     red_axes = tuple(range(len(out_syms), ndim))
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -2149,9 +2165,7 @@ def _eval_arrayop_scalar(
     filter predicate (§7.2) decide whether it contributes a ⊗-term. An empty set
     of admitted terms reduces to the semiring identity 0̄ (§5.1).
     """
-    from .flatten import _expand_range  # local import to avoid cycle
-
-    red_ranges_exp = [_expand_range(resolved[s]) for s in reduce_syms]
+    red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
     sym_positions: Dict[str, List[int]] = {}
     for s, r in zip(out_syms, out_ranges_exp):
         sym_positions[s] = list(r)
