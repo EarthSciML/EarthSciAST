@@ -225,6 +225,18 @@ impl ContractDim {
             ContractDim::Derived { from_faq } => (1, derived_ring_extent(from_faq, ctx)),
         }
     }
+
+    /// The cell-independent `(lo, hi)` of a static dim, or `None` for a
+    /// ragged/derived dim (whose bound varies per output tuple and so must be
+    /// resolved via [`Self::concrete`] each cell). Lets the caller hoist the
+    /// range derivation out of the per-cell reduction loop when all dims are
+    /// static.
+    fn static_bound(&self) -> Option<(i64, i64)> {
+        match self {
+            ContractDim::Static(lo, hi) => Some((*lo, *hi)),
+            ContractDim::Ragged { .. } | ContractDim::Derived { .. } => None,
+        }
+    }
 }
 
 /// An equation rule compiled for runtime RHS evaluation.

@@ -74,6 +74,20 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     Value::Scalar(f64::NAN)
 }
 
+/// Bind (or rebind) a loop index in `binds` without reallocating the key on the
+/// hot path. The output/contraction index names are fixed for a given
+/// aggregate, so after the first cell every key already exists — `get_mut`
+/// rebinds in place, avoiding the per-cell `String` clone that
+/// `insert(name.clone(), …)` paid on every cell of every reduction.
+#[inline]
+pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
+    if let Some(slot) = binds.get_mut(name) {
+        *slot = val;
+    } else {
+        binds.insert(name.to_string(), val);
+    }
+}
+
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     match node.op.as_str() {
         // Elementwise / scalar arithmetic. If any operand is an array,
@@ -433,42 +447,41 @@ pub(super) fn eval_binary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 
 // --- Array ops ---
 
-pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    // First arg is the array-valued expression; remaining args are indices.
-    if node.args.is_empty() {
-        return Value::Scalar(f64::NAN);
+/// Borrow a state/observed variable's whole ARRAY by reference, mirroring
+/// [`lookup_variable`]'s precedence (`t` → loop binds → state → observed) but
+/// without cloning. Returns `None` when the name would resolve to a scalar
+/// (0-D array, loop index, `t`), a param, or a forcing entry — those keep the
+/// original clone/scalar path. Lets [`eval_index`] sample one element of a big
+/// stencil/geometry-table array without cloning the entire array per cell.
+pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a ArrayD<f64>> {
+    if name == "t" || ctx.loop_binds.contains_key(name) {
+        return None;
     }
-    let array_val = eval(&node.args[0], ctx);
-    let arr = match array_val {
-        Value::Array(a) => a,
-        Value::Scalar(s) if node.args.len() == 1 => return Value::Scalar(s),
-        Value::Scalar(_) => return Value::Scalar(f64::NAN),
-    };
-    // Evaluate index expressions into integer indices (1-based).
-    // Out-of-bounds accesses return 0.0 — this implements homogeneous Dirichlet
-    // ghost-cell semantics: a discretized PDE's stencil can reference u[i-1]
-    // when i=1 (ghost cell at i=0) and the boundary condition is u=0.
-    let mut in_bounds = true;
+    if let Some(a) = ctx.state_arrays.get(name) {
+        return if a.ndim() == 0 { None } else { Some(a) };
+    }
+    if let Some(a) = ctx.observed_arrays.get(name) {
+        return if a.ndim() == 0 { None } else { Some(a) };
+    }
+    // Params (scalars) and forcing (a `RefCell` — no plain `&` to hand back)
+    // fall through to the normal evaluate-then-index path.
+    None
+}
+
+/// Sample `arr` at the 1-based `raw` indices (out-of-bounds ⇒ 0.0, homogeneous
+/// Dirichlet ghost cells; fewer indices than the rank ⇒ a fixed-leading-axes
+/// sub-array). `in_bounds` seeds the bound flag (`false` if an index expression
+/// was non-scalar). Shared by the borrowing fast path and the general path.
+pub(super) fn index_into(arr: &ArrayD<f64>, raw: &[i64], mut in_bounds: bool) -> Value {
     // Stack-inlined index buffer (array rank ≤ 4) — no per-node heap allocation.
-    let indices: DimU = node.args[1..]
-        .iter()
-        .enumerate()
-        .map(|(d, a)| {
-            let v = eval(a, ctx);
-            let one_based = match v.as_scalar() {
-                Some(f) => f.round() as i64,
-                None => {
-                    in_bounds = false;
-                    return 0;
-                }
-            };
-            let dim_size = arr.shape().get(d).copied().unwrap_or(0) as i64;
-            if one_based < 1 || one_based > dim_size {
-                in_bounds = false;
-            }
-            (one_based - 1).max(0) as usize
-        })
-        .collect();
+    let mut indices: DimU = SmallVec::with_capacity(raw.len());
+    for (d, &one_based) in raw.iter().enumerate() {
+        let dim_size = arr.shape().get(d).copied().unwrap_or(0) as i64;
+        if one_based < 1 || one_based > dim_size {
+            in_bounds = false;
+        }
+        indices.push((one_based - 1).max(0) as usize);
+    }
     if !in_bounds {
         return Value::Scalar(0.0);
     }
@@ -488,12 +501,61 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
         return Value::Array(view.to_owned());
     }
-    let ix = IxDyn(&indices);
-    if let Some(v) = arr.get(ix) {
-        Value::Scalar(*v)
-    } else {
-        Value::Scalar(0.0)
+    match arr.get(IxDyn(&indices)) {
+        Some(v) => Value::Scalar(*v),
+        None => Value::Scalar(0.0),
     }
+}
+
+/// Evaluate the index expressions (args[1..]) into 1-based `i64` indices,
+/// flagging `in_bounds = false` for any non-scalar operand (contributes a 0
+/// ghost). Kept separate so both `eval_index` paths share identical semantics.
+#[inline]
+fn eval_index_args(args: &[Expr], ctx: &mut EvalCtx) -> (DimI, bool) {
+    let mut raw: DimI = SmallVec::with_capacity(args.len());
+    let mut in_bounds = true;
+    for a in args {
+        match eval(a, ctx).as_scalar() {
+            Some(f) => raw.push(f.round() as i64),
+            None => {
+                in_bounds = false;
+                raw.push(0);
+            }
+        }
+    }
+    (raw, in_bounds)
+}
+
+pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    // First arg is the array-valued expression; remaining args are indices.
+    if node.args.is_empty() {
+        return Value::Scalar(f64::NAN);
+    }
+    // Fast path: `index(<var>, i, j, …)` where `<var>` names a state/observed
+    // ARRAY. Borrow it and read the one element directly, rather than cloning
+    // the whole array (via `lookup_variable`) just to sample a single cell —
+    // the dominant per-cell stencil / geometry-table access. Index expressions
+    // are evaluated first (they never depend on the indexed array), so the
+    // borrow is taken only after `&mut ctx` is no longer needed.
+    if let Expr::Variable(name) = &node.args[0]
+        && lookup_array_ref(name, ctx).is_some()
+    {
+        let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        if let Some(arr) = lookup_array_ref(name, ctx) {
+            return index_into(arr, &raw, in_bounds);
+        }
+    }
+    let array_val = eval(&node.args[0], ctx);
+    let arr = match array_val {
+        Value::Array(a) => a,
+        Value::Scalar(s) if node.args.len() == 1 => return Value::Scalar(s),
+        Value::Scalar(_) => return Value::Scalar(f64::NAN),
+    };
+    // Out-of-bounds accesses return 0.0 — homogeneous Dirichlet ghost-cell
+    // semantics: a discretized PDE's stencil can reference u[i-1] when i=1
+    // (ghost cell at i=0) and the boundary condition is u=0.
+    let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+    index_into(&arr, &raw, in_bounds)
 }
 
 /// Evaluate a `const` op: the inline literal in the node's `value` field. A JSON
@@ -764,6 +826,7 @@ pub(super) fn filter_excludes(filter: Option<&Expr>, ctx: &mut EvalCtx) -> bool 
 pub(super) fn reduce_contraction(
     contract_names: &[String],
     contract_dims: &[ContractDim],
+    static_ranges: Option<&[(i64, i64)]>,
     body: &Expr,
     reduce: ReduceKind,
     filter: Option<&Expr>,
@@ -777,17 +840,26 @@ pub(super) fn reduce_contraction(
             eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
         };
     }
-    // Resolve each contracted dim to a concrete (lo, hi) under the current
-    // output tuple — ragged dims read their per-parent length here. This runs
-    // once per output cell, so it stays on the stack (contraction rank is tiny).
-    let ranges: SmallVec<[(i64, i64); 4]> = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+    // Resolve each contracted dim to a concrete (lo, hi). When every dim is
+    // static (the common case) the caller passes the bounds it computed ONCE
+    // outside the output loop — they are cell-independent — so we skip the
+    // per-cell re-derivation. Ragged/derived dims read their per-parent length
+    // under *this* output tuple, so they are (re)derived here on the stack.
+    let derived: SmallVec<[(i64, i64); 4]>;
+    let ranges: &[(i64, i64)] = match static_ranges {
+        Some(r) => r,
+        None => {
+            derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+            &derived
+        }
+    };
     let mut acc: f64 = reduce.identity();
     // Stream the contraction product from a reused buffer — no per-tuple heap
     // allocation (this loop is the array-simulate hot path).
-    let mut tuples = CartesianTuples::new(&ranges);
+    let mut tuples = CartesianTuples::new(ranges);
     while let Some(k_tuple) = tuples.next() {
         for (kn, kv) in contract_names.iter().zip(k_tuple.iter()) {
-            ctx.loop_binds.insert(kn.clone(), *kv);
+            set_bind(&mut ctx.loop_binds, kn, *kv);
         }
         // A filtered-out combination contributes 0̄ (acc ⊕ 0̄ = acc) (§5.3).
         if filter_excludes(filter, ctx) {
@@ -797,6 +869,18 @@ pub(super) fn reduce_contraction(
         acc = reduce.combine(acc, term);
     }
     acc
+}
+
+/// Precompute the contraction bounds when every dim is static (cell-independent),
+/// so [`reduce_contraction`] can skip the per-cell re-derivation. Returns `None`
+/// if any dim is ragged/derived (those must be resolved per output tuple).
+pub(super) fn static_contract_ranges(
+    contract_dims: &[ContractDim],
+) -> Option<SmallVec<[(i64, i64); 4]>> {
+    contract_dims
+        .iter()
+        .map(|d| d.static_bound())
+        .collect::<Option<SmallVec<[(i64, i64); 4]>>>()
 }
 
 /// Gather the ragged per-parent length `offsets[of…]` for the current output
@@ -927,12 +1011,23 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .chain(contract_names.iter())
         .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
         .collect();
+    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
+    // loop; ragged/derived dims are re-derived per output tuple inside.
+    let static_ranges = static_contract_ranges(&contract_dims);
     let mut tuples = CartesianTuples::new(&ranges);
     while let Some(tuple) = tuples.next() {
         for (name, val) in idx_names.iter().zip(tuple.iter()) {
-            ctx.loop_binds.insert(name.clone(), *val);
+            set_bind(&mut ctx.loop_binds, name, *val);
         }
-        let v = reduce_contraction(&contract_names, &contract_dims, body, reduce, filter, ctx);
+        let v = reduce_contraction(
+            &contract_names,
+            &contract_dims,
+            static_ranges.as_deref(),
+            body,
+            reduce,
+            filter,
+            ctx,
+        );
         let flat = multi_to_flat_col_major(tuple, &shape, &origin);
         buf[flat] = v;
     }

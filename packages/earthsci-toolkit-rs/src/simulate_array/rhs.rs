@@ -373,8 +373,11 @@ pub(super) fn materialize_observeds_append(
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
                 let mut buf = vec![0.0f64; total];
-                let mut tuples = CartesianTuples::new(output_ranges);
-                while let Some(tuple) = tuples.next() {
+                {
+                    // One eval context for the whole cell loop (scoped so its
+                    // read borrow of `dst` releases before the write below). The
+                    // output index names are the same every cell, so `set_bind`
+                    // rebinds in place — no per-cell `IdxMap` alloc or key clone.
                     let mut ctx = EvalCtx {
                         state_arrays,
                         observed_arrays: &*dst,
@@ -385,13 +388,16 @@ pub(super) fn materialize_observeds_append(
                         derived_rings,
                         forcing,
                     };
-                    for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                        ctx.loop_binds.insert(name.clone(), *val);
-                    }
-                    let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
-                    let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
-                    if flat < buf.len() {
-                        buf[flat] = v;
+                    let mut tuples = CartesianTuples::new(output_ranges);
+                    while let Some(tuple) = tuples.next() {
+                        for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
+                            set_bind(&mut ctx.loop_binds, name, *val);
+                        }
+                        let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
+                        let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
+                        if flat < buf.len() {
+                            buf[flat] = v;
+                        }
                     }
                 }
                 let arr = col_major_to_arrayd(&buf, &padded_shape);
@@ -586,26 +592,33 @@ pub(super) fn evaluate_rhs_with_scratch(
 
                 // ---- Per-cell oracle (fallback / forced reference) ---------
                 stats.scalar_rules += 1;
+                // Hoist the eval context and the static contraction bounds out of
+                // the per-cell loop: the bound key set (output_idx + contract
+                // names) is identical every cell, so `set_bind` rebinds in place
+                // and we avoid both a fresh `IdxMap` allocation and the per-cell
+                // range re-derivation on every output tuple.
+                let static_ranges = static_contract_ranges(contract_dims);
+                let mut ctx = EvalCtx {
+                    state_arrays,
+                    observed_arrays,
+                    params,
+                    param_names,
+                    loop_binds: IdxMap::default(),
+                    t,
+                    derived_rings: &derived_rings,
+                    forcing,
+                };
                 let mut tuples = CartesianTuples::new(output_ranges);
                 while let Some(tuple) = tuples.next() {
-                    let mut ctx = EvalCtx {
-                        state_arrays,
-                        observed_arrays,
-                        params,
-                        param_names,
-                        loop_binds: IdxMap::default(),
-                        t,
-                        derived_rings: &derived_rings,
-                        forcing,
-                    };
                     for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                        ctx.loop_binds.insert(name.clone(), *val);
+                        set_bind(&mut ctx.loop_binds, name, *val);
                     }
                     // Generalized einsum: contracted indices (incl. ragged
                     // per-cell dynamic bounds) are unrolled and ⊕-combined here.
                     let v = reduce_contraction(
                         contract_names,
                         contract_dims,
+                        static_ranges.as_deref(),
                         body,
                         *reduce,
                         filter,
