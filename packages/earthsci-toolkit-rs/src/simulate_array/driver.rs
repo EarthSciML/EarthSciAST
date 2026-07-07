@@ -300,28 +300,80 @@ impl ArrayCompiled {
         let param_vec = self.build_param_vec(&params_owned)?;
         let ic_vec = self.build_initial_state(&ics_owned, &param_vec)?;
 
-        // Build observability (see `BuildInspection`): one extra read-only
-        // observed materialization at the initial state. Nothing downstream
-        // consults the sink, so the integration is unchanged.
+        // Hoist the STATE-FREE / `t`-free observeds (ess: static-observed hoist)
+        // out of the per-step RHS. Within a single `simulate` call the forcing
+        // buffer is constant (the free `simulate` never refreshes it between
+        // segments), so a rule whose transitive references reach no state
+        // variable and no `t` is CONSTANT across the whole solve: the
+        // conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
+        // rings), the regridded terrain and its slopes, the Rothermel
+        // coefficients derived from the CONST forcing. Materialize them ONCE here
+        // and seed them into every RHS eval, rather than recomputing the
+        // (expensive) regrid on every step. A model with no such observeds hoists
+        // nothing and stays byte-identical to the un-hoisted path.
+        let static_names = self.classify_static_observeds();
+        let static_rules: Vec<AlgebraicRule> = self
+            .observed_rules
+            .iter()
+            .filter(|r| static_names.contains(observed_rule_var(r)))
+            .cloned()
+            .collect();
+        let varying_rules: Vec<AlgebraicRule> = self
+            .observed_rules
+            .iter()
+            .filter(|r| !static_names.contains(observed_rule_var(r)))
+            .cloned()
+            .collect();
+        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> =
+            RefCell::new(HashMap::new());
+        let sa0 = build_state_arrays(&self.var_shapes, &ic_vec);
+        let static_obs = materialize_observeds(
+            &static_rules,
+            &sa0,
+            &param_vec,
+            &self.param_names,
+            t0,
+            // The regrid's FAQ rings are produced AND consumed within this
+            // one-time static pass (its ring-consuming aggregates are themselves
+            // static), so the sink is discarded after — no varying rule reads a
+            // static ring, and each RHS eval starts from empty `derived_rings`.
+            &static_rings_cell,
+            &self.forcing,
+        );
+        drop(static_rings_cell);
+
+        // Build observability (see `BuildInspection`): the hoisted static
+        // observeds ARE the build-once products (regrid geometry, regridded
+        // terrain, slopes). Nothing downstream consults the sink, so the
+        // integration is unchanged.
         if let Some(insp) = inspect {
-            self.fill_inspection(insp, &ic_vec, &param_vec, t0);
+            self.fill_inspection(insp, &static_obs, &static_names, &param_vec);
         }
 
         let rhs_rules = self.rhs_rules.clone();
-        let observed_rules = self.observed_rules.clone();
         let var_shapes = self.var_shapes.clone();
         let param_names = self.param_names.clone();
 
         let rhs_rules_jac = rhs_rules.clone();
-        let observed_rules_jac = observed_rules.clone();
+        // Each closure and the post-solve output exposure need the varying rule
+        // set; `static_obs` is likewise kept for the output exposure (below), so
+        // both scratch seeds clone it rather than move it.
+        let varying_rules_rhs = varying_rules.clone();
+        let varying_rules_jac = varying_rules.clone();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
 
-        // Per-closure reusable scratch (ess-mro). `RefCell` gives the interior
-        // mutability diffsol's `Fn` RHS requires; the Jacobian closure carries
-        // its own so the two never alias.
-        let rhs_scratch = RefCell::new(RhsScratch::new(&var_shapes));
-        let jac_scratch = RefCell::new(RhsScratch::new(&var_shapes_jac));
+        // Per-closure reusable scratch (ess-mro), pre-seeded ONCE with the
+        // hoisted static observeds (retained in place across steps, never
+        // re-cloned) so each RHS eval materializes only the varying observeds.
+        // `RefCell` gives the interior mutability diffsol's `Fn` RHS requires;
+        // the Jacobian closure carries its own so the two never alias.
+        let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
+        rhs_scratch_val.set_static(static_obs.clone());
+        let rhs_scratch = RefCell::new(rhs_scratch_val);
+        let mut jac_scratch_val = RhsScratch::new(&var_shapes_jac);
+        jac_scratch_val.set_static(static_obs.clone());
+        let jac_scratch = RefCell::new(jac_scratch_val);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
@@ -344,7 +396,7 @@ impl ArrayCompiled {
             let mut scratch = rhs_scratch.borrow_mut();
             evaluate_rhs_with_scratch(
                 &rhs_rules,
-                &observed_rules,
+                &varying_rules_rhs,
                 &var_shapes,
                 &param_names,
                 y_s,
@@ -384,7 +436,7 @@ impl ArrayCompiled {
             let mut scratch = jac_scratch.borrow_mut();
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
-                &observed_rules_jac,
+                &varying_rules_jac,
                 &var_shapes_jac,
                 &param_names_jac,
                 y_s,
@@ -398,7 +450,7 @@ impl ArrayCompiled {
             );
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
-                &observed_rules_jac,
+                &varying_rules_jac,
                 &var_shapes_jac,
                 &param_names_jac,
                 &y_perturbed,
@@ -479,6 +531,8 @@ impl ArrayCompiled {
             &mut state,
             &mut state_variable_names,
             &param_vec,
+            &static_obs,
+            &varying_rules,
         );
 
         Ok(Solution {
@@ -508,25 +562,37 @@ impl ArrayCompiled {
         state: &mut Vec<Vec<f64>>,
         state_variable_names: &mut Vec<String>,
         param_vec: &[f64],
+        static_obs: &ArrMap,
+        varying_rules: &[AlgebraicRule],
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
         }
-        // Which observeds resolve to scalars? Materialize once at the first
-        // node, preserving the dependency-ordered rule order.
+        // Which observeds resolve to scalars? Reconstruct the full observed
+        // picture at each node by SEEDING the hoisted static observeds (constant
+        // across nodes — the regrid geometry, terrain slopes, Rothermel
+        // coefficients) and materializing only the VARYING rules over them, so the
+        // expensive build-once conservative regrid is NOT recomputed at every one
+        // of the NT output nodes (which, unhoisted, dominated the whole run).
         let obs_at = |k: usize| -> ArrMap {
             let flat: Vec<f64> = (0..self.n_states).map(|i| state[i][k]).collect();
             let sa = build_state_arrays(&self.var_shapes, &flat);
             let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-            materialize_observeds(
-                &self.observed_rules,
+            let mut obs = ArrMap::default();
+            for (name, arr) in static_obs {
+                obs.insert(name.clone(), arr.clone());
+            }
+            materialize_observeds_append(
+                &mut obs,
+                varying_rules,
                 &sa,
                 param_vec,
                 &self.param_names,
                 time[k],
                 &dr,
                 &self.forcing,
-            )
+            );
+            obs
         };
         let obs0 = obs_at(0);
         let scalar_obs: Vec<String> = self
@@ -554,62 +620,65 @@ impl ArrayCompiled {
         }
     }
 
-    /// Fill a [`BuildInspection`] sink: materialize the (dependency-ordered)
-    /// observed rules once at the initial state through the official
-    /// [`materialize_observeds`] machinery, record every rule's resolved body
-    /// expression, and record the arrays of the STATE-FREE subset — rules whose
-    /// transitive references reach no state variable, no `t`, and no external
-    /// forcing entry (each reference must be a parameter, a loop index, or an
-    /// already-state-free observed). Read-only with respect to the run.
-    fn fill_inspection(
-        &self,
-        insp: &mut BuildInspection,
-        ic_vec: &[f64],
-        param_vec: &[f64],
-        t0: f64,
-    ) {
-        // Resolved scalar parameters (load-time constants) so the reference /
-        // ic positions can bind them into a build-time cellwise evaluation,
-        // matching the observed-assertion form (materialized below with the
-        // same `param_vec`).
-        for (i, name) in self.param_names.iter().enumerate() {
-            insp.params.insert(name.clone(), param_vec[i]);
-        }
-        let sa = build_state_arrays(&self.var_shapes, ic_vec);
-        let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-        let obs = materialize_observeds(
-            &self.observed_rules,
-            &sa,
-            param_vec,
-            &self.param_names,
-            t0,
-            &dr,
-            &self.forcing,
-        );
+    /// Names of the observeds that are STATE-FREE and `t`-free: their transitive
+    /// references reach no state variable and no `t` (each reference is a
+    /// parameter, a loop index, an external forcing entry, or an already-static
+    /// observed). Because `observed_rules` is dependency-ordered (Kahn sweep at
+    /// build), one forward pass classifies each rule after its references; a
+    /// cycle survivor's unplaced reference correctly disqualifies it.
+    ///
+    /// These are the observeds the RHS hoists out of the per-step loop and the
+    /// build-once products a [`BuildInspection`] records. Unlike a strict
+    /// "state-free" set, an external **forcing** reference is ALLOWED: a CONST
+    /// loader field is constant within a `simulate` call (the free `simulate`
+    /// never refreshes the forcing buffer mid-run), so an observed reaching only
+    /// params + forcing + static observeds is constant across the whole solve.
+    /// The regridded terrain (`elev_xy`) and its slopes — forcing-derived but
+    /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
+    /// Python `BuildInspection`.
+    fn classify_static_observeds(&self) -> HashSet<String> {
         let observed_names: HashSet<&String> =
             self.observed_rules.iter().map(observed_rule_var).collect();
-        let forcing_names: HashSet<String> = self.forcing.borrow().keys().cloned().collect();
-        let mut state_free: HashSet<String> = HashSet::new();
-        // `observed_rules` is dependency-ordered (Kahn sweep at build), so each
-        // rule's observed references are classified before the rule itself; a
-        // cycle survivor's unplaced reference correctly disqualifies it.
+        let mut static_set: HashSet<String> = HashSet::new();
         for rule in &self.observed_rules {
-            let name = observed_rule_var(rule);
-            let body = observed_rule_body(rule);
-            insp.observed_exprs.insert(name.clone(), body.clone());
             let mut refs = HashSet::new();
-            collect_expr_var_refs(body, &mut refs);
+            collect_expr_var_refs(observed_rule_body(rule), &mut refs);
             let ok = refs.iter().all(|r| {
                 r != "t"
                     && !self.var_shapes.contains_key(r)
-                    && !forcing_names.contains(r)
-                    && (!observed_names.contains(r) || state_free.contains(r))
+                    && (!observed_names.contains(r) || static_set.contains(r))
             });
             if ok {
-                state_free.insert(name.clone());
-                if let Some(a) = obs.get(name) {
-                    insp.setup_arrays.insert(name.clone(), a.clone());
-                }
+                static_set.insert(observed_rule_var(rule).clone());
+            }
+        }
+        static_set
+    }
+
+    /// Fill a [`BuildInspection`] sink from the already-hoisted static observeds:
+    /// record every rule's resolved body expression, the resolved scalar
+    /// parameters, and the arrays of the static (state-free / `t`-free) subset
+    /// (`static_obs`, materialized once by the caller). Read-only with respect to
+    /// the run.
+    fn fill_inspection(
+        &self,
+        insp: &mut BuildInspection,
+        static_obs: &ArrMap,
+        static_names: &HashSet<String>,
+        param_vec: &[f64],
+    ) {
+        // Resolved scalar parameters (load-time constants) so the reference / ic
+        // positions can bind them into a build-time cellwise evaluation.
+        for (i, name) in self.param_names.iter().enumerate() {
+            insp.params.insert(name.clone(), param_vec[i]);
+        }
+        for rule in &self.observed_rules {
+            insp.observed_exprs
+                .insert(observed_rule_var(rule).clone(), observed_rule_body(rule).clone());
+        }
+        for name in static_names {
+            if let Some(a) = static_obs.get(name) {
+                insp.setup_arrays.insert(name.clone(), a.clone());
             }
         }
     }

@@ -104,6 +104,17 @@ pub enum SimulateError {
         /// Why the initial condition could not be resolved.
         details: String,
     },
+
+    /// A data provider passed to [`simulate_with_providers_inspect`] failed to
+    /// materialize its loader field, or produced the wrong number of fields for
+    /// its target forcing variable.
+    #[error("Provider for '{name}': {details}")]
+    ProviderError {
+        /// The forcing variable the provider was bound to.
+        name: String,
+        /// What went wrong.
+        details: String,
+    },
 }
 
 // ============================================================================
@@ -1140,6 +1151,95 @@ pub fn simulate_with_inspection(
     }
     let compiled = Compiled::from_file(file)?;
     compiled.simulate(tspan, params, initial_conditions, opts)
+}
+
+/// [`simulate_with_inspection`] plus bound data **providers** — the Rust mirror
+/// of the Julia / Python `simulate(…; providers = Dict(var => provider))`
+/// keyword. Each entry binds a loader-fed forcing variable (e.g.
+/// `"USGS3DEP.raw.elevation"`) to a [`crate::provider::CadenceProvider`]; the
+/// provider is materialized ONCE here (the CONST case — a static raster the model
+/// folds into its build-once geometry) and its single native field is seeded into
+/// the array runtime's forcing buffer under that variable name, exactly where the
+/// model's coupling reads it. The heavy build-once products the field drives (a
+/// conservative regrid, terrain slopes) are then hoisted out of the per-step RHS
+/// by [`crate::simulate_array::ArrayCompiled::simulate_inspect`], so the provider
+/// is sampled — and its geometry computed — a single time.
+///
+/// `providers` is keyed by the forcing VARIABLE name (the coupling target), like
+/// the Julia/Python dict; each provider must feed exactly one field. DISCRETE
+/// (cadence-refreshed) providers are out of scope for this single-segment entry
+/// point — they route through [`crate::provider::RefreshExecutor`] and a
+/// segmented driver; a provider whose `refresh_times()` is non-empty is rejected
+/// here rather than silently frozen at its first record.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn simulate_with_providers_inspect(
+    file: &EsmFile,
+    tspan: (f64, f64),
+    params: &HashMap<String, f64>,
+    initial_conditions: &HashMap<String, f64>,
+    opts: &SimulateOptions,
+    mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
+    inspect: Option<&mut crate::simulate_array::BuildInspection>,
+) -> Result<Solution, SimulateError> {
+    if !(crate::simulate_array::file_has_array_ops(file)
+        || crate::simulate_array::file_has_spatial_model(file))
+    {
+        // Providers feed loader fields, which only exist on the array/spatial
+        // runtime; a pure-scalar file has nowhere to put them.
+        if let Some((name, _)) = providers.iter().next() {
+            return Err(SimulateError::ProviderError {
+                name: name.clone(),
+                details: "providers require an array/spatial model (this file has none)"
+                    .to_string(),
+            });
+        }
+        let compiled = Compiled::from_file(file)?;
+        return compiled.simulate(tspan, params, initial_conditions, opts);
+    }
+
+    let model_count = file.models.as_ref().map_or(0, |m| m.len());
+    let compiled = if model_count > 1 {
+        let flat = flatten(file).map_err(CompileError::from)?;
+        crate::simulate_array::ArrayCompiled::from_flattened(&flat)?
+    } else {
+        crate::simulate_array::ArrayCompiled::from_file(file)?
+    };
+
+    // Sample each provider ONCE and seed its field into the forcing buffer under
+    // the bound variable name (the coupling target). This is the CONST fold the
+    // Julia/Python `providers=` keyword performs; the model's build-once geometry
+    // reads the seeded field at setup.
+    if !providers.is_empty() {
+        let forcing = compiled.forcing_handle();
+        let mut buf = forcing.borrow_mut();
+        for (var, provider) in providers.iter_mut() {
+            if !provider.refresh_times().is_empty() {
+                return Err(SimulateError::ProviderError {
+                    name: var.clone(),
+                    details: "DISCRETE (cadence-refreshed) providers need a segmented driver \
+                              (RefreshExecutor); this entry point takes CONST providers only"
+                        .to_string(),
+                });
+            }
+            let fields = provider.materialize().map_err(|e| SimulateError::ProviderError {
+                name: var.clone(),
+                details: e.to_string(),
+            })?;
+            if fields.len() != 1 {
+                return Err(SimulateError::ProviderError {
+                    name: var.clone(),
+                    details: format!(
+                        "provider fed {} fields; a forcing variable binds exactly one",
+                        fields.len()
+                    ),
+                });
+            }
+            let (_fed_name, field) = fields.into_iter().next().expect("checked len == 1");
+            buf.insert(var.clone(), field.array);
+        }
+    }
+
+    compiled.simulate_inspect(tspan, params, initial_conditions, opts, inspect)
 }
 
 // ============================================================================

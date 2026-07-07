@@ -43,10 +43,23 @@ LoaderProvider = Callable[[LoaderField, float], "np.ndarray"]
 def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
     """Sample a top-level ``providers`` entry at simulation time ``t``.
 
-    Accepts three duck-typed shapes so a fixture stub or a real EarthSciIO-style
-    provider both fit (DESIGN pde_simulation_pipeline §2): a plain callable
-    ``(t) -> array_like``; an object exposing ``sample(t)``; or one exposing
-    ``provider_sample(t)`` (the Julia-parity name)."""
+    Accepts four duck-typed shapes so a fixture stub or a real EarthSciIO
+    ``Provider`` both fit with no per-script glue (DESIGN pde_simulation_pipeline
+    §2): a plain callable ``(t) -> array_like``; an object exposing ``sample(t)``;
+    one exposing ``provider_sample(t)`` (the Julia-parity name); or a real
+    EarthSciIO ``Provider`` (``materialize()`` / ``refresh()`` →
+    ``NativeDataset``, plus ``refresh_times()``).
+
+    The EarthSciIO branch is duck-typed on the ``materialize`` + ``refresh_times``
+    contract so ESS keeps NO hard ``earthsciio`` import — the Python analog of the
+    Julia weakdep extension (``EarthSciSerializationEarthSciIOExt``), keeping the
+    two rigs decoupled (see ``data_loaders/esio_provider.py``). The ``providers=``
+    seam samples ONCE at build time, so ``materialize()`` is the right entry
+    (CONST reads the single file; DISCRETE primes at the window start), and the
+    provider's native array is returned UNREORDERED — ESS is agnostic to
+    dimension order and any [lat,lon]→[x,y] reconciliation is the model's job.
+    One provider is bound per consumer variable, so exactly one data variable is
+    expected; a multi-variable sample is a binding error the caller must split."""
     if (
         callable(provider)
         and not hasattr(provider, "sample")
@@ -57,9 +70,25 @@ def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
         return provider.sample(t)
     if hasattr(provider, "provider_sample"):
         return provider.provider_sample(t)
+    if hasattr(provider, "materialize") and hasattr(provider, "refresh_times"):
+        nds = provider.materialize()
+        names = (
+            nds.variable_names()
+            if hasattr(nds, "variable_names")
+            else list(getattr(nds, "variables", {}) or {})
+        )
+        if len(names) != 1:
+            raise SimulationError(
+                f"EarthSciIO provider yields {len(names)} data variables "
+                f"{sorted(names)}; bind one provider per consumer variable "
+                "(providers={'Loader.var': provider}) so each sample is a single "
+                "field, or slice the provider upstream"
+            )
+        return nds[names[0]].data
     raise SimulationError(
-        "provider must be callable (t)->array or expose sample(t) / "
-        f"provider_sample(t); got {type(provider).__name__}"
+        "provider must be callable (t)->array, expose sample(t) / "
+        "provider_sample(t), or be an EarthSciIO Provider (materialize/"
+        f"refresh_times); got {type(provider).__name__}"
     )
 
 

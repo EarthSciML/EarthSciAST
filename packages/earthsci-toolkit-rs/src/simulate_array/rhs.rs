@@ -32,6 +32,19 @@ pub struct RhsScratch {
     observed_arrays: ArrMap,
     /// Recycled `f64` buffers for vectorized kernel intermediates.
     pool: Pool,
+    /// Names of the hoisted STATE-FREE / `t`-free observeds (ess: static-observed
+    /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
+    /// [`Self::set_static`] and then RETAINED in place across every RHS eval
+    /// (never cleared, never re-cloned), so a build-once product — the
+    /// conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
+    /// rings, incl. the large `A_ij`/`W_ij` weight matrices), the regridded
+    /// terrain + slopes, the Rothermel coefficients derived from the CONST
+    /// forcing — is materialized once, not recomputed on every step. The
+    /// `observed_rules` the RHS is handed is correspondingly the *varying*
+    /// subset. Empty for a model with no such observeds (the debug/oracle entry
+    /// points leave it empty and pass the full rule set, so a plain `clear` +
+    /// full materialize is recovered — byte-identical to the un-hoisted path).
+    static_keys: HashSet<String>,
 }
 
 impl RhsScratch {
@@ -47,6 +60,19 @@ impl RhsScratch {
             state_arrays,
             observed_arrays: ArrMap::default(),
             pool: Pool::default(),
+            static_keys: HashSet::new(),
+        }
+    }
+
+    /// Install the hoisted static observeds (see [`Self::static_keys`]): seed
+    /// their arrays into `observed_arrays` once and remember their names so each
+    /// RHS eval retains them in place. Called once per `simulate` closure setup;
+    /// the debug entry points never call it, so they clear + materialize the full
+    /// rule set every call as before.
+    pub(super) fn set_static(&mut self, static_observeds: ArrMap) {
+        self.static_keys = static_observeds.keys().cloned().collect();
+        for (name, arr) in static_observeds {
+            self.observed_arrays.insert(name, arr);
         }
     }
 }
@@ -287,6 +313,36 @@ pub(super) fn materialize_observeds_into(
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
 ) {
     dst.clear();
+    materialize_observeds_append(
+        dst,
+        observed_rules,
+        state_arrays,
+        params,
+        param_names,
+        t,
+        derived_rings,
+        forcing,
+    );
+}
+
+/// Like [`materialize_observeds_into`] but does NOT clear `dst` first — the
+/// rules are evaluated and their outputs inserted on top of whatever is already
+/// there. This is what lets the RHS seed the hoisted static observeds (ess:
+/// static-observed hoist) into `dst` and then materialize only the *varying*
+/// rules over them, without recomputing the statics every step. A varying rule
+/// may reference an already-seeded static observed by name (they are read from
+/// `dst`), so the seed must be in place before this runs.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn materialize_observeds_append(
+    dst: &mut ArrMap,
+    observed_rules: &[AlgebraicRule],
+    state_arrays: &ArrMap,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
+    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+) {
     for rule in observed_rules {
         match rule {
             AlgebraicRule::Scalar { var, body } => {
@@ -382,23 +438,42 @@ pub(super) fn evaluate_rhs_with_scratch(
     // vertex count. Shared (interior-mutable) across the observed materialization
     // and the RHS rules so a ring registered while `clip` materializes is visible
     // both when `area` runs and in any state derivative that reads a derived set.
-    // Empty (no allocation) for models without geometry, i.e. the stencil path.
+    // Empty (no allocation) for models without geometry, i.e. the stencil path —
+    // and, on the hoisted `simulate` path, for the *varying* observeds too: any
+    // geometry op is state-free (a build-once regrid), so it is a static observed
+    // materialized once at setup with its rings produced-and-consumed there, and
+    // no varying rule reads a static ring.
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
 
     // (b) Materialize observed algebraic rules (dependency-ordered at build time)
     //     into the reused observed container before the state derivatives read
-    //     them. For models with no observeds (the vectorized PDE path) this
-    //     leaves the container empty and allocates nothing.
-    materialize_observeds_into(
-        &mut scratch.observed_arrays,
-        observed_rules,
-        &scratch.state_arrays,
-        params,
-        param_names,
-        t,
-        &derived_rings,
-        forcing,
-    );
+    //     them. RETAIN the hoisted STATE-FREE/`t`-free observeds in place (seeded
+    //     once by `set_static`, keyed in `static_keys`) — they are never cleared
+    //     or re-cloned — then materialize (append, overwriting) only the
+    //     `observed_rules` handed in: the varying subset on the `simulate` path,
+    //     the full set on the debug/oracle path (where `static_keys` is empty, so
+    //     `retain` degenerates to a full clear — byte-identical to the un-hoisted
+    //     materialize). For a model with no observeds this leaves the container
+    //     empty and allocates nothing.
+    {
+        let RhsScratch {
+            state_arrays,
+            observed_arrays,
+            static_keys,
+            ..
+        } = &mut *scratch;
+        observed_arrays.retain(|k, _| static_keys.contains(k));
+        materialize_observeds_append(
+            observed_arrays,
+            observed_rules,
+            state_arrays,
+            params,
+            param_names,
+            t,
+            &derived_rings,
+            forcing,
+        );
+    }
 
     // Emit observed shapes we need for downstream variable lookups.
 
