@@ -778,10 +778,14 @@ pub(super) fn reduce_contraction(
         };
     }
     // Resolve each contracted dim to a concrete (lo, hi) under the current
-    // output tuple — ragged dims read their per-parent length here.
-    let ranges: Vec<(i64, i64)> = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+    // output tuple — ragged dims read their per-parent length here. This runs
+    // once per output cell, so it stays on the stack (contraction rank is tiny).
+    let ranges: SmallVec<[(i64, i64); 4]> = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
     let mut acc: f64 = reduce.identity();
-    for k_tuple in cartesian_range(&ranges) {
+    // Stream the contraction product from a reused buffer — no per-tuple heap
+    // allocation (this loop is the array-simulate hot path).
+    let mut tuples = CartesianTuples::new(&ranges);
+    while let Some(k_tuple) = tuples.next() {
         for (kn, kv) in contract_names.iter().zip(k_tuple.iter()) {
             ctx.loop_binds.insert(kn.clone(), *kv);
         }
@@ -923,12 +927,13 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .chain(contract_names.iter())
         .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
         .collect();
-    for tuple in cartesian_range(&ranges) {
+    let mut tuples = CartesianTuples::new(&ranges);
+    while let Some(tuple) = tuples.next() {
         for (name, val) in idx_names.iter().zip(tuple.iter()) {
             ctx.loop_binds.insert(name.clone(), *val);
         }
         let v = reduce_contraction(&contract_names, &contract_dims, body, reduce, filter, ctx);
-        let flat = multi_to_flat_col_major(&tuple, &shape, &origin);
+        let flat = multi_to_flat_col_major(tuple, &shape, &origin);
         buf[flat] = v;
     }
     for (name, saved) in saved_binds {
@@ -987,7 +992,8 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
                 .map(|(lo, hi)| (hi - lo + 1) as usize)
                 .collect();
             if a.shape() == region_shape.as_slice() {
-                for tuple in cartesian_range(&ranges) {
+                let mut tuples = CartesianTuples::new(&ranges);
+                while let Some(tuple) = tuples.next() {
                     let out_ix: Vec<usize> = tuple
                         .iter()
                         .enumerate()
@@ -1003,7 +1009,8 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
             }
             continue;
         }
-        for tuple in cartesian_range(&ranges) {
+        let mut tuples = CartesianTuples::new(&ranges);
+        while let Some(tuple) = tuples.next() {
             let indices: Vec<usize> = tuple
                 .iter()
                 .enumerate()

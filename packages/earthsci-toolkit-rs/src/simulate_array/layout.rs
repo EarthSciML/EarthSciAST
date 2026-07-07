@@ -76,3 +76,69 @@ pub(super) fn cartesian_range(ranges: &[(i64, i64)]) -> Vec<Vec<i64>> {
     }
     out
 }
+
+/// Streaming, allocation-free enumerator over the Cartesian product of inclusive
+/// `(lo, hi)` ranges — semantically identical to [`cartesian_range`] (same
+/// lexicographic order with dim0 outermost/slowest and the last dim fastest, the
+/// same empty-product rules: no ranges ⇒ one empty tuple, any `lo > hi` dim ⇒
+/// zero tuples), but it yields `&[i64]` slices out of a single reused stack
+/// buffer instead of materializing a `Vec<Vec<i64>>`.
+///
+/// The per-cell reduction kernel ([`reduce_contraction`]) rebuilt the *whole*
+/// contraction product on every output cell, so the throw-away per-tuple
+/// `Vec<i64>` dominated the array-simulate profile (~23% of samples were just
+/// `drop_in_place::<Vec<i64>>`). This enumerator allocates nothing per tuple.
+///
+/// Because each yielded slice borrows the shared buffer, this is a *lending*
+/// iterator: it exposes an inherent [`CartesianTuples::next`] for use in a
+/// `while let Some(tuple) = it.next()` loop rather than implementing [`Iterator`].
+pub(super) struct CartesianTuples<'a> {
+    ranges: &'a [(i64, i64)],
+    cur: SmallVec<[i64; 4]>,
+    started: bool,
+    done: bool,
+}
+
+impl<'a> CartesianTuples<'a> {
+    #[inline]
+    pub(super) fn new(ranges: &'a [(i64, i64)]) -> Self {
+        // Any empty dim (lo > hi) makes the whole product empty (zero tuples),
+        // matching `cartesian_range`'s `lo..=hi` producing no values there.
+        let done = ranges.iter().any(|&(lo, hi)| lo > hi);
+        let cur: SmallVec<[i64; 4]> = ranges.iter().map(|&(lo, _)| lo).collect();
+        CartesianTuples {
+            ranges,
+            cur,
+            started: false,
+            done,
+        }
+    }
+
+    /// Advance to the next tuple, returning it as a slice into the reused buffer,
+    /// or `None` once the product is exhausted.
+    #[inline]
+    pub(super) fn next(&mut self) -> Option<&[i64]> {
+        if self.done {
+            return None;
+        }
+        if !self.started {
+            // First tuple: every dim at its lower bound (an empty product of no
+            // ranges yields exactly one empty tuple, like `vec![vec![]]`).
+            self.started = true;
+            return Some(&self.cur[..]);
+        }
+        // Odometer increment: advance the last (fastest-varying) dim, carrying
+        // left into slower dims — reproduces the lexicographic order.
+        let mut d = self.ranges.len();
+        while d > 0 {
+            d -= 1;
+            if self.cur[d] < self.ranges[d].1 {
+                self.cur[d] += 1;
+                return Some(&self.cur[..]);
+            }
+            self.cur[d] = self.ranges[d].0;
+        }
+        self.done = true;
+        None
+    }
+}

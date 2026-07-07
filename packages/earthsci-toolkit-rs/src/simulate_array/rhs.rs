@@ -373,7 +373,8 @@ pub(super) fn materialize_observeds_append(
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
                 let mut buf = vec![0.0f64; total];
-                for tuple in cartesian_range(output_ranges) {
+                let mut tuples = CartesianTuples::new(output_ranges);
+                while let Some(tuple) = tuples.next() {
                     let mut ctx = EvalCtx {
                         state_arrays,
                         observed_arrays: &*dst,
@@ -388,7 +389,7 @@ pub(super) fn materialize_observeds_append(
                         ctx.loop_binds.insert(name.clone(), *val);
                     }
                     let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
-                    let flat = multi_to_flat_col_major(&tuple, &padded_shape, &padded_origin);
+                    let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
                     if flat < buf.len() {
                         buf[flat] = v;
                     }
@@ -585,7 +586,8 @@ pub(super) fn evaluate_rhs_with_scratch(
 
                 // ---- Per-cell oracle (fallback / forced reference) ---------
                 stats.scalar_rules += 1;
-                for tuple in cartesian_range(output_ranges) {
+                let mut tuples = CartesianTuples::new(output_ranges);
+                while let Some(tuple) = tuples.next() {
                     let mut ctx = EvalCtx {
                         state_arrays,
                         observed_arrays,
