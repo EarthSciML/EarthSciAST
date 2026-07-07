@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -1125,6 +1125,139 @@ def _materialize_map(
         return None
 
 
+def _batched_ring_gather(
+    arg: Expr, out_syms: List[str], ctx: EvalContext
+) -> Optional[Tuple[np.ndarray, str]]:
+    """For a per-cell ring gather ``index(P, s)`` return ``(P_array, s)``.
+
+    ``P_array`` is the full ``[N, V, 2]`` ring-per-cell array and ``s`` the single
+    output index symbol it is gathered by; ``None`` if ``arg`` is not that shape
+    (so the batched leaf path declines and the caller falls back)."""
+    if not (isinstance(arg, ExprNode) and arg.op == "index" and len(arg.args) == 2):
+        return None
+    sym = arg.args[1]
+    if not (isinstance(sym, str) and sym in out_syms):
+        return None
+    try:
+        arr = np.asarray(eval_expr(arg.args[0], ctx), dtype=float)
+    except (NumpyInterpreterError, KeyError, TypeError, ValueError):
+        return None
+    if arr.ndim != 3 or arr.shape[2] != 2:
+        return None
+    return arr, sym
+
+
+def _join_admits_mask(
+    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]],
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+) -> Optional[np.ndarray]:
+    """Dense boolean ``out_shape`` mask of the index tuples the join gates admit.
+
+    The vectorized form of :func:`_join_admits` over the whole output box: a cell
+    is admitted iff every gate's two key columns are equal. Returns ``None`` if a
+    gate references a range symbol that is not an output index (only a pure map's
+    output-index joins can be expressed as a dense mask)."""
+    mask = np.ones(out_shape, dtype=bool)
+    if not gates:
+        return mask
+    axis_of = {s: k for k, s in enumerate(out_syms)}
+    ndim = len(out_syms)
+    for sym_l, sym_r, codes_l, codes_r in gates:
+        if sym_l not in axis_of or sym_r not in axis_of:
+            return None
+        al, ar = axis_of[sym_l], axis_of[sym_r]
+        col_l = np.array([codes_l[v] for v in out_ranges_exp[al]])
+        col_r = np.array([codes_r[v] for v in out_ranges_exp[ar]])
+        shp_l = [1] * ndim
+        shp_l[al] = col_l.size
+        shp_r = [1] * ndim
+        shp_r[ar] = col_r.size
+        mask = mask & (col_l.reshape(shp_l) == col_r.reshape(shp_r))
+    return mask
+
+
+def _eval_arrayop_batched_leaf(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+    reduce_syms: List[str],
+    raw_ranges: Dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Optional[Expr],
+) -> Optional[np.ndarray]:
+    """Batched fast path for a fused-geometry-leaf pure map (esm-spec §8.6.1).
+
+    Recognizes the conservative-regrid narrow phase
+    ``A[i,j] = polygon_intersection_area(index(P_a, i), index(P_b, j))`` — a
+    ``sum_product`` aggregate whose output indices are its only ranges — and
+    evaluates the leaf over every join-admitted ``(i, j)`` in ONE batched kernel
+    call (:func:`geometry.intersect_polygon_area_batch`) instead of one scalar
+    Sutherland–Hodgman clip per cell (the per-cell loop in
+    :func:`_eval_arrayop_scalar`). Semantics are identical:
+    an admitted cell gets the leaf value, a non-admitted cell the semiring
+    identity ``empty_zero`` (0 for ``sum_product``).
+
+    Returns ``None`` — caller falls back to the exact scalar path — for anything
+    outside this shape: a contraction (``reduce_syms``), a ``filter``, a
+    non-``sum_product`` ⊕, a non-planar manifold, operands that are not per-cell
+    ``index`` gathers, or a batch the kernel declines. Generalizes to other
+    control-flow leaves (interp / table lifts) by widening the leaf/kernel switch.
+    """
+    if reduce_syms or filter_expr is not None:
+        return None
+    if reducer != "+":  # sum_product ⊕; other semirings keep the scalar path
+        return None
+    body = expr.expr
+    if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
+        return None
+    if (
+        getattr(body, "manifold", None) != "planar"
+        or len(body.args) != 2
+        or len(out_syms) != 2
+    ):
+        return None
+    ga = _batched_ring_gather(body.args[0], out_syms, ctx)
+    gb = _batched_ring_gather(body.args[1], out_syms, ctx)
+    if ga is None or gb is None:
+        return None
+    arr_a, sym_a = ga
+    arr_b, sym_b = gb
+    axis_of = {s: k for k, s in enumerate(out_syms)}
+    if sym_a == sym_b or sym_a not in axis_of or sym_b not in axis_of:
+        return None
+
+    try:
+        sym_positions = {s: list(r) for s, r in zip(out_syms, out_ranges_exp)}
+        gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+        mask = _join_admits_mask(gates, out_syms, out_ranges_exp, out_shape)
+        if mask is None:
+            return None
+        out = np.full(out_shape, empty_zero, dtype=float)
+        positions = np.nonzero(mask)
+        if positions[0].size == 0:
+            return out
+        ax_a, ax_b = axis_of[sym_a], axis_of[sym_b]
+        base_a = arr_a[np.asarray(out_ranges_exp[ax_a], dtype=np.intp) - 1]
+        base_b = arr_b[np.asarray(out_ranges_exp[ax_b], dtype=np.intp) - 1]
+        batch_a = base_a[positions[ax_a]]
+        batch_b = base_b[positions[ax_b]]
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError):
+        return None
+
+    from . import geometry
+
+    areas = geometry.intersect_polygon_area_batch(batch_a, batch_b, "planar")
+    if areas is None:
+        return None
+    out[positions] = areas
+    return out
+
+
 def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """Evaluate an aggregate / arrayop body over its output index box.
 
@@ -1180,6 +1313,28 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # unchanged M1 fast / scalar paths below and stay byte-for-byte identical.
     join_clauses = getattr(expr, "join", None)
     filter_expr = getattr(expr, "filter", None)
+
+    # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
+    # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
+    # tgt_j). Evaluates the whole (join-admitted) candidate set in one kernel call
+    # instead of a per-cell Sutherland–Hodgman clip; declines (→ None) to the
+    # scalar join/fallback paths below for anything it does not recognize.
+    if not ragged_reduce:
+        batched = _eval_arrayop_batched_leaf(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
+        )
+        if batched is not None:
+            return batched
+
     if join_clauses or filter_expr is not None:
         if ragged_reduce:
             raise NumpyInterpreterError(
@@ -1187,7 +1342,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 "supported; equi-join keys are dense interval / categorical index "
                 "sets (RFC semiring-faq-unified-ir §5.3)"
             )
-        return _eval_arrayop_joined(
+        return _eval_arrayop_scalar(
             expr,
             ctx,
             out_syms,
@@ -1244,32 +1399,41 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         if mapped is not None:
             return mapped
 
-    # Scalar fallback: hoist the cartesian reduction product outside the output loop.
-    out = np.zeros(out_shape, dtype=float)
-    cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else []
+    # Scalar fallback: the general scalar evaluator with no join/filter gate — one
+    # ⊗-term per contraction point, reduced with ⊕. Shares the output-cell walk
+    # and the gated reduction with the join/filter path (a plain reduction is the
+    # gate-free case), so both flow through one code path.
+    return _eval_arrayop_scalar(
+        expr,
+        ctx,
+        out_syms,
+        out_ranges_exp,
+        out_shape,
+        reduce_syms,
+        resolved,
+        raw_ranges,
+        reducer,
+        empty_zero,
+        filter_expr=None,
+    )
+
+
+def _iter_output_cells(
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+) -> Iterator[Tuple[Tuple[int, ...], Dict[str, int]]]:
+    """Yield ``(multi_idx, local_binding)`` for every cell of the output box.
+
+    ``local_binding`` maps each output index symbol to its 1-based range value at
+    that cell. Shared by every scalar arrayop path (plain / ragged / join+filter)
+    so the output-cell walk and the index-symbol binding live in one place."""
     it = np.ndindex(*out_shape) if out_shape else [()]
     for multi_idx in it:
         local_binding: Dict[str, int] = {}
         for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
             local_binding[s] = r[pos]
-        if not reduce_syms:
-            prev = dict(ctx.locals)
-            ctx.locals.update(local_binding)
-            try:
-                out[multi_idx] = float(eval_expr(expr.expr, ctx))
-            finally:
-                ctx.locals = prev
-        else:
-            out[multi_idx] = _reduce_over(
-                expr.expr,
-                ctx,
-                local_binding,
-                reduce_syms,
-                cartesian_red,
-                reducer,
-                empty_zero,
-            )
-    return out
+        yield multi_idx, local_binding
 
 
 def _reduce_over(
@@ -1283,20 +1447,13 @@ def _reduce_over(
 ) -> float:
     """Reduce ``body`` over the contracted-index cartesian product with ⊕.
 
-    Returns the semiring's empty-reduction identity ``empty_zero`` (0̄) when the
-    contracted ranges are empty (RFC §5.1).
-    """
-    acc: Optional[float] = None
-    prev = dict(ctx.locals)
-    try:
-        ctx.locals.update(local_binding)
-        for red_point in cartesian_red:
-            for s, v in zip(reduce_syms, red_point):
-                ctx.locals[s] = v
-            val = float(eval_expr(body, ctx))
-            acc = _reduce_step(reducer, acc, val)
-    finally:
-        ctx.locals = prev
+    The ungated case of :func:`_reduce_over_gated` (no join / filter); returns the
+    semiring's empty-reduction identity ``empty_zero`` (0̄) when the contracted
+    ranges are empty (RFC §5.1)."""
+    return _reduce_over_gated(
+        body, ctx, local_binding, reduce_syms, cartesian_red, reducer, empty_zero,
+        gates=[], filter_expr=None,
+    )
     return acc if acc is not None else empty_zero
 
 
@@ -1321,11 +1478,7 @@ def _eval_arrayop_ragged(
     from .flatten import _expand_range  # local import to avoid cycle
 
     out = np.zeros(out_shape, dtype=float)
-    it = np.ndindex(*out_shape) if out_shape else [()]
-    for multi_idx in it:
-        local_binding: Dict[str, int] = {}
-        for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
-            local_binding[s] = r[pos]
+    for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)
         parent_binding.update(local_binding)
         red_ranges: List[List[int]] = []
@@ -1634,7 +1787,7 @@ def _filter_admits(filter_expr: Expr, ctx: EvalContext) -> bool:
     return bool(val.reshape(-1)[0])
 
 
-def _eval_arrayop_joined(
+def _eval_arrayop_scalar(
     expr: ExprNode,
     ctx: EvalContext,
     out_syms: List[str],
@@ -1647,12 +1800,14 @@ def _eval_arrayop_joined(
     empty_zero: float,
     filter_expr: Optional[Expr],
 ) -> np.ndarray:
-    """Scalar evaluation path for aggregates carrying a join and/or filter.
+    """Scalar (per-output-cell) evaluation path for an aggregate.
 
+    The one non-vectorized evaluator: it serves both a plain reduction and one
+    carrying a join and/or filter (an ungated node just resolves to zero gates).
     The contraction iterates the dense reduce ranges in declared order; for each
     combination the join gate (value equality of key columns, §5.3) and the
-    filter predicate (§7.2) decide whether it contributes a ⊗-term. An empty
-    set of admitted terms reduces to the semiring identity 0̄ (§5.1).
+    filter predicate (§7.2) decide whether it contributes a ⊗-term. An empty set
+    of admitted terms reduces to the semiring identity 0̄ (§5.1).
     """
     from .flatten import _expand_range  # local import to avoid cycle
 
@@ -1667,11 +1822,7 @@ def _eval_arrayop_joined(
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
 
     out = np.zeros(out_shape, dtype=float)
-    it = np.ndindex(*out_shape) if out_shape else [()]
-    for multi_idx in it:
-        local_binding: Dict[str, int] = {}
-        for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
-            local_binding[s] = r[pos]
+    for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         out[multi_idx] = _reduce_over_gated(
             expr.expr,
             ctx,
