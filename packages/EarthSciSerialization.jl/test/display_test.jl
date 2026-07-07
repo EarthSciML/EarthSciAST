@@ -37,7 +37,7 @@ using EarthSciSerialization
         @test EarthSciSerialization.format_chemical_subscripts("H2O", :latex) == "\\mathrm{H_{2}O}"
         @test EarthSciSerialization.format_chemical_subscripts("CO2", :latex) == "\\mathrm{CO_{2}}"
         @test EarthSciSerialization.format_chemical_subscripts("NH3", :latex) == "\\mathrm{NH_{3}}"
-        @test EarthSciSerialization.format_chemical_subscripts("temp", :latex) == "temp"  # Non-chemical variable unchanged
+        @test EarthSciSerialization.format_chemical_subscripts("temp", :latex) == "\\mathrm{temp}"  # Non-chemical multi-char var → upright
 
         # Test format_chemical_subscripts for ascii
         @test EarthSciSerialization.format_chemical_subscripts("H2O", :ascii) == "H2O"   # No subscripts in ASCII
@@ -130,7 +130,7 @@ using EarthSciSerialization
         # Test more complex expressions with ASCII MIME type
         mul_expr = OpExpr("*", EarthSciSerialization.Expr[VarExpr("x"), NumExpr(2.0)])
         show(io, "text/ascii", mul_expr)
-        @test String(take!(io)) == "x*2"
+        @test String(take!(io)) == "x * 2"
 
         pow_expr = OpExpr("^", EarthSciSerialization.Expr[VarExpr("x"), NumExpr(2.0)])
         show(io, "text/ascii", pow_expr)

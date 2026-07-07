@@ -198,6 +198,18 @@ struct OpExpr <: Expr
     distinct::Union{Bool,Nothing}
     key::Union{Expr,Nothing}
 
+    # ── Arg-witness / expression-template display fields ──
+    # `arg`      — for `argmin`/`argmax`, the witnessing index symbol name whose
+    #              value at the optimum is returned (RENDERING_CONTRACT.md §argmin/
+    #              argmax: `{op, arg, expr, ranges?}`). Carried on the typed node so
+    #              the pretty-printer can render `argmin[arg] (expr)`.
+    # `bindings` — for `apply_expression_template`, the parameter→argument-expression
+    #              map (esm-spec §9.6). Templates are normally lowered before typed
+    #              parsing, but the node is renderable directly so the pretty-printer
+    #              can emit `name⟨p=e, …⟩` byte-identically to the other bindings.
+    arg::Union{String,Nothing}
+    bindings::Union{Dict{String,Expr},Nothing}
+
     OpExpr(op::String, args::Vector{Expr};
            wrt=nothing, dim=nothing,
            int_var=nothing, lower=nothing, upper=nothing,
@@ -210,6 +222,7 @@ struct OpExpr <: Expr
            join=nothing, filter=nothing, join_gates=nothing,
            id=nothing, manifold=nothing,
            distinct=nothing, key=nothing,
+           arg=nothing, bindings=nothing,
            # `handler_id` was the v0.2.x field for the now-removed `call`
            # op (esm-spec §9.2 closure). Accept and ignore on construction
            # so internal helpers that still pass it through don't break
@@ -219,7 +232,7 @@ struct OpExpr <: Expr
             semiring, ranges,
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
-            id, manifold, distinct, key)
+            id, manifold, distinct, key, arg, bindings)
 end
 
 # Accept any AbstractVector of Expr-subtypes (e.g. Vector{VarExpr},
@@ -268,7 +281,8 @@ function reconstruct(e::OpExpr;
         table = e.table, table_axes = e.table_axes, output = e.output,
         join = e.join, filter = e.filter, join_gates = e.join_gates,
         id = e.id, manifold = e.manifold,
-        distinct = e.distinct, key = e.key)
+        distinct = e.distinct, key = e.key,
+        arg = e.arg, bindings = e.bindings)
     return OpExpr(op, args;
         wrt=wrt, dim=dim, int_var=int_var, lower=lower, upper=upper,
         output_idx=output_idx, expr_body=expr_body, reduce=reduce,
@@ -276,7 +290,8 @@ function reconstruct(e::OpExpr;
         shape=shape, perm=perm, axis=axis, fn=fn, name=name, value=value,
         table=table, table_axes=table_axes, output=output,
         join=join, filter=filter, join_gates=join_gates,
-        id=id, manifold=manifold, distinct=distinct, key=key)
+        id=id, manifold=manifold, distinct=distinct, key=key,
+        arg=arg, bindings=bindings)
 end
 
 # ========================================

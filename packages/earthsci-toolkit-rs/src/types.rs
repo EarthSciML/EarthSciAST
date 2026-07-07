@@ -512,6 +512,28 @@ pub struct ExpressionNode {
     /// only under the same declared manifold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifold: Option<String>,
+
+    /// For the `apply_expression_template` op (esm-spec §9.7): template
+    /// parameter → argument-expression map. Keys are the template's formal
+    /// parameter names; values are the bound expressions substituted at
+    /// instantiation. Rendered in sorted-key order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<HashMap<String, Expr>>,
+
+    /// For the `argmin` / `argmax` arg-witness ops: the single output index
+    /// name the witness is reported over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg: Option<String>,
+
+    /// For the `aggregate` op: when `true`, contract over distinct key values
+    /// only (RFC semiring-faq-unified-ir §5.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinct: Option<bool>,
+
+    /// For the `aggregate` op: grouping-key expression (RFC
+    /// semiring-faq-unified-ir §5.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<Box<Expr>>,
 }
 
 impl ExpressionNode {
@@ -558,6 +580,16 @@ impl ExpressionNode {
                 f(&axes[k]);
             }
         }
+        if let Some(e) = self.key.as_deref() {
+            f(e);
+        }
+        if let Some(bindings) = &self.bindings {
+            let mut keys: Vec<&String> = bindings.keys().collect();
+            keys.sort();
+            for k in keys {
+                f(&bindings[k]);
+            }
+        }
     }
 
     /// Mutable variant of [`Self::for_each_child`], visiting the same field
@@ -592,6 +624,18 @@ impl ExpressionNode {
                 }
             }
         }
+        if let Some(e) = self.key.as_deref_mut() {
+            f(e);
+        }
+        if let Some(bindings) = &mut self.bindings {
+            let mut keys: Vec<String> = bindings.keys().cloned().collect();
+            keys.sort();
+            for k in keys {
+                if let Some(v) = bindings.get_mut(&k) {
+                    f(v);
+                }
+            }
+        }
     }
 
     /// Short-circuiting predicate over the same child set as
@@ -606,6 +650,7 @@ impl ExpressionNode {
             self.upper.as_deref(),
             self.expr.as_deref(),
             self.filter.as_deref(),
+            self.key.as_deref(),
         ] {
             if let Some(e) = opt
                 && f(e)
@@ -620,6 +665,11 @@ impl ExpressionNode {
         }
         if let Some(axes) = &self.axes
             && axes.values().any(&mut *f)
+        {
+            return true;
+        }
+        if let Some(bindings) = &self.bindings
+            && bindings.values().any(&mut *f)
         {
             return true;
         }
@@ -650,6 +700,11 @@ impl ExpressionNode {
             .axes
             .as_ref()
             .map(|axes| axes.iter().map(|(k, v)| (k.clone(), f(v))).collect());
+        out.key = self.key.as_deref().map(|e| Box::new(f(e)));
+        out.bindings = self
+            .bindings
+            .as_ref()
+            .map(|b| b.iter().map(|(k, v)| (k.clone(), f(v))).collect());
         out
     }
 }

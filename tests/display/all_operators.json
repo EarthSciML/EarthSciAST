@@ -1,224 +1,406 @@
 [
   {
-    "input": { "op": "div", "args": ["u"] },
-    "unicode": "∇·u",
-    "latex": "\\nabla \\cdot u",
+    "input": {
+      "op": "div",
+      "args": [
+        "u"
+      ]
+    },
+    "unicode": "div(u)",
+    "latex": "\\mathrm{div}(u)",
     "ascii": "div(u)"
   },
   {
-    "input": { "op": "laplacian", "args": ["T"] },
-    "unicode": "∇²T",
-    "latex": "\\nabla^2 T",
+    "input": {
+      "op": "laplacian",
+      "args": [
+        "T"
+      ]
+    },
+    "unicode": "laplacian(T)",
+    "latex": "\\mathrm{laplacian}(T)",
     "ascii": "laplacian(T)"
   },
   {
-    "input": { "op": "and", "args": [{ "op": ">", "args": ["x", 0] }, { "op": "<", "args": ["x", 10] }] },
+    "input": {
+      "op": "and",
+      "args": [
+        {
+          "op": ">",
+          "args": [
+            "x",
+            0
+          ]
+        },
+        {
+          "op": "<",
+          "args": [
+            "x",
+            10
+          ]
+        }
+      ]
+    },
     "unicode": "x > 0 ∧ x < 10",
     "latex": "x > 0 \\land x < 10",
     "ascii": "x > 0 and x < 10"
   },
   {
-    "input": { "op": "or", "args": [{ "op": "<", "args": ["x", 0] }, { "op": ">", "args": ["x", 10] }] },
+    "input": {
+      "op": "or",
+      "args": [
+        {
+          "op": "<",
+          "args": [
+            "x",
+            0
+          ]
+        },
+        {
+          "op": ">",
+          "args": [
+            "x",
+            10
+          ]
+        }
+      ]
+    },
     "unicode": "x < 0 ∨ x > 10",
     "latex": "x < 0 \\lor x > 10",
     "ascii": "x < 0 or x > 10"
   },
   {
-    "input": { "op": "not", "args": [{ "op": "=", "args": ["x", 0] }] },
+    "input": {
+      "op": "not",
+      "args": [
+        {
+          "op": "=",
+          "args": [
+            "x",
+            0
+          ]
+        }
+      ]
+    },
     "unicode": "¬(x = 0)",
     "latex": "\\neg (x = 0)",
     "ascii": "not (x == 0)"
   },
   {
-    "input": { "op": "atan2", "args": ["y", "x"] },
+    "input": {
+      "op": "atan2",
+      "args": [
+        "y",
+        "x"
+      ]
+    },
     "unicode": "atan2(y, x)",
     "latex": "\\mathrm{atan2}(y, x)",
     "ascii": "atan2(y, x)"
   },
   {
-    "input": { "op": "min", "args": ["a", "b"] },
+    "input": {
+      "op": "min",
+      "args": [
+        "a",
+        "b"
+      ]
+    },
     "unicode": "min(a, b)",
     "latex": "\\min(a, b)",
     "ascii": "min(a, b)"
   },
   {
-    "input": { "op": "max", "args": ["a", "b"] },
+    "input": {
+      "op": "max",
+      "args": [
+        "a",
+        "b"
+      ]
+    },
     "unicode": "max(a, b)",
     "latex": "\\max(a, b)",
     "ascii": "max(a, b)"
   },
   {
-    "input": { "op": "floor", "args": ["x"] },
+    "input": {
+      "op": "floor",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "⌊x⌋",
     "latex": "\\lfloor x \\rfloor",
     "ascii": "floor(x)"
   },
   {
-    "input": { "op": "ceil", "args": ["x"] },
+    "input": {
+      "op": "ceil",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "⌈x⌉",
     "latex": "\\lceil x \\rceil",
     "ascii": "ceil(x)"
   },
   {
-    "input": { "op": "sqrt", "args": ["x"] },
+    "input": {
+      "op": "sqrt",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "√x",
     "latex": "\\sqrt{x}",
     "ascii": "sqrt(x)"
   },
   {
-    "input": { "op": "log", "args": ["x"] },
+    "input": {
+      "op": "log",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "ln(x)",
     "latex": "\\ln(x)",
     "ascii": "log(x)"
   },
   {
-    "input": { "op": "log10", "args": ["x"] },
+    "input": {
+      "op": "log10",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "log₁₀(x)",
     "latex": "\\log_{10}(x)",
     "ascii": "log10(x)"
   },
   {
-    "input": { "op": "sin", "args": ["θ"] },
+    "input": {
+      "op": "sin",
+      "args": [
+        "θ"
+      ]
+    },
     "unicode": "sin(θ)",
     "latex": "\\sin(\\theta)",
     "ascii": "sin(theta)"
   },
   {
-    "input": { "op": "cos", "args": ["θ"] },
+    "input": {
+      "op": "cos",
+      "args": [
+        "θ"
+      ]
+    },
     "unicode": "cos(θ)",
     "latex": "\\cos(\\theta)",
     "ascii": "cos(theta)"
   },
   {
-    "input": { "op": "tan", "args": ["θ"] },
+    "input": {
+      "op": "tan",
+      "args": [
+        "θ"
+      ]
+    },
     "unicode": "tan(θ)",
     "latex": "\\tan(\\theta)",
     "ascii": "tan(theta)"
   },
   {
-    "input": { "op": "asin", "args": ["x"] },
+    "input": {
+      "op": "asin",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "arcsin(x)",
     "latex": "\\arcsin(x)",
     "ascii": "asin(x)"
   },
   {
-    "input": { "op": "acos", "args": ["x"] },
+    "input": {
+      "op": "acos",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "arccos(x)",
     "latex": "\\arccos(x)",
     "ascii": "acos(x)"
   },
   {
-    "input": { "op": "atan", "args": ["x"] },
+    "input": {
+      "op": "atan",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "arctan(x)",
     "latex": "\\arctan(x)",
     "ascii": "atan(x)"
   },
   {
-    "input": { "op": "abs", "args": ["x"] },
+    "input": {
+      "op": "abs",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "|x|",
     "latex": "|x|",
     "ascii": "abs(x)"
   },
   {
-    "input": { "op": "sign", "args": ["x"] },
+    "input": {
+      "op": "sign",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "sgn(x)",
     "latex": "\\mathrm{sgn}(x)",
     "ascii": "sign(x)"
   },
   {
-    "input": { "op": "=", "args": ["x", "y"] },
+    "input": {
+      "op": "=",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x = y",
     "latex": "x = y",
     "ascii": "x == y"
   },
   {
-    "input": { "op": "!=", "args": ["x", "y"] },
+    "input": {
+      "op": "!=",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x ≠ y",
     "latex": "x \\neq y",
     "ascii": "x != y"
   },
   {
-    "input": { "op": "<", "args": ["x", "y"] },
+    "input": {
+      "op": "<",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x < y",
     "latex": "x < y",
     "ascii": "x < y"
   },
   {
-    "input": { "op": "<=", "args": ["x", "y"] },
+    "input": {
+      "op": "<=",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x ≤ y",
     "latex": "x \\leq y",
     "ascii": "x <= y"
   },
   {
-    "input": { "op": ">", "args": ["x", "y"] },
+    "input": {
+      "op": ">",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x > y",
     "latex": "x > y",
     "ascii": "x > y"
   },
   {
-    "input": { "op": ">=", "args": ["x", "y"] },
+    "input": {
+      "op": ">=",
+      "args": [
+        "x",
+        "y"
+      ]
+    },
     "unicode": "x ≥ y",
     "latex": "x \\geq y",
     "ascii": "x >= y"
   },
   {
-    "input": { "op": "sinh", "args": ["x"] },
+    "input": {
+      "op": "sinh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "sinh(x)",
     "latex": "\\sinh(x)",
     "ascii": "sinh(x)"
   },
   {
-    "input": { "op": "cosh", "args": ["x"] },
+    "input": {
+      "op": "cosh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "cosh(x)",
     "latex": "\\cosh(x)",
     "ascii": "cosh(x)"
   },
   {
-    "input": { "op": "tanh", "args": ["x"] },
+    "input": {
+      "op": "tanh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "tanh(x)",
     "latex": "\\tanh(x)",
     "ascii": "tanh(x)"
   },
   {
-    "input": { "op": "asinh", "args": ["x"] },
+    "input": {
+      "op": "asinh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "sinh⁻¹(x)",
     "latex": "\\sinh^{-1}(x)",
     "ascii": "asinh(x)"
   },
   {
-    "input": { "op": "acosh", "args": ["x"] },
+    "input": {
+      "op": "acosh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "cosh⁻¹(x)",
     "latex": "\\cosh^{-1}(x)",
     "ascii": "acosh(x)"
   },
   {
-    "input": { "op": "atanh", "args": ["x"] },
+    "input": {
+      "op": "atanh",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "tanh⁻¹(x)",
     "latex": "\\tanh^{-1}(x)",
     "ascii": "atanh(x)"
-  },
-  {
-    "input": { "op": "binomial", "args": ["n", "k"] },
-    "unicode": "C(n,k)",
-    "latex": "\\binom{n}{k}",
-    "ascii": "binomial(n, k)"
-  },
-  {
-    "input": { "op": "gamma", "args": ["x"] },
-    "unicode": "Γ(x)",
-    "latex": "\\Gamma(x)",
-    "ascii": "gamma(x)"
-  },
-  {
-    "input": { "op": "erf", "args": ["x"] },
-    "unicode": "erf(x)",
-    "latex": "\\mathrm{erf}(x)",
-    "ascii": "erf(x)"
-  },
-  {
-    "input": { "op": "erfc", "args": ["x"] },
-    "unicode": "erfc(x)",
-    "latex": "\\mathrm{erfc}(x)",
-    "ascii": "erfc(x)"
   }
 ]

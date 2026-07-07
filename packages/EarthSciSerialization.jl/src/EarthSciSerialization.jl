@@ -143,8 +143,9 @@ export
     extract,
     # Code generation
     to_julia_code, to_python_code,
-    # ASCII display format
+    # Text display formats
     to_ascii, format_expression_ascii,
+    to_unicode, to_latex,
     # Canonical AST form (RFC §5.4)
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     # MTK → ESM export (gt-dod2; Phase 1 migration tooling)

@@ -56,6 +56,78 @@ GREEK_LATEX = {
 }
 
 
+# Named Greek letters (spelled out) → Unicode symbol. Mirrors the reference
+# pretty-printer (pretty-print.ts convertGreekLetters). Applied only to a
+# STANDALONE variable name (chemical prefixes like "alphaCO2" go through the
+# element-aware path and keep the spelled-out form).
+NAMED_GREEK_UNICODE = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "epsilon": "ε",
+    "zeta": "ζ",
+    "eta": "η",
+    "theta": "θ",
+    "iota": "ι",
+    "kappa": "κ",
+    "lambda": "λ",
+    "mu": "μ",
+    "nu": "ν",
+    "xi": "ξ",
+    "omicron": "ο",
+    "pi": "π",
+    "rho": "ρ",
+    "sigma": "σ",
+    "tau": "τ",
+    "upsilon": "υ",
+    "phi": "φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "omega": "ω",
+}
+
+# Named Greek letters (spelled out) → LaTeX command. Mirrors the reference
+# pretty-printer's GREEK_LETTERS named entries.
+NAMED_GREEK_LATEX = {
+    "alpha": "\\alpha",
+    "beta": "\\beta",
+    "gamma": "\\gamma",
+    "delta": "\\delta",
+    "epsilon": "\\epsilon",
+    "zeta": "\\zeta",
+    "eta": "\\eta",
+    "theta": "\\theta",
+    "iota": "\\iota",
+    "kappa": "\\kappa",
+    "lambda": "\\lambda",
+    "mu": "\\mu",
+    "nu": "\\nu",
+    "xi": "\\xi",
+    "omicron": "\\omicron",
+    "pi": "\\pi",
+    "rho": "\\rho",
+    "sigma": "\\sigma",
+    "tau": "\\tau",
+    "upsilon": "\\upsilon",
+    "phi": "\\phi",
+    "chi": "\\chi",
+    "psi": "\\psi",
+    "omega": "\\omega",
+    "Gamma": "\\Gamma",
+    "Delta": "\\Delta",
+    "Theta": "\\Theta",
+    "Lambda": "\\Lambda",
+    "Xi": "\\Xi",
+    "Pi": "\\Pi",
+    "Sigma": "\\Sigma",
+    "Upsilon": "\\Upsilon",
+    "Phi": "\\Phi",
+    "Psi": "\\Psi",
+    "Omega": "\\Omega",
+}
+
+
 # Element lookup table for chemical subscript detection (118 elements)
 ELEMENTS = {
     # Period 1
@@ -295,6 +367,10 @@ def _format_chemical_subscripts(variable: str, format_type: str) -> str:
 
     if format_type == "latex":
         if has_elements:
+            # A bare element symbol without digits (e.g. "B", "P", "S") is a
+            # variable name, not a chemical formula → keep it italic/unwrapped.
+            if variable in ELEMENTS and not any(c.isdigit() for c in variable):
+                return variable
             elem_start = _find_first_element_index(variable)
             if elem_start > 0:
                 # Mixed variable: non-element prefix + chemical part
@@ -307,20 +383,24 @@ def _format_chemical_subscripts(variable: str, format_type: str) -> str:
                 formatted = _latex_subscript_digits(variable)
                 return f"\\mathrm{{{formatted}}}"
         else:
-            # Non-chemical with mixed alpha+digits: wrap in \mathrm for consistent display
-            has_alpha = any(c.isalpha() for c in variable)
-            has_digit = any(c.isdigit() for c in variable)
-            if has_alpha and has_digit:
-                return f"\\mathrm{{{variable}}}"
-            return variable
+            # Standalone named Greek letter → LaTeX command (e.g. "phi" → "\phi").
+            if variable in NAMED_GREEK_LATEX:
+                return NAMED_GREEK_LATEX[variable]
+            # Single character → italic, no wrapping.
+            if len(variable) == 1:
+                return variable
+            # Multi-character non-chemical name → upright \mathrm, escaping
+            # LaTeX-special underscores (mirrors pretty-print.ts).
+            escaped = variable.replace("_", "\\_")
+            return f"\\mathrm{{{escaped}}}"
 
     if format_type == "ascii":
         # For ASCII, just return as-is (no special formatting for chemical subscripts)
         return variable
 
     if not has_elements:
-        # No element pattern found, return as-is
-        return variable
+        # Standalone named Greek letter → Unicode symbol; otherwise unchanged.
+        return NAMED_GREEK_UNICODE.get(variable, variable)
 
     # For unicode: element-aware subscript detection
     result = ""
@@ -494,6 +574,12 @@ def to_unicode(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) ->
         return _format_expression_node(target, "unicode")
 
     if isinstance(target, dict) and "op" in target:
+        # Structural / array-query ops carry defining data in non-`args` fields
+        # (value, table, axes, output_idx, …) that the ExprNode conversion below
+        # would drop, so render them directly from the dict first.
+        structural = _format_structural_op(target, "unicode")
+        if structural is not None:
+            return structural
         # Handle dictionary-style expressions for compatibility
         args = target.get("args") or []
         node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
@@ -541,6 +627,12 @@ def to_latex(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> s
         return _format_expression_node(target, "latex")
 
     if isinstance(target, dict) and "op" in target:
+        # Structural / array-query ops carry defining data in non-`args` fields
+        # (value, table, axes, output_idx, …) that the ExprNode conversion below
+        # would drop, so render them directly from the dict first.
+        structural = _format_structural_op(target, "latex")
+        if structural is not None:
+            return structural
         # Handle dictionary-style expressions for compatibility
         args = target.get("args") or []
         node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
@@ -591,6 +683,12 @@ def to_ascii(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> s
         return _format_expression_node(target, "ascii")
 
     if isinstance(target, dict) and "op" in target:
+        # Structural / array-query ops carry defining data in non-`args` fields
+        # (value, table, axes, output_idx, …) that the ExprNode conversion below
+        # would drop, so render them directly from the dict first.
+        structural = _format_structural_op(target, "ascii")
+        if structural is not None:
+            return structural
         # Handle dictionary-style expressions for compatibility
         args = target.get("args") or []
         node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
@@ -615,11 +713,326 @@ def to_ascii(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> s
     raise ValueError(f"Unsupported type for ASCII formatting: {type(target)}")
 
 
+def _node_field(node, key, default=None):
+    """Read a field from an expression node, whether it is a dict or ExprNode."""
+    if isinstance(node, dict):
+        return node.get(key, default)
+    return getattr(node, key, default)
+
+
+def _is_op_node(expr) -> bool:
+    """True if the value is an operator node (dict with 'op' or an ExprNode)."""
+    return isinstance(expr, ExprNode) or (isinstance(expr, dict) and "op" in expr)
+
+
+def _render_expr(expr: "Expr", format_type: str) -> str:
+    """Render a sub-expression in the requested text format."""
+    return {"unicode": to_unicode, "latex": to_latex, "ascii": to_ascii}[format_type](expr)
+
+
+def _wrap_if_op(expr: "Expr", format_type: str) -> str:
+    """Parenthesize a sub-expression only when it is an operator node."""
+    s = _render_expr(expr, format_type)
+    if _is_op_node(expr):
+        return f"({s})"
+    return s
+
+
+def _latex_name(name: str) -> str:
+    """Escape LaTeX-special underscores in a bare operator / identifier name."""
+    return name.replace("_", "\\_")
+
+
+def _format_const_value(value, format_type: str) -> str:
+    """Format a ``const`` node's literal value (scalar number or nested array)."""
+    if isinstance(value, list):
+        return "[" + ", ".join(_format_const_value(v, format_type) for v in value) + "]"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return _format_number(value, format_type)
+    return str(value)
+
+
+def _format_bound(value, format_type: str) -> str:
+    """Format a structural integer bound (region / shape / range entry)."""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    if _is_op_node(value):
+        return _render_expr(value, format_type)
+    return str(value)
+
+
+def _aggregate_symbol(semiring, reduce, format_type: str) -> str:
+    """Big-operator symbol for an ``aggregate`` reduction (semiring supersedes reduce)."""
+    if semiring:
+        if semiring in ("max_product", "max_sum"):
+            fam = "max"
+        elif semiring == "min_sum":
+            fam = "min"
+        elif semiring == "bool_and_or":
+            fam = "bool"
+        else:
+            fam = "plus"
+    else:
+        fam = (
+            "times"
+            if reduce == "*"
+            else "max"
+            if reduce == "max"
+            else "min"
+            if reduce == "min"
+            else "plus"
+        )
+    table = {
+        "plus": ("Σ", "\\sum", "sum"),
+        "times": ("Π", "\\prod", "prod"),
+        "max": ("max", "\\max", "max"),
+        "min": ("min", "\\min", "min"),
+        "bool": ("⋁", "\\bigvee", "any"),
+    }
+    u, latex, ascii_ = table[fam]
+    return u if format_type == "unicode" else latex if format_type == "latex" else ascii_
+
+
+def _format_ranges_clause(ranges: dict, format_type: str) -> str:
+    """Render the ` where {…}` range clause shared by aggregate and argmin/argmax."""
+    in_sym = " \\in " if format_type == "latex" else "∈" if format_type == "unicode" else " in "
+    parts = []
+    for k in sorted(ranges.keys()):
+        rng = ranges[k]
+        if isinstance(rng, list):
+            rng_str = ":".join(_format_bound(x, format_type) for x in rng)
+        elif isinstance(rng, dict) and "from" in rng:
+            frm = str(rng["from"])
+            of = rng.get("of")
+            rng_str = f"{frm}({', '.join(of)})" if of else frm
+        else:
+            rng_str = str(rng)
+        parts.append(f"{k}{in_sym}{rng_str}")
+    if format_type == "latex":
+        return " \\text{ where } \\{" + ", ".join(parts) + "\\}"
+    return " where {" + ", ".join(parts) + "}"
+
+
+def _format_aggregate(node, format_type: str) -> str:
+    """Render an ``aggregate`` node per the rendering contract."""
+
+    def r(e):
+        return _render_expr(e, format_type)
+
+    output_idx = _node_field(node, "output_idx") or []
+    out_idx = ", ".join(str(o) for o in output_idx)
+    expr = _node_field(node, "expr")
+    expr_str = r(expr) if expr is not None else ""
+    semiring = _node_field(node, "semiring")
+    reduce = _node_field(node, "reduce")
+    if reduce is None:
+        reduce = "+"
+    sym = _aggregate_symbol(semiring, reduce, format_type)
+    idx_part = f"_{{{out_idx}}}" if format_type == "latex" else f"[{out_idx}]"
+    out = f"{sym}{idx_part} ({expr_str})"
+    ranges = _node_field(node, "ranges")
+    if ranges:
+        out += _format_ranges_clause(ranges, format_type)
+    join = _node_field(node, "join")
+    if join:
+        clauses = "; ".join(
+            ", ".join(f"{p[0]}={p[1]}" for p in (c.get("on") or [])) for c in join
+        )
+        out += f" join({clauses})"
+    filt = _node_field(node, "filter")
+    if filt is not None:
+        out += f" if {r(filt)}"
+    if _node_field(node, "distinct") is True:
+        out += " distinct"
+    key = _node_field(node, "key")
+    if key is not None:
+        out += f" key={r(key)}"
+    if semiring and semiring != "sum_product":
+        out += f" [semiring={semiring}]"
+    return out
+
+
+def _format_arg_witness(node, format_type: str) -> str:
+    """Render an ``argmin`` / ``argmax`` arg-witness node per the rendering contract."""
+
+    def r(e):
+        return _render_expr(e, format_type)
+
+    arg = str(_node_field(node, "arg") or "")
+    expr = _node_field(node, "expr")
+    expr_str = r(expr) if expr is not None else ""
+    idx_part = f"_{{{arg}}}" if format_type == "latex" else f"[{arg}]"
+    op = _node_field(node, "op")
+    name = f"\\mathrm{{{op}}}" if format_type == "latex" else op
+    out = f"{name}{idx_part} ({expr_str})"
+    ranges = _node_field(node, "ranges")
+    if ranges:
+        out += _format_ranges_clause(ranges, format_type)
+    return out
+
+
+def _format_structural_op(node, format_type: str):
+    """
+    Render the closed-core structural / array-query ops (esm-spec §4.2), whose
+    defining data lives in fields OTHER than ``args``, plus ``integral``.
+
+    Returns a fully-formatted string, or ``None`` for ops handled by the
+    scalar-op dispatch (arithmetic, elementary functions, comparisons, D, Pre,
+    …) or by the generic fallback (open-tier sugar grad/div/laplacian, unknown
+    user ops). Mirrors pretty-print.ts formatStructuralOp; see
+    tests/display/RENDERING_CONTRACT.md.
+    """
+    op = _node_field(node, "op")
+    args = _node_field(node, "args") or []
+
+    def r(e):
+        return _render_expr(e, format_type)
+
+    if op == "const":
+        return _format_const_value(_node_field(node, "value"), format_type)
+
+    if op == "true":
+        return "true"
+
+    if op == "fn":
+        name = str(_node_field(node, "name") or "")
+        inner = ", ".join(r(a) for a in args)
+        if format_type == "latex":
+            return f"\\mathrm{{{_latex_name(name)}}}({inner})"
+        return f"{name}({inner})"
+
+    if op == "enum":
+        label = f"{args[0]}.{args[1]}"
+        if format_type == "latex":
+            return f"\\mathrm{{{_latex_name(label)}}}"
+        return label
+
+    if op == "index":
+        if len(args) == 0:
+            return None
+        arr, idx = args[0], args[1:]
+        return f"{_wrap_if_op(arr, format_type)}[{', '.join(r(i) for i in idx)}]"
+
+    if op == "broadcast":
+        fn = _node_field(node, "fn")
+        if not isinstance(fn, str):
+            return None
+        return _render_expr({"op": fn, "args": args}, format_type)
+
+    if op == "integral":
+        if len(args) == 0:
+            return None
+        f = r(args[0])
+        v = str(_node_field(node, "var") or "x")
+        lower = _node_field(node, "lower")
+        upper = _node_field(node, "upper")
+        lo = r(lower) if lower is not None else ""
+        hi = r(upper) if upper is not None else ""
+        if format_type == "latex":
+            return f"\\int_{{{lo}}}^{{{hi}}} {f} \\, d{v}"
+        if format_type == "unicode":
+            return f"∫[{lo}, {hi}] {f} d{v}"
+        return f"integral({f}, {v}, {lo}, {hi})"
+
+    if op == "table_lookup":
+        table = str(_node_field(node, "table") or "")
+        axes = _node_field(node, "axes")
+        if axes is None:
+            axes = _node_field(node, "table_axes") or {}
+        eq = " = " if format_type == "latex" else "="
+        bindings = ", ".join(f"{k}{eq}{r(axes[k])}" for k in sorted(axes.keys()))
+        output = _node_field(node, "output")
+        out_str = f":{output}" if output is not None else ""
+        name = f"\\mathrm{{{_latex_name(table)}}}" if format_type == "latex" else table
+        return f"{name}[{bindings}]{out_str}"
+
+    if op == "apply_expression_template":
+        name = str(_node_field(node, "name") or "")
+        bindings = _node_field(node, "bindings") or {}
+        eq = " = " if format_type == "latex" else "="
+        inner = ", ".join(f"{k}{eq}{r(bindings[k])}" for k in sorted(bindings.keys()))
+        if format_type == "latex":
+            return f"\\mathrm{{{_latex_name(name)}}}\\langle {inner} \\rangle"
+        if format_type == "unicode":
+            return f"{name}⟨{inner}⟩"
+        return f"{name}<{inner}>"
+
+    if op == "makearray":
+        regions = _node_field(node, "regions") or []
+        values = _node_field(node, "values") or []
+        parts = []
+        for i, region in enumerate(regions):
+            reg_str = ", ".join(
+                f"{_format_bound(dim[0], format_type)}:{_format_bound(dim[1], format_type)}"
+                for dim in region
+            )
+            val = r(values[i]) if i < len(values) else "?"
+            parts.append(f"[{reg_str}] = {val}")
+        name = "\\mathrm{makearray}" if format_type == "latex" else "makearray"
+        return f"{name}({', '.join(parts)})"
+
+    if op == "reshape":
+        if len(args) == 0:
+            return None
+        shape = ", ".join(_format_bound(s, format_type) for s in (_node_field(node, "shape") or []))
+        name = "\\mathrm{reshape}" if format_type == "latex" else "reshape"
+        return f"{name}({r(args[0])}, [{shape}])"
+
+    if op == "transpose":
+        if len(args) == 0:
+            return None
+        perm = _node_field(node, "perm")
+        if perm:
+            name = "\\mathrm{transpose}" if format_type == "latex" else "transpose"
+            return f"{name}({r(args[0])}, [{', '.join(str(p) for p in perm)}])"
+        a = _wrap_if_op(args[0], format_type)
+        if format_type == "latex":
+            return f"{a}^{{T}}"
+        if format_type == "unicode":
+            return f"{a}ᵀ"
+        return f"transpose({r(args[0])})"
+
+    if op == "concat":
+        inner = ", ".join(r(a) for a in args)
+        axis = _node_field(node, "axis")
+        if axis is None:
+            axis = 0
+        name = "\\mathrm{concat}" if format_type == "latex" else "concat"
+        return f"{name}({inner}, axis={axis})"
+
+    if op in ("intersect_polygon", "polygon_intersection_area"):
+        inner = ", ".join(r(a) for a in args)
+        manifold = _node_field(node, "manifold")
+        name = f"\\mathrm{{{_latex_name(op)}}}" if format_type == "latex" else op
+        return f"{name}({inner}, manifold={manifold if manifold is not None else ''})"
+
+    if op == "aggregate":
+        return _format_aggregate(node, format_type)
+
+    if op in ("argmin", "argmax"):
+        return _format_arg_witness(node, format_type)
+
+    return None
+
+
 def _format_expression_node(node: ExprNode, format_type: str) -> str:
     """Format an ExpressionNode (operator with arguments)."""
     op, args = node.op, node.args
     wrt = getattr(node, "wrt", None)
-    dim = getattr(node, "dim", None)
+
+    # Closed-core structural / array-query ops (const, fn, index, aggregate, …)
+    # render from fields other than `args`; try them first.
+    structural = _format_structural_op(node, format_type)
+    if structural is not None:
+        return structural
 
     # Formatter dispatch
     _fmt = {"unicode": to_unicode, "latex": to_latex, "ascii": to_ascii}[format_type]
@@ -754,14 +1167,6 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"\\{op}({to_latex(left)}, {to_latex(right)})"
             return f"{op}({format_arg(left)}, {format_arg(right)})"
 
-        elif op == "binomial":
-            if format_type == "unicode":
-                return f"C({_fmt(left)},{_fmt(right)})"
-            elif format_type == "latex":
-                return f"\\binom{{{to_latex(left)}}}{{{to_latex(right)}}}"
-            else:
-                return f"binomial({_fmt(left)}, {_fmt(right)})"
-
         elif op == "atan2":
             if format_type == "latex":
                 return f"\\mathrm{{atan2}}({to_latex(left)}, {to_latex(right)})"
@@ -847,6 +1252,8 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"sqrt({fa})"
 
         elif op == "abs":
+            if format_type == "ascii":
+                return f"abs({fa})"
             return f"|{fa}|"
 
         elif op == "floor":
@@ -865,39 +1272,6 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
             else:
                 return f"ceil({fa})"
 
-        elif op == "gamma":
-            if format_type == "unicode":
-                return f"Γ({fa})"
-            elif format_type == "latex":
-                return f"\\Gamma({to_latex(arg)})"
-            else:
-                return f"gamma({fa})"
-
-        elif op == "div":
-            if format_type == "unicode":
-                return f"∇·{fa}"
-            elif format_type == "latex":
-                return f"\\nabla \\cdot {to_latex(arg)}"
-            else:
-                return f"div({fa})"
-
-        elif op == "laplacian":
-            if format_type == "unicode":
-                return f"∇²{fa}"
-            elif format_type == "latex":
-                return f"\\nabla^2 {to_latex(arg)}"
-            else:
-                return f"laplacian({fa})"
-
-        elif op == "grad":
-            dim_var = dim or "t"
-            if format_type == "unicode":
-                return f"∂{fa}/∂{dim_var}"
-            elif format_type == "latex":
-                return f"\\frac{{\\partial {to_latex(arg)}}}{{\\partial {dim_var}}}"
-            else:
-                return f"d({fa})/d{dim_var}"
-
         elif op == "D":
             wrt_var = wrt or "t"
             if format_type == "unicode":
@@ -914,10 +1288,10 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"\\mathrm{{sgn}}({to_latex(arg)})"
             return f"sign({fa})"
 
-        elif op in ("erf", "erfc", "Pre"):
+        elif op == "Pre":
             if format_type == "latex":
-                return f"\\mathrm{{{op}}}({to_latex(arg)})"
-            return f"{op}({fa})"
+                return f"\\mathrm{{Pre}}({to_latex(arg)})"
+            return f"Pre({fa})"
 
     # ---- Ternary: ifelse ----
     if op == "ifelse" and len(args) == 3:
@@ -930,12 +1304,13 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
             )
         return f"ifelse({_fmt(cond)}, {_fmt(if_true)}, {_fmt(if_false)})"
 
-    # Fallback: function call notation
+    # Generic fallback: function-call notation for open-tier sugar
+    # (grad/div/laplacian) and any unknown user op. Only `args` are shown.
     if format_type == "unicode":
         arg_list = ", ".join(to_unicode(arg) for arg in args)
     elif format_type == "latex":
         arg_list = ", ".join(to_latex(arg) for arg in args)
-        return f"\\mathrm{{{op}}}({arg_list})"
+        return f"\\mathrm{{{_latex_name(op)}}}({arg_list})"
     elif format_type == "ascii":
         arg_list = ", ".join(to_ascii(arg) for arg in args)
     else:

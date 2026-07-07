@@ -265,11 +265,17 @@ impl Expr {
     fn to_unicode_with_precedence(&self, parent_prec: i32) -> String {
         match self {
             Expr::Number(n) => format_number_unicode(*n),
-            Expr::Integer(n) => n.to_string(),
-            Expr::Variable(name) => format_chemical_subscripts(name),
-            Expr::Operator(node) => {
-                format_operator_unicode(&node.op, &node.args, &node.wrt, &node.dim, parent_prec)
+            // Unicode uses U+2212 MINUS SIGN for negative literals (matching
+            // the reference float printer), not the ASCII hyphen.
+            Expr::Integer(n) => {
+                let s = n.to_string();
+                match s.strip_prefix('-') {
+                    Some(rest) => format!("−{rest}"),
+                    None => s,
+                }
             }
+            Expr::Variable(name) => format_chemical_subscripts(name),
+            Expr::Operator(node) => format_operator_unicode(node, parent_prec),
         }
     }
 }
@@ -288,13 +294,646 @@ fn call_form(op_symbol: &str, args: &[Expr], render: impl Fn(&Expr) -> String) -
     )
 }
 
-fn format_operator_unicode(
-    op: &str,
-    args: &[Expr],
-    wrt: &Option<String>,
-    dim: &Option<String>,
-    parent_prec: i32,
-) -> String {
+/// The three text-rendering backends. Shared by the structural / array-query
+/// op renderer so it can produce all three formats from one code path (the
+/// scalar-op dispatch keeps three separate functions for readability).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fmt {
+    Unicode,
+    Latex,
+    Ascii,
+}
+
+/// Render a sub-expression in the requested backend at outer precedence.
+fn render_fmt(expr: &Expr, fmt: Fmt) -> String {
+    match fmt {
+        Fmt::Unicode => to_unicode(expr),
+        Fmt::Latex => to_latex(expr),
+        Fmt::Ascii => to_ascii(expr),
+    }
+}
+
+/// Render an operator node as a scalar expression in the requested backend
+/// (used by `broadcast`, which renders identically to its elementwise `fn`).
+fn render_operator(node: &ExpressionNode, fmt: Fmt) -> String {
+    match fmt {
+        Fmt::Unicode => format_operator_unicode(node, 0),
+        Fmt::Latex => format_operator_latex(node, 0),
+        Fmt::Ascii => format_operator_ascii(node, 0),
+    }
+}
+
+/// Escape LaTeX-special underscores in a bare operator / identifier name.
+fn latex_name(name: &str) -> String {
+    name.replace('_', "\\_")
+}
+
+/// The integer value of an exponent literal, if it is one (used to pick
+/// Unicode-superscript rendering for `x^n`).
+fn integer_exponent(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Integer(n) => Some(*n),
+        Expr::Number(n) if n.fract() == 0.0 => Some(*n as i64),
+        _ => None,
+    }
+}
+
+/// Convert a decimal integer string to Unicode superscript characters.
+fn to_superscript_str(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '0'..='9' => UNICODE_SUPERSCRIPTS[c.to_digit(10).unwrap() as usize],
+            '-' => '⁻',
+            '+' => '⁺',
+            other => other,
+        })
+        .collect()
+}
+
+/// Replace Unicode Greek characters with their ASCII names (e.g. `θ` → `theta`)
+/// for the ASCII backend. Non-Greek characters pass through unchanged.
+fn greek_to_ascii(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        let name = match c {
+            'α' => "alpha",
+            'β' => "beta",
+            'γ' => "gamma",
+            'δ' => "delta",
+            'ε' => "epsilon",
+            'ζ' => "zeta",
+            'η' => "eta",
+            'θ' => "theta",
+            'ι' => "iota",
+            'κ' => "kappa",
+            'λ' => "lambda",
+            'μ' => "mu",
+            'ν' => "nu",
+            'ξ' => "xi",
+            'ο' => "omicron",
+            'π' => "pi",
+            'ρ' => "rho",
+            'σ' => "sigma",
+            'τ' => "tau",
+            'υ' => "upsilon",
+            'φ' => "phi",
+            'χ' => "chi",
+            'ψ' => "psi",
+            'ω' => "omega",
+            other => {
+                out.push(other);
+                continue;
+            }
+        };
+        out.push_str(name);
+    }
+    out
+}
+
+/// LaTeX command for a variable name that is exactly a Greek letter, given
+/// either as a spelled name (`"phi"`) or a single Unicode character (`"θ"`).
+/// Returns `None` for any non-Greek identifier.
+fn greek_to_latex(name: &str) -> Option<&'static str> {
+    let cmd = match name {
+        "alpha" | "α" => "\\alpha",
+        "beta" | "β" => "\\beta",
+        "gamma" | "γ" => "\\gamma",
+        "delta" | "δ" => "\\delta",
+        "epsilon" | "ε" => "\\epsilon",
+        "zeta" | "ζ" => "\\zeta",
+        "eta" | "η" => "\\eta",
+        "theta" | "θ" => "\\theta",
+        "iota" | "ι" => "\\iota",
+        "kappa" | "κ" => "\\kappa",
+        "lambda" | "λ" => "\\lambda",
+        "mu" | "μ" => "\\mu",
+        "nu" | "ν" => "\\nu",
+        "xi" | "ξ" => "\\xi",
+        "omicron" | "ο" => "\\omicron",
+        "pi" | "π" => "\\pi",
+        "rho" | "ρ" => "\\rho",
+        "sigma" | "σ" => "\\sigma",
+        "tau" | "τ" => "\\tau",
+        "upsilon" | "υ" => "\\upsilon",
+        "phi" | "φ" => "\\phi",
+        "chi" | "χ" => "\\chi",
+        "psi" | "ψ" => "\\psi",
+        "omega" | "ω" => "\\omega",
+        "Gamma" => "\\Gamma",
+        "Delta" => "\\Delta",
+        "Theta" => "\\Theta",
+        "Lambda" => "\\Lambda",
+        "Xi" => "\\Xi",
+        "Pi" => "\\Pi",
+        "Sigma" => "\\Sigma",
+        "Upsilon" => "\\Upsilon",
+        "Phi" => "\\Phi",
+        "Psi" => "\\Psi",
+        "Omega" => "\\Omega",
+        _ => return None,
+    };
+    Some(cmd)
+}
+
+/// The raw identifier string carried by a leaf expression (used by `enum`,
+/// whose members are bare `Type`/`Member` names, not rendered sub-expressions).
+fn expr_raw_string(e: &Expr) -> String {
+    match e {
+        Expr::Variable(s) => s.clone(),
+        Expr::Integer(n) => n.to_string(),
+        Expr::Number(n) => n.to_string(),
+        Expr::Operator(node) => node.op.clone(),
+    }
+}
+
+/// Parenthesize a sub-expression only when it is an operator node (used by
+/// `index` / `transpose`, whose base is bracketed rather than call-wrapped).
+fn wrap_if_op(expr: &Expr, fmt: Fmt) -> String {
+    let s = render_fmt(expr, fmt);
+    if matches!(expr, Expr::Operator(_)) {
+        format!("({s})")
+    } else {
+        s
+    }
+}
+
+/// Render a `const` node's literal JSON value (scalar number or nested array).
+/// Integer JSON tokens print as plain integers (so `const 0` is `0`, not
+/// `0.0`); float tokens use the backend's number formatting.
+fn format_const_value(value: &serde_json::Value, fmt: Fmt) -> String {
+    match value {
+        serde_json::Value::Array(arr) => {
+            let inner = arr
+                .iter()
+                .map(|v| format_const_value(v, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{inner}]")
+        }
+        serde_json::Value::Number(num) => {
+            if let Some(i) = num.as_i64() {
+                i.to_string()
+            } else if let Some(u) = num.as_u64() {
+                u.to_string()
+            } else if let Some(f) = num.as_f64() {
+                match fmt {
+                    Fmt::Unicode => format_number_unicode(f),
+                    Fmt::Latex => match format_display_float(f) {
+                        FloatParts::Plain(s) => s,
+                        FloatParts::Scientific { mantissa, exponent } => {
+                            format!("{mantissa} \\times 10^{{{exponent}}}")
+                        }
+                    },
+                    Fmt::Ascii => match format_display_float(f) {
+                        FloatParts::Plain(s) => s,
+                        FloatParts::Scientific { mantissa, exponent } => {
+                            format!("{mantissa}e{exponent}")
+                        }
+                    },
+                }
+            } else {
+                num.to_string()
+            }
+        }
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Stringify a scalar JSON value (e.g. a `table_lookup` `output` selector).
+fn json_scalar_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Big-operator symbol for an `aggregate` reduction (semiring supersedes the
+/// bare `reduce`). See tests/display/RENDERING_CONTRACT.md.
+fn aggregate_symbol(semiring: Option<&str>, reduce: &str, fmt: Fmt) -> &'static str {
+    enum Fam {
+        Plus,
+        Times,
+        Max,
+        Min,
+        Bool,
+    }
+    let fam = if let Some(sr) = semiring {
+        match sr {
+            "max_product" | "max_sum" => Fam::Max,
+            "min_sum" => Fam::Min,
+            "bool_and_or" => Fam::Bool,
+            _ => Fam::Plus,
+        }
+    } else {
+        match reduce {
+            "*" => Fam::Times,
+            "max" => Fam::Max,
+            "min" => Fam::Min,
+            _ => Fam::Plus,
+        }
+    };
+    let (u, l, a) = match fam {
+        Fam::Plus => ("Σ", "\\sum", "sum"),
+        Fam::Times => ("Π", "\\prod", "prod"),
+        Fam::Max => ("max", "\\max", "max"),
+        Fam::Min => ("min", "\\min", "min"),
+        Fam::Bool => ("⋁", "\\bigvee", "any"),
+    };
+    match fmt {
+        Fmt::Unicode => u,
+        Fmt::Latex => l,
+        Fmt::Ascii => a,
+    }
+}
+
+/// Render one range entry (`[a,b]` → `a:b`, index-set ref → `name(of…)`).
+fn format_range_spec(rng: &RangeSpec) -> String {
+    match rng {
+        RangeSpec::Interval(iv) => format!("{}:{}", iv[0], iv[1]),
+        RangeSpec::IndexSetRef { from, of } => match of {
+            Some(of) if !of.is_empty() => format!("{}({})", from, of.join(", ")),
+            _ => from.clone(),
+        },
+        RangeSpec::RaggedDyn { offsets, of } => format!("{}({})", offsets, of.join(", ")),
+        RangeSpec::DerivedDyn { from_faq } => from_faq.clone(),
+    }
+}
+
+/// Render the ` where {…}` range clause shared by aggregate and argmin/argmax
+/// (keys sorted for determinism).
+fn format_ranges_clause(ranges: &std::collections::HashMap<String, RangeSpec>, fmt: Fmt) -> String {
+    let in_sym = match fmt {
+        Fmt::Latex => " \\in ",
+        Fmt::Unicode => "∈",
+        Fmt::Ascii => " in ",
+    };
+    let mut keys: Vec<&String> = ranges.keys().collect();
+    keys.sort();
+    let parts = keys
+        .iter()
+        .map(|k| format!("{}{}{}", k, in_sym, format_range_spec(&ranges[*k])))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match fmt {
+        Fmt::Latex => format!(" \\text{{ where }} \\{{{parts}\\}}"),
+        _ => format!(" where {{{parts}}}"),
+    }
+}
+
+/// Render an `aggregate` node per tests/display/RENDERING_CONTRACT.md §aggregate.
+fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
+    let out_idx = node
+        .output_idx
+        .as_ref()
+        .map(|v| v.join(", "))
+        .unwrap_or_default();
+    let expr_str = node
+        .expr
+        .as_deref()
+        .map(|e| render_fmt(e, fmt))
+        .unwrap_or_default();
+    let semiring = node.semiring.as_deref();
+    let reduce = node.reduce.as_deref().unwrap_or("+");
+    let sym = aggregate_symbol(semiring, reduce, fmt);
+    let idx_part = if fmt == Fmt::Latex {
+        format!("_{{{out_idx}}}")
+    } else {
+        format!("[{out_idx}]")
+    };
+    let mut out = format!("{sym}{idx_part} ({expr_str})");
+    if let Some(ranges) = &node.ranges
+        && !ranges.is_empty()
+    {
+        out.push_str(&format_ranges_clause(ranges, fmt));
+    }
+    if let Some(join) = &node.join
+        && !join.is_empty()
+    {
+        let clauses = join
+            .iter()
+            .map(|c| {
+                c.on
+                    .iter()
+                    .map(|p| format!("{}={}", p[0], p[1]))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        out.push_str(&format!(" join({clauses})"));
+    }
+    if let Some(filter) = node.filter.as_deref() {
+        out.push_str(&format!(" if {}", render_fmt(filter, fmt)));
+    }
+    if node.distinct == Some(true) {
+        out.push_str(" distinct");
+    }
+    if let Some(key) = node.key.as_deref() {
+        out.push_str(&format!(" key={}", render_fmt(key, fmt)));
+    }
+    if let Some(sr) = semiring
+        && sr != "sum_product"
+    {
+        out.push_str(&format!(" [semiring={sr}]"));
+    }
+    out
+}
+
+/// Render an `argmin` / `argmax` arg-witness node.
+fn format_arg_witness(node: &ExpressionNode, fmt: Fmt) -> String {
+    let arg = node.arg.as_deref().unwrap_or("");
+    let expr_str = node
+        .expr
+        .as_deref()
+        .map(|e| render_fmt(e, fmt))
+        .unwrap_or_default();
+    let idx_part = if fmt == Fmt::Latex {
+        format!("_{{{arg}}}")
+    } else {
+        format!("[{arg}]")
+    };
+    let name = if fmt == Fmt::Latex {
+        format!("\\mathrm{{{}}}", node.op)
+    } else {
+        node.op.clone()
+    };
+    let mut out = format!("{name}{idx_part} ({expr_str})");
+    if let Some(ranges) = &node.ranges
+        && !ranges.is_empty()
+    {
+        out.push_str(&format_ranges_clause(ranges, fmt));
+    }
+    out
+}
+
+/// Render the closed-core structural / array-query ops (esm-spec §4.2), whose
+/// defining data lives in fields OTHER than `args`, plus `integral`. Returns a
+/// fully-formatted string, or `None` for ops handled by the scalar-op dispatch
+/// (arithmetic, elementary functions, comparisons, `D`, `Pre`, …) or by the
+/// generic fallback (open-tier sugar `grad`/`div`/`laplacian`, unknown user
+/// ops). Mirrors `formatStructuralOp` in pretty-print.ts.
+fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
+    let op = node.op.as_str();
+    let args = node.args.as_slice();
+    let eq = if fmt == Fmt::Latex { " = " } else { "=" };
+
+    match op {
+        "const" => Some(format_const_value(
+            node.value.as_ref().unwrap_or(&serde_json::Value::Null),
+            fmt,
+        )),
+
+        "true" => Some("true".to_string()),
+
+        "fn" => {
+            let name = node.name.as_deref().unwrap_or("");
+            let inner = args
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(match fmt {
+                Fmt::Latex => format!("\\mathrm{{{}}}({})", latex_name(name), inner),
+                _ => format!("{name}({inner})"),
+            })
+        }
+
+        "enum" => {
+            let a0 = args.first().map(expr_raw_string).unwrap_or_default();
+            let a1 = args.get(1).map(expr_raw_string).unwrap_or_default();
+            let label = format!("{a0}.{a1}");
+            Some(match fmt {
+                Fmt::Latex => format!("\\mathrm{{{}}}", latex_name(&label)),
+                _ => label,
+            })
+        }
+
+        "index" => {
+            if args.is_empty() {
+                return None;
+            }
+            let idx = args[1..]
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{}[{}]", wrap_if_op(&args[0], fmt), idx))
+        }
+
+        "broadcast" => {
+            let fn_name = node.broadcast_fn.as_deref()?;
+            let synth = ExpressionNode {
+                op: fn_name.to_string(),
+                args: node.args.clone(),
+                ..Default::default()
+            };
+            Some(render_operator(&synth, fmt))
+        }
+
+        "integral" => {
+            if args.is_empty() {
+                return None;
+            }
+            let f = render_fmt(&args[0], fmt);
+            let v = node.int_var.as_deref().unwrap_or("x");
+            let lo = node
+                .lower
+                .as_deref()
+                .map(|e| render_fmt(e, fmt))
+                .unwrap_or_default();
+            let hi = node
+                .upper
+                .as_deref()
+                .map(|e| render_fmt(e, fmt))
+                .unwrap_or_default();
+            Some(match fmt {
+                Fmt::Latex => format!("\\int_{{{lo}}}^{{{hi}}} {f} \\, d{v}"),
+                Fmt::Unicode => format!("∫[{lo}, {hi}] {f} d{v}"),
+                Fmt::Ascii => format!("integral({f}, {v}, {lo}, {hi})"),
+            })
+        }
+
+        "table_lookup" => {
+            let table = node.table.as_deref().unwrap_or("");
+            let bindings = node
+                .axes
+                .as_ref()
+                .map(|axes| {
+                    let mut keys: Vec<&String> = axes.keys().collect();
+                    keys.sort();
+                    keys.iter()
+                        .map(|k| format!("{}{}{}", k, eq, render_fmt(&axes[*k], fmt)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let out_str = match &node.output {
+                Some(v) if !v.is_null() => format!(":{}", json_scalar_string(v)),
+                _ => String::new(),
+            };
+            let name = if fmt == Fmt::Latex {
+                format!("\\mathrm{{{}}}", latex_name(table))
+            } else {
+                table.to_string()
+            };
+            Some(format!("{name}[{bindings}]{out_str}"))
+        }
+
+        "apply_expression_template" => {
+            let name = node.name.as_deref().unwrap_or("");
+            let inner = node
+                .bindings
+                .as_ref()
+                .map(|b| {
+                    let mut keys: Vec<&String> = b.keys().collect();
+                    keys.sort();
+                    keys.iter()
+                        .map(|k| format!("{}{}{}", k, eq, render_fmt(&b[*k], fmt)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            Some(match fmt {
+                Fmt::Latex => format!("\\mathrm{{{}}}\\langle {} \\rangle", latex_name(name), inner),
+                Fmt::Unicode => format!("{name}⟨{inner}⟩"),
+                Fmt::Ascii => format!("{name}<{inner}>"),
+            })
+        }
+
+        "makearray" => {
+            let values = node.values.as_ref();
+            let parts = node
+                .regions
+                .as_ref()
+                .map(|regions| {
+                    regions
+                        .iter()
+                        .enumerate()
+                        .map(|(i, region)| {
+                            let reg_str = region
+                                .iter()
+                                .map(|dim| format!("{}:{}", dim[0], dim[1]))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let val = values
+                                .and_then(|vs| vs.get(i))
+                                .map(|v| render_fmt(v, fmt))
+                                .unwrap_or_else(|| "?".to_string());
+                            format!("[{reg_str}] = {val}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let name = if fmt == Fmt::Latex {
+                "\\mathrm{makearray}"
+            } else {
+                "makearray"
+            };
+            Some(format!("{name}({parts})"))
+        }
+
+        "reshape" => {
+            if args.is_empty() {
+                return None;
+            }
+            let shape = node
+                .shape
+                .as_ref()
+                .map(|s| {
+                    s.iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let name = if fmt == Fmt::Latex {
+                "\\mathrm{reshape}"
+            } else {
+                "reshape"
+            };
+            Some(format!("{}({}, [{}])", name, render_fmt(&args[0], fmt), shape))
+        }
+
+        "transpose" => {
+            if args.is_empty() {
+                return None;
+            }
+            if let Some(perm) = &node.perm
+                && !perm.is_empty()
+            {
+                let p = perm
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let name = if fmt == Fmt::Latex {
+                    "\\mathrm{transpose}"
+                } else {
+                    "transpose"
+                };
+                return Some(format!("{}({}, [{}])", name, render_fmt(&args[0], fmt), p));
+            }
+            let a = wrap_if_op(&args[0], fmt);
+            Some(match fmt {
+                Fmt::Latex => format!("{a}^{{T}}"),
+                Fmt::Unicode => format!("{a}ᵀ"),
+                Fmt::Ascii => format!("transpose({})", render_fmt(&args[0], fmt)),
+            })
+        }
+
+        "concat" => {
+            let inner = args
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = if fmt == Fmt::Latex {
+                "\\mathrm{concat}"
+            } else {
+                "concat"
+            };
+            let axis = node.axis.unwrap_or(0);
+            Some(format!("{name}({inner}, axis={axis})"))
+        }
+
+        "intersect_polygon" | "polygon_intersection_area" => {
+            let inner = args
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = if fmt == Fmt::Latex {
+                format!("\\mathrm{{{}}}", latex_name(op))
+            } else {
+                op.to_string()
+            };
+            let manifold = node.manifold.as_deref().unwrap_or("");
+            Some(format!("{name}({inner}, manifold={manifold})"))
+        }
+
+        "aggregate" => Some(format_aggregate(node, fmt)),
+
+        "argmin" | "argmax" => Some(format_arg_witness(node, fmt)),
+
+        _ => None,
+    }
+}
+
+fn format_operator_unicode(node: &ExpressionNode, parent_prec: i32) -> String {
+    // Closed-core structural / array-query ops (and `integral`) render from
+    // their non-`args` fields and are never parenthesized by precedence.
+    if let Some(s) = format_structural_op(node, Fmt::Unicode) {
+        return s;
+    }
+
+    let op = node.op.as_str();
+    let args = node.args.as_slice();
+    let wrt = &node.wrt;
     let op_prec = get_precedence(op);
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
     // Renders an argument at precedence 0 (used inside delimited contexts).
@@ -338,9 +977,12 @@ fn format_operator_unicode(
         }
         "/" => {
             if args.len() == 2 {
+                // The left operand of a left-associative `/` only needs parens
+                // when it binds *strictly* looser (op_prec - 1), so `a·b/c`
+                // stays unparenthesized while `(a + b)/c` does not.
                 format!(
                     "{}/{}",
-                    args[0].to_unicode_with_precedence(op_prec),
+                    args[0].to_unicode_with_precedence(op_prec - 1),
                     args[1].to_unicode_with_precedence(op_prec + 1)
                 )
             } else {
@@ -349,18 +991,19 @@ fn format_operator_unicode(
         }
         "^" => {
             if args.len() == 2 {
-                match &args[1] {
-                    Expr::Number(n) if *n == 2.0 => {
-                        format!("{}²", args[0].to_unicode_with_precedence(op_prec))
-                    }
-                    Expr::Number(n) if *n == 3.0 => {
-                        format!("{}³", args[0].to_unicode_with_precedence(op_prec))
-                    }
-                    _ => format!(
+                // Integer exponents render as Unicode superscripts.
+                if let Some(n) = integer_exponent(&args[1]) {
+                    format!(
+                        "{}{}",
+                        args[0].to_unicode_with_precedence(op_prec),
+                        to_superscript_str(&n.to_string())
+                    )
+                } else {
+                    format!(
                         "{}^{}",
                         args[0].to_unicode_with_precedence(op_prec),
                         args[1].to_unicode_with_precedence(op_prec + 1)
-                    ),
+                    )
                 }
             } else {
                 call_form("^", args, r0)
@@ -372,32 +1015,6 @@ fn format_operator_unicode(
                 format!("∂{}/∂{}", r0(arg), format_chemical_subscripts(wrt_var))
             } else {
                 call_form("D", args, r0)
-            }
-        }
-        "grad" => {
-            // Gradient - use dim field if available
-            if let ([arg], Some(dim_val)) = (args, dim) {
-                format!("∂{}/∂{}", r0(arg), dim_val)
-            } else if args.len() == 1 {
-                call_form("∇", args, r0)
-            } else {
-                call_form("grad", args, r0)
-            }
-        }
-        "div" => {
-            // Divergence operator
-            if let [arg] = args {
-                format!("∇·{}", arg.to_unicode_with_precedence(op_prec))
-            } else {
-                call_form("div", args, r0)
-            }
-        }
-        "laplacian" => {
-            // Laplacian operator
-            if let [arg] = args {
-                format!("∇²{}", arg.to_unicode_with_precedence(op_prec))
-            } else {
-                call_form("laplacian", args, r0)
             }
         }
         ">" => {
@@ -484,7 +1101,12 @@ fn format_operator_unicode(
         }
         "sqrt" => {
             if let [arg] = args {
-                format!("√{}", arg.to_unicode_with_precedence(op_prec))
+                // Parenthesize a compound radicand for clarity.
+                if matches!(arg, Expr::Operator(_)) {
+                    format!("√({})", r0(arg))
+                } else {
+                    format!("√{}", r0(arg))
+                }
             } else {
                 call_form("sqrt", args, r0)
             }
@@ -553,29 +1175,11 @@ fn format_operator_unicode(
                 call_form("atanh", args, r0)
             }
         }
-        "binomial" => {
-            if args.len() == 2 {
-                format!("C({},{})", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("binomial", args, r0)
-            }
-        }
-        "gamma" => {
-            if args.len() == 1 {
-                call_form("Γ", args, r0)
-            } else {
-                call_form("gamma", args, r0)
-            }
-        }
-        "Pre" => {
-            if args.len() == 1 {
-                format!("{}⁻", args[0].to_unicode_with_precedence(op_prec))
-            } else {
-                call_form("Pre", args, r0)
-            }
-        }
+        // `Pre` renders as a call form, matching the cross-language contract.
+        "Pre" => call_form("Pre", args, r0),
         // Genuinely call-shaped operators (exp, ifelse, min/max, trig,
-        // hyperbolics, erf/erfc, atan2, ...) and unknown operators.
+        // hyperbolics, atan2, ...) and unknown operators (including the
+        // open-tier rewrite-target sugar grad/div/laplacian).
         _ => call_form(op, args, r0),
     };
 
@@ -611,13 +1215,17 @@ fn to_latex_prec(expr: &Expr, parent_prec: i32) -> String {
             }
         },
         Expr::Variable(name) => format_variable_latex(name),
-        Expr::Operator(node) => {
-            format_operator_latex(&node.op, &node.args, &node.wrt, &node.dim, parent_prec)
-        }
+        Expr::Operator(node) => format_operator_latex(node, parent_prec),
     }
 }
 
 fn format_variable_latex(name: &str) -> String {
+    // A variable that is exactly a Greek letter (spelled name or Unicode
+    // character) renders as its LaTeX command.
+    if let Some(cmd) = greek_to_latex(name) {
+        return cmd.to_string();
+    }
+
     // Simple variable (single letter, no digits)
     if name.len() == 1 && !name.chars().any(|c| c.is_ascii_digit()) {
         return name.to_string();
@@ -734,13 +1342,16 @@ fn format_chemical_latex(s: &str) -> String {
     result
 }
 
-fn format_operator_latex(
-    op: &str,
-    args: &[Expr],
-    wrt: &Option<String>,
-    dim: &Option<String>,
-    parent_prec: i32,
-) -> String {
+fn format_operator_latex(node: &ExpressionNode, parent_prec: i32) -> String {
+    // Closed-core structural / array-query ops (and `integral`) render from
+    // their non-`args` fields and are never parenthesized by precedence.
+    if let Some(s) = format_structural_op(node, Fmt::Latex) {
+        return s;
+    }
+
+    let op = node.op.as_str();
+    let args = node.args.as_slice();
+    let wrt = &node.wrt;
     let op_prec = get_precedence(op);
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
     // Renders an argument at precedence 0 (used inside delimited contexts).
@@ -792,15 +1403,10 @@ fn format_operator_latex(
         "/" => call_form("\\div", args, r0),
         "^" => {
             if args.len() == 2 {
-                // The base still needs parenthesization (`{a + b}^{2}`
-                // typesets the superscript directly after `b`, reading as
-                // `a + b²`), but the exponent sits inside `^{...}`, which
-                // groups visually, so it renders at precedence 0.
-                format!(
-                    "{{{}}}^{{{}}}",
-                    to_latex_prec(&args[0], op_prec),
-                    r0(&args[1])
-                )
+                // The base is parenthesized by the precedence rule (so
+                // `(a + b)^{2}` keeps visible parens); the exponent sits
+                // inside `^{...}`, which groups visually, at precedence 0.
+                format!("{}^{{{}}}", to_latex_prec(&args[0], op_prec), r0(&args[1]))
             } else {
                 call_form("^", args, r0)
             }
@@ -810,29 +1416,6 @@ fn format_operator_latex(
                 format!("\\frac{{\\partial {}}}{{\\partial {}}}", r0(arg), wrt_var)
             } else {
                 call_form("D", args, r0)
-            }
-        }
-        "grad" => {
-            if let ([arg], Some(dim_val)) = (args, dim) {
-                format!("\\frac{{\\partial {}}}{{\\partial {}}}", r0(arg), dim_val)
-            } else if args.len() == 1 {
-                call_form("\\nabla", args, r0)
-            } else {
-                call_form("\\mathrm{grad}", args, r0)
-            }
-        }
-        "div" => {
-            if let [arg] = args {
-                format!("\\nabla \\cdot {}", to_latex_prec(arg, op_prec))
-            } else {
-                call_form("\\mathrm{div}", args, r0)
-            }
-        }
-        "laplacian" => {
-            if let [arg] = args {
-                format!("\\nabla^2 {}", to_latex_prec(arg, op_prec))
-            } else {
-                call_form("\\mathrm{laplacian}", args, r0)
             }
         }
         "exp" => {
@@ -849,7 +1432,7 @@ fn format_operator_latex(
         "ifelse" => {
             if args.len() == 3 {
                 format!(
-                    "\\begin{{cases}} {} & \\text{{if }} {} \\\\\\\\ {} & \\text{{otherwise}} \\end{{cases}}",
+                    "\\begin{{cases}} {} & \\text{{if }} {} \\\\ {} & \\text{{otherwise}} \\end{{cases}}",
                     r0(&args[1]),
                     r0(&args[0]),
                     r0(&args[2])
@@ -876,12 +1459,12 @@ fn format_operator_latex(
             if args.len() == 1 {
                 // Add parentheses for complex expressions
                 if matches!(&args[0], Expr::Operator(_)) {
-                    format!("\\lnot ({})", r0(&args[0]))
+                    format!("\\neg ({})", r0(&args[0]))
                 } else {
-                    format!("\\lnot {}", r0(&args[0]))
+                    format!("\\neg {}", r0(&args[0]))
                 }
             } else {
-                call_form("\\lnot", args, r0)
+                call_form("\\neg", args, r0)
             }
         }
         ">" => {
@@ -954,28 +1537,15 @@ fn format_operator_latex(
         "min" => call_form("\\min", args, r0),
         "max" => call_form("\\max", args, r0),
         "atan2" => call_form("\\mathrm{atan2}", args, r0),
-        "binomial" => {
-            if args.len() == 2 {
-                format!("\\binom{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]))
-            } else {
-                call_form("\\mathrm{binomial}", args, r0)
-            }
-        }
-        "gamma" => call_form("\\Gamma", args, r0),
-        "erf" => call_form("\\mathrm{erf}", args, r0),
-        "erfc" => call_form("\\mathrm{erfc}", args, r0),
         "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => call_form(&format!("\\{op}"), args, r0),
         "asinh" => call_form("\\sinh^{-1}", args, r0),
         "acosh" => call_form("\\cosh^{-1}", args, r0),
         "atanh" => call_form("\\tanh^{-1}", args, r0),
-        "Pre" => {
-            if args.len() == 1 {
-                format!("{{{}}}^{{-}}", r0(&args[0]))
-            } else {
-                call_form("\\mathrm{Pre}", args, r0)
-            }
-        }
-        _ => call_form(&format!("\\mathrm{{{op}}}"), args, r0),
+        // `Pre` renders as a call form, matching the cross-language contract.
+        "Pre" => call_form("\\mathrm{Pre}", args, r0),
+        // Generic fallback for open-tier sugar (grad/div/laplacian) and any
+        // unknown user op: `\mathrm{ESC(name)}(args)`, escaping underscores.
+        _ => call_form(&format!("\\mathrm{{{}}}", latex_name(op)), args, r0),
     };
 
     if needs_parens {
@@ -1002,20 +1572,22 @@ fn to_ascii_prec(expr: &Expr, parent_prec: i32) -> String {
             FloatParts::Plain(s) => s,
             FloatParts::Scientific { mantissa, exponent } => format!("{mantissa}e{exponent}"),
         },
-        Expr::Variable(name) => name.clone(),
-        Expr::Operator(node) => {
-            format_operator_ascii(&node.op, &node.args, &node.wrt, &node.dim, parent_prec)
-        }
+        // ASCII spells Greek characters out by name (e.g. `θ` → `theta`).
+        Expr::Variable(name) => greek_to_ascii(name),
+        Expr::Operator(node) => format_operator_ascii(node, parent_prec),
     }
 }
 
-fn format_operator_ascii(
-    op: &str,
-    args: &[Expr],
-    wrt: &Option<String>,
-    dim: &Option<String>,
-    parent_prec: i32,
-) -> String {
+fn format_operator_ascii(node: &ExpressionNode, parent_prec: i32) -> String {
+    // Closed-core structural / array-query ops (and `integral`) render from
+    // their non-`args` fields and are never parenthesized by precedence.
+    if let Some(s) = format_structural_op(node, Fmt::Ascii) {
+        return s;
+    }
+
+    let op = node.op.as_str();
+    let args = node.args.as_slice();
+    let wrt = &node.wrt;
     let op_prec = get_precedence(op);
     let needs_parens = op_prec > 0 && op_prec <= parent_prec;
     // Renders an argument at precedence 0 (used inside delimited contexts).
@@ -1023,12 +1595,11 @@ fn format_operator_ascii(
 
     let result = match op {
         "+" => {
-            if args.len() == 2 {
-                format!(
-                    "{} + {}",
-                    to_ascii_prec(&args[0], op_prec),
-                    to_ascii_prec(&args[1], op_prec)
-                )
+            if args.len() >= 2 {
+                args.iter()
+                    .map(|arg| to_ascii_prec(arg, op_prec))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
             } else {
                 call_form("+", args, r0)
             }
@@ -1049,21 +1620,22 @@ fn format_operator_ascii(
             }
         }
         "*" => {
-            if args.len() == 2 {
-                format!(
-                    "{} * {}",
-                    to_ascii_prec(&args[0], op_prec),
-                    to_ascii_prec(&args[1], op_prec)
-                )
+            if args.len() >= 2 {
+                args.iter()
+                    .map(|arg| to_ascii_prec(arg, op_prec))
+                    .collect::<Vec<_>>()
+                    .join(" * ")
             } else {
                 call_form("*", args, r0)
             }
         }
         "/" => {
             if args.len() == 2 {
+                // Left operand needs parens only when strictly looser-binding
+                // (op_prec - 1), so `a * b / c` stays unparenthesized.
                 format!(
                     "{} / {}",
-                    to_ascii_prec(&args[0], op_prec),
+                    to_ascii_prec(&args[0], op_prec - 1),
                     to_ascii_prec(&args[1], op_prec + 1)
                 )
             } else {
@@ -1086,13 +1658,6 @@ fn format_operator_ascii(
                 format!("D({})/D{}", r0(arg), wrt_var)
             } else {
                 call_form("D", args, r0)
-            }
-        }
-        "grad" => {
-            if let ([arg], Some(dim_val)) = (args, dim) {
-                format!("d({})/d{}", r0(arg), dim_val)
-            } else {
-                call_form("grad", args, r0)
             }
         }
         ">" => {
@@ -1139,45 +1704,30 @@ fn format_operator_ascii(
         }
         "and" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| format!("({})", r0(arg)))
-                    .collect::<Vec<_>>()
-                    .join(" && ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" and ")
             } else {
                 call_form("and", args, r0)
             }
         }
         "or" => {
             if args.len() >= 2 {
-                args.iter()
-                    .map(|arg| format!("({})", r0(arg)))
-                    .collect::<Vec<_>>()
-                    .join(" || ")
+                args.iter().map(r0).collect::<Vec<_>>().join(" or ")
             } else {
                 call_form("or", args, r0)
             }
         }
         "not" => {
             if args.len() == 1 {
-                format!("!({})", r0(&args[0]))
+                format!("not {}", r0(&args[0]))
             } else {
                 call_form("not", args, r0)
             }
         }
-        "binomial" => format!(
-            "binomial({}, {})",
-            args.first().map(r0).unwrap_or_default(),
-            args.get(1).map(r0).unwrap_or_default()
-        ),
-        "Pre" => {
-            if args.len() == 1 {
-                format!("{}-", r0(&args[0]))
-            } else {
-                call_form("Pre", args, r0)
-            }
-        }
-        // Genuinely call-shaped operators (log, sqrt, trig, min/max,
-        // laplacian, erf/erfc, ...) and unknown operators.
+        // `Pre` renders as a call form, matching the cross-language contract.
+        "Pre" => call_form("Pre", args, r0),
+        // Genuinely call-shaped operators (log, sqrt, trig, min/max, ...) and
+        // unknown operators (including the open-tier rewrite-target sugar
+        // grad/div/laplacian).
         _ => call_form(op, args, r0),
     };
 
@@ -1638,10 +2188,10 @@ mod tests {
             ..Default::default()
         });
 
-        // Test all three formatting functions
-        assert_eq!(to_unicode(&pre_expr), "x⁻");
-        assert_eq!(to_latex(&pre_expr), "{x}^{-}");
-        assert_eq!(to_ascii(&pre_expr), "x-");
+        // `Pre` renders as a call form (cross-language rendering contract).
+        assert_eq!(to_unicode(&pre_expr), "Pre(x)");
+        assert_eq!(to_latex(&pre_expr), "\\mathrm{Pre}(x)");
+        assert_eq!(to_ascii(&pre_expr), "Pre(x)");
 
         // Test with complex expression as argument
         let complex_pre = Expr::Operator(ExpressionNode {
@@ -1661,9 +2211,9 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(to_unicode(&complex_pre), "a + b⁻");
-        assert_eq!(to_latex(&complex_pre), "{a + b}^{-}");
-        assert_eq!(to_ascii(&complex_pre), "a + b-");
+        assert_eq!(to_unicode(&complex_pre), "Pre(a + b)");
+        assert_eq!(to_latex(&complex_pre), "\\mathrm{Pre}(a + b)");
+        assert_eq!(to_ascii(&complex_pre), "Pre(a + b)");
 
         // Test with multiple arguments (should fall back to Pre(...) format)
         let multi_arg_pre = Expr::Operator(ExpressionNode {
@@ -1726,7 +2276,7 @@ mod tests {
             vec![op_node("+", vec![var("a"), var("b")]), Expr::Number(2.0)],
         );
         assert_eq!(to_unicode(&pow), "(a + b)²");
-        assert_eq!(to_latex(&pow), "{(a + b)}^{2}");
+        assert_eq!(to_latex(&pow), "(a + b)^{2}");
         assert_eq!(to_ascii(&pow), "(a + b)^2");
 
         // `\frac` groups visually, so a fraction under a product stays bare

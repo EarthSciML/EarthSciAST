@@ -56,6 +56,79 @@ function to_superscript(text::String)
     return join([get(SUPERSCRIPT_MAP, c, c) for c in text])
 end
 
+# ── Greek-letter conversion (mirrors pretty-print.ts convertGreekLetters) ──
+# Named Greek spellings (lowercase + selected capitalized). Used to decide
+# whether a bare variable is a Greek letter that must pass through the LaTeX
+# `\mathrm{}` wrap untouched (the `convert_greek_letters` step maps it later).
+const GREEK_NAMES = Set([
+    "alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota",
+    "kappa","lambda","mu","nu","xi","omicron","pi","rho","sigma","tau",
+    "upsilon","phi","chi","psi","omega",
+    "Gamma","Delta","Theta","Lambda","Xi","Pi","Sigma","Upsilon","Phi","Psi","Omega",
+])
+
+# name / unicode-symbol → LaTeX command.
+const GREEK_TO_LATEX = Dict{String,String}(
+    "alpha"=>"\\alpha","beta"=>"\\beta","gamma"=>"\\gamma","delta"=>"\\delta",
+    "epsilon"=>"\\epsilon","zeta"=>"\\zeta","eta"=>"\\eta","theta"=>"\\theta",
+    "iota"=>"\\iota","kappa"=>"\\kappa","lambda"=>"\\lambda","mu"=>"\\mu",
+    "nu"=>"\\nu","xi"=>"\\xi","omicron"=>"\\omicron","pi"=>"\\pi","rho"=>"\\rho",
+    "sigma"=>"\\sigma","tau"=>"\\tau","upsilon"=>"\\upsilon","phi"=>"\\phi",
+    "chi"=>"\\chi","psi"=>"\\psi","omega"=>"\\omega",
+    "Gamma"=>"\\Gamma","Delta"=>"\\Delta","Theta"=>"\\Theta","Lambda"=>"\\Lambda",
+    "Xi"=>"\\Xi","Pi"=>"\\Pi","Sigma"=>"\\Sigma","Upsilon"=>"\\Upsilon",
+    "Phi"=>"\\Phi","Psi"=>"\\Psi","Omega"=>"\\Omega",
+    "α"=>"\\alpha","β"=>"\\beta","γ"=>"\\gamma","δ"=>"\\delta","ε"=>"\\epsilon",
+    "ζ"=>"\\zeta","η"=>"\\eta","θ"=>"\\theta","ι"=>"\\iota","κ"=>"\\kappa",
+    "λ"=>"\\lambda","μ"=>"\\mu","ν"=>"\\nu","ξ"=>"\\xi","ο"=>"\\omicron",
+    "π"=>"\\pi","ρ"=>"\\rho","σ"=>"\\sigma","τ"=>"\\tau","υ"=>"\\upsilon",
+    "φ"=>"\\phi","χ"=>"\\chi","ψ"=>"\\psi","ω"=>"\\omega",
+)
+
+# named Greek → unicode symbol.
+const GREEK_NAME_TO_UNICODE = Dict{String,String}(
+    "phi"=>"φ","theta"=>"θ","gamma"=>"γ","alpha"=>"α","beta"=>"β","delta"=>"δ",
+    "epsilon"=>"ε","zeta"=>"ζ","eta"=>"η","iota"=>"ι","kappa"=>"κ","lambda"=>"λ",
+    "mu"=>"μ","nu"=>"ν","xi"=>"ξ","omicron"=>"ο","pi"=>"π","rho"=>"ρ",
+    "sigma"=>"σ","tau"=>"τ","upsilon"=>"υ","chi"=>"χ","psi"=>"ψ","omega"=>"ω",
+)
+
+# unicode symbol → ascii name.
+const GREEK_UNICODE_TO_ASCII = Dict{String,String}(
+    "φ"=>"phi","θ"=>"theta","γ"=>"gamma","α"=>"alpha","β"=>"beta","δ"=>"delta",
+    "ε"=>"epsilon","ζ"=>"zeta","η"=>"eta","ι"=>"iota","κ"=>"kappa","λ"=>"lambda",
+    "μ"=>"mu","ν"=>"nu","ξ"=>"xi","ο"=>"omicron","π"=>"pi","ρ"=>"rho","σ"=>"sigma",
+    "τ"=>"tau","υ"=>"upsilon","χ"=>"chi","ψ"=>"psi","ω"=>"omega",
+)
+
+const _GREEK_NAME_ALT = "alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega"
+# Character class spans the two Greek ranges Α-Ω (U+0391..03A9) and α-ω
+# (U+03B1..03C9) using literal characters (PCRE's ALT_BSUX rejects \x{…}).
+const _GREEK_CLASS = "[Α-Ωα-ω]"
+const GREEK_LATEX_RE = Regex("$(_GREEK_CLASS)|(?:$(_GREEK_NAME_ALT))(?![A-Z}])")
+const GREEK_NAME_RE = Regex("(?:$(_GREEK_NAME_ALT))(?![A-Z])")
+const GREEK_UNICODE_RE = Regex(_GREEK_CLASS)
+
+"""
+    convert_greek_letters(text, format::Symbol) -> String
+
+Convert Greek letters between spellings for the given output format, mirroring
+pretty-print.ts `convertGreekLetters`: LaTeX maps names/symbols → `\\phi`;
+unicode maps names → symbols; ascii maps symbols → names. Negative lookaheads
+avoid converting a chemical prefix (uppercase-follows) or a `\\mathrm{}`-wrapped
+segment (`}`-follows) in the LaTeX form.
+"""
+function convert_greek_letters(text::AbstractString, format::Symbol)
+    if format == :latex
+        return replace(text, GREEK_LATEX_RE => m -> get(GREEK_TO_LATEX, String(m), String(m)))
+    elseif format == :unicode
+        return replace(text, GREEK_NAME_RE => m -> get(GREEK_NAME_TO_UNICODE, String(m), String(m)))
+    elseif format == :ascii
+        return replace(text, GREEK_UNICODE_RE => m -> get(GREEK_UNICODE_TO_ASCII, String(m), String(m)))
+    end
+    return String(text)
+end
+
 """
     has_element_pattern(variable::String) -> Bool
 
@@ -126,13 +199,26 @@ Uses greedy 2-char-before-1-char matching for element detection per spec Section
 function format_chemical_subscripts(variable::String, format::Symbol)
     if format == :latex
         if has_element_pattern(variable)
-            # Chemical formula: wrap in \\mathrm{} and convert digits to subscripts
+            # A bare element symbol without digits (e.g. "B", "P", "S") is a
+            # variable name, not a chemical formula — leave it italic/unwrapped
+            # (mirrors pretty-print.ts).
+            if variable in ELEMENTS && !occursin(r"\d", variable)
+                return variable
+            end
+            # Chemical formula: wrap in \\mathrm{} and convert digits to subscripts.
             result = replace(variable, r"(\d+)" => s"_{\1}")
             return "\\mathrm{$result}"
-        else
-            # Regular variable: return as-is
+        end
+        # Greek names pass through unchanged; convert_greek_letters maps them.
+        if variable in GREEK_NAMES
             return variable
         end
+        # Single character (Latin or Greek) → italic, no wrapping.
+        if length(variable) == 1
+            return variable
+        end
+        # Multi-character non-chemical variable → upright, underscores escaped.
+        return "\\mathrm{$(replace(variable, "_" => "\\_"))}"
     end
 
     if format == :ascii
@@ -264,9 +350,21 @@ function get_operator_precedence(op::String)
 end
 
 """
+    is_function_call_op(op::String) -> Bool
+
+True when the operator renders as a function call (no infix precedence). Mirrors
+pretty-print.ts `isFunctionCallOp`: the infix operators carry an explicit
+precedence (1–7); everything else (elementary/trig functions, `min`/`max`, …)
+binds tightest and is a function-call op.
+"""
+is_function_call_op(op::String) = get_operator_precedence(op) == 8
+
+"""
     needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false) -> Bool
 
-Check if parentheses are needed around a subexpression.
+Check if parentheses are needed around a subexpression, mirroring
+pretty-print.ts `needsParentheses`. A function-call argument is parenthesized
+only when it is a logical-`or` (loosest precedence).
 """
 function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false)
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
@@ -280,6 +378,12 @@ function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Boo
     parent_prec = get_operator_precedence(parent_op)
     child_prec = get_operator_precedence(child.op)
 
+    # Function arguments already sit inside the call's own parentheses — only
+    # parenthesize the loosest-binding (logical-or) child expressions.
+    if is_function_call_op(parent_op)
+        return child_prec <= 1
+    end
+
     if child_prec < parent_prec
         return true
     end
@@ -290,12 +394,6 @@ function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Boo
     # Same precedence: need parens if child is right operand and operator is not associative
     if is_right_operand && parent_op in ["-", "/", "^"]
         return true
-    end
-
-    # Special cases for function arguments - no parens needed for simple expressions
-    if parent_op in ["sin", "cos", "tan", "exp", "log", "sqrt", "abs"]
-        # Only parenthesize for very low precedence operators
-        return child_prec <= 2
     end
 
     return false
@@ -343,11 +441,12 @@ function format_expression(expr::Expr, format::Symbol)
     end
 
     if isa(expr, IntExpr)
-        return string(expr.value)
+        s = string(expr.value)
+        return (format == :unicode && startswith(s, "-")) ? "−" * s[2:end] : s
     end
 
     if isa(expr, VarExpr)
-        return format_chemical_subscripts(expr.name, format)
+        return convert_greek_letters(format_chemical_subscripts(expr.name, format), format)
     end
 
     if isa(expr, OpExpr)
@@ -378,6 +477,268 @@ Format an expression as plain ASCII mathematical notation.
 """
 format_expression_ascii(expr::Expr) = format_expression(expr, :ascii)
 
+# ── Structural / array-query op rendering (mirrors pretty-print.ts) ──────────
+# The closed evaluable-core ops whose defining data lives in fields OTHER than
+# `args` (esm-spec §4.2) plus `integral`. `format_structural_op` returns a
+# fully-formatted string, or `nothing` for ops handled by the scalar-op dispatch
+# (arithmetic, elementary functions, comparisons, D, Pre, …) or by the generic
+# fallback (open-tier sugar grad/div/laplacian, unknown user ops, skolem/rank).
+
+"""Escape LaTeX-special underscores in a bare operator / identifier name."""
+latex_name(name::AbstractString) = replace(String(name), "_" => "\\_")
+
+"""Parenthesize a sub-expression only when it is an operator node."""
+function wrap_if_op(e, format::Symbol)
+    s = format_expression(e, format)
+    return e isa OpExpr ? "($s)" : s
+end
+
+# Raw name for an `enum` type/member arg (the leaf identifier, not its rendered
+# form — the whole `Type.Member` label is wrapped once in LaTeX).
+_enum_name(e) = e isa VarExpr ? e.name :
+                e isa IntExpr ? string(e.value) :
+                e isa NumExpr ? format_number(e.value, :ascii) :
+                format_expression(e, :ascii)
+
+"""Format a `const` node's literal value (scalar number or nested array)."""
+function format_const_value(value, format::Symbol)
+    if value isa AbstractVector
+        return "[" * join([format_const_value(v, format) for v in value], ", ") * "]"
+    elseif value isa Bool
+        return string(value)
+    elseif value isa Integer
+        s = string(value)
+        return (format == :unicode && startswith(s, "-")) ? "−" * s[2:end] : s
+    elseif value isa AbstractFloat
+        return format_number(value, format)
+    else
+        return string(value)
+    end
+end
+
+# A structural integer bound (region / shape / range entry): plain integer,
+# symbolic dimension string, or a metaparameter Expression node.
+function format_bound(value, format::Symbol)
+    if value isa Integer
+        return string(value)
+    elseif value isa AbstractString
+        return String(value)
+    elseif value isa Expr
+        return format_expression(value, format)
+    else
+        return string(value)
+    end
+end
+
+"""Big-operator symbol for an `aggregate` reduction (semiring supersedes reduce)."""
+function aggregate_symbol(semiring, reduce, format::Symbol)
+    fam = if semiring !== nothing
+        (semiring == "max_product" || semiring == "max_sum") ? :max :
+        semiring == "min_sum" ? :min :
+        semiring == "bool_and_or" ? :bool : :plus
+    else
+        reduce == "*" ? :times :
+        reduce == "max" ? :max :
+        reduce == "min" ? :min : :plus
+    end
+    tbl = Dict(
+        :plus => ("Σ", "\\sum", "sum"),
+        :times => ("Π", "\\prod", "prod"),
+        :max => ("max", "\\max", "max"),
+        :min => ("min", "\\min", "min"),
+        :bool => ("⋁", "\\bigvee", "any"),
+    )
+    u, l, a = tbl[fam]
+    return format == :unicode ? u : format == :latex ? l : a
+end
+
+"""Render the ` where {…}` range clause shared by aggregate and argmin/argmax."""
+function format_ranges_clause(ranges, format::Symbol)
+    in_sym = format == :latex ? " \\in " : format == :unicode ? "∈" : " in "
+    parts = String[]
+    for k in sort(collect(keys(ranges)))
+        rng = ranges[k]
+        rng_str = if rng isa AbstractVector
+            join([format_bound(x, format) for x in rng], ":")
+        elseif rng isa IndexSetRef
+            isempty(rng.of) ? rng.from : "$(rng.from)($(join(rng.of, ", ")))"
+        else
+            string(rng)
+        end
+        push!(parts, "$k$in_sym$rng_str")
+    end
+    return format == :latex ?
+        " \\text{ where } \\{$(join(parts, ", "))\\}" :
+        " where {$(join(parts, ", "))}"
+end
+
+"""Render an `aggregate` node per the rendering contract."""
+function format_aggregate(node::OpExpr, format::Symbol)
+    r(e) = format_expression(e, format)
+    out_idx = node.output_idx === nothing ? Any[] : node.output_idx
+    out_str = join([string(o) for o in out_idx], ", ")
+    expr_str = node.expr_body === nothing ? "" : r(node.expr_body)
+    semiring = node.semiring
+    reduce = node.reduce === nothing ? "+" : node.reduce
+    sym = aggregate_symbol(semiring, reduce, format)
+    idx_part = format == :latex ? "_{$out_str}" : "[$out_str]"
+    out = "$sym$idx_part ($expr_str)"
+    if node.ranges !== nothing && !isempty(node.ranges)
+        out *= format_ranges_clause(node.ranges, format)
+    end
+    if node.join !== nothing && !isempty(node.join)
+        clauses = join(
+            [join(["$(p[1])=$(p[2])" for p in clause], ", ") for clause in node.join],
+            "; ")
+        out *= " join($clauses)"
+    end
+    if node.filter !== nothing
+        out *= " if $(r(node.filter))"
+    end
+    if node.distinct === true
+        out *= " distinct"
+    end
+    if node.key !== nothing
+        out *= " key=$(r(node.key))"
+    end
+    if semiring !== nothing && semiring != "sum_product"
+        out *= " [semiring=$semiring]"
+    end
+    return out
+end
+
+"""Render an `argmin` / `argmax` arg-witness node per the rendering contract."""
+function format_arg_witness(node::OpExpr, format::Symbol)
+    r(e) = format_expression(e, format)
+    arg = node.arg === nothing ? "" : node.arg
+    expr_str = node.expr_body === nothing ? "" : r(node.expr_body)
+    idx_part = format == :latex ? "_{$arg}" : "[$arg]"
+    name = format == :latex ? "\\mathrm{$(node.op)}" : node.op
+    out = "$name$idx_part ($expr_str)"
+    if node.ranges !== nothing && !isempty(node.ranges)
+        out *= format_ranges_clause(node.ranges, format)
+    end
+    return out
+end
+
+"""
+    format_structural_op(node::OpExpr, format::Symbol) -> Union{String,Nothing}
+
+Render the closed-core structural / array-query ops, or return `nothing` for
+ops handled elsewhere. See tests/display/RENDERING_CONTRACT.md.
+"""
+function format_structural_op(node::OpExpr, format::Symbol)
+    op = node.op
+    args = node.args
+    r(e) = format_expression(e, format)
+
+    if op == "const"
+        return format_const_value(node.value, format)
+    elseif op == "true"
+        return "true"
+    elseif op == "fn"
+        name = node.name === nothing ? "" : node.name
+        inner = join([r(a) for a in args], ", ")
+        return format == :latex ? "\\mathrm{$(latex_name(name))}($inner)" : "$name($inner)"
+    elseif op == "enum"
+        length(args) >= 2 || return nothing
+        label = "$(_enum_name(args[1])).$(_enum_name(args[2]))"
+        return format == :latex ? "\\mathrm{$(latex_name(label))}" : label
+    elseif op == "index"
+        isempty(args) && return nothing
+        arr = args[1]
+        idx = args[2:end]
+        return "$(wrap_if_op(arr, format))[$(join([r(i) for i in idx], ", "))]"
+    elseif op == "broadcast"
+        node.fn === nothing && return nothing
+        return format_operator_expression(OpExpr(node.fn, args), format)
+    elseif op == "integral"
+        isempty(args) && return nothing
+        f = r(args[1])
+        v = node.int_var === nothing ? "x" : node.int_var
+        lo = node.lower === nothing ? "" : r(node.lower)
+        hi = node.upper === nothing ? "" : r(node.upper)
+        if format == :latex
+            return "\\int_{$lo}^{$hi} $f \\, d$v"
+        elseif format == :unicode
+            return "∫[$lo, $hi] $f d$v"
+        else
+            return "integral($f, $v, $lo, $hi)"
+        end
+    elseif op == "table_lookup"
+        table = node.table === nothing ? "" : node.table
+        axes = node.table_axes === nothing ? Dict{String,Expr}() : node.table_axes
+        eq = format == :latex ? " = " : "="
+        bindings = join(["$k$eq$(r(axes[k]))" for k in sort(collect(keys(axes)))], ", ")
+        outv = node.output
+        out_str = outv === nothing ? "" : ":$(outv)"
+        name = format == :latex ? "\\mathrm{$(latex_name(table))}" : table
+        return "$name[$bindings]$out_str"
+    elseif op == "apply_expression_template"
+        name = node.name === nothing ? "" : node.name
+        binds = node.bindings === nothing ? Dict{String,Expr}() : node.bindings
+        eq = format == :latex ? " = " : "="
+        inner = join(["$k$eq$(r(binds[k]))" for k in sort(collect(keys(binds)))], ", ")
+        if format == :latex
+            return "\\mathrm{$(latex_name(name))}\\langle $inner \\rangle"
+        elseif format == :unicode
+            return "$name⟨$inner⟩"
+        else
+            return "$name<$inner>"
+        end
+    elseif op == "makearray"
+        regions = node.regions === nothing ? Vector{Vector{Vector{Int}}}() : node.regions
+        values = node.values === nothing ? Expr[] : node.values
+        parts = String[]
+        for (i, region) in enumerate(regions)
+            reg_str = join(
+                ["$(format_bound(dim[1], format)):$(format_bound(dim[2], format))"
+                 for dim in region], ", ")
+            val = i <= length(values) ? r(values[i]) : "?"
+            push!(parts, "[$reg_str] = $val")
+        end
+        name = format == :latex ? "\\mathrm{makearray}" : "makearray"
+        return "$name($(join(parts, ", ")))"
+    elseif op == "reshape"
+        isempty(args) && return nothing
+        shape = node.shape === nothing ? Any[] : node.shape
+        shp = join([format_bound(s, format) for s in shape], ", ")
+        name = format == :latex ? "\\mathrm{reshape}" : "reshape"
+        return "$name($(r(args[1])), [$shp])"
+    elseif op == "transpose"
+        isempty(args) && return nothing
+        perm = node.perm
+        if perm !== nothing && !isempty(perm)
+            name = format == :latex ? "\\mathrm{transpose}" : "transpose"
+            return "$name($(r(args[1])), [$(join(perm, ", "))])"
+        end
+        a = wrap_if_op(args[1], format)
+        if format == :latex
+            return "$a^{T}"
+        elseif format == :unicode
+            return "$(a)ᵀ"
+        else
+            return "transpose($(r(args[1])))"
+        end
+    elseif op == "concat"
+        inner = join([r(a) for a in args], ", ")
+        axis = node.axis === nothing ? 0 : node.axis
+        name = format == :latex ? "\\mathrm{concat}" : "concat"
+        return "$name($inner, axis=$axis)"
+    elseif op == "intersect_polygon" || op == "polygon_intersection_area"
+        inner = join([r(a) for a in args], ", ")
+        manifold = node.manifold === nothing ? "" : node.manifold
+        name = format == :latex ? "\\mathrm{$(latex_name(op))}" : op
+        return "$name($inner, manifold=$manifold)"
+    elseif op == "aggregate"
+        return format_aggregate(node, format)
+    elseif op == "argmin" || op == "argmax"
+        return format_arg_witness(node, format)
+    else
+        return nothing
+    end
+end
+
 """
     format_operator_expression(node::OpExpr, format::Symbol) -> String
 
@@ -388,26 +749,30 @@ function format_operator_expression(node::OpExpr, format::Symbol)
     args = node.args
     wrt = node.wrt
 
-    # Helper to format arguments with proper parenthesization
+    # Closed-core structural / array-query ops render specially.
+    structural = format_structural_op(node, format)
+    structural === nothing || return structural
+
+    # Helper to format arguments with proper parenthesization.
     format_arg = function(arg, is_right_operand=false)
         result = format_expression(arg, format)
+        needs_parentheses(op, arg, is_right_operand) ? "($result)" : result
+    end
 
-        if needs_parentheses(op, arg, is_right_operand)
-            if format == :latex
-                return "\\left($result\\right)"
-            else
-                return "($result)"
-            end
-        end
-        return result
+    # LaTeX function-call: `\left( \right)` only when the argument is tall
+    # (contains a \frac), else plain parentheses.
+    latex_func = function(name, arg)
+        la = format_expression_latex(arg)
+        occursin("\\frac", la) ? "$name\\left($la\\right)" : "$name($la)"
     end
 
     # min/max: function-call notation for any arity ≥ 2 (esm-spec §4.2)
     if (op == "min" || op == "max") && length(args) >= 2
-        arg_list = join([format_expression(arg, format) for arg in args], ", ")
         if format == :latex
+            arg_list = join([format_expression_latex(arg) for arg in args], ", ")
             return "\\$op($arg_list)"
         else
+            arg_list = join([format_expression(arg, format) for arg in args], ", ")
             return "$op($arg_list)"
         end
     end
@@ -419,28 +784,23 @@ function format_operator_expression(node::OpExpr, format::Symbol)
         if op == "+"
             return "$(format_arg(left)) + $(format_arg(right, true))"
         elseif op == "-"
-            if format == :unicode
-                return "$(format_arg(left)) − $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) - $(format_arg(right, true))"
-            end
+            sep = format == :unicode ? " − " : " - "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
         elseif op == "*"
             if format == :unicode
                 return "$(format_arg(left))·$(format_arg(right, true))"
             elseif format == :latex
                 return "$(format_arg(left)) \\cdot $(format_arg(right, true))"
-            elseif format == :ascii
-                return "$(format_arg(left))*$(format_arg(right, true))"
             else
                 return "$(format_arg(left)) * $(format_arg(right, true))"
             end
         elseif op == "/"
             if format == :latex
                 return "\\frac{$(format_expression_latex(left))}{$(format_expression_latex(right))}"
-            elseif format == :ascii
+            elseif format == :unicode
                 return "$(format_arg(left))/$(format_arg(right, true))"
             else
-                return "$(format_arg(left))/$(format_arg(right, true))"
+                return "$(format_arg(left)) / $(format_arg(right, true))"
             end
         elseif op == "^"
             if format == :latex
@@ -449,48 +809,34 @@ function format_operator_expression(node::OpExpr, format::Symbol)
                 return "$(format_arg(left))$(to_superscript(string(right.value)))"
             elseif format == :unicode && isa(right, NumExpr) && isinteger(right.value)
                 return "$(format_arg(left))$(to_superscript(string(Int(right.value))))"
-            elseif format == :ascii
-                return "$(format_arg(left))^$(format_arg(right, true))"
             else
                 return "$(format_arg(left))^$(format_arg(right, true))"
             end
         elseif op in [">", "<"]
             return "$(format_arg(left)) $op $(format_arg(right, true))"
         elseif op == ">="
-            if format == :unicode
-                return "$(format_arg(left)) ≥ $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) $op $(format_arg(right, true))"
-            end
+            sep = format == :unicode ? " ≥ " : format == :latex ? " \\geq " : " >= "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
         elseif op == "<="
-            if format == :unicode
-                return "$(format_arg(left)) ≤ $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) $op $(format_arg(right, true))"
-            end
-        elseif op == "=="
-            if format == :unicode
-                return "$(format_arg(left)) = $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) $op $(format_arg(right, true))"
-            end
+            sep = format == :unicode ? " ≤ " : format == :latex ? " \\leq " : " <= "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
+        elseif op == "==" || op == "="
+            sep = format == :ascii ? " == " : " = "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
         elseif op == "!="
-            if format == :unicode
-                return "$(format_arg(left)) ≠ $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) $op $(format_arg(right, true))"
-            end
+            sep = format == :unicode ? " ≠ " : format == :latex ? " \\neq " : " != "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
         elseif op == "and"
-            if format == :unicode
-                return "$(format_arg(left)) ∧ $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) and $(format_arg(right, true))"
-            end
+            sep = format == :unicode ? " ∧ " : format == :latex ? " \\land " : " and "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
         elseif op == "or"
-            if format == :unicode
-                return "$(format_arg(left)) ∨ $(format_arg(right, true))"
+            sep = format == :unicode ? " ∨ " : format == :latex ? " \\lor " : " or "
+            return "$(format_arg(left))$sep$(format_arg(right, true))"
+        elseif op == "atan2"
+            if format == :latex
+                return "\\mathrm{atan2}($(format_expression_latex(left)), $(format_expression_latex(right)))"
             else
-                return "$(format_arg(left)) or $(format_arg(right, true))"
+                return "atan2($(format_arg(left)), $(format_arg(right)))"
             end
         end
     end
@@ -500,113 +846,134 @@ function format_operator_expression(node::OpExpr, format::Symbol)
         arg = args[1]
 
         if op == "-"
-            # Unary minus
-            if format == :unicode
-                return "−$(format_arg(arg))"
-            else
-                return "-$(format_arg(arg))"
-            end
+            return format == :unicode ? "−$(format_arg(arg))" : "-$(format_arg(arg))"
         elseif op == "not"
             if format == :unicode
                 return "¬$(format_arg(arg))"
+            elseif format == :latex
+                return "\\neg $(format_arg(arg))"
             else
                 return "not $(format_arg(arg))"
             end
-        elseif op in ["exp", "sin", "cos", "tan"]
-            if format == :latex
-                return "\\$op\\left($(format_expression_latex(arg))\\right)"
-            else
-                return "$op($(format_arg(arg)))"
-            end
+        elseif op in ["exp", "sin", "cos", "tan", "sinh", "cosh", "tanh"]
+            return format == :latex ? latex_func("\\$op", arg) : "$op($(format_arg(arg)))"
         elseif op == "log"
             if format == :unicode
                 return "ln($(format_arg(arg)))"
             elseif format == :latex
-                return "\\$op\\left($(format_expression_latex(arg))\\right)"
-            elseif format == :ascii
-                return "log($(format_arg(arg)))"
+                return latex_func("\\ln", arg)
             else
-                return "$op($(format_arg(arg)))"
+                return "log($(format_arg(arg)))"
             end
         elseif op == "log10"
             if format == :unicode
                 return "log₁₀($(format_arg(arg)))"
             elseif format == :latex
-                return "\\log_{10}\\left($(format_expression_latex(arg))\\right)"
-            elseif format == :ascii
-                return "log10($(format_arg(arg)))"
+                return latex_func("\\log_{10}", arg)
             else
-                return "$op($(format_arg(arg)))"
+                return "log10($(format_arg(arg)))"
             end
         elseif op == "sqrt"
             if format == :unicode
-                return "√$(format_arg(arg))"
+                argstr = format_expression_unicode(arg)
+                return isa(arg, OpExpr) ? "√($argstr)" : "√$argstr"
             elseif format == :latex
                 return "\\sqrt{$(format_expression_latex(arg))}"
-            elseif format == :ascii
-                return "sqrt($(format_arg(arg)))"
             else
-                return "$op($(format_arg(arg)))"
+                return "sqrt($(format_arg(arg)))"
             end
         elseif op == "abs"
             if format == :unicode
                 return "|$(format_arg(arg))|"
             elseif format == :latex
                 return "|$(format_expression_latex(arg))|"
-            elseif format == :ascii
+            else
                 return "abs($(format_arg(arg)))"
+            end
+        elseif op == "sign"
+            if format == :unicode
+                return "sgn($(format_arg(arg)))"
+            elseif format == :latex
+                return "\\mathrm{sgn}($(format_expression_latex(arg)))"
+            else
+                return "sign($(format_arg(arg)))"
+            end
+        elseif op == "floor"
+            if format == :unicode
+                return "⌊$(format_arg(arg))⌋"
+            elseif format == :latex
+                return "\\lfloor $(format_expression_latex(arg)) \\rfloor"
+            else
+                return "floor($(format_arg(arg)))"
+            end
+        elseif op == "ceil"
+            if format == :unicode
+                return "⌈$(format_arg(arg))⌉"
+            elseif format == :latex
+                return "\\lceil $(format_expression_latex(arg)) \\rceil"
+            else
+                return "ceil($(format_arg(arg)))"
+            end
+        elseif op in ["asin", "acos", "atan"]
+            arc = replace(op, "a" => "arc"; count=1)
+            if format == :unicode
+                return "$arc($(format_arg(arg)))"
+            elseif format == :latex
+                return "\\$arc($(format_expression_latex(arg)))"
             else
                 return "$op($(format_arg(arg)))"
             end
+        elseif op in ["asinh", "acosh", "atanh"]
+            hyp = replace(op, "a" => ""; count=1)
+            if format == :unicode
+                return "$hyp⁻¹($(format_arg(arg)))"
+            elseif format == :latex
+                return "\\$hyp^{-1}($(format_expression_latex(arg)))"
+            else
+                return "$op($(format_arg(arg)))"
+            end
+        elseif op == "Pre"
+            return format == :latex ?
+                "\\mathrm{Pre}($(format_expression_latex(arg)))" :
+                "Pre($(format_arg(arg)))"
         elseif op == "D"
-            # Derivative operator
             wrt_var = isnothing(wrt) ? "t" : wrt
             if format == :unicode
-                variable = format_expression_unicode(arg)
-                return "∂$variable/∂$wrt_var"
+                return "∂$(format_expression_unicode(arg))/∂$wrt_var"
             elseif format == :latex
                 return "\\frac{\\partial $(format_expression_latex(arg))}{\\partial $wrt_var}"
-            elseif format == :ascii
-                return "d($(format_arg(arg)))/d$wrt_var"
             else
-                return "D($(format_arg(arg)))/D$wrt_var"
+                return "D($(format_expression_ascii(arg)))/D$wrt_var"
             end
         end
     end
 
-    # N-ary operators
+    # Ternary / n-ary operators
+    if length(args) == 3 && op == "ifelse"
+        cond, thenx, elsex = args
+        if format == :latex
+            return "\\begin{cases} $(format_expression_latex(thenx)) & \\text{if } $(format_expression_latex(cond)) \\\\ $(format_expression_latex(elsex)) & \\text{otherwise} \\end{cases}"
+        end
+        return "ifelse($(format_arg(cond)), $(format_arg(thenx)), $(format_arg(elsex)))"
+    end
+
     if length(args) >= 3
         if op == "+"
-            # N-ary addition
             return join([format_arg(arg) for arg in args], " + ")
         elseif op == "*"
-            # N-ary multiplication
-            if format == :unicode
-                sep = "·"
-            elseif format == :latex
-                sep = " \\cdot "
-            else
-                sep = "*"
-            end
+            sep = format == :unicode ? "·" : format == :latex ? " \\cdot " : " * "
             return join([format_arg(arg) for arg in args], sep)
         elseif op == "or"
-            # N-ary or
-            if format == :unicode
-                return join([format_arg(arg) for arg in args], " ∨ ")
-            else
-                return join([format_arg(arg) for arg in args], " or ")
-            end
+            sep = format == :unicode ? " ∨ " : format == :latex ? " \\lor " : " or "
+            return join([format_arg(arg) for arg in args], sep)
         end
     end
 
-    # Fallback: function call notation
+    # Generic fallback: function-call notation for open-tier sugar
+    # (grad/div/laplacian), skolem/rank, and any unknown user op. Only `args`
+    # are shown; a non-`args` field (e.g. grad's `dim`) is NOT rendered.
     arg_list = join([format_expression(arg, format) for arg in args], ", ")
-
-    if format == :latex
-        return "\\text{$op}\\left($arg_list\\right)"
-    else
-        return "$op($arg_list)"
-    end
+    return format == :latex ? "\\mathrm{$(latex_name(op))}($arg_list)" : "$op($arg_list)"
 end
 
 """
@@ -895,7 +1262,8 @@ to_ascii(::Nothing) = "nothing"
 
 to_ascii(target::Real) = format_number(target, :ascii)
 
-to_ascii(target::String) = format_chemical_subscripts(target, :ascii)
+to_ascii(target::String) =
+    convert_greek_letters(format_chemical_subscripts(target, :ascii), :ascii)
 
 to_ascii(target::Expr) = format_expression_ascii(target)
 
@@ -910,3 +1278,31 @@ to_ascii(target::ReactionSystem) =
     "ReactionSystem($(length(target.species)) species, $(length(target.reactions)) reactions)"
 
 to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"
+
+"""
+    to_unicode(target) -> String
+    to_latex(target) -> String
+
+Format `target` as Unicode / LaTeX mathematical notation. Parallel to
+[`to_ascii`](@ref); dispatch mirrors it so all three formatters share a naming
+convention across the language bindings (see tests/display/RENDERING_CONTRACT.md).
+"""
+to_unicode(target) =
+    throw(ArgumentError("Unsupported type for Unicode formatting: $(typeof(target))"))
+to_unicode(::Nothing) = "nothing"
+to_unicode(target::Real) = format_number(target, :unicode)
+to_unicode(target::String) =
+    convert_greek_letters(format_chemical_subscripts(target, :unicode), :unicode)
+to_unicode(target::Expr) = format_expression_unicode(target)
+to_unicode(target::Equation) =
+    "$(format_expression_unicode(target.lhs)) = $(format_expression_unicode(target.rhs))"
+
+to_latex(target) =
+    throw(ArgumentError("Unsupported type for LaTeX formatting: $(typeof(target))"))
+to_latex(::Nothing) = "nothing"
+to_latex(target::Real) = format_number(target, :latex)
+to_latex(target::String) =
+    convert_greek_letters(format_chemical_subscripts(target, :latex), :latex)
+to_latex(target::Expr) = format_expression_latex(target)
+to_latex(target::Equation) =
+    "$(format_expression_latex(target.lhs)) = $(format_expression_latex(target.rhs))"

@@ -923,6 +923,55 @@ function convertGreekLettersToMathML(text: string): string {
     )
 }
 
+/** Escape `<`, `>`, `&` for embedding text inside MathML `<mtext>`. */
+function escapeMathMLText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * MathML rendering for the structural / array-query ops. `const` and `true`
+ * get native tokens; the array-query tier is rendered non-lossily by
+ * embedding its Unicode text form in `<mtext>` (MathML is TS-only and not
+ * part of the cross-language conformance contract). `broadcast` delegates to
+ * the scalar-op MathML of its `fn`. Returns `undefined` for other ops.
+ */
+function formatStructuralOpMathML(node: ExprNode): string | undefined {
+  const op = node.op
+  const n = node as unknown as Record<string, unknown>
+  switch (op) {
+    case 'const': {
+      const v = n.value
+      if (Array.isArray(v)) return `<mtext>${escapeMathMLText(formatConstValue(v, 'ascii'))}</mtext>`
+      return `<mn>${formatConstValue(v, 'ascii')}</mn>`
+    }
+    case 'true':
+      return `<mi>true</mi>`
+    case 'broadcast': {
+      const fn = n.fn
+      if (typeof fn !== 'string') return undefined
+      return formatExpressionNodeMathML({ op: fn, args: node.args ?? [] } as ExprNode)
+    }
+    case 'fn':
+    case 'enum':
+    case 'index':
+    case 'integral':
+    case 'table_lookup':
+    case 'apply_expression_template':
+    case 'makearray':
+    case 'reshape':
+    case 'transpose':
+    case 'concat':
+    case 'intersect_polygon':
+    case 'polygon_intersection_area':
+    case 'aggregate':
+    case 'argmin':
+    case 'argmax':
+      return `<mtext>${escapeMathMLText(formatStructuralOp(node, 'unicode')!)}</mtext>`
+    default:
+      return undefined
+  }
+}
+
 /**
  * Format an ExpressionNode for MathML output
  */
@@ -931,6 +980,9 @@ function formatExpressionNodeMathML(node: ExprNode): string {
 
   // Helper to format arguments
   const formatArg = (arg: Expr): string => toMathML(arg)
+
+  const structural = formatStructuralOpMathML(node)
+  if (structural !== undefined) return structural
 
   // Binary operators
   if (args.length === 2) {
@@ -1027,17 +1079,6 @@ function formatExpressionNodeMathML(node: ExprNode): string {
       case 'sign':
         return `<mrow><mi>sgn</mi><mo>(</mo>${formatArg(arg)}<mo>)</mo></mrow>`
 
-      case 'grad': {
-        const dim = (node as any).dim || 'x'
-        return `<mfrac><mrow><mo>&part;</mo>${formatArg(arg)}</mrow><mrow><mo>&part;</mo><mi>${dim}</mi></mrow></mfrac>`
-      }
-
-      case 'div':
-        return `<mrow><mo>&nabla;</mo><mo>&cdot;</mo>${formatArg(arg)}</mrow>`
-
-      case 'laplacian':
-        return `<mrow><msup><mo>&nabla;</mo><mn>2</mn></msup>${formatArg(arg)}</mrow>`
-
       case 'Pre':
         return `<mrow><mi>Pre</mi><mo>(</mo>${formatArg(arg)}<mo>)</mo></mrow>`
 
@@ -1084,11 +1125,293 @@ function formatExpressionNodeMathML(node: ExprNode): string {
   return `<mrow><mi>${op}</mi><mo>(</mo>${argList}<mo>)</mo></mrow>`
 }
 
+/** Escape LaTeX-special underscores in a bare operator / identifier name. */
+function latexName(name: string): string {
+  return name.replace(/_/g, '\\_')
+}
+
+/** Render a sub-expression in the requested text format. */
+function renderExpr(expr: Expr, format: TextFormat): string {
+  if (format === 'unicode') return toUnicode(expr)
+  if (format === 'latex') return toLatex(expr)
+  return toAscii(expr)
+}
+
+/** Parenthesize a sub-expression only when it is an operator node. */
+function wrapIfOp(expr: Expr, format: TextFormat): string {
+  const s = renderExpr(expr, format)
+  if (typeof expr === 'object' && expr !== null && 'op' in expr) return `(${s})`
+  return s
+}
+
+/** Format a `const` node's literal value (scalar number or nested array). */
+function formatConstValue(value: unknown, format: TextFormat): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => formatConstValue(v, format)).join(', ')}]`
+  }
+  const n = numericValue(value)
+  if (n !== undefined) return formatNumber(n, format)
+  return String(value)
+}
+
+/**
+ * Format a structural integer bound (region / shape / range entry): a plain
+ * integer, a symbolic dimension string, or a metaparameter Expression node.
+ */
+function formatBound(value: unknown, format: TextFormat): string {
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') return value
+  const n = numericValue(value)
+  if (n !== undefined) return String(n)
+  if (value && typeof value === 'object' && 'op' in (value as object)) {
+    return renderExpr(value as Expr, format)
+  }
+  return String(value)
+}
+
+/** Big-operator symbol for an `aggregate` reduction (semiring supersedes reduce). */
+function aggregateSymbol(
+  semiring: string | undefined,
+  reduce: string,
+  format: TextFormat,
+): string {
+  let fam: 'plus' | 'times' | 'max' | 'min' | 'bool'
+  if (semiring) {
+    fam =
+      semiring === 'max_product' || semiring === 'max_sum'
+        ? 'max'
+        : semiring === 'min_sum'
+          ? 'min'
+          : semiring === 'bool_and_or'
+            ? 'bool'
+            : 'plus'
+  } else {
+    fam = reduce === '*' ? 'times' : reduce === 'max' ? 'max' : reduce === 'min' ? 'min' : 'plus'
+  }
+  const table: Record<string, [string, string, string]> = {
+    plus: ['Σ', '\\sum', 'sum'],
+    times: ['Π', '\\prod', 'prod'],
+    max: ['max', '\\max', 'max'],
+    min: ['min', '\\min', 'min'],
+    bool: ['⋁', '\\bigvee', 'any'],
+  }
+  const [u, l, a] = table[fam]
+  return format === 'unicode' ? u : format === 'latex' ? l : a
+}
+
+/** Render the ` where {…}` range clause shared by aggregate and argmin/argmax. */
+function formatRangesClause(ranges: Record<string, unknown>, format: TextFormat): string {
+  const inSym = format === 'latex' ? ' \\in ' : format === 'unicode' ? '∈' : ' in '
+  const parts = Object.keys(ranges)
+    .sort()
+    .map((k) => {
+      const rng = ranges[k]
+      let rngStr: string
+      if (Array.isArray(rng)) {
+        rngStr = rng.map((x) => formatBound(x, format)).join(':')
+      } else if (rng && typeof rng === 'object' && 'from' in (rng as object)) {
+        const from = String((rng as { from: unknown }).from)
+        const of = (rng as { of?: string[] }).of
+        rngStr = of && of.length > 0 ? `${from}(${of.join(', ')})` : from
+      } else {
+        rngStr = String(rng)
+      }
+      return `${k}${inSym}${rngStr}`
+    })
+  if (format === 'latex') return ` \\text{ where } \\{${parts.join(', ')}\\}`
+  return ` where {${parts.join(', ')}}`
+}
+
+/** Render an `aggregate` node per the rendering contract. */
+function formatAggregate(node: ExprNode, format: TextFormat): string {
+  const n = node as unknown as Record<string, unknown>
+  const r = (e: Expr) => renderExpr(e, format)
+  const outIdx = ((n.output_idx as unknown[]) ?? []).map((o) => String(o)).join(', ')
+  const exprStr = n.expr !== undefined ? r(n.expr as Expr) : ''
+  const semiring = n.semiring as string | undefined
+  const reduce = (n.reduce as string | undefined) ?? '+'
+  const sym = aggregateSymbol(semiring, reduce, format)
+  const idxPart = format === 'latex' ? `_{${outIdx}}` : `[${outIdx}]`
+  let out = `${sym}${idxPart} (${exprStr})`
+  const ranges = n.ranges as Record<string, unknown> | undefined
+  if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
+  const join = n.join as Array<{ on?: string[][] }> | undefined
+  if (join && join.length > 0) {
+    const clauses = join
+      .map((c) => (c.on ?? []).map((p) => `${p[0]}=${p[1]}`).join(', '))
+      .join('; ')
+    out += ` join(${clauses})`
+  }
+  if (n.filter !== undefined) out += ` if ${r(n.filter as Expr)}`
+  if (n.distinct === true) out += ` distinct`
+  if (n.key !== undefined) out += ` key=${r(n.key as Expr)}`
+  if (semiring && semiring !== 'sum_product') out += ` [semiring=${semiring}]`
+  return out
+}
+
+/** Render an `argmin` / `argmax` arg-witness node per the rendering contract. */
+function formatArgWitness(node: ExprNode, format: TextFormat): string {
+  const n = node as unknown as Record<string, unknown>
+  const r = (e: Expr) => renderExpr(e, format)
+  const arg = String(n.arg ?? '')
+  const exprStr = n.expr !== undefined ? r(n.expr as Expr) : ''
+  const idxPart = format === 'latex' ? `_{${arg}}` : `[${arg}]`
+  const name = format === 'latex' ? `\\mathrm{${node.op}}` : node.op
+  let out = `${name}${idxPart} (${exprStr})`
+  const ranges = n.ranges as Record<string, unknown> | undefined
+  if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
+  return out
+}
+
+/**
+ * Render the closed-core structural / array-query ops (esm-spec §4.2), whose
+ * defining data lives in fields OTHER than `args`, plus `integral`. Returns a
+ * fully-formatted string, or `undefined` for ops handled by the scalar-op
+ * dispatch (arithmetic, elementary functions, comparisons, D, Pre, …) or by
+ * the generic fallback (open-tier sugar `grad`/`div`/`laplacian`, unknown
+ * user ops). See tests/display/RENDERING_CONTRACT.md.
+ */
+function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefined {
+  const op = node.op
+  const args = node.args ?? []
+  const n = node as unknown as Record<string, unknown>
+  const r = (e: Expr) => renderExpr(e, format)
+
+  switch (op) {
+    case 'const':
+      return formatConstValue(n.value, format)
+
+    case 'true':
+      return 'true'
+
+    case 'fn': {
+      const name = String(n.name ?? '')
+      const inner = args.map(r).join(', ')
+      return format === 'latex' ? `\\mathrm{${latexName(name)}}(${inner})` : `${name}(${inner})`
+    }
+
+    case 'enum': {
+      const label = `${String(args[0])}.${String(args[1])}`
+      return format === 'latex' ? `\\mathrm{${latexName(label)}}` : label
+    }
+
+    case 'index': {
+      if (args.length === 0) return undefined
+      const [arr, ...idx] = args
+      return `${wrapIfOp(arr, format)}[${idx.map(r).join(', ')}]`
+    }
+
+    case 'broadcast': {
+      const fn = n.fn
+      if (typeof fn !== 'string') return undefined
+      return formatExpressionNode({ op: fn, args } as ExprNode, format)
+    }
+
+    case 'integral': {
+      if (args.length === 0) return undefined
+      const f = r(args[0])
+      const v = String(n.var ?? 'x')
+      const lo = n.lower !== undefined ? r(n.lower as Expr) : ''
+      const hi = n.upper !== undefined ? r(n.upper as Expr) : ''
+      if (format === 'latex') return `\\int_{${lo}}^{${hi}} ${f} \\, d${v}`
+      if (format === 'unicode') return `∫[${lo}, ${hi}] ${f} d${v}`
+      return `integral(${f}, ${v}, ${lo}, ${hi})`
+    }
+
+    case 'table_lookup': {
+      const table = String(n.table ?? '')
+      const axes = (n.axes as Record<string, Expr>) ?? {}
+      const eq = format === 'latex' ? ' = ' : '='
+      const bindings = Object.keys(axes)
+        .sort()
+        .map((k) => `${k}${eq}${r(axes[k])}`)
+        .join(', ')
+      const out = n.output
+      const outStr = out !== undefined && out !== null ? `:${String(out)}` : ''
+      const name = format === 'latex' ? `\\mathrm{${latexName(table)}}` : table
+      return `${name}[${bindings}]${outStr}`
+    }
+
+    case 'apply_expression_template': {
+      const name = String(n.name ?? '')
+      const bindings = (n.bindings as Record<string, Expr>) ?? {}
+      const eq = format === 'latex' ? ' = ' : '='
+      const inner = Object.keys(bindings)
+        .sort()
+        .map((k) => `${k}${eq}${r(bindings[k])}`)
+        .join(', ')
+      if (format === 'latex') return `\\mathrm{${latexName(name)}}\\langle ${inner} \\rangle`
+      if (format === 'unicode') return `${name}⟨${inner}⟩`
+      return `${name}<${inner}>`
+    }
+
+    case 'makearray': {
+      const regions = (n.regions as unknown[][][]) ?? []
+      const values = (n.values as Expr[]) ?? []
+      const parts = regions.map((region, i) => {
+        const regStr = region
+          .map((dim) => `${formatBound(dim[0], format)}:${formatBound(dim[1], format)}`)
+          .join(', ')
+        const val = i < values.length ? r(values[i]) : '?'
+        return `[${regStr}] = ${val}`
+      })
+      const name = format === 'latex' ? '\\mathrm{makearray}' : 'makearray'
+      return `${name}(${parts.join(', ')})`
+    }
+
+    case 'reshape': {
+      if (args.length === 0) return undefined
+      const shape = ((n.shape as unknown[]) ?? []).map((s) => formatBound(s, format)).join(', ')
+      const name = format === 'latex' ? '\\mathrm{reshape}' : 'reshape'
+      return `${name}(${r(args[0])}, [${shape}])`
+    }
+
+    case 'transpose': {
+      if (args.length === 0) return undefined
+      const perm = n.perm as number[] | undefined
+      if (perm && perm.length > 0) {
+        const name = format === 'latex' ? '\\mathrm{transpose}' : 'transpose'
+        return `${name}(${r(args[0])}, [${perm.join(', ')}])`
+      }
+      const a = wrapIfOp(args[0], format)
+      if (format === 'latex') return `${a}^{T}`
+      if (format === 'unicode') return `${a}ᵀ`
+      return `transpose(${r(args[0])})`
+    }
+
+    case 'concat': {
+      const inner = args.map(r).join(', ')
+      const name = format === 'latex' ? '\\mathrm{concat}' : 'concat'
+      return `${name}(${inner}, axis=${n.axis ?? 0})`
+    }
+
+    case 'intersect_polygon':
+    case 'polygon_intersection_area': {
+      const inner = args.map(r).join(', ')
+      const name = format === 'latex' ? `\\mathrm{${latexName(op)}}` : op
+      return `${name}(${inner}, manifold=${String(n.manifold ?? '')})`
+    }
+
+    case 'aggregate':
+      return formatAggregate(node, format)
+
+    case 'argmin':
+    case 'argmax':
+      return formatArgWitness(node, format)
+
+    default:
+      return undefined
+  }
+}
+
 /**
  * Format an ExpressionNode (operator with arguments)
  */
 function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'ascii'): string {
   const { op, args, wrt } = node
+
+  const structural = formatStructuralOp(node, format)
+  if (structural !== undefined) return structural
 
   // Helper to format arguments with proper parenthesization
   const formatArg = (arg: Expr, isRightOperand = false): string => {
@@ -1238,14 +1561,6 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
           return `\\${op}(${toLatex(left)}, ${toLatex(right)})`
         }
         return `${op}(${formatArg(left)}, ${formatArg(right)})`
-
-      case 'binomial':
-        if (format === 'unicode') {
-          return `C(${toUnicode(left)},${toUnicode(right)})`
-        } else if (format === 'latex') {
-          return `\\binom{${toLatex(left)}}{${toLatex(right)}}`
-        }
-        return `${op}(${formatArg(left)}, ${formatArg(right)})`
     }
   }
 
@@ -1372,53 +1687,11 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
         return `${op}(${formatArg(arg)})`
       }
 
-      case 'grad': {
-        const dim = (node as any).dim || 'x' // dim is not in ExprNode type yet
-        if (format === 'unicode') {
-          const variable2 = formatArg(arg)
-          return `∂${variable2}/∂${dim}`
-        } else if (format === 'latex') {
-          return `\\frac{\\partial ${toLatex(arg)}}{\\partial ${dim}}`
-        }
-        return `d(${toAscii(arg)})/d${dim}`
-      }
-
-      case 'div':
-        if (format === 'unicode') {
-          return `∇·${formatArg(arg)}`
-        } else if (format === 'latex') {
-          return `\\nabla \\cdot ${toLatex(arg)}`
-        }
-        return `${op}(${formatArg(arg)})`
-
-      case 'laplacian':
-        if (format === 'unicode') {
-          return `∇²${formatArg(arg)}`
-        } else if (format === 'latex') {
-          return `\\nabla^2 ${toLatex(arg)}`
-        }
-        return `${op}(${formatArg(arg)})`
-
       case 'Pre':
         if (format === 'latex') {
           return `\\mathrm{Pre}(${toLatex(arg)})`
         }
         return `Pre(${formatArg(arg)})`
-
-      case 'gamma':
-        if (format === 'unicode') {
-          return `Γ(${formatArg(arg)})`
-        } else if (format === 'latex') {
-          return `\\Gamma(${toLatex(arg)})`
-        }
-        return `${op}(${formatArg(arg)})`
-
-      case 'erf':
-      case 'erfc':
-        if (format === 'latex') {
-          return `\\mathrm{${op}}(${toLatex(arg)})`
-        }
-        return `${op}(${formatArg(arg)})`
 
       case 'D': {
         // Derivative operator
@@ -1484,7 +1757,8 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
     }
   }
 
-  // Fallback: function call notation
+  // Generic fallback: function-call notation for open-tier sugar
+  // (grad/div/laplacian) and any unknown user op. Only `args` are shown.
   const argList = args
     .map((arg) => {
       if (format === 'unicode') return toUnicode(arg)
@@ -1494,7 +1768,7 @@ function formatExpressionNode(node: ExprNode, format: 'unicode' | 'latex' | 'asc
     .join(', ')
 
   if (format === 'latex') {
-    return `\\text{${op}}\\left(${argList}\\right)`
+    return `\\mathrm{${latexName(op)}}(${argList})`
   }
   return `${op}(${argList})`
 }

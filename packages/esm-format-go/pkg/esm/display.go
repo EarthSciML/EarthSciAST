@@ -1,11 +1,14 @@
 package esm
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // chemicalElements contains all 118 chemical element symbols for element-aware tokenizer
@@ -53,12 +56,44 @@ func formatExpression(target interface{}, format string) string {
 		return formatNumber(expr, format)
 	case int:
 		return formatNumber(float64(expr), format)
+	case int64:
+		return formatNumber(float64(expr), format)
+	case json.Number:
+		// Structural-op sub-fields (expr/lower/upper/bounds/…) are not run
+		// through the args normalizer, so numeric literals remain json.Number.
+		if f, err := expr.Float64(); err == nil {
+			return formatNumber(f, format)
+		}
+		return string(expr)
+	case bool:
+		if expr {
+			return "true"
+		}
+		return "false"
 	case string:
 		return formatVariable(expr, format)
 	case ExprNode:
 		return formatExprNode(expr, format, 0)
 	case *ExprNode:
 		return formatExprNode(*expr, format, 0)
+	case map[string]interface{}:
+		// A raw op-node object (an un-normalized nested expression). Re-decode
+		// it into an ExprNode so all structural fields are populated, then render.
+		if b, err := json.Marshal(expr); err == nil {
+			if e, err := UnmarshalExpression(b); err == nil {
+				if _, isMap := e.(map[string]interface{}); !isMap {
+					return formatExpression(e, format)
+				}
+			}
+		}
+		return fmt.Sprintf("%v", target)
+	case []interface{}:
+		// A bare array literal (e.g. a const array reaching the recursion).
+		parts := make([]string, len(expr))
+		for i, v := range expr {
+			parts[i] = formatExpression(v, format)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
 	default:
 		return fmt.Sprintf("%v", target)
 	}
@@ -101,18 +136,66 @@ func formatNumber(num float64, format string) string {
 	return result
 }
 
-// formatVariable formats variable names with chemical subscripts
+// greekUnicode maps Greek letter names to their Unicode symbols.
+var greekUnicode = map[string]string{
+	"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+	"zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+	"lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "omicron": "ο",
+	"pi": "π", "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ",
+	"phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
+}
+
+// greekLatex maps Greek letter names to their LaTeX commands.
+var greekLatex = map[string]string{
+	"alpha": "\\alpha", "beta": "\\beta", "gamma": "\\gamma", "delta": "\\delta",
+	"epsilon": "\\epsilon", "zeta": "\\zeta", "eta": "\\eta", "theta": "\\theta",
+	"iota": "\\iota", "kappa": "\\kappa", "lambda": "\\lambda", "mu": "\\mu",
+	"nu": "\\nu", "xi": "\\xi", "omicron": "\\omicron", "pi": "\\pi",
+	"rho": "\\rho", "sigma": "\\sigma", "tau": "\\tau", "upsilon": "\\upsilon",
+	"phi": "\\phi", "chi": "\\chi", "psi": "\\psi", "omega": "\\omega",
+}
+
+// latexEscape escapes LaTeX-special characters in a bare identifier / op name.
+func latexEscape(name string) string {
+	return strings.ReplaceAll(name, "_", "\\_")
+}
+
+// formatVariable formats variable names, mirroring the cross-language rendering
+// contract (tests/display/RENDERING_CONTRACT.md): chemical species get
+// element-aware subscripts; Greek letter names render as symbols/commands;
+// single-character identifiers stay italic (bare); multi-character non-chemical
+// identifiers render upright (\mathrm{…}, underscores escaped) in LaTeX.
 func formatVariable(varName string, format string) string {
-	switch format {
-	case "unicode":
-		return formatChemicalSubscripts(varName, format)
-	case "latex":
-		// In LaTeX, put chemical variables in \mathrm{}
+	// A bare element symbol without digits (e.g. "S", "P", "B", "He") is a
+	// plain variable name, NOT a chemical formula — render it verbatim in every
+	// format (matches the cross-language rendering contract).
+	if chemicalElements[varName] && !strings.ContainsAny(varName, "0123456789") {
+		return varName
+	}
+
+	// Chemical species: element-aware subscripting.
+	if isChemicalSpecies(varName) {
 		formatted := formatChemicalSubscripts(varName, format)
-		if isChemicalSpecies(varName) {
+		if format == "latex" {
 			return "\\mathrm{" + formatted + "}"
 		}
 		return formatted
+	}
+
+	switch format {
+	case "unicode":
+		if sym, ok := greekUnicode[varName]; ok {
+			return sym
+		}
+		return varName
+	case "latex":
+		if cmd, ok := greekLatex[varName]; ok {
+			return cmd
+		}
+		if utf8.RuneCountInString(varName) <= 1 {
+			return varName
+		}
+		return "\\mathrm{" + latexEscape(varName) + "}"
 	default:
 		return varName
 	}
@@ -292,6 +375,13 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 	op := node.Op
 	args := node.Args
 
+	// Closed structural / array-query tier (esm-spec §4.2) whose defining data
+	// lives in fields other than `args`, plus `integral`. See
+	// tests/display/RENDERING_CONTRACT.md and tests/display/structural_ops.json.
+	if s, ok := formatStructuralOp(node, format); ok {
+		return s
+	}
+
 	switch op {
 	case "+":
 		if len(args) < 2 {
@@ -350,8 +440,16 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 	case "D":
 		return formatDerivative(args, node.Wrt, format)
 
-	case "grad":
-		return formatGradient(args, node.Dim, format)
+	case "abs":
+		if len(args) == 1 {
+			arg := formatExpression(args[0], format)
+			switch format {
+			case "unicode", "latex":
+				return "|" + arg + "|"
+			default:
+				return "abs(" + arg + ")"
+			}
+		}
 
 	case "exp":
 		arg := formatExpression(args[0], format)
@@ -399,22 +497,21 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 			return left + " " + op + " " + right
 		}
 
-	// Other functions
-	default:
-		if len(args) == 1 {
-			arg := formatExpression(args[0], format)
-			return op + "(" + arg + ")"
-		} else if len(args) > 1 {
-			argStrs := make([]string, len(args))
-			for i, arg := range args {
-				argStrs[i] = formatExpression(arg, format)
-			}
-			return op + "(" + strings.Join(argStrs, ", ") + ")"
-		}
 	}
 
-	// Fallback
-	return op + "(...)"
+	// Generic fallback: function-call notation for open-tier rewrite sugar
+	// (grad/div/laplacian) and any unknown user op. Only `args` are shown; any
+	// non-`args` fields (e.g. grad's `dim`) are NOT rendered.
+	// unicode/ascii: name(a0, a1, …);  latex: \mathrm{ESC(name)}(a0, a1, …).
+	argStrs := make([]string, len(args))
+	for i, arg := range args {
+		argStrs[i] = formatExpression(arg, format)
+	}
+	inner := strings.Join(argStrs, ", ")
+	if format == "latex" {
+		return "\\mathrm{" + latexEscape(op) + "}(" + inner + ")"
+	}
+	return op + "(" + inner + ")"
 }
 
 func formatMultiplication(args []interface{}, format string) string {
@@ -684,22 +781,532 @@ func formatDerivative(args []interface{}, wrt *string, format string) string {
 	}
 }
 
-func formatGradient(args []interface{}, dim *string, format string) string {
-	if len(args) != 1 || dim == nil {
-		return "grad(...)"
+// ============================================================================
+// Structural / array-query op rendering (esm-spec §4.2).
+//
+// These ops carry their defining data in fields OTHER than `args`. The
+// rendering here mirrors the reference TypeScript implementation
+// (packages/earthsci-toolkit/src/pretty-print.ts) and MUST byte-match the
+// shared fixtures in tests/display/structural_ops.json. See
+// tests/display/RENDERING_CONTRACT.md for the exact per-op rules.
+//
+// Go exposes only the unicode and latex formats (there is no ToAscii); the
+// ascii branches below exist for completeness and internal reuse.
+// ============================================================================
+
+// isOpNodeValue reports whether a value is an operator node (ExprNode or a raw
+// {"op": …} object) rather than a leaf.
+func isOpNodeValue(v interface{}) bool {
+	switch x := v.(type) {
+	case ExprNode, *ExprNode:
+		return true
+	case map[string]interface{}:
+		_, ok := x["op"]
+		return ok
 	}
+	return false
+}
 
-	variable := formatExpression(args[0], format)
-	dimension := *dim
+// wrapIfOpValue renders a sub-expression, parenthesizing it only when it is an
+// operator node (a leaf is never wrapped).
+func wrapIfOpValue(v interface{}, format string) string {
+	s := formatExpression(v, format)
+	if isOpNodeValue(v) {
+		return "(" + s + ")"
+	}
+	return s
+}
 
+// plainScalar returns the bare textual form of a raw scalar (index name, axis,
+// output selector, manifold, …) — mirrors JS String(): identifiers and enum
+// labels render verbatim, with no variable/greek formatting.
+func plainScalar(v interface{}) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case json.Number:
+		return string(x)
+	case bool:
+		return strconv.FormatBool(x)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+// formatConstValue renders a `const` node's literal payload: a scalar number or
+// a nested array, indistinguishable from a bare literal.
+func formatConstValue(v interface{}, format string) string {
+	switch x := v.(type) {
+	case []interface{}:
+		parts := make([]string, len(x))
+		for i, e := range x {
+			parts[i] = formatConstValue(e, format)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case json.Number:
+		if f, err := x.Float64(); err == nil {
+			return formatNumber(f, format)
+		}
+		return string(x)
+	case float64:
+		return formatNumber(x, format)
+	case int:
+		return formatNumber(float64(x), format)
+	case int64:
+		return formatNumber(float64(x), format)
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+// formatStructBound renders a structural integer bound (region / shape / perm /
+// range entry): a plain integer or symbolic dimension, or a metaparameter
+// Expression node rendered recursively.
+func formatStructBound(v interface{}, format string) string {
+	if isOpNodeValue(v) {
+		return formatExpression(v, format)
+	}
+	return plainScalar(v)
+}
+
+// joinArgList renders each arg via the recursive formatter and joins with ", ".
+func joinArgList(args []interface{}, format string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = formatExpression(a, format)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// aggregateSymbol returns the big-operator symbol for an aggregate reduction;
+// a present `semiring` supersedes `reduce`.
+func aggregateSymbol(semiring, reduce, format string) string {
+	var fam string
+	if semiring != "" {
+		switch semiring {
+		case "max_product", "max_sum":
+			fam = "max"
+		case "min_sum":
+			fam = "min"
+		case "bool_and_or":
+			fam = "bool"
+		default:
+			fam = "plus"
+		}
+	} else {
+		switch reduce {
+		case "*":
+			fam = "times"
+		case "max":
+			fam = "max"
+		case "min":
+			fam = "min"
+		default:
+			fam = "plus"
+		}
+	}
+	table := map[string][3]string{
+		"plus":  {"Σ", "\\sum", "sum"},
+		"times": {"Π", "\\prod", "prod"},
+		"max":   {"max", "\\max", "max"},
+		"min":   {"min", "\\min", "min"},
+		"bool":  {"⋁", "\\bigvee", "any"},
+	}
+	t := table[fam]
 	switch format {
 	case "unicode":
-		return "∂" + variable + "/∂" + dimension
+		return t[0]
 	case "latex":
-		return "\\frac{\\partial " + variable + "}{\\partial " + dimension + "}"
+		return t[1]
 	default:
-		return "d(" + variable + ")/d" + dimension
+		return t[2]
 	}
+}
+
+// formatRange renders a single range value: an array [a,b]→"a:b" / [a,s,b]→
+// "a:s:b", or an index-set reference { "from": F, "of": […] }.
+func formatRange(v interface{}, format string) string {
+	switch x := v.(type) {
+	case []interface{}:
+		parts := make([]string, len(x))
+		for i, e := range x {
+			parts[i] = formatStructBound(e, format)
+		}
+		return strings.Join(parts, ":")
+	case map[string]interface{}:
+		if from, ok := x["from"]; ok {
+			fromStr := plainScalar(from)
+			if of, ok := x["of"].([]interface{}); ok && len(of) > 0 {
+				ofParts := make([]string, len(of))
+				for i, o := range of {
+					ofParts[i] = plainScalar(o)
+				}
+				return fromStr + "(" + strings.Join(ofParts, ", ") + ")"
+			}
+			return fromStr
+		}
+		return fmt.Sprintf("%v", x)
+	default:
+		return plainScalar(v)
+	}
+}
+
+// formatRangesClause renders the ` where {…}` clause shared by aggregate and
+// argmin/argmax (keys sorted).
+func formatRangesClause(ranges map[string]interface{}, format string) string {
+	inSym := "∈"
+	switch format {
+	case "latex":
+		inSym = " \\in "
+	case "ascii":
+		inSym = " in "
+	}
+	keys := make([]string, 0, len(ranges))
+	for k := range ranges {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + inSym + formatRange(ranges[k], format)
+	}
+	if format == "latex" {
+		return " \\text{ where } \\{" + strings.Join(parts, ", ") + "\\}"
+	}
+	return " where {" + strings.Join(parts, ", ") + "}"
+}
+
+// formatAggregate renders an `aggregate` node per the rendering contract.
+func formatAggregate(node ExprNode, format string) string {
+	outParts := make([]string, len(node.OutputIdx))
+	for i, o := range node.OutputIdx {
+		outParts[i] = plainScalar(o)
+	}
+	outIdx := strings.Join(outParts, ", ")
+
+	exprStr := ""
+	if node.Expr != nil {
+		exprStr = formatExpression(node.Expr, format)
+	}
+	semiring := ""
+	if node.Semiring != nil {
+		semiring = *node.Semiring
+	}
+	reduce := "+"
+	if node.Reduce != nil {
+		reduce = *node.Reduce
+	}
+	sym := aggregateSymbol(semiring, reduce, format)
+
+	var out string
+	if format == "latex" {
+		out = sym + "_{" + outIdx + "} (" + exprStr + ")"
+	} else {
+		out = sym + "[" + outIdx + "] (" + exprStr + ")"
+	}
+
+	if len(node.Ranges) > 0 {
+		out += formatRangesClause(node.Ranges, format)
+	}
+	if len(node.Join) > 0 {
+		clauses := make([]string, 0, len(node.Join))
+		for _, c := range node.Join {
+			cm, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			onRaw, _ := cm["on"].([]interface{})
+			pairs := make([]string, 0, len(onRaw))
+			for _, p := range onRaw {
+				pp, ok := p.([]interface{})
+				if !ok || len(pp) < 2 {
+					continue
+				}
+				pairs = append(pairs, plainScalar(pp[0])+"="+plainScalar(pp[1]))
+			}
+			clauses = append(clauses, strings.Join(pairs, ", "))
+		}
+		out += " join(" + strings.Join(clauses, "; ") + ")"
+	}
+	if node.Filter != nil {
+		out += " if " + formatExpression(node.Filter, format)
+	}
+	if node.Distinct != nil && *node.Distinct {
+		out += " distinct"
+	}
+	if node.Key != nil {
+		out += " key=" + formatExpression(node.Key, format)
+	}
+	if semiring != "" && semiring != "sum_product" {
+		out += " [semiring=" + semiring + "]"
+	}
+	return out
+}
+
+// formatArgWitness renders an `argmin` / `argmax` node per the rendering contract.
+func formatArgWitness(node ExprNode, format string) string {
+	arg := ""
+	if node.Arg != nil {
+		arg = *node.Arg
+	}
+	exprStr := ""
+	if node.Expr != nil {
+		exprStr = formatExpression(node.Expr, format)
+	}
+	var out string
+	if format == "latex" {
+		out = "\\mathrm{" + node.Op + "}_{" + arg + "} (" + exprStr + ")"
+	} else {
+		out = node.Op + "[" + arg + "] (" + exprStr + ")"
+	}
+	if len(node.Ranges) > 0 {
+		out += formatRangesClause(node.Ranges, format)
+	}
+	return out
+}
+
+// formatStructuralOp renders the closed structural / array-query tier
+// (esm-spec §4.2) plus `integral`. It returns (rendered, true) when it handles
+// the op, or ("", false) to defer to the scalar-op dispatch or the generic
+// fallback (open-tier sugar grad/div/laplacian and unknown user ops).
+func formatStructuralOp(node ExprNode, format string) (string, bool) {
+	op := node.Op
+	args := node.Args
+
+	switch op {
+	case "const":
+		return formatConstValue(node.Value, format), true
+
+	case "true":
+		return "true", true
+
+	case "fn":
+		name := ""
+		if node.Name != nil {
+			name = *node.Name
+		}
+		inner := joinArgList(args, format)
+		if format == "latex" {
+			return "\\mathrm{" + latexEscape(name) + "}(" + inner + ")", true
+		}
+		return name + "(" + inner + ")", true
+
+	case "enum":
+		if len(args) < 2 {
+			return "", false
+		}
+		label := plainScalar(args[0]) + "." + plainScalar(args[1])
+		if format == "latex" {
+			return "\\mathrm{" + latexEscape(label) + "}", true
+		}
+		return label, true
+
+	case "index":
+		if len(args) == 0 {
+			return "", false
+		}
+		idx := make([]string, 0, len(args)-1)
+		for _, a := range args[1:] {
+			idx = append(idx, formatExpression(a, format))
+		}
+		return wrapIfOpValue(args[0], format) + "[" + strings.Join(idx, ", ") + "]", true
+
+	case "broadcast":
+		if node.Fn == nil {
+			return "", false
+		}
+		return formatExprNode(ExprNode{Op: *node.Fn, Args: args}, format, 0), true
+
+	case "integral":
+		if len(args) == 0 {
+			return "", false
+		}
+		f := formatExpression(args[0], format)
+		v := "x"
+		if node.Var != nil {
+			v = *node.Var
+		}
+		lo := ""
+		if node.Lower != nil {
+			lo = formatExpression(node.Lower, format)
+		}
+		hi := ""
+		if node.Upper != nil {
+			hi = formatExpression(node.Upper, format)
+		}
+		switch format {
+		case "latex":
+			return "\\int_{" + lo + "}^{" + hi + "} " + f + " \\, d" + v, true
+		case "unicode":
+			return "∫[" + lo + ", " + hi + "] " + f + " d" + v, true
+		default:
+			return "integral(" + f + ", " + v + ", " + lo + ", " + hi + ")", true
+		}
+
+	case "table_lookup":
+		table := ""
+		if node.Table != nil {
+			table = *node.Table
+		}
+		eq := "="
+		if format == "latex" {
+			eq = " = "
+		}
+		keys := make([]string, 0, len(node.TableAxes))
+		for k := range node.TableAxes {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = k + eq + formatExpression(node.TableAxes[k], format)
+		}
+		outStr := ""
+		if node.Output != nil {
+			outStr = ":" + plainScalar(node.Output)
+		}
+		name := table
+		if format == "latex" {
+			name = "\\mathrm{" + latexEscape(table) + "}"
+		}
+		return name + "[" + strings.Join(parts, ", ") + "]" + outStr, true
+
+	case "apply_expression_template":
+		name := ""
+		if node.Name != nil {
+			name = *node.Name
+		}
+		eq := "="
+		if format == "latex" {
+			eq = " = "
+		}
+		keys := make([]string, 0, len(node.Bindings))
+		for k := range node.Bindings {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = k + eq + formatExpression(node.Bindings[k], format)
+		}
+		inner := strings.Join(parts, ", ")
+		switch format {
+		case "latex":
+			return "\\mathrm{" + latexEscape(name) + "}\\langle " + inner + " \\rangle", true
+		case "unicode":
+			return name + "⟨" + inner + "⟩", true
+		default:
+			return name + "<" + inner + ">", true
+		}
+
+	case "makearray":
+		parts := make([]string, 0, len(node.Regions))
+		for i, region := range node.Regions {
+			dims := make([]string, len(region))
+			for j, dim := range region {
+				lo, hi := "", ""
+				if len(dim) > 0 {
+					lo = formatStructBound(dim[0], format)
+				}
+				if len(dim) > 1 {
+					hi = formatStructBound(dim[1], format)
+				}
+				dims[j] = lo + ":" + hi
+			}
+			val := "?"
+			if i < len(node.Values) {
+				val = formatExpression(node.Values[i], format)
+			}
+			parts = append(parts, "["+strings.Join(dims, ", ")+"] = "+val)
+		}
+		name := "makearray"
+		if format == "latex" {
+			name = "\\mathrm{makearray}"
+		}
+		return name + "(" + strings.Join(parts, ", ") + ")", true
+
+	case "reshape":
+		if len(args) == 0 {
+			return "", false
+		}
+		shape := make([]string, len(node.Shape))
+		for i, s := range node.Shape {
+			shape[i] = formatStructBound(s, format)
+		}
+		name := "reshape"
+		if format == "latex" {
+			name = "\\mathrm{reshape}"
+		}
+		return name + "(" + formatExpression(args[0], format) + ", [" + strings.Join(shape, ", ") + "])", true
+
+	case "transpose":
+		if len(args) == 0 {
+			return "", false
+		}
+		if len(node.Perm) > 0 {
+			perm := make([]string, len(node.Perm))
+			for i, p := range node.Perm {
+				perm[i] = formatStructBound(p, format)
+			}
+			name := "transpose"
+			if format == "latex" {
+				name = "\\mathrm{transpose}"
+			}
+			return name + "(" + formatExpression(args[0], format) + ", [" + strings.Join(perm, ", ") + "])", true
+		}
+		switch format {
+		case "latex":
+			return wrapIfOpValue(args[0], format) + "^{T}", true
+		case "unicode":
+			return wrapIfOpValue(args[0], format) + "ᵀ", true
+		default:
+			return "transpose(" + formatExpression(args[0], format) + ")", true
+		}
+
+	case "concat":
+		inner := joinArgList(args, format)
+		axis := "0"
+		if node.Axis != nil {
+			axis = plainScalar(node.Axis)
+		}
+		name := "concat"
+		if format == "latex" {
+			name = "\\mathrm{concat}"
+		}
+		return name + "(" + inner + ", axis=" + axis + ")", true
+
+	case "intersect_polygon", "polygon_intersection_area":
+		inner := joinArgList(args, format)
+		manifold := ""
+		if node.Manifold != nil {
+			manifold = *node.Manifold
+		}
+		name := op
+		if format == "latex" {
+			name = "\\mathrm{" + latexEscape(op) + "}"
+		}
+		return name + "(" + inner + ", manifold=" + manifold + ")", true
+
+	case "aggregate":
+		return formatAggregate(node, format), true
+
+	case "argmin", "argmax":
+		return formatArgWitness(node, format), true
+	}
+
+	return "", false
 }
 
 // Helper functions for specific formatting decisions

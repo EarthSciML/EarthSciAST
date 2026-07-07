@@ -9,8 +9,11 @@
  *   - a relative computational-cost weight for complexity analysis.
  *
  * Adding a new scalar operator is ONE entry here plus any per-format render
- * strings in pretty-print.ts. Rewrite-target ops (D, grad, div, laplacian,
- * integral) and structural ops (const, enum, fn, aggregate, ...) are handled
+ * strings in pretty-print.ts. Open-tier rewrite-target sugar (grad, div,
+ * laplacian, integral) is NOT registered here — it carries no evaluator and,
+ * per esm-spec §4.2, gets no special treatment: it renders through the
+ * generic pretty-print fallback and is lowered by rewrite rules before
+ * evaluation. Structural ops (const, enum, fn, aggregate, ...) are handled
  * specially by their consumers and carry no `evaluate`.
  */
 
@@ -231,13 +234,9 @@ export const OPS: Record<string, OpInfo> = {
     evaluate: (args) => (args[0] !== 0 ? args[1] : args[2]),
   },
 
-  // ---- event / rewrite-target ops (no scalar evaluator) -------------------
+  // ---- event / structural ops (no scalar evaluator) -----------------------
   Pre: { arity: { min: 1, max: 1 }, cost: 5 },
   D: { arity: { min: 1, max: 1 }, cost: 30 },
-  grad: { arity: { min: 1, max: 1 }, cost: 50 },
-  div: { arity: { min: 1, max: 1 }, cost: 40 },
-  laplacian: { arity: { min: 1, max: 1 }, cost: 80 },
-  integral: { arity: { min: 1, max: null }, cost: 50 },
 }
 
 /** Registry entry for an operator, or undefined for unknown ops. */

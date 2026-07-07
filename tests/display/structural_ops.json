@@ -1,0 +1,558 @@
+[
+  {
+    "name": "Structural and array-query ops",
+    "tests": [
+      {
+        "name": "const scalar",
+        "input": {
+          "op": "const",
+          "args": [],
+          "value": 5
+        },
+        "unicode": "5",
+        "latex": "5",
+        "ascii": "5"
+      },
+      {
+        "name": "const float",
+        "input": {
+          "op": "const",
+          "args": [],
+          "value": 2.5
+        },
+        "unicode": "2.5",
+        "latex": "2.5",
+        "ascii": "2.5"
+      },
+      {
+        "name": "const array",
+        "input": {
+          "op": "const",
+          "args": [],
+          "value": [
+            1,
+            2,
+            3
+          ]
+        },
+        "unicode": "[1, 2, 3]",
+        "latex": "[1, 2, 3]",
+        "ascii": "[1, 2, 3]"
+      },
+      {
+        "name": "true",
+        "input": {
+          "op": "true",
+          "args": []
+        },
+        "unicode": "true",
+        "latex": "true",
+        "ascii": "true"
+      },
+      {
+        "name": "fn datetime.year",
+        "input": {
+          "op": "fn",
+          "name": "datetime.year",
+          "args": [
+            "t"
+          ]
+        },
+        "unicode": "datetime.year(t)",
+        "latex": "\\mathrm{datetime.year}(t)",
+        "ascii": "datetime.year(t)"
+      },
+      {
+        "name": "fn underscored name",
+        "input": {
+          "op": "fn",
+          "name": "datetime.day_of_year",
+          "args": [
+            "t"
+          ]
+        },
+        "unicode": "datetime.day_of_year(t)",
+        "latex": "\\mathrm{datetime.day\\_of\\_year}(t)",
+        "ascii": "datetime.day_of_year(t)"
+      },
+      {
+        "name": "enum member",
+        "input": {
+          "op": "enum",
+          "args": [
+            "Season",
+            "summer"
+          ]
+        },
+        "unicode": "Season.summer",
+        "latex": "\\mathrm{Season.summer}",
+        "ascii": "Season.summer"
+      },
+      {
+        "name": "index",
+        "input": {
+          "op": "index",
+          "args": [
+            "A",
+            "i",
+            "j"
+          ]
+        },
+        "unicode": "A[i, j]",
+        "latex": "A[i, j]",
+        "ascii": "A[i, j]"
+      },
+      {
+        "name": "index of compound",
+        "input": {
+          "op": "index",
+          "args": [
+            {
+              "op": "+",
+              "args": [
+                "A",
+                "B"
+              ]
+            },
+            "i"
+          ]
+        },
+        "unicode": "(A + B)[i]",
+        "latex": "(A + B)[i]",
+        "ascii": "(A + B)[i]"
+      },
+      {
+        "name": "broadcast +",
+        "input": {
+          "op": "broadcast",
+          "fn": "+",
+          "args": [
+            "A",
+            "B"
+          ]
+        },
+        "unicode": "A + B",
+        "latex": "A + B",
+        "ascii": "A + B"
+      },
+      {
+        "name": "broadcast exp",
+        "input": {
+          "op": "broadcast",
+          "fn": "exp",
+          "args": [
+            "A"
+          ]
+        },
+        "unicode": "exp(A)",
+        "latex": "\\exp(A)",
+        "ascii": "exp(A)"
+      },
+      {
+        "name": "integral",
+        "input": {
+          "op": "integral",
+          "args": [
+            "f"
+          ],
+          "var": "x",
+          "lower": 0,
+          "upper": 1
+        },
+        "unicode": "∫[0, 1] f dx",
+        "latex": "\\int_{0}^{1} f \\, dx",
+        "ascii": "integral(f, x, 0, 1)"
+      },
+      {
+        "name": "table_lookup single axis",
+        "input": {
+          "op": "table_lookup",
+          "args": [],
+          "table": "visc",
+          "axes": {
+            "T": "temp"
+          }
+        },
+        "unicode": "visc[T=temp]",
+        "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
+        "ascii": "visc[T=temp]"
+      },
+      {
+        "name": "table_lookup multi axis with output",
+        "input": {
+          "op": "table_lookup",
+          "args": [],
+          "table": "k_rate",
+          "axes": {
+            "T": "temp",
+            "p": "pres"
+          },
+          "output": 1
+        },
+        "unicode": "k_rate[T=temp, p=pres]:1",
+        "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
+        "ascii": "k_rate[T=temp, p=pres]:1"
+      },
+      {
+        "name": "apply_expression_template",
+        "input": {
+          "op": "apply_expression_template",
+          "name": "central_diff",
+          "args": [],
+          "bindings": {
+            "f": "u",
+            "h": "dx"
+          }
+        },
+        "unicode": "central_diff⟨f=u, h=dx⟩",
+        "latex": "\\mathrm{central\\_diff}\\langle f = u, h = \\mathrm{dx} \\rangle",
+        "ascii": "central_diff<f=u, h=dx>"
+      },
+      {
+        "name": "makearray regions",
+        "input": {
+          "op": "makearray",
+          "args": [],
+          "regions": [
+            [
+              [
+                1,
+                3
+              ]
+            ],
+            [
+              [
+                4,
+                6
+              ]
+            ]
+          ],
+          "values": [
+            {
+              "op": "const",
+              "args": [],
+              "value": 0
+            },
+            "q"
+          ]
+        },
+        "unicode": "makearray([1:3] = 0, [4:6] = q)",
+        "latex": "\\mathrm{makearray}([1:3] = 0, [4:6] = q)",
+        "ascii": "makearray([1:3] = 0, [4:6] = q)"
+      },
+      {
+        "name": "makearray 2d region",
+        "input": {
+          "op": "makearray",
+          "args": [],
+          "regions": [
+            [
+              [
+                1,
+                3
+              ],
+              [
+                1,
+                2
+              ]
+            ]
+          ],
+          "values": [
+            "z"
+          ]
+        },
+        "unicode": "makearray([1:3, 1:2] = z)",
+        "latex": "\\mathrm{makearray}([1:3, 1:2] = z)",
+        "ascii": "makearray([1:3, 1:2] = z)"
+      },
+      {
+        "name": "reshape",
+        "input": {
+          "op": "reshape",
+          "args": [
+            "A"
+          ],
+          "shape": [
+            2,
+            3
+          ]
+        },
+        "unicode": "reshape(A, [2, 3])",
+        "latex": "\\mathrm{reshape}(A, [2, 3])",
+        "ascii": "reshape(A, [2, 3])"
+      },
+      {
+        "name": "transpose",
+        "input": {
+          "op": "transpose",
+          "args": [
+            "A"
+          ]
+        },
+        "unicode": "Aᵀ",
+        "latex": "A^{T}",
+        "ascii": "transpose(A)"
+      },
+      {
+        "name": "transpose with perm",
+        "input": {
+          "op": "transpose",
+          "args": [
+            "A"
+          ],
+          "perm": [
+            1,
+            0
+          ]
+        },
+        "unicode": "transpose(A, [1, 0])",
+        "latex": "\\mathrm{transpose}(A, [1, 0])",
+        "ascii": "transpose(A, [1, 0])"
+      },
+      {
+        "name": "concat",
+        "input": {
+          "op": "concat",
+          "args": [
+            "A",
+            "B"
+          ],
+          "axis": 0
+        },
+        "unicode": "concat(A, B, axis=0)",
+        "latex": "\\mathrm{concat}(A, B, axis=0)",
+        "ascii": "concat(A, B, axis=0)"
+      },
+      {
+        "name": "intersect_polygon",
+        "input": {
+          "op": "intersect_polygon",
+          "args": [
+            "P",
+            "Q"
+          ],
+          "manifold": "spherical"
+        },
+        "unicode": "intersect_polygon(P, Q, manifold=spherical)",
+        "latex": "\\mathrm{intersect\\_polygon}(P, Q, manifold=spherical)",
+        "ascii": "intersect_polygon(P, Q, manifold=spherical)"
+      },
+      {
+        "name": "polygon_intersection_area",
+        "input": {
+          "op": "polygon_intersection_area",
+          "args": [
+            "P",
+            "Q"
+          ],
+          "manifold": "planar"
+        },
+        "unicode": "polygon_intersection_area(P, Q, manifold=planar)",
+        "latex": "\\mathrm{polygon\\_intersection\\_area}(P, Q, manifold=planar)",
+        "ascii": "polygon_intersection_area(P, Q, manifold=planar)"
+      },
+      {
+        "name": "aggregate sum",
+        "input": {
+          "op": "aggregate",
+          "args": [
+            "A",
+            "B"
+          ],
+          "output_idx": [
+            "i"
+          ],
+          "expr": {
+            "op": "*",
+            "args": [
+              "A",
+              "B"
+            ]
+          },
+          "reduce": "+"
+        },
+        "unicode": "Σ[i] (A·B)",
+        "latex": "\\sum_{i} (A \\cdot B)",
+        "ascii": "sum[i] (A * B)"
+      },
+      {
+        "name": "aggregate product 2d",
+        "input": {
+          "op": "aggregate",
+          "args": [
+            "A"
+          ],
+          "output_idx": [
+            "i",
+            "j"
+          ],
+          "expr": "A",
+          "reduce": "*"
+        },
+        "unicode": "Π[i, j] (A)",
+        "latex": "\\prod_{i, j} (A)",
+        "ascii": "prod[i, j] (A)"
+      },
+      {
+        "name": "aggregate with ranges",
+        "input": {
+          "op": "aggregate",
+          "args": [],
+          "output_idx": [
+            "i"
+          ],
+          "expr": {
+            "op": "*",
+            "args": [
+              "A",
+              "B"
+            ]
+          },
+          "reduce": "+",
+          "ranges": {
+            "j": [
+              1,
+              10
+            ]
+          }
+        },
+        "unicode": "Σ[i] (A·B) where {j∈1:10}",
+        "latex": "\\sum_{i} (A \\cdot B) \\text{ where } \\{j \\in 1:10\\}",
+        "ascii": "sum[i] (A * B) where {j in 1:10}"
+      },
+      {
+        "name": "aggregate semiring",
+        "input": {
+          "op": "aggregate",
+          "args": [],
+          "output_idx": [
+            "i"
+          ],
+          "expr": "d",
+          "semiring": "min_sum"
+        },
+        "unicode": "min[i] (d) [semiring=min_sum]",
+        "latex": "\\min_{i} (d) [semiring=min_sum]",
+        "ascii": "min[i] (d) [semiring=min_sum]"
+      },
+      {
+        "name": "argmin",
+        "input": {
+          "op": "argmin",
+          "args": [],
+          "arg": "g",
+          "expr": {
+            "op": "abs",
+            "args": [
+              "d"
+            ]
+          },
+          "ranges": {
+            "g": [
+              1,
+              10
+            ]
+          }
+        },
+        "unicode": "argmin[g] (|d|) where {g∈1:10}",
+        "latex": "\\mathrm{argmin}_{g} (|d|) \\text{ where } \\{g \\in 1:10\\}",
+        "ascii": "argmin[g] (abs(d)) where {g in 1:10}"
+      },
+      {
+        "name": "grad (generic)",
+        "input": {
+          "op": "grad",
+          "args": [
+            "phi"
+          ],
+          "dim": "x"
+        },
+        "unicode": "grad(φ)",
+        "latex": "\\mathrm{grad}(\\phi)",
+        "ascii": "grad(phi)"
+      },
+      {
+        "name": "div (generic)",
+        "input": {
+          "op": "div",
+          "args": [
+            "v"
+          ]
+        },
+        "unicode": "div(v)",
+        "latex": "\\mathrm{div}(v)",
+        "ascii": "div(v)"
+      },
+      {
+        "name": "laplacian (generic)",
+        "input": {
+          "op": "laplacian",
+          "args": [
+            "u"
+          ]
+        },
+        "unicode": "laplacian(u)",
+        "latex": "\\mathrm{laplacian}(u)",
+        "ascii": "laplacian(u)"
+      },
+      {
+        "name": "grad of compound (generic)",
+        "input": {
+          "op": "grad",
+          "args": [
+            {
+              "op": "*",
+              "args": [
+                "f",
+                "g"
+              ]
+            }
+          ],
+          "dim": "x"
+        },
+        "unicode": "grad(f·g)",
+        "latex": "\\mathrm{grad}(f \\cdot g)",
+        "ascii": "grad(f * g)"
+      },
+      {
+        "name": "unknown user op (generic)",
+        "input": {
+          "op": "godunov_hamiltonian",
+          "args": [
+            "u",
+            "v"
+          ]
+        },
+        "unicode": "godunov_hamiltonian(u, v)",
+        "latex": "\\mathrm{godunov\\_hamiltonian}(u, v)",
+        "ascii": "godunov_hamiltonian(u, v)"
+      },
+      {
+        "name": "skolem (generic, args-only)",
+        "input": {
+          "op": "skolem",
+          "args": [
+            "edge",
+            "u",
+            "v"
+          ]
+        },
+        "unicode": "skolem(edge, u, v)",
+        "latex": "\\mathrm{skolem}(\\mathrm{edge}, u, v)",
+        "ascii": "skolem(edge, u, v)"
+      },
+      {
+        "name": "rank (generic, args-only)",
+        "input": {
+          "op": "rank",
+          "args": [
+            "S"
+          ]
+        },
+        "unicode": "rank(S)",
+        "latex": "\\mathrm{rank}(S)",
+        "ascii": "rank(S)"
+      }
+    ]
+  }
+]

@@ -9,7 +9,7 @@ import pytest
 import json
 from conftest import FIXTURES_ROOT
 
-from earthsci_toolkit.display import to_unicode, to_latex
+from earthsci_toolkit.display import to_unicode, to_latex, to_ascii
 
 
 class TestDisplayFixtures:
@@ -172,6 +172,39 @@ class TestDisplayFixtures:
             if input_expr and expected_latex:
                 result_latex = to_latex(input_expr)
                 assert result_latex == expected_latex
+
+    def test_structural_ops(self, fixtures_dir):
+        """Structural / array-query ops must byte-match the frozen rendering
+        contract (tests/display/structural_ops.json) in all three formats."""
+        fixture_file = fixtures_dir / "structural_ops.json"
+
+        if not fixture_file.exists():
+            pytest.skip("structural_ops.json fixture not found")
+
+        with open(fixture_file) as f:
+            groups = json.load(f)
+
+        for group in groups:
+            for case in group["tests"]:
+                input_expr = case["input"]
+
+                result_unicode = to_unicode(input_expr)
+                assert result_unicode == case["unicode"], (
+                    f"unicode mismatch for {case['name']}: "
+                    f"got {result_unicode!r}, expected {case['unicode']!r}"
+                )
+
+                result_latex = to_latex(input_expr)
+                assert result_latex == case["latex"], (
+                    f"latex mismatch for {case['name']}: "
+                    f"got {result_latex!r}, expected {case['latex']!r}"
+                )
+
+                result_ascii = to_ascii(input_expr)
+                assert result_ascii == case["ascii"], (
+                    f"ascii mismatch for {case['name']}: "
+                    f"got {result_ascii!r}, expected {case['ascii']!r}"
+                )
 
     def test_expression_precedence_display(self, fixtures_dir):
         """Test expression precedence in display formatting."""

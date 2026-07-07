@@ -110,6 +110,7 @@ const OPEXPR_WIRE_KEYS = (
     join = :join, filter = :filter,
     id = :id, manifold = :manifold,
     distinct = :distinct, key = :key,
+    arg = :arg, bindings = :bindings,
 )
 
 # Shared implementation for every dict-like carrier (native Dict, JSON3.Object,
@@ -231,6 +232,21 @@ function _parse_op_dict(data)
     distinct_val = _maybe(Bool, _get_field(data, :distinct, nothing))
     key_expr = _maybe(parse_expression, _get_field(data, :key, nothing))
 
+    # Arg-witness (`argmin`/`argmax`) witnessing index symbol, and the
+    # `apply_expression_template` parameter→argument bindings map. Both are
+    # rendered by the pretty-printer per RENDERING_CONTRACT.md; parsed here so a
+    # typed node round-trips them (`apply_expression_template` is otherwise
+    # rejected above before this point, so `bindings` is generic wire storage).
+    arg_str = _opt_string(data, :arg)
+    bindings_raw = _get_field(data, :bindings, nothing)
+    bindings_dict = nothing
+    if bindings_raw !== nothing
+        bindings_dict = Dict{String,Expr}()
+        for (k, v) in pairs(bindings_raw)
+            bindings_dict[string(k)] = parse_expression(v)
+        end
+    end
+
     return OpExpr(op, args;
         wrt=wrt,
         dim=dim,
@@ -243,7 +259,8 @@ function _parse_op_dict(data)
         table=table_str, table_axes=table_axes_dict, output=output_native,
         join=join_clauses, filter=filter_expr,
         id=id_str, manifold=manifold_str,
-        distinct=distinct_val, key=key_expr)
+        distinct=distinct_val, key=key_expr,
+        arg=arg_str, bindings=bindings_dict)
 end
 
 function _coerce_output_idx(data)

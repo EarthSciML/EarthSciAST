@@ -179,6 +179,17 @@ function serialize_expression(expr::Expr)
         if expr.key !== nothing
             result["key"] = serialize_expression(expr.key)
         end
+        # Arg-witness index symbol (argmin/argmax) and expression-template
+        # bindings — emitted only when present so other nodes round-trip
+        # byte-identically.
+        if expr.arg !== nothing
+            result["arg"] = expr.arg
+        end
+        if expr.bindings !== nothing
+            result["bindings"] = Dict{String,Any}(
+                k => serialize_expression(v) for (k, v) in expr.bindings
+            )
+        end
         return result
     else
         throw(ArgumentError("Unknown expression type: $(typeof(expr))"))

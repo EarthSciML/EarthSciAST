@@ -194,54 +194,72 @@ fn test_number_formatting() {
     }
 }
 
-/// Test fixture-based formatting (if fixtures exist)
+/// Exact-match conformance against the shared cross-language display fixtures.
+///
+/// Every `input` is deserialized into the real [`Expr`] AST and its
+/// `to_unicode` / `to_latex` / `to_ascii` renderings MUST equal the fixture
+/// strings byte-for-byte. This is the enforcement of the frozen rendering
+/// contract (`tests/display/RENDERING_CONTRACT.md`); the reference
+/// implementation is `packages/earthsci-toolkit/src/pretty-print.ts`.
 #[test]
-fn test_fixture_based_formatting() {
-    // Try to load display fixtures, but gracefully handle if they don't exist
-    let fixture_files = [
-        "../../../tests/display/chemical_subscripts.json",
-        "../../../tests/display/operator_precedence.json",
-        "../../../tests/display/all_operators.json",
+fn test_display_fixtures_exact() {
+    let fixtures = [
+        "../../tests/display/structural_ops.json",
+        "../../tests/display/comprehensive_operators.json",
     ];
 
-    for fixture_path in &fixture_files {
-        if let Ok(fixture_content) = std::fs::read_to_string(fixture_path)
-            && let Ok(test_data) = serde_json::from_str::<serde_json::Value>(&fixture_content)
-        {
-            // Process test cases if they exist
-            if let Some(cases) = test_data.as_array() {
-                for case in cases.iter().take(5) {
-                    // Test first 5 cases only
-                    if let Some(input) = case.get("input").and_then(|v| v.as_str()) {
-                        // Create a variable expression from the input
-                        let expr = Expr::Variable(input.to_string());
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
 
-                        let unicode_result = to_unicode(&expr);
-                        let latex_result = to_latex(&expr);
-                        let ascii_result = to_ascii(&expr);
+    for path in &fixtures {
+        let content = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read required fixture {path}: {e}"));
+        let groups: serde_json::Value =
+            serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON in {path}: {e}"));
+        let groups = groups
+            .as_array()
+            .unwrap_or_else(|| panic!("fixture {path} is not a JSON array"));
 
-                        assert!(!unicode_result.is_empty());
-                        assert!(!latex_result.is_empty());
-                        assert!(!ascii_result.is_empty());
+        for group in groups {
+            let Some(tests) = group.get("tests").and_then(|t| t.as_array()) else {
+                continue;
+            };
+            for test in tests {
+                let name = test.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+                let input = test
+                    .get("input")
+                    .unwrap_or_else(|| panic!("{path} :: {name}: missing `input`"));
+                let expr: Expr = serde_json::from_value(input.clone()).unwrap_or_else(|e| {
+                    panic!("{path} :: {name}: cannot deserialize input into Expr: {e}")
+                });
+
+                for (fmt, rendered) in [
+                    ("unicode", to_unicode(&expr)),
+                    ("latex", to_latex(&expr)),
+                    ("ascii", to_ascii(&expr)),
+                ] {
+                    let Some(expected) = test.get(fmt).and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    checked += 1;
+                    if rendered != expected {
+                        failures.push(format!(
+                            "  [{fmt}] {name}\n    input:    {input}\n    expected: {expected:?}\n    actual:   {rendered:?}"
+                        ));
                     }
-                }
-            } else if let Some(obj) = test_data.as_object() {
-                // Handle object-based test format
-                for (key, _value) in obj.iter().take(3) {
-                    // Test first 3 entries only
-                    let expr = Expr::Variable(key.to_string());
-
-                    let unicode_result = to_unicode(&expr);
-                    let latex_result = to_latex(&expr);
-                    let ascii_result = to_ascii(&expr);
-
-                    assert!(!unicode_result.is_empty());
-                    assert!(!latex_result.is_empty());
-                    assert!(!ascii_result.is_empty());
                 }
             }
         }
     }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} display renderings did not byte-match the fixtures:\n{}",
+        failures.len(),
+        checked,
+        failures.join("\n")
+    );
+    assert!(checked > 0, "no fixture assertions ran — check fixture paths");
 }
 
 /// Test that display functions handle edge cases gracefully

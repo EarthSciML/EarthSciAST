@@ -50,6 +50,53 @@ type ExprNode struct {
 	// use `attrs`. Structural `match` rules bind `attrs.<key>` params to matched
 	// literals via generic object matching (esm-spec §9.6.1).
 	Attrs map[string]interface{} `json:"attrs,omitempty"`
+
+	// --- Structural / array-query op fields (esm-spec §4.2). These carry the
+	// defining data of the closed structural tier in fields OTHER than `args`,
+	// so the pretty-printer (display.go) can render them non-lossily. They are
+	// stored as interface{}/raw slices so numeric literals inside them keep the
+	// json.Number shape they had at parse time; the display code normalizes on
+	// read. ---
+
+	// Bindings is the param→expression map of an `apply_expression_template` op.
+	Bindings map[string]interface{} `json:"bindings,omitempty"`
+	// Regions is the list of hyper-rectangular index regions of a `makearray`
+	// op; each region is a list of [lo, hi] bound pairs.
+	Regions [][][]interface{} `json:"regions,omitempty"`
+	// Values is the per-region value list of a `makearray` op (paired with
+	// Regions by position).
+	Values []interface{} `json:"values,omitempty"`
+	// Shape is the target shape of a `reshape` op.
+	Shape []interface{} `json:"shape,omitempty"`
+	// Perm is the optional permutation of a `transpose` op.
+	Perm []interface{} `json:"perm,omitempty"`
+	// Axis is the concatenation axis of a `concat` op.
+	Axis interface{} `json:"axis,omitempty"`
+	// Manifold is the geometry manifold of `intersect_polygon` /
+	// `polygon_intersection_area` ops.
+	Manifold *string `json:"manifold,omitempty"`
+	// OutputIdx are the surviving (free) index names of an `aggregate` op.
+	OutputIdx []interface{} `json:"output_idx,omitempty"`
+	// Expr is the reduced sub-expression of an `aggregate` / `argmin` / `argmax`
+	// op.
+	Expr interface{} `json:"expr,omitempty"`
+	// Reduce is the scalar reduction operator of an `aggregate` op.
+	Reduce *string `json:"reduce,omitempty"`
+	// Semiring is the optional named semiring of an `aggregate` op.
+	Semiring *string `json:"semiring,omitempty"`
+	// Ranges maps a bound index name to its iteration range for `aggregate` /
+	// `argmin` / `argmax` ops.
+	Ranges map[string]interface{} `json:"ranges,omitempty"`
+	// Join is the optional list of join clauses of an `aggregate` op.
+	Join []interface{} `json:"join,omitempty"`
+	// Filter is the optional predicate of an `aggregate` op.
+	Filter interface{} `json:"filter,omitempty"`
+	// Distinct marks an `aggregate` op as reducing over distinct values.
+	Distinct *bool `json:"distinct,omitempty"`
+	// Key is the optional grouping key of an `aggregate` op.
+	Key interface{} `json:"key,omitempty"`
+	// Arg is the witness index name of an `argmin` / `argmax` op.
+	Arg *string `json:"arg,omitempty"`
 }
 
 // Expression represents the union type: number | string | ExprNode

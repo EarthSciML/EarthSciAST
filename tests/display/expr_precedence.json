@@ -1,90 +1,225 @@
 [
   {
-    "input": { "op": "+", "args": ["a", "b"] },
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        "b"
+      ]
+    },
     "unicode": "a + b",
     "latex": "a + b",
     "ascii": "a + b"
   },
   {
-    "input": { "op": "*", "args": ["a", "b"] },
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        "b"
+      ]
+    },
     "unicode": "a·b",
     "latex": "a \\cdot b",
     "ascii": "a * b"
   },
   {
-    "input": { "op": "+", "args": [{ "op": "*", "args": ["a", "b"] }, "c"] },
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        "c"
+      ]
+    },
     "unicode": "a·b + c",
     "latex": "a \\cdot b + c",
     "ascii": "a * b + c"
   },
   {
-    "input": { "op": "*", "args": [{ "op": "+", "args": ["a", "b"] }, "c"] },
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
+        "c"
+      ]
+    },
     "unicode": "(a + b)·c",
     "latex": "(a + b) \\cdot c",
     "ascii": "(a + b) * c"
   },
   {
-    "input": { "op": "^", "args": ["x", 2] },
+    "input": {
+      "op": "^",
+      "args": [
+        "x",
+        2
+      ]
+    },
     "unicode": "x²",
     "latex": "x^{2}",
     "ascii": "x^2"
   },
   {
-    "input": { "op": "+", "args": [{ "op": "^", "args": ["x", 2] }, { "op": "*", "args": [2, "x"] }] },
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "x",
+            2
+          ]
+        },
+        {
+          "op": "*",
+          "args": [
+            2,
+            "x"
+          ]
+        }
+      ]
+    },
     "unicode": "x² + 2·x",
     "latex": "x^{2} + 2 \\cdot x",
     "ascii": "x^2 + 2 * x"
   },
   {
-    "input": { "op": "^", "args": [{ "op": "+", "args": ["x", "y"] }, 2] },
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "x",
+            "y"
+          ]
+        },
+        2
+      ]
+    },
     "unicode": "(x + y)²",
     "latex": "(x + y)^{2}",
     "ascii": "(x + y)^2"
   },
   {
-    "input": { "op": "-", "args": ["x"] },
+    "input": {
+      "op": "-",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "−x",
     "latex": "-x",
     "ascii": "-x"
   },
   {
-    "input": { "op": "+", "args": ["a", { "op": "-", "args": ["b"] }] },
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b"
+          ]
+        }
+      ]
+    },
     "unicode": "a − b",
     "latex": "a - b",
     "ascii": "a - b"
   },
   {
-    "input": { "op": "/", "args": ["a", "b"] },
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        "b"
+      ]
+    },
     "unicode": "a/b",
     "latex": "\\frac{a}{b}",
     "ascii": "a / b"
   },
   {
-    "input": { "op": "D", "args": ["O3"], "wrt": "t" },
+    "input": {
+      "op": "D",
+      "args": [
+        "O3"
+      ],
+      "wrt": "t"
+    },
     "unicode": "∂O₃/∂t",
     "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
     "ascii": "D(O3)/Dt"
   },
   {
-    "input": { "op": "grad", "args": ["x"], "dim": "y" },
-    "unicode": "∂x/∂y",
-    "latex": "\\frac{\\partial x}{\\partial y}",
-    "ascii": "d(x)/dy"
+    "input": {
+      "op": "grad",
+      "args": [
+        "x"
+      ],
+      "dim": "y"
+    },
+    "unicode": "grad(x)",
+    "latex": "\\mathrm{grad}(x)",
+    "ascii": "grad(x)"
   },
   {
-    "input": { "op": "exp", "args": [{ "op": "/", "args": [-1370, "T"] }] },
+    "input": {
+      "op": "exp",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            -1370,
+            "T"
+          ]
+        }
+      ]
+    },
     "unicode": "exp(−1370/T)",
     "latex": "\\exp\\left(\\frac{-1370}{T}\\right)",
     "ascii": "exp(-1370 / T)"
   },
   {
-    "input": { "op": "Pre", "args": ["x"] },
+    "input": {
+      "op": "Pre",
+      "args": [
+        "x"
+      ]
+    },
     "unicode": "Pre(x)",
     "latex": "\\mathrm{Pre}(x)",
     "ascii": "Pre(x)"
   },
   {
-    "input": { "op": "ifelse", "args": [{ "op": ">", "args": ["x", 0] }, "x", 0] },
+    "input": {
+      "op": "ifelse",
+      "args": [
+        {
+          "op": ">",
+          "args": [
+            "x",
+            0
+          ]
+        },
+        "x",
+        0
+      ]
+    },
     "unicode": "ifelse(x > 0, x, 0)",
     "latex": "\\begin{cases} x & \\text{if } x > 0 \\\\ 0 & \\text{otherwise} \\end{cases}",
     "ascii": "ifelse(x > 0, x, 0)"
@@ -96,13 +231,21 @@
     "ascii": "1.8e-12"
   },
   {
-    "input": 2.46e19,
+    "input": 24600000000000000000,
     "unicode": "2.46×10¹⁹",
     "latex": "2.46 \\times 10^{19}",
     "ascii": "2.46e+19"
   },
   {
-    "input": { "op": "*", "args": [1.8e-12, "O3", "NO", "M"] },
+    "input": {
+      "op": "*",
+      "args": [
+        1.8e-12,
+        "O3",
+        "NO",
+        "M"
+      ]
+    },
     "unicode": "1.8×10⁻¹²·O₃·NO·M",
     "latex": "1.8 \\times 10^{-12} \\cdot \\mathrm{O_3} \\cdot \\mathrm{NO} \\cdot M",
     "ascii": "1.8e-12 * O3 * NO * M"

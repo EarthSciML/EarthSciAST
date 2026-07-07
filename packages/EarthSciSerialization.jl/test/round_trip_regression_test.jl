@@ -148,6 +148,15 @@ const ESM = EarthSciSerialization
          expected = OpExpr("skolem", E(VarExpr("i"))),
          cop = "aggregate", cargs = E(),
          kw = (key = OpExpr("skolem", E(VarExpr("i"))),)),
+        (field = :arg,
+         json = """{"op":"argmin","args":[],"arg":"g"}""",
+         expected = "g",
+         cop = "argmin", cargs = E(), kw = (arg = "g",)),
+        (field = :bindings,
+         json = """{"op":"aggregate","args":[],"bindings":{"f":"u"}}""",
+         expected = Dict{String,ESM.Expr}("f" => VarExpr("u")),
+         cop = "aggregate", cargs = E(),
+         kw = (bindings = Dict{String,ESM.Expr}("f" => VarExpr("u")),)),
     ]
 
     # The spec list must cover every field except op/args (structural) and

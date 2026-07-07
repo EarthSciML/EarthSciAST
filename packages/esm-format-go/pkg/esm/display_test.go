@@ -91,13 +91,13 @@ func TestToUnicodeBasic(t *testing.T) {
 			expected: "∂O₃/∂t",
 		},
 		{
-			name: "gradient",
+			name: "gradient (generic fallback, dim not rendered)",
 			input: ExprNode{
 				Op:   "grad",
 				Args: []interface{}{"x"},
 				Dim:  strPtr("y"),
 			},
-			expected: "∂x/∂y",
+			expected: "grad(x)",
 		},
 		{
 			name: "unary minus",
@@ -500,7 +500,9 @@ func TestModelSummary(t *testing.T) {
 	assert.Contains(t, result, "R1: NO + O₃ → NO₂    rate: 1.8×10⁻¹² · exp(−1370/T) · M")
 	assert.Contains(t, result, "R2: NO₂ → NO + O₃    rate: jNO₂")
 	assert.Contains(t, result, "Advection (2 parameters, 1 equation)")
-	assert.Contains(t, result, "∂_var/∂t = −u_wind · ∂_var/∂x + −v_wind · ∂_var/∂y")
+	// grad now renders via the generic fallback (dim is NOT rendered), so both
+	// advection terms print as grad(_var).
+	assert.Contains(t, result, "∂_var/∂t = −u_wind · grad(_var) + −v_wind · grad(_var)")
 	assert.Contains(t, result, "GEOSFP: T, u, v (grid)")
 	assert.Contains(t, result, "operator_compose: SimpleOzone + Advection")
 	assert.Contains(t, result, "variable_map: GEOSFP.T → SimpleOzone.T")
