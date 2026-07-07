@@ -135,8 +135,12 @@ function _as_ring(poly::AbstractMatrix, who::AbstractString)::Matrix{Float64}
         "intersect_polygon $who must be an [verts, 2] lon-lat ring, got array of shape $(size(poly))"))
     # _dedup_consecutive drops consecutive duplicates AND the wrap pair (a
     # closing first==last duplicate), so padding and explicit closure both
-    # collapse to the n distinct vertices with implicit closure.
-    arr = _dedup_consecutive(Matrix{Float64}(poly))
+    # collapse to the n distinct vertices with implicit closure. It never mutates
+    # its input (it returns `ring[keep, :]`), so when `poly` is already a
+    # `Matrix{Float64}` — the common case, since `intersect_polygon` passes the
+    # freshly-coerced `_to_matrix(...)` result — the defensive copy is redundant
+    # and skipped (one fewer allocation per operand per clip).
+    arr = _dedup_consecutive(poly isa Matrix{Float64} ? poly : Matrix{Float64}(poly))
     size(arr, 1) >= 3 || throw(GeometryError(
         "intersect_polygon $who needs ≥3 distinct vertices, got $(size(arr, 1))"))
     return arr
@@ -240,6 +244,43 @@ function _planar_clip(subject::AbstractMatrix, clip::AbstractMatrix)::Matrix{Flo
 end
 
 # --------------------------------------------------------------------------- #
+# Planar broad-phase — axis-aligned bounding-box reject
+# --------------------------------------------------------------------------- #
+# A conservative-regrid `A_ij` clips every src×tgt cell pair (O(n·m)), but two
+# regular grids over the same domain overlap only along the diagonal band — the
+# vast majority of pairs are spatially disjoint and clip to nothing. For the
+# PLANAR manifold a disjoint axis-aligned bounding box is an EXACT reject: the
+# Sutherland–Hodgman clip of a subject wholly outside the (convex) clip ring is
+# empty, so the overlap ring is empty and its area is zero. Computing each
+# operand's bbox is O(verts) and reads the raw operand matrix directly — no
+# `_as_ring` coercion, no clip, no area FAQ — so rejecting a non-overlapping pair
+# here skips ~all of its per-pair allocation. Strict `<` never rejects an
+# edge-touching pair (bbox_a.max == bbox_b.min); that falls through to the clip,
+# which correctly yields a zero-area sliver.
+
+@inline function _ring_xybbox(m::AbstractMatrix)
+    n = size(m, 1)
+    @inbounds begin
+        xmin = xmax = m[1, 1]
+        ymin = ymax = m[1, 2]
+        for i in 2:n
+            x = m[i, 1]; y = m[i, 2]
+            x < xmin && (xmin = x); x > xmax && (xmax = x)
+            y < ymin && (ymin = y); y > ymax && (ymax = y)
+        end
+    end
+    return (xmin, xmax, ymin, ymax)
+end
+
+@inline function _bbox_disjoint(a::AbstractMatrix, b::AbstractMatrix)
+    (size(a, 1) == 0 || size(b, 1) == 0) && return true
+    (size(a, 2) < 2 || size(b, 2) < 2) && return false   # let coercion raise
+    axmin, axmax, aymin, aymax = _ring_xybbox(a)
+    bxmin, bxmax, bymin, bymax = _ring_xybbox(b)
+    return axmax < bxmin || bxmax < axmin || aymax < bymin || bymax < aymin
+end
+
+# --------------------------------------------------------------------------- #
 # Public clip entry point
 # --------------------------------------------------------------------------- #
 
@@ -265,6 +306,12 @@ empty `0×2` array when the cells do not overlap. `planar` is dependency-free;
 function intersect_polygon(poly_a, poly_b, manifold::AbstractString)::Matrix{Float64}
     manifold in GEOMETRY_MANIFOLDS || throw(GeometryError(
         "unknown manifold $(repr(manifold)); the closed set is $(GEOMETRY_MANIFOLDS)"))
+    # Planar broad-phase: a disjoint bounding box is an exact reject (see
+    # `_bbox_disjoint`), so skip the coercion + clip for non-overlapping pairs.
+    if manifold == "planar" && poly_a isa AbstractMatrix && poly_b isa AbstractMatrix &&
+       _bbox_disjoint(poly_a, poly_b)
+        return zeros(Float64, 0, 2)
+    end
     a = _as_ring(_to_matrix(poly_a), "poly_a")
     b = _as_ring(_to_matrix(poly_b), "poly_b")
     if manifold == "planar"

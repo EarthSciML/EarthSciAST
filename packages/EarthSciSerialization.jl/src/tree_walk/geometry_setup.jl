@@ -278,6 +278,60 @@ function _geo_apply_scalar(op::AbstractString, a::Vector{Float64})
         "unsupported op '$(op)' in setup-time geometry"))
 end
 
+# Arity-specialized scalar apply. `_geo_eval`'s general op branch used to collect
+# every operand into a freshly-allocated `Float64[]` and call `_geo_apply_scalar`
+# — one heap allocation per arithmetic node, per output cell (hundreds of
+# thousands of tiny garbage vectors in a conservative-regrid setup). The 1-, 2-
+# and 3-arg forms below cover the entire scalar vocabulary the FAQ emits (the
+# shoelace `*`/`-`, the `ifelse`/comparison gates), evaluating with NO allocation;
+# only a genuinely variadic `+`/`*`/`max`/`min` (>3 args) falls back to the vector
+# form. Each is byte-identical to `_geo_apply_scalar` at the same arity.
+@inline function _geo_apply1(op::AbstractString, a::Float64)
+    op == "-"     && return -a
+    op == "sqrt"  && return sqrt(a)
+    op == "abs"   && return abs(a)
+    op == "cos"   && return cos(a)
+    op == "sin"   && return sin(a)
+    op == "floor" && return floor(a)
+    op == "ceil"  && return ceil(a)
+    (op == "+" || op == "*" || op == "max" || op == "min") && return a  # unary reduction
+    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+        "unsupported unary op '$(op)' in setup-time geometry"))
+end
+@inline function _geo_apply2(op::AbstractString, a::Float64, b::Float64)
+    op == "+"     && return a + b
+    op == "-"     && return a - b
+    op == "*"     && return a * b
+    op == "/"     && return a / b
+    op == "^"     && return a ^ b
+    op == "max"   && return max(a, b)
+    op == "min"   && return min(a, b)
+    op == "atan2" && return atan(a, b)
+    op == ">"     && return a >  b ? 1.0 : 0.0
+    op == "<"     && return a <  b ? 1.0 : 0.0
+    op == ">="    && return a >= b ? 1.0 : 0.0
+    op == "<="    && return a <= b ? 1.0 : 0.0
+    op == "=="    && return a == b ? 1.0 : 0.0
+    op == "!="    && return a != b ? 1.0 : 0.0
+    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+        "unsupported binary op '$(op)' in setup-time geometry"))
+end
+@inline function _geo_apply3(op::AbstractString, a::Float64, b::Float64, c::Float64)
+    op == "ifelse" && return a != 0.0 ? b : c
+    op == "+"      && return a + b + c
+    op == "*"      && return a * b * c
+    op == "-"      && return a - b - c           # a[1] - sum(a[2:end])
+    op == "max"    && return max(a, b, c)
+    op == "min"    && return min(a, b, c)
+    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
+        "unsupported ternary op '$(op)' in setup-time geometry"))
+end
+
+# Evaluate the k-th argument of an `index` node to an integer subscript (rounding
+# to nearest, matching the original `Int(round(_geo_eval(...)))`).
+@inline _geo_ix(expr, k::Int, ctx, idx_env, outer_setof) =
+    Int(round(_geo_eval(expr.args[k], ctx, idx_env, outer_setof)::Float64))
+
 # Map a join key column to the aggregate loop var that indexes it (via its
 # declared 1-D shape's index set).
 function _geo_loopvar_for(col, setof, var_shapes)
@@ -359,12 +413,41 @@ function _geo_eval(expr, ctx::_GeoCtx, idx_env,
             arr = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)
             arr isa AbstractArray || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
                 "index of a non-array in setup-time geometry"))
-            idxs = Int[Int(round(_geo_eval(a, ctx, idx_env, outer_setof)))
-                       for a in expr.args[2:end]]
-            if length(idxs) == ndims(arr)
+            nidx = length(expr.args) - 1
+            nd = ndims(arr)
+            # Fast paths for the ranks the geometry FAQ actually uses (1–3 leading
+            # indices into a 1-/2-/3-D array). These avoid BOTH the `args[2:end]`
+            # slice allocation and the `arr[idxs...]` splat — the splat lowers to
+            # `Base._apply_iterate`, a dynamic-dispatch hot spot when it runs once
+            # per operand per cell. A partial index returns a `view` (no data copy):
+            # the const source array outlives every walk and is never mutated, and
+            # the only consumers are the read-only geometry kernel (bbox reject and
+            # `_as_ring`, which materializes a dense copy itself when it must). For a
+            # conservative regrid this matters because the planar broad-phase rejects
+            # most pairs straight off the operand bbox — the slice is never copied.
+            if nidx == 1
+                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
+                nd == 1 && return arr[i1]
+                nd == 2 && return view(arr, i1, :)
+                nd == 3 && return view(arr, i1, :, :)
+            elseif nidx == 2
+                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
+                i2 = _geo_ix(expr, 3, ctx, idx_env, outer_setof)
+                nd == 2 && return arr[i1, i2]
+                nd == 3 && return view(arr, i1, i2, :)
+            elseif nidx == 3 && nd == 3
+                i1 = _geo_ix(expr, 2, ctx, idx_env, outer_setof)
+                i2 = _geo_ix(expr, 3, ctx, idx_env, outer_setof)
+                i3 = _geo_ix(expr, 4, ctx, idx_env, outer_setof)
+                return arr[i1, i2, i3]
+            end
+            # General fallback (unusual ranks): build the index vector once.
+            idxs = Int[_geo_ix(expr, k, ctx, idx_env, outer_setof)
+                       for k in 2:length(expr.args)]
+            if nidx == nd
                 return arr[idxs...]
             else
-                colons = ntuple(_ -> Colon(), ndims(arr) - length(idxs))
+                colons = ntuple(_ -> Colon(), nd - nidx)
                 return Array(arr[idxs..., colons...])   # partial index → slice
             end
         elseif op == "intersect_polygon"
@@ -406,14 +489,36 @@ function _geo_eval(expr, ctx::_GeoCtx, idx_env,
                 r isa IndexSetRef && (setof[lv] = r.from)
             end
             acc = 0.0
+            # Reuse one env dict across the product: `copy(idx_env)` once (carrying
+            # the outer loop vars), then overwrite just this aggregate's loop vars
+            # each iteration — instead of a fresh Dict copy per tuple. Callees never
+            # retain `ie` (a nested aggregate copies again; the gate only reads it),
+            # so mutation-in-place is safe.
+            ie = copy(idx_env)
             for tup in Iterators.product((1:e for e in exts)...)
-                ie = copy(idx_env)
                 for (lv, iv) in zip(loopvars, tup); ie[lv] = iv; end
                 _geo_agg_gate(expr, ie, ctx, setof) || continue
                 acc += _geo_eval(expr.expr_body, ctx, ie, setof)
             end
             return acc
         else
+            # Arity-specialized, allocation-free apply for the common 1–3 arg ops
+            # (the whole FAQ scalar vocabulary); only a variadic reduction falls
+            # back to the vector form.
+            n = length(expr.args)
+            if n == 1
+                return _geo_apply1(op,
+                    _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64)
+            elseif n == 2
+                a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64
+                b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)::Float64
+                return _geo_apply2(op, a, b)
+            elseif n == 3
+                a = _geo_eval(expr.args[1], ctx, idx_env, outer_setof)::Float64
+                b = _geo_eval(expr.args[2], ctx, idx_env, outer_setof)::Float64
+                c = _geo_eval(expr.args[3], ctx, idx_env, outer_setof)::Float64
+                return _geo_apply3(op, a, b, c)
+            end
             vals = Float64[_geo_eval(x, ctx, idx_env, outer_setof)
                            for x in expr.args]
             return _geo_apply_scalar(op, vals)
@@ -459,8 +564,9 @@ function _materialize_ranged_clip(arrayop, env, index_sets, derived_extents,
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
     rings = Dict{Tuple,Matrix{Float64}}()
     maxn = 0
+    ie = Dict{String,Any}()   # reused across pairs (callees only read / copy it)
     for tup in Iterators.product((1:e for e in outer_ext)...)
-        ie = Dict{String,Any}(zip(outer, tup))
+        for (lv, v) in zip(outer, tup); ie[lv] = v; end
         A = _geo_eval(ipoly.args[1], ctx, ie)
         B = _geo_eval(ipoly.args[2], ctx, ie)
         # A non-overlapping pair yields a degenerate (< 3 vertex) clip → a zero-area
@@ -537,9 +643,15 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
     end
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
     arr  = zeros(Float64, exts...)
+    # One reused env dict for the whole materialization (see `_geo_eval`'s
+    # aggregate branch): overwrite the loop-var slots each cell instead of
+    # allocating a fresh `Dict{String,Any}` per output cell (× per contraction
+    # tuple). `_geo_eval`/`_geo_agg_gate` only read `ie` or copy it, never retain
+    # it, so in-place reuse is safe.
+    ie = Dict{String,Any}()
     if isempty(contract)
         for tup in Iterators.product((1:e for e in exts)...)
-            ie = Dict{String,Any}(zip(out, tup))
+            for (lv, v) in zip(out, tup); ie[lv] = v; end
             # A no-contraction map still honors an output-cell join/filter gate: a
             # rejected cell keeps the zero-initialized 0̄ (a cross-bin W_ij, a
             # sub-atol sliver). Degenerate (no join/filter) ⇒ gate is always true.
@@ -551,17 +663,101 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
         cexts = Int[_geo_index_extent(arrayop.ranges[c], index_sets, derived_extents)
                     for c in contract]
         for tup in Iterators.product((1:e for e in exts)...)
+            for (lv, v) in zip(out, tup); ie[lv] = v; end
             acc = init
             for ct in Iterators.product((1:e for e in cexts)...)
-                ie = Dict{String,Any}(zip(out, tup))
-                for (lv, cv) in zip(contract, ct)
-                    ie[lv] = cv
-                end
+                for (lv, cv) in zip(contract, ct); ie[lv] = cv; end
                 _geo_agg_gate(arrayop, ie, ctx, setof) || continue
                 acc = fold(acc, _geo_eval(arrayop.expr_body, ctx, ie, setof))
             end
             arr[tup...] = acc
         end
+    end
+    return arr
+end
+
+# ============================================================
+# Build-once PROMOTED-PHYSICS MAP aggregates (fuel/moisture/wind lookups)
+# ============================================================
+# A build-once array observed need not be geometry. When a per-cell field (e.g.
+# `FuelModelLookup.code`, temperature, wind) is produced by an in-model regridder,
+# the behavior stack that consumed the formerly-scalar params (FuelModelLookup /
+# EquilibriumMoistureContent / OneHourFuelMoisture / MidflameWind /
+# RothermelFireSpread) is promoted to a build-once MAP over the fire `[x,y]` grid.
+# Its body is PURE PHYSICS — `and`/`or`/`ifelse`, comparisons, `fn:interp.linear`,
+# `const`, `exp`/`log` — ops the limited geometry-FAQ evaluator (`_geo_eval`) does
+# NOT speak. Such a MAP must materialize through the GENERAL build-time cell
+# evaluator (`_eval_cellwise`), the same one `_materialize_setup_wholearray` uses.
+
+# The exact op vocabulary the setup-time geometry evaluator (`_geo_eval` /
+# `_geo_apply_scalar`) can evaluate: the scalar arithmetic / comparison / rounding
+# ops, the geometry leaves, and the nested aggregate/index gathers. A build-once
+# MAP whose body uses ONLY these needs no help — `_geo_eval` already materializes it
+# (a loader-field reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`, a constructed cell
+# ring `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry weight over a derived set).
+# A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`, `fn`
+# (`interp.linear`), `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
+# only the general evaluator speaks; those, and only those, route to `_eval_cellwise`.
+_GEO_EVAL_OPS = Set{String}([
+    "+", "*", "-", "/", "^", "max", "min", "sqrt", "abs", "cos", "sin", "atan2",
+    "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
+    "index", "intersect_polygon", "polygon_intersection_area", "skolem",
+    "true", "false", "aggregate", "arrayop"])
+
+# True iff any op node in the subtree is OUTSIDE the `_geo_eval` vocabulary — i.e.
+# the body cannot be materialized by the setup-time geometry evaluator and needs
+# the general build-time cell evaluator instead.
+function _body_needs_general_eval(e::OpExpr)
+    e.op in _GEO_EVAL_OPS || return true
+    any(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
+    e.expr_body isa OpExpr && _body_needs_general_eval(e.expr_body::OpExpr) && return true
+    e.filter isa OpExpr && _body_needs_general_eval(e.filter::OpExpr) && return true
+    if e.values !== nothing
+        any(v -> v isa OpExpr && _body_needs_general_eval(v), e.values) && return true
+    end
+    return false
+end
+
+# True iff `rhs` is a build-once NON-GEOMETRY MAP aggregate that NEEDS the general
+# evaluator: an array-producing `aggregate`/`arrayop` (non-empty `output_idx`) that
+# is a pure MAP — every range key is an output index, so no top-level CONTRACTION —
+# carries no join/filter gate, and whose body reaches an op OUTSIDE the `_geo_eval`
+# vocabulary (`and`/`fn`/`const`/`exp`/`log`/…). This is exactly a promoted per-cell
+# physics lookup (FuelModelLookup/EMC/Rothermel/MidflameWind over the fire grid).
+# Every genuine geometry aggregate — a `polygon_intersection_area` weight, a
+# `A_j[j] = Σ_i A_ij[i,j]` row-sum, a constructed cell ring, a binning coordinate, a
+# skolem-bin producer, a loader-field reindex — uses ONLY `_geo_eval` ops and so
+# stays on `_geo_eval` (the `_materialize_geom_array` path), byte-identical.
+function _is_setup_general_map(rhs)
+    (rhs isa OpExpr && _is_aggregate_op(rhs.op)) || return false
+    (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
+    rhs.expr_body === nothing && return false
+    (rhs.join === nothing && rhs.join_gates === nothing && rhs.filter === nothing) || return false
+    out = Set{String}(String(s) for s in rhs.output_idx if s isa AbstractString)
+    ranges = rhs.ranges === nothing ? Dict{String,Any}() : rhs.ranges
+    all(k -> String(k) in out, keys(ranges)) || return false   # pure MAP: no contraction
+    return _body_needs_general_eval(rhs::OpExpr)
+end
+
+# Materialize a build-once NON-GEOMETRY MAP aggregate by evaluating its body once
+# per output cell through the GENERAL build-time cell pipeline: `_eval_cellwise`
+# wraps the MAP as `index(agg, cell…)`, `_resolve_index_of_arrayop` substitutes the
+# output indices, then `_compile`/`_eval_node` run the full scalar language against
+# the materialized `env` (its array entries become gatherable const arrays, its
+# scalar params bind by name). Byte-identical to the ODE RHS resolver — the twin of
+# `_materialize_setup_wholearray`, just ranging over the aggregate's declared
+# `output_idx`/`ranges` extents instead of a makearray's regions.
+function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
+                                        index_sets, derived_extents,
+                                        registered_functions::AbstractDict)
+    out  = String[String(s) for s in rhs.output_idx if s isa AbstractString]
+    exts = Int[_geo_index_extent(rhs.ranges[v], index_sets, derived_extents) for v in out]
+    ca, params = _setup_env_split(env)
+    arr = zeros(Float64, exts...)
+    for I in CartesianIndices(Tuple(exts))
+        arr[I] = _eval_cellwise(rhs, Int[Tuple(I)...]; const_arrays=ca,
+                                registered_functions=registered_functions,
+                                params=params)
     end
     return arr
 end
@@ -621,11 +817,20 @@ function _setup_env_split(env::AbstractDict)
     params = Dict{String,Float64}()
     for (k, v) in env
         ks = String(k)
-        if v isa AbstractArray
-            ca[ks] = v isa AbstractArray{Float64} ? v : Array{Float64}(v)
+        if v isa AbstractArray{Float64}
+            ca[ks] = v
+        elseif v isa AbstractArray && eltype(v) <: Real
+            ca[ks] = Array{Float64}(v)
         elseif v isa Real
             params[ks] = Float64(v)
         end
+        # A non-numeric array in `env` — e.g. the tuple-valued skolem bin-key
+        # buffers that a broad-phase equi-join reads directly from `env` (a
+        # value-invention `distinct`/`skolem` map materializes integer key tuples,
+        # kept byte-identical across bindings) — is neither a gatherable Float64
+        # const array nor a scalar param for the physics cell pipeline, so skip it.
+        # (Previously this forced `Array{Float64}(v)` and crashed on the tuples the
+        # moment a gated regrid and a promoted-physics MAP coexisted in one model.)
     end
     return ca, params
 end
@@ -774,15 +979,37 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
         haskey(model.variables, f) &&
         model.variables[f].type == ObservedVariable &&
         !_is_array_shape(model.variables[f].shape) && haskey(defs, f)
-    _setup_deps_ok(refs) = !any(_is_scalar_computed_obs, refs)
+    # The exclusion is TRANSITIVE. An array observed that reads a computed scalar
+    # observed is setup-ineligible (above); so is one that GATHERS an ineligible
+    # array observed — `R0 = f(index(IR,…))` cannot materialize at setup when `IR`
+    # (which reads the scalar Rothermel constant `eta_s`) is itself rejected, since
+    # `IR` is never in the setup env. A DIRECT-refs-only check lets `R0` slip in (its
+    # own refs carry no scalar observed) and materialize with a dangling `IR` gather.
+    # Propagate the block through the array-observed graph so the whole tainted cone
+    # (IR, R0, R, …) stays together in the ODE-RHS array-inline path — never a split.
+    # A no-op (byte-identical) for a pure-geometry regrid: nothing there reads a
+    # computed scalar observed, so the block set is empty and setup is unchanged.
+    blocked = Set{String}()
     changed = true
     while changed
         changed = false
         for (n, rhs) in defs
-            (is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) && !(n in tainted)) || continue
+            (is_arr_obs(n) && !(n in blocked)) || continue
+            refs = intersect(_referenced_var_names(rhs), mvars)
+            if any(_is_scalar_computed_obs, refs) || any(f -> f in blocked, refs)
+                push!(blocked, n); changed = true
+            end
+        end
+    end
+    changed = true
+    while changed
+        changed = false
+        for (n, rhs) in defs
+            (is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
+             !(n in tainted) && !(n in blocked)) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
             if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
-               !any(f -> f in state_var_names, refs) && _setup_deps_ok(refs)
+               !any(f -> f in state_var_names, refs)
                 push!(setup, n); changed = true
             end
         end
@@ -807,11 +1034,10 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
         for n in collect(setup)
             for r in intersect(_referenced_var_names(defs[n]), mvars)
                 (is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
-                 !(r in tainted) && haskey(defs, r) && !_is_const_op(defs[r]) &&
-                 !(defs[r] isa VarExpr)) || continue
+                 !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
+                 !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)) || continue
                 rrefs = intersect(_referenced_var_names(defs[r]), mvars)
                 any(f -> f in state_var_names, rrefs) && continue
-                _setup_deps_ok(rrefs) || continue   # not setup-materializable (reads a computed scalar observed)
                 push!(setup, r); changed = true
             end
         end
@@ -921,6 +1147,17 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
             # general build-time array pipeline against the materialized `env`.
             _materialize_setup_wholearray(rhs, env, index_sets, derived_extents,
                                           get(var_shapes, n, String[]), registered_functions)
+        elseif _is_setup_general_map(rhs)
+            # A promoted PER-CELL PHYSICS lookup (fuel/moisture/wind over the fire
+            # grid): a pure MAP aggregate whose body reaches an op OUTSIDE the
+            # geometry-FAQ vocabulary (`and`/`ifelse`/`interp.linear`/`const`/`exp`/
+            # `log`). Materialize it through the general build-time cell evaluator (as
+            # the makearray path does), byte-identical to the ODE RHS resolver. Every
+            # geometry aggregate (a geometry weight, a contraction, a constructed ring,
+            # a reindex — all `_geo_eval` ops) fails `_is_setup_general_map` and falls
+            # through to `_geo_eval` below.
+            _materialize_setup_general_map(rhs, env, index_sets, derived_extents,
+                                           registered_functions)
         else
             _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes)
         end

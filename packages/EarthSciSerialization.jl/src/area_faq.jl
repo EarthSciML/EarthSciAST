@@ -107,10 +107,31 @@ run it through `_resolve_indices` (→ `_resolve_scalar_arrayop`) + `evaluate_ex
 function _polygon_area_via_faq(closed_ring::AbstractMatrix, manifold::AbstractString)::Float64
     n = max(size(closed_ring, 1) - 1, 0)   # closed ring has n+1 rows
     n < 3 && return 0.0
-    faq = manifold == "planar" ? _shoelace_area_faq(n) : _spherical_area_faq(n)
+    # Planar fast path: evaluate the shoelace FAQ DIRECTLY (see
+    # `_planar_shoelace_area`) instead of building and resolving a fresh symbolic
+    # aggregate AST per polygon. In a conservative regrid this leaf runs once per
+    # overlapping cell pair; the AST build + `_resolve_indices` was ~70 KB and the
+    # bulk of the build-time area cost. The direct sum is byte-for-byte identical
+    # to routing `_shoelace_area_faq` through the generic machinery (verified
+    # bit-exact over random rings), so no result changes.
+    manifold == "planar" && return _planar_shoelace_area(closed_ring, n)
+    faq = _spherical_area_faq(n)
     const_arrays = Dict{String,AbstractArray{Float64}}("overlap_clip" => Matrix{Float64}(closed_ring))
     array_var_info = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
     var_map = Dict{String,Int}()
     resolved = _resolve_indices(faq, array_var_info, var_map, const_arrays)
     return abs(evaluate_expr(resolved, Dict{String,Float64}()))
+end
+
+# Direct evaluation of the planar shoelace `sum_product` FAQ over the closed clip
+# ring: `|0.5·Σ_{v=1}^{n} (x_v·y_{v+1} − x_{v+1}·y_v)|`. Same operations, same
+# accumulation order, same per-term `0.5` factor as `_shoelace_area_faq` evaluated
+# through `evaluate_expr` — bit-identical, but with no AST or resolver allocation.
+@inline function _planar_shoelace_area(closed_ring::AbstractMatrix, n::Int)::Float64
+    acc = 0.0
+    @inbounds for v in 1:n
+        acc += 0.5 * (closed_ring[v, 1] * closed_ring[v+1, 2] -
+                      closed_ring[v+1, 1] * closed_ring[v, 2])
+    end
+    return abs(acc)
 end

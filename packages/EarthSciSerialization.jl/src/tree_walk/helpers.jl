@@ -463,6 +463,19 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
     elseif op == "/"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "/ in index needs 2 args"))
         return div(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
+    elseif op == "floor"
+        # `floor` in an index position wraps an already-integer subexpression (the
+        # `/` case above is truncating integer `div`, == `floor` for the
+        # non-negative cell subscripts a loader reindex forms). So it is a
+        # pass-through here, matching the build-once `_geo_eval` path where
+        # `floor((c-1)/GX)` folds to the same integer. Keeping it lets a loader
+        # reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the LIVE gather
+        # path (a discrete-cadence loader field), not only build-once.
+        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "floor in index needs 1 arg"))
+        return _eval_const_int(c[1], idx_env, const_arrays)
+    elseif op == "mod"
+        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
+        return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
     elseif op == "ifelse"
         length(c) == 3 || throw(TreeWalkError("E_TREEWALK_ARITY", "ifelse in index needs 3 args"))
         cond = _eval_const_int(c[1], idx_env, const_arrays)
