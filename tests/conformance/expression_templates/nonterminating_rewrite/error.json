@@ -1,0 +1,5 @@
+{
+  "code": "rewrite_rule_nonterminating",
+  "stage": "load",
+  "description": "A self-reintroducing rewrite rule never reaches a fixpoint; the engine rejects the file once MAX_REWRITE_PASSES=64 productive passes have run without converging (esm-spec §9.6.3). Bindings assert the load-time error carries this code."
+}

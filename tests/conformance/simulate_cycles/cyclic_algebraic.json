@@ -1,6 +1,6 @@
 {
   "id": "cyclic_algebraic",
-  "description": "Two algebraic equations form a non-trivial cycle in the assignment graph: A is defined in terms of B, and B is defined in terms of A, with no time derivative on either side. Bindings MUST detect the cycle and fail-fast with a structured error during discretize() / simulate() / mtkcompile() (Julia: structural_simplify reports algebraic-loop or singular-system; Python earthsci_toolkit: should raise rather than silently use defaults; Rust/TS/Go: per-binding error class). Silent success producing default values for A and B is a test failure.",
+  "description": "Two algebraic equations form a non-trivial cycle in the assignment graph: A is defined in terms of B, and B is defined in terms of A, with no time derivative on either side. Bindings MUST detect the cycle and fail-fast with a structured error during discretize() / simulate() / mtkcompile() (Julia: structural_simplify reports algebraic-loop or singular-system; Python earthsci_ast: should raise rather than silently use defaults; Rust/TS/Go: per-binding error class). Silent success producing default values for A and B is a test failure.",
   "input": {
     "esm": "0.4.0",
     "metadata": {

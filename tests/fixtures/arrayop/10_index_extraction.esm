@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_10_index_extraction",
     "description": "Exercises the standalone `index` op on an array variable. u[1:5] follows D(u[i]) = -u[i] (analytical u_i(t) = i*exp(-t)) via an arrayop. A scalar state s is driven by D(s) = -index(u, 3) = -u[3], so s(t) = 3*(exp(-t) - 1). This verifies that `index` on an array-shaped state variable resolves to the correct scalar element when used in a scalar equation RHS outside of an arrayop body.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "index"]
   },
   "models": {
@@ -16,12 +16,12 @@
         {
           "_comment": "Array ODE: D(u[i]) = -u[i] for i in 1..5.",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", "i"] }], "wrt": "t" },
             "ranges": { "i": [1, 5] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "-", "args": [{ "op": "index", "args": ["u", "i"] }] },
             "ranges": { "i": [1, 5] }
           }

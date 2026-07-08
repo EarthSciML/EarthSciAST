@@ -144,7 +144,7 @@
 | Stoichiometric matrix | ✅ | ✅ | ✅ NumPy | ✅ | `tests/mathematical_correctness/` |
 | Equation counting | ✅ | ✅ | ✅ | ✅ | `tests/validation/mathematical_correctness.esm` |
 
-### ✅ Interactive Tier (SolidJS esm-editor)
+### ✅ Interactive Tier (SolidJS earthsci-ast-editor)
 **Capabilities**: Click-to-edit, undo/redo, coupling graph, web components
 
 | Feature | Implementation | Test Coverage |

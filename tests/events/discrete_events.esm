@@ -233,7 +233,7 @@
       "variables": {
         "temperature": {
           "type": "state",
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 20.0,
           "description": "System temperature"
         },
@@ -244,25 +244,25 @@
           "description": "Number of samples taken"
         },
         "heating_rate": {
-          "units": "\u00b0C/min",
+          "units": "°C/min",
           "default": 2.0,
           "description": "Heating rate",
           "type": "parameter"
         },
         "cooling_rate": {
-          "units": "\u00b0C/min",
+          "units": "°C/min",
           "default": -1.0,
           "description": "Cooling rate",
           "type": "parameter"
         },
         "switch_temp": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 80.0,
           "description": "Temperature switch point",
           "type": "parameter"
         },
         "sample_threshold": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 50.0,
           "description": "Sampling threshold",
           "type": "parameter"
@@ -494,17 +494,11 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T24:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T24:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

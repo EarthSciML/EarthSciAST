@@ -66,6 +66,15 @@
               "drug_amount"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "drug_amount"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -91,8 +100,8 @@
         }
       ],
       "tolerance": {
-        "rel": 1.0e-4,
-        "abs": 1.0e-8
+        "rel": 0.0001,
+        "abs": 1e-08
       },
       "tests": [
         {
@@ -110,7 +119,14 @@
             "end": 0.5
           },
           "assertions": [
-            { "variable": "drug_amount", "time": 0.0, "expected": 0.0, "tolerance": { "abs": 1.0e-12 } }
+            {
+              "variable": "drug_amount",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              }
+            }
           ]
         },
         {
@@ -128,8 +144,23 @@
             "end": 10.0
           },
           "assertions": [
-            { "variable": "drug_amount", "time": 7.9, "expected": 0.0,              "tolerance": { "abs": 1.0e-10 } },
-            { "variable": "drug_amount", "time": 8.1, "expected": 99.0049833749168, "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } }
+            {
+              "variable": "drug_amount",
+              "time": 7.9,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-10
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 8.1,
+              "expected": 99.0049833749168,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            }
           ]
         },
         {
@@ -147,27 +178,75 @@
             "end": 40.0
           },
           "assertions": [
-            { "variable": "drug_amount", "time": 15.9, "expected": 45.38447952823558,   "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 16.1, "expected": 143.4907899972109,   "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 23.9, "expected": 65.77704070165694,   "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 24.1, "expected": 163.47955140472536,  "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 31.9, "expected": 74.94000908940743,   "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 32.1, "expected": 172.4610808619501,   "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } },
-            { "variable": "drug_amount", "time": 39.9, "expected": 79.0571961833142,    "tolerance": { "rel": 1.0e-5, "abs": 1.0e-8 } }
+            {
+              "variable": "drug_amount",
+              "time": 15.9,
+              "expected": 45.38447952823558,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 16.1,
+              "expected": 143.4907899972109,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 23.9,
+              "expected": 65.77704070165694,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 24.1,
+              "expected": 163.47955140472536,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 31.9,
+              "expected": 74.94000908940743,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 32.1,
+              "expected": 172.4610808619501,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "drug_amount",
+              "time": 39.9,
+              "expected": 79.0571961833142,
+              "tolerance": {
+                "rel": 1e-05,
+                "abs": 1e-08
+              }
+            }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "PharmacokineticModel.drug_amount": 0.0
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

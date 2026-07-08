@@ -1,8 +1,8 @@
 {
-  "esm": "0.2.0",
+  "esm": "0.8.0",
   "metadata": {
     "name": "CrossDomainCoupling",
-    "description": "Test fixture for coupling entries with interface and lifting fields across domains of different dimensionality\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
+    "description": "Cross-domain air-sea coupling. The atmosphere-grid sensible flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) is remapped onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps to the bulk flux calculator use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
@@ -10,35 +10,770 @@
     "tags": [
       "cross-domain",
       "coupling",
-      "interface",
+      "regridding",
       "lifting",
-      "migrated_from_v01"
+      "migrated_to_v08"
     ]
+  },
+  "index_sets": {
+    "ocean_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "atmos_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "rg_coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "rg_cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "rg_candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "rg_candidate_set"
+    }
   },
   "models": {
     "Ocean3D": {
-      "domain": "ocean",
       "variables": {
         "SST": {
           "type": "state",
           "units": "K",
           "default": 290.0,
-          "description": "Sea surface temperature"
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Sea surface temperature on the ocean surface grid"
         },
         "salinity": {
           "type": "state",
           "units": "psu",
           "default": 35.0,
-          "description": "Salinity"
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Salinity on the ocean surface grid"
         },
-        "heat_flux": {
+        "flux_atmos": {
           "type": "parameter",
           "units": "W/m^2",
           "default": 0.0,
-          "description": "Surface heat flux"
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Sensible heat flux sampled on the 4-cell atmosphere surface grid (a SPATIALLY-VARYING field supplied by Atmosphere2D), regridded onto the 3-cell ocean grid by the inline conservative weights below."
+        },
+        "rg_src_poly": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  1,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  3,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  3,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file SOURCE-grid geometry: one closed lon-lat vertex ring per source cell (the 4-cell atmosphere surface grid). The `poly_a` operand of the ranged clip \u2014 the weights are computed FROM this geometry, not supplied."
+        },
+        "rg_tgt_poly": {
+          "type": "observed",
+          "shape": [
+            "ocean_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file TARGET-grid geometry: one closed lon-lat vertex ring per target cell (the 3-cell ocean surface grid). A GENUINELY DIFFERENT grid (distinct cell count and vertex rings) tiling the same domain, so the overlaps are fractional."
+        },
+        "rg_src_lon": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.0,
+              2.0,
+              3.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative longitude (bbox-min) \u2014 enters only the integer binning via floor, never a raw join comparison."
+        },
+        "rg_src_lat": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative latitude for binning."
+        },
+        "rg_tgt_lon": {
+          "type": "observed",
+          "shape": [
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.5,
+              2.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative longitude for binning."
+        },
+        "rg_tgt_lat": {
+          "type": "observed",
+          "shape": [
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative latitude for binning."
+        },
+        "rg_dx": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin width (integer quantization step).",
+          "default": 2.0
+        },
+        "rg_dy": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin height.",
+          "default": 2.0
+        },
+        "rg_atol": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Sliver floor: an overlap area at or below atol is dropped.",
+          "default": 1e-12
+        },
+        "rg_src_bin": {
+          "type": "state",
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) \u2014 the equi-join column."
+        },
+        "rg_tgt_bin": {
+          "type": "state",
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Integer bin key of each target cell, identically quantized."
+        },
+        "rg_pairs": {
+          "type": "state",
+          "shape": [
+            "rg_candidate_pairs"
+          ],
+          "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
+        },
+        "rg_A": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells",
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "a",
+              "o"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              },
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [],
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_src_poly",
+                    "a"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_tgt_poly",
+                    "o"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[a,o] = polygon_intersection_area(rg_src_poly[a], rg_tgt_poly[o]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate \u2014 replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+        },
+        "rg_At": {
+          "type": "observed",
+          "shape": [
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "o"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              },
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "a",
+                    "o"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "rg_A",
+                "a",
+                "o"
+              ]
+            }
+          },
+          "description": "Target-cell area denominator A_j = \u03a3_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter \u2014 the row-sum normalization, computed from geometry, not supplied."
+        },
+        "rg_W": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells",
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "a",
+              "o"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              },
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "a",
+                    "o"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "a",
+                    "o"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_At",
+                    "o"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "The conservative regrid weights W_ij = A_ij/A_j over the candidate pairs. Partition-of-unity \u03a3_i W_ij = 1 by construction (denominator is the row-sum of the same areas)."
+        },
+        "heat_flux": {
+          "type": "observed",
+          "shape": [
+            "ocean_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "o"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              },
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "a",
+                    "o"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_W",
+                    "a",
+                    "o"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "flux_atmos",
+                    "a"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "Surface heat flux on the ocean grid, regridded from the atmosphere-grid sensible flux via the INLINE conservative weights: heat_flux[o] = \u03a3_a W[a,o]\u00b7flux_atmos[a], W = A/A_o computed from cell geometry (the old air_sea interface as a real overlap-weighted regrid)."
         }
       },
       "equations": [
+        {
+          "_comment": "BROAD PHASE (1a): bin each SOURCE cell to an integer lon-lat bin key.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_src_bin",
+              "a"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "a"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lon",
+                            "a"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lat",
+                            "a"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1b): bin each TARGET cell identically.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin",
+              "o"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "o"
+            ],
+            "ranges": {
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lon",
+                            "o"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lat",
+                            "o"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_pairs",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "bool_and_or",
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              },
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "id": "rg_candidate_set",
+            "distinct": true,
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "key": {
+              "op": "skolem",
+              "args": [
+                "pair",
+                "a",
+                "o"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "SST"
+            ]
+          },
+          "rhs": 290.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "salinity"
+            ]
+          },
+          "rhs": 35.0
+        },
         {
           "lhs": {
             "op": "D",
@@ -65,72 +800,9 @@
           },
           "rhs": 0.0
         }
-      ],
-      "boundary_conditions": {
-        "SST_zero_gradient_lon_min": {
-          "variable": "SST",
-          "side": "lon_min",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_lon_min": {
-          "variable": "salinity",
-          "side": "lon_min",
-          "kind": "zero_gradient"
-        },
-        "SST_zero_gradient_lon_max": {
-          "variable": "SST",
-          "side": "lon_max",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_lon_max": {
-          "variable": "salinity",
-          "side": "lon_max",
-          "kind": "zero_gradient"
-        },
-        "SST_zero_gradient_lat_min": {
-          "variable": "SST",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_lat_min": {
-          "variable": "salinity",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "SST_zero_gradient_lat_max": {
-          "variable": "SST",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_lat_max": {
-          "variable": "salinity",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "SST_zero_gradient_depth_min": {
-          "variable": "SST",
-          "side": "depth_min",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_depth_min": {
-          "variable": "salinity",
-          "side": "depth_min",
-          "kind": "zero_gradient"
-        },
-        "SST_zero_gradient_depth_max": {
-          "variable": "SST",
-          "side": "depth_max",
-          "kind": "zero_gradient"
-        },
-        "salinity_zero_gradient_depth_max": {
-          "variable": "salinity",
-          "side": "depth_max",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "Atmosphere2D": {
-      "domain": "atmos_surface",
       "variables": {
         "T_air": {
           "type": "state",
@@ -149,9 +821,44 @@
           "units": "kg/(m^2*s)",
           "default": 0.0,
           "description": "Evaporation rate"
+        },
+        "flux_field": {
+          "type": "observed",
+          "shape": [
+            "atmos_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              100.0,
+              200.0,
+              300.0,
+              400.0
+            ],
+            "args": []
+          },
+          "description": "SPATIALLY-VARYING atmosphere-grid sensible-flux field (non-uniform on purpose: a uniform field through the weights would be a no-op). Coupled pointwise onto Ocean3D.flux_atmos and regridded onto the ocean grid."
         }
       },
       "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T_air"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "wind_speed"
+            ]
+          },
+          "rhs": 5.0
+        },
         {
           "lhs": {
             "op": "D",
@@ -172,52 +879,9 @@
           },
           "rhs": 0.0
         }
-      ],
-      "boundary_conditions": {
-        "T_air_zero_gradient_lon_min": {
-          "variable": "T_air",
-          "side": "lon_min",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_lon_min": {
-          "variable": "wind_speed",
-          "side": "lon_min",
-          "kind": "zero_gradient"
-        },
-        "T_air_zero_gradient_lon_max": {
-          "variable": "T_air",
-          "side": "lon_max",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_lon_max": {
-          "variable": "wind_speed",
-          "side": "lon_max",
-          "kind": "zero_gradient"
-        },
-        "T_air_zero_gradient_lat_min": {
-          "variable": "T_air",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_lat_min": {
-          "variable": "wind_speed",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "T_air_zero_gradient_lat_max": {
-          "variable": "T_air",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_lat_max": {
-          "variable": "wind_speed",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "BulkFluxCalculator": {
-      "domain": null,
       "variables": {
         "T_air_in": {
           "type": "parameter",
@@ -290,88 +954,12 @@
       "equations": []
     }
   },
-  "domains": {
-    "ocean": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -80.0,
-          "max": -60.0,
-          "units": "degrees",
-          "grid_spacing": 0.5
-        },
-        "lat": {
-          "min": 20.0,
-          "max": 40.0,
-          "units": "degrees",
-          "grid_spacing": 0.5
-        },
-        "depth": {
-          "min": 0.0,
-          "max": 1000.0,
-          "units": "m",
-          "grid_spacing": 10.0
-        }
-      },
-      "spatial_ref": "WGS84",
-      "initial_conditions": {
-        "type": "constant",
-        "value": 290.0
-      },
-      "element_type": "Float64"
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-02T00:00:00Z"
     },
-    "atmos_surface": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -80.0,
-          "max": -60.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        },
-        "lat": {
-          "min": 20.0,
-          "max": 40.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        }
-      },
-      "spatial_ref": "WGS84",
-      "initial_conditions": {
-        "type": "constant",
-        "value": 288.0
-      },
-      "element_type": "Float64"
-    }
-  },
-  "interfaces": {
-    "air_sea": {
-      "description": "Air-sea interface coupling atmosphere and ocean surface",
-      "domains": [
-        "atmos_surface",
-        "ocean"
-      ],
-      "dimension_mapping": {
-        "shared": {
-          "atmos_surface.lon": "ocean.lon",
-          "atmos_surface.lat": "ocean.lat"
-        },
-        "constraints": {
-          "ocean.depth": {
-            "value": "min"
-          }
-        }
-      },
-      "regridding": {
-        "method": "conservative"
-      }
-    }
+    "element_type": "Float64"
   },
   "coupling": [
     {
@@ -395,18 +983,16 @@
       "from": "Ocean3D.SST",
       "to": "BulkFluxCalculator.SST_in",
       "transform": "param_to_var",
-      "interface": "air_sea",
-      "lifting": "pointwise",
-      "description": "SST from ocean surface to bulk flux calculator"
+      "lifting": "mean",
+      "description": "SST from the spatial ocean surface grid reduced (mean) to the 0-D bulk flux calculator"
     },
     {
       "type": "variable_map",
-      "from": "BulkFluxCalculator.sensible_flux",
-      "to": "Ocean3D.heat_flux",
+      "from": "Atmosphere2D.flux_field",
+      "to": "Ocean3D.flux_atmos",
       "transform": "param_to_var",
-      "interface": "air_sea",
       "lifting": "pointwise",
-      "description": "Sensible heat flux drives ocean surface temperature"
+      "description": "Spatially-varying atmosphere-grid flux field supplied to Ocean3D on the atmosphere grid; Ocean3D regrids it onto the ocean grid (heat_flux) via the inline conservative overlap weights."
     }
   ]
 }

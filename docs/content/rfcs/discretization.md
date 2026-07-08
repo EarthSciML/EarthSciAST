@@ -1,6 +1,16 @@
 # RFC — Language-agnostic Discretization in ESM
 
-**Status:** Draft v2.2 (v2.2 addendum — §5.4.6 on-wire int/float disambiguation per gt-h9kt)
+> **SUPERSEDED (v0.8.0 clean break).** The bespoke discretization machinery this
+> RFC defines — the `grids` / `staggering_rules` / `discretizations` blocks, the
+> stencil-template rule grammar (`Discretization`, `Rule`, `PatternNode`,
+> `NeighborSelector`, `StencilEntry`, `BoundaryPolicy`, `GhostWidth`, …),
+> GridDiscretization Descriptors, and `Equation.region` — was **removed from the
+> schema in v0.8.0**. Spatial grid geometry (topology, connectivity, metric
+> arrays) and discretization stencils are now expressed directly as `aggregate`
+> Functional Aggregate Query nodes; see **`semiring-faq-unified-ir.md`**. This
+> document is retained for historical context only and is no longer normative.
+
+**Status:** SUPERSEDED by `semiring-faq-unified-ir.md` (was: Draft v2.2 — §5.4.6 on-wire int/float disambiguation per gt-h9kt)
 **Bead:** gt-dq0f (v1), gt-yx9y (v2 revision), gt-woe1 (v2.1 addenda), gt-h9kt (v2.2 addendum)
 **Affects spec version:** 0.1.0 → 0.2.0 (**breaking**; see §10 and §16 for migration)
 **Scope:** Spatial discretization only. Time integration remains a runtime concern.

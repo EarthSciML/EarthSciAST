@@ -1,5 +1,8 @@
 # Verification Review — RFC Discretization v2.1
 
+> **SUPERSEDED (v0.8.0 clean break).** The bespoke discretization / spatial-grid machinery this document concerns was removed from the schema in v0.8.0; grid geometry and discretization are now expressed as `aggregate` Functional Aggregate Query nodes (see `semiring-faq-unified-ir.md`). Retained for historical context only.
+
+
 **Reviewer:** polecat `thunder` (no prior authorship or review of this RFC)
 **Document:** `docs/rfcs/discretization.md`, 2079 lines, v2.1 (§17.1 addenda; landed via commit 26f73a83 / gt-woe1)
 **Prior reviews verified against:** `docs/rfcs/discretization-review-v2.md` (gt-j6do, brahmin) and `docs/rfcs/discretization-review-v2-parallel.md` (gt-adhm, ghoul)

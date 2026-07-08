@@ -20,7 +20,7 @@
             ],
             "op": "sign"
           },
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": [
             1
           ],
@@ -53,7 +53,7 @@
             "nEUKfhLw"
           ],
           "expr": 447702474.9619224,
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": [
             "g"
           ]

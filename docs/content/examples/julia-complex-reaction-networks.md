@@ -1,6 +1,6 @@
 # Complex Reaction Networks (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reactions_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reactions_test.jl`
 
 ```julia
 # Test a more complex network: A + B ⇌ C, C → D

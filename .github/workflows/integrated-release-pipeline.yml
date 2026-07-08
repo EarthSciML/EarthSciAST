@@ -78,14 +78,14 @@ jobs:
 
         if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
           NEEDS_RELEASE="true"
-          CHANGED_PACKAGES='["EarthSciSerialization.jl", "earthsci-toolkit", "earthsci_toolkit", "earthsci-toolkit-rs"]'
-        elif git diff --name-only ${LAST_REF}..HEAD | grep -E '^packages/'; then
+          CHANGED_PACKAGES='["EarthSciAST.jl", "earthsci-ast-ts", "earthsci-ast-py", "earthsci-ast-rs"]'
+        elif git diff --name-only ${LAST_REF}..HEAD | grep -E '^pkg/'; then
           echo "Changes detected in packages"
           NEEDS_RELEASE="true"
 
           # Detect which specific packages changed
           CHANGED_PACKAGES=$(git diff --name-only ${LAST_REF}..HEAD | \
-            grep -E '^packages/' | \
+            grep -E '^pkg/' | \
             cut -d'/' -f2 | \
             sort -u | \
             jq -R -s -c 'split("\n") | map(select(length > 0))')
@@ -171,10 +171,10 @@ jobs:
         $(echo "$CHANGED_PACKAGES" | jq -r '.[]' | sed 's/^/- /')
 
         ## Package Versions:
-        - Julia EarthSciSerialization.jl: v$NEW_VERSION
-        - TypeScript earthsci-toolkit: v$NEW_VERSION
-        - Python earthsci_toolkit: v$NEW_VERSION
-        - Rust earthsci-toolkit: v$NEW_VERSION
+        - Julia EarthSciAST.jl: v$NEW_VERSION
+        - TypeScript @earthsciml/ast: v$NEW_VERSION
+        - Python earthsci-ast: v$NEW_VERSION
+        - Rust earthsci-ast: v$NEW_VERSION
 
         ## Installation:
 
@@ -186,16 +186,16 @@ jobs:
         ### Package Managers
         \`\`\`bash
         # Julia
-        using Pkg; Pkg.add("EarthSciSerialization")
+        using Pkg; Pkg.add("EarthSciAST")
 
         # TypeScript/JavaScript
-        npm install earthsci-toolkit
+        npm install @earthsciml/ast
 
         # Python
-        pip install earthsci-toolkit
+        pip install earthsci-ast
 
         # Rust
-        cargo add earthsci-toolkit
+        cargo add earthsci-ast
         \`\`\`
 
         EOF
@@ -298,25 +298,25 @@ jobs:
         NEW_VERSION="${{ needs.release-analysis.outputs.new_version }}"
 
         # Update Julia Project.toml
-        if [ -f "packages/EarthSciSerialization.jl/Project.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" packages/EarthSciSerialization.jl/Project.toml
+        if [ -f "pkg/EarthSciAST.jl/Project.toml" ]; then
+          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/EarthSciAST.jl/Project.toml
         fi
 
         # Update TypeScript package.json
-        if [ -f "packages/earthsci-toolkit/package.json" ]; then
-          cd packages/earthsci-toolkit
+        if [ -f "pkg/earthsci-ast-ts/package.json" ]; then
+          cd pkg/earthsci-ast-ts
           npm version $NEW_VERSION --no-git-tag-version
           cd ../..
         fi
 
         # Update Python pyproject.toml
-        if [ -f "packages/earthsci_toolkit/pyproject.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" packages/earthsci_toolkit/pyproject.toml
+        if [ -f "pkg/earthsci-ast-py/pyproject.toml" ]; then
+          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/earthsci-ast-py/pyproject.toml
         fi
 
         # Update Rust Cargo.toml
-        if [ -f "packages/earthsci-toolkit-rs/Cargo.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" packages/earthsci-toolkit-rs/Cargo.toml
+        if [ -f "pkg/earthsci-ast-rs/Cargo.toml" ]; then
+          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/earthsci-ast-rs/Cargo.toml
         fi
 
         # Update workspace.json with coordinated release info

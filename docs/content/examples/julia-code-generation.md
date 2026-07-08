@@ -1,6 +1,6 @@
 # Code Generation (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/test_codegen.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/test_codegen.jl`
 
 ```julia
 @testset "to_julia_code" begin

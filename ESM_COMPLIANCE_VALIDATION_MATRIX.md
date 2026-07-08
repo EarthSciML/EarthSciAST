@@ -111,6 +111,84 @@ Where:
 | BEHAV-06-A-001 | All models MUST be fully specified | esm-spec.md:450 | Yes | behavioral |
 | BEHAV-06-A-002 | Every equation, variable, parameter MUST be present in ESM | esm-spec.md:450 | Yes | behavioral |
 
+### BEHAV-04-B: Remote (URL) References — Optional Capability
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-B-001 | URL/remote reference support is an OPTIONAL binding capability; a binding without it MUST reject a URL ref cleanly with the existing unresolved diagnostics (`template_import_unresolved` / subsystem-ref resolution error), never silently skip or misresolve | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
+| BEHAV-04-B-002 | A binding that supports URL refs MUST resolve a URL-loaded document's own relative refs against its URL base (RFC 3986 joining) and canonicalize URL identity for cycle detection (dot segments removed, relative spellings joined) | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
+
+### BEHAV-04-E: Subsystem-Mounted Data-Loader Consumption (RFC pure-io-data-loaders §4.3)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-E-001 | A pure-I/O data loader MOUNTED as a model subsystem (`models.X.subsystems.raw = <DataLoader>`) MUST have each of its variables lowered by flatten to a const-array-backed **observed** `<owner>.<subkey>.<var>` with NO defining equation; the owning model's own equations consume it by dot-notation (`raw.field`), and simulate MUST bind its value through the provider/const-array seam so BOTH a bare-scalar reference and a gather `index(raw.field, …)` resolve to the loaded value | RFC pure-io-data-loaders §4.3; CONFORMANCE_SPEC.md §5.11 | Yes | behavioral |
+
+> **Binding status (2026-07-06)**: Python + Julia + Rust **implemented** and gated by the shared offline fixture `tests/conformance/subsystem_loader/` (analytic golden). Julia: flatten `_collect_model!` lowers each DataLoader-subsystem variable to an observed and the bare-scalar reference resolves through `_resolve_indices(::VarExpr)` against the CONST provider's `const_arrays` (runner `subsystem_loader_conformance_test.jl`). Python: `flatten.py` already lowers the observed + `LoaderField`; the 2-part `raw.field` structural check (`structural_checks.py`) and the numpy interpreter's bare 1-element loader-field scalarization (`numpy_interpreter.py`) were the two fixes (runner `test_subsystem_loader_conformance.py`). Rust: `flatten.rs` (`lower_loader_subsystems`) lowers each DataLoader-subsystem variable to an expression-less observed `Box.raw.<var>` and namespaces the owner's bare `raw.<var>` references to `Box.raw.<var>`; `structural.rs` (`loader_subsystem_scoped_refs`) resolves the 2-part ref so `validate` accepts it; both then bind at the RHS through the existing data-Provider forcing seam (`ArrayCompiled::forcing_handle`) — a bare-scalar field seeded as a 0-D array, a gathered field as a 1-D array (runner `subsystem_loader_conformance.rs`). Go / TypeScript out of scope (no array simulator).
+
+### BEHAV-04-D: Subsystem-Mounted `index_sets` Merge (esm-spec §4.7)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-D-001 | A referenced subsystem file's top-level `index_sets` MUST merge into the importing document's document-scoped registry at resolution time, after the referenced document's metaparameters close and fold (§9.7.6 site 3 bindings, then defaults); names absent from the importer are added, deep-equal redeclaration is idempotent | esm-spec.md §4.7 | Yes | validation |
+| BEHAV-04-D-002 | A non-deep-equal collision between a mounted file's index-set declaration and the importing document's registry MUST be rejected at load with `subsystem_index_set_conflict` (the subsystem-edge mirror of `template_import_index_set_conflict`, §9.7.5) | esm-spec.md §4.7, §9.6.6 | Yes | validation |
+
+> **Binding status (2026-07-02)**: Julia implemented (`_merge_subsystem_index_sets!` in `parse.jl`, called from `_resolve_subsystem_ref` for every §4.7 subsystem edge, local and remote; fixtures `tests/valid/subsystem_mesh_lib.esm` + `tests/valid/subsystem_index_set_merge.esm`, `tests/invalid/template_imports/subsystem_index_set_conflict.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) at every subsystem-ref resolution, merge the loaded file's top-level `index_sets` (post-metaparameter-fold) into the importing document's registry; (2) treat deep-equal redeclaration as idempotent (structural equality over kind/size/members/of/offsets/values/from_faq); (3) reject non-equal collisions with the stable `subsystem_index_set_conflict` diagnostic; (4) drive the shared fixtures (schema-only bindings assert schema acceptance per `resolver_only`). Note: the Julia raw-level top-level-model `{ref}` inline path (`_inline_toplevel_model_refs!`) is a distinct mechanism and does not yet merge `index_sets`; it merges only `function_tables`/`data_loaders`/`enums`.
+>
+> **Go port (2026-07-03)**: implemented (`mergeSubsystemIndexSets` + `indexSetDeepEqual` in `subsystem_ref.go`; the importing document's `file.IndexSets` registry is threaded through `resolveSubsystemRefs`/`resolveSubsystemMap` and each mounted file's folded top-level `index_sets` merge in, transitively through nested mounts). `subsystem_index_set_merge.esm` loads with `vertices` merged in (size 4) and `cells` deep-equal-idempotent; `subsystem_index_set_conflict.esm` is rejected with `subsystem_index_set_conflict` (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `mergeSubsystemIndexSets` in `pkg/earthsci-ast-ts/src/ref-loading.ts`, called from `resolveModelRefs` at every model subsystem-ref resolution with the importing document's `file.index_sets` threaded as the registry; deep-equal via `deepEqual` (numeric-literal-aware), non-equal collision → `subsystem_index_set_conflict`, absent name added. Matches the Julia reference (registry threaded only through the model walk, not reaction systems). The `subsystem_index_set_conflict.esm` fixture is rejected with the exact code (`src/template-imports.test.ts` invalid loop, via `resolveSubsystemRefs`).
+> **Rust (2026-07-03)**: implemented (`earthsci-ast-rs/src/ref_loading.rs` —
+> `merge_subsystem_index_sets` threaded through the model-subsystem walk via an
+> `Option<&mut Map>` registry seeded from the importing document's own `index_sets`,
+> written back post-merge; reaction-system subsystem refs thread `None`, matching the Julia
+> scope; deep-equal via order-independent serde_json `Map` equality). Fixtures
+> `subsystem_index_set_merge.esm` (+ `subsystem_mesh_lib.esm`) and
+> `subsystem_index_set_conflict.esm` drive it (`template_imports_conformance`).
+> **Python (2026-07-03)**: implemented (`earthsci_ast/parse.py` `_merge_subsystem_index_sets` + `_index_set_deep_equal`, threaded through model subsystem resolution via `EsmFile.index_sets`; reaction-system subsystems do not merge, matching the Julia reference). Fixtures: `subsystem_index_set_merge.esm` brings `vertices` in and keeps deep-equal `cells`; `subsystem_index_set_conflict.esm` raises `subsystem_index_set_conflict`.
+
+### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-C-001 | A `makearray` region bound pair `[start, start − 1]` is the canonical EMPTY bound: the region contributes no elements and its `values` entry is never consulted; the document MUST load cleanly (the §9.6.8 minimum-admissible-extent case, e.g. `[2, N−1]` folded at `N = 2`) | esm-spec.md §4.3.2, §9.6.8 | Yes | validation |
+| BEHAV-04-C-002 | A `makearray` region bound pair with `stop < start − 1` on the expanded, metaparameter-folded form MUST be rejected at load with `makearray_region_inverted` (e.g. `[2, N−1]` folded at `N = 1`) | esm-spec.md §4.3.2, §9.6.6, §9.6.4 | Yes | validation |
+
+> **Binding status (2026-07-02)**: Julia implemented (`_validate_makearray_regions`, both §9.6.4 validator sites in `lower_expression_templates.jl`; fixtures `tests/valid/makearray_empty_region_min_extent.esm`, `tests/invalid/template_imports/makearray_region_inverted.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) walk the expanded, folded tree's `makearray.regions`, skipping `expression_templates` blocks and non-integer (unfolded) bound entries; (2) accept `stop == start − 1` as empty; (3) reject `stop < start − 1` with the stable `makearray_region_inverted` diagnostic; (4) drive the two shared fixtures (schema-only bindings TS/Go assert schema acceptance per the `resolver_only` flag in `expected_errors.json`).
+>
+> **Go port (2026-07-03)**: implemented (`validateMakearrayRegions` + `asInt64Strict` in `lower_expression_templates.go`, run at both §9.6.4 validator sites — the no-machinery fast path and the post-fixpoint return). `makearray_empty_region_min_extent.esm` loads at default N=2 (empty bound `[2,1]`) and is rejected at N=1 (inverted `[2,0]`) with `makearray_region_inverted`; the shared invalid fixture is rejected (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `validateMakearrayRegions` in `pkg/earthsci-ast-ts/src/lower_expression_templates.ts`, run on the expanded/folded form at both `lowerExpressionTemplates` validator sites (fast path + full path), skipping `expression_templates` and non-integer bounds. `makearray_empty_region_min_extent.esm` loads clean at default `N = 2` (interior folds to `[2, 1]`); the same file rebound `N = 1` (loader API) and `makearray_region_inverted.esm` are rejected with `makearray_region_inverted`. Tests in `src/expression-templates.test.ts` + the `src/template-imports.test.ts` invalid-fixture loop.
+> **Rust (2026-07-03)**: implemented (`earthsci-ast-rs/src/lower_expression_templates.rs`
+> — `validate_makearray_regions`, called at the end of `lower_expression_templates` after
+> `validate_geometry_manifolds`; skips `expression_templates` and non-integer bounds, accepts
+> `stop == start − 1`, rejects `stop < start − 1` with `makearray_region_inverted`). Fixtures
+> `makearray_empty_region_min_extent.esm` (default N=2 loads; loader-API N=1 rejects) and
+> `makearray_region_inverted.esm` (`template_imports_conformance`).
+> **Python (2026-07-03)**: implemented (`earthsci_ast/lower_expression_templates.py` `_validate_makearray_regions`, run at both §9.6.4 validator sites — fast path and full path — skipping `expression_templates` and non-integer bounds). Fixtures: `makearray_empty_region_min_extent.esm` loads at `N=2` (folds `[2,1]`) and rejects at `N=1` (folds `[2,0]`); `makearray_region_inverted.esm` raises `makearray_region_inverted`.
+
+### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-08-A-001 | `intersect_polygon` / `polygon_intersection_area` operand rings MUST accept a closing duplicate final vertex and CONSECUTIVE duplicate vertices (rectangular-storage padding, e.g. an MPAS pentagon in a hexagon-shaped `[cells, NVERT, 2]` slot) and evaluate them as the deduplicated ring (point-equality tolerance atol 1e-8 / rtol 1e-5), equal to the same op over the already-distinct ring | esm-spec.md §8.6.1 | Yes | mathematical |
+| BEHAV-08-A-002 | Deduplication MUST happen in the binding kernel's operand coercion BEFORE the backend clip (S2 rejects zero-length edges as degenerate; Sutherland–Hodgman treats them as no-ops — the op contract must not depend on the backend), and `intersect_polygon` MUST return its overlap ring as distinct vertices with implicit closure on every manifold | esm-spec.md §8.6.1, CONFORMANCE_SPEC §5.8.4 | Yes | mathematical |
+| BEHAV-08-A-003 | A ring with fewer than 3 DISTINCT vertices after deduplication is a degenerate operand and MUST be rejected (the ≥3-distinct-vertices operand error) | esm-spec.md §8.6.1 | Yes | validation |
+
+> **Binding status (2026-07-02)**: Julia implemented (`_as_ring` in `geometry.jl` now runs `_dedup_consecutive` on every operand before the planar/GeometryOps clip; empirically the planar and GeometryOps paths already tolerated padding with exactly-equal areas, but the spherical clip's OUTPUT retained the duplicates — dedup-at-coercion restores the distinct-vertex output contract; fixture `tests/valid/geometry/polygon_intersection_area_padded_ring.esm`, unit tests in `geometry_polygon_intersection_area_test.jl` incl. pentagon padded to 6/7 slots, planar + spherical). **Pending port** — **Python** (`geometry.py::_as_ring`): apply `_dedup_consecutive` (already defined for clip output) to operands before the clip — empirically REQUIRED for the spherely/S2 path, which rejects degenerate edges. **Rust** (`geometry.rs::intersect_polygon`): dedupe operands (allclose tolerance, wrap pair included) before `SphericalPolygon::from_lon_lat` — empirically the S2 path FAILS today on padded rings ("Edge N is degenerate (duplicate vertex)"), and the planar path passes padding through to its output ring; also dedupe the planar output. **TypeScript / Go**: schema-only, no geometry kernel — no action.
+>
+> **Rust (2026-07-03)**: DONE (`earthsci-ast-rs/src/geometry.rs` — `dedup_consecutive`
+> + `as_ring` applied to both operands at the top of `intersect_polygon`, `dedup_consecutive`
+> on the planar clip output, and dedup before `SphericalPolygon::from_lon_lat` in
+> `spherical_area`; `<3` distinct after dedup rejects). Confirmed: the padded MPAS-style ring
+> now clips in S2 (unit test `spherical_clip_accepts_padded_rings` — previously failed with
+> the degenerate-edge error). Fixture `polygon_intersection_area_padded_ring.esm` simulates to
+> area 1.0 via the `pde_conformance` example.
+> **Python (2026-07-03)**: implemented (`earthsci_ast/geometry.py` `_as_ring` now runs `_dedup_consecutive` — interior consecutive duplicates + closing wrap pair — on every operand before the clip; `<3` distinct vertices rejected). Verified on the PLANAR path: `polygon_intersection_area_padded_ring.esm` (5-/6-vertex padded squares) deduplicates to 4-vertex squares, overlap area = 1.0; unit tests cover dedup + degenerate reject. The SPHERICAL/S2 (`spherely`) path is spherely-gated in this venv (no cp314 macOS-arm wheel) and could not be exercised; the dedup runs identically before either backend.
+
+### BEHAV-06-B: Inline-Test Assertion Semantics (pinned §6.6.3/§6.6.5 conventions)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-06-B-001 | PDE assertions MUST select a scalar via `coords` or `reduce`; pointwise assertions are 0-D-only (validators reject the cross cases) | esm-spec.md §6.6.5 | Yes | simulation |
+| BEHAV-06-B-002 | `coords` values are 1-based fractional INDEX-space positions along the named interval index sets; sampling picks the nearest grid index with exact half-way ties rounding down (`idx = ceil(c − 1/2)`); resolved index in `1..size` | esm-spec.md §6.6.3, §6.6.5 convention 1 | Yes | simulation |
+| BEHAV-06-B-003 | `coords` may pin a strict subset of dimensions only when every remaining dimension resolves to a single sample | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
+| BEHAV-06-B-004 | `integral` reduce is the uniform-cell Riemann sum under unit total domain measure per axis (= `mean` over interval sets); the measure convention under which relative-L2 is measure-free | esm-spec.md §6.6.5 convention 2 | Yes | simulation |
+| BEHAV-06-B-005 | `from_file` reference `path` resolves relative to the `.esm` file's directory; v1 `format` is `json` — a row-major nested array shape-validated against the field | esm-spec.md §6.6.5 convention 3 | Yes | simulation |
+| BEHAV-06-B-006 | A `coords`/`reduce` assertion on a rank≥2 (multidimensional) array OBSERVED MUST materialize the field over the full Cartesian product of its interval index sets in row-major (lexicographic) cell order paired with the value layout, so all bindings agree. Julia: FIXED (`vec()` around the `CartesianIndices` cell sweep — a rank≥2 comprehension yields a Matrix that `sort!` rejected without `dims=`); Python (`np.ndindex`) and Rust (row-major `IxDyn` enumeration) were already rank-agnostic. Gate: `tests/conformance/pde_inline_observed_rank2/` (Julia/Python/Rust agree on the golden actuals) | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
+
 ---
 
 ## 4. FORMAT REQUIREMENTS
@@ -300,15 +378,15 @@ Where:
 ### EXPR-09-A: `expression_templates` Block (v0.4.0, esm-spec §9.6)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| EXPR-09-A-001 | `expression_templates` MUST be declared inside a single model or reaction_system | esm-spec.md §9.6.1 | Yes | expression |
-| EXPR-09-A-002 | Each entry MUST declare non-empty `params` array (no duplicates) | esm-spec.md §9.6.1 | Yes | expression |
+| EXPR-09-A-001 | `expression_templates` MUST be declared inside a single model or reaction_system, or at top level of a template-library file (§9.7.1) | esm-spec.md §9.6.1, §9.7.1 | Yes | expression |
+| EXPR-09-A-002 | Each entry MUST declare a `params` array (possibly empty; no duplicates; entries non-empty strings) | esm-spec.md §9.6.1 | Yes | expression |
 | EXPR-09-A-003 | Each entry MUST declare a fixed Expression AST `body` | esm-spec.md §9.6.1 | Yes | expression |
-| EXPR-09-A-004 | Template `body` MUST NOT contain `apply_expression_template` nodes (no template-calls-template) | esm-spec.md §9.6.3 | Yes | expression |
+| EXPR-09-A-004 | Template-body `apply_expression_template` references MUST form an acyclic DAG over match-less in-scope templates, inlined at registration time (depth ≤ 32) | esm-spec.md §9.6.3, §9.7.3 | Yes | expression |
 
 ### EXPR-09-B: `apply_expression_template` Op
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
-| EXPR-09-B-001 | `apply_expression_template` `name` MUST reference a template in the same component | esm-spec.md §9.6.2 | Yes | expression |
+| EXPR-09-B-001 | `apply_expression_template` `name` MUST reference a match-less template declared in or imported into the same component | esm-spec.md §9.6.2, §9.7.2 | Yes | expression |
 | EXPR-09-B-002 | `bindings` MUST exactly match the template's `params` (no missing or extra keys) | esm-spec.md §9.6.2 | Yes | expression |
 | EXPR-09-B-003 | Loaders MUST expand `apply_expression_template` to a fully-substituted AST at load time | esm-spec.md §9.6.4 | Yes | expression |
 | EXPR-09-B-004 | After expansion the AST MUST be structurally identical to inline-authored equivalent | esm-spec.md §9.6.4 | Yes | expression |
@@ -320,7 +398,7 @@ Where:
 | EXPR-09-C-001 | `apply_expression_template_version_too_old` when `esm` < 0.4.0 uses either construct | esm-spec.md §9.6.5 | Yes | validation |
 | EXPR-09-C-002 | `apply_expression_template_unknown_template` for unresolved `name` | esm-spec.md §9.6.6 | Yes | validation |
 | EXPR-09-C-003 | `apply_expression_template_bindings_mismatch` for missing/extra binding keys | esm-spec.md §9.6.6 | Yes | validation |
-| EXPR-09-C-004 | `apply_expression_template_recursive_body` when body contains `apply_expression_template` | esm-spec.md §9.6.6 | Yes | validation |
+| EXPR-09-C-004 | `apply_expression_template_recursive_body` on a cyclic (self or mutual) template-body reference | esm-spec.md §9.6.6, §9.7.3 | Yes | validation |
 | EXPR-09-C-005 | `apply_expression_template_invalid_declaration` for malformed `params`/`body` | esm-spec.md §9.6.6 | Yes | validation |
 
 ### EXPR-09-D: Conformance Fixtures
@@ -328,6 +406,138 @@ Where:
 |---|---|---|---|---|
 | EXPR-09-D-001 | Load + re-serialize of arrhenius template yields canonical expanded AST | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/fixture.esm` → `expanded.esm` | expression |
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
+
+### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
+| EXPR-09-E-002 | `expression_template_imports` MUST resolve at load, before validation, with §4.7 reference formats and canonical-path cycle detection (`template_import_cycle`) | esm-spec.md §9.7.2 | Yes | validation |
+| EXPR-09-E-003 | Importing a non-library file is `template_import_not_library`; a subsystem `ref` targeting a library file is `subsystem_ref_is_template_library` | esm-spec.md §9.7.1 | Yes | validation |
+| EXPR-09-E-004 | Effective declaration order MUST be depth-first post-order over the import DAG; deep-equal diamond duplicates dedup; non-equal same-name collisions are `template_import_name_conflict` | esm-spec.md §9.7.4 | Yes | expression |
+| EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
+| EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
+| EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
+| EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
+| EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
+| EXPR-09-E-012 | Round-trip MUST emit the expanded, folded form; no §9.7 construct survives `parse → emit` | esm-spec.md §9.7.6 | Yes | serialization |
+| EXPR-09-E-013 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_smoke`, `import_diamond`, `import_order_determinism`, `metaparameter_resolutions` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_*` | expression |
+
+### EXPR-09-F: Import Renaming, Namespacing, and Free-Name Rebinding (esm-spec §9.7.7)
+
+> **Binding status**: Julia (reference) = implemented; Python / Rust / Go =
+> pending port (wave 2 of RFC `docs/content/rfcs/template-import-renaming.md` §10).
+>
+> **Go port (2026-07-03)**: implemented in `pkg/earthsci-ast-go/pkg/esm/template_imports.go`
+> (`applyEdgeRenames` + `renameWalk`/`renameDecl`/`nameMap`/`collectBoundSyms`/`collectRefNames`,
+> called from `resolveImportEntry` after `only` filtering, before the §9.7.4/§9.7.5 merge).
+> Goldens `import_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond`
+> byte-identical; `rename_unknown_name` / `rebind_unknown_free_name` / `rename_collision` /
+> `rename_invalid_identifier` raise the mapped diagnostics (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `applyEdgeRenames` + `renameWalk` /
+> `renameDecl` / `nameMap` / `collectBoundSyms` / `collectRefNames` in
+> `pkg/earthsci-ast-ts/src/template_imports.ts`, called from
+> `resolveImportEntry` after `bindings`/`only` and before the merge; `where` added
+> to `META_SUBST_SKIP_KEYS`. Byte-identity (via `toEqual`) confirmed against the
+> Julia goldens for `import_rename_two_instances`, `import_rebind_keyed_factors`,
+> `import_rename_diamond`; the four invalid fixtures raise the exact codes
+> (`rename_unknown_name`, `rebind_unknown_free_name`, `rename_collision`,
+> `rename_invalid_identifier`). Tests in `src/template-imports.test.ts`.
+> **Rust (2026-07-03)**: implemented (`earthsci-ast-rs/src/template_imports.rs` —
+> `apply_edge_renames` + `name_map`/`rename_walk`/`rename_decl`/`collect_bound_syms`/
+> `collect_ref_names`, `is_valid_dotted_name`, `RENAME_AXIS_KEYS`/`RENAME_EXTRA_PROTECTED_KEYS`,
+> `where` added to `META_SUBST_SKIP_KEYS`; called from `resolve_import_entry` after
+> `only` filtering). Byte-identical goldens for `import_rename_two_instances`,
+> `import_rebind_keyed_factors`, `import_rename_diamond` (EXPR-09-F-008), verified via
+> the `canonical_expand` example and the `template_imports_conformance` suite. AST byte
+> identity for full-precision float literals also required the serde_json `float_roundtrip`
+> feature (default fast path was 1 ulp off on some 16-17-digit literals).
+> **Python (2026-07-03)**: implemented (`earthsci_ast/template_imports.py`
+> `_apply_edge_renames`, called per import edge after `bindings`/`only`, before merge).
+> Goldens byte-identical: `import_rename_two_instances`, `import_rebind_keyed_factors`,
+> `import_rename_diamond`. Invalid fixtures raise the mapped diagnostics
+> `rename_invalid_identifier`).
+>
+> **`where.*.shape` rewrite (2026-07-03, EXPR-09-F-003)**: an import-edge
+> `prefix`/`rename` MUST carry a `where`-constrained rule's `where.*.shape`
+> index-set names through the edge's index-set map in lockstep with the rule's
+> declaration and body references (constraint KEYS — param names — stay
+> unchanged; unmapped shape names stay as spelled). Previously the rename walk
+> reused the metaparameter `_META_SUBST_SKIP_KEYS` (which protects `where`) and
+> copied `where` verbatim, so an imported `where`-rule renamed under `prefix`
+> failed rule registration with `template_constraint_unknown_index_set`
+> (body/registry used `<prefix>.x` while `where` still said `x`). Fixed in the
+> RENAME walk only (META-SUBST still skips `where`) via a positional `where`
+> branch (`_rename_where` / `rename_where` / `renameWhere`) in **all five
+> bindings** (`template_imports.jl`, `template_imports.py`, `template_imports.rs`,
+> `template_imports.ts`, `template_imports.go`). Guarded by the combined fixture
+> `import_where_rename_two_instances` (a `where`-rule library imported twice
+> under prefix `meshA`/`meshB`; each renamed rule instance fires only on its own
+> field — five-way byte-identical expanded AST) and the negative fixture
+> `import_where_rename_unknown_index_set` (a `where` shape naming a set the
+> library never declares survives the rename as spelled and is rejected at
+> registration with `template_constraint_unknown_index_set`).
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| EXPR-09-F-001 | Edge pipeline order MUST be: target's own-scope resolution → `bindings` → `only` → `prefix`/`rename`/`rebind` → merge; `only`/`bindings`/`rename`/`rebind` speak the target's export vocabulary (pre this edge's rename) | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-002 | `prefix` MUST rename every surviving exported name without an explicit `rename` entry to `<prefix>.<name>`; `rename` entries override; prefixes nest through re-export chains (deeper edges and the loader API bind the renamed, dotted names) | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-003 | Renames MUST apply transitively through the pinned occurrence sites: index-set registry keys / registry `of` / `{"from"}` refs / `wrt`-`dim` scalar fields / `where.*.shape` match-scoping index-set names in `body` AND `match` (param-shadowed); metaparameter keys / expression-position bare strings / structural-site names; template keys / `apply_expression_template.name` | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-004 | `rebind` MUST rewrite free variable names in bodies/matches (incl. `aggregate` `args` and `index` gathers) and ragged `offsets`/`values`; dotted targets are §4.6 scoped references | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-005 | Renaming a name the target does not export at the edge is `template_import_rename_unknown_name`; rebinding a non-occurring or declared name is `template_import_rebind_unknown_name`; rebinding a bound index symbol is `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
+| EXPR-09-F-006 | Post-rename names MUST be unique per namespace and new bare names fresh (no capture of free names, bound symbols, or params): `template_import_rename_collision`; `prefix`/targets MUST be dotted identifiers: `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
+| EXPR-09-F-007 | Same file under different renames = distinct registrations (no deep-equal dedup across renames); identical `ref` + instantiation + renames = dedupe at first occurrence; renamed `match`-rule instances register at their edges' §9.7.4 positions and identical patterns tie-break by that order | esm-spec.md §9.7.4, §9.7.7 | Yes | expression |
+| EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_where_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_where_rename_*`, `import_rebind_*` | expression |
+
+### EXPR-09-G: Match-Pattern Scoping Constraints (`where`, esm-spec §9.6.1; RFC match-pattern-scoping-constraints)
+
+> Binding status: Julia reference implementation landed (2026-07); Python / Rust /
+> TypeScript / Go ports pending (wave 2 — RFC §10 porting checklist).
+>
+> **Go port (2026-07-03)**: implemented in `pkg/earthsci-ast-go/pkg/esm/lower_expression_templates.go`
+> (`componentShapeEnv` / `whereSatisfied` / `registeredWhere`, threaded through `matchRule.whereC`
+> and `rewritePass`/`rewriteToFixpoint`; `where` structural checks in `validateTemplates`; `where`
+> added to `metaSubstSkipKeys`). Goldens `constrained_match_scope`, `two_div_two_meshes`,
+> `per_variable_scheme_literal_args` byte-identical (models.m.variables); `constraint_unknown_index_set`
+> raises `template_constraint_unknown_index_set` (`go test ./...`).
+> **TypeScript = implemented (2026-07-03)**: `where` structural validation in
+> `validateTemplates`, plus `componentShapeEnv` / `whereSatisfied` /
+> `registeredWhere` and the `whereConstraint`/`shapeEnv` threading through the
+> §9.6.3 engine (`onePass` / `rewriteToFixpoint`) in
+> `pkg/earthsci-ast-ts/src/lower_expression_templates.ts`; `where` added to
+> `META_SUBST_SKIP_KEYS` (G-008). Byte-identity confirmed for
+> `constrained_match_scope`, `two_div_two_meshes`, `per_variable_scheme_literal_args`;
+> `constraint_unknown_index_set` rejected at load with
+> `template_constraint_unknown_index_set`. The two non-fixture pins
+> (filter-before-priority, compound-arg-conservative) are unit-tested. Tests in
+> `src/expression-templates.test.ts`.
+> **Rust (2026-07-03)**: implemented (`earthsci-ast-rs/src/lower_expression_templates.rs`
+> — `where` structural validation in `validate_templates`, `component_shape_env`,
+> `registered_where` (`template_constraint_unknown_index_set` against the document
+> `index_sets` registry), `where_satisfied` checked as match eligibility in `rewrite_pass`,
+> `MatchRule.where_c`). Goldens `constrained_match_scope`, `two_div_two_meshes`,
+> `per_variable_scheme_literal_args` match and `constraint_unknown_index_set` rejects at load
+> (EXPR-09-G-009), via the `expression_templates_conformance` suite.
+> **Python (2026-07-03)**: implemented (`earthsci_ast/lower_expression_templates.py`
+> `_component_shape_env` / `_where_satisfied` / `_registered_where`; constraint filtering
+> in `_rewrite_pass` before priority selection; `where` added to `_META_SUBST_SKIP_KEYS`).
+> Goldens match (models/index_sets): `constrained_match_scope`,
+> `per_variable_scheme_literal_args`, `two_div_two_meshes`. Error fixture
+> `constraint_unknown_index_set` raises `template_constraint_unknown_index_set`;
+> filter-before-priority and compound-arg-conservative pins covered as unit tests.
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| EXPR-09-G-001 | A `match` rule MAY declare `where` constraints on captured params; `where` without `match`, a non-param key, an unknown constraint kind (v1: exactly `shape`), or an empty/non-string `shape` list is `apply_expression_template_invalid_declaration` | esm-spec.md §9.6.1, §9.6.6 | Yes | validation |
+| EXPR-09-G-002 | A `shape` constraint is satisfied iff the bound sub-AST is a bare variable reference declared in the enclosing component with exactly that `shape` (same index-set names, same order); compound sub-ASTs, literals, scoped references, undeclared names, and scalars fail | esm-spec.md §9.6.1 | Yes | expression |
+| EXPR-09-G-003 | Constraint evaluation MUST be fully static (declared shapes at lowering time, never runtime values); fixpoints remain byte-identical across bindings | esm-spec.md §9.6.1, §9.6.3 | Yes | expression |
+| EXPR-09-G-004 | Constraints filter as part of match ELIGIBILITY, before the priority/declaration-order selection: a constraint-excluded rule never shadows a lower-priority rule that fires | esm-spec.md §9.6.3 | Yes | expression |
+| EXPR-09-G-005 | Constraint index-set names MUST resolve against the consuming document's merged `index_sets` registry at rule registration; unknown names are `template_constraint_unknown_index_set` | esm-spec.md §9.6.1, §9.6.6 | Yes | validation |
+| EXPR-09-G-006 | A constrained rule that never fires is NOT an error; a rewrite-target left un-lowered by constraint exclusion is caught by the ordinary `unlowered_operator` gate | esm-spec.md §9.6.1, §9.6.8 | Yes | expression |
+| EXPR-09-G-007 | A non-parameter string in a `match` `args` position is a literal matching only that exact bare variable reference (the sanctioned per-variable selector) | esm-spec.md §9.6.1, §9.6.8 | Yes | expression |
+| EXPR-09-G-008 | Metaparameter substitution MUST NOT rewrite `where` contents (structural field) | esm-spec.md §9.6.1, §9.7.6 | Yes | expression |
+| EXPR-09-G-009 | Bindings MUST agree on the goldens for `constrained_match_scope`, `two_div_two_meshes`, `per_variable_scheme_literal_args` and reject `constraint_unknown_index_set` at load | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/constrained_match_scope/` etc. | expression |
 
 ---
 
@@ -346,6 +556,16 @@ Where:
 | SERIAL-02-A-001 | MUST convert expression tree to ESM JSON | esm-libraries-spec.md:144 | Yes | serialization |
 | SERIAL-02-A-002 | Output MUST validate against schema | esm-libraries-spec.md:145 | Yes | serialization |
 | SERIAL-02-A-003 | MUST round-trip identically | esm-libraries-spec.md:145 | Yes | serialization |
+
+### SERIAL-05-A: Canonical Number Formatting (CONFORMANCE_SPEC §5.5.3.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| SERIAL-05-A-001 | Integral, `Int64`-representable numbers serialize as integer literals regardless of source spelling (`0.0` → `0`) — rule 1, applied uniformly at the AST-literal boundary | CONFORMANCE_SPEC.md §5.5.3.1 rule 1 | Yes | serialization |
+| SERIAL-05-A-002 | Non-integral finite floats use shortest round-trip formatting (Julia-style positional/scientific split) | CONFORMANCE_SPEC.md §5.5.3.1 rule 2 | Yes | serialization |
+| SERIAL-05-A-003 | Arithmetic-op operand literal types are by value, not reader-inferred storage: an **integer operand of `+ - * / ^ neg` stays an integer literal inside AND outside an `aggregate` `expr` body**. A binding whose JSON reader widens a bare integer token to float (Julia `JSON3` structural inference) MUST re-apply rule 1 when building the AST | CONFORMANCE_SPEC.md §5.5.3.1 rule 3 | Yes | serialization |
+| SERIAL-05-A-004 | An integer ratio `{op:"/",args:[1,N]}` has one canonical byte form all five bindings produce identically; `/` is true (float-returning) division at evaluation (`1/8` = `0.125`), so integer operands are value-preserving | CONFORMANCE_SPEC.md §5.5.3.1 rule 3 | Yes | serialization |
+
+**Conformance fixture:** `tests/valid/aggregate/coordinate_int_ratio_spacing.esm` (registered in `tests/conformance/round_trip/manifest.json`, tag `ess-aggregate-intdiv`) authors cell-centre spacing `(i − 1/2)·(1/N)` with the exact integer ratio `{op:"/",args:[1,8]}` / `[1,16]` INSIDE an `aggregate` `expr` body; all five bindings (julia/python/rust/ts/go) MUST round-trip it byte-identically, and the inline `tests` block pins the values (`coordA[1]=0.0625`, i.e. `0.5·(1/8)`; `coordB[1]=0.03125`). Julia regression guard: `parse_test.jl` "Integer ratio inside aggregate stays integer (§5.5.3.1)" loads a `cos(pi·…)`-nested document that provokes the JSON3 widening and asserts the ratio re-serializes as `1/8`, not `1.0/8.0`.
 
 ---
 
@@ -373,9 +593,9 @@ Where:
 | Validation | 21 | 21 | validation |
 | Display | 17 | 17 | display |
 | Expression | 25 | 25 | expression |
-| Serialization | 6 | 6 | serialization |
+| Serialization | 10 | 10 | serialization |
 | Versioning | 4 | 4 | versioning |
-| **TOTAL** | **134** | **134** | **10 categories** |
+| **TOTAL** | **138** | **138** | **10 categories** |
 
 ## Test Fixture Mapping
 
@@ -408,10 +628,10 @@ agreement for v0.4.0 features:
 | Directory | Feature | Notes |
 |---|---|---|
 | `tests/conformance/canonical/` | Canonical AST equality | Drives `parse → canonical-AST` agreement across bindings |
-| `tests/conformance/discretize/` + `discretization/` | `discretize` AST transforms | Owned by EarthSciDiscretizations rule application |
+| `tests/conformance/geometry/` | Conservative-regridding geometry (`intersect_polygon` + `polygon_area` aggregate) | CONFORMANCE_SPEC §5.8 |
 | `tests/conformance/expression_templates/` | `expression_templates` + `apply_expression_template` (esm-spec §9.6) | Indexed by EXPR-09-D above |
 | `tests/conformance/function_tables/` | `function_tables` + `table_lookup` (esm-spec §9.5) | `linear/`, `bilinear/`, `roundtrip/` |
-| `tests/conformance/grids/` | Grid descriptors | |
+| `tests/conformance/determinism/` | Build-time relational engine determinism (distinct/skolem/rank/join) | CONFORMANCE_SPEC §5.5 |
 | `tests/conformance/migration/` | Schema-version migration | Pairs with VERSION-08-A above |
 | `tests/conformance/round_trip/` | Round-trip equality (esm-spec §9.6.4 Option A) | Pairs with SERIAL-07-A above |
 | `tests/conformance/simulate_cycles/` | End-to-end simulation cycles via official ESS runners | Per CLAUDE.md "Simulation Pathway" rule |

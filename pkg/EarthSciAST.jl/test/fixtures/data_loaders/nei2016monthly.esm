@@ -1,0 +1,71 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "NEI2016Monthly_onroad_example",
+    "description": "Covers EarthSciData.jl/src/nei2016monthly.jl NEI2016MonthlyEmisFileSet (default mirror https://gaftp.epa.gov/Air/, relpath emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_{sector}_12US1_month_{MM}.ncf). Grid is the EPA 12US1 Lambert-conformal CONUS grid. Diurnal and day-of-week factors live in the runtime (not schema-visible). NEI 2016 monthly onroad sector emissions.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-loader",
+      "emissions",
+      "nei2016monthly",
+      "anthropogenic"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {},
+      "equations": []
+    }
+  },
+  "data_loaders": {
+    "NEI2016_onroad": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://gaftp.epa.gov/Air/emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_{sector}_12US1_month_{date:%m}.ncf"
+      },
+      "temporal": {
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-12-31T23:59:59Z",
+        "file_period": "P1M",
+        "frequency": "P1M",
+        "records_per_file": 1
+      },
+      "variables": {
+        "NO": {
+          "file_variable": "NO",
+          "units": "mol s^-1",
+          "description": "NO emissions per grid cell"
+        },
+        "NO2": {
+          "file_variable": "NO2",
+          "units": "mol s^-1",
+          "description": "NO2 emissions per grid cell"
+        },
+        "CO": {
+          "file_variable": "CO",
+          "units": "mol s^-1",
+          "description": "CO emissions per grid cell"
+        },
+        "SO2": {
+          "file_variable": "SO2",
+          "units": "mol s^-1",
+          "description": "SO2 emissions per grid cell"
+        }
+      },
+      "reference": {
+        "citation": "US EPA (2019) 2016 National Emissions Inventory (NEI) Data — Modeling Platform v1.",
+        "url": "https://www.epa.gov/air-emissions-modeling/2016-version-1-platform"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic"
+        ],
+        "sector": "onroad",
+        "grid": "12US1"
+      }
+    }
+  }
+}

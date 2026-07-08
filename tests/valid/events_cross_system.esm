@@ -418,39 +418,7 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "solar_intensity_periodic_xmin": {
-          "variable": "solar_intensity",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "temperature_periodic_xmin": {
-          "variable": "temperature",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "wind_speed_periodic_xmin": {
-          "variable": "wind_speed",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "solar_intensity_periodic_ymin": {
-          "variable": "solar_intensity",
-          "side": "ymin",
-          "kind": "periodic"
-        },
-        "temperature_periodic_ymin": {
-          "variable": "temperature",
-          "side": "ymin",
-          "kind": "periodic"
-        },
-        "wind_speed_periodic_ymin": {
-          "variable": "wind_speed",
-          "side": "ymin",
-          "kind": "periodic"
-        }
-      }
+      ]
     }
   },
   "coupling": [
@@ -469,31 +437,11 @@
       ]
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-08T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 100.0,
-          "grid_spacing": 10.0,
-          "units": "km"
-        },
-        "y": {
-          "min": 0.0,
-          "max": 100.0,
-          "grid_spacing": 10.0,
-          "units": "km"
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-08T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

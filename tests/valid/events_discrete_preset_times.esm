@@ -265,7 +265,7 @@
       "variables": {
         "temperature": {
           "type": "state",
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 25.0,
           "description": "System temperature"
         },
@@ -300,19 +300,19 @@
           "type": "parameter"
         },
         "target_temp_1": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 30.0,
           "description": "First temperature setpoint",
           "type": "parameter"
         },
         "target_temp_2": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 45.0,
           "description": "Second temperature setpoint",
           "type": "parameter"
         },
         "target_temp_3": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 20.0,
           "description": "Final temperature setpoint",
           "type": "parameter"
@@ -330,7 +330,7 @@
           "type": "parameter"
         },
         "ambient_temp": {
-          "units": "\u00b0C",
+          "units": "°C",
           "default": 25.0,
           "description": "Ambient temperature",
           "type": "parameter"
@@ -901,17 +901,11 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-04T06:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-04T06:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

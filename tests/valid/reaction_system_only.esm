@@ -24,52 +24,52 @@
       "species": {
         "O": {
           "units": "mol/mol",
-          "default": 1e-12,
+          "default": 1.0,
           "description": "Atomic oxygen"
         },
         "O2": {
           "units": "mol/mol",
-          "default": 0.21,
+          "default": 1.0,
           "description": "Molecular oxygen"
         },
         "O3": {
           "units": "mol/mol",
-          "default": 4e-08,
+          "default": 1.0,
           "description": "Ozone"
         },
         "NO": {
           "units": "mol/mol",
-          "default": 1e-10,
+          "default": 1.0,
           "description": "Nitric oxide"
         },
         "NO2": {
           "units": "mol/mol",
-          "default": 1e-09,
+          "default": 1.0,
           "description": "Nitrogen dioxide"
         },
         "NO3": {
           "units": "mol/mol",
-          "default": 1e-11,
+          "default": 1.0,
           "description": "Nitrogen trioxide"
         },
         "N2O5": {
           "units": "mol/mol",
-          "default": 5e-12,
+          "default": 1.0,
           "description": "Dinitrogen pentoxide"
         },
         "HO2": {
           "units": "mol/mol",
-          "default": 2e-11,
+          "default": 1.0,
           "description": "Hydroperoxyl radical"
         },
         "OH": {
           "units": "mol/mol",
-          "default": 1e-11,
+          "default": 1.0,
           "description": "Hydroxyl radical"
         },
         "H2O2": {
           "units": "mol/mol",
-          "default": 1e-10,
+          "default": 1.0,
           "description": "Hydrogen peroxide"
         }
       },
@@ -466,36 +466,6 @@
       "source": {
         "url_template": "file:///data/TUV_rates.nc"
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "jO3": {
           "file_variable": "jO3",
@@ -551,17 +521,11 @@
       "transform": "param_to_var"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-06-21T12:00:00Z",
-        "end": "2024-06-21T18:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 1.0
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-06-21T12:00:00Z",
+      "end": "2024-06-21T18:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

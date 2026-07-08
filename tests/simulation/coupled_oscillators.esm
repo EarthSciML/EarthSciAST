@@ -154,11 +154,47 @@
               "coupling_force"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x1"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v1"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x2"
+            ]
+          },
+          "rhs": -0.5
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v2"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "tolerance": {
-        "rel": 1.0e-6,
-        "abs": 1.0e-10
+        "rel": 1e-06,
+        "abs": 1e-10
       },
       "tests": [
         {
@@ -180,16 +216,62 @@
             "end": 6.283185307179586
           },
           "assertions": [
-            { "variable": "x1", "time": 0.0,                "expected": 1.0 },
-            { "variable": "x2", "time": 0.0,                "expected": 1.0 },
-            { "variable": "x1", "time": 1.5707963267948966, "expected": 0.0,  "tolerance": { "abs": 1.0e-6 } },
-            { "variable": "x2", "time": 1.5707963267948966, "expected": 0.0,  "tolerance": { "abs": 1.0e-6 } },
-            { "variable": "x1", "time": 3.141592653589793,  "expected": -1.0 },
-            { "variable": "x2", "time": 3.141592653589793,  "expected": -1.0 },
-            { "variable": "x1", "time": 6.283185307179586,  "expected": 1.0 },
-            { "variable": "x2", "time": 6.283185307179586,  "expected": 1.0 },
-            { "variable": "v1", "time": 1.5707963267948966, "expected": -1.0 },
-            { "variable": "v2", "time": 1.5707963267948966, "expected": -1.0 }
+            {
+              "variable": "x1",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "x2",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "x1",
+              "time": 1.5707963267948966,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-06
+              }
+            },
+            {
+              "variable": "x2",
+              "time": 1.5707963267948966,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-06
+              }
+            },
+            {
+              "variable": "x1",
+              "time": 3.141592653589793,
+              "expected": -1.0
+            },
+            {
+              "variable": "x2",
+              "time": 3.141592653589793,
+              "expected": -1.0
+            },
+            {
+              "variable": "x1",
+              "time": 6.283185307179586,
+              "expected": 1.0
+            },
+            {
+              "variable": "x2",
+              "time": 6.283185307179586,
+              "expected": 1.0
+            },
+            {
+              "variable": "v1",
+              "time": 1.5707963267948966,
+              "expected": -1.0
+            },
+            {
+              "variable": "v2",
+              "time": 1.5707963267948966,
+              "expected": -1.0
+            }
           ]
         },
         {
@@ -211,31 +293,58 @@
             "end": 4.442882938158366
           },
           "assertions": [
-            { "variable": "x1", "time": 0.0,                "expected": 1.0 },
-            { "variable": "x2", "time": 0.0,                "expected": -1.0 },
-            { "variable": "x1", "time": 1.1107207345395915, "expected": 0.0,  "tolerance": { "abs": 1.0e-6 } },
-            { "variable": "x2", "time": 1.1107207345395915, "expected": 0.0,  "tolerance": { "abs": 1.0e-6 } },
-            { "variable": "x1", "time": 2.221441469079183,  "expected": -1.0 },
-            { "variable": "x2", "time": 2.221441469079183,  "expected": 1.0 },
-            { "variable": "x1", "time": 4.442882938158366,  "expected": 1.0 },
-            { "variable": "x2", "time": 4.442882938158366,  "expected": -1.0 }
+            {
+              "variable": "x1",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "x2",
+              "time": 0.0,
+              "expected": -1.0
+            },
+            {
+              "variable": "x1",
+              "time": 1.1107207345395915,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-06
+              }
+            },
+            {
+              "variable": "x2",
+              "time": 1.1107207345395915,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-06
+              }
+            },
+            {
+              "variable": "x1",
+              "time": 2.221441469079183,
+              "expected": -1.0
+            },
+            {
+              "variable": "x2",
+              "time": 2.221441469079183,
+              "expected": 1.0
+            },
+            {
+              "variable": "x1",
+              "time": 4.442882938158366,
+              "expected": 1.0
+            },
+            {
+              "variable": "x2",
+              "time": 4.442882938158366,
+              "expected": -1.0
+            }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "CoupledOscillators.x1": 1.0,
-          "CoupledOscillators.v1": 0.0,
-          "CoupledOscillators.x2": -0.5,
-          "CoupledOscillators.v2": 0.0
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

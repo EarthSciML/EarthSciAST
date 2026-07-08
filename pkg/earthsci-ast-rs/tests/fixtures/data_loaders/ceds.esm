@@ -1,0 +1,146 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "CEDS_Fixture",
+    "description": "EarthSciData.jl CEDS loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/ceds.jl — struct CEDSFileSet (lines 59-151), relpath (lines 159-167), and the 50-year chunked archive layout CEDS_GN_CHUNKS (lines 21-28). CEDS files have a `(time, sector, lat, lon)` layout at 0.5°×0.5° global resolution; the Julia loader either sums across all sectors or filters by a given subset — that sector-filter is a runtime option, not a schema field. Each file covers one species and one 50-year chunk; the runtime picks the chunk file based on the query date.",
+    "authors": [
+      "ESM Rust binding acceptance suite"
+    ],
+    "tags": [
+      "fixture",
+      "earthscidata",
+      "gt-0c7"
+    ]
+  },
+  "data_loaders": {
+    "CEDS": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/CMIP7/CMIP/PNNL-JGCRI/CEDS-CMIP-2025-04-18/atmos/mon/{species}_em_anthro/gn/v20250421/{species}-em-anthro_input4MIPs_emissions_CMIP_CEDS-CMIP-2025-04-18_gn_{chunk_start}01-{chunk_end}12.nc"
+      },
+      "temporal": {
+        "start": "1750-01-01T00:00:00Z",
+        "end": "2023-12-31T23:59:59Z",
+        "file_period": "P50Y",
+        "frequency": "P1M",
+        "records_per_file": "auto",
+        "time_variable": "time"
+      },
+      "variables": {
+        "BC": {
+          "file_variable": "BC_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "Black carbon anthropogenic emissions (sector-summed unless filtered at runtime)"
+        },
+        "CO": {
+          "file_variable": "CO_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "CO anthropogenic emissions"
+        },
+        "CH4": {
+          "file_variable": "CH4_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "Methane anthropogenic emissions"
+        },
+        "NH3": {
+          "file_variable": "NH3_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "NH3 anthropogenic emissions"
+        },
+        "NMVOC": {
+          "file_variable": "NMVOC_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "NMVOC anthropogenic emissions"
+        },
+        "NOx": {
+          "file_variable": "NOx_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "NOx anthropogenic emissions (reported as NO2)"
+        },
+        "OC": {
+          "file_variable": "OC_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "Organic carbon anthropogenic emissions"
+        },
+        "SO2": {
+          "file_variable": "SO2_em_anthro",
+          "units": "kg/m^2/s",
+          "description": "SO2 anthropogenic emissions"
+        }
+      },
+      "reference": {
+        "citation": "Hoesly, R. M., et al., 2018: Historical (1750-2014) anthropogenic emissions of reactive gases and aerosols from CEDS. GMD 11, 369-408",
+        "doi": "10.5194/gmd-11-369-2018"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic",
+          "historical"
+        ],
+        "earthscidata_source": "src/ceds.jl",
+        "earthscidata_struct": "CEDSFileSet",
+        "earthscidata_sectors": [
+          "Agriculture",
+          "Energy",
+          "Industrial",
+          "Transportation",
+          "Residential, Commercial, Other",
+          "Solvents production and application",
+          "Waste",
+          "International Shipping"
+        ],
+        "earthscidata_chunks": [
+          [
+            1750,
+            1799
+          ],
+          [
+            1800,
+            1849
+          ],
+          [
+            1850,
+            1899
+          ],
+          [
+            1900,
+            1949
+          ],
+          [
+            1950,
+            1999
+          ],
+          [
+            2000,
+            2023
+          ]
+        ],
+        "earthscidata_note": "{chunk_start} and {chunk_end} are custom substitutions passed through to the runtime."
+      }
+    }
+  },
+  "models": {
+    "fixture_stub": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

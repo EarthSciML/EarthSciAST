@@ -1,6 +1,6 @@
 # Error Handling (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/parse_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/parse_test.jl`
 
 ```julia
 # Test invalid JSON
@@ -11,6 +11,6 @@
         @test_throws SchemaValidationError load(IOBuffer(invalid_esm))
 
         # Test invalid expression format
-        @test_throws ParseError EarthSciSerialization.parse_expression(Dict("invalid" => "data"))
+        @test_throws ParseError EarthSciAST.parse_expression(Dict("invalid" => "data"))
 ```
 

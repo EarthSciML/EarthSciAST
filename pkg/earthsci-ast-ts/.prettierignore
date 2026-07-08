@@ -1,0 +1,5 @@
+dist/
+node_modules/
+src/generated.ts
+src/embedded-schema.ts
+package-lock.json

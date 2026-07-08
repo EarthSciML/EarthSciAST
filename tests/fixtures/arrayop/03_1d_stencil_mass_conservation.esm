@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_03_1d_stencil_mass_conservation",
     "description": "1-D diffusion stencil on u[1:10]. Interior: D(u[i+1]) = u[i] - 2u[i+1] + u[i+2] for i in 1..8 (1-based output range, offsets baked into body). Dirichlet-like BCs at i=1 and i=10 (scalar equations). The test asserts mass conservation — diffusion preserves the total amount sum(u) over time. Mirrors MTK fork test #3.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "stencil", "offset_index"]
   },
   "models": {
@@ -15,12 +15,12 @@
         {
           "_comment": "Interior stencil via arrayop, 1-based output range, offsets baked into body",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] }], "wrt": "t" },
             "ranges": { "i": [1, 8] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": {
               "op": "+",
               "args": [

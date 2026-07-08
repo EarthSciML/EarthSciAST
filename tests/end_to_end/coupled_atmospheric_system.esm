@@ -341,6 +341,51 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO"
+            ]
+          },
+          "rhs": 5e-10
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO2"
+            ]
+          },
+          "rhs": 2e-09
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "HCHO"
+            ]
+          },
+          "rhs": 1e-09
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "HO2"
+            ]
+          },
+          "rhs": 1e-12
         }
       ],
       "continuous_events": [
@@ -374,159 +419,7 @@
           ],
           "description": "Increase photolysis when ozone exceeds 70 ppb (pollution episode)"
         }
-      ],
-      "boundary_conditions": {
-        "O3_constant_xmin": {
-          "variable": "O3",
-          "side": "xmin",
-          "kind": "constant"
-        },
-        "NO_constant_xmin": {
-          "variable": "NO",
-          "side": "xmin",
-          "kind": "constant"
-        },
-        "NO2_constant_xmin": {
-          "variable": "NO2",
-          "side": "xmin",
-          "kind": "constant"
-        },
-        "HCHO_constant_xmin": {
-          "variable": "HCHO",
-          "side": "xmin",
-          "kind": "constant"
-        },
-        "HO2_constant_xmin": {
-          "variable": "HO2",
-          "side": "xmin",
-          "kind": "constant"
-        },
-        "O3_constant_xmax": {
-          "variable": "O3",
-          "side": "xmax",
-          "kind": "constant"
-        },
-        "NO_constant_xmax": {
-          "variable": "NO",
-          "side": "xmax",
-          "kind": "constant"
-        },
-        "NO2_constant_xmax": {
-          "variable": "NO2",
-          "side": "xmax",
-          "kind": "constant"
-        },
-        "HCHO_constant_xmax": {
-          "variable": "HCHO",
-          "side": "xmax",
-          "kind": "constant"
-        },
-        "HO2_constant_xmax": {
-          "variable": "HO2",
-          "side": "xmax",
-          "kind": "constant"
-        },
-        "O3_zero_gradient_xmin": {
-          "variable": "O3",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_xmin": {
-          "variable": "NO",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_xmin": {
-          "variable": "NO2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "HCHO_zero_gradient_xmin": {
-          "variable": "HCHO",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "HO2_zero_gradient_xmin": {
-          "variable": "HO2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_xmax": {
-          "variable": "O3",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_xmax": {
-          "variable": "NO",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_xmax": {
-          "variable": "NO2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "HCHO_zero_gradient_xmax": {
-          "variable": "HCHO",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "HO2_zero_gradient_xmax": {
-          "variable": "HO2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O3_robin_xmin": {
-          "variable": "O3",
-          "side": "xmin",
-          "kind": "robin"
-        },
-        "NO_robin_xmin": {
-          "variable": "NO",
-          "side": "xmin",
-          "kind": "robin"
-        },
-        "NO2_robin_xmin": {
-          "variable": "NO2",
-          "side": "xmin",
-          "kind": "robin"
-        },
-        "HCHO_robin_xmin": {
-          "variable": "HCHO",
-          "side": "xmin",
-          "kind": "robin"
-        },
-        "HO2_robin_xmin": {
-          "variable": "HO2",
-          "side": "xmin",
-          "kind": "robin"
-        },
-        "O3_robin_xmax": {
-          "variable": "O3",
-          "side": "xmax",
-          "kind": "robin"
-        },
-        "NO_robin_xmax": {
-          "variable": "NO",
-          "side": "xmax",
-          "kind": "robin"
-        },
-        "NO2_robin_xmax": {
-          "variable": "NO2",
-          "side": "xmax",
-          "kind": "robin"
-        },
-        "HCHO_robin_xmax": {
-          "variable": "HCHO",
-          "side": "xmax",
-          "kind": "robin"
-        },
-        "HO2_robin_xmax": {
-          "variable": "HO2",
-          "side": "xmax",
-          "kind": "robin"
-        }
-      }
+      ]
     },
     "AtmosphericTransport": {
       "reference": {
@@ -891,52 +784,6 @@
         "file_period": "PT1H",
         "records_per_file": 1
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat",
-          "dx",
-          "dy"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          },
-          "dx": {
-            "n": "n_dx",
-            "spacing": "uniform"
-          },
-          "dy": {
-            "n": "n_dy",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          },
-          "n_dx": {
-            "description": "dx cell count, resolved from the source dataset at load time"
-          },
-          "n_dy": {
-            "description": "dy cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "temperature": {
           "file_variable": "temperature",
@@ -984,36 +831,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/NEI_2017/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "NOx_emission_rate": {
@@ -1325,45 +1142,13 @@
       "description": "Reduce vertical mixing when PBL height drops below 100m"
     }
   ],
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-07-15T00:00:00Z",
-        "end": "2024-07-17T00:00:00Z",
-        "reference_time": "2024-07-15T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": -1000000.0,
-          "max": 1000000.0,
-          "units": "meters",
-          "grid_spacing": 12000.0
-        },
-        "y": {
-          "min": -1000000.0,
-          "max": 1000000.0,
-          "units": "meters",
-          "grid_spacing": 12000.0
-        },
-        "z": {
-          "min": 0.0,
-          "max": 15000.0,
-          "units": "meters",
-          "grid_spacing": 100.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "AtmosphericChemistry.O3": 4e-08,
-          "AtmosphericChemistry.NO": 5e-10,
-          "AtmosphericChemistry.NO2": 2e-09,
-          "AtmosphericChemistry.HCHO": 1e-09,
-          "AtmosphericChemistry.HO2": 1e-12
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-07-15T00:00:00Z",
+      "end": "2024-07-17T00:00:00Z",
+      "reference_time": "2024-07-15T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

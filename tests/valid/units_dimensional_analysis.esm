@@ -140,7 +140,9 @@
           "rhs": "a"
         }
       ],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "newton_observed_at_t0",
@@ -154,12 +156,31 @@
             "a": 2.0,
             "t": 1.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "F",         "time": 0.0, "expected":  20.0 },
-            { "variable": "p",         "time": 0.0, "expected":  50.0 },
-            { "variable": "E_kinetic", "time": 0.0, "expected": 125.0 },
-            { "variable": "W",         "time": 0.0, "expected":  40.0 }
+            {
+              "variable": "F",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "p",
+              "time": 0.0,
+              "expected": 50.0
+            },
+            {
+              "variable": "E_kinetic",
+              "time": 0.0,
+              "expected": 125.0
+            },
+            {
+              "variable": "W",
+              "time": 0.0,
+              "expected": 40.0
+            }
           ]
         }
       ]
@@ -378,7 +399,9 @@
           }
         }
       ],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "thermo_observed_at_t0",
@@ -393,10 +416,21 @@
             "R": 8.314,
             "Cv": 20.8
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "U", "time": 0.0, "expected": 6240.0 },
-            { "variable": "H", "time": 0.0, "expected": 8740.0 }
+            {
+              "variable": "U",
+              "time": 0.0,
+              "expected": 6240.0
+            },
+            {
+              "variable": "H",
+              "time": 0.0,
+              "expected": 8740.0
+            }
           ]
         }
       ]
@@ -564,7 +598,9 @@
         }
       },
       "equations": [],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "electromagnetism_observed_at_t0",
@@ -578,11 +614,26 @@
             "epsilon0": 1.0,
             "c": 300000000.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "F_electric",     "time": 0.0, "expected": 10.0 },
-            { "variable": "F_magnetic",     "time": 0.0, "expected": 62.8318 },
-            { "variable": "cyclotron_freq", "time": 0.0, "expected":  1.0 }
+            {
+              "variable": "F_electric",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "F_magnetic",
+              "time": 0.0,
+              "expected": 62.8318
+            },
+            {
+              "variable": "cyclotron_freq",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         }
       ]
@@ -591,7 +642,6 @@
       "reference": {
         "notes": "Fluid mechanics equations with dimensional consistency"
       },
-      "domain": "fluid_1d",
       "variables": {
         "rho": {
           "type": "parameter",
@@ -786,7 +836,9 @@
           }
         }
       ],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "fluids_observed_at_t0",
@@ -802,13 +854,36 @@
             "mu": 0.001,
             "L": 1.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "nu",                   "time": 0.0, "expected":      1.0e-6 },
-            { "variable": "Re",                   "time": 0.0, "expected":  2000000.0 },
-            { "variable": "dynamic_pressure",     "time": 0.0, "expected":     2000.0 },
-            { "variable": "hydrostatic_pressure", "time": 0.0, "expected":   100000.0 },
-            { "variable": "total_pressure",       "time": 0.0, "expected":   202000.0 }
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 1e-06
+            },
+            {
+              "variable": "Re",
+              "time": 0.0,
+              "expected": 2000000.0
+            },
+            {
+              "variable": "dynamic_pressure",
+              "time": 0.0,
+              "expected": 2000.0
+            },
+            {
+              "variable": "hydrostatic_pressure",
+              "time": 0.0,
+              "expected": 100000.0
+            },
+            {
+              "variable": "total_pressure",
+              "time": 0.0,
+              "expected": 202000.0
+            }
           ]
         }
       ]
@@ -1033,7 +1108,9 @@
           }
         }
       ],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "kinetics_observed_at_t0",
@@ -1051,26 +1128,34 @@
             "R": 8.314,
             "T": 300.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "rate_unimol",    "time": 0.0, "expected": 0.2 },
-            { "variable": "rate_bimol",     "time": 0.0, "expected": 0.06 },
-            { "variable": "rate_trimol",    "time": 0.0, "expected": 0.024 },
-            { "variable": "arrhenius_rate", "time": 0.0, "expected": 0.1 }
+            {
+              "variable": "rate_unimol",
+              "time": 0.0,
+              "expected": 0.2
+            },
+            {
+              "variable": "rate_bimol",
+              "time": 0.0,
+              "expected": 0.06
+            },
+            {
+              "variable": "rate_trimol",
+              "time": 0.0,
+              "expected": 0.024
+            },
+            {
+              "variable": "arrhenius_rate",
+              "time": 0.0,
+              "expected": 0.1
+            }
           ]
         }
       ]
-    }
-  },
-  "domains": {
-    "fluid_1d": {
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1.0,
-          "units": "m"
-        }
-      }
     }
   }
 }

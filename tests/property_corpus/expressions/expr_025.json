@@ -3,7 +3,7 @@
     0
   ],
   "expr": 0,
-  "op": "arrayop",
+  "op": "aggregate",
   "output_idx": [
     "a"
   ]

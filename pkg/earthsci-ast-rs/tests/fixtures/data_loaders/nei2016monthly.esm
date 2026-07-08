@@ -1,0 +1,107 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "NEI2016Monthly_Fixture",
+    "description": "EarthSciData.jl NEI2016Monthly loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/nei2016monthly.jl — struct NEI2016MonthlyEmisFileSet (lines 142-166) with relpath (lines 173-177) and the sector-based {sector} substitution. The runtime-side diurnal and day-of-week scale factors (DIURNAL_FACTORS, DayofWeekFactors_* and the @register_symbolic functions at lines 4-133) are runtime behavior and intentionally not in the schema — they are applied during rate-expression evaluation. All emissions are only available for 2016 and are gridded on the 12US1 Lambert Conformal grid.",
+    "authors": [
+      "ESM Rust binding acceptance suite"
+    ],
+    "tags": [
+      "fixture",
+      "earthscidata",
+      "gt-0c7"
+    ]
+  },
+  "data_loaders": {
+    "NEI2016Monthly": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://gaftp.epa.gov/Air/emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_{sector}_12US1_month_{date:%m}.ncf"
+      },
+      "temporal": {
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-12-31T23:59:59Z",
+        "file_period": "P1M",
+        "frequency": "P1M",
+        "records_per_file": "auto",
+        "time_variable": "TSTEP"
+      },
+      "variables": {
+        "NO": {
+          "file_variable": "NO",
+          "units": "kg/m^2/s",
+          "description": "NO emission rate (per grid cell, pre diurnal/dow scaling)"
+        },
+        "NO2": {
+          "file_variable": "NO2",
+          "units": "kg/m^2/s",
+          "description": "NO2 emission rate (per grid cell, pre diurnal/dow scaling)"
+        },
+        "CO": {
+          "file_variable": "CO",
+          "units": "kg/m^2/s",
+          "description": "CO emission rate (per grid cell, pre diurnal/dow scaling)"
+        },
+        "SO2": {
+          "file_variable": "SO2",
+          "units": "kg/m^2/s",
+          "description": "SO2 emission rate (per grid cell)"
+        },
+        "NH3": {
+          "file_variable": "NH3",
+          "units": "kg/m^2/s",
+          "description": "NH3 emission rate (per grid cell)"
+        },
+        "ISOP": {
+          "file_variable": "ISOP",
+          "units": "kg/m^2/s",
+          "description": "Isoprene emission rate (per grid cell, pre-diurnal scaling)"
+        }
+      },
+      "reference": {
+        "citation": "US EPA, 2016 National Emissions Inventory, Emission Modeling Platform v1, 12US1 domain",
+        "url": "https://www.epa.gov/air-emissions-inventories/2016-national-emissions-inventory-nei-data"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic",
+          "monthly"
+        ],
+        "earthscidata_source": "src/nei2016monthly.jl",
+        "earthscidata_struct": "NEI2016MonthlyEmisFileSet",
+        "earthscidata_sectors_example": [
+          "afdust",
+          "ptnonipm",
+          "onroad",
+          "nonroad",
+          "othpt"
+        ],
+        "earthscidata_note": "Diurnal and day-of-week factors are runtime scale functions and not part of the schema."
+      }
+    }
+  },
+  "models": {
+    "fixture_stub": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

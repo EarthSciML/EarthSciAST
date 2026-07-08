@@ -127,6 +127,24 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "height"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "velocity"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -430,6 +448,24 @@
               "reaction_rate"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "temperature"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "concentration"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -701,6 +737,33 @@
               "infected"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "susceptible"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "infected"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "recovered"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -1033,6 +1096,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "prey_population"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "predator_population"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "vegetation_cover"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -1230,16 +1320,10 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T06:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T06:00:00Z"
     }
   }
 }

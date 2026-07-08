@@ -1,0 +1,41 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "coupling_transform_expression",
+    "description": "Minimal exercise of the v0.8.0 variable_map expression-transform widening (esm-spec §10.4): the coupling entry binds Sink.F_in to the Expression 2*Src.F + Sink.offset — an operator node whose references are fully scoped, referencing the entry's `from` variable (Src.F) plus another in-scope variable of the receiving component (Sink.offset). Flattening turns the target parameter into an observed defined by the transform, so d(Sink.u)/dt = Sink.F_in = 2*4 + 1.5 = 9.5 and u(1) = 9.5 from the zero IC. The template-invocation spelling of the same transform is the expression_templates conformance case coupling_transform_expression (this file is its post-expansion twin in tests/valid, registered for round-trip conformance).",
+    "authors": ["esm coupling-transform-widening conformance"]
+  },
+  "models": {
+    "Src": {
+      "variables": {
+        "F": {"type": "observed", "units": "1", "expression": 4.0, "description": "Source field: the constant 4."}
+      },
+      "equations": []
+    },
+    "Sink": {
+      "variables": {
+        "u": {"type": "state", "units": "1", "default": 0.0},
+        "offset": {"type": "parameter", "units": "1", "default": 1.5},
+        "F_in": {"type": "parameter", "units": "1", "description": "Receiving target: becomes an observed bound to the transform expression at flatten."}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "F_in"}
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Src.F",
+      "to": "Sink.F_in",
+      "transform": {
+        "op": "+",
+        "args": [
+          {"op": "*", "args": [2, "Src.F"]},
+          "Sink.offset"
+        ]
+      },
+      "description": "Expression transform: target := 2*source + offset (esm-spec §10.4 computed replacement)."
+    }
+  ]
+}

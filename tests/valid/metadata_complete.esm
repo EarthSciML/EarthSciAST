@@ -219,46 +219,11 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -130.0,
-          "max": -100.0,
-          "grid_spacing": 0.5,
-          "units": "degrees"
-        },
-        "lat": {
-          "min": 30.0,
-          "max": 50.0,
-          "grid_spacing": 0.5,
-          "units": "degrees"
-        },
-        "lev": {
-          "min": 1,
-          "max": 10,
-          "grid_spacing": 1,
-          "units": "level"
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "boundary_conditions": [
-        {
-          "type": "dirichlet",
-          "value": 4e-08,
-          "dimensions": [
-            "lon"
-          ]
-        }
-      ],
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-02T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

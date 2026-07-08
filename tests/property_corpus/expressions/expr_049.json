@@ -39,7 +39,7 @@
     ],
     "op": "log"
   },
-  "op": "arrayop",
+  "op": "aggregate",
   "output_idx": [
     1
   ],

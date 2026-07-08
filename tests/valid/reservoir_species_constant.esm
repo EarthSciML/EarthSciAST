@@ -19,7 +19,7 @@
       "species": {
         "O2": {
           "units": "ppb",
-          "default": 2.1e8,
+          "default": 210000000.0,
           "description": "Molecular oxygen (reservoir)",
           "constant": true
         },
@@ -31,7 +31,7 @@
         },
         "H2O": {
           "units": "ppb",
-          "default": 1.8e7,
+          "default": 18000000.0,
           "description": "Water vapor (reservoir)",
           "constant": true
         },
@@ -42,12 +42,12 @@
         },
         "OH": {
           "units": "ppb",
-          "default": 1e-4,
+          "default": 0.0001,
           "description": "Hydroxyl radical"
         },
         "HO2": {
           "units": "ppb",
-          "default": 1e-3,
+          "default": 0.001,
           "description": "Hydroperoxyl radical"
         }
       },
@@ -73,11 +73,20 @@
           "id": "R1",
           "name": "O1D_with_H2O_forms_OH",
           "substrates": [
-            { "species": "O3", "stoichiometry": 1 },
-            { "species": "H2O", "stoichiometry": 1 }
+            {
+              "species": "O3",
+              "stoichiometry": 1
+            },
+            {
+              "species": "H2O",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            { "species": "OH", "stoichiometry": 2 }
+            {
+              "species": "OH",
+              "stoichiometry": 2
+            }
           ],
           "rate": "kO1D_H2O"
         },
@@ -85,11 +94,20 @@
           "id": "R2",
           "name": "CH4_OH_oxidation",
           "substrates": [
-            { "species": "CH4", "stoichiometry": 1 },
-            { "species": "OH", "stoichiometry": 1 }
+            {
+              "species": "CH4",
+              "stoichiometry": 1
+            },
+            {
+              "species": "OH",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            { "species": "HO2", "stoichiometry": 1 }
+            {
+              "species": "HO2",
+              "stoichiometry": 1
+            }
           ],
           "rate": "kCH4_OH"
         },
@@ -97,25 +115,35 @@
           "id": "R3",
           "name": "HO2_O3_sink",
           "substrates": [
-            { "species": "HO2", "stoichiometry": 1 },
-            { "species": "O3", "stoichiometry": 1 }
+            {
+              "species": "HO2",
+              "stoichiometry": 1
+            },
+            {
+              "species": "O3",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            { "species": "OH", "stoichiometry": 1 },
-            { "species": "O2", "stoichiometry": 1 }
+            {
+              "species": "OH",
+              "stoichiometry": 1
+            },
+            {
+              "species": "O2",
+              "stoichiometry": 1
+            }
           ],
           "rate": "kHO2_O3"
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-06-21T12:00:00Z",
-        "end": "2024-06-21T12:06:00Z"
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-06-21T12:00:00Z",
+      "end": "2024-06-21T12:06:00Z"
+    },
+    "element_type": "Float64"
   }
 }

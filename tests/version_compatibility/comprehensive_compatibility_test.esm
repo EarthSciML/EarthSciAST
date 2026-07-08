@@ -403,36 +403,6 @@
       "source": {
         "url_template": "file:///data/ECMWF_ERA5/{date:%Y%m%d_%H%M}.nc"
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "T": {
           "file_variable": "T",
@@ -471,36 +441,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/CEDS_v2021/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "E_NO_total": {
@@ -576,73 +516,11 @@
       "description": "Convert kg/m^2/s to molec/cm^3/s for NO"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-07-01T00:00:00Z",
-        "end": "2024-07-03T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -130.0,
-          "max": -100.0,
-          "grid_spacing": 0.5,
-          "units": "degrees_east"
-        },
-        "lat": {
-          "min": 25.0,
-          "max": 50.0,
-          "grid_spacing": 0.5,
-          "units": "degrees_north"
-        },
-        "lev": {
-          "min": 1000.0,
-          "max": 100.0,
-          "grid_spacing": 50.0,
-          "units": "hPa"
-        }
-      },
-      "coordinate_transforms": [
-        {
-          "id": "lonlat_to_cartesian",
-          "dimensions": [
-            "lon",
-            "lat"
-          ]
-        },
-        {
-          "id": "pressure_to_altitude",
-          "dimensions": [
-            "lev"
-          ]
-        }
-      ],
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "boundary_conditions": [
-        {
-          "type": "periodic",
-          "dimensions": [
-            "lon"
-          ]
-        },
-        {
-          "type": "zero_gradient",
-          "dimensions": [
-            "lat"
-          ]
-        },
-        {
-          "type": "dirichlet",
-          "dimensions": [
-            "lev"
-          ],
-          "value": 0.0
-        }
-      ],
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-07-01T00:00:00Z",
+      "end": "2024-07-03T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

@@ -16,7 +16,7 @@
   "models": {
     "NeumannBoundary": {
       "reference": {
-        "notes": "Test zero-gradient (Neumann) boundary conditions: \u2202C/\u2202n = 0 at domain edges"
+        "notes": "Test zero-gradient (Neumann) boundary conditions: ∂C/∂n = 0 at domain edges"
       },
       "variables": {
         "concentration": {
@@ -53,35 +53,21 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "concentration"
+            ]
+          },
+          "rhs": 1e-08
         }
-      ],
-      "boundary_conditions": {
-        "concentration_zero_gradient_xmin": {
-          "variable": "concentration",
-          "side": "xmin",
-          "kind": "zero_gradient",
-          "description": "Zero-gradient Neumann on x=0"
-        },
-        "concentration_zero_gradient_xmax": {
-          "variable": "concentration",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "concentration_zero_gradient_ymin": {
-          "variable": "concentration",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "concentration_zero_gradient_ymax": {
-          "variable": "concentration",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "DirichletBoundary": {
       "reference": {
-        "notes": "Test fixed-value (Dirichlet) boundary conditions: C = C\u2080 at domain edges"
+        "notes": "Test fixed-value (Dirichlet) boundary conditions: C = C₀ at domain edges"
       },
       "variables": {
         "tracer": {
@@ -123,26 +109,21 @@
               }
             ]
           }
-        }
-      ],
-      "boundary_conditions": {
-        "tracer_dirichlet_xmin": {
-          "variable": "tracer",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": "boundary_value"
         },
-        "tracer_dirichlet_xmax": {
-          "variable": "tracer",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": "boundary_value"
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "tracer"
+            ]
+          },
+          "rhs": 0.0
         }
-      }
+      ]
     },
     "PeriodicBoundary": {
       "reference": {
-        "notes": "Test periodic boundary conditions: C(0) = C(L) for global atmospheric models. Per RFC \u00a79.2.1, declare once on xmin; the xmax side is implicit."
+        "notes": "Test periodic boundary conditions: C(0) = C(L) for global atmospheric models. Per RFC §9.2.1, declare once on xmin; the xmax side is implicit."
       },
       "variables": {
         "global_tracer": {
@@ -185,20 +166,21 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "global_tracer"
+            ]
+          },
+          "rhs": 1e-09
         }
-      ],
-      "boundary_conditions": {
-        "global_tracer_periodic_lon": {
-          "variable": "global_tracer",
-          "side": "xmin",
-          "kind": "periodic",
-          "description": "Periodic x-axis wrap (declared once on xmin per RFC \u00a79.2.1)"
-        }
-      }
+      ]
     },
     "RobinBoundary": {
       "reference": {
-        "notes": "Test Robin boundary conditions: \u03b1u + \u03b2\u2202u/\u2202n = \u03b3 at the domain edge."
+        "notes": "Test Robin boundary conditions: αu + β∂u/∂n = γ at the domain edge."
       },
       "variables": {
         "temperature": {
@@ -232,25 +214,21 @@
               "temperature"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "temperature"
+            ]
+          },
+          "rhs": 288.15
         }
-      ],
-      "boundary_conditions": {
-        "temperature_robin_xmin": {
-          "variable": "temperature",
-          "side": "xmin",
-          "kind": "robin",
-          "robin_alpha": "htc",
-          "robin_beta": 1.0,
-          "robin_gamma": {
-            "op": "*",
-            "args": ["htc", "t_ambient"]
-          }
-        }
-      }
+      ]
     },
     "MixedBoundaries": {
       "reference": {
-        "notes": "Test mixed BCs: a flux_contrib from a dry deposition component and an emission flux_contrib on the same (variable, side) pair — the rewrite engine aggregates both into the zmin Neumann template (RFC \u00a79.3)."
+        "notes": "Test mixed BCs: a flux_contrib from a dry deposition component and an emission flux_contrib on the same (variable, side) pair — the rewrite engine aggregates both into the zmin Neumann template (RFC §9.3)."
       },
       "variables": {
         "pollution": {
@@ -287,83 +265,25 @@
               "pollution"
             ]
           }
-        }
-      ],
-      "boundary_conditions": {
-        "pollution_neumann_zmin": {
-          "variable": "pollution",
-          "side": "zmin",
-          "kind": "neumann",
-          "value": 0.0,
-          "description": "Enclosing neumann template; flux_contrib entries aggregate into this side's flux."
         },
-        "pollution_deposition_zmin": {
-          "variable": "pollution",
-          "side": "zmin",
-          "kind": "flux_contrib",
-          "value": {
-            "op": "*",
+        {
+          "lhs": {
+            "op": "ic",
             "args": [
-              {"op": "-", "args": ["deposition_velocity"]},
               "pollution"
             ]
           },
-          "contributed_by": {
-            "component": "dry_deposition",
-            "flux_sign": "-"
-          }
-        },
-        "pollution_emission_zmin": {
-          "variable": "pollution",
-          "side": "zmin",
-          "kind": "flux_contrib",
-          "value": "surface_emission",
-          "contributed_by": {
-            "component": "emissions",
-            "flux_sign": "+"
-          }
+          "rhs": 0.0
         }
-      }
+      ]
     }
   },
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T06:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 50000.0,
-          "units": "meters",
-          "grid_spacing": 1000.0
-        },
-        "y": {
-          "min": 0.0,
-          "max": 50000.0,
-          "units": "meters",
-          "grid_spacing": 1000.0
-        },
-        "lon": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees",
-          "grid_spacing": 2.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "concentration": 1e-08,
-          "tracer": 0.0,
-          "global_tracer": 1e-09,
-          "pollution": 0.0,
-          "temperature": 288.15
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T06:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

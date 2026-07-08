@@ -1,0 +1,61 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "makearray_empty_region_min_extent",
+    "description": "A §9.6.8-style discretized-derivative makearray at the scheme's MINIMUM admissible extent (esm-spec §4.3.2 'Empty and inverted bounds'). The interior region [2, N-1] is metaparameterized (§9.7.6) and at the default N = 2 folds to the canonical EMPTY bound [2, 1]: the region covers no cells, its value (the centered-difference aggregate) is never consulted, and the two single-cell boundary-face regions [1,1] and [2,2] tile the whole lon axis with the one-sided differences. This MUST load cleanly — empty is a legal, load-clean spelling. Re-binding N = 1 at the loader API folds the interior region to [2, 0], which is INVERTED (stop < start - 1) and MUST be rejected at load with makearray_region_inverted (§9.6.6): the 3-point scheme cannot exist on a 1-cell grid, and the loud failure at the binding site is what surfaces the mis-sized instantiation (the Julia test template_imports_test.jl drives both bindings of this same file).",
+    "authors": ["EarthSciAST"],
+    "created": "2026-07-02T00:00:00Z",
+    "tags": ["makearray", "regions", "empty-bound", "metaparameters", "discretization", "minimum-extent"]
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 2, "description": "zonal cell count; the centered scheme's minimum admissible extent is 2" }
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": "N" },
+    "lat": { "kind": "interval", "size": 3 }
+  },
+  "models": {
+    "Advection": {
+      "variables": {
+        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "default": 0.5, "description": "tracer" },
+        "dx": { "type": "parameter", "units": "m", "default": 2.5, "description": "grid spacing" }
+      },
+      "equations": [
+        {
+          "_comment": "d(c)/dt = the discretized zonal derivative: interior centered difference over i in [2, N-1] (EMPTY at N = 2), west face i=1 and east face i=N one-sided (zero-gradient BC), per esm-spec §9.6.8.",
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[2, { "op": "-", "args": ["N", 1] }], [1, 3]],
+              [[1, 1], [1, 3]],
+              [["N", "N"], [1, 3]]
+            ],
+            "values": [
+              { "op": "aggregate", "output_idx": ["i", "j"], "args": ["c"],
+                "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }], "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [
+                    { "op": "index", "args": ["c", { "op": "+", "args": ["i", 1] }, "j"] },
+                    { "op": "index", "args": ["c", { "op": "-", "args": ["i", 1] }, "j"] } ] },
+                  { "op": "*", "args": [2, "dx"] } ] } },
+              { "op": "aggregate", "output_idx": ["j"], "args": ["c"],
+                "ranges": { "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [ { "op": "index", "args": ["c", 2, "j"] },
+                                         { "op": "index", "args": ["c", 1, "j"] } ] },
+                  "dx" ] } },
+              { "op": "aggregate", "output_idx": ["j"], "args": ["c"],
+                "ranges": { "j": { "from": "lat" } },
+                "expr": { "op": "/", "args": [
+                  { "op": "-", "args": [ { "op": "index", "args": ["c", "N", "j"] },
+                                         { "op": "index", "args": ["c", { "op": "-", "args": ["N", 1] }, "j"] } ] },
+                  "dx" ] } }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

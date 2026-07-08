@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "inject_subsystem_ref_no_inject",
+    "description": "NEGATIVE TWIN of fixture.esm (esm-spec §9.7.10 form A): the same agnostic leaf.esm is mounted by ref WITHOUT an expression_template_imports injection. The mount LOADS cleanly (the leaf's D(c, wrt: lon) survives — the op namespace is open, §4.2), but reaching evaluation/compilation the surviving rewrite-target is rejected with `unlowered_operator` (§9.6.3 constraint 6) — the same failure as today, with the obvious fix being to add the injection. Bindings that never build an evaluator mark this N/A (mirroring the unlowered_operator fixture)."
+  },
+  "models": {
+    "Assembly": {
+      "variables": {
+        "total": { "type": "state", "units": "kg/m^3", "default": 0.0, "description": "assembly-level diagnostic" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["total"], "wrt": "t" }, "rhs": 0.0 }
+      ],
+      "subsystems": {
+        "Runoff": { "ref": "./leaf.esm" }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+# Fetch git dependencies through the system `git` CLI rather than the built-in
+# libgit2 client.
+#
+# Required by the `s2bindings` git dependency (ess-my4.4.11). On the EarthSciML
+# build cluster a global git rewrite maps `https://github.com/` to
+# `git@github.com:` (SSH), and libgit2's ssh-agent path cannot satisfy that
+# auth, so cargo's built-in fetcher fails. The system `git` honors the rewrite
+# and the configured SSH credentials, so delegating to it makes the dependency
+# fetchable here and in the merge/refinery environment. Harmless on hosted CI
+# (GitHub Actions has no such rewrite and the CLI fetches over HTTPS).
+[net]
+git-fetch-with-cli = true
+
+# Run the wasm32 test target (`tests/wasm_suite.rs`) under Node.js via the
+# wasm-bindgen test runner. This lets
+#   cargo test --target wasm32-unknown-unknown --test wasm_suite
+# build and run ONLY that target plus the library (not the native-only unit and
+# integration tests, which use the filesystem / tempfiles / the native s2 kernel
+# and cannot compile for wasm32). `wasm-pack test` can't be used for this: it
+# always passes `--tests`, which drags every native test target into the wasm
+# build. Install the matching runner with:
+#   cargo install wasm-bindgen-cli --version 0.2.126
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

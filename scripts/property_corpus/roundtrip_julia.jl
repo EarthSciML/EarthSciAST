@@ -3,7 +3,7 @@
 # Julia expression round-trip driver for property-corpus conformance.
 #
 # Reads expression JSON fixtures, passes each through
-# EarthSciSerialization.parse_expression / serialize_expression, and emits
+# EarthSciAST.parse_expression / serialize_expression, and emits
 # a JSON object {fixture_name: {"ok": bool, "value"|"error": ...}} to stdout.
 #
 # Usage: julia roundtrip_julia.jl <fixture.json> [<fixture.json> ...]
@@ -11,18 +11,18 @@
 using Pkg
 
 project_root = dirname(dirname(dirname(@__FILE__)))
-julia_pkg = joinpath(project_root, "packages", "EarthSciSerialization.jl")
+julia_pkg = joinpath(project_root, "pkg", "EarthSciAST.jl")
 Pkg.activate(julia_pkg; io=devnull)
 
-using EarthSciSerialization
+using EarthSciAST
 using JSON3
 
 function roundtrip_one(path::String)::Dict{String,Any}
     try
         raw = read(path, String)
         data = JSON3.read(raw)
-        expr = EarthSciSerialization.parse_expression(data)
-        out = EarthSciSerialization.serialize_expression(expr)
+        expr = EarthSciAST.parse_expression(data)
+        out = EarthSciAST.serialize_expression(expr)
         # Round-trip through JSON to strip JSON3-specific types so the outer
         # JSON3.write is a plain Dict/Vector tree.
         normalized = JSON3.read(JSON3.write(out))

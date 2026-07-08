@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "fv_div_grid", "description": "Uniform 1-D finite-volume grid family sized by metaparameter N: index set x, and a `where`-constrained divergence rule fv_div_x matching {op: div, args: [F]} scoped to fields shaped over x (esm-spec 9.6.1). Names are generic by design (the library-file no-edit bar, esm-spec 9.7.1); a consumer instantiates the family per grid with import-edge prefix + bindings (esm-spec 9.7.7), and the edge rename MUST carry the `where` shape from x to the renamed set so the rule registers and fires on its own instance's field only." },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 4, "description": "cell count" }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "fv_div_x": {
+      "params": ["F"],
+      "match": { "op": "div", "args": ["F"] },
+      "where": { "F": { "shape": ["x"] } },
+      "body": { "op": "*", "args": [{ "op": "/", "args": [1, "N"] }, "F"] }
+    }
+  }
+}

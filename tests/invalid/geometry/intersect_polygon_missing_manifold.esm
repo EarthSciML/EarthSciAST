@@ -4,7 +4,7 @@
     "name": "intersect_polygon_missing_manifold",
     "description": "INVALID (bead ess-my4.4.2): an `intersect_polygon` node that OMITS the required `manifold` flag (RFC semiring-faq-unified-ir §8.1; CONFORMANCE_SPEC.md §5.8.4). The geometry interpretation (planar / spherical / geodesic) is part of the op's contract — two bindings may be compared only under the same declared manifold — so the schema's intersect_polygon clause makes `manifold` REQUIRED with no default. A clip node without it is a pure schema (required-property) violation, caught by every binding at validation time.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",
@@ -15,27 +15,56 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "MissingManifold": {
-      "index_sets": {
-        "verts": { "kind": "interval", "size": 4 }
-      },
       "variables": {
-        "poly_a": { "type": "parameter", "shape": ["verts"] },
-        "poly_b": { "type": "parameter", "shape": ["verts"] },
-        "u": { "type": "state" },
+        "poly_a": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_b": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "u": {
+          "type": "state"
+        },
         "clip": {
           "type": "observed",
           "expression": {
             "op": "intersect_polygon",
-            "args": ["poly_a", "poly_b"]
+            "args": [
+              "poly_a",
+              "poly_b"
+            ]
           }
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
-          "rhs": { "op": "-", "args": ["u"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
         }
       ]
     }

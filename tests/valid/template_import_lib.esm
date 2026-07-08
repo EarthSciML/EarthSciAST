@@ -1,0 +1,21 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "template_import_lib",
+    "description": "Minimal template-library file (esm-spec 9.7.1): a metaparameter-sized index set, a zero-parameter constant template, and one auto-applied match rule. Importable via expression_template_imports; also a valid standalone document (the valid suite tolerates a model-less library file)."
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 8, "description": "cell count" }
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "n_cells": { "params": [], "body": "N" },
+    "scale_by_n": {
+      "params": ["f"],
+      "match": { "op": "scale_by_n", "args": ["f"] },
+      "body": { "op": "*", "args": ["f", { "op": "apply_expression_template", "args": [], "name": "n_cells", "bindings": {} }] }
+    }
+  }
+}

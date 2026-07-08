@@ -66,79 +66,26 @@
           "description": "Total atmospheric carbon (simplified)"
         }
       },
-      "equations": [],
-      "boundary_conditions": {
-        "CO2_periodic_xmin": {
-          "variable": "CO2",
-          "side": "xmin",
-          "kind": "periodic"
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "CO2"
+            ]
+          },
+          "rhs": 0.00042
         },
-        "O2_periodic_xmin": {
-          "variable": "O2",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "CO2_zero_gradient_xmin": {
-          "variable": "CO2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O2_zero_gradient_xmin": {
-          "variable": "O2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "CO2_zero_gradient_xmax": {
-          "variable": "CO2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O2_zero_gradient_xmax": {
-          "variable": "O2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "CO2_neumann_xmin": {
-          "variable": "CO2",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "O2_neumann_xmin": {
-          "variable": "O2",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "CO2_neumann_xmax": {
-          "variable": "CO2",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "O2_neumann_xmax": {
-          "variable": "O2",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "CO2_zero_gradient_xmin_2": {
-          "variable": "CO2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O2_zero_gradient_xmin_2": {
-          "variable": "O2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "CO2_zero_gradient_xmax_2": {
-          "variable": "CO2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O2_zero_gradient_xmax_2": {
-          "variable": "O2",
-          "side": "xmax",
-          "kind": "zero_gradient"
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O2"
+            ]
+          },
+          "rhs": 0.2095
         }
-      }
+      ]
     },
     "OceanCarbon": {
       "coupletype": "OceanCoupler",
@@ -326,115 +273,35 @@
               "mixed_layer_depth"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "DIC"
+            ]
+          },
+          "rhs": 2100.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "ALK"
+            ]
+          },
+          "rhs": 2300.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O2_dissolved"
+            ]
+          },
+          "rhs": 250.0
         }
-      ],
-      "boundary_conditions": {
-        "DIC_periodic_xmin": {
-          "variable": "DIC",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "ALK_periodic_xmin": {
-          "variable": "ALK",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "O2_dissolved_periodic_xmin": {
-          "variable": "O2_dissolved",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "DIC_zero_gradient_xmin": {
-          "variable": "DIC",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "ALK_zero_gradient_xmin": {
-          "variable": "ALK",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O2_dissolved_zero_gradient_xmin": {
-          "variable": "O2_dissolved",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "DIC_zero_gradient_xmax": {
-          "variable": "DIC",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "ALK_zero_gradient_xmax": {
-          "variable": "ALK",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O2_dissolved_zero_gradient_xmax": {
-          "variable": "O2_dissolved",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "DIC_neumann_xmin": {
-          "variable": "DIC",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "ALK_neumann_xmin": {
-          "variable": "ALK",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "O2_dissolved_neumann_xmin": {
-          "variable": "O2_dissolved",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "DIC_neumann_xmax": {
-          "variable": "DIC",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "ALK_neumann_xmax": {
-          "variable": "ALK",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "O2_dissolved_neumann_xmax": {
-          "variable": "O2_dissolved",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "DIC_zero_gradient_xmin_2": {
-          "variable": "DIC",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "ALK_zero_gradient_xmin_2": {
-          "variable": "ALK",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O2_dissolved_zero_gradient_xmin_2": {
-          "variable": "O2_dissolved",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "DIC_zero_gradient_xmax_2": {
-          "variable": "DIC",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "ALK_zero_gradient_xmax_2": {
-          "variable": "ALK",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O2_dissolved_zero_gradient_xmax_2": {
-          "variable": "O2_dissolved",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "MarineEcosystem": {
       "reference": {
@@ -789,150 +656,44 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "nutrients"
+            ]
+          },
+          "rhs": 15.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "phytoplankton"
+            ]
+          },
+          "rhs": 2.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "zooplankton"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "detritus"
+            ]
+          },
+          "rhs": 0.5
         }
-      ],
-      "boundary_conditions": {
-        "nutrients_periodic_xmin": {
-          "variable": "nutrients",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "phytoplankton_periodic_xmin": {
-          "variable": "phytoplankton",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "zooplankton_periodic_xmin": {
-          "variable": "zooplankton",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "detritus_periodic_xmin": {
-          "variable": "detritus",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "nutrients_zero_gradient_xmin": {
-          "variable": "nutrients",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "phytoplankton_zero_gradient_xmin": {
-          "variable": "phytoplankton",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "zooplankton_zero_gradient_xmin": {
-          "variable": "zooplankton",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "detritus_zero_gradient_xmin": {
-          "variable": "detritus",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "nutrients_zero_gradient_xmax": {
-          "variable": "nutrients",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "phytoplankton_zero_gradient_xmax": {
-          "variable": "phytoplankton",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "zooplankton_zero_gradient_xmax": {
-          "variable": "zooplankton",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "detritus_zero_gradient_xmax": {
-          "variable": "detritus",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "nutrients_neumann_xmin": {
-          "variable": "nutrients",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "phytoplankton_neumann_xmin": {
-          "variable": "phytoplankton",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "zooplankton_neumann_xmin": {
-          "variable": "zooplankton",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "detritus_neumann_xmin": {
-          "variable": "detritus",
-          "side": "xmin",
-          "kind": "neumann"
-        },
-        "nutrients_neumann_xmax": {
-          "variable": "nutrients",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "phytoplankton_neumann_xmax": {
-          "variable": "phytoplankton",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "zooplankton_neumann_xmax": {
-          "variable": "zooplankton",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "detritus_neumann_xmax": {
-          "variable": "detritus",
-          "side": "xmax",
-          "kind": "neumann"
-        },
-        "nutrients_zero_gradient_xmin_2": {
-          "variable": "nutrients",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "phytoplankton_zero_gradient_xmin_2": {
-          "variable": "phytoplankton",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "zooplankton_zero_gradient_xmin_2": {
-          "variable": "zooplankton",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "detritus_zero_gradient_xmin_2": {
-          "variable": "detritus",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "nutrients_zero_gradient_xmax_2": {
-          "variable": "nutrients",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "phytoplankton_zero_gradient_xmax_2": {
-          "variable": "phytoplankton",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "zooplankton_zero_gradient_xmax_2": {
-          "variable": "zooplankton",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "detritus_zero_gradient_xmax_2": {
-          "variable": "detritus",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "AirSeaGasExchange": {
       "reference": {
@@ -974,36 +735,6 @@
       "source": {
         "url_template": "file:///data/CESM2_Output/{date:%Y%m%d_%H%M}.nc"
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "temperature_ocean": {
           "file_variable": "temperature_ocean",
@@ -1037,36 +768,6 @@
       "kind": "points",
       "source": {
         "url_template": "file:///data/SOCAT_pCO2/{date:%Y%m%d}.csv"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "pCO2_observed": {
@@ -1493,49 +1194,13 @@
       "description": "Seasonal nutrient injection every 90 days (upwelling)"
     }
   ],
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2025-01-01T00:00:00Z",
-        "reference_time": "2024-01-01T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees_east",
-          "grid_spacing": 2.0
-        },
-        "y": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees_north",
-          "grid_spacing": 2.0
-        },
-        "z": {
-          "min": 0.0,
-          "max": 5000.0,
-          "units": "meters",
-          "grid_spacing": 50.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "AtmosphericCarbon.CO2": 0.00042,
-          "AtmosphericCarbon.O2": 0.2095,
-          "OceanCarbon.DIC": 2100.0,
-          "OceanCarbon.ALK": 2300.0,
-          "OceanCarbon.O2_dissolved": 250.0,
-          "MarineEcosystem.nutrients": 15.0,
-          "MarineEcosystem.phytoplankton": 2.0,
-          "MarineEcosystem.zooplankton": 1.0,
-          "MarineEcosystem.detritus": 0.5
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2025-01-01T00:00:00Z",
+      "reference_time": "2024-01-01T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

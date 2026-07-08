@@ -1,0 +1,73 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "WRF_hourly_d01_example",
+    "description": "Covers EarthSciData.jl/src/wrf.jl WRFFileSet. relpath = <yr><mo>/wrfout_hourly_d01_<yyyy>-<mm>-<dd>_<hh>.nc. Lambert-conformal projection on Arakawa C-grid (staggered U/V/W). CRS varies by domain; using a typical CONUS LCC here. WRF hourly domain-1 output on a CONUS Lambert-conformal grid.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-loader",
+      "meteorology",
+      "wrf"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {},
+      "equations": []
+    }
+  },
+  "data_loaders": {
+    "WRF_hourly_d01": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file://${WRF_MIRROR}/{date:%Y}{date:%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H}.nc"
+      },
+      "temporal": {
+        "file_period": "PT1H",
+        "frequency": "PT1H",
+        "records_per_file": 1,
+        "time_variable": "Time"
+      },
+      "variables": {
+        "U": {
+          "file_variable": "U",
+          "units": "m s^-1",
+          "description": "Zonal wind component on west_east_stag"
+        },
+        "V": {
+          "file_variable": "V",
+          "units": "m s^-1",
+          "description": "Meridional wind component on south_north_stag"
+        },
+        "W": {
+          "file_variable": "W",
+          "units": "m s^-1",
+          "description": "Vertical wind component on bottom_top_stag"
+        },
+        "T": {
+          "file_variable": "T",
+          "units": "K",
+          "description": "Perturbation potential temperature"
+        },
+        "QVAPOR": {
+          "file_variable": "QVAPOR",
+          "units": "kg kg^-1",
+          "description": "Water vapor mixing ratio"
+        }
+      },
+      "reference": {
+        "citation": "Skamarock, W.C. et al. (2021) A Description of the Advanced Research WRF Model Version 4.3. NCAR Tech. Note.",
+        "url": "https://www2.mmm.ucar.edu/wrf/users/"
+      },
+      "metadata": {
+        "tags": [
+          "wrf",
+          "regional"
+        ],
+        "domain_id": "d01"
+      }
+    }
+  }
+}

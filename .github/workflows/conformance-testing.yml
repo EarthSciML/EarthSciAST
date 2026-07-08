@@ -4,14 +4,14 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/conformance-testing.yml'
   pull_request:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/conformance-testing.yml'
@@ -58,7 +58,7 @@ jobs:
         julia-version: ['1.10', '1.11', '1.12']
     defaults:
       run:
-        working-directory: packages/EarthSciSerialization.jl
+        working-directory: pkg/EarthSciAST.jl
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,7 +88,7 @@ jobs:
         uses: julia-actions/julia-processcoverage@v1
         if: matrix.julia-version == '1.12'
         with:
-          directories: packages/EarthSciSerialization.jl/src
+          directories: pkg/EarthSciAST.jl/src
 
       - name: Upload Julia coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -105,7 +105,7 @@ jobs:
         node-version: [20, 22]
     defaults:
       run:
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,16 +116,57 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: packages/earthsci-toolkit/package-lock.json
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Install TypeScript dependencies
         run: npm ci
+
+      - name: Typecheck TypeScript package
+        run: npm run typecheck
+
+      - name: Lint TypeScript package
+        run: npm run lint
+
+      - name: Check TypeScript formatting
+        run: npm run format:check
 
       - name: Build TypeScript package
         run: npm run build
 
       - name: Run TypeScript tests
         run: npm run test:ci
+
+  earthsci-ast-editor-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pkg/earthsci-ast-editor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: pkg/earthsci-ast-editor/package-lock.json
+
+      # earthsci-ast-editor consumes @earthsciml/ast via a file: devDependency, so
+      # the toolkit's dist must exist before the editor installs/builds.
+      - name: Build @earthsciml/ast dependency
+        working-directory: pkg/earthsci-ast-ts
+        run: npm ci && npm run build
+
+      - name: Install earthsci-ast-editor dependencies
+        run: npm install
+
+      - name: Typecheck earthsci-ast-editor
+        run: npm run typecheck
+
+      - name: Run earthsci-ast-editor tests
+        run: npx vitest run
 
   python-tests:
     runs-on: ubuntu-latest
@@ -135,7 +176,7 @@ jobs:
         python-version: ['3.9', '3.10', '3.11', '3.12']
     defaults:
       run:
-        working-directory: packages/earthsci_toolkit
+        working-directory: pkg/earthsci-ast-py
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,32 +191,31 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('packages/earthsci_toolkit/pyproject.toml') }}
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pkg/earthsci-ast-py/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build pytest pytest-cov flake8
+          pip install build pytest pytest-cov ruff
           pip install -e .[dev,test]
 
-      - name: Lint with flake8
+      - name: Lint and check formatting with ruff
         run: |
-          # stop the build if there are Python syntax errors or undefined names
-          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings
-          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+          # Config lives in the repo-root ruff.toml.
+          ruff check src/ tests/ ../../scripts/
+          ruff format --check src/ tests/ ../../scripts/
 
       - name: Run Python tests (with coverage)
         run: |
-          pytest tests/ -v --cov=src/earthsci_toolkit --cov-report=xml
+          pytest tests/ -v --cov=src/earthsci_ast --cov-report=xml
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.11'
         with:
-          files: packages/earthsci_toolkit/coverage.xml
+          files: pkg/earthsci-ast-py/coverage.xml
           flags: python
 
   rust-tests:
@@ -186,7 +226,7 @@ jobs:
         rust: ['stable', 'beta', '1.88.0']  # 1.88.0 = MSRV
     defaults:
       run:
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
     steps:
       - uses: actions/checkout@v4
         with:
@@ -204,8 +244,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            packages/earthsci-toolkit-rs/target
-          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('packages/earthsci-toolkit-rs/Cargo.lock') }}
+            pkg/earthsci-ast-rs/target
+          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
 
@@ -231,6 +271,24 @@ jobs:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"
         run: cargo build --target wasm32-unknown-unknown --features wasm --verbose
 
+      - name: Run WASM test suite
+        if: matrix.rust == 'stable'
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
+        run: |
+          # `wasm-bindgen-test-runner` must match the resolved `wasm-bindgen`
+          # crate version exactly (it checks a schema version), so read the
+          # version from Cargo.lock — written by the build steps above — and
+          # install the matching runner. Node (preinstalled on the runner) drives
+          # it via the `runner` set in .cargo/config.toml.
+          wb=$(awk '/^name = "wasm-bindgen"$/{getline; print}' Cargo.lock | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Installing wasm-bindgen-cli $wb to match the crate"
+          cargo install wasm-bindgen-cli --version "$wb"
+          # Builds only the library + tests/wasm_suite.rs (a wasm32-gated target),
+          # NOT the native-only unit/integration tests (filesystem / tempfiles /
+          # native s2 C++ kernel), which cannot compile for wasm32.
+          cargo test --target wasm32-unknown-unknown --features wasm --test wasm_suite
+
       - name: Run Rust tests
         run: cargo test --verbose --all-features
 
@@ -246,7 +304,7 @@ jobs:
         go-version: ['1.21', '1.22', '1.23']
     defaults:
       run:
-        working-directory: packages/esm-format-go
+        working-directory: pkg/earthsci-ast-go
     steps:
       - uses: actions/checkout@v4
         with:
@@ -261,7 +319,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('packages/esm-format-go/go.sum') }}
+          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('pkg/earthsci-ast-go/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-${{ matrix.go-version }}-
 
@@ -281,7 +339,7 @@ jobs:
         uses: codecov/codecov-action@v4
         if: matrix.go-version == '1.23'
         with:
-          files: packages/esm-format-go/coverage.out
+          files: pkg/earthsci-ast-go/coverage.out
           flags: go
 
       - name: Build Go binary
@@ -292,7 +350,7 @@ jobs:
         if: matrix.go-version == '1.23'
         with:
           version: latest
-          working-directory: packages/esm-format-go
+          working-directory: pkg/earthsci-ast-go
 
   # Cross-language conformance testing — only runs if all per-language suites pass
   standard-conformance-testing:
@@ -313,7 +371,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: packages/earthsci-toolkit/package-lock.json
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -333,32 +391,32 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-            packages/earthsci-toolkit-rs/target
-            packages/earthsci-toolkit/node_modules
-          key: ${{ runner.os }}-conformance-${{ hashFiles('packages/*/Project.toml', 'packages/*/package*.json', 'packages/*/pyproject.toml', 'packages/*/Cargo.lock') }}
+            pkg/earthsci-ast-rs/target
+            pkg/earthsci-ast-ts/node_modules
+          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-conformance-
 
       # Install dependencies for all languages
       - name: Install Julia dependencies
-        working-directory: packages/EarthSciSerialization.jl
+        working-directory: pkg/EarthSciAST.jl
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
       - name: Install TypeScript dependencies and build
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: |
           npm ci
           npm run build
 
       - name: Install Python dependencies
-        working-directory: packages/earthsci_toolkit
+        working-directory: pkg/earthsci-ast-py
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev,test]
 
       - name: Build Rust package
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
         run: |
           cargo build --release
 

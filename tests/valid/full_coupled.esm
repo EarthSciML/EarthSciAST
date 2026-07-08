@@ -108,7 +108,6 @@
       "reference": {
         "notes": "3D transport model"
       },
-      "domain": "default",
       "variables": {
         "u": {
           "type": "parameter",
@@ -341,36 +340,6 @@
       "source": {
         "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc"
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "u": {
           "file_variable": "u",
@@ -409,36 +378,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v5/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "NOx_emissions": {
@@ -486,56 +425,11 @@
       "callback_id": "apply_emissions"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-07-01T00:00:00Z",
-        "end": "2024-07-08T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -125.0,
-          "max": -110.0,
-          "grid_spacing": 0.25,
-          "units": "m"
-        },
-        "lat": {
-          "min": 32.0,
-          "max": 42.0,
-          "grid_spacing": 0.25,
-          "units": "m"
-        },
-        "lev": {
-          "min": 1,
-          "max": 10,
-          "grid_spacing": 1,
-          "units": "m"
-        }
-      },
-      "coordinate_transforms": [
-        {
-          "id": "lonlat_to_meters",
-          "dimensions": [
-            "lon",
-            "lat"
-          ]
-        },
-        {
-          "id": "sigma_to_pressure",
-          "dimensions": [
-            "lev"
-          ]
-        }
-      ],
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "O3": 4e-08,
-          "NO": 1e-10,
-          "NO2": 1e-09
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-07-01T00:00:00Z",
+      "end": "2024-07-08T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

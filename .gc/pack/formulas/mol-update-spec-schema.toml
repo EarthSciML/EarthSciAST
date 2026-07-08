@@ -138,11 +138,11 @@ broken Python parse blocks every other rig). For each:
 
 | Binding | Package path |
 |---|---|
-| Python | `packages/earthsci_toolkit/` |
-| Julia | `packages/EarthSciSerialization.jl/` |
-| Rust | `packages/earthsci-toolkit-rs/` |
-| Go | `packages/esm-format-go/` |
-| TypeScript (if needed) | `packages/earthsci-toolkit/` |
+| Python | `pkg/earthsci-ast-py/` |
+| Julia | `pkg/EarthSciAST.jl/` |
+| Rust | `pkg/earthsci-ast-rs/` |
+| Go | `pkg/earthsci-ast-go/` |
+| TypeScript (if needed) | `pkg/earthsci-ast-ts/` |
 
 For each binding:
 1. Update the parser to accept the new shape. For widening changes that map
@@ -199,10 +199,10 @@ Before committing, verify that the four artifacts are aligned:
 ```bash
 scripts/sync-schema.sh --check                       # schema mirrors + manifest versions agree
 grep -E '"\\$id"' esm-schema.json                     # contains $TARGET_VERSION
-grep -E '"version"' packages/earthsci_toolkit/pyproject.toml  # contains $TARGET_VERSION
-grep -E 'version = ' packages/EarthSciSerialization.jl/Project.toml
-grep -E 'version = ' packages/earthsci-toolkit-rs/Cargo.toml
-grep -E '"version"' packages/earthsci-toolkit/package.json 2>/dev/null || true
+grep -E '"version"' pkg/earthsci-ast-py/pyproject.toml  # contains $TARGET_VERSION
+grep -E 'version = ' pkg/EarthSciAST.jl/Project.toml
+grep -E 'version = ' pkg/earthsci-ast-rs/Cargo.toml
+grep -E '"version"' pkg/earthsci-ast-ts/package.json 2>/dev/null || true
 ```
 
 Run the relevant binding tests one more time end-to-end.
@@ -211,7 +211,7 @@ Then stage and commit **everything for the change as one commit** so a reviewer
 can see spec ↔ schema ↔ bindings move together:
 
 ```bash
-git add esm-spec.md esm-schema.json packages/ docs/content/rfcs/*.md 2>/dev/null || true
+git add esm-spec.md esm-schema.json pkg/ docs/content/rfcs/*.md 2>/dev/null || true
 git status
 git commit -m "format: bump to $TARGET_VERSION — <short description>"
 git push origin <branch>

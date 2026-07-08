@@ -489,6 +489,24 @@
               "x"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "tolerance": {
@@ -646,36 +664,32 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y_fast"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y_slow"
+            ]
+          },
+          "rhs": 1.0
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T00:10:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "MassConservationTest.A": 1.0,
-          "MassConservationTest.B": 1.0,
-          "MassConservationTest.C": 0.0,
-          "MassConservationTest.D": 0.0,
-          "LinearChain.A": 1.0,
-          "LinearChain.B": 0.0,
-          "LinearChain.C": 0.0,
-          "StoichiometryTest.A": 2.0,
-          "StoichiometryTest.B": 3.0,
-          "StoichiometryTest.C": 0.0,
-          "StoichiometryTest.D": 0.0,
-          "AnalyticalODE.x": 1.0,
-          "AnalyticalODE.v": 0.0,
-          "NumericalStabilityTest.y_fast": 1.0,
-          "NumericalStabilityTest.y_slow": 1.0
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T00:10:00Z"
     }
   }
 }

@@ -448,17 +448,11 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T01:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

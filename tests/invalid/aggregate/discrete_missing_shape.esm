@@ -4,7 +4,7 @@
     "name": "discrete_missing_shape",
     "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8): a `discrete` variable that omits the required `shape`. A discrete variable's defining property is that its shape is fixed and known at setup (it is the declared seed for the DISCRETE cadence class); the ModelVariable schema's kind-conditional `allOf` requires `shape` when `type` is \"discrete\". Omitting it is a pure schema (conditional-required-property) violation — caught by every binding. The variable is otherwise well-formed (it carries a valid refresh trigger), so the only failure cause is the missing shape.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.capable"
+      "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
       "discrete-variable",

@@ -6,7 +6,6 @@
   },
   "models": {
     "pide_partial": {
-      "domain": "x_domain",
       "variables": {
         "u": {
           "type": "state",
@@ -18,7 +17,9 @@
           "units": "1",
           "expression": {
             "op": "integral",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "var": "x",
             "lower": "xmin",
             "upper": "x"
@@ -29,7 +30,9 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -37,7 +40,10 @@
             "args": [
               {
                 "op": "*",
-                "args": [-2, "u"]
+                "args": [
+                  -2,
+                  "u"
+                ]
               },
               {
                 "op": "*",
@@ -45,7 +51,9 @@
                   5,
                   {
                     "op": "grad",
-                    "args": ["cumuSum"],
+                    "args": [
+                      "cumuSum"
+                    ],
                     "dim": "x"
                   }
                 ]
@@ -57,7 +65,6 @@
       ]
     },
     "whole_domain_integral_model": {
-      "domain": "x_domain",
       "variables": {
         "f": {
           "type": "state",
@@ -69,7 +76,9 @@
           "units": "1",
           "expression": {
             "op": "integral",
-            "args": ["f"],
+            "args": [
+              "f"
+            ],
             "var": "x",
             "lower": 0,
             "upper": 1
@@ -80,36 +89,23 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["f"],
+            "args": [
+              "f"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "-",
-            "args": ["f"]
+            "args": [
+              "f"
+            ]
           }
         }
       ]
     }
   },
-  "domains": {
-    "x_domain": {
-      "independent_variable": "t",
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1.0,
-          "units": "1",
-          "grid_spacing": 0.05
-        }
-      },
-      "boundary_conditions": [
-        {
-          "type": "dirichlet",
-          "dimensions": ["x"],
-          "value": 0.0
-        }
-      ],
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "element_type": "Float64"
   }
 }

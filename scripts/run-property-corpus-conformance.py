@@ -75,7 +75,7 @@ def detect_bindings() -> List[Binding]:
 
     # Rust via cargo example (prebuild so per-fixture invocation is fast).
     cargo = shutil.which("cargo")
-    rust_dir = PROJECT_ROOT / "packages" / "earthsci-toolkit-rs"
+    rust_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-rs"
     bindings.append(
         Binding(
             name="rust",
@@ -95,7 +95,7 @@ def detect_bindings() -> List[Binding]:
 
     # Go via `go run`.
     go = shutil.which("go")
-    go_dir = PROJECT_ROOT / "packages" / "esm-format-go"
+    go_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-go"
     bindings.append(
         Binding(
             name="go",
@@ -117,12 +117,7 @@ def detect_bindings() -> List[Binding]:
             name="typescript",
             cmd=[
                 node or "node",
-                str(
-                    PROJECT_ROOT
-                    / "scripts"
-                    / "property_corpus"
-                    / "roundtrip_typescript.mjs"
-                ),
+                str(PROJECT_ROOT / "scripts" / "property_corpus" / "roundtrip_typescript.mjs"),
             ],
             available=node is not None,
             skip_reason="node not on PATH" if node is None else "",
@@ -188,8 +183,7 @@ def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
                     "error": entry.get("error", "unknown"),
                 }
         distinct = {
-            e["canonical"] if e["ok"] else f"ERR::{e['error']}"
-            for e in per_binding.values()
+            e["canonical"] if e["ok"] else f"ERR::{e['error']}" for e in per_binding.values()
         }
         diverged = len(distinct) > 1
         report.append(
@@ -205,9 +199,7 @@ def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
 def summarize(report: List[dict], bindings: List[str]) -> dict:
     """Aggregate per-fixture findings into a run summary."""
     diverged = [r for r in report if r["diverged"]]
-    any_failures = [
-        r for r in report if any(not b["ok"] for b in r["bindings"].values())
-    ]
+    any_failures = [r for r in report if any(not b["ok"] for b in r["bindings"].values())]
     return {
         "total_fixtures": len(report),
         "diverged_count": len(diverged),
@@ -222,9 +214,7 @@ def main() -> int:
     ap.add_argument("--corpus", default=str(DEFAULT_CORPUS))
     ap.add_argument(
         "--output",
-        default=str(
-            PROJECT_ROOT / "conformance-results" / "property_corpus_report.json"
-        ),
+        default=str(PROJECT_ROOT / "conformance-results" / "property_corpus_report.json"),
         help="Where to write the per-fixture comparison report.",
     )
     ap.add_argument(

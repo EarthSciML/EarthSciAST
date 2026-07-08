@@ -255,7 +255,7 @@ authors stage symbolic→integer at the `enums` layer (§3.1).
 
 The list is driven by the two motivating clients in the bead:
 
-- **FastJX photolysis** (`packages/EarthSciSerialization.jl/.../gaschem.jl`)
+- **FastJX photolysis** (`pkg/EarthSciAST.jl/.../gaschem.jl`)
   — needs solar geometry + inline-table interpolation of small cross-section
   tables. Covered by `datetime.*` + `interp.*`.
 - **Wesely / Zhang dry deposition** — needs categorical land-use × season
@@ -335,7 +335,7 @@ itself rewrite those fixtures; §10 lists the beads.
 ### 6.3 Files affected (audit)
 
 ```
-$ grep -l '"op": "call"' tests/ examples/ packages/
+$ grep -l '"op": "call"' tests/ examples/ pkg/
 tests/registered_funcs/one_d_interpolator.esm
 tests/registered_funcs/two_d_table_lookup.esm
 tests/registered_funcs/pure_math.esm
@@ -345,9 +345,9 @@ tests/future/security/schema_bypass_attempts.esm
 ```
 
 Plus the `registered_functions` schema entries in `esm-schema.json` and
-each binding's parser (`packages/esm-format-go/pkg/esm/esm-schema.json`,
-`earthsci-toolkit-rs/`, `earthsci_toolkit/`, `earthsci-toolkit/`,
-`EarthSciSerialization.jl/`).
+each binding's parser (`pkg/earthsci-ast-go/pkg/esm/esm-schema.json`,
+`earthsci-ast-rs/`, `earthsci_ast/`, `earthsci-ast-ts/`,
+`EarthSciAST.jl/`).
 
 For §9.1 operators, ~14 fixtures touched (`tests/valid/`,
 `tests/coupling/`, `tests/end_to_end/`). The follow-on bead `esm-tzp/op-mig`
@@ -549,7 +549,7 @@ After this RFC is approved, file (in this order):
    table. Bump the `esm` minor version.
 2. **`esm-tzp/schema-edits`** — corresponding `esm-schema.json` and
    per-binding schema updates (Go binding ships its own copy in
-   `packages/esm-format-go/pkg/esm/esm-schema.json`).
+   `pkg/earthsci-ast-go/pkg/esm/esm-schema.json`).
 3. **`esm-tzp/op-mig`** — sweep §6.3 fixture set and rewrite Track-A
    operator usages. Rewrite or retire `tests/registered_funcs/*.esm` and
    `tests/registered_funcs/README.md`.

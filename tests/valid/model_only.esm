@@ -422,105 +422,7 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "u_dirichlet_xmin": {
-          "variable": "u",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "v_dirichlet_xmin": {
-          "variable": "v",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "p_dirichlet_xmin": {
-          "variable": "p",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "T_dirichlet_xmin": {
-          "variable": "T",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "u_dirichlet_xmax": {
-          "variable": "u",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "v_dirichlet_xmax": {
-          "variable": "v",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "p_dirichlet_xmax": {
-          "variable": "p",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "T_dirichlet_xmax": {
-          "variable": "T",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "u_neumann_ymin": {
-          "variable": "u",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "v_neumann_ymin": {
-          "variable": "v",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "p_neumann_ymin": {
-          "variable": "p",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "T_neumann_ymin": {
-          "variable": "T",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "u_neumann_ymax": {
-          "variable": "u",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "v_neumann_ymax": {
-          "variable": "v",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "p_neumann_ymax": {
-          "variable": "p",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "T_neumann_ymax": {
-          "variable": "T",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        }
-      }
+      ]
     },
     "WaveEquation": {
       "reference": {
@@ -614,58 +516,17 @@
               "source"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "phi"
+            ]
+          },
+          "rhs": 1.0
         }
-      ],
-      "boundary_conditions": {
-        "phi_dirichlet_xmin": {
-          "variable": "phi",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "phi_t_dirichlet_xmin": {
-          "variable": "phi_t",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "phi_dirichlet_xmax": {
-          "variable": "phi",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "phi_t_dirichlet_xmax": {
-          "variable": "phi_t",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "phi_neumann_ymin": {
-          "variable": "phi",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "phi_t_neumann_ymin": {
-          "variable": "phi_t",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "phi_neumann_ymax": {
-          "variable": "phi",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "phi_t_neumann_ymax": {
-          "variable": "phi_t",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        }
-      }
+      ]
     },
     "PopulationDynamics": {
       "reference": {
@@ -815,58 +676,26 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "prey"
+            ]
+          },
+          "rhs": 100.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "predator"
+            ]
+          },
+          "rhs": 10.0
         }
-      ],
-      "boundary_conditions": {
-        "prey_dirichlet_xmin": {
-          "variable": "prey",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "predator_dirichlet_xmin": {
-          "variable": "predator",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "prey_dirichlet_xmax": {
-          "variable": "prey",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "predator_dirichlet_xmax": {
-          "variable": "predator",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "prey_neumann_ymin": {
-          "variable": "prey",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "predator_neumann_ymin": {
-          "variable": "predator",
-          "side": "ymin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "prey_neumann_ymax": {
-          "variable": "prey",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "predator_neumann_ymax": {
-          "variable": "predator",
-          "side": "ymax",
-          "kind": "neumann",
-          "value": 0.0
-        }
-      }
+      ]
     }
   },
   "data_loaders": {
@@ -874,36 +703,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ERA5_reanalysis/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "wind_u": {
@@ -933,36 +732,6 @@
       "kind": "static",
       "source": {
         "url_template": "file:///data/analytical_fields.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "initial_phi": {
@@ -1015,44 +784,11 @@
       "transform": "param_to_var"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-03-01T00:00:00Z",
-        "end": "2024-03-02T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 10.0,
-          "grid_spacing": 0.1,
-          "units": "km"
-        },
-        "y": {
-          "min": 0.0,
-          "max": 10.0,
-          "grid_spacing": 0.1,
-          "units": "km"
-        }
-      },
-      "coordinate_transforms": [
-        {
-          "id": "cartesian_2d",
-          "dimensions": [
-            "x",
-            "y"
-          ]
-        }
-      ],
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "phi": 1.0,
-          "prey": 100.0,
-          "predator": 10.0
-        }
-      },
-      "element_type": "Float32"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-03-01T00:00:00Z",
+      "end": "2024-03-02T00:00:00Z"
+    },
+    "element_type": "Float32"
   }
 }

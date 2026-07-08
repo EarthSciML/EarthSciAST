@@ -53,11 +53,20 @@
               "N"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "N"
+            ]
+          },
+          "rhs": 100.0
         }
       ],
       "tolerance": {
-        "rel": 1.0e-6,
-        "abs": 1.0e-10
+        "rel": 1e-06,
+        "abs": 1e-10
       },
       "tests": [
         {
@@ -74,13 +83,41 @@
             "end": 50.0
           },
           "assertions": [
-            { "variable": "N", "time": 0.0,  "expected": 100.0 },
-            { "variable": "N", "time": 5.0,  "expected": 60.65306597126334 },
-            { "variable": "N", "time": 10.0, "expected": 36.787944117144235 },
-            { "variable": "N", "time": 20.0, "expected": 13.533528323661267 },
-            { "variable": "N", "time": 30.0, "expected": 4.978706836786395 },
-            { "variable": "N", "time": 40.0, "expected": 1.8315638888734182 },
-            { "variable": "N", "time": 50.0, "expected": 0.6737946999085468 }
+            {
+              "variable": "N",
+              "time": 0.0,
+              "expected": 100.0
+            },
+            {
+              "variable": "N",
+              "time": 5.0,
+              "expected": 60.65306597126334
+            },
+            {
+              "variable": "N",
+              "time": 10.0,
+              "expected": 36.787944117144235
+            },
+            {
+              "variable": "N",
+              "time": 20.0,
+              "expected": 13.533528323661267
+            },
+            {
+              "variable": "N",
+              "time": 30.0,
+              "expected": 4.978706836786395
+            },
+            {
+              "variable": "N",
+              "time": 40.0,
+              "expected": 1.8315638888734183
+            },
+            {
+              "variable": "N",
+              "time": 50.0,
+              "expected": 0.6737946999085468
+            }
           ]
         },
         {
@@ -97,21 +134,17 @@
             "end": 7.0
           },
           "assertions": [
-            { "variable": "N", "time": 6.931471805599453, "expected": 50.0 }
+            {
+              "variable": "N",
+              "time": 6.931471805599453,
+              "expected": 50.0
+            }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "ExponentialDecay.N": 100.0
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

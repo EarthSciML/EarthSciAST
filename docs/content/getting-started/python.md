@@ -6,26 +6,26 @@ The Python implementation provides scientific computing integration with NumPy, 
 
 ### From PyPI (when available)
 ```bash
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
 ### Development Installation
 ```bash
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci_toolkit
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-py
 pip install -e .
 ```
 
 ### With Optional Dependencies
 ```bash
 # For visualization
-pip install earthsci-toolkit[viz]
+pip install earthsci-ast[viz]
 
 # For symbolic computation
-pip install earthsci-toolkit[symbolic]
+pip install earthsci-ast[symbolic]
 
 # For all optional features
-pip install earthsci-toolkit[all]
+pip install earthsci-ast[all]
 ```
 
 ## Core Capabilities
@@ -44,7 +44,7 @@ The Python implementation provides **Analysis** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```python
-from earthsci_toolkit import load_esm, save_esm, validate
+from earthsci_ast import load_esm, save_esm, validate
 import json
 
 # Load from file
@@ -74,7 +74,7 @@ save_esm(esm_file, 'output.esm')
 ### Working with Expressions
 
 ```python
-from earthsci_toolkit import (
+from earthsci_ast import (
     parse_expression, to_unicode, to_latex, to_ascii,
     substitute, free_variables, simplify
 )
@@ -107,7 +107,7 @@ print(f"Simplified: {to_unicode(simplified)}")
 ```python
 import numpy as np
 from scipy.integrate import odeint
-from earthsci_toolkit import load_esm, to_numpy_system
+from earthsci_ast import load_esm, to_numpy_system
 
 # Load atmospheric chemistry model
 esm_file = load_esm('atmospheric_model.esm')
@@ -136,7 +136,7 @@ print(f"Final concentrations: {solution[-1]}")
 import numpy as np
 import pandas as pd
 from scipy import stats
-from earthsci_toolkit import load_esm, validate
+from earthsci_ast import load_esm, validate
 
 # Load multiple model runs
 model_results = []
@@ -166,7 +166,7 @@ print("95% Confidence intervals:", confidence_intervals)
 
 ```python
 import sympy as sp
-from earthsci_toolkit import load_esm, to_sympy_expressions
+from earthsci_ast import load_esm, to_sympy_expressions
 
 # Load model
 esm_file = load_esm('symbolic_model.esm')
@@ -199,7 +199,7 @@ gradient_func = sp.lambdify((x, t), [dexpr_dx, dexpr_dt], 'numpy')
 
 ```python
 import sympy as sp
-from earthsci_toolkit import load_esm, get_state_variables, get_equations
+from earthsci_ast import load_esm, get_state_variables, get_equations
 
 # Load chemical kinetics model
 esm_file = load_esm('kinetics_model.esm')
@@ -228,7 +228,7 @@ jacobian_func = sp.lambdify(symbols, jacobian, 'numpy')
 
 ```python
 import matplotlib.pyplot as plt
-from earthsci_toolkit import load_esm, simulate_model
+from earthsci_ast import load_esm, simulate_model
 
 # Load and simulate model
 esm_file = load_esm('atmospheric_model.esm')
@@ -276,7 +276,7 @@ plt.show()
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
-from earthsci_toolkit import load_esm, parameter_sweep
+from earthsci_ast import load_esm, parameter_sweep
 
 # Parameter sweep
 esm_file = load_esm('parameter_study.esm')
@@ -312,7 +312,7 @@ plt.show()
 
 ```python
 # Jupyter notebook cell
-from earthsci_toolkit import load_esm, interactive_plot
+from earthsci_ast import load_esm, interactive_plot
 from ipywidgets import interact, FloatSlider, IntSlider
 import matplotlib.pyplot as plt
 
@@ -349,7 +349,7 @@ def explore_parameters(k1, k2, duration):
 ```python
 import pandas as pd
 import seaborn as sns
-from earthsci_toolkit import load_esm, compare_models
+from earthsci_ast import load_esm, compare_models
 
 # Load multiple model versions
 models = {
@@ -402,7 +402,7 @@ plt.show()
 
 ```python
 import pytest
-from earthsci_toolkit import load_esm, validate, simulate_model
+from earthsci_ast import load_esm, validate, simulate_model
 import numpy as np
 
 class TestESMModel:
@@ -441,7 +441,7 @@ class TestESMModel:
 
 ```python
 from hypothesis import given, strategies as st
-from earthsci_toolkit import parse_expression, to_unicode, substitute
+from earthsci_ast import parse_expression, to_unicode, substitute
 
 @given(
     variable_name=st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=['Lu', 'Ll'])),
@@ -471,7 +471,7 @@ def test_linear_expression_properties(variable_name, coefficient):
 
 ```python
 import numpy as np
-from earthsci_toolkit import load_esm, vectorize_system
+from earthsci_ast import load_esm, vectorize_system
 
 # Load model
 esm_file = load_esm('large_model.esm')
@@ -494,7 +494,7 @@ print(f"Results shape: {batch_results.shape}")  # (1000, 100, n_variables)
 
 ```python
 from functools import lru_cache
-from earthsci_toolkit import load_esm, parse_expression
+from earthsci_ast import load_esm, parse_expression
 
 # Cache parsed expressions
 @lru_cache(maxsize=1000)
@@ -557,7 +557,7 @@ class ModelFactory:
 
 ### Data Pipeline Integration
 ```python
-from earthsci_toolkit import load_esm, validate
+from earthsci_ast import load_esm, validate
 import pandas as pd
 
 class ESMDataPipeline:

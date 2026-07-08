@@ -466,7 +466,7 @@ esm validate model.esm --watch
 
 ```julia
 # In Julia REPL
-using EarthSciSerialization
+using EarthSciAST
 esm_file = load_esm("model.esm")
 result = validate(esm_file)
 @show result.errors
@@ -535,7 +535,7 @@ esm validate model.esm --schema schema.json
 
 ### Julia
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 esm_file = load_esm("model.esm")
 result = validate(esm_file)
@@ -552,7 +552,7 @@ end
 
 ### TypeScript
 ```typescript
-import { load, validate } from 'earthsci-toolkit';
+import { load, validate } from '@earthsciml/ast';
 
 const esmFile = load(esmData);
 const result = validate(esmFile);
@@ -567,7 +567,7 @@ if (!result.isValid) {
 
 ### Python
 ```python
-from earthsci_toolkit import load_esm, validate
+from earthsci_ast import load_esm, validate
 
 esm_file = load_esm('model.esm')
 result = validate(esm_file)

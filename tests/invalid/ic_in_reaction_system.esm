@@ -1,0 +1,35 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "ic_in_reaction_system",
+    "description": "Invalid: an `ic`-op equation placed inside a reaction system's `constraint_equations`. ICs are model-hosted (esm-spec.md §11.4.1): a reaction system has no `equations` field and MUST NOT carry an `ic` equation. This file is SCHEMA-VALID (constraint_equations is an array of Equation and `ic` is a legal op, so nothing in JSON Schema forbids it) but MUST be rejected by structural validation with diagnostic `ic_in_reaction_system`. A reaction-system species' initial value is its scalar `species.default`; a non-constant / spatial / loaded-field IC is declared with a scoped-reference `ic` equation in a MODEL (`ic(Chemistry.O3) ~ <field>`), never inside the reaction system.",
+    "authors": ["EarthSciML"],
+    "created": "2026-07-01T00:00:00Z"
+  },
+  "reaction_systems": {
+    "Chemistry": {
+      "species": {
+        "O3": { "units": "mol/mol", "default": 4.0e-8, "description": "Ozone" }
+      },
+      "parameters": {
+        "k": { "units": "1/s", "default": 1.0e-3, "description": "First-order loss rate" }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "O3_loss",
+          "substrates": [ { "species": "O3", "stoichiometry": 1 } ],
+          "products": null,
+          "rate": "k"
+        }
+      ],
+      "constraint_equations": [
+        {
+          "_comment": "INVALID: ic equations are model-hosted (§11.4.1); a reaction system must not carry one. This should be rejected with ic_in_reaction_system, not silently dropped.",
+          "lhs": { "op": "ic", "args": ["O3"] },
+          "rhs": 4.0e-8
+        }
+      ]
+    }
+  }
+}

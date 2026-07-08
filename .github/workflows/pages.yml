@@ -5,7 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'docs/**'
-      - 'packages/**'
+      - 'pkg/**'
       - 'scripts/generate_docs.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -55,15 +55,15 @@ jobs:
       - name: Build site with Hugo
         run: hugo --source docs --minify --destination public --baseURL "${{ steps.pages.outputs.base_url }}/"
 
-      # Hugo emits root-relative hrefs of the form /EarthSciSerialization/...
+      # Hugo emits root-relative hrefs of the form /EarthSciAST/...
       # because the GitHub-Pages baseURL has that path component. The local build
       # tree lives at docs/public/, so we stage it under a parent dir that mirrors
       # the deployed path layout. Lychee's --root-dir then resolves those hrefs to
       # real files.
       - name: Stage built site for link-checking
         run: |
-          mkdir -p /tmp/lychee-root/EarthSciSerialization
-          cp -r docs/public/. /tmp/lychee-root/EarthSciSerialization/
+          mkdir -p /tmp/lychee-root/EarthSciAST
+          cp -r docs/public/. /tmp/lychee-root/EarthSciAST/
 
       - name: Link-check built site (internal links only)
         # v1 ships lychee 0.15.0 which lacks --root-dir; v2 ships 0.23.0 which supports it.
@@ -77,7 +77,7 @@ jobs:
             --root-dir /tmp/lychee-root
             --exclude '^https?://'
             --exclude '^mailto:'
-            '/tmp/lychee-root/EarthSciSerialization/**/*.html'
+            '/tmp/lychee-root/EarthSciAST/**/*.html'
           fail: true
           format: detailed
 

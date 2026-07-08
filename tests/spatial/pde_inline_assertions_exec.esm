@@ -1,0 +1,234 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "PdeInlineAssertionsExec",
+    "description": "Executable shared fixture for the SS 6.6.5 inline-assertion runner (run_pde_tests) consumed by the Julia, Python, and Rust binding test suites on identical input. A lifted field decay model du_i/dt = -u_i over x (interval, size 8) seeded by the coordinate expression ic(u) = cos(pi x_i) with x_i = (i - 1/2)/8; exact solution e^{-t} cos(pi x_i). The assertions pin the three cross-binding conventions: (1) coords values are positions in 1-based INDEX space (fractional allowed) with nearest-index sampling and exact half-way ties rounding DOWN (x: 3.5 samples cell 3; x: 5.6 samples cell 6); (2) reduce: integral is the uniform-cell Riemann sum under a UNIT total domain measure per axis (sum(field)/N = mean; the symmetric cosine field integrates to zero); (3) from_file references resolve relative to this file's directory, default (and only) v1 format json, a row-major nested array matching the field's shape (pde_inline_assertions_reference.json holds the exact t=0 field).",
+    "authors": [
+      "ESM Test Suite"
+    ],
+    "tags": [
+      "pde",
+      "spatial-assertions",
+      "coords",
+      "integral",
+      "from-file"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 8
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "state",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "cos",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  3.141592653589793,
+                  {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    },
+                    "expr": {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            0.5
+                          ]
+                        },
+                        {
+                          "op": "/",
+                          "args": [
+                            1,
+                            8
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -1,
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "pde_assertions",
+          "description": "coords nearest/tie sampling, integral-as-mean, and from_file JSON references over the decay field.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.25
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.5555702330196023,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "coords": {
+                "x": 3
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.5555702330196023,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "coords": {
+                "x": 3.5
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": -0.555570233019602,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "coords": {
+                "x": 5.6
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.25,
+              "expected": 0.43267853252682914,
+              "tolerance": {
+                "abs": 1e-06
+              },
+              "coords": {
+                "x": 3
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "integral"
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "type": "from_file",
+                "path": "pde_inline_assertions_reference.json"
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "Linf_error",
+              "reference": {
+                "type": "from_file",
+                "path": "pde_inline_assertions_reference.json",
+                "format": "json"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

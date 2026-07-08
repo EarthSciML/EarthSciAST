@@ -1,0 +1,34 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "ragged_rowsum", "description": "MPAS-style connectivity rule over a ragged keyed-factor index set (esm-spec 9.7.7 rebind motivation): nz_of_row is a per-row CSR set whose offsets/values factors bind by NAME (row_count / row_cols), and the weighted_rowsum rule contracts over it through a free weight factor row_w. The three factor names are the library's wiring contract; a consumer either exposes them as bare-name arrays or rebinds them at the import edge (rebind), which is what lets two instances of the connectivity coexist" },
+  "metaparameters": {
+    "NROWS": { "type": "integer", "default": 3, "description": "row count" },
+    "NCOLS": { "type": "integer", "default": 4, "description": "column count" },
+    "MAXNZ": { "type": "integer", "default": 2, "description": "padded row length of the per-row factor arrays" }
+  },
+  "index_sets": {
+    "rows": { "kind": "interval", "size": "NROWS" },
+    "cols": { "kind": "interval", "size": "NCOLS" },
+    "maxnz": { "kind": "interval", "size": "MAXNZ" },
+    "nz_of_row": { "kind": "ragged", "of": ["rows"], "offsets": "row_count", "values": "row_cols" }
+  },
+  "expression_templates": {
+    "weighted_rowsum": {
+      "params": ["F"],
+      "match": { "op": "rowsum", "args": ["F"] },
+      "body": {
+        "op": "aggregate",
+        "args": ["F", "row_cols", "row_w"],
+        "output_idx": ["i"],
+        "semiring": "sum_product",
+        "ranges": {
+          "i": { "from": "rows" },
+          "k": { "from": "nz_of_row", "of": ["i"] }
+        },
+        "expr": { "op": "*", "args": [
+          { "op": "index", "args": ["row_w", "i", "k"] },
+          { "op": "index", "args": ["F", { "op": "index", "args": ["row_cols", "i", "k"] }] } ] }
+      }
+    }
+  }
+}

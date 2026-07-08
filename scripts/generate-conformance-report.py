@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -254,7 +254,7 @@ HTML_TEMPLATE = """
 
         <div class="footer">
             <p>This report was generated automatically by the ESM Format cross-language conformance testing infrastructure.</p>
-            <p>For more information, see the <a href="https://github.com/ctessum/EarthSciSerialization">EarthSciSerialization project</a>.</p>
+            <p>For more information, see the <a href="https://github.com/EarthSciML/EarthSciAST">EarthSciAST project</a>.</p>
         </div>
     </div>
 
@@ -281,6 +281,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
+
 def format_category_results(analysis_data: Dict[str, Any]) -> str:
     """Format category results for HTML display."""
     html = ""
@@ -289,7 +290,7 @@ def format_category_results(analysis_data: Dict[str, Any]) -> str:
         ("validation", "Validation Tests", analysis_data.get("validation_analysis", {})),
         ("display", "Display Format Tests", analysis_data.get("display_analysis", {})),
         ("substitution", "Substitution Tests", analysis_data.get("substitution_analysis", {})),
-        ("graph", "Graph Generation Tests", analysis_data.get("graph_analysis", {}))
+        ("graph", "Graph Generation Tests", analysis_data.get("graph_analysis", {})),
     ]
 
     for category_id, category_name, category_data in categories:
@@ -303,7 +304,13 @@ def format_category_results(analysis_data: Dict[str, Any]) -> str:
 
         if total_tests > 0:
             consistency_score = consistent_tests / total_tests
-            status_class = "pass" if consistency_score >= 0.9 else "warn" if consistency_score >= 0.7 else "fail"
+            status_class = (
+                "pass"
+                if consistency_score >= 0.9
+                else "warn"
+                if consistency_score >= 0.7
+                else "fail"
+            )
 
             html += f"""
             <div class="category-results">
@@ -319,6 +326,7 @@ def format_category_results(analysis_data: Dict[str, Any]) -> str:
 
     return html
 
+
 def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
     """Format detailed divergence information for HTML display."""
     html = '<div class="section"><h2>Divergence Details</h2>'
@@ -326,8 +334,12 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
     categories = [
         ("validation", "Validation Divergences", analysis_data.get("validation_analysis", {})),
         ("display", "Display Format Divergences", analysis_data.get("display_analysis", {})),
-        ("substitution", "Substitution Divergences", analysis_data.get("substitution_analysis", {})),
-        ("graph", "Graph Generation Divergences", analysis_data.get("graph_analysis", {}))
+        (
+            "substitution",
+            "Substitution Divergences",
+            analysis_data.get("substitution_analysis", {}),
+        ),
+        ("graph", "Graph Generation Divergences", analysis_data.get("graph_analysis", {})),
     ]
 
     has_divergences = False
@@ -365,12 +377,12 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
                 if isinstance(divergence_data, list):
                     for divergence in divergence_data:
                         html += f"""
-                        <p><strong>Type:</strong> {divergence.get('type', 'Unknown')}</p>
-                        <p><strong>Input:</strong> <code>{divergence.get('input', '')}</code></p>
-                        <p><strong>Reference ({divergence.get('reference_lang', '')}):</strong>
-                           <span class="code-block">{divergence.get('reference_output', '')}</span></p>
-                        <p><strong>Divergent ({divergence.get('divergent_lang', '')}):</strong>
-                           <span class="code-block">{divergence.get('divergent_output', '')}</span></p>
+                        <p><strong>Type:</strong> {divergence.get("type", "Unknown")}</p>
+                        <p><strong>Input:</strong> <code>{divergence.get("input", "")}</code></p>
+                        <p><strong>Reference ({divergence.get("reference_lang", "")}):</strong>
+                           <span class="code-block">{divergence.get("reference_output", "")}</span></p>
+                        <p><strong>Divergent ({divergence.get("divergent_lang", "")}):</strong>
+                           <span class="code-block">{divergence.get("divergent_output", "")}</span></p>
                         """
 
             elif category_id == "substitution":
@@ -378,35 +390,35 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
                 if isinstance(divergence_data, list):
                     for divergence in divergence_data:
                         html += f"""
-                        <p><strong>Input Expression:</strong> <code>{divergence.get('input', '')}</code></p>
-                        <p><strong>Substitutions:</strong> <code>{divergence.get('substitutions', {})}</code></p>
-                        <p><strong>Reference ({divergence.get('reference_lang', '')}):</strong>
-                           <span class="code-block">{divergence.get('reference_result', '')}</span></p>
-                        <p><strong>Divergent ({divergence.get('divergent_lang', '')}):</strong>
-                           <span class="code-block">{divergence.get('divergent_result', '')}</span></p>
+                        <p><strong>Input Expression:</strong> <code>{divergence.get("input", "")}</code></p>
+                        <p><strong>Substitutions:</strong> <code>{divergence.get("substitutions", {})}</code></p>
+                        <p><strong>Reference ({divergence.get("reference_lang", "")}):</strong>
+                           <span class="code-block">{divergence.get("reference_result", "")}</span></p>
+                        <p><strong>Divergent ({divergence.get("divergent_lang", "")}):</strong>
+                           <span class="code-block">{divergence.get("divergent_result", "")}</span></p>
                         """
 
             elif category_id == "graph":
                 # Graph divergences
                 if isinstance(divergence_data, list):
                     for divergence in divergence_data:
-                        divergence_type = divergence.get('type', 'Unknown')
+                        divergence_type = divergence.get("type", "Unknown")
                         html += f"<p><strong>Type:</strong> {divergence_type}</p>"
 
                         if divergence_type in ["node_count", "edge_count"]:
                             html += f"""
-                            <p><strong>Reference ({divergence.get('reference_lang', '')}):</strong> {divergence.get('reference_count', 'N/A')}</p>
-                            <p><strong>Divergent ({divergence.get('divergent_lang', '')}):</strong> {divergence.get('divergent_count', 'N/A')}</p>
+                            <p><strong>Reference ({divergence.get("reference_lang", "")}):</strong> {divergence.get("reference_count", "N/A")}</p>
+                            <p><strong>Divergent ({divergence.get("divergent_lang", "")}):</strong> {divergence.get("divergent_count", "N/A")}</p>
                             """
                         elif divergence_type == "dot_structure":
                             html += f"""
-                            <p><strong>Reference Lang:</strong> {divergence.get('reference_lang', '')}</p>
-                            <p><strong>Divergent Lang:</strong> {divergence.get('divergent_lang', '')}</p>
+                            <p><strong>Reference Lang:</strong> {divergence.get("reference_lang", "")}</p>
+                            <p><strong>Divergent Lang:</strong> {divergence.get("divergent_lang", "")}</p>
                             <p><strong>Diff:</strong></p>
-                            <div class="code-block">{'<br>'.join(divergence.get('diff', []))}</div>
+                            <div class="code-block">{"<br>".join(divergence.get("diff", []))}</div>
                             """
 
-            html += '</div>'
+            html += "</div>"
 
         html += """
                 </div>
@@ -415,16 +427,17 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
         """
 
     if not has_divergences:
-        html += '<p>🎉 No divergences found! All language implementations are consistent.</p>'
+        html += "<p>🎉 No divergences found! All language implementations are consistent.</p>"
 
-    html += '</div>'
+    html += "</div>"
     return html
+
 
 def generate_html_report(analysis_file: Path, output_file: Path):
     """Generate HTML conformance report from analysis data."""
 
     # Load analysis data
-    with open(analysis_file, 'r') as f:
+    with open(analysis_file, "r") as f:
         analysis_data = json.load(f)
 
     # Extract key metrics
@@ -460,15 +473,16 @@ def generate_html_report(analysis_file: Path, output_file: Path):
         critical_divergences=critical_divergences,
         total_categories=total_categories,
         category_results=category_results,
-        divergence_details=divergence_details
+        divergence_details=divergence_details,
     )
 
     # Write HTML file
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         f.write(html_content)
 
     print(f"HTML conformance report generated: {output_file}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Generate HTML conformance report")
@@ -490,6 +504,7 @@ def main():
     except Exception as e:
         print(f"Error generating HTML report: {e}")
         return 1
+
 
 if __name__ == "__main__":
     exit(main())

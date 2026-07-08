@@ -4,7 +4,7 @@
     "name": "nearest_generator_centroid",
     "description": "GROUPED-AGGREGATE value-invention fixture (RFC semiring-faq-unified-ir §5.5 rule 5 + §5.7 rule 6; CONFORMANCE_SPEC.md §5.5.1 rules 5-6; bead ess-2u5, mpas-scvt epic esd-e5m): the SCVT centroid-update STEP, a grouped `sum_product` reduction whose group KEY is the data-dependent nearest-generator INDEX minted by the E1 `argmin` arg-witness (ess-os1). Builds on the argmin assignment buffer: assign[i] = argmin_g dist(point_i, gen_g) is the per-point generator id; the per-generator density-weighted centroid is then num[g] = Σ_{p : assign[p]=g} rho_p·px_p, den[g] = Σ_{p : assign[p]=g} rho_p, centroid[g] = num[g]/den[g]. The two Σ are GROUPED semiring reductions (⊕=+, ⊗=*) keyed on the materialised `assign` buffer — the first time the value-invention front-door drives `Relational.group_aggregate` (it was a library helper only, never reached by tree_walk / the front-door). DECLARATIVE-OR-FAIL: each STEP piece is declarative — the grouped sum_product is a §5.5 rule-5 FAQ (bucket by the canonical integer key, ⊕ within each bucket sequentially in canonical value order so the float sum is byte-reproducible), the centroid is an elementwise `/`, and the only irreducible leaf is the E1 `argmin` (like intersect_polygon §8.1); the host loop over generators is RHS-only. The group key is value-dependent (a materialised buffer, not a loop index), so this is the M3 value-equality reduction the dense `simulate` evaluator does not drive — it is materialised ONCE at setup through the value-invention front-door (value_invention.{jl,rs,py}), exactly like the argmin assignment it consumes. Coordinates and weights are exact dyadics so every grouped sum is bit-exact: generators gx=[0,1,2]; points px=[0,0.75,1.25,2.0] give assign=[1,2,2,3] (no ties); density rho=[1,1,3,4] gives num=[0,4.5,8], den=[1,4,4], centroid=[0,1.125,2] — generator 2's seed moves from 1.0 to the density-weighted 1.125 (the heavier point 3 pulls it), a non-trivial Lloyd step. STRUCTURAL fixture: the coordinate / density factors are supplied by each binding's front-door test (mirroring nearest_generator_argmin.esm / edge_enumeration_area_eff.esm); cross-binding byte/tolerance-identity of the emitted grouped buffers IS the conformance contract (Julia + Rust + Python evaluate; Go + TS schema-validate).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",
@@ -24,74 +24,146 @@
       "ess-2u5"
     ]
   },
+  "index_sets": {
+    "points": {
+      "kind": "interval",
+      "size": 4
+    },
+    "generators": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "NearestGeneratorCentroid": {
-      "index_sets": {
-        "points": {
-          "kind": "interval",
-          "size": 4
-        },
-        "generators": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "px": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Point coordinates. A const factor read only inside the declarative distance FAQ (the argmin) and the centroid numerator — never a raw join comparison."
         },
         "gx": {
           "type": "parameter",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Generator coordinates (the Voronoi seeds the points are assigned to, then moved toward their cells' centroids)."
         },
         "rho": {
           "type": "parameter",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Per-point density weight. The centroid is the rho-weighted mean of each generator's assigned points — the SCVT (centroidal Voronoi) update."
         },
         "assign": {
           "type": "state",
-          "shape": ["points"],
+          "shape": [
+            "points"
+          ],
           "description": "Nearest-generator INDEX of each point: assign[i] = argmin_g dist(point_i, gen_g). The E1 arg-witness output (ess-os1) — an integer 1-based generator id buffer materialised at setup (CONST cadence) and dropped from the ODE. Here it is the GROUP KEY the centroid reduction buckets on (§5.7 rule 6 smallest-id tie-break makes it byte-identical across bindings)."
         },
         "num": {
           "type": "state",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Centroid numerator per generator: num[g] = Σ_{p : assign[p]=g} rho_p·px_p. A GROUPED sum_product reduction keyed on the `assign` buffer — value-invention, materialised at setup through Relational.group_aggregate (§5.5 rule 5) and dropped from the ODE."
         },
         "den": {
           "type": "state",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Centroid denominator per generator: den[g] = Σ_{p : assign[p]=g} rho_p. The grouped total weight; same group key as num. A generator with no assigned point folds to the 0̄ identity (0)."
         },
         "centroid": {
           "type": "state",
-          "shape": ["generators"],
+          "shape": [
+            "generators"
+          ],
           "description": "Density-weighted cell centroid centroid[g] = num[g]/den[g] — the generator's next position in the Lloyd / SCVT iteration. A DERIVED elementwise buffer over the two grouped reductions; value-invention, dropped from the ODE."
         }
       },
       "equations": [
         {
           "_comment": "NEAREST-GENERATOR ASSIGNMENT (E1, ess-os1) — assign[i] = argmin_g (px[i]-gx[g])² over the full points × generators candidate set. The arg-witness reducer mints the value-dependent group key the centroid reduction buckets on. Squared distance keeps the metric `*`/`-` only (argmin is invariant to the monotone square); points are chosen so no two generators are equidistant (assign=[1,2,2,3]).",
-          "lhs": { "op": "index", "args": ["assign", "i"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "assign",
+              "i"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["i"],
-            "ranges": { "i": { "from": "points" } },
-            "args": ["px", "gx"],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "gx"
+            ],
             "expr": {
               "op": "argmin",
-              "args": ["px", "gx"],
+              "args": [
+                "px",
+                "gx"
+              ],
               "arg": "g",
-              "ranges": { "g": { "from": "generators" } },
+              "ranges": {
+                "g": {
+                  "from": "generators"
+                }
+              },
               "expr": {
                 "op": "*",
                 "args": [
-                  { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] },
-                  { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "g"] }] }
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "index",
+                        "args": [
+                          "px",
+                          "i"
+                        ]
+                      },
+                      {
+                        "op": "index",
+                        "args": [
+                          "gx",
+                          "g"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "index",
+                        "args": [
+                          "px",
+                          "i"
+                        ]
+                      },
+                      {
+                        "op": "index",
+                        "args": [
+                          "gx",
+                          "g"
+                        ]
+                      }
+                    ]
+                  }
                 ]
               }
             }
@@ -99,49 +171,149 @@
         },
         {
           "_comment": "CENTROID NUMERATOR — num[g] = Σ_{p : assign[p]=g} rho_p·px_p. A GROUPED sum_product reduction: output index g over generators, contraction p over points, with the inner equi-join `join.on [[assign, g]]` gating each ⊗-term (rho[p]·px[p]) onto the bucket whose key assign[p] equals g. Because the key column `assign` is a materialised value-invention buffer (not a loop index), the reduction runs through Relational.group_aggregate at setup (§5.5 rule 5: bucket by the canonical integer key, ⊕ sequentially in canonical value order), NOT the dense simulate evaluator. Empty groups fold to 0̄ = 0.",
-          "lhs": { "op": "index", "args": ["num", "g"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "num",
+              "g"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["g"],
-            "ranges": { "g": { "from": "generators" }, "p": { "from": "points" } },
+            "output_idx": [
+              "g"
+            ],
+            "ranges": {
+              "g": {
+                "from": "generators"
+              },
+              "p": {
+                "from": "points"
+              }
+            },
             "semiring": "sum_product",
-            "join": [{ "on": [["assign", "g"]] }],
-            "args": ["assign", "rho", "px"],
+            "join": [
+              {
+                "on": [
+                  [
+                    "assign",
+                    "g"
+                  ]
+                ]
+              }
+            ],
+            "args": [
+              "assign",
+              "rho",
+              "px"
+            ],
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["rho", "p"] },
-                { "op": "index", "args": ["px", "p"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "rho",
+                    "p"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "px",
+                    "p"
+                  ]
+                }
               ]
             }
           }
         },
         {
           "_comment": "CENTROID DENOMINATOR — den[g] = Σ_{p : assign[p]=g} rho_p. The same grouped reduction and group key as num, with the ⊗-term being just rho[p] (the per-generator total assigned weight).",
-          "lhs": { "op": "index", "args": ["den", "g"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "den",
+              "g"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["g"],
-            "ranges": { "g": { "from": "generators" }, "p": { "from": "points" } },
+            "output_idx": [
+              "g"
+            ],
+            "ranges": {
+              "g": {
+                "from": "generators"
+              },
+              "p": {
+                "from": "points"
+              }
+            },
             "semiring": "sum_product",
-            "join": [{ "on": [["assign", "g"]] }],
-            "args": ["assign", "rho"],
-            "expr": { "op": "index", "args": ["rho", "p"] }
+            "join": [
+              {
+                "on": [
+                  [
+                    "assign",
+                    "g"
+                  ]
+                ]
+              }
+            ],
+            "args": [
+              "assign",
+              "rho"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "rho",
+                "p"
+              ]
+            }
           }
         },
         {
           "_comment": "CELL CENTROID — centroid[g] = num[g]/den[g]. A DERIVED elementwise buffer over the two grouped reductions: per generator g, divide the grouped numerator by the grouped denominator. The new Lloyd / SCVT generator position. No contraction and no join — just a `/` reading the upstream materialised buffers.",
-          "lhs": { "op": "index", "args": ["centroid", "g"] },
+          "lhs": {
+            "op": "index",
+            "args": [
+              "centroid",
+              "g"
+            ]
+          },
           "rhs": {
             "op": "aggregate",
-            "output_idx": ["g"],
-            "ranges": { "g": { "from": "generators" } },
-            "args": ["num", "den"],
+            "output_idx": [
+              "g"
+            ],
+            "ranges": {
+              "g": {
+                "from": "generators"
+              }
+            },
+            "args": [
+              "num",
+              "den"
+            ],
             "expr": {
               "op": "/",
               "args": [
-                { "op": "index", "args": ["num", "g"] },
-                { "op": "index", "args": ["den", "g"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "num",
+                    "g"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "den",
+                    "g"
+                  ]
+                }
               ]
             }
           }

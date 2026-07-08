@@ -1,0 +1,36 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "inject_coupling_entry_neg_target_is_loader",
+    "description": "NEGATIVE (esm-spec §9.7.10 / §10.8): the variable_map injection map key 'GEOSFP' resolves to a data loader, which is pure I/O with no expression positions to rewrite. MUST be rejected at load with template_inject_target_is_loader."
+  },
+  "models": {
+    "Advection": {
+      "variables": { "c": { "type": "state", "units": "1", "shape": ["lon", "lat"] } },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "D", "args": ["c"], "wrt": "lon" } }
+      ]
+    }
+  },
+  "data_loaders": {
+    "GEOSFP": {
+      "kind": "grid",
+      "source": { "url_template": "geosfp/{date:%Y%m%d}.nc" },
+      "variables": { "T": { "file_variable": "T", "units": "K" } }
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "GEOSFP.T",
+      "to": "Advection.c",
+      "transform": "param_to_var",
+      "expression_template_imports": {
+        "GEOSFP": [
+          { "ref": "./central_D_lon_zero_grad_bc.esm", "bindings": { "NLON": 288, "NLAT": 181 } }
+        ]
+      }
+    }
+  ]
+}

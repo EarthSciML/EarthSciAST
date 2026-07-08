@@ -22,20 +22,20 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "earthsci_toolkit" / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "earthsci_toolkit" / "tests"))
+sys.path.insert(0, str(PROJECT_ROOT / "pkg" / "earthsci-ast-py" / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "pkg" / "earthsci-ast-py" / "tests"))
 
 from hypothesis import given, settings, strategies as st  # noqa: E402
 from test_property_expression import (  # noqa: E402
     _expr_strategy,
-    _op_arrayop,
+    _op_aggregate,
     _op_broadcast,
     _op_concat,
     _op_makearray,
     _op_reshape,
     _op_transpose,
 )
-from earthsci_toolkit.serialize import _serialize_expression  # noqa: E402
+from earthsci_ast.serialize import _serialize_expression  # noqa: E402
 
 
 def _collect(strategy, count: int) -> list:
@@ -76,7 +76,7 @@ def generate(count: int) -> list:
     # non-trivial subtrees drawn from the full expression strategy. Each
     # array-op strategy then becomes root of a fixture.
     arrayop_root = st.one_of(
-        _op_arrayop(_expr_strategy),
+        _op_aggregate(_expr_strategy),
         _op_makearray(_expr_strategy),
         _op_reshape(_expr_strategy),
         _op_transpose(_expr_strategy),

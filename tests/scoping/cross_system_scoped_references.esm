@@ -52,6 +52,42 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "global_temperature"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "BoundaryLayer.potential_temperature"
+            ]
+          },
+          "rhs": 295.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "BoundaryLayer.Chemistry.CO"
+            ]
+          },
+          "rhs": 1e-07
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "BoundaryLayer.Chemistry.OH"
+            ]
+          },
+          "rhs": 1e-12
         }
       ],
       "subsystems": {
@@ -181,6 +217,24 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "sea_surface_temp"
+            ]
+          },
+          "rhs": 285.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "MixedLayer.heat_content"
+            ]
+          },
+          "rhs": 100000000.0
         }
       ],
       "subsystems": {
@@ -257,6 +311,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_temperature"
+            ]
+          },
+          "rhs": 283.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Vegetation.canopy_temp"
+            ]
+          },
+          "rhs": 290.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Vegetation.Photosynthesis.gpp"
+            ]
+          },
+          "rhs": 1e-08
         }
       ],
       "subsystems": {
@@ -540,40 +621,10 @@
       "description": "Complex cascading coupling using multiple cross-system nested scoped references"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-08-01T00:00:00Z",
-        "end": "2024-08-01T24:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1000.0,
-          "units": "km",
-          "grid_spacing": 50.0
-        },
-        "y": {
-          "min": 0.0,
-          "max": 1000.0,
-          "units": "km",
-          "grid_spacing": 50.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "AtmosphericModel.global_temperature": 288.0,
-          "AtmosphericModel.BoundaryLayer.potential_temperature": 295.0,
-          "AtmosphericModel.BoundaryLayer.Chemistry.CO": 1e-07,
-          "AtmosphericModel.BoundaryLayer.Chemistry.OH": 1e-12,
-          "OceanModel.sea_surface_temp": 285.0,
-          "OceanModel.MixedLayer.heat_content": 100000000.0,
-          "LandModel.soil_temperature": 283.0,
-          "LandModel.Vegetation.canopy_temp": 290.0,
-          "LandModel.Vegetation.Photosynthesis.gpp": 1e-08
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-08-01T00:00:00Z",
+      "end": "2024-08-01T24:00:00Z"
     }
   }
 }

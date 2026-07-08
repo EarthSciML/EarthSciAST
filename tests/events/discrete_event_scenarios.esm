@@ -52,6 +52,15 @@
             "wrt": "t"
           },
           "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "accumulator"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -246,6 +255,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "measurement_value"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -478,6 +496,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "sensor_value"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -719,6 +746,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "dynamic_state"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -834,16 +870,10 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T00:20:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T00:20:00Z"
     }
   }
 }

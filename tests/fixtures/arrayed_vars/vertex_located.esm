@@ -3,20 +3,28 @@
   "metadata": {
     "name": "VertexLocated",
     "description": "Arrayed-variable schema (RFC §10.2): a 2-D state variable defined at grid vertices rather than cell centers.",
-    "authors": ["gt-dzdi"],
+    "authors": [
+      "gt-dzdi"
+    ],
     "created": "2026-04-19T00:00:00Z",
-    "tags": ["arrayed_vars", "2d", "vertex"]
+    "tags": [
+      "arrayed_vars",
+      "2d",
+      "vertex"
+    ]
   },
   "models": {
     "VertexScalar2D": {
-      "domain": "plane",
       "variables": {
         "phi": {
           "type": "state",
           "units": "m",
           "default": 0.0,
           "description": "Scalar defined at grid vertices",
-          "shape": ["x", "y"],
+          "shape": [
+            "x",
+            "y"
+          ],
           "location": "vertex"
         },
         "alpha": {
@@ -28,24 +36,27 @@
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["phi"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "phi"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "*",
             "args": [
-              { "op": "-", "args": ["alpha"] },
+              {
+                "op": "-",
+                "args": [
+                  "alpha"
+                ]
+              },
               "phi"
             ]
           }
         }
       ]
-    }
-  },
-  "domains": {
-    "plane": {
-      "spatial": {
-        "x": { "min": 0.0, "max": 1.0, "grid_spacing": 0.1, "units": "m" },
-        "y": { "min": 0.0, "max": 1.0, "grid_spacing": 0.1, "units": "m" }
-      }
     }
   }
 }

@@ -1,0 +1,79 @@
+{
+  "_comment": "EDGAR v8.1 Monthly Emissions fixture. Expresses an instantiation of EarthSciData.jl EDGARv81MonthlyEmisFileSet with substance='NOx', sector='TRO_noRES'. Source: EarthSciData.jl src/edgar_v81_monthly.jl (struct EDGARv81MonthlyEmisFileSet at lines 91-140, relpath at lines 148-152). Data ships as a per-(substance, sector) zip that runtime extracts; the resulting per-year NetCDF files inside are aggregated via NCDataset multi-file mode. url_template here points at the zip archive.",
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "EDGARv81MonthlyFixture",
+    "description": "EDGAR v8.1 monthly NOx emissions from road transport (excluding residential) in the STAC-like DataLoader schema.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "created": "2026-04-14T00:00:00Z",
+    "tags": [
+      "earthscidata-coverage",
+      "edgar",
+      "emissions",
+      "anthropogenic"
+    ]
+  },
+  "data_loaders": {
+    "EDGARv81_NOx_TRO": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/EDGAR/datasets/v81_AP/{species}/TOTALS/bkl_{sector}_flx_nc.zip"
+      },
+      "temporal": {
+        "start": "2000-01-01T00:00:00Z",
+        "end": "2022-12-31T23:59:59Z",
+        "file_period": "P1Y",
+        "frequency": "P1M",
+        "records_per_file": 12,
+        "time_variable": "time"
+      },
+      "variables": {
+        "flx": {
+          "file_variable": "flx",
+          "units": "kg/m^2/s",
+          "description": "NOx flux from road transport excluding residential heating (TRO_noRES sector)"
+        }
+      },
+      "reference": {
+        "citation": "Crippa, M. et al. (2023). EDGAR v8.1 Global Air Pollutant Emissions (1970-2022). EU Joint Research Centre.",
+        "url": "https://edgar.jrc.ec.europa.eu/dataset_ap81"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic",
+          "edgar"
+        ],
+        "earthscidata_source": "src/edgar_v81_monthly.jl::EDGARv81MonthlyEmisFileSet",
+        "substance": "NOx",
+        "sector": "TRO_noRES",
+        "packaging": "zip-of-netcdf"
+      }
+    }
+  },
+  "models": {
+    "placeholder": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

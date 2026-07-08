@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "metaparameter_name_conflict", "description": "Metaparameter x collides with the model state variable x: no shadowing (metaparameter_name_conflict, esm-spec 9.7.6)" },
+  "metaparameters": { "x": { "type": "integer", "default": 3 } },
+  "models": {
+    "M": {
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

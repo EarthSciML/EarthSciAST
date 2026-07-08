@@ -1,0 +1,85 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "polygon_intersection_area_planar",
+    "description": "Conformance fixture for the `polygon_intersection_area` fused geometry leaf (esm-spec.md §8.6.1): the SCALAR overlap area of two polygons under a declared `manifold`, defined to equal `polygon_area(intersect_polygon(a, b))` but with NO exposed clip ring. Two unit-aligned squares — src (0,0)-(2,0)-(2,2)-(0,2) and tgt (1,1)-(3,1)-(3,3)-(1,3), supplied inline as `const` vertex rings — overlap in the [1,2]x[1,2] box, so the planar overlap area is exactly 1.0. Unlike intersect_polygon_planar_area.esm (which surfaces the clip ring as a derived index set and areas it with a sum_product FAQ), the fused leaf returns the scalar directly, so the whole computation is a dense, evaluable expression with no ragged intermediate — this is the form that makes the conservative-regrid narrow phase densely evaluable over a candidate set (§8.6.1). The `planar` manifold is dependency-free (Sutherland-Hodgman clip + shoelace area); the `spherical`/`geodesic` manifolds delegate to the pinned S2 kernel. Cross-binding area agreement is tolerance-based (CONFORMANCE_SPEC.md §5.8.4), inherited from the intersect_polygon + polygon_area contract.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-07-01T00:00:00Z",
+    "tags": [
+      "geometry",
+      "polygon_intersection_area",
+      "manifold",
+      "planar",
+      "conservative-regridding",
+      "fused-leaf",
+      "value-invention",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "coord": { "kind": "interval", "size": 2 },
+    "src_verts": { "kind": "interval", "size": 4 },
+    "tgt_verts": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "PolygonIntersectionAreaPlanar": {
+      "variables": {
+        "src_poly": {
+          "type": "observed",
+          "shape": ["src_verts", "coord"],
+          "expression": {
+            "op": "const",
+            "value": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
+            "args": []
+          },
+          "description": "Source cell as a closed CCW lon-lat vertex ring: the square (0,0)-(2,0)-(2,2)-(0,2). The poly_a operand of the fused leaf."
+        },
+        "tgt_poly": {
+          "type": "observed",
+          "shape": ["tgt_verts", "coord"],
+          "expression": {
+            "op": "const",
+            "value": [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]],
+            "args": []
+          },
+          "description": "Target cell as a closed CCW lon-lat vertex ring: the square (1,1)-(3,1)-(3,3)-(1,3). The poly_b operand of the fused leaf."
+        },
+        "overlap_area": {
+          "type": "observed",
+          "units": "1",
+          "description": "Scalar planar overlap area of src_poly and tgt_poly via the fused polygon_intersection_area leaf. Equals polygon_area(intersect_polygon(src_poly, tgt_poly)) = 1.0 (the [1,2]x[1,2] intersection box). No clip ring is exposed — the leaf returns the scalar directly.",
+          "expression": {
+            "op": "polygon_intersection_area",
+            "manifold": "planar",
+            "args": ["src_poly", "tgt_poly"]
+          }
+        },
+        "area_state": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0,
+          "description": "Consumes overlap_area so the fused leaf evaluates in a well-formed ODE: d(area_state)/dt = overlap_area from a zero IC, so du = overlap_area = 1.0."
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "ic", "args": ["area_state"] }, "rhs": 0.0 },
+        {
+          "_comment": "d(area_state)/dt = overlap_area (the fused planar overlap area). From a zero IC, area_state(t) = overlap_area * t.",
+          "lhs": { "op": "D", "args": ["area_state"], "wrt": "t" },
+          "rhs": "overlap_area"
+        }
+      ],
+      "tests": [
+        {
+          "id": "planar_overlap_area",
+          "description": "Planar overlap area of the two unit-aligned squares is exactly 1.0 (the [1,2]x[1,2] intersection). area_state(t) = overlap_area * t from a zero IC, so area_state(1) = 1.0.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "tolerance": { "abs": 1e-9 },
+          "assertions": [
+            { "variable": "area_state", "time": 1.0, "expected": 1.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

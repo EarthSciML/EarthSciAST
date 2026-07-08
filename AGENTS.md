@@ -86,11 +86,11 @@ Each binding has its own official runner(s) consuming the same canonical AST:
 
 | Binding    | Official runner(s)                                                                        | File(s) |
 |------------|-------------------------------------------------------------------------------------------|---------|
-| Julia      | ModelingToolkit; `tree_walk.jl`                                                           | `packages/EarthSciSerialization.jl/src/mtk_export.jl`, `tree_walk.jl` |
-| Python     | `numpy_interpreter` (AST evaluator); `simulation.simulate()` (SciPy backend)              | `packages/earthsci_toolkit/src/earthsci_toolkit/numpy_interpreter.py`, `simulation.py` |
-| Rust       | `simulate` (diffsol scalar ODE); `simulate_array` (ndarray array-op runtime)              | `packages/earthsci-toolkit-rs/src/simulate.rs`, `simulate_array.rs` |
-| TypeScript | `codegen` (canonical-AST → JS lowering)                                                   | `packages/earthsci-toolkit/src/codegen.ts` |
-| Go         | (none — `esm-format-go` is parse + validate only by design)                               | — |
+| Julia      | ModelingToolkit; `tree_walk.jl`                                                           | `pkg/EarthSciAST.jl/src/mtk_export.jl`, `tree_walk.jl` |
+| Python     | `numpy_interpreter` (AST evaluator); `simulation.simulate()` (SciPy backend)              | `pkg/earthsci-ast-py/src/earthsci_ast/numpy_interpreter.py`, `simulation.py` |
+| Rust       | `simulate` (diffsol scalar ODE); `simulate_array` (ndarray array-op runtime)              | `pkg/earthsci-ast-rs/src/simulate.rs`, `simulate_array.rs` |
+| TypeScript | `codegen` (canonical-AST → JS lowering)                                                   | `pkg/earthsci-ast-ts/src/codegen.ts` |
+| Go         | (none — `earthsci-ast-go` is parse + validate only by design)                               | — |
 
 If a binding lacks a runner, that gap is filed as a bead, not patched
 around with a one-off evaluator.

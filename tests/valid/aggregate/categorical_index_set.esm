@@ -4,7 +4,7 @@
     "name": "categorical_index_set",
     "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.2; bead ess-my4.1.5). A `categorical` index set resolves to the dense bound [1, |members|], so a contraction drawn `{from}` it iterates one position per member. State `emissions[i]` sums the product body i*j over j drawn from the `fuels` categorical set (3 members -> j in 1..3): emissions[1]=Sum_{j=1..3}1*j=6, emissions[2]=Sum_{j=1..3}2*j=12 at t=1 — identical to an interval of size 3, which is the point: categorical membership count drives the contraction cardinality. Exercises the categorical IndexSet kind through `{from}` in the full simulate pipeline under the default-equivalent sum_product semiring. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",
@@ -16,20 +16,29 @@
       "ess-my4.1.5"
     ]
   },
+  "index_sets": {
+    "fuels": {
+      "kind": "categorical",
+      "members": [
+        "gas",
+        "diesel",
+        "coal"
+      ]
+    }
+  },
   "models": {
     "CategoricalIndexSet": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "fuels": {
-          "kind": "categorical",
-          "members": ["gas", "diesel", "coal"]
-        }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "emissions": { "type": "state", "shape": ["i"] }
+        "emissions": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
       },
       "equations": [
         {
@@ -37,21 +46,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["emissions", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "emissions",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 2] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
-            "ranges": { "i": [1, 2], "j": { "from": "fuels" } },
-            "expr": { "op": "*", "args": ["i", "j"] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "j": {
+                "from": "fuels"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "i",
+                "j"
+              ]
+            }
           }
         }
       ],
@@ -63,10 +103,21 @@
             "emissions[1]": 0.0,
             "emissions[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "emissions[1]", "time": 1.0, "expected": 6.0 },
-            { "variable": "emissions[2]", "time": 1.0, "expected": 12.0 }
+            {
+              "variable": "emissions[1]",
+              "time": 1.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "emissions[2]",
+              "time": 1.0,
+              "expected": 12.0
+            }
           ]
         }
       ]

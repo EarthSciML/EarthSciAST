@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_06_rearranged_algebraic",
     "description": "Regression test for arrayop with the algebraic variable buried in a rearranged LHS sum: (-1 - 0.5*sin(u[i]) + v[i]) ~ (v[i] - v[i]). v should still be eliminated during mtkcompile. Mirrors MTK fork test #6 which guards against the MethodOfLines PDE discretization producing this specific shape.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "algebraic_elimination", "rearranged"]
   },
   "models": {
@@ -16,12 +16,12 @@
         {
           "_comment": "D(u[i]) = v[i]",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", "i"] }], "wrt": "t" },
             "ranges": { "i": [1, 5] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "index", "args": ["v", "i"] },
             "ranges": { "i": [1, 5] }
           }
@@ -29,7 +29,7 @@
         {
           "_comment": "(-1 - 0.5*sin(u[i]) + v[i]) = (v[i] - v[i])  [RHS = 0]",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": {
               "op": "+",
               "args": [
@@ -41,7 +41,7 @@
             "ranges": { "i": [1, 5] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": {
               "op": "-",
               "args": [

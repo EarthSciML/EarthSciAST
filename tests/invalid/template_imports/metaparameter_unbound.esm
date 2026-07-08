@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "metaparameter_unbound", "description": "NX has no default and nothing binds it (no import edge, no subsystem edge, no loader-API binding): still open after all binding sites (metaparameter_unbound, esm-spec 9.7.6)" },
+  "metaparameters": { "NX": { "type": "integer" } },
+  "models": {
+    "M": {
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

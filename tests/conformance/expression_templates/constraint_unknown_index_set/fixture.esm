@@ -1,0 +1,31 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "constraint_unknown_index_set",
+    "description": "INVALID: the div rule's `where` shape constraint names index set 'edges', but the consuming document's index_sets registry declares only 'cells'. Rejected at rule registration with `template_constraint_unknown_index_set` (esm-spec §9.6.1/§9.6.6) — a constraint typo fails loudly, mirroring template_import_unknown_name, instead of silently producing a rule that can never fire.",
+    "authors": ["match-pattern-scoping-constraints conformance"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 7 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F": { "type": "state", "units": "1", "default": 1.5, "shape": ["cells"], "description": "Cell field" },
+        "inv_area": { "type": "parameter", "units": "1", "default": 0.5, "description": "Stencil coefficient" },
+        "d": { "type": "observed", "units": "1", "shape": ["cells"], "description": "div target",
+          "expression": { "op": "div", "args": ["F"] }
+        }
+      },
+      "equations": [],
+      "expression_templates": {
+        "fv_div_edges": {
+          "params": ["Q"],
+          "match": { "op": "div", "args": ["Q"] },
+          "where": { "Q": { "shape": ["edges"] } },
+          "body": { "op": "*", "args": ["inv_area", "Q"] }
+        }
+      }
+    }
+  }
+}

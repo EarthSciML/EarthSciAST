@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "constrained_match_scope",
+    "description": "Expected post-lowering form of constrained_match_scope/fixture.esm: div_edge rewritten by the shape-constrained rule, div_cell left as the un-lowered rewrite-target (Option A round-trip, esm-spec §9.6.4)."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 7 },
+    "edges": { "kind": "interval", "size": 12 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F_edge": { "type": "state", "units": "1", "default": 1.5, "shape": ["edges"], "description": "Edge-normal flux (over the constrained index set)" },
+        "F_cell": { "type": "state", "units": "1", "default": 2.5, "shape": ["cells"], "description": "Cell-centered field (fails the shape constraint)" },
+        "inv_area": { "type": "parameter", "units": "1", "default": 0.5, "description": "Stand-in 1/A_i stencil coefficient" },
+        "div_edge": { "type": "observed", "units": "1", "shape": ["cells"], "description": "div of an edge-field: the constrained rule fires",
+          "expression": { "op": "*", "args": ["inv_area", "F_edge"] }
+        },
+        "div_cell": { "type": "observed", "units": "1", "shape": ["cells"], "description": "div of a cell-field: constraint-excluded, stays unlowered",
+          "expression": { "op": "div", "args": ["F_cell"] }
+        }
+      },
+      "equations": []
+    }
+  }
+}

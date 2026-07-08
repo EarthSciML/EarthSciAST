@@ -3,12 +3,24 @@
     "description": "Time derivatives using partial derivative notation",
     "test_cases": [
       {
-        "input": {"op": "D", "args": ["O3"], "wrt": "t"},
+        "input": {
+          "op": "D",
+          "args": [
+            "O3"
+          ],
+          "wrt": "t"
+        },
         "unicode": "∂O₃/∂t",
         "description": "Simple species time derivative"
       },
       {
-        "input": {"op": "D", "args": ["concentration"], "wrt": "t"},
+        "input": {
+          "op": "D",
+          "args": [
+            "concentration"
+          ],
+          "wrt": "t"
+        },
         "unicode": "∂concentration/∂t",
         "description": "Variable name time derivative"
       }
@@ -18,12 +30,24 @@
     "description": "Spatial gradients",
     "test_cases": [
       {
-        "input": {"op": "grad", "args": ["T"], "dim": "x"},
+        "input": {
+          "op": "grad",
+          "args": [
+            "T"
+          ],
+          "dim": "x"
+        },
         "unicode": "∂T/∂x",
         "description": "Temperature gradient in x direction"
       },
       {
-        "input": {"op": "grad", "args": ["pressure"], "dim": "y"},
+        "input": {
+          "op": "grad",
+          "args": [
+            "pressure"
+          ],
+          "dim": "y"
+        },
         "unicode": "∂pressure/∂y",
         "description": "Pressure gradient in y direction"
       }
@@ -33,12 +57,25 @@
     "description": "Multiplication using middle dot",
     "test_cases": [
       {
-        "input": {"op": "*", "args": ["a", "b"]},
+        "input": {
+          "op": "*",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a·b",
         "description": "Binary multiplication"
       },
       {
-        "input": {"op": "*", "args": ["k", "O3", "NO"]},
+        "input": {
+          "op": "*",
+          "args": [
+            "k",
+            "O3",
+            "NO"
+          ]
+        },
         "unicode": "k·O₃·NO",
         "description": "Ternary multiplication with chemical species"
       }
@@ -48,12 +85,28 @@
     "description": "Minus sign (not hyphen) for subtraction and negation",
     "test_cases": [
       {
-        "input": {"op": "-", "args": ["a"]},
+        "input": {
+          "op": "-",
+          "args": [
+            "a"
+          ]
+        },
         "unicode": "−a",
         "description": "Unary negation with proper minus sign"
       },
       {
-        "input": {"op": "+", "args": ["a", {"op": "-", "args": ["b"]}]},
+        "input": {
+          "op": "+",
+          "args": [
+            "a",
+            {
+              "op": "-",
+              "args": [
+                "b"
+              ]
+            }
+          ]
+        },
         "unicode": "a − b",
         "description": "Subtraction with proper minus sign"
       }
@@ -63,7 +116,12 @@
     "description": "Pre operator (event handling)",
     "test_cases": [
       {
-        "input": {"op": "Pre", "args": ["x"]},
+        "input": {
+          "op": "Pre",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "Pre(x)",
         "description": "Pre-event variable value"
       }
@@ -73,12 +131,22 @@
     "description": "Mathematical operators and symbols",
     "test_cases": [
       {
-        "input": {"op": "div", "args": ["velocity_field"]},
+        "input": {
+          "op": "div",
+          "args": [
+            "velocity_field"
+          ]
+        },
         "unicode": "∇·velocity_field",
         "description": "Divergence operator"
       },
       {
-        "input": {"op": "laplacian", "args": ["T"]},
+        "input": {
+          "op": "laplacian",
+          "args": [
+            "T"
+          ]
+        },
         "unicode": "∇²T",
         "description": "Laplacian operator"
       }
@@ -113,17 +181,35 @@
     "description": "Exponents and superscripts",
     "test_cases": [
       {
-        "input": {"op": "^", "args": ["x", 2]},
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            2
+          ]
+        },
         "unicode": "x²",
         "description": "Squared using superscript"
       },
       {
-        "input": {"op": "^", "args": ["x", 3]},
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            3
+          ]
+        },
         "unicode": "x³",
         "description": "Cubed using superscript"
       },
       {
-        "input": {"op": "^", "args": ["x", "n"]},
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            "n"
+          ]
+        },
         "unicode": "x^n",
         "description": "Variable exponent using caret notation"
       }
@@ -133,12 +219,36 @@
     "description": "Parentheses minimization based on precedence",
     "test_cases": [
       {
-        "input": {"op": "+", "args": [{"op": "*", "args": ["a", "b"]}, "c"]},
+        "input": {
+          "op": "+",
+          "args": [
+            {
+              "op": "*",
+              "args": [
+                "a",
+                "b"
+              ]
+            },
+            "c"
+          ]
+        },
         "unicode": "a·b + c",
         "description": "No parentheses needed - multiplication has higher precedence"
       },
       {
-        "input": {"op": "*", "args": ["a", {"op": "+", "args": ["b", "c"]}]},
+        "input": {
+          "op": "*",
+          "args": [
+            "a",
+            {
+              "op": "+",
+              "args": [
+                "b",
+                "c"
+              ]
+            }
+          ]
+        },
         "unicode": "a·(b + c)",
         "description": "Parentheses needed for lower precedence operation"
       }
@@ -151,11 +261,39 @@
         "input": {
           "op": "=",
           "args": [
-            {"op": "D", "args": ["O₃"], "wrt": "t"},
-            {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["k_NO_O3"]}, "O₃", "NO", "M"]},
-              {"op": "*", "args": ["jNO2", "NO₂"]}
-            ]}
+            {
+              "op": "D",
+              "args": [
+                "O₃"
+              ],
+              "wrt": "t"
+            },
+            {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "k_NO_O3"
+                      ]
+                    },
+                    "O₃",
+                    "NO",
+                    "M"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "jNO2",
+                    "NO₂"
+                  ]
+                }
+              ]
+            }
           ]
         },
         "unicode": "∂O₃/∂t = −k_NO_O3·O₃·NO·M + jNO2·NO₂",

@@ -1,0 +1,49 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "USGS3DEP_elevation_example",
+    "description": "Covers EarthSciData.jl/src/usgs3dep.jl USGS3DEPFileSet, a static dataset fetched from a REST ExportImage endpoint as a GeoTIFF with a fixed bbox/size per target domain. Scientific kind is 'static' (single-record, time-invariant). url() builds a query string with bbox / imageSR / size / format parameters — captured here as a templated REST URL. USGS 3DEP terrain elevation at ~10m (1/3 arc-second).",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-loader",
+      "terrain",
+      "static",
+      "usgs3dep"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {},
+      "equations": []
+    }
+  },
+  "data_loaders": {
+    "USGS3DEP_elevation": {
+      "kind": "static",
+      "source": {
+        "url_template": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage?bbox={bbox}&bboxSR=4326&imageSR=4326&size={size}&format=tiff&pixelType=F32&interpolation=+RSP_BilinearInterpolation&f=image"
+      },
+      "variables": {
+        "elevation": {
+          "file_variable": "elevation",
+          "units": "m",
+          "description": "Terrain elevation above sea level"
+        }
+      },
+      "reference": {
+        "citation": "USGS (2019) The 3D Elevation Program (3DEP) — U.S. Geological Survey.",
+        "url": "https://www.usgs.gov/3d-elevation-program"
+      },
+      "metadata": {
+        "tags": [
+          "terrain",
+          "static",
+          "elevation"
+        ],
+        "resolution_arc_seconds": 0.333
+      }
+    }
+  }
+}

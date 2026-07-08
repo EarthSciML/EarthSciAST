@@ -24,7 +24,44 @@
           "description": "Orbital forcing"
         }
       },
-      "equations": [],
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "orbital_forcing"
+            ]
+          },
+          "rhs": 1361.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "AtmosphereComponent.total_column_ozone"
+            ]
+          },
+          "rhs": 300.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.J_NO2"
+            ]
+          },
+          "rhs": 0.001
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.WavelengthDependentCalculation.quantum_yield"
+            ]
+          },
+          "rhs": 0.8
+        }
+      ],
       "subsystems": {
         "AtmosphereComponent": {
           "variables": {
@@ -166,7 +203,53 @@
           "description": "Global ocean heat content"
         }
       },
-      "equations": [],
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "global_ocean_heat_content"
+            ]
+          },
+          "rhs": 1e+24
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "SurfaceOceanLayer.mixed_layer_temperature"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "SurfaceOceanLayer.MicrobialLoop.bacterial_production"
+            ]
+          },
+          "rhs": 50.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.nitrate_concentration"
+            ]
+          },
+          "rhs": 10.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.enzyme_activity"
+            ]
+          },
+          "rhs": 0.5
+        }
+      ],
       "subsystems": {
         "SurfaceOceanLayer": {
           "variables": {
@@ -352,46 +435,10 @@
       "description": "Maximum depth couple using 7-level scoped references throughout"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-09-01T00:00:00Z",
-        "end": "2024-09-01T06:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        },
-        "y": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        },
-        "z": {
-          "min": 0.0,
-          "max": 15000.0,
-          "units": "m",
-          "grid_spacing": 100.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "EarthClimateSystem.orbital_forcing": 1361.0,
-          "EarthClimateSystem.AtmosphereComponent.total_column_ozone": 300.0,
-          "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.J_NO2": 0.001,
-          "EarthClimateSystem.AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.WavelengthDependentCalculation.quantum_yield": 0.8,
-          "OceanClimateSystem.global_ocean_heat_content": 1e+24,
-          "OceanClimateSystem.SurfaceOceanLayer.mixed_layer_temperature": 288.0,
-          "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.bacterial_production": 50.0,
-          "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.nitrate_concentration": 10.0,
-          "OceanClimateSystem.SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.enzyme_activity": 0.5
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-09-01T00:00:00Z",
+      "end": "2024-09-01T06:00:00Z"
     }
   }
 }

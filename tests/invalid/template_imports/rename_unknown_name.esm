@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "rename_unknown_name", "description": "The rename map names 'nope', which the target library does not export at this edge (template_import_rename_unknown_name, esm-spec 9.7.7): renames never invent names, a typo fails loudly" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm", "rename": { "nope": "np" } } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

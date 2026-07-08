@@ -4,7 +4,7 @@
     "name": "undeclared_from_name",
     "description": "INVALID — RESOLVER-LEVEL (bead ess-my4.1.6; RFC semiring-faq-unified-ir §5.2 / §8): an `aggregate` node whose `ranges` reference `{ \"from\": \"ghost_cells\" }`, an index-set name that is NOT a key of the model's `index_sets` registry (which declares only \"cells\"). A `{ \"from\": <string> }` range is well-formed against esm-schema.json regardless of whether the name resolves, so this fixture is SCHEMA-VALID — the schema-only bindings (TypeScript, Go) correctly ACCEPT it, and tests/invalid/expected_errors.json marks it `resolver_only: true` so their invalid-fixture loops do not treat that acceptance as a failure. It is rejected only by the index-set-registry resolver in the evaluating bindings: Julia `build_evaluator` → TreeWalkError E_TREEWALK_UNDECLARED_INDEX_SET; Rust `resolve_aggregate_ranges` → CompileError::InterpreterBuildError; Python `build_reference_graph` → ReferenceResolutionError E_REF_UNDECLARED_INDEX_SET. RFC §5.2: no implicit interval is inferred for an undeclared name.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "aggregate",
@@ -13,14 +13,14 @@
       "resolver"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "UndeclaredFrom": {
-      "index_sets": {
-        "cells": {
-          "kind": "interval",
-          "size": 3
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -31,24 +31,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": { "from": "ghost_cells" } }
+            "ranges": {
+              "i": {
+                "from": "ghost_cells"
+              }
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
             "expr": {
               "op": "-",
-              "args": [{ "op": "index", "args": ["u", "i"] }]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
             },
-            "ranges": { "i": { "from": "ghost_cells" } }
+            "ranges": {
+              "i": {
+                "from": "ghost_cells"
+              }
+            }
           }
         }
       ]

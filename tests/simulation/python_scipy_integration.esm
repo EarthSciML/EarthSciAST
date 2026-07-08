@@ -17,7 +17,7 @@
   "models": {
     "ExponentialDecay": {
       "reference": {
-        "notes": "Simple exponential decay with analytical solution: C(t) = C\u2080 * exp(-k*t)"
+        "notes": "Simple exponential decay with analytical solution: C(t) = C₀ * exp(-k*t)"
       },
       "variables": {
         "concentration": {
@@ -58,7 +58,7 @@
               }
             ]
           },
-          "description": "C\u2080 * exp(-k*t)"
+          "description": "C₀ * exp(-k*t)"
         }
       },
       "equations": [
@@ -82,17 +82,26 @@
               "concentration"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "concentration"
+            ]
+          },
+          "rhs": 1e-06
         }
       ],
       "tolerance": {
-        "rel": 1.0e-6
+        "rel": 1e-06
       },
       "tests": [
         {
           "id": "exponential_decay_analytical",
           "description": "Closed-form C(t) = 1e-6 * exp(-0.001 * t). Samples at t=0, 100, 500, 693.147 (half-life), 1000, 3000.",
           "initial_conditions": {
-            "concentration": 1.0e-6
+            "concentration": 1e-06
           },
           "parameter_overrides": {
             "decay_rate": 0.001
@@ -102,12 +111,36 @@
             "end": 3000.0
           },
           "assertions": [
-            { "variable": "concentration", "time": 0.0,                "expected": 1.0e-6 },
-            { "variable": "concentration", "time": 100.0,              "expected": 9.048374180359595e-7 },
-            { "variable": "concentration", "time": 500.0,              "expected": 6.065306597126334e-7 },
-            { "variable": "concentration", "time": 693.1471805599453,  "expected": 5.0e-7 },
-            { "variable": "concentration", "time": 1000.0,             "expected": 3.6787944117144233e-7 },
-            { "variable": "concentration", "time": 3000.0,             "expected": 4.9787068367863944e-8 }
+            {
+              "variable": "concentration",
+              "time": 0.0,
+              "expected": 1e-06
+            },
+            {
+              "variable": "concentration",
+              "time": 100.0,
+              "expected": 9.048374180359595e-07
+            },
+            {
+              "variable": "concentration",
+              "time": 500.0,
+              "expected": 6.065306597126334e-07
+            },
+            {
+              "variable": "concentration",
+              "time": 693.1471805599454,
+              "expected": 5e-07
+            },
+            {
+              "variable": "concentration",
+              "time": 1000.0,
+              "expected": 3.6787944117144235e-07
+            },
+            {
+              "variable": "concentration",
+              "time": 3000.0,
+              "expected": 4.9787068367863944e-08
+            }
           ]
         }
       ]
@@ -171,10 +204,19 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "population"
+            ]
+          },
+          "rhs": 0.1
         }
       ],
       "tolerance": {
-        "rel": 1.0e-6
+        "rel": 1e-06
       },
       "tests": [
         {
@@ -192,11 +234,31 @@
             "end": 100.0
           },
           "assertions": [
-            { "variable": "population", "time": 0.0,   "expected": 0.1 },
-            { "variable": "population", "time": 10.0,  "expected": 0.23196931668407392 },
-            { "variable": "population", "time": 20.0,  "expected": 0.4508530603792838 },
-            { "variable": "population", "time": 50.0,  "expected": 0.9428256185740149 },
-            { "variable": "population", "time": 100.0, "expected": 0.9995915675173918 }
+            {
+              "variable": "population",
+              "time": 0.0,
+              "expected": 0.1
+            },
+            {
+              "variable": "population",
+              "time": 10.0,
+              "expected": 0.23196931668407392
+            },
+            {
+              "variable": "population",
+              "time": 20.0,
+              "expected": 0.4508530603792838
+            },
+            {
+              "variable": "population",
+              "time": 50.0,
+              "expected": 0.9428256185740149
+            },
+            {
+              "variable": "population",
+              "time": 100.0,
+              "expected": 0.9995915675173918
+            }
           ]
         }
       ]
@@ -205,7 +267,7 @@
   "reaction_systems": {
     "SimpleKinetics": {
       "reference": {
-        "notes": "Test reaction system \u2192 ODE conversion and mass balance verification"
+        "notes": "Test reaction system → ODE conversion and mass balance verification"
       },
       "species": {
         "A": {
@@ -296,25 +358,13 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T12:00:00Z",
-        "reference_time": "2024-01-01T00:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "concentration": 1e-06,
-          "population": 0.1,
-          "A": 0.001,
-          "B": 0.0,
-          "C": 0.0
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T12:00:00Z",
+      "reference_time": "2024-01-01T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

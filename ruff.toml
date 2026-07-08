@@ -1,0 +1,20 @@
+# Repo-wide Python lint/format configuration (ruff).
+# Scope: pkg/earthsci-ast-py and scripts/ — the paths the CI lint job
+# checks. Other packages are non-Python.
+target-version = "py39"
+line-length = 100
+
+[lint]
+# Default rule set (pyflakes + core pycodestyle): a correctness gate, not a
+# style straitjacket. Formatting is enforced separately by `ruff format`.
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# The conformance runners bootstrap `import conformance_lib` after a
+# sys.path.insert, which E402 would flag.
+"scripts/*.py" = ["E402"]
+# __init__ imports the optional simulation tier inside a try guard before
+# the remaining imports; the ordering is deliberate.
+"pkg/earthsci-ast-py/src/earthsci_ast/__init__.py" = ["E402"]
+# Property tests call pytest.importorskip("hypothesis") before importing it.
+"pkg/earthsci-ast-py/tests/test_property_*.py" = ["E402"]

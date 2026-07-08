@@ -1,5 +1,8 @@
 # Discretization RFC — Implementation Status
 
+> **SUPERSEDED (v0.8.0 clean break).** The bespoke discretization / spatial-grid machinery this document concerns was removed from the schema in v0.8.0; grid geometry and discretization are now expressed as `aggregate` Functional Aggregate Query nodes (see `semiring-faq-unified-ir.md`). Retained for historical context only.
+
+
 Audit status for [`discretization.md`](./discretization.md) sections, as they
 land in `esm-schema.json` / `esm-spec.md` / bindings. Scope is the on-wire
 schema surface — binding-side runtime work is tracked in the per-binding

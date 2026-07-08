@@ -1,0 +1,15 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "grid_latlon", "description": "Uniform lon-lat grid, NLON x NLAT" },
+  "metaparameters": {
+    "NLON": { "type": "integer", "default": 144 },
+    "NLAT": { "type": "integer", "default": 91 }
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": "NLON" },
+    "lat": { "kind": "interval", "size": "NLAT" }
+  },
+  "expression_templates": {
+    "dlon_deg": { "params": [], "body": { "op": "/", "args": [360, "NLON"] } }
+  }
+}

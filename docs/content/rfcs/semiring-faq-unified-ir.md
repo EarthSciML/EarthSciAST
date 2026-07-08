@@ -4,7 +4,7 @@ description: "Concrete proposal to generalize the ESS arrayop node into a Functi
 ---
 
 > **Status:** Draft proposal (concrete IR). **Bead:** unassigned.
-> **Target repo:** EarthSciSerialization (`packages/EarthSciSerialization.jl`, the
+> **Target repo:** EarthSciAST (`pkg/EarthSciAST.jl`, the
 > `arrayop` IR and `tree_walk.jl` evaluator). Relocated here from
 > EarthSciDiscretizations `docs/content/rfcs/`.
 
@@ -303,7 +303,7 @@ arg-witness reducers (`argmin`/`argmax`, rule 6), and the
 joins of §5.3 produce **index sets, dense IDs, and assignment buffers that other
 nodes consume**, so
 two bindings that disagree on their order or numbering produce *different models*,
-not merely different formatting. Because `earthsci-toolkit` is parallel native
+not merely different formatting. Because `EarthSciAST` is parallel native
 implementations (Julia, Rust, Python, …) verified by a conformance suite — not one
 core behind FFI — this determinism is **normative spec, stated here**, not an
 implementation detail deferred to an appendix. (Appendix A.5 keeps the per-language
@@ -837,7 +837,7 @@ formalism, and the worked conservative-regridding decomposition, are in **Append
   data-dependent index sets.
 - Nested Relational Calculus / Datalog± (value invention, the chase) — the
   formal home of Skolem key construction.
-- In-repo: `EarthSciSerialization/src/tree_walk.jl` (`build_evaluator`,
+- In-repo: `EarthSciAST/src/tree_walk.jl` (`build_evaluator`,
   `_resolve_indices`, `_expand_int_range_dyn`); ESS RFC
   `per-cell-metric-binding-eval` (per-cell metric binding); ESD
   `discretizations/finite_difference/nn_diffusion_{mpas,duo}.json` and
@@ -849,8 +849,8 @@ formalism, and the worked conservative-regridding decomposition, are in **Append
 The two appendices below are implementation studies supporting the specification
 above: Appendix A covers the build-time relational engine (§§5.5, 6.1) and Appendix B
 the `intersect_polygon` kernel (§8.1), across the Julia, Rust, and Python
-implementations of `earthsci-toolkit`. They are grounded in inspection of the
-`earthsci-toolkit`, `ConservativeRegridding.jl`, and `GeometryOps.jl` source.
+implementations of `EarthSciAST`. They are grounded in inspection of the
+`EarthSciAST`, `ConservativeRegridding.jl`, and `GeometryOps.jl` source.
 
 > **Note on source-level claims.** The appendices cite specifics (dependency lists,
 > file and symbol names, version numbers) from repositories outside this RFC's host
@@ -880,9 +880,9 @@ exactly five primitives over integer-keyed tuples (vertex/cell IDs, scale
 4. **`rank`** — dense integer renumbering of a distinct set (assign IDs to deduped tuples).
 5. **group-by + semiring aggregate** (sum/min/max) over those sets.
 
-**The decisive constraint comes from the ESS architecture.** `earthsci-toolkit` is
+**The decisive constraint comes from the ESS architecture.** `EarthSciAST` is
 **not one core with FFI bindings** — it is *parallel native implementations* per
-language (`EarthSciSerialization.jl`, `earthsci-toolkit-rs`, `earthsci_toolkit`
+language (`EarthSciAST.jl`, `earthsci-ast-rs`, `earthsci_ast`
 (Python), plus TS/Go), each conforming to a shared contract and verified by a
 cross-binding conformance suite (`scripts/test-conformance.sh` against
 `CONFORMANCE_SPEC.md`). Therefore the hard problem is **bit-for-bit determinism
@@ -923,7 +923,7 @@ Each binding should add a small `relational` module using the structure it
 *already* depends on. The cross-binding agreement comes from §A.5, not the library.
 
 #### Julia — stdlib `Dict`/`Set`/`sort` (+ `OrderedCollections`, already a dep)
-`EarthSciSerialization.jl` (v0.6.0, Julia ≥1.10) deps are lean — `JSON3`,
+`EarthSciAST.jl` (v0.6.0, Julia ≥1.10) deps are lean — `JSON3`,
 `OrderedCollections`, `Tullio`, `Unitful`; **no DataFrames/DuckDB**. The evaluator
 is two-phase: build-time `_compile` / `build_evaluator` and hot-path `_eval_node`;
 the engine slots in as a build-time topology pre-pass beside `_compile`. **`src/graph.jl`
@@ -934,7 +934,7 @@ Julia 1.9. *Reject* DataFrames.jl (multi-second TTFX, "undefined" join/group ord
 and DuckDB.jl (native binary) for production.
 
 #### Rust — `indexmap` (already a dep) + canonical sort
-`earthsci-toolkit-rs` (v0.6.0, edition 2024) already depends on
+`earthsci-ast-rs` (v0.6.0, edition 2024) already depends on
 `indexmap = "2"`, `ndarray`, `smallvec`; **no polars/datafusion/arrow**. It already
 encodes the exact discipline needed: `src/performance.rs` does sort-then-enumerate
 for reproducible dense indices (**that is `rank`**), and `src/canonicalize.rs`
@@ -946,7 +946,7 @@ out of proportion) and never let a non-portable fast hasher (`ahash`,
 `rustc-hash`/FxHash) drive emitted order or keys.
 
 #### Python — NumPy (already a dep) `lexsort`/`unique`/`searchsorted`
-`earthsci_toolkit` already hard-depends on NumPy/SciPy/xarray; **no
+`earthsci_ast` already hard-depends on NumPy/SciPy/xarray; **no
 pandas/polars/duckdb/pyarrow**. The evaluator is a NumPy AST interpreter
 (`numpy_interpreter.py`); spatial/mesh ops are contractually lowered at setup
 (`UnreachableSpatialOperatorError`) — exactly this engine's slot. Relational code is
@@ -1117,10 +1117,10 @@ emitting it as ESS IR would unify it with ESM/ESD/ESI under one evaluator.
 
 ### A.9 References
 
-- ESS repo (`main`): `packages/EarthSciSerialization.jl/{Project.toml,src/tree_walk.jl,src/graph.jl}`,
-  `packages/earthsci-toolkit-rs/{Cargo.toml,src/performance.rs,src/canonicalize.rs}`,
-  `packages/earthsci_toolkit/{pyproject.toml,src/earthsci_toolkit/numpy_interpreter.py,canonicalize.py}`,
-  `CONFORMANCE_SPEC.md` — <https://github.com/EarthSciML/EarthSciSerialization>.
+- ESS repo (`main`): `pkg/EarthSciAST.jl/{Project.toml,src/tree_walk.jl,src/graph.jl}`,
+  `pkg/earthsci-ast-rs/{Cargo.toml,src/performance.rs,src/canonicalize.rs}`,
+  `pkg/earthsci-ast-py/{pyproject.toml,src/earthsci_ast/numpy_interpreter.py,canonicalize.py}`,
+  `CONFORMANCE_SPEC.md` — <https://github.com/EarthSciML/EarthSciAST>.
 - Determinism: Rust `HashMap` SipHash randomization (`std::collections::HashMap`
   docs); PEP 456 (Python SipHash / hash randomization); `indexmap` hasher-independent
   order (docs.rs/indexmap); Julia `sort` stability (≥1.9).

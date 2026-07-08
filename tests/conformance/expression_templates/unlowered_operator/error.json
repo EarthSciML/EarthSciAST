@@ -1,0 +1,5 @@
+{
+  "code": "unlowered_operator",
+  "stage": "evaluate",
+  "description": "A spatial D(u, wrt=x) with no lowering rule loads cleanly (the op namespace is open) but is rejected with `unlowered_operator` when the model reaches evaluation/compilation (esm-spec §4.2 / §9.6.3 constraint 6 / §9.6.8). The gate fires before evaluation, not at load. Bindings that never build an evaluator for a file (parse/validate-only paths) mark this fixture N/A. Supersedes the old per-binding UnreachableSpatialOperator / UnsupportedDimensionality codes."
+}

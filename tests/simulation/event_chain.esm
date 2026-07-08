@@ -185,10 +185,55 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "concentration"
+            ]
+          },
+          "rhs": 0.1
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "temperature"
+            ]
+          },
+          "rhs": 298.15
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "product"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "dose_counter"
+            ]
+          },
+          "rhs": 0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "heating_active"
+            ]
+          },
+          "rhs": 1
         }
       ],
       "tolerance": {
-        "rel": 1e-04
+        "rel": 0.0001
       },
       "tests": [
         {
@@ -210,14 +255,55 @@
             "end": 500.0
           },
           "assertions": [
-            { "variable": "temperature", "time": 0.0,   "expected": 298.15 },
-            { "variable": "temperature", "time": 48.0,  "expected": 302.95 },
-            { "variable": "temperature", "time": 98.0,  "expected": 307.95 },
-            { "variable": "temperature", "time": 500.0, "expected": 348.15, "tolerance": { "abs": 1e-06 } },
-            { "variable": "concentration", "time": 0.0,   "expected": 0.1 },
-            { "variable": "concentration", "time": 500.0, "expected": 0.1,  "tolerance": { "abs": 1e-07 } },
-            { "variable": "product",       "time": 0.0,   "expected": 0.0 },
-            { "variable": "product",       "time": 500.0, "expected": 6e-10, "tolerance": { "abs": 1e-09 } }
+            {
+              "variable": "temperature",
+              "time": 0.0,
+              "expected": 298.15
+            },
+            {
+              "variable": "temperature",
+              "time": 48.0,
+              "expected": 302.95
+            },
+            {
+              "variable": "temperature",
+              "time": 98.0,
+              "expected": 307.95
+            },
+            {
+              "variable": "temperature",
+              "time": 500.0,
+              "expected": 348.15,
+              "tolerance": {
+                "abs": 1e-06
+              }
+            },
+            {
+              "variable": "concentration",
+              "time": 0.0,
+              "expected": 0.1
+            },
+            {
+              "variable": "concentration",
+              "time": 500.0,
+              "expected": 0.1,
+              "tolerance": {
+                "abs": 1e-07
+              }
+            },
+            {
+              "variable": "product",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "product",
+              "time": 500.0,
+              "expected": 6e-10,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            }
           ]
         }
       ],
@@ -226,12 +312,9 @@
           "id": "temperature_ramp",
           "description": "Illustrative run: a 500 s linear heating ramp at 0.1 K/s with the default reaction parameters. Plots temperature, concentration, and product on their own axes; rates are low enough that concentration looks flat, which is informative in itself.",
           "initial_state": {
-            "type": "per_variable",
-            "values": {
-              "concentration": 0.1,
-              "temperature": 298.15,
-              "product": 0.0
-            }
+            "concentration": 0.1,
+            "temperature": 298.15,
+            "product": 0.0
           },
           "parameters": {
             "heating_rate": 0.1,
@@ -247,34 +330,34 @@
             {
               "id": "temperature_vs_time",
               "type": "line",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "temperature", "label": "temperature (K)" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "temperature",
+                "label": "temperature (K)"
+              }
             },
             {
               "id": "product_vs_time",
               "type": "line",
               "description": "Product buildup driven by the temperature-dependent Arrhenius rate.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "product", "label": "product (mol/L)" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "product",
+                "label": "product (mol/L)"
+              }
             }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "EventSystem.concentration": 0.1,
-          "EventSystem.temperature": 298.15,
-          "EventSystem.product": 0.0,
-          "EventSystem.dose_counter": 0,
-          "EventSystem.heating_active": 1
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

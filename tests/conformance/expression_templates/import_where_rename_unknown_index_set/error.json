@@ -1,0 +1,5 @@
+{
+  "code": "template_constraint_unknown_index_set",
+  "stage": "load",
+  "description": "A `where` shape constraint (esm-spec §9.6.1) survives the §9.7.7 import-edge rename naming index set 'y', which the library never declares and which the rename map therefore leaves as spelled. The consuming document's merged index_sets registry (§9.7.5) declares only meshA.x, so at rule registration in the consuming component the constraint is rejected with this code. Confirms that carrying `where.shape` through the index-set rename does NOT suppress a genuinely-unknown constraint set."
+}

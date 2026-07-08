@@ -1148,13 +1148,13 @@
     "schema_errors": [
       {
         "path": "",
-        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_loaders', or kind 'grid_discretization_descriptor'",
+        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_loaders'",
         "keyword": "anyOf"
       }
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "Genuine no-subsystem negative (RFC pure-io-data-loaders 4.4, bead ess-v9a.8): a document declaring none of models / reaction_systems / data_loaders (and no grid_discretization_descriptor) fails the top-level anyOf. Refreshed for ess-v9a.8 -- the prior fixture was a loader-only document kept invalid only incidentally by a stray top-level 'domain' key, and this entry listed pre-pure-IO 'type: netcdf' / 'path' / 'provides_vars' loader errors (from before the 4.1 pure-IO migration) that no longer apply."
+    "notes": "Genuine no-subsystem negative (RFC pure-io-data-loaders 4.4, bead ess-v9a.8): a document declaring none of models / reaction_systems / data_loaders fails the top-level anyOf. Refreshed for ess-v9a.8 -- the prior fixture was a loader-only document kept invalid only incidentally by a stray top-level 'domain' key, and this entry listed pre-pure-IO 'type: netcdf' / 'path' / 'provides_vars' loader errors (from before the 4.1 pure-IO migration) that no longer apply."
   },
 
   "invalid_trigger_type.esm": {
@@ -1881,7 +1881,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Primary demonstration: grad applied over coordinate 'x' whose units are undeclared in the domain — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian (Julia, Rust, Python, Go) still surface this fixture as invalid. Currently the TypeScript validator is the only binding to surface the grad-specific inconsistency; follow-up beads track gradient support elsewhere."
+    "notes": "Primary demonstration: grad applied over coordinate 'x' that the model declares WITHOUT units — validators that model grad/div/laplacian must not assume a hardcoded metre denominator. Since the v0.8.0 Domain.spatial removal, physical coordinates are ordinary declared variables/parameters, so the fixture declares 'x' as a units-less parameter; a grad dim naming NO declared variable (an index-set axis lowered by a discretization rewrite rule, spec §9.6.8) is instead left to the legacy metre fallback and never flagged. The companion bad_sum observed variable is a secondary demonstration included so bindings that do not yet validate grad/div/laplacian still surface this fixture as invalid. The Julia binding surfaces the grad-specific inconsistency by resolving the dim against declared model variables (validate.jl::validate_model_gradient_units); follow-up beads track the same declared-variable resolution in the TypeScript/Rust bindings (whose coordinate tables are currently never populated) and gradient support in Python/Go."
   },
 
   "units_mixed_dimensional_operations.esm": {
@@ -2021,5 +2021,191 @@
     "resolver_only": true,
     "resolver_error_code": "FloatKeyError",
     "notes": "Resolver/build-time invalid (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3). The categorical index set `keys` declares members [\"x\", null]; emitting a NULL into a value-equality join key column is a front-end error surfaced at build time, never silently dropped (a null key is unmatchable and nulls never compare equal). The document is SCHEMA-VALID — the schema's categorical `members` is an untyped array — so schema-only bindings (TypeScript, Go) accept it (is_valid: true): the TS conformance.test.ts recursive invalid sweep reads `resolver_only` and asserts schema acceptance, and the Go aggregate glob (tests/invalid/aggregate/*.esm) is non-recursive so it never descends into the build_time/ subdir. The evaluating bindings reject it at build: Rust Key::try_from_json -> FloatKeyError ('unsupported relational key component null'); Julia build_evaluator -> TreeWalkError (message names null); Python simulate -> raises / success=False. Lives under tests/invalid/aggregate/build_time/."
+  },
+  "ic_in_reaction_system.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/Chemistry/constraint_equations/0",
+        "code": "ic_in_reaction_system",
+        "message": "ic equation not allowed in a reaction system; a reaction system has no equations field and hosts no ic equations (ICs are model-hosted: species.default, or a scoped-reference ic equation in a model, spec §11.4.1)",
+        "details": {
+          "system": "Chemistry",
+          "species": "O3",
+          "constraint_equation_index": 0
+        }
+      }
+    ]
+  },
+
+  "import_cycle_a.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_cycle",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. import_cycle_a.esm imports import_cycle_b.esm which imports import_cycle_a.esm: an import-graph cycle over canonical paths (esm-spec §9.7.2). Loading EITHER file fails with template_import_cycle."
+  },
+
+  "import_cycle_b.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_cycle",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The other half of the import_cycle_a.esm cycle; loading either file reports template_import_cycle (esm-spec §9.7.2)."
+  },
+
+  "import_not_library.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_not_library",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The import ref targets ../../valid/model_only.esm, a component (model) file — not a pure template-library file (no top-level expression_templates; esm-spec §9.7.1)."
+  },
+
+  "subsystem_ref_is_library.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_ref_is_template_library",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. A §4.7 subsystem ref targets ../../valid/template_import_lib.esm, a template-library file. The two reference mechanisms are disjoint (esm-spec §9.7.1): libraries are imported via expression_template_imports, never included as subsystems."
+  },
+
+  "import_name_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The model imports template_import_lib.esm (which declares n_cells with body \"N\") and locally declares n_cells with body 2 — a same-name, non-deep-equal import/local collision (esm-spec §9.7.4)."
+  },
+
+  "import_unknown_only.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The import's `only` array names does_not_exist, a template the target library does not declare (esm-spec §9.7.2)."
+  },
+
+  "index_set_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 4) collides with the imported library's cells (interval, size N) — non-deep-equal merge (esm-spec §9.7.5)."
+  },
+
+  "makearray_region_inverted.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "makearray_region_inverted",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.3.2 'Empty and inverted bounds' / \u00a79.6.4). The document is SCHEMA-VALID \u2014 metaparameter expressions are legal in makearray region bound positions \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The \u00a79.6.8-style interior region [2, N-1] is instantiated at N = 1 (the metaparameter default), folding to [2, 0] \u2014 INVERTED (stop < start - 1). The canonical EMPTY bound [start, start-1] (e.g. [2, 1] at N = 2, see tests/valid/makearray_empty_region_min_extent.esm) is legal and contributes no elements; anything further inverted is a load-time error on the expanded, metaparameter-folded form."
+  },
+
+  "subsystem_index_set_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Index-set merge'). The document is SCHEMA-VALID \u2014 a subsystem ref and top-level index_sets are both legal schema \u2014 so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring \u00a79.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
+  },
+
+  "body_apply_cycle.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "apply_expression_template_recursive_body",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Templates t_a and t_b reference each other from their bodies: a cycle in the §9.7.3 registration-time body-composition DAG. (Redefined by the template-library RFC: acyclic body references are legal and inlined at load; only CYCLES are rejected.)"
+  },
+
+  "body_chain_too_deep.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_body_expansion_too_deep",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. GENERATED fixture: a 33-template body-reference chain c_01 -> ... -> c_33. The longest chain (counted in templates) exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 32 (esm-spec §9.7.3); a 32-template chain is legal."
+  },
+
+  "metaparameter_unbound.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_unbound",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter NX declares no default and nothing binds it (no import edge, no subsystem edge, no loader-API binding): still open after all §9.7.6 binding sites."
+  },
+
+  "metaparameter_inexact_division.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_type_error",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. index_sets.half.size = NX / 2 with NX defaulting to 5: metaparameter folding is exact 64-bit integer arithmetic and `/` MUST divide exactly (esm-spec §9.7.6)."
+  },
+
+  "metaparameter_name_conflict.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "metaparameter_name_conflict",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter x collides with the model state variable x; a metaparameter name must not collide with any visible variable/parameter/species/index-set name — there is no shadowing (esm-spec §9.7.6)."
+  },
+
+  "import_version_too_old.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_version_too_old",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The file declares esm 0.7.0 but carries expression_template_imports; the §9.7 constructs arrive at esm 0.8.0 (esm-spec §9.6.5). The gate fires before the import ref is ever resolved."
+  },
+
+  "rename_unknown_name.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rename` map names 'nope', which the target does not export at this edge (surviving exports = templates after `only`, index sets, metaparameters left open by `bindings`): renames never invent names (esm-spec §9.7.7)."
+  },
+
+  "rebind_unknown_free_name.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rebind_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `rebind` map names 'not_a_free_name', which does not occur free in the imported declarations: a rebind that binds nothing would silently leave the library's factor contract in force (esm-spec §9.7.7)."
+  },
+
+  "rename_collision.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_collision",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Two exported template names (area, perim) both renamed to 'geom' at one edge: a rename-target collision within one namespace (esm-spec §9.7.7)."
+  },
+
+  "rename_invalid_identifier.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_rename_invalid",
+    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-import-renaming). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The edge's `prefix` '9 bad' is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots); the grammar is resolver-enforced so the diagnostic is cross-binding uniform (esm-spec §9.7.7)."
   }
 }

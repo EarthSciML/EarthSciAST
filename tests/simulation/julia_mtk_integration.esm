@@ -124,6 +124,24 @@
               "x"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "tolerance": {
@@ -315,6 +333,24 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "A"
+            ]
+          },
+          "rhs": 1e-06
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "B"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -481,24 +517,13 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T01:00:00Z",
-        "reference_time": "2024-01-01T00:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "x": 1.0,
-          "v": 0.0,
-          "A": 1e-06,
-          "B": 0.0
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "reference_time": "2024-01-01T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

@@ -143,11 +143,11 @@ All implementations MUST implement `substitute` with the following behavior:
    test is required.
 
 These semantics are exercised by:
-- Python: `packages/earthsci_toolkit/tests/test_substitute.py`
+- Python: `pkg/earthsci-ast-py/tests/test_substitute.py`
   (class `TestSubstitutionErrorHandling`)
-- Rust: `packages/earthsci-toolkit-rs/tests/substitution.rs`
+- Rust: `pkg/earthsci-ast-rs/tests/substitution.rs`
   (the `edge cases and error handling` section)
-- Julia: `packages/EarthSciSerialization.jl/test/expression_test.jl`
+- Julia: `pkg/EarthSciAST.jl/test/expression_test.jl`
   (`@testset "substitute edge cases"`)
 
 #### 2.2.4 Graph Generation Tests (`tests/graphs/`)
@@ -551,7 +551,7 @@ The comparison system categorizes divergences as:
 > footguns; **the rules below are the contract.** They are exercised by the
 > adversarial harness in `tests/conformance/determinism/` (see §5.5.4).
 
-`earthsci-toolkit` is **parallel native implementations** (Julia, Rust,
+`EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by this suite — not one core behind FFI. The
 value-invention primitives `distinct`, `skolem`, and `rank`, the arg-witness
 reducers `argmin`/`argmax` (§5.5.1 rule 6), together with
@@ -672,6 +672,89 @@ canonical-JSON discipline the round-trip idempotence contract relies on
 (`tests/conformance/README.md`). Two conforming bindings MUST produce
 byte-for-byte identical serialized index sets and identical dense-ID arrays
 (after rule-3 base normalization).
+
+##### 5.5.3.1 Canonical number formatting (normative)
+
+Every canonical byte form in this spec — the compact index-set form above and
+the sorted-keys / 2-space-indent golden-writer form used by the conformance
+goldens (`scripts/generate-template-import-goldens.jl`; reimplemented
+byte-for-byte by the EarthSciDiscretizations runner emitters) — renders JSON
+numbers by one shared scheme, pinned to what the Julia reference's
+`JSON3.read` → `JSON3.write` round-trip produces:
+
+1. **Integral-float normalization.** A JSON number whose mathematical value is
+   integral and representable in `Int64` serializes as an **integer literal**,
+   regardless of how the source document spelled it (`0.0` → `0`, `2.5e1` →
+   `25`). This mirrors JSON3's numeric narrowing on parse (an integral float
+   token parses as `Int64`). Because the narrowing forgets the author's
+   spelling, fixtures MUST avoid integral-valued float literals wherever the
+   float-ness is semantic — write `1.5`, not `1.0` (see
+   `tests/conformance/expression_templates/README.md`).
+
+2. **Shortest-roundtrip float formatting.** A non-integral finite float
+   serializes with the **shortest** digit string that round-trips to the same
+   IEEE-754 double (the Ryu-shortest digits every binding's default `repr`
+   produces), laid out Julia-style. With `e10` the decimal exponent of the
+   value's first significant digit (`value = ±d.dd… × 10^e10`, so
+   `e10(999999.5) = 5`, `e10(0.000123456) = −4`):
+
+   - **Positional** iff `−4 ≤ e10 ≤ 5`: for `e10 < 0` emit
+     `0.` + (`−e10 − 1` zeros) + digits (`0.000123456`); otherwise place the
+     point after digit position `e10 + 1` (`999999.5`), appending `.0` if no
+     digits remain to its right (unreachable for a non-integral value; pinned
+     for writer totality).
+   - **Scientific** otherwise (`e10 < −4` or `e10 ≥ 6`, i.e. the switch sits
+     between `1e-5`-scale and `1e6`-scale magnitudes): `d.f…e<exp>` where the
+     mantissa **always carries at least one fraction digit** (`1.0e-9`, never
+     `1e-9`), the exponent is unpadded decimal with `-` but never `+`
+     (`1.0e-9`, `1.0000005e6`), and the `e` is lowercase.
+   - Non-finite values (`NaN`, `±Inf`) are not valid JSON; the canonical
+     writer MUST reject them.
+
+   Reference probe table, validated byte-for-byte against Julia `JSON3.write`
+   (and reproduced by all four non-Julia emitter reimplementations):
+
+   | value | canonical bytes |
+   |---|---|
+   | `1.0e-9` | `1.0e-9` |
+   | `1.5e-5` | `1.5e-5` |
+   | `0.000123456` | `0.000123456` |
+   | `2.5` | `2.5` |
+   | `999999.5` | `999999.5` |
+   | `1000000.5` | `1.0000005e6` |
+   | `123456789.25` | `1.2345678925e8` |
+   | `0.0` | `0` (rule 1) |
+
+3. **Literal type is by value, not by reader-inferred storage — everywhere,
+   including arithmetic operands and aggregate bodies (normative).** Rule 1 is
+   a property of a number's *value*, so it MUST hold at the AST-literal boundary
+   **uniformly**, independent of any binding's JSON-reader number typing. A
+   conforming reader whose number inference is context-dependent (Julia's
+   `JSON3` applies a structural inference that can materialise a bare integer
+   token — e.g. `1` — as `Float64` inside a deeply-nested, schema-repeating
+   document) MUST re-apply rule 1 when building the AST: **an integral,
+   `Int64`-representable number is an integer literal (`IntExpr`); a
+   non-integral number is a float literal (`NumExpr`)** — regardless of where
+   the number appears. In particular this governs the **operand literal types of
+   arithmetic ops** (`+ - * / ^ neg`): an integer operand stays an integer
+   literal whether the operation sits at the top level, inside another
+   expression, or **inside an `aggregate` `expr` body / `makearray` values**.
+
+   The canonical consequence for division: **`/` is true, float-returning
+   division at evaluation for every operand type** (integer operands never
+   trigger integer/floor division — `1/8` evaluates to `0.125`, not `0`), so
+   keeping integer operands as integer literals is value-preserving. An integer
+   ratio such as `{"op":"/","args":[1,N]}` therefore has ONE canonical byte
+   form — `{"op":"/","args":[1,N]}` — that all five bindings MUST produce
+   identically, inside and outside an aggregate. A binding that emits
+   `{"op":"/","args":[1.0,N.0]}` for an integer-spelled ratio is **non-conformant**.
+   Fixtures MAY spell an exact integer ratio (`1/N`) directly inside an
+   aggregate `expr` (e.g. cell-centre spacing `(i − 1/2)·(1/N)`); they need not
+   pre-fold it to a non-integral decimal to stay byte-portable. (Rule 1 still
+   forbids relying on an integral *float* literal like `1.0` keeping its
+   float-ness — that is `1` — so a semantically-float operand must be
+   non-integral; see `tests/valid/aggregate/coordinate_int_ratio_spacing.esm`
+   and the `round_trip` conformance manifest.)
 
 #### 5.5.4 Conformance requirement and the adversarial harness
 
@@ -817,16 +900,16 @@ values**, so agreement is the cross-binding semiring-equivalence proof:
 | `categorical_index_set.esm` | a `categorical` `{from}` contraction (cardinality = member count) |
 
 - **Julia, Rust, Python** evaluate every fixture and match its inline
-  `expected` (`packages/EarthSciSerialization.jl/test/aggregate_conformance_test.jl`,
-  `packages/earthsci-toolkit-rs/tests/aggregate_conformance_tests.rs`,
-  `packages/earthsci_toolkit/tests/test_aggregate_conformance.py`), and each
+  `expected` (`pkg/EarthSciAST.jl/test/aggregate_conformance_test.jl`,
+  `pkg/earthsci-ast-rs/tests/aggregate_conformance_tests.rs`,
+  `pkg/earthsci-ast-py/tests/test_aggregate_conformance.py`), and each
   asserts the full `0̄` / `1̄` identity table (including the non-finite rows) in
   its evaluator unit suite.
 - **Go, TypeScript** parse + schema-validate every valid fixture and reject the
   invalid ones, covering the additive fields (`op:"aggregate"`, the `semiring`
   enum, `ranges` `{from}` references, the `index_sets` registry) with no
-  evaluator (`packages/esm-format-go/pkg/esm/aggregate_fixtures_test.go`,
-  `packages/earthsci-toolkit/src/aggregate-fixtures.test.ts`).
+  evaluator (`pkg/earthsci-ast-go/pkg/esm/aggregate_fixtures_test.go`,
+  `pkg/earthsci-ast-ts/src/aggregate-fixtures.test.ts`).
 
 ### 5.7 Cadence-Partition Pass (normative)
 
@@ -1230,7 +1313,7 @@ FAQ → `A_j` row-sum → apply → normalize — and is driven through the eval
 reference binding (**Julia**) evaluates it end-to-end and asserts the conservation
 + partition-of-unity invariants and the spherical Van Oosterom–Strackee /
 analytic-rectangle oracle values in
-`packages/EarthSciSerialization.jl/test/geometry_overlap_join_conformance_test.jl`.
+`pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl`.
 The two cross-binding building blocks run in every evaluating binding: the
 **broad-phase candidate set** is materialized by the value-invention front-door
 (`materialize_value_invention`, Julia/Python/Rust, §5.5) and the **`polygon_area`
@@ -1256,7 +1339,7 @@ agree, on a **numeric-tolerance** basis, when they evaluate and integrate shared
 driven by `scripts/run-pde-simulation-conformance.py`; bead ess-fmw).
 
 Go and TypeScript are **out of scope** — they implement only the rewrite half
-(no `makearray`/spatial lowering, no simulator).
+(no `arrayop`/`makearray` evaluator, no simulator).
 
 #### 5.9.1 What is compared
 
@@ -1314,16 +1397,23 @@ the **discrete-cadence loader + dependent-variable refresh** consumer: the three
 simulation-capable bindings — **Rust, Python, Julia** — must agree, on a
 **numeric-tolerance** basis, when they read external forcing from data loaders at
 a cadence, **regrid** it onto the simulation grid, and integrate the resulting
-forced model. Shared **offline** fixtures live in `tests/conformance/refresh/`
-(bead `ess-14f.12`, epic `ess-14f`; plan `esio-consumer-rust-plan`).
+forced model. Shared **offline** fixtures live in `tests/conformance/refresh/`.
 
 This is the **composition** capstone over two pieces governed elsewhere: §5.7
 pins *which cadence class* each node is (CONST materialized once vs DISCRETE
 refreshed at anchors), and §5.8 pins the *regrid kernel geometry* (overlap areas,
 conservation). §5.10 pins that a consumer composes them the same way —
-`refresh(t)` → **regrid native→sim grid** → write forcing buffer → integrate the
-segment — so the **refreshed+regridded arrays** and the **integrated trajectory**
-agree across bindings.
+`refresh(t)` → write the **native** forcing buffer → **in-model regrid** +
+integrate the segment — so the **regridded arrays** and the **integrated
+trajectory** agree across bindings.
+
+The regrid is **in-model**, not a refresh-time seam: it is an ordinary coupling
+contraction the RHS evaluates (`F_tgt[j] = sum_i W[i,j]*F_src[i]`, with `W` a
+const weight matrix — the 2:1 area-weighted coarsening). The obsolete
+`RegridApplier` / `Regrid` seam was **removed in v0.8.0**; the refresh executor
+writes the native forcing straight into the buffer, and regridding is part of the
+in-model coupling relationship. This mirrors production (e.g. the wildlandfire
+ERA5 regrid).
 
 Go and TypeScript are **out of scope** (no array simulator / refresh executor).
 
@@ -1331,17 +1421,18 @@ Go and TypeScript are **out of scope** (no array simulator / refresh executor).
 
 For each fixture, every in-scope binding loads the shared `.esm` in two views —
 the **classifier view** (raw, for the cadence partition + loader binding) and the
-**simulate view** (loader-fed `discrete` vars stripped, so the RHS compiler
-resolves them as forcing names; see the set's `README.md`) — seeds one provider
-per loader **offline** from the golden's `native_fields`, wires the regrid named
-in `golden.regrid`, and reports two quantities:
+**simulate view** (loader-fed `discrete` vars + the `data_loaders` block stripped,
+so the RHS compiler resolves `F_src`/`scale_src` as forcing names; see the set's
+`README.md`) — seeds one provider per loader **offline** from the golden's
+`native_fields`, and reports two quantities:
 
-1. **Refreshed+regridded arrays** — the forcing-buffer array each loader field
-   lands in, after `materialize_const` (CONST) and after each `refresh_at` anchor
-   (DISCRETE), compared to `golden.regridded_fields`. The native fields are
-   delivered on a **coarser** grid than the sim grid, so this exercises a genuine
-   non-identity regrid (a conservative area-weighted remap through the §5.8
-   kernel); an identity pass-through fails.
+1. **Regridded arrays** — the in-model regridded observeds `F_tgt` (per DISCRETE
+   anchor) and `scale_tgt` (CONST), read through the binding's build-observability
+   sink, compared to `golden.regridded_fields`. The native fields are delivered on
+   a **coarser** 6-cell grid than the 3-cell sim grid, so this exercises a genuine
+   non-identity regrid (the in-model 2:1 area-weighted coarsening); a stale or
+   identity forcing fails. The distinct paired native values make the averaging
+   load-bearing.
 2. **Integrated trajectory** — each cadence-boundary state from the segmented
    solve (refresh once per boundary, forcing frozen within a segment, state
    threaded, fresh solver per segment), compared to `golden.trajectory`. The
@@ -1349,12 +1440,12 @@ in `golden.regrid`, and reports two quantities:
 
 | Band | rtol | atol |
 |------|------|------|
-| Refreshed+regridded arrays (vs analytic) | 1e-9 | 1e-11 |
+| Regridded arrays (vs analytic) | 1e-9 | 1e-11 |
 | Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
 
-The regrid band is tight — a conservative remap on exact (here unit) overlap
-areas is exact up to floating-point. The trajectory band matches §5.9's
-manufactured-solution band, absorbing integrator truncation.
+The regrid band is tight — a 2:1 average on exact values is exact up to
+floating-point. The trajectory band matches §5.9's manufactured-solution band,
+absorbing integrator truncation.
 
 #### 5.10.2 ⛔ Numeric-tolerance and strictly offline
 
@@ -1366,21 +1457,261 @@ byte-identical; the integrator is pinned per binding in `manifest.json`
 #### 5.10.3 Coverage
 
 The fixture `coupled_refresh_regrid` is a discretized, **coupled**, non-PDE
-forced model (`D(c[i]) = scale[i]·src[i]`; `D(d[i]) = Box.c[i]`) with **one CONST
-loader** (`factors` → `scale`, no `temporal`) and **one DISCRETE loader**
-(`emis` → `src`, hourly `temporal`), both regridded by a conservative 2:1
-coarsening. It exercises: CONST-once vs DISCRETE-per-anchor cadence, the
-non-identity regrid seam, cross-component coupling threaded across segments, and
-the closed-form check the piecewise-constant forcing affords.
+forced model over one model `M` (3-cell sim grid): `D(c[j]) =
+scale_tgt[j]·F_tgt[j]`, `D(d[j]) = c[j]`, with **one CONST loader** (`factors` →
+`scale_src`, no `temporal`) and **one DISCRETE loader** (`emis` → `F_src`, hourly
+`temporal`) on the coarse 6-cell native grid, both regridded **in-model** by the
+const-`W` 2:1 coarsening (`F_tgt`/`scale_tgt`). It exercises: CONST-once vs
+DISCRETE-per-anchor cadence, the in-model regrid (a DISCRETE-materialized `F_tgt`
+and a build-once `scale_tgt`), coupling threaded across segments, and the
+closed-form check the piecewise-constant forcing affords.
 
 #### 5.10.4 Gate
 
-The Rust producer (`cargo test --test refresh_conformance`, run by
-`test-conformance.sh`) drives the path and gates both bands against the committed
-golden, **failing loudly** on any divergence. `bindings_required` is currently
-`["rust"]`: RS-R4 establishes the shared fixture + golden and the Rust producer;
-the Python (`ess-14f.2`) and Julia (`ess-14f.6`) consumer adapters reproduce the
-same golden and move themselves into `bindings_required` when wired.
+Per-binding runners drive the path and gate both bands against the committed
+golden, **failing loudly** on any divergence: **Julia** —
+`pkg/EarthSciAST.jl/test/refresh_conformance_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_refresh_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/refresh_conformance.rs` (all run by
+`test-conformance.sh`). `bindings_required` is `["julia", "python", "rust"]` — the
+regrid is an in-model coupling every simulation binding already evaluates, so no
+regrid seam or source change is needed to consume it.
+
+### 5.11 Subsystem-Mounted Loader Consumption (normative)
+
+§5.10 governs **top-level** `data_loaders` fed to a model through a coupling
+edge. This section governs a pure-I/O data loader **mounted as a model
+subsystem** (RFC `pure-io-data-loaders` §4.3 — `models.X.subsystems.raw =
+<DataLoader>`) and consumed by the **owning model's own equations** by the
+existing dot-notation (`raw.field`, lowered to the observed `<owner>.raw.field`).
+The two simulation bindings that support it — **Python, Julia** — must agree, on
+a **numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/subsystem_loader/`.
+
+This closes a gap the §5.10 top-level/`variable_map` fixtures do not cover: the
+loader is a **subsystem of the consumer**, and it is consumed both by a
+**bare-scalar** reference (`raw.k`) and by a **gather** (`index(raw.wind, 2)`).
+The bare-scalar path is the one that previously failed — Julia raised
+`E_TREEWALK_UNBOUND_VARIABLE: <owner>.<subkey>.<var>`, and Python's structural
+validator rejected the 2-part `raw.field` reference.
+
+#### 5.11.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it, and asserts each
+DataLoader-subsystem variable lowered to a const-array-backed **observed**
+`<owner>.<subkey>.<var>` with **no defining equation** (its value is a pure-I/O
+external input). It seeds one **offline CONST provider** per loader field from the
+golden's `loaders[*].native`, integrates `D(c) = (raw.k + wind[2]) - c` (c(0)=0)
+with the pinned integrator, and compares each golden `trajectory` point's `Box.c`.
+The forcing `F = k + wind[2] = 2 + 5 = 7` is constant, so `c(t) = 7 (1 - e^-t)` is
+analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+#### 5.11.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.10, trajectories MUST NOT be asserted byte-identical; the integrator is
+pinned per binding in `manifest.json` (`integrators`). Providers are seeded from
+`golden.loaders[*].native` — **no network, no file I/O** — so the suite is
+deterministic and CI-safe.
+
+#### 5.11.3 Coverage
+
+The fixture `subsystem_loader_ode` is a 0-D ODE whose model `Box` mounts a static
+(CONST) loader `raw` exposing a scalar `k` and a 3-element `wind`, consuming `k`
+bare and `wind` via `index(raw.wind, 2)`. It exercises: subsystem-mount lowering
+to `<owner>.<subkey>.<var>` observeds, **bare-scalar** loader consumption,
+**gather** loader consumption, and CONST-once materialization.
+
+#### 5.11.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`pkg/EarthSciAST.jl/test/subsystem_loader_conformance_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_subsystem_loader_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/subsystem_loader_conformance.rs`.
+`bindings_required` is `["python", "julia", "rust"]`. Rust's flattener now lowers
+a DataLoader mounted as a model subsystem (`flatten.rs`
+`lower_loader_subsystems`): each loader variable becomes a const-array-backed
+observed `Box.raw.<var>` with no defining expression, and the owner's bare
+`raw.<var>` references are namespaced to `Box.raw.<var>`; both resolve at the RHS
+through the existing data-Provider forcing seam (`ArrayCompiled::forcing_handle`),
+a bare-scalar field seeded as a 0-D array and a gathered field as a 1-D array.
+
+### 5.12 Build-Once Spatial-Field Consumption (normative)
+
+§5.8 governs the build-once conservative-regrid **areas**; §5.11 governs binding a
+CONST **loader** field. This section governs a **build-once spatial field** — a
+`const`-derived array **regridded and/or differentiated** once at setup — that is
+then **consumed elementwise by an ODE**. It is the pattern a coupling emits when a
+static field (e.g. loader/const terrain elevation) is regridded onto a model grid
+and differentiated (`grad`/`D`) into a per-cell forcing that flows into the ODE
+RHS (`wildlandfire.esm`'s `TerrainRegrid` → `TerrainSlope`). The two simulation
+bindings that support it — **Julia, Python** — must agree, on a
+**numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/build_once_spatial_field/`.
+
+This closes two gaps the §5.8 / §5.11 fixtures do not cover, both on the
+build-once materialization ⇄ RHS seam:
+
+1. **A build-once array op that is NOT an aggregate.** A discretization rule
+   lowers `D(field)` to a `makearray` STENCIL (interior + periodic-boundary
+   regions, each a nested central-difference aggregate), and a shape rewrite may
+   emit a `reshape`. Neither carries `output_idx`/`ranges`, so the setup-time
+   materializer must evaluate them per output cell through the **same** build-time
+   array pipeline the ODE RHS uses for `index(makearray, …)` — not only the
+   aggregate (`output_idx`) form.
+2. **A build-once array crossing into the ODE RHS.** A field materialized at
+   setup must be exposed to the ODE RHS as a **gatherable const array**, so a
+   per-cell reference `index(darea, c)` (after shape promotion of a scalar
+   consumer of the spatial field) resolves against the setup-registered const
+   arrays.
+
+#### 5.12.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it (asserting `Field.area`
+and `Field.darea` are observeds, not integrated state slots), and integrates
+`D(u[c]) = darea[c] - u[c]` (u(0)=0) with the pinned integrator, comparing each
+golden `trajectory` point's `Field.u[c]`. Julia additionally asserts the
+materialized `setup_fields` (`Field.area = [10, 30, 60]`, `Field.darea =
+[-15, 25, -10]`) through `BuildInspection`. The forcing is CONST, so
+`u_c(t) = darea_c (1 - e^-t)` is analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+#### 5.12.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.11, trajectories MUST NOT be asserted byte-identical; the integrator is
+pinned per binding in `manifest.json` (`integrators`). The fixture takes no
+providers — the source field is an in-file `const` polygon stack — so the suite is
+deterministic and CI-safe.
+
+#### 5.12.3 Coverage
+
+The fixture `build_once_spatial_ode` is a 0-D-per-cell array ODE whose model
+`Field` declares three const polygon cells, derives `area[c] =
+polygon_intersection_area(poly[c], poly[c], planar)` (a geometry leaf arming the
+build-once setup machinery), differentiates it build-once with a periodic
+`makearray` (`darea = D_c(area)`), and forces `D(u[c]) = darea[c] - u[c]`. It
+exercises: setup-time materialization of a **makearray** (Gap 1), a build-once
+array **gathered into the ODE RHS** (Gap 2), and CONST build-once materialization.
+
+#### 5.12.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`pkg/EarthSciAST.jl/test/build_once_spatial_field_conformance_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_build_once_spatial_field_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/build_once_spatial_field_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]` (Julia is where the two gaps
+were fixed — the setup-materializer + const-array crossing; Python and Rust
+already evaluate `polygon_intersection_area` + `makearray` + the array ODE
+end-to-end, resolving the build-once field at the RHS rather than at a separate
+setup pass, so the numeric result matches Julia's setup-materialized path). Rust
+drives the composed path through its `simulate_array` runtime with no source
+changes required to enable it.
+
+### 5.13 Discrete-Cadence Materialization Consumption (normative)
+
+§5.12 governs the CONST tier of the materialize ⇄ gather seam (a field derived
+once at setup, gathered into an ODE, never refreshed); §5.10 governs the full
+loader → regrid → refresh capstone. This section governs the **middle cadence
+phase** between them — the DISCRETE tier of the `const ⊏ discrete ⊏ continuous`
+partition. A state-free array observed that mixes a **CONST** weight with a
+**DISCRETE** forcing field changes neither build-once nor per-continuous-step: it
+materializes **once per refresh** and is gathered into the RHS across the segment.
+The three simulation bindings — **Julia, Python, Rust** — must agree, on a
+**numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
+fixture lives in `tests/conformance/discrete_materialize/`.
+
+Relative to §5.10 it **drops the regrid** (`src` is delivered directly on the sim
+index) and the provider/loader stack (the adapter drives the segments from the
+golden's offline snapshots), isolating the one thing §5.10 and §5.12 do not pin on
+their own: the **const-vs-discrete cadence classification inside a contraction**.
+Two sibling contractions of identical shape sit on opposite sides of the cut:
+
+1. **The DISCRETE contraction.** `g[j] = sum_i W[i,j]·src[i]` mixes the const
+   weight `W` with the DISCRETE forcing `src`, so it is state-free yet
+   forcing-tainted — it changes only at a cadence boundary. A materializing
+   binding (Julia's `DiscreteMaterializer`) caches it once per refresh and gathers
+   the cache into the hot RHS; a re-evaluating binding (Python, Rust) recomputes
+   the state-free `g` once per segment with the forcing frozen. Both land the same
+   value.
+2. **The CONST sibling (the regression guard).** `k[j] = sum_i W[i,j]·offset`
+   reads only const `W` and the scalar parameter `offset` — state-free AND
+   forcing-free — so it is CONST-cadence and MUST stay on the build-once/inline
+   path. It MUST NOT become a per-refresh cache; an over-broad cut that captures it
+   is a conformance failure.
+
+Go and TypeScript are **out of scope** (no array simulator / refresh executor).
+
+#### 5.13.1 What is compared
+
+Each in-scope binding loads the shared `.esm`, flattens it (asserting `W`/`g`/`k`
+are observeds, not integrated state slots), and drives a **segmented solve** of
+`D(c[j]) = g[j] + k[j]` over the golden's `refresh_times` ∩ `tspan` — writing
+`src` from `forcing.by_anchor` at each boundary (forcing frozen within a segment →
+RHS pure), threading state across segments — comparing each golden `trajectory`
+point's `M.c[j]`. Julia **additionally** asserts the **field band**: the
+`DiscreteMaterializer` caches `g` (not `k`), and its cache equals
+`golden.discrete_field` at each anchor. The DISCRETE forcing is piecewise-constant
+across segments, so the trajectory (and the per-anchor `g`) is analytic and exact.
+
+| Band | rtol | atol |
+|------|------|------|
+| Discrete-cache / const field (vs analytic) | 1e-9 | 1e-11 |
+| Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
+
+The field band is tight — a contraction on exact integer weights is exact up to
+floating-point. The trajectory band matches §5.10 / §5.12, absorbing integrator
+truncation.
+
+#### 5.13.2 ⛔ Numeric-tolerance and strictly offline
+
+As in §5.10 / §5.12, trajectories MUST NOT be asserted byte-identical; the
+integrator is pinned per binding in `manifest.json` (`integrators`). The forcing
+snapshots come from the golden's `forcing.by_anchor` — **no providers, no network,
+no file I/O** — driven by each binding's forcing primitive (Julia
+`build_evaluator(…; param_arrays)` + a `build_refresh_callback` whose
+`post_refresh = dm.materialize!` fires per anchor; Python
+`_simulate_with_numpy(…, loader_arrays=…)`; Rust
+`ArrayCompiled::forcing_handle()`), so the suite is deterministic and CI-safe. The
+per-anchor `src` snapshots are distinct, so a stale (un-refreshed) forcing yields a
+visibly wrong trajectory slope — the refresh is load-bearing.
+
+#### 5.13.3 Coverage
+
+The fixture `discrete_materialize_contraction` is a 0-D-per-cell array ODE whose
+model `M` declares a const weight matrix `W`, a scalar parameter `offset`, and a
+bare DISCRETE forcing name `src`; derives the DISCRETE contraction `g` and the
+CONST sibling `k`; and forces `D(c[j]) = g[j] + k[j]` over `j ∈ [1,3]`. It
+exercises: the DISCRETE-tier materialize ⇄ gather seam (a state-free forcing-tainted
+array refreshed at cadence boundaries), the const-vs-discrete classification
+(`g` cached, `k` inline), cross-segment state threading, and the closed-form check
+the piecewise-constant forcing affords.
+
+#### 5.13.4 Gate
+
+Per-binding runners drive the fixture and gate the trajectory band against the
+committed golden: **Julia** —
+`pkg/EarthSciAST.jl/test/discrete_materialize_conformance_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_discrete_materialize_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/discrete_materialize_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]` (Julia is where the
+discrete-materialization cut lives — the `DiscreteMaterializer` sink + the refresh
+callback's `post_refresh` hook — so it additionally gates the field band; Python
+and Rust re-materialize the state-free contraction at each segment's RHS, forcing
+frozen, so the numeric result matches Julia's materialized path).
 
 ## 6. CI Integration
 
@@ -1398,7 +1729,7 @@ The `.github/workflows/conformance-testing.yml` workflow:
 
 Conformance tests run automatically on:
 - Pushes to `main` or `develop` branches
-- Pull requests affecting `packages/`, `tests/`, or `scripts/`
+- Pull requests affecting `pkg/`, `tests/`, or `scripts/`
 - Manual workflow dispatch
 
 ### 6.3 Workflow Dependencies
@@ -1430,10 +1761,8 @@ Validation tests must use these standardized error codes:
 | `event_var_undeclared` | Structural | Event affects undeclared variable |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure |
 | `unit_parse_error` | Units | Unrecognized unit string |
-| `E_UNREWRITTEN_PDE_OP` | Discretization | `discretize()` output still contains a PDE op (`grad`, `div`, `laplacian`, `D`, `bc`) after the rule engine runs (RFC §11 Step 7). |
-| `E_RULES_NOT_CONVERGED` | Discretization | Rule engine hit `max_passes` without reaching a fixed point (RFC §5.2.5). |
-| `E_NO_DAE_SUPPORT` | Discretization | `discretize()` output contains algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
-| `E_NONTRIVIAL_DAE` | Discretization | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
+| `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
+| `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 ### 7.2 Error Message Format
 
@@ -1537,9 +1866,9 @@ The test fixture format is designed to accommodate:
 
 ## 11. Reference Implementation
 
-The Julia `EarthSciSerialization.jl` library serves as the reference implementation for conformance test development. When adding new test fixtures:
+The Julia `EarthSciAST.jl` library serves as the reference implementation for conformance test development. When adding new test fixtures:
 
-1. Verify behavior using `EarthSciSerialization.jl`
+1. Verify behavior using `EarthSciAST.jl`
 2. Generate expected outputs using Julia implementation
 3. Validate that other implementations produce equivalent results
 4. Document any acceptable implementation differences

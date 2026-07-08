@@ -1,0 +1,78 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "ERA5_pressure_levels_example",
+    "description": "Covers EarthSciData.jl/src/era5.jl ERA5PressureLevelFileSet. Files come from CDS API or a local mirror (era5_pl_YYYY_MM.nc per month, 37 pressure levels 1000..1 hPa, hourly valid_time). Variables follow ERA5_VARIABLES mapping (full name -> short name used in the NetCDF). ERA5 pressure-level reanalysis, monthly files, hourly frequency, 37 pressure levels from CDS.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-loader",
+      "meteorology",
+      "reanalysis",
+      "era5"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {},
+      "equations": []
+    }
+  },
+  "data_loaders": {
+    "ERA5_pl_monthly": {
+      "kind": "grid",
+      "source": {
+        "url_template": "cdsapi://reanalysis-era5-pressure-levels/era5_pl_{date:%Y}_{date:%m}.nc",
+        "mirrors": [
+          "file://${ERA5_LOCAL}/era5_pl_{date:%Y}_{date:%m}.nc"
+        ]
+      },
+      "temporal": {
+        "start": "1940-01-01T00:00:00Z",
+        "file_period": "P1M",
+        "frequency": "PT1H",
+        "time_variable": "valid_time"
+      },
+      "variables": {
+        "temperature": {
+          "file_variable": "t",
+          "units": "K",
+          "description": "Air temperature on pressure levels"
+        },
+        "u_component_of_wind": {
+          "file_variable": "u",
+          "units": "m s^-1",
+          "description": "Eastward component of wind on pressure levels"
+        },
+        "v_component_of_wind": {
+          "file_variable": "v",
+          "units": "m s^-1",
+          "description": "Northward component of wind on pressure levels"
+        },
+        "specific_humidity": {
+          "file_variable": "q",
+          "units": "kg kg^-1",
+          "description": "Specific humidity on pressure levels"
+        },
+        "geopotential": {
+          "file_variable": "z",
+          "units": "m^2 s^-2",
+          "description": "Geopotential on pressure levels"
+        }
+      },
+      "reference": {
+        "citation": "Hersbach, H. et al. (2020) The ERA5 global reanalysis. Q. J. R. Meteorol. Soc. 146: 1999-2049.",
+        "doi": "10.1002/qj.3803",
+        "url": "https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-pressure-levels"
+      },
+      "metadata": {
+        "tags": [
+          "reanalysis",
+          "pressure-levels"
+        ],
+        "dataset": "reanalysis-era5-pressure-levels"
+      }
+    }
+  }
+}

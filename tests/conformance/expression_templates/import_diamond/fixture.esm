@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_diamond", "description": "Diamond import: grid_shared reaches this model through both lib_flux_a and lib_flux_b with equal instantiation; the deep-equal duplicates (cell_count template, NC metaparameter, cells index set) dedup at first occurrence (esm-spec 9.7.4/9.7.5)" },
+  "models": {
+    "Diamond": {
+      "expression_template_imports": [
+        { "ref": "./lib_flux_a.esm" },
+        { "ref": "./lib_flux_b.esm" }
+      ],
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.5 },
+        "ya": { "type": "observed", "units": "1", "expression": { "op": "diffuse_a", "args": ["x"] } },
+        "yb": { "type": "observed", "units": "1", "expression": { "op": "diffuse_b", "args": ["x"] } }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

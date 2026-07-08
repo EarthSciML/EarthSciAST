@@ -326,7 +326,7 @@
                       "type": "parameter",
                       "units": "1/s",
                       "default": 0.001,
-                      "description": "Brunt-V\u00e4is\u00e4l\u00e4 frequency"
+                      "description": "Brunt-Väisälä frequency"
                     }
                   },
                   "equations": [
@@ -566,17 +566,11 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-02T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

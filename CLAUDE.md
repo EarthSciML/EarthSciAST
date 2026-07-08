@@ -1,55 +1,5 @@
 # Project Instructions for AI Agents
 
-This file provides instructions and context for AI coding agents working on this project.
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
-
-
 ## Build & Test
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup and [CONFORMANCE_SPEC.md](CONFORMANCE_SPEC.md) for cross-language conformance details.
@@ -60,11 +10,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup and [CONFORMANCE_SPEC.md](
 
 # Individual language tests
 julia --project=. -e 'using Pkg; Pkg.test()'                       # Julia
-cd packages/earthsci-toolkit && npm test                            # TypeScript
-cd packages/earthsci_toolkit && python3 -m pytest tests/ -v         # Python
-cd packages/earthsci-toolkit-rs && cargo test                       # Rust
-cd packages/esm-format-go && go test ./...                          # Go
-cd packages/esm-editor && npm test                                  # SolidJS editor
+cd pkg/earthsci-ast-ts && npm test                            # TypeScript
+cd pkg/earthsci-ast-py && python3 -m pytest tests/ -v         # Python
+cd pkg/earthsci-ast-rs && cargo test                       # Rust
+cd pkg/earthsci-ast-go && go test ./...                          # Go
+cd pkg/earthsci-ast-editor && npm test                                  # SolidJS editor
 
 # Dependency management
 ./install.sh --all       # Install all language environments
@@ -73,14 +23,14 @@ cd packages/esm-editor && npm test                                  # SolidJS ed
 
 ## Architecture Overview
 
-EarthSciSerialization is a language-agnostic JSON format for earth science model components, defined by `esm-schema.json` and documented in `esm-spec.md`. Language implementations live under `packages/`:
+EarthSciAST is a language-agnostic JSON format for earth science model components, defined by `esm-schema.json` and documented in `esm-spec.md`. Language implementations live under `pkg/`:
 
-- **EarthSciSerialization.jl** — Julia reference implementation (MTK/Catalyst integration)
-- **earthsci-toolkit** — TypeScript types and utilities
-- **earthsci_toolkit** — Python scientific integration
-- **earthsci-toolkit-rs** — Rust high-performance implementation
-- **esm-format-go** — Go lightweight implementation
-- **esm-editor** — SolidJS interactive web editor
+- **EarthSciAST.jl** — Julia reference implementation (MTK/Catalyst integration)
+- **earthsci-ast-ts** (`@earthsciml/ast`) — TypeScript types and utilities
+- **earthsci-ast-py** (`earthsci-ast`) — Python scientific integration
+- **earthsci-ast-rs** (`earthsci-ast`) — Rust high-performance implementation
+- **earthsci-ast-go** — Go lightweight implementation
+- **earthsci-ast-editor** (`@earthsciml/ast-editor`) — SolidJS interactive web editor
 
 Shared test fixtures in `tests/` (valid, invalid, conformance) ensure cross-language consistency.
 
@@ -89,22 +39,3 @@ Shared test fixtures in `tests/` (valid, invalid, conformance) ensure cross-lang
 - Follow conventional commits: `type(scope): description` (e.g. `feat(julia): add expression support`)
 - All implementations must conform to `esm-schema.json` and pass `./scripts/test-conformance.sh`
 - Follow each language's idiomatic style (see [CONTRIBUTING.md](CONTRIBUTING.md#language-specific-standards))
-
-## Authoring ESM files (rules, models, reactions)
-
-**Prefer the AST.** Expression right-hand-sides SHOULD be written using the
-built-in AST ops defined in `esm-spec.md` §4 (e.g. `^`, `*`, `+`, `max`, `min`,
-`ifelse`, `sign`, and the standard trig / exp / log / sqrt family). Do NOT
-introduce a `registered_functions` entry and a `{op: "call", handler_id: ...}`
-node for anything that can be written as a finite closed-form expression —
-`x²` is `{op: "^", args: [x, 2]}`, never `{op: "call", handler_id: "sq", args: [x]}`.
-
-The `call` op is an escape hatch for operations that **cannot** be expressed in
-the AST: tabulated lookups (photolysis rates, 2D deposition tables), implicit
-or iterative solves (equilibrium, Newton), and platform-dependent adapters.
-Every registered function costs a per-binding handler implementation in all
-five languages, so the bar is high.
-
-See `esm-spec.md` §9.2 ("When to use `call` vs. AST ops") for the full decision
-table. When reviewing another agent's or contributor's ESM changes, reject any
-`call` node whose body can be written with existing AST ops.

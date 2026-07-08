@@ -4,13 +4,13 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'docs/**'
       - 'scripts/generate_docs.py'
   pull_request:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'docs/**'
       - 'scripts/generate_docs.py'
 

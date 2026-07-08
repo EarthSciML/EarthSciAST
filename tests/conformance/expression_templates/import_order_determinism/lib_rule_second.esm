@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "lib_rule_second", "description": "Equal-priority match rule on the SAME pattern as lib_rule_first; body multiplies by 3" },
+  "expression_templates": {
+    "lower_op_second": {
+      "params": ["f"],
+      "match": { "op": "lowerme", "args": ["f"] },
+      "body": { "op": "*", "args": [3, "f"] }
+    }
+  }
+}

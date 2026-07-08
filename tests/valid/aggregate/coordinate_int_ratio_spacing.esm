@@ -1,0 +1,224 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "coordinate_int_ratio_spacing",
+    "description": "Cross-binding canonical-number conformance fixture for an INTEGER RATIO spelled INSIDE an aggregate `expr` body (CONFORMANCE_SPEC §5.5.3.1 rule 1). Two cell-centre coordinate maps compute x_i = (i - 1/2)/N over unit-interval grids of N = 8 and N = 16 cells: the grid spacing 1/N is spelled as the exact integer ratio {op:/,args:[1,N]} inside each aggregate `expr` (the sibling {op:-,args:[i,0.5]} carries a float 0.5, and the aggregate sits under a float-heavy cos(pi*...) init expression). This is the shape that exposed the divergence: the Julia binding's JSON3 reader applies a context-dependent structural number inference that materialises a bare integer token (1, 8, 16) as Float64 inside such a deeply-nested, schema-repeating document, so the same integer ratio serialized as 1.0/8.0 in Julia but 1/8 in Python/Rust/TS/Go, and could never be byte-identical. §5.5.3.1 rule 1 (a JSON number whose value is integral and Int64-representable is an integer literal, regardless of source spelling) is applied uniformly at the AST-literal boundary so every binding preserves the integer literals. The standalone spacing observeds dxA/dxB carry the SAME 1/N integer ratio OUTSIDE any aggregate and must render identically. Value check: each coordinate rate is a constant from rest, so coord*[i] at t=1 equals (i-1/2)/N exactly — coordA[1]=(1-0.5)/8=0.0625, coordA[2]=0.1875; coordB[1]=(1-0.5)/16=0.03125 — confirming the integer ratio 1/8 evaluates as true division to 0.125 (and 1/16 to 0.0625).",
+    "authors": [
+      "EarthSciAST/polecats/gastown.slit"
+    ],
+    "tags": [
+      "aggregate",
+      "int-division",
+      "canonical-number",
+      "conformance",
+      "5.5.3.1",
+      "ess-aggregate-intdiv"
+    ]
+  },
+  "index_sets": {
+    "xA": {
+      "kind": "interval",
+      "size": 8
+    },
+    "xB": {
+      "kind": "interval",
+      "size": 16
+    }
+  },
+  "models": {
+    "CoordinateIntRatioSpacing": {
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "variables": {
+        "coordA": {
+          "type": "state",
+          "shape": [
+            "xA"
+          ]
+        },
+        "coordB": {
+          "type": "state",
+          "shape": [
+            "xB"
+          ]
+        },
+        "dxA": {
+          "type": "observed",
+          "units": "1",
+          "expression": {
+            "op": "/",
+            "args": [
+              1,
+              8
+            ]
+          }
+        },
+        "dxB": {
+          "type": "observed",
+          "units": "1",
+          "expression": {
+            "op": "/",
+            "args": [
+              1,
+              16
+            ]
+          }
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(coordA[i])/dt = (i - 1/2)*(1/8). Integer ratio 1/8 inside the aggregate expr body; constant RHS from rest so coordA[i](1)=(i-0.5)/8.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "coordA",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": {
+                "from": "xA"
+              }
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "xA"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "i",
+                    0.5
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    1,
+                    8
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "D(coordB[i])/dt = (i - 1/2)*(1/16). Integer ratio 1/16 inside the aggregate expr body over a 16-cell grid.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "coordB",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "i": {
+                "from": "xB"
+              }
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "xB"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "i",
+                    0.5
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    1,
+                    16
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "coordinate_int_ratio_t1",
+          "description": "Constant-RHS coordinate map from rest: coordA[i](1)=(i-0.5)/8, coordB[i](1)=(i-0.5)/16. Confirms the integer ratio 1/8 inside the aggregate evaluates as true division to 0.125 (0.5*0.125=0.0625) and 1/16 to 0.0625.",
+          "initial_conditions": {
+            "coordA[1]": 0.0,
+            "coordA[2]": 0.0,
+            "coordB[1]": 0.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "coordA[1]",
+              "time": 1.0,
+              "expected": 0.0625
+            },
+            {
+              "variable": "coordA[2]",
+              "time": 1.0,
+              "expected": 0.1875
+            },
+            {
+              "variable": "coordB[1]",
+              "time": 1.0,
+              "expected": 0.03125
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

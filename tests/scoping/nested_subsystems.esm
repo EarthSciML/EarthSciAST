@@ -21,7 +21,53 @@
           "description": "Surface pressure"
         }
       },
-      "equations": [],
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Chemistry.FastChem.O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Chemistry.FastChem.NO"
+            ]
+          },
+          "rhs": 1e-10
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Chemistry.FastChem.NO2"
+            ]
+          },
+          "rhs": 1e-09
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Chemistry.SlowChem.CH4"
+            ]
+          },
+          "rhs": 1.8e-06
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Chemistry.SlowChem.OH"
+            ]
+          },
+          "rhs": 1e-12
+        }
+      ],
       "subsystems": {
         "Chemistry": {
           "variables": {
@@ -274,20 +320,17 @@
               }
             ]
           }
-        }
-      ],
-      "boundary_conditions": {
-        "sea_surface_temp_zero_gradient_zmin": {
-          "variable": "sea_surface_temp",
-          "side": "zmin",
-          "kind": "zero_gradient"
         },
-        "sea_surface_temp_zero_gradient_zmax": {
-          "variable": "sea_surface_temp",
-          "side": "zmax",
-          "kind": "zero_gradient"
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "sea_surface_temp"
+            ]
+          },
+          "rhs": 288.0
         }
-      }
+      ]
     }
   },
   "data_loaders": {
@@ -295,36 +338,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "NO_flux": {
@@ -409,31 +422,10 @@
       "description": "Cross-chemistry coupling: NO2 affects OH production"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-07-15T00:00:00Z",
-        "end": "2024-07-15T06:00:00Z"
-      },
-      "spatial": {
-        "z": {
-          "min": 0.0,
-          "max": 10000.0,
-          "grid_spacing": 100.0,
-          "units": "m"
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "Atmosphere.Chemistry.FastChem.O3": 4e-08,
-          "Atmosphere.Chemistry.FastChem.NO": 1e-10,
-          "Atmosphere.Chemistry.FastChem.NO2": 1e-09,
-          "Atmosphere.Chemistry.SlowChem.CH4": 1.8e-06,
-          "Atmosphere.Chemistry.SlowChem.OH": 1e-12,
-          "Ocean.sea_surface_temp": 288.0
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-07-15T00:00:00Z",
+      "end": "2024-07-15T06:00:00Z"
     }
   }
 }

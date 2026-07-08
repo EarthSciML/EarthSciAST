@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_08_2d_analytical",
     "description": "2-D ArrayOp on u[i,j] with M=4, N=3. D(u[i,j]) = -u[i,j], analytical u_ij(t) = (i+j)*exp(-t). Exercises the 2-D output_idx path and multi-dimensional shape inference. Mirrors MTK fork test #8.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "2d", "analytical"]
   },
   "models": {
@@ -14,12 +14,12 @@
       "equations": [
         {
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i", "j"],
+            "op": "aggregate", "args": [], "output_idx": ["i", "j"],
             "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", "i", "j"] }], "wrt": "t" },
             "ranges": { "i": [1, 4], "j": [1, 3] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i", "j"],
+            "op": "aggregate", "args": [], "output_idx": ["i", "j"],
             "expr": { "op": "-", "args": [{ "op": "index", "args": ["u", "i", "j"] }] },
             "ranges": { "i": [1, 4], "j": [1, 3] }
           }

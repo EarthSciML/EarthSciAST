@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "subsystem_ref_is_library", "description": "A 4.7 subsystem ref targets a template-library file; the two reference mechanisms are disjoint (subsystem_ref_is_template_library, esm-spec 9.7.1)" },
+  "models": {
+    "M": {
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ],
+      "subsystems": { "Lib": { "ref": "../../valid/template_import_lib.esm" } }
+    }
+  }
+}

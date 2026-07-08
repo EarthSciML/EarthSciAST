@@ -46,6 +46,15 @@
               "fast_state"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "fast_state"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -179,13 +188,13 @@
           "type": "state",
           "units": "rad",
           "default": 1.57,
-          "description": "Oscillator 2 phase (90\u00b0 offset)"
+          "description": "Oscillator 2 phase (90° offset)"
         },
         "osc3_phase": {
           "type": "state",
           "units": "rad",
           "default": 3.14,
-          "description": "Oscillator 3 phase (180\u00b0 offset)"
+          "description": "Oscillator 3 phase (180° offset)"
         },
         "sync_strength": {
           "type": "parameter",
@@ -299,6 +308,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "osc1_phase"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "osc2_phase"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "osc3_phase"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -476,6 +512,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "shared_resource"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -734,16 +779,10 @@
       "description": "Cross-system synchronization event with multiple complex conditions"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00.000000Z",
-        "end": "2024-01-01T00:00:10.000000Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00.000000Z",
+      "end": "2024-01-01T00:00:10.000000Z"
     }
   }
 }

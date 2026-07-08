@@ -1,6 +1,6 @@
 # ESM ReactionSystem → MockCatalyst conversion with stoichiometry preservation (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Create a simple ozone photochemistry system
@@ -20,7 +20,7 @@
             Reaction(
                 Dict("NO" => 1, "O3" => 1),
                 Dict("NO2" => 1),
-                OpExpr("*", EarthSciSerialization.Expr[VarExpr("k1"), VarExpr("M")])
+                OpExpr("*", EarthSciAST.Expr[VarExpr("k1"), VarExpr("M")])
             ),
             Reaction(
                 Dict("NO2" => 1),
@@ -32,7 +32,7 @@
         esm_rsys = ReactionSystem(species, reactions; parameters=parameters)
         catalyst_sys = to_catalyst_system(esm_rsys, "OzonePhotochemistry")
 
-        @test catalyst_sys isa EarthSciSerialization.MockCatalystSystem
+        @test catalyst_sys isa EarthSciAST.MockCatalystSystem
         @test catalyst_sys.name == "OzonePhotochemistry"
 
         # Check species, parameters, and reactions

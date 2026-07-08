@@ -1,0 +1,77 @@
+{
+  "_comment": "OpenAQ point observations fixture. Expresses an instantiation of EarthSciData.jl OpenAQFileSet for 'o3' parameter. Source: EarthSciData.jl src/openaq.jl (struct OpenAQFileSet at lines 57-70, constructor at lines 89-116). This is a 'points' kind loader because OpenAQ returns irregular station observations. The url_template points at the OpenAQ v3 measurements API. API key (ENV['OPENAQ_API_KEY']) is runtime-only and not in the schema.",
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "OpenAQFixture",
+    "description": "OpenAQ point-observation ozone measurements in the STAC-like DataLoader schema.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "created": "2026-04-14T00:00:00Z",
+    "tags": [
+      "earthscidata-coverage",
+      "openaq",
+      "observations",
+      "point-data"
+    ]
+  },
+  "data_loaders": {
+    "OpenAQ_O3": {
+      "kind": "points",
+      "source": {
+        "url_template": "https://api.openaq.org/v3/sensors/{sensor_id}/measurements?parameter={species}&date_from={date:%Y-%m-%dT%H:%M:%SZ}&date_to={date:%Y-%m-%dT%H:%M:%SZ}&limit=1000"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "PT1H",
+        "records_per_file": "auto",
+        "time_variable": "datetime"
+      },
+      "variables": {
+        "o3": {
+          "file_variable": "value",
+          "units": "ppb",
+          "description": "Surface O3 concentration at station sites (raw values may be in µg/m³; runtime converts using unit_scale)"
+        }
+      },
+      "reference": {
+        "citation": "OpenAQ: Open Air Quality Data Platform. Real-time and historical air quality observations from public stations worldwide.",
+        "url": "https://docs.openaq.org/"
+      },
+      "metadata": {
+        "tags": [
+          "observation",
+          "point-data",
+          "air-quality"
+        ],
+        "earthscidata_source": "src/openaq.jl::OpenAQFileSet",
+        "parameter": "o3",
+        "requires_api_key": true,
+        "notes": "OpenAQ is a points loader: measurements come from irregular stations. The runtime rasterizes onto a target grid using grid_lon_edges/grid_lat_edges (provided at construction). Station discovery uses the OpenAQ v3 /locations endpoint with a bbox filter."
+      }
+    }
+  },
+  "models": {
+    "placeholder": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

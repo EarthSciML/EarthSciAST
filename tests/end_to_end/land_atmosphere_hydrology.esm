@@ -156,55 +156,35 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "air_temperature"
+            ]
+          },
+          "rhs": 295.15
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "specific_humidity"
+            ]
+          },
+          "rhs": 0.008
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "wind_speed"
+            ]
+          },
+          "rhs": 3.0
         }
-      ],
-      "boundary_conditions": {
-        "air_temperature_periodic_xmin": {
-          "variable": "air_temperature",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "specific_humidity_periodic_xmin": {
-          "variable": "specific_humidity",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "wind_speed_periodic_xmin": {
-          "variable": "wind_speed",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "air_temperature_zero_gradient_xmin": {
-          "variable": "air_temperature",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "specific_humidity_zero_gradient_xmin": {
-          "variable": "specific_humidity",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_xmin": {
-          "variable": "wind_speed",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "air_temperature_zero_gradient_xmax": {
-          "variable": "air_temperature",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "specific_humidity_zero_gradient_xmax": {
-          "variable": "specific_humidity",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "wind_speed_zero_gradient_xmax": {
-          "variable": "wind_speed",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "SoilHydrologyThermal": {
       "coupletype": "SoilCoupler",
@@ -683,100 +663,62 @@
               "heat_capacity"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_moisture_layer1"
+            ]
+          },
+          "rhs": 0.25
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_moisture_layer2"
+            ]
+          },
+          "rhs": 0.3
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_moisture_layer3"
+            ]
+          },
+          "rhs": 0.35
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_temperature_layer1"
+            ]
+          },
+          "rhs": 288.15
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_temperature_layer2"
+            ]
+          },
+          "rhs": 288.15
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_temperature_layer3"
+            ]
+          },
+          "rhs": 288.15
         }
-      ],
-      "boundary_conditions": {
-        "soil_moisture_layer1_periodic_xmin": {
-          "variable": "soil_moisture_layer1",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_moisture_layer2_periodic_xmin": {
-          "variable": "soil_moisture_layer2",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_moisture_layer3_periodic_xmin": {
-          "variable": "soil_moisture_layer3",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_temperature_layer1_periodic_xmin": {
-          "variable": "soil_temperature_layer1",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_temperature_layer2_periodic_xmin": {
-          "variable": "soil_temperature_layer2",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_temperature_layer3_periodic_xmin": {
-          "variable": "soil_temperature_layer3",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "soil_moisture_layer1_zero_gradient_xmin": {
-          "variable": "soil_moisture_layer1",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_layer2_zero_gradient_xmin": {
-          "variable": "soil_moisture_layer2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_layer3_zero_gradient_xmin": {
-          "variable": "soil_moisture_layer3",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer1_zero_gradient_xmin": {
-          "variable": "soil_temperature_layer1",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer2_zero_gradient_xmin": {
-          "variable": "soil_temperature_layer2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer3_zero_gradient_xmin": {
-          "variable": "soil_temperature_layer3",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_layer1_zero_gradient_xmax": {
-          "variable": "soil_moisture_layer1",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_layer2_zero_gradient_xmax": {
-          "variable": "soil_moisture_layer2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_layer3_zero_gradient_xmax": {
-          "variable": "soil_moisture_layer3",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer1_zero_gradient_xmax": {
-          "variable": "soil_temperature_layer1",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer2_zero_gradient_xmax": {
-          "variable": "soil_temperature_layer2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "soil_temperature_layer3_zero_gradient_xmax": {
-          "variable": "soil_temperature_layer3",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "VegetationDynamics": {
       "reference": {
@@ -1035,55 +977,35 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "leaf_area_index"
+            ]
+          },
+          "rhs": 3.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "above_ground_biomass"
+            ]
+          },
+          "rhs": 2.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "below_ground_biomass"
+            ]
+          },
+          "rhs": 1.5
         }
-      ],
-      "boundary_conditions": {
-        "leaf_area_index_periodic_xmin": {
-          "variable": "leaf_area_index",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "above_ground_biomass_periodic_xmin": {
-          "variable": "above_ground_biomass",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "below_ground_biomass_periodic_xmin": {
-          "variable": "below_ground_biomass",
-          "side": "xmin",
-          "kind": "periodic"
-        },
-        "leaf_area_index_zero_gradient_xmin": {
-          "variable": "leaf_area_index",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "above_ground_biomass_zero_gradient_xmin": {
-          "variable": "above_ground_biomass",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "below_ground_biomass_zero_gradient_xmin": {
-          "variable": "below_ground_biomass",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "leaf_area_index_zero_gradient_xmax": {
-          "variable": "leaf_area_index",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "above_ground_biomass_zero_gradient_xmax": {
-          "variable": "above_ground_biomass",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "below_ground_biomass_zero_gradient_xmax": {
-          "variable": "below_ground_biomass",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "SurfaceEnergyBalance": {
       "reference": {
@@ -1377,25 +1299,17 @@
               500000.0
             ]
           }
-        }
-      ],
-      "boundary_conditions": {
-        "surface_temperature_periodic_xmin": {
-          "variable": "surface_temperature",
-          "side": "xmin",
-          "kind": "periodic"
         },
-        "surface_temperature_zero_gradient_xmin": {
-          "variable": "surface_temperature",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "surface_temperature_zero_gradient_xmax": {
-          "variable": "surface_temperature",
-          "side": "xmax",
-          "kind": "zero_gradient"
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "surface_temperature"
+            ]
+          },
+          "rhs": 290.15
         }
-      }
+      ]
     }
   },
   "data_loaders": {
@@ -1403,36 +1317,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ERA5_Hourly/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "air_temperature": {
@@ -1482,36 +1366,6 @@
       "kind": "static",
       "source": {
         "url_template": "file:///data/SoilGrids250.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "porosity": {
@@ -1895,47 +1749,13 @@
       "description": "Accelerate leaf senescence in autumn when temperature drops below 5°C"
     }
   ],
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2023-01-01T00:00:00Z",
-        "end": "2024-01-01T00:00:00Z",
-        "reference_time": "2023-01-01T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees_east",
-          "grid_spacing": 0.5
-        },
-        "y": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees_north",
-          "grid_spacing": 0.5
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "AtmosphericBoundaryLayer.air_temperature": 295.15,
-          "AtmosphericBoundaryLayer.specific_humidity": 0.008,
-          "AtmosphericBoundaryLayer.wind_speed": 3.0,
-          "SoilHydrologyThermal.soil_moisture_layer1": 0.25,
-          "SoilHydrologyThermal.soil_moisture_layer2": 0.3,
-          "SoilHydrologyThermal.soil_moisture_layer3": 0.35,
-          "SoilHydrologyThermal.soil_temperature_layer1": 288.15,
-          "SoilHydrologyThermal.soil_temperature_layer2": 288.15,
-          "SoilHydrologyThermal.soil_temperature_layer3": 288.15,
-          "VegetationDynamics.leaf_area_index": 3.0,
-          "VegetationDynamics.above_ground_biomass": 2.0,
-          "VegetationDynamics.below_ground_biomass": 1.5,
-          "SurfaceEnergyBalance.surface_temperature": 290.15
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2023-01-01T00:00:00Z",
+      "end": "2024-01-01T00:00:00Z",
+      "reference_time": "2023-01-01T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

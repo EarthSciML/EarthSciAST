@@ -1,0 +1,19 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_priority_override", "description": "Same import order, but the second library's rule declares priority 10 - explicit priority out-ranks the effective-order tie-break (esm-spec 9.6.3): lib_rule_second_hi wins, y = 5*x" },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        { "ref": "./lib_rule_first.esm" },
+        { "ref": "./lib_rule_second_hi.esm" }
+      ],
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.5 },
+        "y": { "type": "observed", "units": "1", "expression": { "op": "lowerme", "args": ["x"] } }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "WRF_Fixture",
+    "description": "EarthSciData.jl WRF loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/wrf.jl — struct WRFFileSet (lines 4-37) with relpath (lines 39-45) and loadmetadata (lines 61-100+). The Julia loader asserts Lambert Conformal Conic projection (MAP_PROJ == 1) and reads the truelat1/truelat2/stand_lon attributes from the NetCDF file at runtime; the PROJ string below is constructed from those attributes and is captured here as the runtime-equivalent CRS.",
+    "authors": [
+      "ESM Rust binding acceptance suite"
+    ],
+    "tags": [
+      "fixture",
+      "earthscidata",
+      "gt-0c7"
+    ]
+  },
+  "data_loaders": {
+    "WRF_Regional": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://data.rda.ucar.edu/d340000/{date:%Y%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H:%M:%S}.nc"
+      },
+      "temporal": {
+        "file_period": "PT1H",
+        "frequency": "PT1H",
+        "records_per_file": 1,
+        "time_variable": "time"
+      },
+      "variables": {
+        "U": {
+          "file_variable": "U",
+          "units": "m/s",
+          "description": "x-wind component on staggered grid"
+        },
+        "V": {
+          "file_variable": "V",
+          "units": "m/s",
+          "description": "y-wind component on staggered grid"
+        },
+        "T": {
+          "file_variable": "T",
+          "units": "K",
+          "description": "Perturbation potential temperature"
+        },
+        "P": {
+          "file_variable": "P",
+          "units": "Pa",
+          "description": "Perturbation pressure"
+        },
+        "QVAPOR": {
+          "file_variable": "QVAPOR",
+          "units": "kg/kg",
+          "description": "Water vapor mixing ratio"
+        },
+        "PBLH": {
+          "file_variable": "PBLH",
+          "units": "m",
+          "description": "Planetary boundary layer height"
+        }
+      },
+      "reference": {
+        "citation": "Skamarock et al., 2008: A Description of the Advanced Research WRF Version 3. NCAR Technical Note NCAR/TN-475+STR",
+        "url": "https://rda.ucar.edu/datasets/ds340.0/"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis",
+          "regional"
+        ],
+        "earthscidata_source": "src/wrf.jl",
+        "earthscidata_struct": "WRFFileSet",
+        "earthscidata_note": "CRS attributes (truelat1, truelat2, moad_cen_lat, stand_lon) are read from the NetCDF file at runtime; the example PROJ string is representative."
+      }
+    }
+  },
+  "models": {
+    "fixture_stub": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

@@ -4,7 +4,7 @@
     "name": "aggregate_semiring_indexset",
     "description": "M1 schema fixture (RFC semiring-faq-unified-ir §5.1 / §5.2 / §8; bead ess-my4.1.1): an `aggregate` node — the canonical op tag for the former `arrayop` — carrying an explicit `semiring` and a `ranges` entry that references a declared index set via `{ \"from\": ... }`. Exercises the additive schema deltas: op:aggregate, the closed `semiring` enum, the `ranges` index-set reference union, and the document-scoped `index_sets` registry (interval + categorical kinds). This is the strict-superset additive form of an ordinary arrayop and validates against the schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",
@@ -14,22 +14,22 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 5
+    },
+    "county": {
+      "kind": "categorical",
+      "members": [
+        "Champaign",
+        "Cook",
+        "Sangamon"
+      ]
+    }
+  },
   "models": {
     "AggregateDemo": {
-      "index_sets": {
-        "cells": {
-          "kind": "interval",
-          "size": 5
-        },
-        "county": {
-          "kind": "categorical",
-          "members": [
-            "Champaign",
-            "Cook",
-            "Sangamon"
-          ]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -43,30 +43,60 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["u", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": { "from": "cells" } }
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
             "expr": {
               "op": "-",
-              "args": [{ "op": "index", "args": ["u", "i"] }]
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
             },
-            "ranges": { "i": { "from": "cells" } }
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           }
         },
         {
           "lhs": {
             "op": "D",
-            "args": ["total"],
+            "args": [
+              "total"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -74,8 +104,18 @@
             "args": [],
             "output_idx": [],
             "semiring": "sum_product",
-            "expr": { "op": "index", "args": ["u", "i"] },
-            "ranges": { "i": { "from": "cells" } }
+            "expr": {
+              "op": "index",
+              "args": [
+                "u",
+                "i"
+              ]
+            },
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            }
           }
         }
       ]

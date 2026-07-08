@@ -106,7 +106,7 @@
           "variables": {
             "PM25": {
               "type": "state",
-              "units": "\u03bcg/m^3",
+              "units": "μg/m^3",
               "default": 15.0,
               "description": "PM2.5 concentration"
             },
@@ -334,7 +334,7 @@
           "variables": {
             "PM_emissions": {
               "type": "parameter",
-              "units": "\u03bcg/(m^3*s)",
+              "units": "μg/(m^3*s)",
               "default": 0.5,
               "description": "Particulate matter emissions"
             },
@@ -502,7 +502,7 @@
             },
             "PAR_intensity": {
               "type": "parameter",
-              "units": "\u03bcmol/(m^2*s)",
+              "units": "μmol/(m^2*s)",
               "default": 1500.0,
               "description": "Photosynthetically active radiation"
             }
@@ -567,23 +567,11 @@
       }
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-06-01T00:00:00Z",
-        "end": "2024-06-02T00:00:00Z"
-      },
-      "spatial": {
-        "grid": {
-          "min": 0.0,
-          "max": 1.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-06-01T00:00:00Z",
+      "end": "2024-06-02T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

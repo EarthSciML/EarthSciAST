@@ -4,7 +4,7 @@
     "name": "area_eff_edge_faq",
     "description": "M3 cross-binding conformance fixture (RFC semiring-faq-unified-ir §7.3 / §7.1; bead ess-my4.3.10): the DOWNSTREAM geometric FAQ of the §7.3 mesh-edge worked example — the second half of the value-invention end-to-end chain. The first half (mesh-edge enumeration: a bool_and_or + distinct aggregate over faces, filter a<b, key skolem(edge,a,b), then a rank densify) MINTS the deduplicated `edges` index set; that half is a CONST-fold (build-time relational engine) whose byte-identical output is pinned by the determinism `edge_enumeration` golden and the cadence `pure_topology` golden across Julia/Rust/Python. Post-fold, `edges` is a PRIMITIVE index set, and this fixture is the geometric FAQ that consumes it: a default sum_product contraction over `edges`, the operation that replaces imperative per-edge Julia. The mesh is the same canonical 2-triangle mesh (faces {1,2,3},{2,3,4}) whose 5 unique undirected edges [[1,2],[1,3],[2,3],[2,4],[3,4]] rank to dense ids 0..4 — so `edges` is declared here as the materialized interval of size 5. State area_eff[i] accumulates the sum-of-products geometric contraction Sum_{e in edges} i*e: the per-edge geometric weight (the MPAS DUO term 1/4*dc*dv) is modeled by the edge index e and the per-cell factor by i, so the fixture stays inline-data-free and evaluates byte-for-byte identically across the three numeric bindings — the same index-arithmetic discipline as fvm_diffusion_sum_product (§7.1) and join_moves_running_exhaust (§7.2). area_eff[1]=Sum_{e=1..5}1*e=15, area_eff[2]=Sum_{e=1..5}2*e=30 at t=1 from zero initial conditions (constant-RHS shape, so Julia/Rust/Python agree to integration tolerance). The contracted index e is drawn from the `edges` interval index set via {from} (§5.2); the output index i uses a dense range so every binding sizes the state array identically. Together with the value-invention half (skolem_distinct_rank / pure_topology, verified byte-identically) this completes the §7.3 chain end to end: enumerate -> dedup/skolem -> rank -> consume `edges` as a primitive index set in an ordinary sum_product FAQ.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",
@@ -18,20 +18,25 @@
       "ess-my4.3.10"
     ]
   },
+  "index_sets": {
+    "edges": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
   "models": {
     "AreaEffEdgeFaq": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "edges": {
-          "kind": "interval",
-          "size": 5
-        }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "area_eff": { "type": "state", "shape": ["i"] }
+        "area_eff": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
       },
       "equations": [
         {
@@ -39,21 +44,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["area_eff", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "area_eff",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 2] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "sum_product",
-            "ranges": { "i": [1, 2], "e": { "from": "edges" } },
-            "expr": { "op": "*", "args": ["i", "e"] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "e": {
+                "from": "edges"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "i",
+                "e"
+              ]
+            }
           }
         }
       ],
@@ -65,10 +101,21 @@
             "area_eff[1]": 0.0,
             "area_eff[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "area_eff[1]", "time": 1.0, "expected": 15.0 },
-            { "variable": "area_eff[2]", "time": 1.0, "expected": 30.0 }
+            {
+              "variable": "area_eff[1]",
+              "time": 1.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "area_eff[2]",
+              "time": 1.0,
+              "expected": 30.0
+            }
           ]
         }
       ]

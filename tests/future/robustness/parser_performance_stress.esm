@@ -164,11 +164,6 @@
       { "id": "pressure_to_height", "dimensions": ["lev"], "reference_pressure": 1013.25 }
     ],
     "initial_conditions": { "type": "from_file", "file": "/data/stress_test/initial_conditions_large.nc" },
-    "boundary_conditions": [
-      { "type": "periodic", "dimensions": ["lon"] },
-      { "type": "zero_gradient", "dimensions": ["lat"] },
-      { "type": "fixed_value", "dimensions": ["lev"], "value": 1e-12 }
-    ],
     "element_type": "Float64"
   }
 }

@@ -1,6 +1,6 @@
-# EarthSciSerialization
+# EarthSciAST
 
-[![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciSerialization/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciSerialization/actions/workflows/conformance-testing.yml)
+[![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **EarthSciML Serialization Format** — A language-agnostic JSON-based format for earth science model components, their composition, and runtime configuration.
@@ -17,22 +17,22 @@ The format is language-agnostic (Julia, TypeScript, Python, Rust, Go), human-rea
 
 **Julia:**
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 esm_file = load("model.esm")
 println("Model has $(length(esm_file.models)) components")
 ```
 
 **TypeScript/Node.js:**
 ```typescript
-import { load, validate } from 'earthsci-toolkit';
+import { load, validate } from '@earthsciml/ast';
 const esmFile = load('model.esm');
 const result = validate(esmFile);
 ```
 
 **Python:**
 ```python
-import earthsci_toolkit
-esm_file = earthsci_toolkit.load("model.esm")
+import earthsci_ast
+esm_file = earthsci_ast.load("model.esm")
 print(f"Model has {len(esm_file.models)} components")
 ```
 
@@ -42,40 +42,40 @@ This repository contains multiple language implementations of the ESM format:
 
 | Package | Language | Description | Directory |
 |---------|----------|-------------|-----------|
-| **EarthSciSerialization.jl** | Julia | Complete MTK/Catalyst integration | [`packages/EarthSciSerialization.jl/`](packages/EarthSciSerialization.jl/) |
-| **earthsci-toolkit** | TypeScript | Web/Node.js types and utilities | [`packages/earthsci-toolkit/`](packages/earthsci-toolkit/) |
-| **earthsci_toolkit** | Python | Scientific Python integration | [`packages/earthsci_toolkit/`](packages/earthsci_toolkit/) |
-| **earthsci-toolkit** | Rust | High-performance implementation | [`packages/earthsci-toolkit-rs/`](packages/earthsci-toolkit-rs/) |
-| **esm-format-go** | Go | Lightweight Go implementation | [`packages/esm-format-go/`](packages/esm-format-go/) |
-| **esm-editor** | SolidJS | Interactive web-based editor | [`packages/esm-editor/`](packages/esm-editor/) |
+| **EarthSciAST.jl** | Julia | Complete MTK/Catalyst integration | [`pkg/EarthSciAST.jl/`](pkg/EarthSciAST.jl/) |
+| **@earthsciml/ast** | TypeScript | Web/Node.js types and utilities | [`pkg/earthsci-ast-ts/`](pkg/earthsci-ast-ts/) |
+| **earthsci_ast** | Python | Scientific Python integration | [`pkg/earthsci-ast-py/`](pkg/earthsci-ast-py/) |
+| **earthsci-ast** | Rust | High-performance implementation | [`pkg/earthsci-ast-rs/`](pkg/earthsci-ast-rs/) |
+| **earthsci-ast-go** | Go | Lightweight Go implementation | [`pkg/earthsci-ast-go/`](pkg/earthsci-ast-go/) |
+| **earthsci-ast-editor** | SolidJS | Interactive web-based editor | [`pkg/earthsci-ast-editor/`](pkg/earthsci-ast-editor/) |
 
 ## Installation
 
 ### Julia
 ```julia
 using Pkg
-Pkg.add("EarthSciSerialization")
+Pkg.add("EarthSciAST")
 ```
 
 ### TypeScript/Node.js
 ```bash
-npm install earthsci-toolkit
+npm install @earthsciml/ast
 ```
 
 ### Python
 ```bash
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
 ### Rust
 ```toml
 [dependencies]
-earthsci-toolkit = "0.1.0"
+earthsci-ast = "0.1.0"
 ```
 
 ### Go
 ```bash
-go get github.com/EarthSciML/EarthSciSerialization/packages/esm-format-go
+go get github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go
 ```
 
 ## Format Specification
@@ -162,13 +162,13 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Citation
 
-If you use EarthSciSerialization in your research, please cite:
+If you use EarthSciAST in your research, please cite:
 
 ```bibtex
 @software{earthsciserialization,
-  title = {EarthSciSerialization: Language-agnostic serialization for earth science models},
+  title = {EarthSciAST: Language-agnostic serialization for earth science models},
   author = {Chris Tessum and contributors},
   year = {2026},
-  url = {https://github.com/EarthSciML/EarthSciSerialization}
+  url = {https://github.com/EarthSciML/EarthSciAST}
 }
 ```

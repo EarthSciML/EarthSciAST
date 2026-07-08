@@ -1,0 +1,84 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "description": "Convergence wrapper instantiating problem.esm at N = 8 via a 4.7 subsystem-ref binding (esm-spec 9.7.6 binding site 3)",
+    "name": "wrapper_n8"
+  },
+  "models": {
+    "Sweep": {
+      "equations": [],
+      "subsystems": {
+        "Problem": {
+          "equations": [
+            {
+              "lhs": {
+                "args": [
+                  "u"
+                ],
+                "op": "D",
+                "wrt": "t"
+              },
+              "rhs": {
+                "args": [
+                  -0.5,
+                  "u"
+                ],
+                "op": "*"
+              }
+            }
+          ],
+          "variables": {
+            "half": {
+              "expression": {
+                "args": [
+                  8,
+                  2
+                ],
+                "op": "/"
+              },
+              "type": "observed",
+              "units": "1"
+            },
+            "npts": {
+              "expression": 8,
+              "type": "observed",
+              "units": "1"
+            },
+            "ramp": {
+              "expression": {
+                "args": [
+                  "u"
+                ],
+                "expr": {
+                  "args": [
+                    "u",
+                    "i"
+                  ],
+                  "op": "*"
+                },
+                "op": "aggregate",
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    4
+                  ]
+                }
+              },
+              "type": "observed",
+              "units": "1"
+            },
+            "u": {
+              "default": 1.0,
+              "type": "state",
+              "units": "1"
+            }
+          }
+        }
+      },
+      "variables": {}
+    }
+  }
+}

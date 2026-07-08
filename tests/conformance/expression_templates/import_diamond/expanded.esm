@@ -1,0 +1,63 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 10
+    }
+  },
+  "metadata": {
+    "description": "Diamond import: grid_shared reaches this model through both lib_flux_a and lib_flux_b with equal instantiation; the deep-equal duplicates (cell_count template, NC metaparameter, cells index set) dedup at first occurrence (esm-spec 9.7.4/9.7.5)",
+    "name": "import_diamond"
+  },
+  "models": {
+    "Diamond": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "x"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "x"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "variables": {
+        "x": {
+          "default": 1.5,
+          "type": "state",
+          "units": "1"
+        },
+        "ya": {
+          "expression": {
+            "args": [
+              "x",
+              10
+            ],
+            "op": "*"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "yb": {
+          "expression": {
+            "args": [
+              "x",
+              10
+            ],
+            "op": "+"
+          },
+          "type": "observed",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

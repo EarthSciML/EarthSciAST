@@ -4,7 +4,7 @@
     "name": "arrayop_18_interface_bc_2domain",
     "description": "Two coupled 1D heat domains (u on [0,1], v on [1,2]) joined by an interface BC at x=1. N=4 cells each, dx=0.25, D=1, D/dx^2=16. Dirichlet(0) at outer boundaries; interface coupling: ghost u[5]=v[1] and ghost v[0]=u[4]. The combined 8-cell system is equivalent to a single 8-cell heat equation on [0,2] with Dirichlet BCs: IC sin(i*pi/9) for i=1..8, mode-1 eigenvalue lambda1=16*(2*cos(pi/9)-2)=-1.9298, decay factor exp(-0.19298)=0.8245 at t=0.1. Verifies interface BC value-continuity coupling: u[4](t)=v[1](t) holds throughout the simulation.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "arrayop",
@@ -57,7 +57,7 @@
         {
           "_comment": "u interior cells, 1-based i in 1..2 (after offset baking: cells 2 and 3)",
           "lhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": ["i"],
             "expr": {
@@ -68,7 +68,7 @@
             "ranges": {"i": [1, 2]}
           },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": ["i"],
             "expr": {
@@ -135,7 +135,7 @@
         {
           "_comment": "v interior cells, 1-based i in 1..2 (after offset baking: cells 2 and 3)",
           "lhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": ["i"],
             "expr": {
@@ -146,7 +146,7 @@
             "ranges": {"i": [1, 2]}
           },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": ["i"],
             "expr": {

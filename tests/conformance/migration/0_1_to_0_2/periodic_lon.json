@@ -39,15 +39,7 @@
         "initial_conditions": {
           "type": "constant",
           "value": 0.0
-        },
-        "boundary_conditions": [
-          {
-            "type": "periodic",
-            "dimensions": [
-              "lon"
-            ]
-          }
-        ]
+        }
       }
     }
   },
@@ -72,14 +64,7 @@
             "default": 1e-09
           }
         },
-        "equations": [],
-        "boundary_conditions": {
-          "c_periodic_lon_min": {
-            "variable": "c",
-            "side": "lon_min",
-            "kind": "periodic"
-          }
-        }
+        "equations": []
       }
     },
     "domains": {

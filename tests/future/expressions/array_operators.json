@@ -6,7 +6,7 @@
     "examples": [
       {
         "input": {
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": ["i", "j"],
           "expr": {
             "op": "*",
@@ -30,7 +30,7 @@
     "examples": [
       {
         "input": {
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": ["j"],
           "expr": { "op": "index", "args": ["A", "i", "j"] },
           "reduce": "+",
@@ -40,7 +40,7 @@
       },
       {
         "input": {
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": ["j"],
           "expr": { "op": "index", "args": ["A", "i", "j"] },
           "reduce": "max",
@@ -58,7 +58,7 @@
     "examples": [
       {
         "input": {
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": ["i", "j"],
           "expr": {
             "op": "+",
@@ -88,7 +88,7 @@
     "examples": [
       {
         "input": {
-          "op": "arrayop",
+          "op": "aggregate",
           "output_idx": ["i", 1, "j", 1],
           "expr": {
             "op": "*",
@@ -122,7 +122,7 @@
           "values": [
             "x_row",
             {
-              "op": "arrayop",
+              "op": "aggregate",
               "output_idx": [1, "i"],
               "expr": {
                 "op": "+",
@@ -136,7 +136,7 @@
             1,
             { "op": "index", "args": ["z", 1] },
             {
-              "op": "arrayop",
+              "op": "aggregate",
               "output_idx": [],
               "expr": {
                 "op": "*",

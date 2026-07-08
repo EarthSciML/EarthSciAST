@@ -1,6 +1,6 @@
 # Bidirectional conversion: ESM → Catalyst → ESM (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Test round-trip conversion for reaction system

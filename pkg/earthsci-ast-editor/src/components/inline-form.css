@@ -1,0 +1,72 @@
+/**
+ * InlineForm - styling for inline edit forms (replacement for
+ * prompt()/alert() dialogs in the editor components).
+ */
+
+.inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin: 4px 0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: #f8f9fa;
+  font-size: 0.9em;
+}
+
+.inline-form-title {
+  font-weight: 600;
+}
+
+.inline-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inline-form-label {
+  font-size: 0.85em;
+  color: #555;
+}
+
+.inline-form-input,
+.inline-form-select,
+.inline-form-textarea {
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  background-color: #fff;
+}
+
+.inline-form-textarea {
+  font-family: monospace;
+  resize: vertical;
+}
+
+.inline-form-error {
+  color: #b00020;
+  font-size: 0.85em;
+}
+
+.inline-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.inline-form-confirm,
+.inline-form-cancel {
+  font: inherit;
+  padding: 3px 10px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  cursor: pointer;
+  background-color: #fff;
+}
+
+.inline-form-confirm {
+  background-color: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}

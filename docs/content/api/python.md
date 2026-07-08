@@ -6,7 +6,7 @@ Complete API reference for the ESM Format Python library.
 
 ### Process
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:33`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:33`
 
 ```python
 def Process():
@@ -16,7 +16,7 @@ def Process():
 
 ### add_component_time
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:104`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:104`
 
 ```python
 def add_component_time(self, component: str, duration: float):
@@ -28,7 +28,7 @@ Add timing for a component.
 
 ### add_component_time
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:560`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:560`
 
 ```python
 def add_component_time(self, component, duration):
@@ -38,7 +38,7 @@ def add_component_time(self, component, duration):
 
 ### add_constraint
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:88`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:88`
 
 ```python
 def add_constraint(self, constraint: FieldConstraint):
@@ -50,7 +50,7 @@ Add a field constraint.
 
 ### add_error
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:206`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:206`
 
 ```python
 def add_error(self, error: ESMError):
@@ -62,7 +62,7 @@ Add an error to the collection.
 
 ### add_iteration_time
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:110`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:110`
 
 ```python
 def add_iteration_time(self, duration: float):
@@ -74,7 +74,7 @@ Add timing for an iteration.
 
 ### add_iteration_time
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:565`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:565`
 
 ```python
 def add_iteration_time(self, duration):
@@ -84,7 +84,7 @@ def add_iteration_time(self, duration):
 
 ### add_memory_usage
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:568`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:568`
 
 ```python
 def add_memory_usage(self, usage_mb):
@@ -94,7 +94,7 @@ def add_memory_usage(self, usage_mb):
 
 ### add_recovery_attempt
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:85`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:85`
 
 ```python
 def add_recovery_attempt(self, strategy: RecoveryStrategy, success: bool, details: str):
@@ -106,7 +106,7 @@ Record a recovery attempt.
 
 ### add_variable_change_listener
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:580`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:580`
 
 ```python
 def add_variable_change_listener(self, listener: Callable):
@@ -118,7 +118,7 @@ Add a listener for variable change events.
 
 ### append
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:51`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:51`
 
 ```python
 def append(arr, value):
@@ -128,7 +128,7 @@ def append(arr, value):
 
 ### array
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:23`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:23`
 
 ```python
 def array(data):
@@ -138,7 +138,7 @@ def array(data):
 
 ### assign_task_dynamic
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:444`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:444`
 
 ```python
 def assign_task_dynamic(self, task_name, estimated_cost=1.0):
@@ -148,7 +148,7 @@ def assign_task_dynamic(self, task_name, estimated_cost=1.0):
 
 ### assign_task_round_robin
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:439`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:439`
 
 ```python
 def assign_task_round_robin(self, task_name):
@@ -158,7 +158,7 @@ def assign_task_round_robin(self, task_name):
 
 ### begin_transaction
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:930`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:930`
 
 ```python
 def begin_transaction(self):
@@ -173,7 +173,7 @@ Begin a database transaction.
 
 ### build_structure
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1268`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1268`
 
 ```python
 def build_structure(name, obj):
@@ -183,7 +183,7 @@ def build_structure(name, obj):
 
 ### build_structure_pytables
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1295`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1295`
 
 ```python
 def build_structure_pytables(node, current_dict, path=""):
@@ -193,7 +193,7 @@ def build_structure_pytables(node, current_dict, path=""):
 
 ### cleanup
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:225`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:225`
 
 ```python
 def cleanup():
@@ -205,7 +205,7 @@ Clean up sample files.
 
 ### clear
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:304`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:304`
 
 ```python
 def clear(self):
@@ -217,7 +217,7 @@ Clear cache.
 
 ### clear_cache
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_dispatch.py:347`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_dispatch.py:347`
 
 ```python
 def clear_cache(self):
@@ -229,7 +229,7 @@ Clear the dispatch cache.
 
 ### close
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:242`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:242`
 
 ```python
 def close(self):
@@ -241,7 +241,7 @@ Close the dataset and free resources.
 
 ### close
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1016`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1016`
 
 ```python
 def close(self):
@@ -253,7 +253,7 @@ Close database connections and clean up resources.
 
 ### close
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1512`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1512`
 
 ```python
 def close(self):
@@ -265,7 +265,7 @@ Close the HDF5 file and free resources.
 
 ### close
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1862`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1862`
 
 ```python
 def close(self):
@@ -277,7 +277,7 @@ Close the dataset and free resources.
 
 ### close
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:2401`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:2401`
 
 ```python
 def close(self):
@@ -289,7 +289,7 @@ Clean up resources.
 
 ### collect_dataset_info
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1345`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1345`
 
 ```python
 def collect_dataset_info(name, obj):
@@ -299,7 +299,7 @@ def collect_dataset_info(name, obj):
 
 ### collect_dataset_info_pytables
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1364`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1364`
 
 ```python
 def collect_dataset_info_pytables(node, path=""):
@@ -309,7 +309,7 @@ def collect_dataset_info_pytables(node, path=""):
 
 ### commit_transaction
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:944`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:944`
 
 ```python
 def commit_transaction(self):
@@ -321,7 +321,7 @@ Commit the current transaction and close the connection.
 
 ### create_atmospheric_chemistry_system
 
-**File:** `packages/earthsci_toolkit/examples/atmospheric_chemistry_simulation.py:17`
+**File:** `pkg/earthsci-ast-py/examples/atmospheric_chemistry_simulation.py:17`
 
 ```python
 def create_atmospheric_chemistry_system():
@@ -338,7 +338,7 @@ Create a simple atmospheric chemistry system with O3-NOx reactions.
 
 ### create_demo_coupling_function
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:25`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:25`
 
 ```python
 def create_demo_coupling_function(component_name: str = None):
@@ -350,7 +350,7 @@ Create a demo coupling function that simulates Earth system component coupling.
 
 ### create_demo_esm
 
-**File:** `packages/earthsci_toolkit/examples/dynamic_scope_demo.py:21`
+**File:** `pkg/earthsci-ast-py/examples/dynamic_scope_demo.py:21`
 
 ```python
 def create_demo_esm():
@@ -362,7 +362,7 @@ Create a demo ESM file for the demonstration.
 
 ### create_demo_esm_file
 
-**File:** `packages/earthsci_toolkit/examples/coupling_dependency_resolution_demo.py:14`
+**File:** `pkg/earthsci-ast-py/examples/coupling_dependency_resolution_demo.py:14`
 
 ```python
 def create_demo_esm_file():
@@ -374,7 +374,7 @@ Create a demonstration ESM file with hierarchical components.
 
 ### create_example_models
 
-**File:** `packages/earthsci_toolkit/examples/coupling_variable_matching_demo.py:16`
+**File:** `pkg/earthsci-ast-py/examples/coupling_variable_matching_demo.py:16`
 
 ```python
 def create_example_models():
@@ -386,7 +386,7 @@ Create example models for demonstration.
 
 ### create_sample_database
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:19`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:19`
 
 ```python
 def create_sample_database():
@@ -398,7 +398,7 @@ Create a sample SQLite database with atmospheric chemistry data.
 
 ### create_sample_netcdf
 
-**File:** `packages/earthsci_toolkit/examples/netcdf_data_loading_example.py:23`
+**File:** `pkg/earthsci-ast-py/examples/netcdf_data_loading_example.py:23`
 
 ```python
 def create_sample_netcdf():
@@ -410,7 +410,7 @@ Create a sample NetCDF file with atmospheric data.
 
 ### demo_advanced_operations
 
-**File:** `packages/earthsci_toolkit/demo_sympy_bridge.py:65`
+**File:** `pkg/earthsci-ast-py/demo_sympy_bridge.py:65`
 
 ```python
 def demo_advanced_operations():
@@ -422,7 +422,7 @@ Demonstrate advanced operations.
 
 ### demo_basic_error_recovery
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:244`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:244`
 
 ```python
 def demo_basic_error_recovery():
@@ -434,7 +434,7 @@ Demonstrate basic error recovery capabilities.
 
 ### demo_basic_functionality
 
-**File:** `packages/earthsci_toolkit/examples/dynamic_scope_demo.py:55`
+**File:** `pkg/earthsci-ast-py/examples/dynamic_scope_demo.py:55`
 
 ```python
 def demo_basic_functionality():
@@ -446,7 +446,7 @@ Demonstrate basic dynamic scope functionality.
 
 ### demo_basic_mapping
 
-**File:** `packages/earthsci_toolkit/demo_sympy_bridge.py:30`
+**File:** `pkg/earthsci-ast-py/demo_sympy_bridge.py:30`
 
 ```python
 def demo_basic_mapping():
@@ -458,7 +458,7 @@ Demonstrate basic expression mapping.
 
 ### demo_basic_performance_optimization
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:137`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:137`
 
 ```python
 def demo_basic_performance_optimization():
@@ -470,7 +470,7 @@ Demonstrate basic performance optimization setup and usage.
 
 ### demo_basic_synchronization
 
-**File:** `packages/earthsci_toolkit/examples/time_synchronization_demo.py:24`
+**File:** `pkg/earthsci-ast-py/examples/time_synchronization_demo.py:24`
 
 ```python
 def demo_basic_synchronization():
@@ -482,7 +482,7 @@ Demonstrate basic time synchronization between two components.
 
 ### demo_caching_optimization
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:322`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:322`
 
 ```python
 def demo_caching_optimization():
@@ -494,7 +494,7 @@ Demonstrate caching optimization benefits.
 
 ### demo_complete_coupling_pipeline
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:315`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:315`
 
 ```python
 def demo_complete_coupling_pipeline():
@@ -506,7 +506,7 @@ Demonstrate a complete coupling transformation pipeline.
 
 ### demo_context_switching
 
-**File:** `packages/earthsci_toolkit/examples/dynamic_scope_demo.py:103`
+**File:** `pkg/earthsci-ast-py/examples/dynamic_scope_demo.py:103`
 
 ```python
 def demo_context_switching():
@@ -518,7 +518,7 @@ Demonstrate context switching capabilities.
 
 ### demo_coordinate_transformation
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:161`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:161`
 
 ```python
 def demo_coordinate_transformation():
@@ -530,7 +530,7 @@ Demonstrate coordinate system transformations.
 
 ### demo_cost_estimation
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:415`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:415`
 
 ```python
 def demo_cost_estimation():
@@ -542,7 +542,7 @@ Demonstrate transformation cost estimation for performance planning.
 
 ### demo_coupled_system
 
-**File:** `packages/earthsci_toolkit/examples/time_synchronization_demo.py:153`
+**File:** `pkg/earthsci-ast-py/examples/time_synchronization_demo.py:153`
 
 ```python
 def demo_coupled_system():
@@ -554,7 +554,7 @@ Demonstrate full coupled system simulation.
 
 ### demo_error_cases
 
-**File:** `packages/earthsci_toolkit/examples/coupling_dependency_resolution_demo.py:175`
+**File:** `pkg/earthsci-ast-py/examples/coupling_dependency_resolution_demo.py:175`
 
 ```python
 def demo_error_cases():
@@ -566,7 +566,7 @@ Demonstrate error handling for invalid references.
 
 ### demo_execution_strategies
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:221`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:221`
 
 ```python
 def demo_execution_strategies():
@@ -578,7 +578,7 @@ Demonstrate different execution strategies.
 
 ### demo_fault_tolerant_simulation
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:339`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:339`
 
 ```python
 def demo_fault_tolerant_simulation():
@@ -590,7 +590,7 @@ Demonstrate fault-tolerant simulation for production use.
 
 ### demo_grid_interpolation
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:82`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:82`
 
 ```python
 def demo_grid_interpolation():
@@ -602,7 +602,7 @@ Demonstrate grid interpolation between different spatial resolutions.
 
 ### demo_interpolation
 
-**File:** `packages/earthsci_toolkit/examples/time_synchronization_demo.py:63`
+**File:** `pkg/earthsci-ast-py/examples/time_synchronization_demo.py:63`
 
 ```python
 def demo_interpolation():
@@ -614,7 +614,7 @@ Demonstrate time interpolation capabilities.
 
 ### demo_load_balancing
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:424`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:424`
 
 ```python
 def demo_load_balancing():
@@ -626,7 +626,7 @@ Demonstrate load balancing optimization.
 
 ### demo_partial_execution_resilience
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:423`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:423`
 
 ```python
 def demo_partial_execution_resilience():
@@ -638,7 +638,7 @@ Demonstrate partial execution when some components fail.
 
 ### demo_performance_analysis
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:542`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:542`
 
 ```python
 def demo_performance_analysis():
@@ -650,7 +650,7 @@ Demonstrate performance analysis and reporting.
 
 ### demo_round_trip
 
-**File:** `packages/earthsci_toolkit/demo_sympy_bridge.py:95`
+**File:** `pkg/earthsci-ast-py/demo_sympy_bridge.py:95`
 
 ```python
 def demo_round_trip():
@@ -662,7 +662,7 @@ Demonstrate round-trip conversion.
 
 ### demo_runtime_statistics
 
-**File:** `packages/earthsci_toolkit/examples/dynamic_scope_demo.py:196`
+**File:** `pkg/earthsci-ast-py/examples/dynamic_scope_demo.py:196`
 
 ```python
 def demo_runtime_statistics():
@@ -674,7 +674,7 @@ Show runtime statistics and monitoring.
 
 ### demo_scoped_reference_resolution
 
-**File:** `packages/earthsci_toolkit/examples/coupling_dependency_resolution_demo.py:91`
+**File:** `pkg/earthsci-ast-py/examples/coupling_dependency_resolution_demo.py:91`
 
 ```python
 def demo_scoped_reference_resolution():
@@ -686,7 +686,7 @@ Demonstrate scoped reference resolution capabilities.
 
 ### demo_state_variable_functions
 
-**File:** `packages/earthsci_toolkit/demo_sympy_bridge.py:182`
+**File:** `pkg/earthsci-ast-py/demo_sympy_bridge.py:182`
 
 ```python
 def demo_state_variable_functions():
@@ -698,7 +698,7 @@ Demonstrate state variables as functions of time.
 
 ### demo_subcycling
 
-**File:** `packages/earthsci_toolkit/examples/time_synchronization_demo.py:119`
+**File:** `pkg/earthsci-ast-py/examples/time_synchronization_demo.py:119`
 
 ```python
 def demo_subcycling():
@@ -710,7 +710,7 @@ Demonstrate subcycling between fast and slow components.
 
 ### demo_symbolic_jacobian
 
-**File:** `packages/earthsci_toolkit/demo_sympy_bridge.py:124`
+**File:** `pkg/earthsci-ast-py/demo_sympy_bridge.py:124`
 
 ```python
 def demo_symbolic_jacobian():
@@ -722,7 +722,7 @@ Demonstrate symbolic Jacobian computation.
 
 ### demo_temporary_contexts
 
-**File:** `packages/earthsci_toolkit/examples/dynamic_scope_demo.py:157`
+**File:** `pkg/earthsci-ast-py/examples/dynamic_scope_demo.py:157`
 
 ```python
 def demo_temporary_contexts():
@@ -734,7 +734,7 @@ Demonstrate temporary context usage.
 
 ### demo_unit_conversion
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:26`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:26`
 
 ```python
 def demo_unit_conversion():
@@ -746,7 +746,7 @@ Demonstrate unit conversion between different measurement systems.
 
 ### demo_variable_transformations
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:241`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:241`
 
 ```python
 def demo_variable_transformations():
@@ -758,7 +758,7 @@ Demonstrate ESM variable transformation semantics.
 
 ### demonstrate_auto_detection
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:93`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:93`
 
 ```python
 def demonstrate_auto_detection():
@@ -770,7 +770,7 @@ Demonstrate automatic loader type detection and creation.
 
 ### demonstrate_basic_dispatch
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:24`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:24`
 
 ```python
 def demonstrate_basic_dispatch():
@@ -782,7 +782,7 @@ Demonstrate basic operator dispatch with built-in overloads.
 
 ### demonstrate_builtin_loaders
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:77`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:77`
 
 ```python
 def demonstrate_builtin_loaders():
@@ -794,7 +794,7 @@ Show the built-in loaders registered by default.
 
 ### demonstrate_circular_dependency_protection
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:124`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:124`
 
 ```python
 def demonstrate_circular_dependency_protection():
@@ -806,7 +806,7 @@ Demonstrate circular dependency detection.
 
 ### demonstrate_custom_loader
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:123`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:123`
 
 ```python
 def demonstrate_custom_loader():
@@ -818,7 +818,7 @@ Show how to register a custom loader.
 
 ### demonstrate_custom_overloads
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:53`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:53`
 
 ```python
 def demonstrate_custom_overloads():
@@ -830,7 +830,7 @@ Demonstrate registering custom operator overloads.
 
 ### demonstrate_dependencies
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:68`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:68`
 
 ```python
 def demonstrate_dependencies():
@@ -842,7 +842,7 @@ Demonstrate operator dependency system.
 
 ### demonstrate_dispatch_introspection
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:223`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:223`
 
 ```python
 def demonstrate_dispatch_introspection():
@@ -854,7 +854,7 @@ Demonstrate introspection of dispatch decisions.
 
 ### demonstrate_error_handling
 
-**File:** `packages/earthsci_toolkit/examples/hdf5_loader_example.py:429`
+**File:** `pkg/earthsci-ast-py/examples/hdf5_loader_example.py:429`
 
 ```python
 def demonstrate_error_handling():
@@ -866,7 +866,7 @@ Demonstrate error handling capabilities.
 
 ### demonstrate_error_handling
 
-**File:** `packages/earthsci_toolkit/examples/netcdf_data_loading_example.py:216`
+**File:** `pkg/earthsci-ast-py/examples/netcdf_data_loading_example.py:216`
 
 ```python
 def demonstrate_error_handling():
@@ -878,7 +878,7 @@ Demonstrate error handling in NetCDF loading.
 
 ### demonstrate_fallback_mechanisms
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:165`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:165`
 
 ```python
 def demonstrate_fallback_mechanisms():
@@ -890,7 +890,7 @@ Demonstrate fallback mechanisms.
 
 ### demonstrate_full_validation
 
-**File:** `packages/earthsci_toolkit/examples/coupling_variable_matching_demo.py:195`
+**File:** `pkg/earthsci-ast-py/examples/coupling_variable_matching_demo.py:195`
 
 ```python
 def demonstrate_full_validation():
@@ -902,7 +902,7 @@ Demonstrate full coupling graph validation.
 
 ### demonstrate_hdf5_loading
 
-**File:** `packages/earthsci_toolkit/examples/hdf5_loader_example.py:241`
+**File:** `pkg/earthsci-ast-py/examples/hdf5_loader_example.py:241`
 
 ```python
 def demonstrate_hdf5_loading():
@@ -914,7 +914,7 @@ Demonstrate various HDF5 loading capabilities.
 
 ### demonstrate_loader_chains
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:172`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:172`
 
 ```python
 def demonstrate_loader_chains():
@@ -926,7 +926,7 @@ Show loader chain functionality.
 
 ### demonstrate_mathematical_expression
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:147`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:147`
 
 ```python
 def demonstrate_mathematical_expression():
@@ -938,7 +938,7 @@ Demonstrate precedence in mathematical expression context.
 
 ### demonstrate_netcdf_loading
 
-**File:** `packages/earthsci_toolkit/examples/netcdf_data_loading_example.py:123`
+**File:** `pkg/earthsci-ast-py/examples/netcdf_data_loading_example.py:123`
 
 ```python
 def demonstrate_netcdf_loading():
@@ -950,7 +950,7 @@ Demonstrate NetCDF data loading with ESM Format.
 
 ### demonstrate_performance_characteristics
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:247`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:247`
 
 ```python
 def demonstrate_performance_characteristics():
@@ -962,7 +962,7 @@ Demonstrate performance characteristics of the dispatch system.
 
 ### demonstrate_polymorphism
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:107`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:107`
 
 ```python
 def demonstrate_polymorphism():
@@ -974,7 +974,7 @@ Demonstrate polymorphism with different implementations.
 
 ### demonstrate_precedence
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:27`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:27`
 
 ```python
 def demonstrate_precedence():
@@ -986,7 +986,7 @@ Demonstrate operator precedence system.
 
 ### demonstrate_registry_inspection
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:192`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:192`
 
 ```python
 def demonstrate_registry_inspection():
@@ -998,7 +998,7 @@ Show registry inspection capabilities.
 
 ### demonstrate_variable_matching
 
-**File:** `packages/earthsci_toolkit/examples/coupling_variable_matching_demo.py:93`
+**File:** `pkg/earthsci-ast-py/examples/coupling_variable_matching_demo.py:93`
 
 ```python
 def demonstrate_variable_matching():
@@ -1010,7 +1010,7 @@ Demonstrate various variable matching scenarios.
 
 ### differentiate
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:74`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:74`
 
 ```python
 def differentiate(self, x_values, y_values):
@@ -1022,7 +1022,7 @@ Forward difference implementation.
 
 ### evaluate_expr_dict
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:34`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:34`
 
 ```python
 def evaluate_expr_dict(expr, variables):
@@ -1032,7 +1032,7 @@ def evaluate_expr_dict(expr, variables):
 
 ### event_function
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/simulation.py:253`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/simulation.py:253`
 
 ```python
 def event_function(t, y, condition_func=condition_func, var_names=var_names):
@@ -1042,7 +1042,7 @@ def event_function(t, y, condition_func=condition_func, var_names=var_names):
 
 ### example_authenticated_api
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:101`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:101`
 
 ```python
 def example_authenticated_api():
@@ -1054,7 +1054,7 @@ Example: Authenticated API access.
 
 ### example_basic_auth
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:132`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:132`
 
 ```python
 def example_basic_auth():
@@ -1066,7 +1066,7 @@ Example: Basic authentication.
 
 ### example_basic_http
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:36`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:36`
 
 ```python
 def example_basic_http():
@@ -1078,7 +1078,7 @@ Example: Basic HTTP data loading.
 
 ### example_basic_loading
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:95`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:95`
 
 ```python
 def example_basic_loading():
@@ -1090,7 +1090,7 @@ Demonstrate basic database loading functionality.
 
 ### example_cache_management
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:186`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:186`
 
 ```python
 def example_cache_management():
@@ -1102,7 +1102,7 @@ Example: Cache management.
 
 ### example_cloud_storage_urls
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:255`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:255`
 
 ```python
 def example_cloud_storage_urls():
@@ -1114,7 +1114,7 @@ Example: Cloud storage URL detection.
 
 ### example_connection_resilience
 
-**File:** `packages/earthsci_toolkit/examples/streaming_loader_example.py:206`
+**File:** `pkg/earthsci-ast-py/examples/streaming_loader_example.py:206`
 
 ```python
 def example_connection_resilience():
@@ -1126,7 +1126,7 @@ Demonstrate connection resilience features.
 
 ### example_custom_queries
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:139`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:139`
 
 ```python
 def example_custom_queries():
@@ -1138,7 +1138,7 @@ Demonstrate custom query execution.
 
 ### example_error_handling
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:227`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:227`
 
 ```python
 def example_error_handling():
@@ -1150,7 +1150,7 @@ Example: Error handling and retries.
 
 ### example_http_streaming
 
-**File:** `packages/earthsci_toolkit/examples/streaming_loader_example.py:71`
+**File:** `pkg/earthsci-ast-py/examples/streaming_loader_example.py:71`
 
 ```python
 def example_http_streaming():
@@ -1162,7 +1162,7 @@ Demonstrate HTTP streaming data loader.
 
 ### example_message_queue_streaming
 
-**File:** `packages/earthsci_toolkit/examples/streaming_loader_example.py:121`
+**File:** `pkg/earthsci-ast-py/examples/streaming_loader_example.py:121`
 
 ```python
 def example_message_queue_streaming():
@@ -1174,7 +1174,7 @@ Demonstrate message queue streaming data loader.
 
 ### example_progress_tracking
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:159`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:159`
 
 ```python
 def example_progress_tracking():
@@ -1186,7 +1186,7 @@ Example: Download with progress tracking.
 
 ### example_registry_integration
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:269`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:269`
 
 ```python
 def example_registry_integration():
@@ -1198,7 +1198,7 @@ Demonstrate integration with the data loader registry.
 
 ### example_tcp_streaming
 
-**File:** `packages/earthsci_toolkit/examples/streaming_loader_example.py:164`
+**File:** `pkg/earthsci-ast-py/examples/streaming_loader_example.py:164`
 
 ```python
 def example_tcp_streaming():
@@ -1210,7 +1210,7 @@ Demonstrate TCP streaming data loader.
 
 ### example_transactions
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:198`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:198`
 
 ```python
 def example_transactions():
@@ -1222,7 +1222,7 @@ Demonstrate transaction handling.
 
 ### example_websocket_streaming
 
-**File:** `packages/earthsci_toolkit/examples/streaming_loader_example.py:15`
+**File:** `pkg/earthsci-ast-py/examples/streaming_loader_example.py:15`
 
 ```python
 def example_websocket_streaming():
@@ -1234,7 +1234,7 @@ Demonstrate WebSocket streaming data loader.
 
 ### eye
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:34`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:34`
 
 ```python
 def eye(n):
@@ -1244,7 +1244,7 @@ def eye(n):
 
 ### generate_report
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:575`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:575`
 
 ```python
 def generate_report(self):
@@ -1254,7 +1254,7 @@ def generate_report(self):
 
 ### get
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:336`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:336`
 
 ```python
 def get(self, key):
@@ -1264,7 +1264,7 @@ def get(self, key):
 
 ### get_hit_rate
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:347`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:347`
 
 ```python
 def get_hit_rate(self):
@@ -1274,7 +1274,7 @@ def get_hit_rate(self):
 
 ### get_load_balance_factor
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:472`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:472`
 
 ```python
 def get_load_balance_factor(self):
@@ -1284,7 +1284,7 @@ def get_load_balance_factor(self):
 
 ### get_stats
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:351`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:351`
 
 ```python
 def get_stats(self):
@@ -1294,7 +1294,7 @@ def get_stats(self):
 
 ### get_stats
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:484`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:484`
 
 ```python
 def get_stats(self):
@@ -1304,7 +1304,7 @@ def get_stats(self):
 
 ### has_cycle
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:627`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:627`
 
 ```python
 def has_cycle(node, visited, rec_stack):
@@ -1314,7 +1314,7 @@ def has_cycle(node, visited, rec_stack):
 
 ### interpolate
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:32`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:32`
 
 ```python
 def interpolate(self, x_values, y_values, x_new):
@@ -1326,7 +1326,7 @@ Simple linear interpolation implementation.
 
 ### interpolate
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:54`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:54`
 
 ```python
 def interpolate(self, x_values, y_values, x_new):
@@ -1338,7 +1338,7 @@ Spline interpolation implementation.
 
 ### load
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:137`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:137`
 
 ```python
 def load(self):
@@ -1350,7 +1350,7 @@ Load CSV data (simplified implementation).
 
 ### lstsq
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:56`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:56`
 
 ```python
 def lstsq(A, b, rcond=None):
@@ -1360,7 +1360,7 @@ def lstsq(A, b, rcond=None):
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/math_operators_example.py:20`
+**File:** `pkg/earthsci-ast-py/examples/math_operators_example.py:20`
 
 ```python
 def main():
@@ -1372,7 +1372,7 @@ Demonstrate mathematical operators functionality.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:512`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:512`
 
 ```python
 def main():
@@ -1384,7 +1384,7 @@ Run all coupling error handling demonstrations.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:177`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:177`
 
 ```python
 def main():
@@ -1396,7 +1396,7 @@ Main demonstration function.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:24`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:24`
 
 ```python
 def main():
@@ -1408,7 +1408,7 @@ Demonstrate data loader registry functionality.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:281`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:281`
 
 ```python
 def main():
@@ -1420,7 +1420,7 @@ Run all examples.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:294`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:294`
 
 ```python
 def main():
@@ -1432,7 +1432,7 @@ Run all demonstrations.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:713`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:713`
 
 ```python
 def main():
@@ -1444,7 +1444,7 @@ Run all performance optimization demos.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:86`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:86`
 
 ```python
 def main():
@@ -1456,7 +1456,7 @@ Demonstrate operator registry functionality.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/coupling_data_transformation_demo.py:496`
+**File:** `pkg/earthsci-ast-py/examples/coupling_data_transformation_demo.py:496`
 
 ```python
 def main():
@@ -1468,7 +1468,7 @@ Run all demonstrations.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/json_loader_demo.py:20`
+**File:** `pkg/earthsci-ast-py/examples/json_loader_demo.py:20`
 
 ```python
 def main():
@@ -1480,7 +1480,7 @@ Demonstrate JSON loader functionality.
 
 ### main
 
-**File:** `packages/earthsci_toolkit/examples/database_loader_example.py:307`
+**File:** `pkg/earthsci-ast-py/examples/database_loader_example.py:307`
 
 ```python
 def main():
@@ -1492,7 +1492,7 @@ Run all database loader examples.
 
 ### mean
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:43`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:43`
 
 ```python
 def mean(data):
@@ -1502,7 +1502,7 @@ def mean(data):
 
 ### memory_info
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:35`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:35`
 
 ```python
 def memory_info(self):
@@ -1512,7 +1512,7 @@ def memory_info(self):
 
 ### photostationary_equilibrium
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/atmospheric_verification.py:142`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/atmospheric_verification.py:142`
 
 ```python
 def photostationary_equilibrium(k1, j_NO2, NO_total, O3_excess):
@@ -1524,7 +1524,7 @@ Analytical solution for photostationary equilibrium.
 
 ### plot
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/simulation.py:45`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/simulation.py:45`
 
 ```python
 def plot(self, variables: Optional[List[str]] = None, **kwargs):
@@ -1540,7 +1540,7 @@ Plot simulation results using matplotlib.
 
 ### print_structure
 
-**File:** `packages/earthsci_toolkit/examples/hdf5_loader_example.py:332`
+**File:** `pkg/earthsci-ast-py/examples/hdf5_loader_example.py:332`
 
 ```python
 def print_structure(struct, indent=0):
@@ -1552,7 +1552,7 @@ Recursively print structure.
 
 ### production_coupling_function
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:377`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:377`
 
 ```python
 def production_coupling_function(variables, **kwargs):
@@ -1562,7 +1562,7 @@ def production_coupling_function(variables, **kwargs):
 
 ### progress_callback
 
-**File:** `packages/earthsci_toolkit/examples/remote_loader_example.py:24`
+**File:** `pkg/earthsci-ast-py/examples/remote_loader_example.py:24`
 
 ```python
 def progress_callback(progress, downloaded, total):
@@ -1574,7 +1574,7 @@ Progress callback for download tracking.
 
 ### put
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:272`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:272`
 
 ```python
 def put(self, key: str, value: Any):
@@ -1586,7 +1586,7 @@ Put value in cache.
 
 ### put
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:344`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:344`
 
 ```python
 def put(self, key, value):
@@ -1596,7 +1596,7 @@ def put(self, key, value):
 
 ### register_builtin
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_registry.py:179`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_registry.py:179`
 
 ```python
 def register_builtin(name, operator_type, operator_class, version="1.0"):
@@ -1606,7 +1606,7 @@ def register_builtin(name, operator_type, operator_class, version="1.0"):
 
 ### register_fallback_chain
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_dispatch.py:218`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_dispatch.py:218`
 
 ```python
 def register_fallback_chain(self, operator_name: str, fallback_operators: List[str]):
@@ -1622,7 +1622,7 @@ Register a fallback chain for an operator.
 
 ### remove_variable_change_listener
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:584`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:584`
 
 ```python
 def remove_variable_change_listener(self, listener: Callable):
@@ -1634,7 +1634,7 @@ Remove a variable change listener.
 
 ### rollback_transaction
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:956`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:956`
 
 ```python
 def rollback_transaction(self):
@@ -1646,7 +1646,7 @@ Rollback the current transaction and close the connection.
 
 ### run_atmospheric_simulation
 
-**File:** `packages/earthsci_toolkit/examples/atmospheric_chemistry_simulation.py:68`
+**File:** `pkg/earthsci-ast-py/examples/atmospheric_chemistry_simulation.py:68`
 
 ```python
 def run_atmospheric_simulation():
@@ -1658,7 +1658,7 @@ Run the atmospheric chemistry simulation.
 
 ### safe_coupling_function
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:353`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:353`
 
 ```python
 def safe_coupling_function(vars_dict: Dict[str, float], **func_kwargs):
@@ -1668,7 +1668,7 @@ def safe_coupling_function(vars_dict: Dict[str, float], **func_kwargs):
 
 ### safe_function
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:534`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:534`
 
 ```python
 def safe_function(variables: Dict[str, float], **kwargs):
@@ -1678,7 +1678,7 @@ def safe_function(variables: Dict[str, float], **kwargs):
 
 ### setup_error_logging
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:559`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:559`
 
 ```python
 def setup_error_logging(log_file: Optional[str] = None, level: str = "INFO"):
@@ -1690,7 +1690,7 @@ Setup logging for ESM error handling.
 
 ### setup_sample_files
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:48`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:48`
 
 ```python
 def setup_sample_files():
@@ -1702,7 +1702,7 @@ Create sample data files for demonstration.
 
 ### show_graph
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/display.py:719`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/display.py:719`
 
 ```python
 def show_graph(self, format_type: str = "mermaid"):
@@ -1714,7 +1714,7 @@ Display the component graph in the specified format.
 
 ### show_models
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/display.py:675`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/display.py:675`
 
 ```python
 def show_models(self):
@@ -1726,7 +1726,7 @@ Display detailed information about models.
 
 ### show_reactions
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/display.py:694`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/display.py:694`
 
 ```python
 def show_reactions(self):
@@ -1738,7 +1738,7 @@ Display detailed information about reaction systems.
 
 ### simplified_coupling
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:378`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:378`
 
 ```python
 def simplified_coupling(vars_dict: Dict[str, float], **func_kwargs):
@@ -1748,7 +1748,7 @@ def simplified_coupling(vars_dict: Dict[str, float], **func_kwargs):
 
 ### solve
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:61`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:61`
 
 ```python
 def solve(A, b):
@@ -1758,7 +1758,7 @@ def solve(A, b):
 
 ### sqrt
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:47`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:47`
 
 ```python
 def sqrt(x):
@@ -1768,7 +1768,7 @@ def sqrt(x):
 
 ### start_timer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:417`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:417`
 
 ```python
 def start_timer(self, operation: str):
@@ -1780,7 +1780,7 @@ Start timing an operation.
 
 ### strongconnect
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:168`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:168`
 
 ```python
 def strongconnect(node_id: str):
@@ -1790,7 +1790,7 @@ def strongconnect(node_id: str):
 
 ### temporary_context
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:208`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:208`
 
 ```python
 def temporary_context(self, context_id: str):
@@ -1812,7 +1812,7 @@ Context manager for temporarily switching contexts.
 
 ### tracked_coupling_function
 
-**File:** `packages/earthsci_toolkit/examples/coupling_error_handling_demo.py:303`
+**File:** `pkg/earthsci-ast-py/examples/coupling_error_handling_demo.py:303`
 
 ```python
 def tracked_coupling_function(variables, **kwargs):
@@ -1822,7 +1822,7 @@ def tracked_coupling_function(variables, **kwargs):
 
 ### update_cache_stats
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:571`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:571`
 
 ```python
 def update_cache_stats(self, hits, misses):
@@ -1832,7 +1832,7 @@ def update_cache_stats(self, hits, misses):
 
 ### update_patterns
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:181`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:181`
 
 ```python
 def update_patterns(self, error: CouplingError):
@@ -1844,7 +1844,7 @@ Update error pattern tracking.
 
 ### update_profile
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:152`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:152`
 
 ```python
 def update_profile(self, execution_time: float, memory_mb: float, success: bool):
@@ -1856,7 +1856,7 @@ Update profile based on recent execution.
 
 ### update_worker_performance
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:382`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:382`
 
 ```python
 def update_worker_performance(self, worker_id: int, task_duration: float, task_cost: float = 1.0):
@@ -1868,7 +1868,7 @@ Update worker performance based on completed task.
 
 ### update_worker_performance
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:461`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:461`
 
 ```python
 def update_worker_performance(self, worker_id, task_duration, task_cost=1.0):
@@ -1878,7 +1878,7 @@ def update_worker_performance(self, worker_id, task_duration, task_cost=1.0):
 
 ### virtual_memory
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:40`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:40`
 
 ```python
 def virtual_memory():
@@ -1888,7 +1888,7 @@ def virtual_memory():
 
 ### visit_func
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1152`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1152`
 
 ```python
 def visit_func(name, obj):
@@ -1898,7 +1898,7 @@ def visit_func(name, obj):
 
 ### visit_nodes
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1186`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1186`
 
 ```python
 def visit_nodes(node, path=""):
@@ -1908,7 +1908,7 @@ def visit_nodes(node, path=""):
 
 ### zeros
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:27`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:27`
 
 ```python
 def zeros(shape):
@@ -1920,7 +1920,7 @@ def zeros(shape):
 
 ### AccelerationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:151`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:151`
 
 ```python
 class AccelerationConfig:
@@ -1932,7 +1932,7 @@ Configuration for convergence acceleration.
 
 ### AccelerationController
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:413`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:413`
 
 ```python
 class AccelerationController:
@@ -1944,7 +1944,7 @@ Controls convergence acceleration methods.
 
 ### AccelerationMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:97`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:97`
 
 ```python
 class AccelerationMethod:
@@ -1956,7 +1956,7 @@ Convergence acceleration methods.
 
 ### AddOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:230`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:230`
 
 ```python
 class AddOperator:
@@ -1968,7 +1968,7 @@ Addition operator with broadcasting and precision handling.
 
 ### AffectEquation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:34`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:34`
 
 ```python
 class AffectEquation:
@@ -1980,7 +1980,7 @@ Equation that affects a variable (assignment-like).
 
 ### AndOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:249`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:249`
 
 ```python
 class AndOperator:
@@ -1992,7 +1992,7 @@ Logical AND operator with short-circuit evaluation.
 
 ### ArithmeticOperatorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:108`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:108`
 
 ```python
 class ArithmeticOperatorConfig:
@@ -2004,7 +2004,7 @@ Configuration for arithmetic operators.
 
 ### Associativity
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_registry.py:19`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_registry.py:19`
 
 ```python
 class Associativity:
@@ -2016,7 +2016,7 @@ Operator associativity rules.
 
 ### AtmosphericChemistryScenario
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/atmospheric_verification.py:25`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/atmospheric_verification.py:25`
 
 ```python
 class AtmosphericChemistryScenario:
@@ -2028,7 +2028,7 @@ Atmospheric chemistry test scenario with verification criteria.
 
 ### AtmosphericChemistryVerifier
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/atmospheric_verification.py:52`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/atmospheric_verification.py:52`
 
 ```python
 class AtmosphericChemistryVerifier:
@@ -2040,7 +2040,7 @@ Main verification framework for atmospheric chemistry simulations.
 
 ### BaseArithmeticOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:119`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:119`
 
 ```python
 class BaseArithmeticOperator:
@@ -2055,7 +2055,7 @@ Base class for arithmetic operators.
 
 ### BaseComparisonOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:381`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:381`
 
 ```python
 class BaseComparisonOperator:
@@ -2069,7 +2069,7 @@ Base class for comparison operators.
 
 ### BaseInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:39`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:39`
 
 ```python
 class BaseInterpolationOperator:
@@ -2084,7 +2084,7 @@ Base class for interpolation operators.
 
 ### BaseLogicalOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:171`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:171`
 
 ```python
 class BaseLogicalOperator:
@@ -2099,7 +2099,7 @@ Base class for logical operators.
 
 ### BaseSpatialOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/spatial_operators.py:99`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/spatial_operators.py:99`
 
 ```python
 class BaseSpatialOperator:
@@ -2114,7 +2114,7 @@ Base class for spatial differential operators.
 
 ### BaseStatisticalOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:104`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:104`
 
 ```python
 class BaseStatisticalOperator:
@@ -2129,7 +2129,7 @@ Base class for statistical operators.
 
 ### BaseTemporalOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:122`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:122`
 
 ```python
 class BaseTemporalOperator:
@@ -2144,7 +2144,7 @@ Base class for temporal operators.
 
 ### BinaryLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1871`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1871`
 
 ```python
 class BinaryLoader:
@@ -2160,7 +2160,7 @@ Binary data loader supporting custom binary formats with struct unpacking and en
 
 ### BoundaryCondition
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:263`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:263`
 
 ```python
 class BoundaryCondition:
@@ -2172,7 +2172,7 @@ Boundary condition specification.
 
 ### BoundaryConditionProcessor
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/boundary_conditions.py:84`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/boundary_conditions.py:84`
 
 ```python
 class BoundaryConditionProcessor:
@@ -2190,7 +2190,7 @@ Comprehensive boundary condition processor and validator.
 
 ### BoundaryConditionType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:252`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:252`
 
 ```python
 class BoundaryConditionType:
@@ -2202,7 +2202,7 @@ Types of boundary conditions.
 
 ### BoundaryConstraint
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/boundary_conditions.py:39`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/boundary_conditions.py:39`
 
 ```python
 class BoundaryConstraint:
@@ -2219,7 +2219,7 @@ Enhanced boundary constraint supporting spatial/temporal variation.
 
 ### BoundaryLocationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/boundary_conditions.py:26`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/boundary_conditions.py:26`
 
 ```python
 class BoundaryLocationError:
@@ -2231,7 +2231,7 @@ Raised when boundary location is invalid for domain geometry.
 
 ### BoundaryProcessorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/boundary_conditions.py:66`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/boundary_conditions.py:66`
 
 ```python
 class BoundaryProcessorConfig:
@@ -2243,7 +2243,7 @@ Configuration for boundary condition processor.
 
 ### BoundaryValueError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/boundary_conditions.py:31`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/boundary_conditions.py:31`
 
 ```python
 class BoundaryValueError:
@@ -2255,7 +2255,7 @@ Raised when boundary value specification is invalid.
 
 ### CacheManager
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:228`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:228`
 
 ```python
 class CacheManager:
@@ -2267,7 +2267,7 @@ Manages caching of coupling computations.
 
 ### CachingStrategy
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:81`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:81`
 
 ```python
 class CachingStrategy:
@@ -2279,7 +2279,7 @@ Strategies for caching coupling computations.
 
 ### Circle
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:123`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:123`
 
 ```python
 class Circle:
@@ -2289,7 +2289,7 @@ class Circle:
 
 ### CircularReferenceError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/placeholder_expansion.py:12`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/placeholder_expansion.py:12`
 
 ```python
 class CircularReferenceError:
@@ -2301,7 +2301,7 @@ Exception raised when circular references are detected in placeholder expansion.
 
 ### ComponentNode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:59`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:59`
 
 ```python
 class ComponentNode:
@@ -2313,7 +2313,7 @@ A component node representing models or reaction systems.
 
 ### ComponentProfile
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:139`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:139`
 
 ```python
 class ComponentProfile:
@@ -2325,7 +2325,7 @@ Performance profile for a coupling component.
 
 ### ComponentTimeState
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:107`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:107`
 
 ```python
 class ComponentTimeState:
@@ -2337,7 +2337,7 @@ Tracks the temporal state of a coupled component.
 
 ### ConstraintOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:39`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:39`
 
 ```python
 class ConstraintOperator:
@@ -2349,7 +2349,7 @@ Constraint enforcement strategies.
 
 ### ContextSwitchResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:61`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:61`
 
 ```python
 class ContextSwitchResult:
@@ -2361,7 +2361,7 @@ Result of a context switch operation.
 
 ### ContinuousEvent
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:115`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:115`
 
 ```python
 class ContinuousEvent:
@@ -2373,7 +2373,7 @@ An event that occurs when a condition becomes true during continuous evolution.
 
 ### ConvergenceChecker
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:210`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:210`
 
 ```python
 class ConvergenceChecker:
@@ -2385,7 +2385,7 @@ Abstract base class for convergence checking algorithms.
 
 ### ConvergenceConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:106`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:106`
 
 ```python
 class ConvergenceConfig:
@@ -2397,7 +2397,7 @@ Configuration for convergence checking.
 
 ### ConvergenceMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:81`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:81`
 
 ```python
 class ConvergenceMethod:
@@ -2409,7 +2409,7 @@ Convergence checking methods.
 
 ### CoordinateTransform
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:229`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:229`
 
 ```python
 class CoordinateTransform:
@@ -2421,7 +2421,7 @@ Coordinate transformation specification.
 
 ### CoordinateTransformation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:379`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:379`
 
 ```python
 class CoordinateTransformation:
@@ -2433,7 +2433,7 @@ Coordinate system transformations.
 
 ### CouplingEdge
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:45`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:45`
 
 ```python
 class CouplingEdge:
@@ -2445,7 +2445,7 @@ An edge in the coupling graph.
 
 ### CouplingEdge
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:83`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:83`
 
 ```python
 class CouplingEdge:
@@ -2457,7 +2457,7 @@ An edge representing coupling between components.
 
 ### CouplingEntry
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:197`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:197`
 
 ```python
 class CouplingEntry:
@@ -2469,7 +2469,7 @@ Entry describing how model components are coupled.
 
 ### CouplingError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:78`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:78`
 
 ```python
 class CouplingError:
@@ -2481,7 +2481,7 @@ Specialized error for coupling failures.
 
 ### CouplingErrorAnalyzer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:140`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:140`
 
 ```python
 class CouplingErrorAnalyzer:
@@ -2493,7 +2493,7 @@ Analyzes coupling errors to provide insights and recommendations.
 
 ### CouplingErrorContext
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:66`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:66`
 
 ```python
 class CouplingErrorContext:
@@ -2505,7 +2505,7 @@ Extended context for coupling-specific errors.
 
 ### CouplingErrorType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:35`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:35`
 
 ```python
 class CouplingErrorType:
@@ -2517,7 +2517,7 @@ Types of coupling errors that can occur.
 
 ### CouplingGraph
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:82`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:82`
 
 ```python
 class CouplingGraph:
@@ -2532,7 +2532,7 @@ A coupling graph representing dependencies between model components.
 
 ### CouplingIterator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:607`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:607`
 
 ```python
 class CouplingIterator:
@@ -2547,7 +2547,7 @@ Main coupling iteration controller.
 
 ### CouplingNode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:35`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:35`
 
 ```python
 class CouplingNode:
@@ -2559,7 +2559,7 @@ A node in the coupling graph.
 
 ### CouplingRecoveryManager
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:193`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:193`
 
 ```python
 class CouplingRecoveryManager:
@@ -2571,7 +2571,7 @@ Manages recovery strategies for coupling failures.
 
 ### CouplingResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:189`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:189`
 
 ```python
 class CouplingResult:
@@ -2583,7 +2583,7 @@ Result of coupling iteration.
 
 ### CouplingType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:188`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:188`
 
 ```python
 class CouplingType:
@@ -2595,7 +2595,7 @@ Types of coupling between model components.
 
 ### CubicInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:237`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:237`
 
 ```python
 class CubicInterpolationOperator:
@@ -2607,7 +2607,7 @@ Cubic spline interpolation operator using scipy.interpolate.CubicSpline.
 
 ### DataDescriptor
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:77`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:77`
 
 ```python
 class DataDescriptor:
@@ -2619,7 +2619,7 @@ Description of data characteristics for transformation validation.
 
 ### DataLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:157`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:157`
 
 ```python
 class DataLoader:
@@ -2631,7 +2631,7 @@ Configuration for loading external data.
 
 ### DataLoaderRegistry
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loader_registry.py:21`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loader_registry.py:21`
 
 ```python
 class DataLoaderRegistry:
@@ -2646,7 +2646,7 @@ Registry for data loader implementations.
 
 ### DataLoaderType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:143`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:143`
 
 ```python
 class DataLoaderType:
@@ -2658,7 +2658,7 @@ Types of data loaders.
 
 ### DataTransformation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:101`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:101`
 
 ```python
 class DataTransformation:
@@ -2670,7 +2670,7 @@ Abstract base class for data transformation operations.
 
 ### DataTransformationPipeline
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:580`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:580`
 
 ```python
 class DataTransformationPipeline:
@@ -2682,7 +2682,7 @@ Pipeline for chaining multiple data transformations.
 
 ### DatabaseLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:558`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:558`
 
 ```python
 class DatabaseLoader:
@@ -2698,7 +2698,7 @@ Database data loader supporting SQLite and PostgreSQL.
 
 ### DemoCacheManager
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:330`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:330`
 
 ```python
 class DemoCacheManager:
@@ -2708,7 +2708,7 @@ class DemoCacheManager:
 
 ### DemoLoadBalancer
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:432`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:432`
 
 ```python
 class DemoLoadBalancer:
@@ -2718,7 +2718,7 @@ class DemoLoadBalancer:
 
 ### DemoOperator
 
-**File:** `packages/earthsci_toolkit/examples/precedence_dependency_demo.py:20`
+**File:** `pkg/earthsci-ast-py/examples/precedence_dependency_demo.py:20`
 
 ```python
 class DemoOperator:
@@ -2730,7 +2730,7 @@ Demo operator for examples.
 
 ### DependencyEdge
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:90`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:90`
 
 ```python
 class DependencyEdge:
@@ -2742,7 +2742,7 @@ An edge representing mathematical dependencies.
 
 ### DependencyInfo
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:56`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:56`
 
 ```python
 class DependencyInfo:
@@ -2754,7 +2754,7 @@ Information about dependencies between components.
 
 ### DerivativeOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:187`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:187`
 
 ```python
 class DerivativeOperator:
@@ -2769,7 +2769,7 @@ Temporal derivative operator using finite difference schemes.
 
 ### DiagnosticReport
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:113`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:113`
 
 ```python
 class DiagnosticReport:
@@ -2781,7 +2781,7 @@ Comprehensive diagnostic report for coupling failures.
 
 ### DiscreteEvent
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:131`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:131`
 
 ```python
 class DiscreteEvent:
@@ -2793,7 +2793,7 @@ An event that occurs at discrete time points.
 
 ### DiscreteEventTrigger
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:124`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:124`
 
 ```python
 class DiscreteEventTrigger:
@@ -2805,7 +2805,7 @@ Trigger condition for a discrete event.
 
 ### DivergenceOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/spatial_operators.py:271`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/spatial_operators.py:271`
 
 ```python
 class DivergenceOperator:
@@ -2817,7 +2817,7 @@ Divergence operator for vector fields with finite difference implementation.
 
 ### DivideOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:347`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:347`
 
 ```python
 class DivideOperator:
@@ -2829,7 +2829,7 @@ Division operator with broadcasting, precision, and divide-by-zero handling.
 
 ### Domain
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:276`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:276`
 
 ```python
 class Domain:
@@ -2841,7 +2841,7 @@ Comprehensive computational domain specification.
 
 ### DynamicScopeResolver
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:72`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:72`
 
 ```python
 class DynamicScopeResolver:
@@ -2857,7 +2857,7 @@ Dynamic scope resolver with runtime context support.
 
 ### ESMEditor
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/edit.py:45`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/edit.py:45`
 
 ```python
 class ESMEditor:
@@ -2869,7 +2869,7 @@ Editor for ESM format structures with validation and safety checks.
 
 ### ESMError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:114`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:114`
 
 ```python
 class ESMError:
@@ -2881,7 +2881,7 @@ Comprehensive error representation with diagnostics and suggestions.
 
 ### ESMErrorFactory
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:246`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:246`
 
 ```python
 class ESMErrorFactory:
@@ -2893,7 +2893,7 @@ Factory for creating standardized ESM errors with helpful suggestions.
 
 ### ESMExplorer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/display.py:525`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/display.py:525`
 
 ```python
 class ESMExplorer:
@@ -2905,7 +2905,7 @@ Interactive explorer widget for ESM files in Jupyter notebooks.
 
 ### EditOperation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/edit.py:26`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/edit.py:26`
 
 ```python
 class EditOperation:
@@ -2917,7 +2917,7 @@ Represents an editing operation that can be applied to an ESM structure.
 
 ### EditResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/edit.py:36`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/edit.py:36`
 
 ```python
 class EditResult:
@@ -2929,7 +2929,7 @@ Result of an editing operation.
 
 ### EndToEndVerificationSuite
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/end_to_end_verification.py:33`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/end_to_end_verification.py:33`
 
 ```python
 class EndToEndVerificationSuite:
@@ -2941,7 +2941,7 @@ Complete end-to-end verification suite for atmospheric chemistry.
 
 ### EqualOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:410`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:410`
 
 ```python
 class EqualOperator:
@@ -2953,7 +2953,7 @@ Equality comparison operator.
 
 ### Equation
 
-**File:** `packages/earthsci_toolkit/display_test.py:18`
+**File:** `pkg/earthsci-ast-py/display_test.py:18`
 
 ```python
 class Equation:
@@ -2965,7 +2965,7 @@ Mathematical equation with left and right hand sides.
 
 ### Equation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:27`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:27`
 
 ```python
 class Equation:
@@ -2977,7 +2977,7 @@ Mathematical equation with left and right hand sides.
 
 ### ErrorCode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:22`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:22`
 
 ```python
 class ErrorCode:
@@ -2989,7 +2989,7 @@ Standardized error codes for consistent error handling across all libraries.
 
 ### ErrorCollector
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:198`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:198`
 
 ```python
 class ErrorCollector:
@@ -3001,7 +3001,7 @@ Collects and manages errors during ESM processing.
 
 ### ErrorContext
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:91`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:91`
 
 ```python
 class ErrorContext:
@@ -3013,7 +3013,7 @@ Additional context information for errors.
 
 ### EsmFile
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:342`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:342`
 
 ```python
 class EsmFile:
@@ -3025,7 +3025,7 @@ Root container for an ESM format file.
 
 ### ExecutionMode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:57`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:57`
 
 ```python
 class ExecutionMode:
@@ -3037,7 +3037,7 @@ Modes for handling partial execution.
 
 ### ExecutionStrategy
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:63`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:63`
 
 ```python
 class ExecutionStrategy:
@@ -3049,7 +3049,7 @@ Strategies for parallel execution of coupling components.
 
 ### ExpansionContext
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/placeholder_expansion.py:24`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/placeholder_expansion.py:24`
 
 ```python
 class ExpansionContext:
@@ -3064,7 +3064,7 @@ Context manager for placeholder expansion operations.
 
 ### ExprNode
 
-**File:** `packages/earthsci_toolkit/display_test.py:10`
+**File:** `pkg/earthsci-ast-py/display_test.py:10`
 
 ```python
 class ExprNode:
@@ -3076,7 +3076,7 @@ A node in an expression tree.
 
 ### ExprNode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:14`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:14`
 
 ```python
 class ExprNode:
@@ -3088,7 +3088,7 @@ A node in an expression tree.
 
 ### FieldConstraint
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:47`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:47`
 
 ```python
 class FieldConstraint:
@@ -3100,7 +3100,7 @@ Constraint specification for a field.
 
 ### FixSuggestion
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:104`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:104`
 
 ```python
 class FixSuggestion:
@@ -3112,7 +3112,7 @@ Actionable suggestion for fixing an error.
 
 ### ForwardDifferenceOperator
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:66`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:66`
 
 ```python
 class ForwardDifferenceOperator:
@@ -3124,7 +3124,7 @@ Example differentiation operator.
 
 ### FunctionalAffect
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:107`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:107`
 
 ```python
 class FunctionalAffect:
@@ -3136,7 +3136,7 @@ A functional effect applied during an event.
 
 ### GRIBLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1522`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1522`
 
 ```python
 class GRIBLoader:
@@ -3152,7 +3152,7 @@ GRIB data loader supporting GRIB1 and GRIB2 meteorological data formats.
 
 ### GradientOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/spatial_operators.py:196`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/spatial_operators.py:196`
 
 ```python
 class GradientOperator:
@@ -3164,7 +3164,7 @@ Gradient operator with grid-aware finite difference implementation.
 
 ### Graph
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:97`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:97`
 
 ```python
 class Graph:
@@ -3176,7 +3176,7 @@ Generic graph representation with nodes and edges.
 
 ### GraphEdge
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:73`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:73`
 
 ```python
 class GraphEdge:
@@ -3188,7 +3188,7 @@ An edge in a graph representation.
 
 ### GraphNode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:50`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:50`
 
 ```python
 class GraphNode:
@@ -3200,7 +3200,7 @@ A node in a graph representation.
 
 ### GreaterThanOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:550`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:550`
 
 ```python
 class GreaterThanOperator:
@@ -3212,7 +3212,7 @@ Greater-than comparison operator.
 
 ### GreaterThanOrEqualOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:587`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:587`
 
 ```python
 class GreaterThanOrEqualOperator:
@@ -3224,7 +3224,7 @@ Greater-than-or-equal comparison operator.
 
 ### GridInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:373`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:373`
 
 ```python
 class GridInterpolationOperator:
@@ -3239,7 +3239,7 @@ Grid-based interpolation operator for multi-dimensional data.
 
 ### GridInterpolationTransformation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:252`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:252`
 
 ```python
 class GridInterpolationTransformation:
@@ -3251,7 +3251,7 @@ Grid interpolation and remapping using SciPy.
 
 ### HDF5Loader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:1035`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:1035`
 
 ```python
 class HDF5Loader:
@@ -3267,7 +3267,7 @@ HDF5 data loader supporting hierarchical data structures with h5py/pytables inte
 
 ### HierarchicalScopeResolver
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/hierarchical_scope_resolution.py:48`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/hierarchical_scope_resolution.py:48`
 
 ```python
 class HierarchicalScopeResolver:
@@ -3282,7 +3282,7 @@ Enhanced hierarchical scope resolver with shadowing and inheritance.
 
 ### InitialCondition
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:244`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:244`
 
 ```python
 class InitialCondition:
@@ -3294,7 +3294,7 @@ Initial condition specification.
 
 ### InitialConditionConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:58`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:58`
 
 ```python
 class InitialConditionConfig:
@@ -3306,7 +3306,7 @@ Configuration for initial condition processing.
 
 ### InitialConditionProcessor
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:73`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:73`
 
 ```python
 class InitialConditionProcessor:
@@ -3324,7 +3324,7 @@ Comprehensive initial condition processor and validator.
 
 ### InitialConditionSetupError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/initial_conditions_setup.py:67`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/initial_conditions_setup.py:67`
 
 ```python
 class InitialConditionSetupError:
@@ -3336,7 +3336,7 @@ Error during initial condition setup.
 
 ### InitialConditionType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:236`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:236`
 
 ```python
 class InitialConditionType:
@@ -3348,7 +3348,7 @@ Types of initial conditions.
 
 ### IntegralOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:284`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:284`
 
 ```python
 class IntegralOperator:
@@ -3363,7 +3363,7 @@ Temporal integral operator using various numerical integration methods.
 
 ### IntegrationMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:28`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:28`
 
 ```python
 class IntegrationMethod:
@@ -3375,7 +3375,7 @@ Methods for temporal integration.
 
 ### InteractiveErrorExplorer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:449`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:449`
 
 ```python
 class InteractiveErrorExplorer:
@@ -3387,7 +3387,7 @@ Interactive tools for exploring and understanding errors.
 
 ### InterpolationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:25`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:25`
 
 ```python
 class InterpolationConfig:
@@ -3399,7 +3399,7 @@ Configuration for interpolation operators.
 
 ### IterationState
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:169`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:169`
 
 ```python
 class IterationState:
@@ -3411,7 +3411,7 @@ State information for a coupling iteration.
 
 ### JSONLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:251`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:251`
 
 ```python
 class JSONLoader:
@@ -3426,7 +3426,7 @@ JSON data loader with JSONSchema validation and type coercion.
 
 ### JuliaIntegrator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/julia_integration.py:57`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/julia_integration.py:57`
 
 ```python
 class JuliaIntegrator:
@@ -3438,7 +3438,7 @@ Interface for Julia ModelingToolkit/Catalyst integration.
 
 ### JuliaPerformanceMetrics
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/julia_integration.py:38`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/julia_integration.py:38`
 
 ```python
 class JuliaPerformanceMetrics:
@@ -3450,7 +3450,7 @@ Performance metrics from Julia simulation.
 
 ### JuliaSimulationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/julia_integration.py:21`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/julia_integration.py:21`
 
 ```python
 class JuliaSimulationConfig:
@@ -3462,7 +3462,7 @@ Configuration for Julia simulation backend.
 
 ### JuliaSimulationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/julia_integration.py:52`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/julia_integration.py:52`
 
 ```python
 class JuliaSimulationError:
@@ -3474,7 +3474,7 @@ Exception raised during Julia simulation.
 
 ### LaplacianOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/spatial_operators.py:330`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/spatial_operators.py:330`
 
 ```python
 class LaplacianOperator:
@@ -3486,7 +3486,7 @@ Laplacian operator (∇²) with finite difference implementation.
 
 ### LessThanOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:476`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:476`
 
 ```python
 class LessThanOperator:
@@ -3498,7 +3498,7 @@ Less-than comparison operator.
 
 ### LessThanOrEqualOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:513`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:513`
 
 ```python
 class LessThanOrEqualOperator:
@@ -3510,7 +3510,7 @@ Less-than-or-equal comparison operator.
 
 ### LinAlgError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:65`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:65`
 
 ```python
 class LinAlgError:
@@ -3520,7 +3520,7 @@ class LinAlgError:
 
 ### LinearInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:183`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:183`
 
 ```python
 class LinearInterpolationOperator:
@@ -3532,7 +3532,7 @@ Linear interpolation operator using scipy.interpolate.interp1d.
 
 ### LinearInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:24`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:24`
 
 ```python
 class LinearInterpolationOperator:
@@ -3544,7 +3544,7 @@ Example linear interpolation operator.
 
 ### LoadBalancer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:313`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:313`
 
 ```python
 class LoadBalancer:
@@ -3556,7 +3556,7 @@ Balances computational load across available resources.
 
 ### LoadBalancingMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:72`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:72`
 
 ```python
 class LoadBalancingMethod:
@@ -3568,7 +3568,7 @@ Methods for balancing computational load across resources.
 
 ### LogicalOperatorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:162`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:162`
 
 ```python
 class LogicalOperatorConfig:
@@ -3580,7 +3580,7 @@ Configuration for logical operators.
 
 ### MathematicalVerifier
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/verification.py:69`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/verification.py:69`
 
 ```python
 class MathematicalVerifier:
@@ -3592,7 +3592,7 @@ Main verification class for mathematical correctness.
 
 ### MeanOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:179`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:179`
 
 ```python
 class MeanOperator:
@@ -3604,7 +3604,7 @@ Mean (average) operator for statistical aggregation.
 
 ### MedianOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:364`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:364`
 
 ```python
 class MedianOperator:
@@ -3616,7 +3616,7 @@ Median operator (50th percentile).
 
 ### MemoryOptimizer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:175`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:175`
 
 ```python
 class MemoryOptimizer:
@@ -3628,7 +3628,7 @@ Optimizes memory usage during coupling execution.
 
 ### Metadata
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:328`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:328`
 
 ```python
 class Metadata:
@@ -3640,7 +3640,7 @@ Metadata about the model or dataset.
 
 ### MixedConvergenceChecker
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:234`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:234`
 
 ```python
 class MixedConvergenceChecker:
@@ -3652,7 +3652,7 @@ Mixed convergence checker using absolute, relative, and residual criteria.
 
 ### Model
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:55`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:55`
 
 ```python
 class Model:
@@ -3664,7 +3664,7 @@ A mathematical model containing variables and equations.
 
 ### ModelVariable
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:45`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:45`
 
 ```python
 class ModelVariable:
@@ -3676,7 +3676,7 @@ A variable in a mathematical model.
 
 ### MultiplyOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:308`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:308`
 
 ```python
 class MultiplyOperator:
@@ -3688,7 +3688,7 @@ Multiplication operator with broadcasting and precision handling.
 
 ### NetCDFLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:59`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:59`
 
 ```python
 class NetCDFLoader:
@@ -3703,7 +3703,7 @@ NetCDF data loader using xarray for multidimensional scientific data.
 
 ### NodeType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:27`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:27`
 
 ```python
 class NodeType:
@@ -3715,7 +3715,7 @@ Types of nodes in a coupling graph.
 
 ### NotEqualOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:443`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:443`
 
 ```python
 class NotEqualOperator:
@@ -3727,7 +3727,7 @@ Not-equal comparison operator.
 
 ### NotOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:347`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:347`
 
 ```python
 class NotOperator:
@@ -3739,7 +3739,7 @@ Logical NOT operator.
 
 ### Operator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:179`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:179`
 
 ```python
 class Operator:
@@ -3751,7 +3751,7 @@ Mathematical operator applied to data or expressions.
 
 ### OperatorDispatcher
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_dispatch.py:89`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_dispatch.py:89`
 
 ```python
 class OperatorDispatcher:
@@ -3766,7 +3766,7 @@ Central dispatcher for operator overloading and polymorphism.
 
 ### OperatorOverload
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_dispatch.py:78`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_dispatch.py:78`
 
 ```python
 class OperatorOverload:
@@ -3778,7 +3778,7 @@ Represents a specific operator implementation for given types.
 
 ### OperatorPrecedence
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_registry.py:26`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_registry.py:26`
 
 ```python
 class OperatorPrecedence:
@@ -3790,7 +3790,7 @@ Operator precedence and associativity information.
 
 ### OperatorRegistry
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_registry.py:53`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_registry.py:53`
 
 ```python
 class OperatorRegistry:
@@ -3805,7 +3805,7 @@ Registry for operator implementations.
 
 ### OperatorRequirements
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_validation.py:36`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_validation.py:36`
 
 ```python
 class OperatorRequirements:
@@ -3817,7 +3817,7 @@ Requirements for operator implementations.
 
 ### OperatorType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:166`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:166`
 
 ```python
 class OperatorType:
@@ -3829,7 +3829,7 @@ Types of mathematical operators.
 
 ### OperatorValidator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_validation.py:47`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_validation.py:47`
 
 ```python
 class OperatorValidator:
@@ -3844,7 +3844,7 @@ Validator for operator implementations.
 
 ### OptimizationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:124`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:124`
 
 ```python
 class OptimizationConfig:
@@ -3856,7 +3856,7 @@ Configuration for coupling performance optimization.
 
 ### OrOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/logical_operators.py:298`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/logical_operators.py:298`
 
 ```python
 class OrOperator:
@@ -3868,7 +3868,7 @@ Logical OR operator with short-circuit evaluation.
 
 ### ParallelExecutionEngine
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:417`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:417`
 
 ```python
 class ParallelExecutionEngine:
@@ -3880,7 +3880,7 @@ Manages parallel execution of coupling components.
 
 ### Parameter
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:74`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:74`
 
 ```python
 class Parameter:
@@ -3892,7 +3892,7 @@ A parameter for reaction systems.
 
 ### PercentileOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:257`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:257`
 
 ```python
 class PercentileOperator:
@@ -3904,7 +3904,7 @@ Percentile operator for distribution analysis.
 
 ### PerformanceMetrics
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:91`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:91`
 
 ```python
 class PerformanceMetrics:
@@ -3916,7 +3916,7 @@ Metrics for tracking coupling performance.
 
 ### PerformanceOptimizedCouplingIterator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:610`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:610`
 
 ```python
 class PerformanceOptimizedCouplingIterator:
@@ -3935,7 +3935,7 @@ Coupling iterator with comprehensive performance optimizations.
 
 ### PerformanceProfiler
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:409`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:409`
 
 ```python
 class PerformanceProfiler:
@@ -3947,7 +3947,7 @@ Performance profiling tool for ESM operations.
 
 ### PerformanceTracker
 
-**File:** `packages/earthsci_toolkit/examples/coupling_performance_optimization_demo.py:553`
+**File:** `pkg/earthsci-ast-py/examples/coupling_performance_optimization_demo.py:553`
 
 ```python
 class PerformanceTracker:
@@ -3957,7 +3957,7 @@ class PerformanceTracker:
 
 ### PlaceholderExpansionError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/placeholder_expansion.py:17`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/placeholder_expansion.py:17`
 
 ```python
 class PlaceholderExpansionError:
@@ -3969,7 +3969,7 @@ Exception raised when placeholder expansion fails.
 
 ### Reaction
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:84`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:84`
 
 ```python
 class Reaction:
@@ -3981,7 +3981,7 @@ A chemical reaction.
 
 ### ReactionSystem
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:94`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:94`
 
 ```python
 class ReactionSystem:
@@ -3993,7 +3993,7 @@ A system of chemical reactions.
 
 ### RecoveryConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:96`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:96`
 
 ```python
 class RecoveryConfig:
@@ -4005,7 +4005,7 @@ Configuration for coupling error recovery.
 
 ### RecoveryStrategy
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:47`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:47`
 
 ```python
 class RecoveryStrategy:
@@ -4017,7 +4017,7 @@ Strategies for recovering from coupling failures.
 
 ### Rectangle
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:117`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:117`
 
 ```python
 class Rectangle:
@@ -4027,7 +4027,7 @@ class Rectangle:
 
 ### Reference
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:317`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:317`
 
 ```python
 class Reference:
@@ -4039,7 +4039,7 @@ Bibliographic reference.
 
 ### RelaxationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:133`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:133`
 
 ```python
 class RelaxationConfig:
@@ -4051,7 +4051,7 @@ Configuration for relaxation methods.
 
 ### RelaxationController
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:295`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:295`
 
 ```python
 class RelaxationController:
@@ -4063,7 +4063,7 @@ Controls relaxation parameters during coupling iteration.
 
 ### RelaxationMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:89`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:89`
 
 ```python
 class RelaxationMethod:
@@ -4075,7 +4075,7 @@ Relaxation methods for coupling iteration.
 
 ### RemoteLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:2650`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:2650`
 
 ```python
 class RemoteLoader:
@@ -4091,7 +4091,7 @@ Remote data loader for HTTP, FTP, and cloud storage access.
 
 ### RobustCouplingIterator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_error_handling.py:427`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_error_handling.py:427`
 
 ```python
 class RobustCouplingIterator:
@@ -4106,7 +4106,7 @@ Coupling iterator with comprehensive error handling and recovery.
 
 ### RuntimeContext
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:40`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:40`
 
 ```python
 class RuntimeContext:
@@ -4118,7 +4118,7 @@ A runtime execution context with injected parameters and overrides.
 
 ### RuntimeVariable
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/dynamic_scope_resolution.py:27`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/dynamic_scope_resolution.py:27`
 
 ```python
 class RuntimeVariable:
@@ -4130,7 +4130,7 @@ A variable with runtime context information.
 
 ### SchemaValidationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/parse.py:28`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/parse.py:28`
 
 ```python
 class SchemaValidationError:
@@ -4142,7 +4142,7 @@ Exception raised when schema validation fails.
 
 ### ScopeInfo
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/hierarchical_scope_resolution.py:24`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/hierarchical_scope_resolution.py:24`
 
 ```python
 class ScopeInfo:
@@ -4154,7 +4154,7 @@ Information about a scope in the hierarchy.
 
 ### ScopeValidationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:624`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:624`
 
 ```python
 class ScopeValidationError:
@@ -4166,7 +4166,7 @@ Represents a scope validation error with detailed information.
 
 ### ScopeValidationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:650`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:650`
 
 ```python
 class ScopeValidationResult:
@@ -4178,7 +4178,7 @@ Result of comprehensive scope validation.
 
 ### ScopeValidator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:672`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:672`
 
 ```python
 class ScopeValidator:
@@ -4197,7 +4197,7 @@ Comprehensive scope validation system with detailed error reporting.
 
 ### ScopedReference
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:945`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:945`
 
 ```python
 class ScopedReference:
@@ -4215,7 +4215,7 @@ A resolved scoped reference containing the path and target information.
 
 ### ScopedReferenceResolver
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:963`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:963`
 
 ```python
 class ScopedReferenceResolver:
@@ -4232,7 +4232,7 @@ Resolver for hierarchical scoped references in ESM format.
 
 ### Severity
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:81`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:81`
 
 ```python
 class Severity:
@@ -4244,7 +4244,7 @@ Error severity levels.
 
 ### Shape
 
-**File:** `packages/earthsci_toolkit/examples/operator_overloading_demo.py:113`
+**File:** `pkg/earthsci-ast-py/examples/operator_overloading_demo.py:113`
 
 ```python
 class Shape:
@@ -4254,7 +4254,7 @@ class Shape:
 
 ### SimpleCSVLoader
 
-**File:** `packages/earthsci_toolkit/examples/data_loader_registry_example.py:129`
+**File:** `pkg/earthsci-ast-py/examples/data_loader_registry_example.py:129`
 
 ```python
 class SimpleCSVLoader:
@@ -4266,7 +4266,7 @@ Simple CSV loader for demonstration.
 
 ### SimulationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/simulation.py:105`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/simulation.py:105`
 
 ```python
 class SimulationError:
@@ -4278,7 +4278,7 @@ Exception raised during simulation.
 
 ### SimulationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/simulation.py:31`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/simulation.py:31`
 
 ```python
 class SimulationResult:
@@ -4290,7 +4290,7 @@ Result of a simulation run.
 
 ### Solver
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:303`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:303`
 
 ```python
 class Solver:
@@ -4302,7 +4302,7 @@ Numerical solver configuration.
 
 ### SolverType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:293`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:293`
 
 ```python
 class SolverType:
@@ -4314,7 +4314,7 @@ Types of numerical solvers.
 
 ### SpatialDimension
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:220`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:220`
 
 ```python
 class SpatialDimension:
@@ -4326,7 +4326,7 @@ Spatial dimension specification.
 
 ### SpatialOperatorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/spatial_operators.py:87`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/spatial_operators.py:87`
 
 ```python
 class SpatialOperatorConfig:
@@ -4338,7 +4338,7 @@ Configuration for spatial differential operators.
 
 ### Species
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:64`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:64`
 
 ```python
 class Species:
@@ -4350,7 +4350,7 @@ A chemical species in a reaction system.
 
 ### SplineInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/interpolation_operators.py:287`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/interpolation_operators.py:287`
 
 ```python
 class SplineInterpolationOperator:
@@ -4362,7 +4362,7 @@ General spline interpolation operator with configurable order.
 
 ### SplineInterpolationOperator
 
-**File:** `packages/earthsci_toolkit/examples/operator_registry_example.py:46`
+**File:** `pkg/earthsci-ast-py/examples/operator_registry_example.py:46`
 
 ```python
 class SplineInterpolationOperator:
@@ -4374,7 +4374,7 @@ Example spline interpolation operator (newer version).
 
 ### StandardDeviationOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:325`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:325`
 
 ```python
 class StandardDeviationOperator:
@@ -4386,7 +4386,7 @@ Standard deviation operator (square root of variance).
 
 ### StatisticalOperatorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:94`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:94`
 
 ```python
 class StatisticalOperatorConfig:
@@ -4398,7 +4398,7 @@ Configuration for statistical operators.
 
 ### StreamingLoader
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_loaders.py:2409`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_loaders.py:2409`
 
 ```python
 class StreamingLoader:
@@ -4414,7 +4414,7 @@ Streaming data loader supporting real-time data ingestion from multiple sources.
 
 ### SubtractOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/math_operators.py:269`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/math_operators.py:269`
 
 ```python
 class SubtractOperator:
@@ -4426,7 +4426,7 @@ Subtraction operator with broadcasting and precision handling.
 
 ### TemporalAveragingOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:395`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:395`
 
 ```python
 class TemporalAveragingOperator:
@@ -4441,7 +4441,7 @@ Temporal averaging operator for computing time-averaged quantities.
 
 ### TemporalDomain
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/types.py:212`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/types.py:212`
 
 ```python
 class TemporalDomain:
@@ -4453,7 +4453,7 @@ Temporal domain specification.
 
 ### TemporalOperatorConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:38`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:38`
 
 ```python
 class TemporalOperatorConfig:
@@ -4465,7 +4465,7 @@ Configuration for temporal operators.
 
 ### TemporalScheme
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:17`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:17`
 
 ```python
 class TemporalScheme:
@@ -4477,7 +4477,7 @@ Time-stepping and discretization schemes.
 
 ### TimeAlignmentStrategy
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:38`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:38`
 
 ```python
 class TimeAlignmentStrategy:
@@ -4489,7 +4489,7 @@ Strategies for aligning time between components.
 
 ### TimeExtrapolationMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:30`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:30`
 
 ```python
 class TimeExtrapolationMethod:
@@ -4501,7 +4501,7 @@ Methods for time extrapolation.
 
 ### TimeInterpolationMethod
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:22`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:22`
 
 ```python
 class TimeInterpolationMethod:
@@ -4513,7 +4513,7 @@ Methods for time interpolation.
 
 ### TimePoint
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:73`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:73`
 
 ```python
 class TimePoint:
@@ -4525,7 +4525,7 @@ Represents a point in time with associated data.
 
 ### TimeSeries
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:81`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:81`
 
 ```python
 class TimeSeries:
@@ -4537,7 +4537,7 @@ A time series of data points.
 
 ### TimeStep
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:47`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:47`
 
 ```python
 class TimeStep:
@@ -4549,7 +4549,7 @@ Represents a time step with value and units.
 
 ### TimeSteppingOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/temporal_operators.py:474`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/temporal_operators.py:474`
 
 ```python
 class TimeSteppingOperator:
@@ -4564,7 +4564,7 @@ Time-stepping operator for advancing model states in time.
 
 ### TimeSynchronizer
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/time_synchronization.py:132`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/time_synchronization.py:132`
 
 ```python
 class TimeSynchronizer:
@@ -4580,7 +4580,7 @@ Main class for synchronizing time between coupled components.
 
 ### TransformationConfig
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:69`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:69`
 
 ```python
 class TransformationConfig:
@@ -4592,7 +4592,7 @@ Configuration for a single transformation operation.
 
 ### TransformationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:90`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:90`
 
 ```python
 class TransformationResult:
@@ -4604,7 +4604,7 @@ Result of a data transformation operation.
 
 ### TransformationType
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:44`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:44`
 
 ```python
 class TransformationType:
@@ -4616,7 +4616,7 @@ Types of data transformations supported in coupling pipeline.
 
 ### TypeSignature
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_dispatch.py:20`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_dispatch.py:20`
 
 ```python
 class TypeSignature:
@@ -4628,7 +4628,7 @@ Type signature for operator dispatch.
 
 ### UnitConversionResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/units.py:45`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/units.py:45`
 
 ```python
 class UnitConversionResult:
@@ -4640,7 +4640,7 @@ Result of unit conversion operation.
 
 ### UnitConversionTransformation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:152`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:152`
 
 ```python
 class UnitConversionTransformation:
@@ -4652,7 +4652,7 @@ Unit conversion using Pint library.
 
 ### UnitValidationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/units.py:35`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/units.py:35`
 
 ```python
 class UnitValidationResult:
@@ -4664,7 +4664,7 @@ Result of unit validation check.
 
 ### UnitValidator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/units.py:53`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/units.py:53`
 
 ```python
 class UnitValidator:
@@ -4676,7 +4676,7 @@ Validator for dimensional consistency in ESM format structures.
 
 ### UnitWarning
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:38`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:38`
 
 ```python
 class UnitWarning:
@@ -4688,7 +4688,7 @@ Represents a unit validation warning.
 
 ### UnsupportedVersionError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/parse.py:33`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/parse.py:33`
 
 ```python
 class UnsupportedVersionError:
@@ -4700,7 +4700,7 @@ Exception raised when ESM version is not supported.
 
 ### ValidationError
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:25`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:25`
 
 ```python
 class ValidationError:
@@ -4712,7 +4712,7 @@ Represents a single validation error.
 
 ### ValidationLevel
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_validation.py:19`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_validation.py:19`
 
 ```python
 class ValidationLevel:
@@ -4724,7 +4724,7 @@ Validation strictness levels.
 
 ### ValidationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/validation.py:52`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/validation.py:52`
 
 ```python
 class ValidationResult:
@@ -4736,7 +4736,7 @@ Represents the result of validation.
 
 ### ValidationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/operator_validation.py:27`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/operator_validation.py:27`
 
 ```python
 class ValidationResult:
@@ -4748,7 +4748,7 @@ Result of operator validation.
 
 ### VariableMatchResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_graph.py:65`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_graph.py:65`
 
 ```python
 class VariableMatchResult:
@@ -4760,7 +4760,7 @@ Result of variable matching between source and target variables.
 
 ### VariableNode
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/graph.py:66`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/graph.py:66`
 
 ```python
 class VariableNode:
@@ -4772,7 +4772,7 @@ A variable node representing mathematical variables or expressions.
 
 ### VariableResolution
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/hierarchical_scope_resolution.py:36`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/hierarchical_scope_resolution.py:36`
 
 ```python
 class VariableResolution:
@@ -4784,7 +4784,7 @@ Result of variable resolution with scope information.
 
 ### VariableTransformation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/data_transformation.py:485`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/data_transformation.py:485`
 
 ```python
 class VariableTransformation:
@@ -4796,7 +4796,7 @@ ESM variable transformations (additive, multiplicative, etc.).
 
 ### VarianceOperator
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/statistical_operators.py:218`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/statistical_operators.py:218`
 
 ```python
 class VarianceOperator:
@@ -4808,7 +4808,7 @@ Variance operator for statistical analysis.
 
 ### VerificationReport
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/verification.py:48`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/verification.py:48`
 
 ```python
 class VerificationReport:
@@ -4820,7 +4820,7 @@ Comprehensive verification report.
 
 ### VerificationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/verification.py:35`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/verification.py:35`
 
 ```python
 class VerificationResult:
@@ -4832,7 +4832,7 @@ Result of a verification check.
 
 ### VerificationResult
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/atmospheric_verification.py:39`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/atmospheric_verification.py:39`
 
 ```python
 class VerificationResult:
@@ -4844,7 +4844,7 @@ Result of atmospheric chemistry verification.
 
 ### VerificationStatus
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/verification.py:26`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/verification.py:26`
 
 ```python
 class VerificationStatus:
@@ -4856,7 +4856,7 @@ Status of verification results.
 
 ### linalg
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:54`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:54`
 
 ```python
 class linalg:
@@ -4866,7 +4866,7 @@ class linalg:
 
 ### np_fallback
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_iteration.py:21`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_iteration.py:21`
 
 ```python
 class np_fallback:
@@ -4876,7 +4876,7 @@ class np_fallback:
 
 ### profile_operation
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/error_handling.py:537`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py:537`
 
 ```python
 class profile_operation:
@@ -4888,7 +4888,7 @@ Context manager for profiling ESM operations.
 
 ### psutil_fallback
 
-**File:** `packages/earthsci_toolkit/src/earthsci_toolkit/coupling_performance.py:31`
+**File:** `pkg/earthsci-ast-py/src/earthsci_ast/coupling_performance.py:31`
 
 ```python
 class psutil_fallback:

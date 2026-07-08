@@ -31,6 +31,7 @@
 
     { "id": "valid/scoped_refs_nested",             "path": "valid/scoped_refs_nested.esm",             "tags": ["scoping"] },
     { "id": "valid/scoped_refs_coupling",           "path": "valid/scoped_refs_coupling.esm",           "tags": ["scoping", "coupling", "esm-umm"] },
+    { "id": "valid/coupling_transform_expression",  "path": "valid/coupling_transform_expression.esm",  "tags": ["coupling", "expression-transform", "esm-spec-10.4"] },
 
     { "id": "valid/expr_graphs_variable_deps",      "path": "valid/expr_graphs_variable_deps.esm",      "tags": ["expressions"] },
     { "id": "valid/tests_examples_comprehensive",   "path": "valid/tests_examples_comprehensive.esm",   "tags": ["tests_blocks"] },
@@ -94,6 +95,8 @@
 
     { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] },
 
-    { "id": "valid/regrid_point_missing_value",      "path": "valid/regrid_point_missing_value.esm",      "tags": ["data_loaders", "regrid", "missing_value", "ess-v9a.6"] }
+    { "id": "valid/regrid_point_missing_value",      "path": "valid/regrid_point_missing_value.esm",      "tags": ["data_loaders", "regrid", "missing_value", "ess-v9a.6"] },
+
+    { "id": "valid/aggregate/coordinate_int_ratio_spacing", "path": "valid/aggregate/coordinate_int_ratio_spacing.esm", "tags": ["aggregate", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] }
   ]
 }

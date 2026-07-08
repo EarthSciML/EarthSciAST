@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_04_weno_wide_stencil",
     "description": "WENO-like wide stencil on u[1:20]. flux[i] = u[i] - 5u[i+1] + 10u[i+2] - 10u[i+3] + 5u[i+4] - u[i+5] for 1-based i in 1:15 (offset +2 absorbed into flux indexing). D(u[i+3]) = -(flux[i+1] - flux[i]) for 1-based i in 1:14. Boundary cells [1,2,3,18,19,20] held at zero via scalar BCs. Mirrors MTK fork test #4. Smoke test: with zero initial condition the solution stays at zero and the solver integrates successfully — verifies the 6-point stencil compiles and links into the arrayop block-tearing path.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "wide_stencil", "flux"]
   },
   "models": {
@@ -16,12 +16,12 @@
         {
           "_comment": "flux[i] = u[i] - 5u[i+1] + 10u[i+2] - 10u[i+3] + 5u[i+4] - u[i+5], 1-based i in 1..15",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "index", "args": ["flux", "i"] },
             "ranges": { "i": [1, 15] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": {
               "op": "+",
               "args": [
@@ -39,12 +39,12 @@
         {
           "_comment": "D(u[i+3]) = -(flux[i+1] - flux[i]), 1-based i in 1..14",
           "lhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": { "op": "D", "args": [{ "op": "index", "args": ["u", { "op": "+", "args": ["i", 3] }] }], "wrt": "t" },
             "ranges": { "i": [1, 14] }
           },
           "rhs": {
-            "op": "arrayop", "args": [], "output_idx": ["i"],
+            "op": "aggregate", "args": [], "output_idx": ["i"],
             "expr": {
               "op": "-",
               "args": [

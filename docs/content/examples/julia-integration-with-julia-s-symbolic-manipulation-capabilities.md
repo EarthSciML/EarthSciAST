@@ -1,6 +1,6 @@
 # Integration with Julia's symbolic manipulation capabilities (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Test expression conversion utilities
@@ -13,12 +13,12 @@
         @test esm_to_mock_symbolic(simple_var) == "x"
 
         # Test differential expression conversion
-        diff_expr = OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t")
+        diff_expr = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t")
         symbolic_diff = esm_to_mock_symbolic(diff_expr)
         @test occursin("D(x, t)", symbolic_diff)
 
         # Test arithmetic expression conversion
-        add_expr = OpExpr("+", EarthSciSerialization.Expr[VarExpr("a"), VarExpr("b")])
+        add_expr = OpExpr("+", EarthSciAST.Expr[VarExpr("a"), VarExpr("b")])
         symbolic_add = esm_to_mock_symbolic(add_expr)
         @test occursin("+(a, b)", symbolic_add)
 
@@ -35,8 +35,8 @@
 
         equations = [
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t"),
-                OpExpr("*", EarthSciSerialization.Expr[VarExpr("a"), VarExpr("x")])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t"),
+                OpExpr("*", EarthSciAST.Expr[VarExpr("a"), VarExpr("x")])
             )
         ]
 
@@ -44,7 +44,7 @@
         mtk_sys = to_mtk_system(model, "ExponentialGrowth")
 
         # Verify the mock system captures the symbolic nature
-        @test mtk_sys isa EarthSciSerialization.MockMTKSystem
+        @test mtk_sys isa EarthSciAST.MockMTKSystem
         @test length(mtk_sys.equations) == 1
         @test "x" in mtk_sys.states
         @test "a" in mtk_sys.parameters

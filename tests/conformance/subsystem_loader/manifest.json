@@ -1,0 +1,30 @@
+{
+  "category": "subsystem_loader_consumption",
+  "version": "1.0",
+  "description": "Cross-language conformance for a pure-I/O data loader MOUNTED AS A MODEL SUBSYSTEM and consumed by the owning model's OWN equations (RFC pure-io-data-loaders §4.3; CONFORMANCE_SPEC.md §5.11). The flattener must lower each DataLoader-subsystem variable to a const-array-backed observed `<owner>.<subkey>.<var>` (Python: an observed + LoaderField; Julia: an observed keyed for the provider/const_arrays seam), and simulate must bind its value so BOTH a bare-scalar reference (`raw.k`) AND a gather (`index(raw.wind, 2)`) resolve. The forcing is CONST, so the golden trajectory is analytic and exact. Complements the top-level-loader fixtures (`tests/valid/advection_reaction_loaded_ic_bc.esm`, `pkg/earthsci-ast-py/tests/fixtures/loader_injection/loader_consumer.esm`), which cover top-level / variable_map-coupled loaders + gather but NOT subsystem-mount + direct bare-scalar consumption.",
+  "reference_binding": "analytic",
+  "bindings_required": ["python", "julia", "rust"],
+  "bindings_optional": [],
+  "scope_excluded": {
+    "go": "rewrite-only port; no array simulator",
+    "typescript": "rewrite-only port; no array simulator"
+  },
+  "tolerances": {
+    "traj_rtol": 1e-04,
+    "traj_atol": 1e-06
+  },
+  "integrators": {
+    "julia": {"solver": "Tsit5", "reltol": 1e-09, "abstol": 1e-11},
+    "python": {"solver": "LSODA", "reltol": 1e-10, "abstol": 1e-12},
+    "rust": {"solver": "Bdf", "reltol": 1e-10, "abstol": 1e-12}
+  },
+  "fixtures": [
+    {
+      "id": "subsystem_loader_ode",
+      "fixture": "fixtures/subsystem_loader_ode.esm",
+      "golden": "golden/subsystem_loader_ode.json",
+      "state_order": ["Box.c"],
+      "tags": ["subsystem-loader", "pure-io", "const", "bare-scalar", "gather"]
+    }
+  ]
+}

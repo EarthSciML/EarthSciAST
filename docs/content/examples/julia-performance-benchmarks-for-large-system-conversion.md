@@ -1,6 +1,6 @@
 # Performance benchmarks for large system conversion (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Create a larger system for performance testing

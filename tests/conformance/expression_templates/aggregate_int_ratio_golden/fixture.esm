@@ -1,0 +1,50 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "aggregate_int_ratio_golden",
+    "description": "Regression guard for CONFORMANCE_SPEC §5.5.3.1 rule 1 on the AST-GOLDEN pathway (resolve_template_machinery -> lower_expression_templates -> canonical sorted write), NOT the typed Load/Save path. A `coord` expression template whose body is cos(pi * aggregate((i - 1/2)*(1/8))) is expanded via apply_expression_template, so an integer ratio {op:/,args:[1,8]} lands INSIDE a nested, float-heavy aggregate `expr` body. JSON3's context-dependent structural number inference widens those bare integer tokens to Float64 (1 -> 1.0, 8 -> 8.0) when they share a schema-repeating, float-heavy document with cos(pi*...) siblings, so before the fix the Julia golden emitted `[1.0,8.0]` inside the aggregate while Python/Rust/TS/Go emitted `[1,8]` — Julia the lone outlier. `lower_expression_templates` now narrows integral Int64-representable Float64 in `args` positions back to integers, so the expanded golden is `[1,8]` everywhere and byte-identical across the five bindings. The standalone `dx = 1/8` sits OUTSIDE any aggregate and already stayed an integer ratio; it is retained here to pin that inside-vs-outside now agree. `/` is true float division so the value is unchanged (1/8 = 0.125)."
+  },
+  "index_sets": { "x": { "kind": "interval", "size": 8 } },
+  "models": {
+    "M": {
+      "expression_templates": {
+        "coord": {
+          "params": [],
+          "body": {
+            "op": "cos",
+            "args": [
+              { "op": "*", "args": [
+                3.141592653589793,
+                { "op": "aggregate", "output_idx": ["i"], "args": [],
+                  "ranges": { "i": { "from": "x" } },
+                  "expr": { "op": "*", "args": [
+                    { "op": "-", "args": ["i", 0.5] },
+                    { "op": "/", "args": [1, 8] }
+                  ] } }
+              ] }
+            ]
+          }
+        }
+      },
+      "variables": {
+        "u": { "type": "state", "units": "1", "shape": ["x"], "default": 0 },
+        "dx": { "type": "observed", "units": "1", "expression": { "op": "/", "args": [1, 8] } },
+        "c0": { "type": "observed", "units": "1",
+                "expression": { "op": "apply_expression_template", "args": [], "name": "coord", "bindings": {} } }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+                   "ranges": { "i": { "from": "x" } },
+                   "expr": { "op": "D", "args": [ { "op": "index", "args": ["u", "i"] } ], "wrt": "t" } },
+          "rhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
+                   "ranges": { "i": { "from": "x" } },
+                   "expr": { "op": "cos", "args": [ { "op": "*", "args": [
+                     3.141592653589793,
+                     { "op": "*", "args": [ { "op": "-", "args": ["i", 0.5] },
+                                            { "op": "/", "args": [1, 8] } ] } ] } ] } }
+        }
+      ]
+    }
+  }
+}

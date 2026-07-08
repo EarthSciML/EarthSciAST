@@ -4,7 +4,7 @@
     "name": "intersect_polygon_planar_ode",
     "description": "M4 conservative-regridding geometry kernel — the END-TO-END SIMULATE/ODE companion to intersect_polygon_planar_area (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.13). This fixture is integrated as an ODE through simulate(): the array-op simulate driver materializes the array-valued observed `clip = intersect_polygon(src_poly, tgt_poly)` (its overlap ring registered as the derived `clip_ring` index set via from_faq), then the scalar observed `area = sum_product FAQ(clip)` (planar shoelace over the closed ring), then integrates the well-formed ODE d(tracer)/dt = -area·tracer. The two source/target cells are unit-aligned squares overlapping in the [1,2]×[1,2] box held as `const` observed inputs, so the planar overlap area is exactly 1.0 and tracer(t) = tracer0·exp(-t). The `planar` manifold is dependency-free (numpy Sutherland–Hodgman), so this conformance fixture runs without the optional `spherely` (S2) backend. Modeling the polygon inputs as `const` observeds keeps the whole model self-contained so the test_aggregate_conformance-style runner — which supplies only scalar initial_conditions / parameter_overrides — can drive it. Cross-binding area agreement is tolerance-based (§5.8.2 / B.5).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "geometry",
@@ -22,60 +22,106 @@
       "ess-my4.4.13"
     ]
   },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "src_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "clip_ring": {
+      "kind": "derived",
+      "from_faq": "overlap_clip"
+    }
+  },
   "models": {
     "PolygonClipAreaPlanarODE": {
       "tolerance": {
         "rel": 1e-06,
         "abs": 1e-09
       },
-      "index_sets": {
-        "coord": {
-          "kind": "interval",
-          "size": 2
-        },
-        "src_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "tgt_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "clip_ring": {
-          "kind": "derived",
-          "from_faq": "overlap_clip"
-        }
-      },
       "variables": {
         "src_poly": {
           "type": "observed",
-          "shape": ["src_verts", "coord"],
+          "shape": [
+            "src_verts",
+            "coord"
+          ],
           "description": "Source cell as a closed CCW lon-lat vertex ring: the square (0,0)-(2,0)-(2,2)-(0,2). The `poly_a` operand of the clip, held as a constant observed input so the model is self-contained for the scalar-only conformance runner.",
           "expression": {
             "op": "const",
             "args": [],
-            "value": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+            "value": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                2.0,
+                0.0
+              ],
+              [
+                2.0,
+                2.0
+              ],
+              [
+                0.0,
+                2.0
+              ]
+            ]
           }
         },
         "tgt_poly": {
           "type": "observed",
-          "shape": ["tgt_verts", "coord"],
+          "shape": [
+            "tgt_verts",
+            "coord"
+          ],
           "description": "Target cell as a closed CCW lon-lat vertex ring: the square (1,1)-(3,1)-(3,3)-(1,3). The `poly_b` operand of the clip.",
           "expression": {
             "op": "const",
             "args": [],
-            "value": [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]
+            "value": [
+              [
+                1.0,
+                1.0
+              ],
+              [
+                3.0,
+                1.0
+              ],
+              [
+                3.0,
+                3.0
+              ],
+              [
+                1.0,
+                3.0
+              ]
+            ]
           }
         },
         "clip": {
           "type": "observed",
-          "shape": ["clip_ring", "coord"],
+          "shape": [
+            "clip_ring",
+            "coord"
+          ],
           "description": "The clipped overlap ring A ∩ B = the unit square (1,1)-(2,1)-(2,2)-(1,2), of data-dependent length: the `intersect_polygon` leaf output. Its vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\"); the simulate driver registers the materialized ring under the node id so the derived set resolves its extent.",
           "expression": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
             "manifold": "planar",
-            "args": ["src_poly", "tgt_poly"]
+            "args": [
+              "src_poly",
+              "tgt_poly"
+            ]
           }
         },
         "area": {
@@ -87,9 +133,13 @@
             "semiring": "sum_product",
             "output_idx": [],
             "ranges": {
-              "v": { "from": "clip_ring" }
+              "v": {
+                "from": "clip_ring"
+              }
             },
-            "args": ["clip"],
+            "args": [
+              "clip"
+            ],
             "expr": {
               "op": "*",
               "args": [
@@ -100,15 +150,55 @@
                     {
                       "op": "*",
                       "args": [
-                        { "op": "index", "args": ["clip", "v", 1] },
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            "v",
+                            1
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            {
+                              "op": "+",
+                              "args": [
+                                "v",
+                                1
+                              ]
+                            },
+                            2
+                          ]
+                        }
                       ]
                     },
                     {
                       "op": "*",
                       "args": [
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 1] },
-                        { "op": "index", "args": ["clip", "v", 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            {
+                              "op": "+",
+                              "args": [
+                                "v",
+                                1
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "clip",
+                            "v",
+                            2
+                          ]
+                        }
                       ]
                     }
                   ]
@@ -128,7 +218,9 @@
           "_comment": "Well-formed ODE that consumes the geometry FAQ: d(tracer)/dt = -area·tracer.",
           "lhs": {
             "op": "D",
-            "args": ["tracer"],
+            "args": [
+              "tracer"
+            ],
             "wrt": "t"
           },
           "rhs": {
@@ -153,11 +245,31 @@
             "end": 2.0
           },
           "assertions": [
-            { "variable": "area", "time": 0.0, "expected": 1.0 },
-            { "variable": "area", "time": 2.0, "expected": 1.0 },
-            { "variable": "tracer", "time": 0.0, "expected": 1.0 },
-            { "variable": "tracer", "time": 1.0, "expected": 0.36787944117144233 },
-            { "variable": "tracer", "time": 2.0, "expected": 0.1353352832366127 }
+            {
+              "variable": "area",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "area",
+              "time": 2.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "tracer",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "tracer",
+              "time": 1.0,
+              "expected": 0.36787944117144233
+            },
+            {
+              "variable": "tracer",
+              "time": 2.0,
+              "expected": 0.1353352832366127
+            }
           ]
         }
       ]

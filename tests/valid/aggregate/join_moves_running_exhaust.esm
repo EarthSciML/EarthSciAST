@@ -4,7 +4,7 @@
     "name": "join_moves_running_exhaust",
     "description": "M2 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.3 / §7.2; bead ess-my4.2.5). The MOVES running-exhaust contraction as the DEGENERATE POSITIONAL join (§7.2): each `on` key column is one of the aggregate's own loop indices, so the value-equality gate admits every declared (sourceType x fuelType) combination — it is byte-identical to combining the factors by shared index name. running_exhaust[p] = SUM over src in sourceType, fuel in fuelType of (src*fuel)*p, with the two-key join on [[src,sourceType],[fuel,fuelType]] resolving to the self-equality no-op (src<->src, fuel<->fuel). The categorical sourceType/fuelType sets each resolve to [1,|members|] (2 members each), so the contraction has |sourceType|*|fuelType| = 4 product terms per output bin p: running_exhaust[1]=1*(1*1+1*2+2*1+2*2)=9, running_exhaust[2]=2*9=18 at t=1 from zero ICs. This is the join form ALL THREE evaluating bindings agree on: Julia/Python resolve the named key to the unique symbol drawing {from} the set (self-equality), Rust treats a loop-index key column as the positional no-op (the data-derived value-equality engine is M3). Constant-RHS shape so Julia / Rust / Python agree to integration tolerance; Go/TS validate the additive join schema.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",
@@ -18,24 +18,35 @@
       "ess-my4.2.5"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    },
+    "fuelType": {
+      "kind": "categorical",
+      "members": [
+        "gasoline",
+        "diesel"
+      ]
+    }
+  },
   "models": {
     "MovesRunningExhaust": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": ["onroad", "nonroad"]
-        },
-        "fuelType": {
-          "kind": "categorical",
-          "members": ["gasoline", "diesel"]
-        }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "running_exhaust": { "type": "state", "shape": ["p"] }
+        "running_exhaust": {
+          "type": "state",
+          "shape": [
+            "p"
+          ]
+        }
       },
       "equations": [
         {
@@ -43,32 +54,73 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["p"],
+            "output_idx": [
+              "p"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["running_exhaust", "p"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "running_exhaust",
+                    "p"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "p": [1, 2] }
+            "ranges": {
+              "p": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["p"],
+            "output_idx": [
+              "p"
+            ],
             "semiring": "sum_product",
             "reduce": "+",
             "ranges": {
-              "p": [1, 2],
-              "src": { "from": "sourceType" },
-              "fuel": { "from": "fuelType" }
+              "p": [
+                1,
+                2
+              ],
+              "src": {
+                "from": "sourceType"
+              },
+              "fuel": {
+                "from": "fuelType"
+              }
             },
             "join": [
-              { "on": [["src", "sourceType"], ["fuel", "fuelType"]] }
+              {
+                "on": [
+                  [
+                    "src",
+                    "sourceType"
+                  ],
+                  [
+                    "fuel",
+                    "fuelType"
+                  ]
+                ]
+              }
             ],
             "expr": {
               "op": "*",
               "args": [
-                { "op": "*", "args": ["src", "fuel"] },
+                {
+                  "op": "*",
+                  "args": [
+                    "src",
+                    "fuel"
+                  ]
+                },
                 "p"
               ]
             }
@@ -83,10 +135,21 @@
             "running_exhaust[1]": 0.0,
             "running_exhaust[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "running_exhaust[1]", "time": 1.0, "expected": 9.0 },
-            { "variable": "running_exhaust[2]", "time": 1.0, "expected": 18.0 }
+            {
+              "variable": "running_exhaust[1]",
+              "time": 1.0,
+              "expected": 9.0
+            },
+            {
+              "variable": "running_exhaust[2]",
+              "time": 1.0,
+              "expected": 18.0
+            }
           ]
         }
       ]

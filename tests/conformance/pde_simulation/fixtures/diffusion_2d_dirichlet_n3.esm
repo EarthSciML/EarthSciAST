@@ -4,7 +4,7 @@
     "name": "diffusion_2d_dirichlet_n3",
     "description": "Discretized 2-D heat equation on a 3x3 interior grid (h=0.25, kappa=16) with homogeneous Dirichlet BCs (implicit zero ghost on out-of-bounds neighbours).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",
@@ -33,7 +33,7 @@
       "equations": [
         {
           "lhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": [
               "i",
@@ -65,7 +65,7 @@
             }
           },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": [
               "i",

@@ -2,9 +2,9 @@
   "esm": "0.6.0",
   "metadata": {
     "name": "conservative_regrid_overlap_join",
-    "description": "M4 END-TO-END worked example (RFC semiring-faq-unified-ir \u00a7A.8 / \u00a78.1 / \u00a76.1; CONFORMANCE_SPEC.md \u00a75.8; bead ess-my4.4.5): the FULL conservative-regridding overlap-join idiom in one document \u2014 the synthesis the schema-only blocker fixtures (bin_skolem_spatial_join.esm = broad phase, intersect_polygon_clip_area.esm = narrow phase) deferred here. The operation is `F_tgt[j] = (1/A_j)\u00b7\u03a3_i A_ij\u00b7F_src[i]`, `A_ij = area(src_i \u2229 tgt_j)`, `A_j = \u03a3_i A_ij` \u2014 verified piece-by-piece against ConservativeRegridding.jl / EarthSciData.jl (\u00a7A.8). The A.8 mapping, in the order the equations realize it: (1) OVERLAP PAIRS {(i,j):A_ij>0} \u2014 NOT M2's equi-only join.on directly (the spatial/theta join), realized as a bin-Skolem EQUI-join: each cell's representative bbox corner is quantized to an INTEGER lat-lon bin via `floor` (the item-3 decision \u2014 no new bin/floor leaf op), a bin key is minted with `skolem`, and the candidate pairs are the landed M2 `join.on` of source and target cells sharing a bin key (a `distinct` bool_and_or index-set-producing aggregate, id `candidate_set`, materialized as the derived `candidate_pairs` set). Integer bin keys keep this candidate set BYTE-IDENTICAL across bindings (\u00a75.8.5 / \u00a75.5 determinism \u2014 no floating-point coordinate comparison enters the broad phase; the sorted total order of \u00a75.7 fixes the emitted set); the adversarial permuted-input-order variant collapsing to the identical candidate set is asserted by the M4 conformance gate (ess-my4.4.8 / \u00a75.8.6). STR-tree acceleration is an explicit perf follow-on (a physical-operator/planner concern), NOT in scope and NOT in the IR. (2) A_ij \u2014 the `intersect_polygon` kernel leaf + the `polygon_area` `sum_product` FAQ (\u00a78.1): the narrow phase, demonstrated here on a representative candidate pair (the `clip`/`A_ij_rep` observed pair, mirroring intersect_polygon_clip_area.esm) and supplied to the assembly as the build-once sparse overlap-area FACTOR `A_ij` (ConservativeRegridding.jl's `intersections` matrix of RAW areas \u2014 the static-partition build-once output, \u00a76.1; one clip per candidate pair fills each entry, exactly as `dc`/`dv` are factors over the derived edge set in edge_enumeration_area_eff.esm). ZERO-AREA FILTERING: a candidate that clips to a sub-`atol` sliver is treated as equal-to-zero (\u00a75.8.2) and dropped from the surviving-overlap set via `filter: A_ij > atol` on the assembly aggregates \u2014 this is exactly \u00a75.8.5's 'candidate set \u2260 surviving-overlap set' boundary made explicit: the join produces the byte-identical CANDIDATE set, the filter produces the tolerance-dependent SURVIVING set. (3) A_j = \u03a3_i A_ij \u2014 the group-by-`j` `sum_product` FAQ (ConservativeRegridding.jl's row-sums \u2192 `dst_areas`). (4) APPLY \u03a3_i A_ij\u00b7F_src[i] \u2014 a `sum_product` FAQ over the overlap set (the sparse mat-vec `mul!(dst, intersections, src)`); dynamic if F_src is time-varying (\u00a76.1). (5) NORMALIZE /A_j \u2014 elementwise, foldable to build time (`dst ./= dst_areas`); partition-of-unity \u03a3_i W_ij = 1 holds BY CONSTRUCTION because the denominator is the row-sum of the SAME computed areas (\u00a75.8.3). The `mass_tgt` tracer integrates \u03a3_j A_j\u00b7F_tgt[j], the conserved global mass (\u00a75.8.3 conservation invariant). NO NEW PHYSICAL OPERATOR: the idiom composes from `floor`, `skolem`, `join.on`, `distinct`, `sum_product`, and the already-landed `intersect_polygon` leaf. STRUCTURAL fixture: validates against the additive M3+M4 schema with no evaluator (skolem/distinct/intersect_polygon are resolver/kernel concerns \u2014 the value-invention half rides the M3 determinism goldens, the clip is the tolerance-based M4 kernel gate ess-my4.4.8, and the per-binding assembly is ess-my4.4.6/.7/.12).",
+    "description": "M4 END-TO-END worked example (RFC semiring-faq-unified-ir §A.8 / §8.1 / §6.1; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.5): the FULL conservative-regridding overlap-join idiom in one document — the synthesis the schema-only blocker fixtures (bin_skolem_spatial_join.esm = broad phase, intersect_polygon_clip_area.esm = narrow phase) deferred here. The operation is `F_tgt[j] = (1/A_j)·Σ_i A_ij·F_src[i]`, `A_ij = area(src_i ∩ tgt_j)`, `A_j = Σ_i A_ij` — verified piece-by-piece against ConservativeRegridding.jl / EarthSciData.jl (§A.8). The A.8 mapping, in the order the equations realize it: (1) OVERLAP PAIRS {(i,j):A_ij>0} — NOT M2's equi-only join.on directly (the spatial/theta join), realized as a bin-Skolem EQUI-join: each cell's representative bbox corner is quantized to an INTEGER lat-lon bin via `floor` (the item-3 decision — no new bin/floor leaf op), a bin key is minted with `skolem`, and the candidate pairs are the landed M2 `join.on` of source and target cells sharing a bin key (a `distinct` bool_and_or index-set-producing aggregate, id `candidate_set`, materialized as the derived `candidate_pairs` set). Integer bin keys keep this candidate set BYTE-IDENTICAL across bindings (§5.8.5 / §5.5 determinism — no floating-point coordinate comparison enters the broad phase; the sorted total order of §5.7 fixes the emitted set); the adversarial permuted-input-order variant collapsing to the identical candidate set is asserted by the M4 conformance gate (ess-my4.4.8 / §5.8.6). STR-tree acceleration is an explicit perf follow-on (a physical-operator/planner concern), NOT in scope and NOT in the IR. (2) A_ij — the `intersect_polygon` kernel leaf + the `polygon_area` `sum_product` FAQ (§8.1): the narrow phase, demonstrated here on a representative candidate pair (the `clip`/`A_ij_rep` observed pair, mirroring intersect_polygon_clip_area.esm) and supplied to the assembly as the build-once sparse overlap-area FACTOR `A_ij` (ConservativeRegridding.jl's `intersections` matrix of RAW areas — the static-partition build-once output, §6.1; one clip per candidate pair fills each entry, exactly as `dc`/`dv` are factors over the derived edge set in edge_enumeration_area_eff.esm). ZERO-AREA FILTERING: a candidate that clips to a sub-`atol` sliver is treated as equal-to-zero (§5.8.2) and dropped from the surviving-overlap set via `filter: A_ij > atol` on the assembly aggregates — this is exactly §5.8.5's 'candidate set ≠ surviving-overlap set' boundary made explicit: the join produces the byte-identical CANDIDATE set, the filter produces the tolerance-dependent SURVIVING set. (3) A_j = Σ_i A_ij — the group-by-`j` `sum_product` FAQ (ConservativeRegridding.jl's row-sums → `dst_areas`). (4) APPLY Σ_i A_ij·F_src[i] — a `sum_product` FAQ over the overlap set (the sparse mat-vec `mul!(dst, intersections, src)`); dynamic if F_src is time-varying (§6.1). (5) NORMALIZE /A_j — elementwise, foldable to build time (`dst ./= dst_areas`); partition-of-unity Σ_i W_ij = 1 holds BY CONSTRUCTION because the denominator is the row-sum of the SAME computed areas (§5.8.3). The `mass_tgt` tracer integrates Σ_j A_j·F_tgt[j], the conserved global mass (§5.8.3 conservation invariant). NO NEW PHYSICAL OPERATOR: the idiom composes from `floor`, `skolem`, `join.on`, `distinct`, `sum_product`, and the already-landed `intersect_polygon` leaf. STRUCTURAL fixture: validates against the additive M3+M4 schema with no evaluator (skolem/distinct/intersect_polygon are resolver/kernel concerns — the value-invention half rides the M3 determinism goldens, the clip is the tolerance-based M4 kernel gate ess-my4.4.8, and the per-binding assembly is ess-my4.4.6/.7/.12).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "geometry",
@@ -26,48 +26,48 @@
       "ess-my4.4.5"
     ]
   },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "candidate_set"
+    },
+    "clip_ring": {
+      "kind": "derived",
+      "from_faq": "overlap_clip"
+    }
+  },
   "models": {
     "ConservativeRegridOverlapJoin": {
-      "index_sets": {
-        "coord": {
-          "kind": "interval",
-          "size": 2
-        },
-        "cell_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "src_cells": {
-          "kind": "interval",
-          "size": 3
-        },
-        "tgt_cells": {
-          "kind": "interval",
-          "size": 3
-        },
-        "candidate_pairs": {
-          "kind": "derived",
-          "from_faq": "candidate_set"
-        },
-        "clip_ring": {
-          "kind": "derived",
-          "from_faq": "overlap_clip"
-        }
-      },
       "variables": {
         "src_lon": {
           "type": "parameter",
           "shape": [
             "src_cells"
           ],
-          "description": "Source-cell representative longitude (e.g. the bbox-min corner). A float coordinate that enters ONLY the integer binning via `floor`, never a raw join comparison (\u00a75.8.5)."
+          "description": "Source-cell representative longitude (e.g. the bbox-min corner). A float coordinate that enters ONLY the integer binning via `floor`, never a raw join comparison (§5.8.5)."
         },
         "src_lat": {
           "type": "parameter",
           "shape": [
             "src_cells"
           ],
-          "description": "Source-cell representative latitude \u2014 the other binning coordinate."
+          "description": "Source-cell representative latitude — the other binning coordinate."
         },
         "tgt_lon": {
           "type": "parameter",
@@ -86,7 +86,7 @@
         "dx": {
           "type": "parameter",
           "shape": [],
-          "description": "Bin width in degrees \u2014 the exactly-defined integer quantization step of the broad phase (\u00a75.8.5). Shared by source and target so a common bin key means the bboxes fall in the same bucket."
+          "description": "Bin width in degrees — the exactly-defined integer quantization step of the broad phase (§5.8.5). Shared by source and target so a common bin key means the bboxes fall in the same bucket."
         },
         "dy": {
           "type": "parameter",
@@ -96,7 +96,7 @@
         "atol": {
           "type": "parameter",
           "shape": [],
-          "description": "Sliver floor (\u00a75.8.2): an overlap area at or below `atol` (\u2248 1e-15\u00b7R\u00b2) is treated as equal-to-zero \u2014 'present-but-tiny' and 'absent' both collapse to no contribution. It is the threshold of the zero-area `filter` that turns the byte-identical CANDIDATE set into the tolerance-dependent SURVIVING-overlap set (\u00a75.8.5)."
+          "description": "Sliver floor (§5.8.2): an overlap area at or below `atol` (≈ 1e-15·R²) is treated as equal-to-zero — 'present-but-tiny' and 'absent' both collapse to no contribution. It is the threshold of the zero-area `filter` that turns the byte-identical CANDIDATE set into the tolerance-dependent SURVIVING-overlap set (§5.8.5)."
         },
         "src_poly_rep": {
           "type": "parameter",
@@ -104,7 +104,7 @@
             "cell_verts",
             "coord"
           ],
-          "description": "A representative source cell as a closed lon-lat vertex ring (src_poly_rep[v,1]=lon, src_poly_rep[v,2]=lat) \u2014 the `poly_a` operand of the narrow-phase clip demo below. An ordinary [verts, coord] coordinate array (no bespoke polygon type, \u00a78.1). In the full mesh there is one such ring per source cell; the clip runs once per candidate pair to fill each `A_ij` entry."
+          "description": "A representative source cell as a closed lon-lat vertex ring (src_poly_rep[v,1]=lon, src_poly_rep[v,2]=lat) — the `poly_a` operand of the narrow-phase clip demo below. An ordinary [verts, coord] coordinate array (no bespoke polygon type, §8.1). In the full mesh there is one such ring per source cell; the clip runs once per candidate pair to fill each `A_ij` entry."
         },
         "tgt_poly_rep": {
           "type": "parameter",
@@ -112,7 +112,7 @@
             "cell_verts",
             "coord"
           ],
-          "description": "A representative target cell ring \u2014 the `poly_b` operand of the clip demo."
+          "description": "A representative target cell ring — the `poly_b` operand of the clip demo."
         },
         "A_ij": {
           "type": "parameter",
@@ -120,14 +120,14 @@
             "src_cells",
             "tgt_cells"
           ],
-          "description": "The build-once sparse overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) \u2014 ConservativeRegridding.jl's `intersections` matrix of RAW areas, the static-partition (\u00a76.1) NARROW-phase output that the assembly consumes as a factor (analogous to `dc`/`dv` over the derived edge set in edge_enumeration_area_eff.esm). Entries for non-candidate (different-bin) pairs are 0 \u2014 those (i,j) never enter the bin-Skolem join \u2014 and sub-`atol` sliver entries are 0 by the \u00a75.8.2 snapping; both are excluded by the join + zero-area `filter` of the assembly aggregates. Its per-pair provenance is the `clip`/`A_ij_rep` demo and intersect_polygon_clip_area.esm; cross-binding A_ij agreement is tolerance-based (\u00a75.8.2), gated by ess-my4.4.8."
+          "description": "The build-once sparse overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) — ConservativeRegridding.jl's `intersections` matrix of RAW areas, the static-partition (§6.1) NARROW-phase output that the assembly consumes as a factor (analogous to `dc`/`dv` over the derived edge set in edge_enumeration_area_eff.esm). Entries for non-candidate (different-bin) pairs are 0 — those (i,j) never enter the bin-Skolem join — and sub-`atol` sliver entries are 0 by the §5.8.2 snapping; both are excluded by the join + zero-area `filter` of the assembly aggregates. Its per-pair provenance is the `clip`/`A_ij_rep` demo and intersect_polygon_clip_area.esm; cross-binding A_ij agreement is tolerance-based (§5.8.2), gated by ess-my4.4.8."
         },
         "F_src": {
           "type": "parameter",
           "shape": [
             "src_cells"
           ],
-          "description": "The source field being remapped. A `parameter` here (static field, build-once apply); in the time-varying case it is `state`/`discrete` and the apply FAQ (eq. 5) becomes CONTINUOUS-cadence per \u00a76.1 \u2014 the build-once weights / apply-many split is exactly the static/dynamic partition."
+          "description": "The source field being remapped. A `parameter` here (static field, build-once apply); in the time-varying case it is `state`/`discrete` and the apply FAQ (eq. 5) becomes CONTINUOUS-cadence per §6.1 — the build-once weights / apply-many split is exactly the static/dynamic partition."
         },
         "src_bin": {
           "type": "state",
@@ -141,14 +141,14 @@
           "shape": [
             "tgt_cells"
           ],
-          "description": "Integer bin key of each target cell \u2014 identically quantized, so a shared key means source and target bboxes fall in the same broad-phase bucket."
+          "description": "Integer bin key of each target cell — identically quantized, so a shared key means source and target bboxes fall in the same broad-phase bucket."
         },
         "pair_exists": {
           "type": "state",
           "shape": [
             "candidate_pairs"
           ],
-          "description": "Membership over the candidate overlap-pair set produced by the bin-Skolem equi-join (the broad phase) \u2014 the byte-identical integer candidate set of \u00a75.8.5, materialized as the derived `candidate_pairs` index set via from_faq:\"candidate_set\"."
+          "description": "Membership over the candidate overlap-pair set produced by the bin-Skolem equi-join (the broad phase) — the byte-identical integer candidate set of §5.8.5, materialized as the derived `candidate_pairs` index set via from_faq:\"candidate_set\"."
         },
         "clip": {
           "type": "observed",
@@ -156,7 +156,7 @@
             "clip_ring",
             "coord"
           ],
-          "description": "NARROW-PHASE DEMO: the clipped overlap ring A \u2229 B for a representative candidate pair \u2014 the `intersect_polygon` leaf output, a vertex ring of DATA-DEPENDENT length whose vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\", riding the M3 value-invention machinery, \u00a78.1). One such clip is computed per candidate pair to fill the `A_ij` factor.",
+          "description": "NARROW-PHASE DEMO: the clipped overlap ring A ∩ B for a representative candidate pair — the `intersect_polygon` leaf output, a vertex ring of DATA-DEPENDENT length whose vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\", riding the M3 value-invention machinery, §8.1). One such clip is computed per candidate pair to fill the `A_ij` factor.",
           "expression": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
@@ -170,7 +170,7 @@
         "A_ij_rep": {
           "type": "observed",
           "shape": [],
-          "description": "NARROW-PHASE DEMO: the representative overlap area A_ij = polygon_area(clip) on the SPHERE \u2014 a sum_product FAQ over the clipped ring whose body is the great-circle fan triangulation \u03a3_v E(v_1,v_v,v_{v+1}) of Van Oosterom-Strackee spherical excesses E(a,b,c)=2\u00b7atan2(a\u00b7(b\u00d7c),1+a\u00b7b+b\u00b7c+c\u00b7a) (unit sphere). This is how each entry of the build-once A_ij factor is produced; the test asserts it equals polygon_area(clip,\"spherical\") and the matching A_ij[i,j].",
+          "description": "NARROW-PHASE DEMO: the representative overlap area A_ij = polygon_area(clip) on the SPHERE — a sum_product FAQ over the clipped ring whose body is the great-circle fan triangulation Σ_v E(v_1,v_v,v_{v+1}) of Van Oosterom-Strackee spherical excesses E(a,b,c)=2·atan2(a·(b×c),1+a·b+b·c+c·a) (unit sphere). This is how each entry of the build-once A_ij factor is produced; the test asserts it equals polygon_area(clip,\"spherical\") and the matching A_ij[i,j].",
           "expression": {
             "op": "aggregate",
             "semiring": "sum_product",
@@ -1607,31 +1607,31 @@
           "shape": [
             "tgt_cells"
           ],
-          "description": "Target-cell area denominator A_j = \u03a3_i A_ij \u2014 the group-by-`j` row-sum over the bin-Skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]] on the MATERIALISED bin buffers) with the sub-atol sliver filter. d(A_j[j])/dt from a zero IC \u21d2 du = A_j[j]; the test asserts it reproduces the supplied `dst_areas` (PoU by construction, \u00a75.8.3)."
+          "description": "Target-cell area denominator A_j = Σ_i A_ij — the group-by-`j` row-sum over the bin-Skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]] on the MATERIALISED bin buffers) with the sub-atol sliver filter. d(A_j[j])/dt from a zero IC ⇒ du = A_j[j]; the test asserts it reproduces the supplied `dst_areas` (PoU by construction, §5.8.3)."
         },
         "F_tgt": {
           "type": "state",
           "shape": [
             "tgt_cells"
           ],
-          "description": "Regridded field F_tgt[j] = (1/dst_areas[j])\u00b7\u03a3_i A_ij[i,j]\u00b7F_src[i] = \u03a3_i W_ij\u00b7F_src[i], W_ij = A_ij/A_j \u2014 the apply sum_product FAQ over the bin-Skolem candidate set with the normalize `/ dst_areas[j]` folded in. d(F_tgt[j])/dt from a zero IC \u21d2 du = F_tgt[j]."
+          "description": "Regridded field F_tgt[j] = (1/dst_areas[j])·Σ_i A_ij[i,j]·F_src[i] = Σ_i W_ij·F_src[i], W_ij = A_ij/A_j — the apply sum_product FAQ over the bin-Skolem candidate set with the normalize `/ dst_areas[j]` folded in. d(F_tgt[j])/dt from a zero IC ⇒ du = F_tgt[j]."
         },
         "dst_areas": {
           "type": "parameter",
           "shape": [
             "tgt_cells"
           ],
-          "description": "Build-once target-cell area denominator A_j = \u03a3_i A_ij stored at regridder-build time (ConservativeRegridding.jl's `dst_areas`). The NORMALIZE factor the apply body divides by; supplied as a const_array. The `A_j` FAQ recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, \u00a75.8.3)."
+          "description": "Build-once target-cell area denominator A_j = Σ_i A_ij stored at regridder-build time (ConservativeRegridding.jl's `dst_areas`). The NORMALIZE factor the apply body divides by; supplied as a const_array. The `A_j` FAQ recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, §5.8.3)."
         },
         "narrow_phase_area": {
           "type": "state",
           "shape": [],
-          "description": "Tracer consuming the representative narrow-phase area so the spherical clip + polygon_area FAQ evaluate in a well-formed ODE: d(narrow_phase_area)/dt = A_ij_rep from a zero IC \u21d2 du = A_ij_rep. The conformance test checks it equals polygon_area(clip,\"spherical\") (the kept Van Oosterom-Strackee oracle) and the matching A_ij entry."
+          "description": "Tracer consuming the representative narrow-phase area so the spherical clip + polygon_area FAQ evaluate in a well-formed ODE: d(narrow_phase_area)/dt = A_ij_rep from a zero IC ⇒ du = A_ij_rep. The conformance test checks it equals polygon_area(clip,\"spherical\") (the kept Van Oosterom-Strackee oracle) and the matching A_ij entry."
         }
       },
       "equations": [
         {
-          "_comment": "(1a) OVERLAP PAIRS \u2014 bin each SOURCE cell to an integer lat-lon bin key. floor(lon/dx), floor(lat/dy) are integer bin coordinates (the existing `floor` op); skolem mints the content-addressed bin key. Per-element map (output i, no contraction).",
+          "_comment": "(1a) OVERLAP PAIRS — bin each SOURCE cell to an integer lat-lon bin key. floor(lon/dx), floor(lat/dy) are integer bin coordinates (the existing `floor` op); skolem mints the content-addressed bin key. Per-element map (output i, no contraction).",
           "lhs": {
             "op": "index",
             "args": [
@@ -1701,7 +1701,7 @@
           }
         },
         {
-          "_comment": "(1b) OVERLAP PAIRS \u2014 bin each TARGET cell identically (same dx/dy quantization).",
+          "_comment": "(1b) OVERLAP PAIRS — bin each TARGET cell identically (same dx/dy quantization).",
           "lhs": {
             "op": "index",
             "args": [
@@ -1771,7 +1771,7 @@
           }
         },
         {
-          "_comment": "(1c) OVERLAP PAIRS \u2014 the candidate overlap-pair set = the bin-Skolem EQUI-join. The index-set-producing aggregate (bool_and_or, distinct:true, id `candidate_set` referenced by candidate_pairs.from_faq) ranges source i and target j, the M2 `join.on` keeps only (i,j) whose bin keys are EQUAL, and skolem(\"pair\", i, j) names each surviving candidate; the `true` body marks membership. Integer bin keys \u21d2 the candidate set is byte-identical across bindings in the \u00a75.7 sorted order (\u00a75.8.5). No spatial-index op in the IR \u2014 the index is a physical-operator concern (STR-tree acceleration is the perf follow-on, out of scope).",
+          "_comment": "(1c) OVERLAP PAIRS — the candidate overlap-pair set = the bin-Skolem EQUI-join. The index-set-producing aggregate (bool_and_or, distinct:true, id `candidate_set` referenced by candidate_pairs.from_faq) ranges source i and target j, the M2 `join.on` keeps only (i,j) whose bin keys are EQUAL, and skolem(\"pair\", i, j) names each surviving candidate; the `true` body marks membership. Integer bin keys ⇒ the candidate set is byte-identical across bindings in the §5.7 sorted order (§5.8.5). No spatial-index op in the IR — the index is a physical-operator concern (STR-tree acceleration is the perf follow-on, out of scope).",
           "lhs": {
             "op": "index",
             "args": [
@@ -1835,7 +1835,7 @@
           "rhs": "A_ij_rep"
         },
         {
-          "_comment": "(3) A_j[j] = \u03a3_i A_ij[i,j] \u2014 the group-by-`j` sum_product FAQ. The OVERLAP JOIN restricts the contraction to bin-Skolem CANDIDATE pairs by gating on the MATERIALISED bin buffers: join.on [[src_bin,tgt_bin]] admits (i,j) iff src_bin[i] == tgt_bin[j] (the F3 buffer-gated join, \u00a75.3). filter A_ij>atol drops sub-atol slivers \u2192 the SURVIVING set. Zero IC \u21d2 du[A_j[j]] = A_j[j].",
+          "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` sum_product FAQ. The OVERLAP JOIN restricts the contraction to bin-Skolem CANDIDATE pairs by gating on the MATERIALISED bin buffers: join.on [[src_bin,tgt_bin]] admits (i,j) iff src_bin[i] == tgt_bin[j] (the F3 buffer-gated join, §5.3). filter A_ij>atol drops sub-atol slivers → the SURVIVING set. Zero IC ⇒ du[A_j[j]] = A_j[j].",
           "lhs": {
             "op": "aggregate",
             "args": [],
@@ -1916,7 +1916,7 @@
           }
         },
         {
-          "_comment": "(4)+(5) APPLY + NORMALIZE \u2014 F_tgt[j] = \u03a3_i A_ij[i,j]\u00b7F_src[i] / dst_areas[j]. Same bin-Skolem buffer-gated join + zero-area filter as A_j; the elementwise `/ dst_areas[j]` folds in the normalize (dst_areas is the build-once denominator A_j). F_tgt = \u03a3_i W_ij\u00b7F_src[i], \u03a3_i W_ij = 1 by construction. Zero IC \u21d2 du[F_tgt[j]] = F_tgt[j].",
+          "_comment": "(4)+(5) APPLY + NORMALIZE — F_tgt[j] = Σ_i A_ij[i,j]·F_src[i] / dst_areas[j]. Same bin-Skolem buffer-gated join + zero-area filter as A_j; the elementwise `/ dst_areas[j]` folds in the normalize (dst_areas is the build-once denominator A_j). F_tgt = Σ_i W_ij·F_src[i], Σ_i W_ij = 1 by construction. Zero IC ⇒ du[F_tgt[j]] = F_tgt[j].",
           "lhs": {
             "op": "aggregate",
             "args": [],

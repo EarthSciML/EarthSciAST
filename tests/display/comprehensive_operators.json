@@ -3,31 +3,63 @@
     "name": "Arithmetic operators",
     "tests": [
       {
-        "input": { "op": "+", "args": ["a", "b", "c"] },
+        "input": {
+          "op": "+",
+          "args": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
         "unicode": "a + b + c",
         "latex": "a + b + c",
         "ascii": "a + b + c"
       },
       {
-        "input": { "op": "-", "args": ["a", "b"] },
+        "input": {
+          "op": "-",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a − b",
         "latex": "a - b",
         "ascii": "a - b"
       },
       {
-        "input": { "op": "*", "args": ["a", "b", "c"] },
+        "input": {
+          "op": "*",
+          "args": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
         "unicode": "a·b·c",
         "latex": "a \\cdot b \\cdot c",
         "ascii": "a * b * c"
       },
       {
-        "input": { "op": "/", "args": ["a", "b"] },
+        "input": {
+          "op": "/",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a/b",
         "latex": "\\frac{a}{b}",
         "ascii": "a / b"
       },
       {
-        "input": { "op": "^", "args": ["x", 3] },
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            3
+          ]
+        },
         "unicode": "x³",
         "latex": "x^{3}",
         "ascii": "x^3"
@@ -38,27 +70,49 @@
     "name": "Calculus operators",
     "tests": [
       {
-        "input": { "op": "D", "args": ["x"], "wrt": "t" },
+        "input": {
+          "op": "D",
+          "args": [
+            "x"
+          ],
+          "wrt": "t"
+        },
         "unicode": "∂x/∂t",
         "latex": "\\frac{\\partial x}{\\partial t}",
         "ascii": "D(x)/Dt"
       },
       {
-        "input": { "op": "grad", "args": ["phi"], "dim": "x" },
-        "unicode": "∂φ/∂x",
-        "latex": "\\frac{\\partial \\phi}{\\partial x}",
-        "ascii": "d(phi)/dx"
+        "input": {
+          "op": "grad",
+          "args": [
+            "phi"
+          ],
+          "dim": "x"
+        },
+        "unicode": "grad(φ)",
+        "latex": "\\mathrm{grad}(\\phi)",
+        "ascii": "grad(phi)"
       },
       {
-        "input": { "op": "div", "args": ["v"] },
-        "unicode": "∇·v",
-        "latex": "\\nabla \\cdot v",
+        "input": {
+          "op": "div",
+          "args": [
+            "v"
+          ]
+        },
+        "unicode": "div(v)",
+        "latex": "\\mathrm{div}(v)",
         "ascii": "div(v)"
       },
       {
-        "input": { "op": "laplacian", "args": ["u"] },
-        "unicode": "∇²u",
-        "latex": "\\nabla^2 u",
+        "input": {
+          "op": "laplacian",
+          "args": [
+            "u"
+          ]
+        },
+        "unicode": "laplacian(u)",
+        "latex": "\\mathrm{laplacian}(u)",
         "ascii": "laplacian(u)"
       }
     ]
@@ -67,103 +121,192 @@
     "name": "Elementary functions",
     "tests": [
       {
-        "input": { "op": "exp", "args": ["x"] },
+        "input": {
+          "op": "exp",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "exp(x)",
         "latex": "\\exp(x)",
         "ascii": "exp(x)"
       },
       {
-        "input": { "op": "log", "args": ["x"] },
+        "input": {
+          "op": "log",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "ln(x)",
         "latex": "\\ln(x)",
         "ascii": "log(x)"
       },
       {
-        "input": { "op": "log10", "args": ["x"] },
+        "input": {
+          "op": "log10",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "log₁₀(x)",
         "latex": "\\log_{10}(x)",
         "ascii": "log10(x)"
       },
       {
-        "input": { "op": "sqrt", "args": ["x"] },
+        "input": {
+          "op": "sqrt",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "√x",
         "latex": "\\sqrt{x}",
         "ascii": "sqrt(x)"
       },
       {
-        "input": { "op": "abs", "args": ["x"] },
+        "input": {
+          "op": "abs",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "|x|",
         "latex": "|x|",
         "ascii": "abs(x)"
       },
       {
-        "input": { "op": "sign", "args": ["x"] },
+        "input": {
+          "op": "sign",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "sgn(x)",
         "latex": "\\mathrm{sgn}(x)",
         "ascii": "sign(x)"
       },
       {
-        "input": { "op": "sin", "args": ["x"] },
+        "input": {
+          "op": "sin",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "sin(x)",
         "latex": "\\sin(x)",
         "ascii": "sin(x)"
       },
       {
-        "input": { "op": "cos", "args": ["θ"] },
+        "input": {
+          "op": "cos",
+          "args": [
+            "θ"
+          ]
+        },
         "unicode": "cos(θ)",
         "latex": "\\cos(\\theta)",
         "ascii": "cos(theta)"
       },
       {
-        "input": { "op": "tan", "args": ["x"] },
+        "input": {
+          "op": "tan",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "tan(x)",
         "latex": "\\tan(x)",
         "ascii": "tan(x)"
       },
       {
-        "input": { "op": "asin", "args": ["x"] },
+        "input": {
+          "op": "asin",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "arcsin(x)",
         "latex": "\\arcsin(x)",
         "ascii": "asin(x)"
       },
       {
-        "input": { "op": "acos", "args": ["x"] },
+        "input": {
+          "op": "acos",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "arccos(x)",
         "latex": "\\arccos(x)",
         "ascii": "acos(x)"
       },
       {
-        "input": { "op": "atan", "args": ["x"] },
+        "input": {
+          "op": "atan",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "arctan(x)",
         "latex": "\\arctan(x)",
         "ascii": "atan(x)"
       },
       {
-        "input": { "op": "atan2", "args": ["y", "x"] },
+        "input": {
+          "op": "atan2",
+          "args": [
+            "y",
+            "x"
+          ]
+        },
         "unicode": "atan2(y, x)",
         "latex": "\\mathrm{atan2}(y, x)",
         "ascii": "atan2(y, x)"
       },
       {
-        "input": { "op": "min", "args": ["a", "b"] },
+        "input": {
+          "op": "min",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "min(a, b)",
         "latex": "\\min(a, b)",
         "ascii": "min(a, b)"
       },
       {
-        "input": { "op": "max", "args": ["a", "b", "c"] },
+        "input": {
+          "op": "max",
+          "args": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
         "unicode": "max(a, b, c)",
         "latex": "\\max(a, b, c)",
         "ascii": "max(a, b, c)"
       },
       {
-        "input": { "op": "floor", "args": ["x"] },
+        "input": {
+          "op": "floor",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "⌊x⌋",
         "latex": "\\lfloor x \\rfloor",
         "ascii": "floor(x)"
       },
       {
-        "input": { "op": "ceil", "args": ["x"] },
+        "input": {
+          "op": "ceil",
+          "args": [
+            "x"
+          ]
+        },
         "unicode": "⌈x⌉",
         "latex": "\\lceil x \\rceil",
         "ascii": "ceil(x)"
@@ -174,55 +317,109 @@
     "name": "Logical and comparison operators",
     "tests": [
       {
-        "input": { "op": ">", "args": ["a", "b"] },
+        "input": {
+          "op": ">",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a > b",
         "latex": "a > b",
         "ascii": "a > b"
       },
       {
-        "input": { "op": "<", "args": ["a", "b"] },
+        "input": {
+          "op": "<",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a < b",
         "latex": "a < b",
         "ascii": "a < b"
       },
       {
-        "input": { "op": ">=", "args": ["a", "b"] },
+        "input": {
+          "op": ">=",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a ≥ b",
         "latex": "a \\geq b",
         "ascii": "a >= b"
       },
       {
-        "input": { "op": "<=", "args": ["a", "b"] },
+        "input": {
+          "op": "<=",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a ≤ b",
         "latex": "a \\leq b",
         "ascii": "a <= b"
       },
       {
-        "input": { "op": "==", "args": ["a", "b"] },
+        "input": {
+          "op": "==",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a = b",
         "latex": "a = b",
         "ascii": "a == b"
       },
       {
-        "input": { "op": "!=", "args": ["a", "b"] },
+        "input": {
+          "op": "!=",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "unicode": "a ≠ b",
         "latex": "a \\neq b",
         "ascii": "a != b"
       },
       {
-        "input": { "op": "and", "args": ["p", "q"] },
+        "input": {
+          "op": "and",
+          "args": [
+            "p",
+            "q"
+          ]
+        },
         "unicode": "p ∧ q",
         "latex": "p \\land q",
         "ascii": "p and q"
       },
       {
-        "input": { "op": "or", "args": ["p", "q", "r"] },
+        "input": {
+          "op": "or",
+          "args": [
+            "p",
+            "q",
+            "r"
+          ]
+        },
         "unicode": "p ∨ q ∨ r",
         "latex": "p \\lor q \\lor r",
         "ascii": "p or q or r"
       },
       {
-        "input": { "op": "not", "args": ["p"] },
+        "input": {
+          "op": "not",
+          "args": [
+            "p"
+          ]
+        },
         "unicode": "¬p",
         "latex": "\\neg p",
         "ascii": "not p"
@@ -233,7 +430,25 @@
     "name": "Conditional operators",
     "tests": [
       {
-        "input": { "op": "ifelse", "args": [{ "op": ">", "args": ["x", 0] }, "x", { "op": "-", "args": ["x"] }] },
+        "input": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": ">",
+              "args": [
+                "x",
+                0
+              ]
+            },
+            "x",
+            {
+              "op": "-",
+              "args": [
+                "x"
+              ]
+            }
+          ]
+        },
         "unicode": "ifelse(x > 0, x, −x)",
         "latex": "\\begin{cases} x & \\text{if } x > 0 \\\\ -x & \\text{otherwise} \\end{cases}",
         "ascii": "ifelse(x > 0, x, -x)"
@@ -244,7 +459,12 @@
     "name": "Event-specific operators",
     "tests": [
       {
-        "input": { "op": "Pre", "args": ["velocity"] },
+        "input": {
+          "op": "Pre",
+          "args": [
+            "velocity"
+          ]
+        },
         "unicode": "Pre(velocity)",
         "latex": "\\mathrm{Pre}(\\mathrm{velocity})",
         "ascii": "Pre(velocity)"
@@ -255,26 +475,118 @@
     "name": "Complex nested expressions",
     "tests": [
       {
-        "input": { "op": "exp", "args": [{ "op": "/", "args": [{ "op": "*", "args": [-1370, { "op": "log", "args": ["T"] }] }, "R"] }] },
+        "input": {
+          "op": "exp",
+          "args": [
+            {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    -1370,
+                    {
+                      "op": "log",
+                      "args": [
+                        "T"
+                      ]
+                    }
+                  ]
+                },
+                "R"
+              ]
+            }
+          ]
+        },
         "unicode": "exp(−1370·ln(T)/R)",
         "latex": "\\exp\\left(\\frac{-1370 \\cdot \\ln(T)}{R}\\right)",
         "ascii": "exp(-1370 * log(T) / R)"
       },
       {
-        "input": { "op": "+", "args": [
-          { "op": "*", "args": ["A", { "op": "sin", "args": [{ "op": "*", "args": ["ω", "t"] }] }] },
-          { "op": "*", "args": ["B", { "op": "cos", "args": [{ "op": "*", "args": ["ω", "t"] }] }] }
-        ] },
+        "input": {
+          "op": "+",
+          "args": [
+            {
+              "op": "*",
+              "args": [
+                "A",
+                {
+                  "op": "sin",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "ω",
+                        "t"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "*",
+              "args": [
+                "B",
+                {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "ω",
+                        "t"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
         "unicode": "A·sin(ω·t) + B·cos(ω·t)",
         "latex": "A \\cdot \\sin(\\omega \\cdot t) + B \\cdot \\cos(\\omega \\cdot t)",
         "ascii": "A * sin(omega * t) + B * cos(omega * t)"
       },
       {
-        "input": { "op": "sqrt", "args": [{ "op": "+", "args": [
-          { "op": "^", "args": ["a", 2] },
-          { "op": "^", "args": ["b", 2] },
-          { "op": "*", "args": [2, "a", "b", { "op": "cos", "args": ["γ"] }] }
-        ] }] },
+        "input": {
+          "op": "sqrt",
+          "args": [
+            {
+              "op": "+",
+              "args": [
+                {
+                  "op": "^",
+                  "args": [
+                    "a",
+                    2
+                  ]
+                },
+                {
+                  "op": "^",
+                  "args": [
+                    "b",
+                    2
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    2,
+                    "a",
+                    "b",
+                    {
+                      "op": "cos",
+                      "args": [
+                        "γ"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
         "unicode": "√(a² + b² + 2·a·b·cos(γ))",
         "latex": "\\sqrt{a^{2} + b^{2} + 2 \\cdot a \\cdot b \\cdot \\cos(\\gamma)}",
         "ascii": "sqrt(a^2 + b^2 + 2 * a * b * cos(gamma))"

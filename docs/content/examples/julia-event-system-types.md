@@ -1,6 +1,6 @@
 # Event System Types (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/runtests.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/runtests.jl`
 
 ```julia
 # Test DiscreteEventTrigger types

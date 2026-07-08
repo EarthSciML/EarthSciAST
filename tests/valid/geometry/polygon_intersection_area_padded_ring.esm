@@ -1,0 +1,86 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "polygon_intersection_area_padded_ring",
+    "description": "Conformance fixture for the esm-spec §8.6.1 'Operand rings, padding, and degenerate vertices' pin: `polygon_intersection_area` operands carrying CONSECUTIVE DUPLICATE (padded) vertices MUST be accepted and evaluated as the deduplicated ring. This is the rectangular-storage padding a mixed-valence mesh needs — an MPAS pentagon stored in a hexagon-shaped [cells, NVERT, 2] ring stack repeats its final vertex to fill the fixed NVERT slots. Here src_poly is the square (0.5,0.5)-(2.5,0.5)-(2.5,2.5)-(0.5,2.5) padded to 5 vertices (final vertex repeated once) and tgt_poly is the square (1.5,1.5)-(3.5,1.5)-(3.5,3.5)-(1.5,3.5) padded to 6 vertices (final vertex repeated twice); the planar overlap is the [1.5,2.5]x[1.5,2.5] box, area exactly 1.0 — identical to the unpadded rings. Deduplication is the binding kernel's job, performed in operand coercion BEFORE the backend clip (S2 backends reject zero-length edges as degenerate; Sutherland-Hodgman treats them as no-ops — the contract must not depend on the backend). Sibling of polygon_intersection_area_planar.esm, which exercises the unpadded convention.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-07-02T00:00:00Z",
+    "tags": [
+      "geometry",
+      "polygon_intersection_area",
+      "manifold",
+      "planar",
+      "padded-ring",
+      "duplicate-vertices",
+      "mixed-valence",
+      "conservative-regridding",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "coord": { "kind": "interval", "size": 2 },
+    "src_verts": { "kind": "interval", "size": 5 },
+    "tgt_verts": { "kind": "interval", "size": 6 }
+  },
+  "models": {
+    "PolygonIntersectionAreaPaddedRing": {
+      "variables": {
+        "src_poly": {
+          "type": "observed",
+          "shape": ["src_verts", "coord"],
+          "expression": {
+            "op": "const",
+            "value": [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]],
+            "args": []
+          },
+          "description": "Source cell: the square (0.5,0.5)-(2.5,0.5)-(2.5,2.5)-(0.5,2.5) PADDED to 5 vertices — the final vertex (0.5,2.5) repeated once, as a pentagon-in-hexagon-slot mesh row would be. Deduplicates to the 4 distinct vertices."
+        },
+        "tgt_poly": {
+          "type": "observed",
+          "shape": ["tgt_verts", "coord"],
+          "expression": {
+            "op": "const",
+            "value": [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5], [1.5, 3.5], [1.5, 3.5]],
+            "args": []
+          },
+          "description": "Target cell: the square (1.5,1.5)-(3.5,1.5)-(3.5,3.5)-(1.5,3.5) PADDED to 6 vertices — the final vertex repeated twice. Deduplicates to the 4 distinct vertices."
+        },
+        "overlap_area": {
+          "type": "observed",
+          "units": "1",
+          "description": "Scalar planar overlap area of the two PADDED rings via the fused polygon_intersection_area leaf. MUST equal the area of the deduplicated rings: the [1.5,2.5]x[1.5,2.5] box, exactly 1.0 (esm-spec §8.6.1 padding pin).",
+          "expression": {
+            "op": "polygon_intersection_area",
+            "manifold": "planar",
+            "args": ["src_poly", "tgt_poly"]
+          }
+        },
+        "area_state": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0,
+          "description": "Consumes overlap_area so the fused leaf evaluates in a well-formed ODE: d(area_state)/dt = overlap_area from a zero IC, so du = overlap_area = 1.0."
+        }
+      },
+      "equations": [
+        { "lhs": { "op": "ic", "args": ["area_state"] }, "rhs": 0.0 },
+        {
+          "_comment": "d(area_state)/dt = overlap_area (the fused planar overlap area of the padded rings). From a zero IC, area_state(t) = overlap_area * t.",
+          "lhs": { "op": "D", "args": ["area_state"], "wrt": "t" },
+          "rhs": "overlap_area"
+        }
+      ],
+      "tests": [
+        {
+          "id": "padded_ring_overlap_area",
+          "description": "Planar overlap area of the two padded squares equals the deduplicated-ring overlap exactly: 1.0 (the [1.5,2.5]x[1.5,2.5] box). area_state(t) = overlap_area * t from a zero IC, so area_state(1) = 1.0.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "tolerance": { "abs": 1e-9 },
+          "assertions": [
+            { "variable": "area_state", "time": 1.0, "expected": 1.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

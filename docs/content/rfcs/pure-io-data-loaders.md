@@ -3,9 +3,17 @@ title: "Pure-I/O data loaders: separating read-from-disk from regridding and rep
 description: "Strip the data loader down to a single responsibility — read/update a slice of data from disk — by moving regridding (value transfer) and reprojection (coordinate transform) out of the loader and into a model component built from existing ESD pieces. The loader's native grid is expressed once, in the shared GDD Grid format; its variables seed the cadence partition as discrete (or const). A pure-I/O loader is then a model subsystem and a single-component file becomes externally referenceable, closing the loader-reuse gap (ESS issue #24)."
 ---
 
+> **v0.8.0 update.** The pure-I/O principle here is retained: a `DataLoader`
+> only locates, reads, and slices bytes. But the surrounding mechanism described
+> below is superseded — there is no `DataLoader.grid` / GDD `Grid` descriptor and
+> no `Model.regrid` map. A loader exposes grid geometry (coordinates, connectivity,
+> metric arrays) as ordinary `variables`, and regridding/reprojection are ordinary
+> `aggregate` coupling expressions between variables (see `semiring-faq-unified-ir.md`
+> §A.8), not a per-loader or per-model configuration block.
+
 > **Status:** Draft proposal. **Bead:** unassigned.
 > **Target repos (cross-rig):**
-> - **EarthSciSerialization (ESS)** — the `.esm` schema/spec: `DataLoader`,
+> - **EarthSciAST (ESS)** — the `.esm` schema/spec: `DataLoader`,
 >   the GDD `Grid` family, subsystem inclusion (§4.7), top-level document
 >   validation, loader-seeded cadence, and a small expression-operator-set
 >   addition (hyperbolic trig).

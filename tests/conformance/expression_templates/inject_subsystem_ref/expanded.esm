@@ -1,0 +1,292 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 181
+    },
+    "lon": {
+      "kind": "interval",
+      "size": 288
+    }
+  },
+  "metadata": {
+    "description": "esm-spec §9.7.10 form A: a composing document mounts the discretization-agnostic leaf.esm as a subsystem by ref and injects the central-difference BC rule into the referenced component's own scope via the subsystem-ref edge's expression_template_imports. The referenced leaf is lowered under the assembler-chosen discretization at the mount; the injection is consumed by the §9.6.3 fixpoint and does not survive parse->emit (the mounted subsystem round-trips as the lowered inline component).",
+    "name": "inject_subsystem_ref"
+  },
+  "models": {
+    "Assembly": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "total"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ],
+      "subsystems": {
+        "Runoff": {
+          "equations": [
+            {
+              "lhs": {
+                "args": [
+                  "c"
+                ],
+                "op": "D",
+                "wrt": "t"
+              },
+              "rhs": {
+                "args": [
+                  {
+                    "args": [
+                      "u"
+                    ],
+                    "op": "-"
+                  },
+                  {
+                    "args": [],
+                    "op": "makearray",
+                    "regions": [
+                      [
+                        [
+                          2,
+                          287
+                        ],
+                        [
+                          1,
+                          181
+                        ]
+                      ],
+                      [
+                        [
+                          1,
+                          1
+                        ],
+                        [
+                          1,
+                          181
+                        ]
+                      ],
+                      [
+                        [
+                          288,
+                          288
+                        ],
+                        [
+                          1,
+                          181
+                        ]
+                      ]
+                    ],
+                    "values": [
+                      {
+                        "args": [
+                          "c"
+                        ],
+                        "expr": {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "c",
+                                    {
+                                      "args": [
+                                        "i",
+                                        1
+                                      ],
+                                      "op": "+"
+                                    },
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                },
+                                {
+                                  "args": [
+                                    "c",
+                                    {
+                                      "args": [
+                                        "i",
+                                        1
+                                      ],
+                                      "op": "-"
+                                    },
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                }
+                              ],
+                              "op": "-"
+                            },
+                            {
+                              "args": [
+                                2,
+                                {
+                                  "args": [
+                                    360,
+                                    288
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "*"
+                            }
+                          ],
+                          "op": "/"
+                        },
+                        "op": "aggregate",
+                        "output_idx": [
+                          "i",
+                          "j"
+                        ],
+                        "ranges": {
+                          "i": [
+                            2,
+                            287
+                          ],
+                          "j": {
+                            "from": "lat"
+                          }
+                        }
+                      },
+                      {
+                        "args": [
+                          "c"
+                        ],
+                        "expr": {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "c",
+                                    2,
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                },
+                                {
+                                  "args": [
+                                    "c",
+                                    1,
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                }
+                              ],
+                              "op": "-"
+                            },
+                            {
+                              "args": [
+                                360,
+                                288
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "/"
+                        },
+                        "op": "aggregate",
+                        "output_idx": [
+                          "j"
+                        ],
+                        "ranges": {
+                          "j": {
+                            "from": "lat"
+                          }
+                        }
+                      },
+                      {
+                        "args": [
+                          "c"
+                        ],
+                        "expr": {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "c",
+                                    288,
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                },
+                                {
+                                  "args": [
+                                    "c",
+                                    {
+                                      "args": [
+                                        288,
+                                        1
+                                      ],
+                                      "op": "-"
+                                    },
+                                    "j"
+                                  ],
+                                  "op": "index"
+                                }
+                              ],
+                              "op": "-"
+                            },
+                            {
+                              "args": [
+                                360,
+                                288
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "/"
+                        },
+                        "op": "aggregate",
+                        "output_idx": [
+                          "j"
+                        ],
+                        "ranges": {
+                          "j": {
+                            "from": "lat"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "op": "*"
+              }
+            }
+          ],
+          "variables": {
+            "c": {
+              "description": "tracer",
+              "shape": [
+                "lon",
+                "lat"
+              ],
+              "type": "state",
+              "units": "kg/m^3"
+            },
+            "u": {
+              "default": 5.5,
+              "description": "zonal wind",
+              "type": "parameter",
+              "units": "m/s"
+            }
+          }
+        }
+      },
+      "variables": {
+        "total": {
+          "default": 0.0,
+          "description": "assembly-level diagnostic",
+          "type": "state",
+          "units": "kg/m^3"
+        }
+      }
+    }
+  }
+}

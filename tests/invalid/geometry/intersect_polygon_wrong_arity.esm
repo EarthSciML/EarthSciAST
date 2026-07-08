@@ -4,7 +4,7 @@
     "name": "intersect_polygon_wrong_arity",
     "description": "INVALID (bead ess-my4.4.2): an `intersect_polygon` node with THREE operands. The op is a strict BINARY clip — `args: [poly_a, poly_b]` — so the schema's intersect_polygon clause pins `args` to exactly two items (minItems:2, maxItems:2). A clip with a third polygon argument is a pure schema (array-length) violation; an n-ary overlay is not part of the op contract (chain binary clips instead). Caught by every binding at validation time.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",
@@ -15,29 +15,64 @@
       "ess-my4.4.2"
     ]
   },
+  "index_sets": {
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
   "models": {
     "WrongArity": {
-      "index_sets": {
-        "verts": { "kind": "interval", "size": 4 }
-      },
       "variables": {
-        "poly_a": { "type": "parameter", "shape": ["verts"] },
-        "poly_b": { "type": "parameter", "shape": ["verts"] },
-        "poly_c": { "type": "parameter", "shape": ["verts"] },
-        "u": { "type": "state" },
+        "poly_a": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_b": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "poly_c": {
+          "type": "parameter",
+          "shape": [
+            "verts"
+          ]
+        },
+        "u": {
+          "type": "state"
+        },
         "clip": {
           "type": "observed",
           "expression": {
             "op": "intersect_polygon",
             "manifold": "spherical",
-            "args": ["poly_a", "poly_b", "poly_c"]
+            "args": [
+              "poly_a",
+              "poly_b",
+              "poly_c"
+            ]
           }
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
-          "rhs": { "op": "-", "args": ["u"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "u"
+            ]
+          }
         }
       ]
     }

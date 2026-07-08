@@ -1,6 +1,6 @@
 # Compatibility Tests (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/compat_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/compat_test.jl`
 
 ```julia
 @testset "Julia Version Compatibility" begin

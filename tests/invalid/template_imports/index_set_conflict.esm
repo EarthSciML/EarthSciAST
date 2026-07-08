@@ -1,0 +1,12 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "index_set_conflict", "description": "The document declares cells (size 4) and imports a library whose cells merges non-deep-equal (template_import_index_set_conflict, esm-spec 9.7.5)" },
+  "index_sets": { "cells": { "kind": "interval", "size": 4 } },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm" } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

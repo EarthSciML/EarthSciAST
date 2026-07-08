@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "rebind_unknown_free_name", "description": "The rebind map names 'not_a_free_name', which does not occur free anywhere in the imported declarations (template_import_rebind_unknown_name, esm-spec 9.7.7): a rebind that binds nothing would silently leave the library's real factor contract in force, so it fails loudly" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm", "rebind": { "not_a_free_name": "y" } } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

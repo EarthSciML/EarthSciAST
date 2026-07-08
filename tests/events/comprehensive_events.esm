@@ -129,6 +129,42 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "vy"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -216,7 +252,7 @@
               }
             }
           ],
-          "description": "Elastic collision with walls at y = \u00b11.5"
+          "description": "Elastic collision with walls at y = ±1.5"
         },
         {
           "name": "friction_threshold",
@@ -417,6 +453,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "temperature"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": []
@@ -458,16 +503,10 @@
       "description": "Reduce emissions when ball energy exceeds threshold (cross-system event)"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T00:01:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T00:01:00Z"
     }
   }
 }

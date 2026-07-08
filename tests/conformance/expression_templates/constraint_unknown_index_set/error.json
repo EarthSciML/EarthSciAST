@@ -1,0 +1,5 @@
+{
+  "code": "template_constraint_unknown_index_set",
+  "stage": "load",
+  "description": "A `where` shape constraint (esm-spec §9.6.1) names index set 'edges', which the consuming document's merged index_sets registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — the check runs against the post-import-merge registry, so a library constraining against index sets it declares itself passes when imported. Bindings assert the load-time error carries this code. A constrained rule that merely never fires is NOT an error (the un-lowered rewrite-target is caught by the ordinary `unlowered_operator` gate at evaluation)."
+}

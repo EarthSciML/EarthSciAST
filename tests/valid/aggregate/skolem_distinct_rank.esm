@@ -4,7 +4,7 @@
     "name": "skolem_distinct_rank",
     "description": "M3 schema fixture (RFC semiring-faq-unified-ir §5.5 / §5.7 / §8; bead ess-my4.3.2): the value-invention primitives. An index-set-producing `aggregate` carrying `distinct: true` under the `bool_and_or` semiring, a `key` Skolem term ({ \"op\": \"skolem\" }), the nullary `true` op as the body / contribute-always predicate, and a `rank` op that assigns dense integer ids over the resulting data-derived index set. Models mesh-edge enumeration (§7.3 — the operation einsum cannot do): deduplicate the unique undirected edges discovered from a face→edge relation, name each by a canonical Skolem key over its (already canonically sorted) endpoint vertex ids, expose the result as a `kind: \"derived\"` index set via `from_faq`, and `rank` it to dense ids for the array backend. The dedup order and numbering are fixed by the normative determinism rules (§5.7), not by binding discretion. Exercises the additive M3 schema deltas: op enum gains skolem/rank/true; ExpressionNode gains `distinct` + `key`. This is the strict-superset additive form of an ordinary arrayop and validates against the schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.capable"
+      "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
       "aggregate",
@@ -16,22 +16,22 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "faces": {
+      "kind": "interval",
+      "size": 12
+    },
+    "local_edges": {
+      "kind": "interval",
+      "size": 3
+    },
+    "edges": {
+      "kind": "derived",
+      "from_faq": "edge_set"
+    }
+  },
   "models": {
     "EdgeEnumeration": {
-      "index_sets": {
-        "faces": {
-          "kind": "interval",
-          "size": 12
-        },
-        "local_edges": {
-          "kind": "interval",
-          "size": 3
-        },
-        "edges": {
-          "kind": "derived",
-          "from_faq": "edge_set"
-        }
-      },
       "variables": {
         "u": {
           "type": "state"

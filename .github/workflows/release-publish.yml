@@ -36,19 +36,19 @@ jobs:
 
       - name: Build package
         run: |
-          cd packages/earthsci_toolkit
+          cd pkg/earthsci-ast-py
           python -m build
 
       - name: Check package
         run: |
-          cd packages/earthsci_toolkit
+          cd pkg/earthsci-ast-py
           python -m twine check dist/*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: python-package-distributions
-          path: packages/earthsci_toolkit/dist/
+          path: pkg/earthsci-ast-py/dist/
 
   python-publish-testpypi:
     name: Publish to TestPyPI
@@ -61,7 +61,7 @@ jobs:
     if: false
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/earthsci-toolkit
+      url: https://test.pypi.org/p/earthsci-ast
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
@@ -87,7 +87,7 @@ jobs:
     if: false
     environment:
       name: pypi
-      url: https://pypi.org/p/earthsci-toolkit
+      url: https://pypi.org/p/earthsci-ast
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
@@ -116,7 +116,7 @@ jobs:
           version: '1.12'
 
       - name: Update version in Project.toml
-        working-directory: packages/EarthSciSerialization.jl
+        working-directory: pkg/EarthSciAST.jl
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           sed -i "s/version = \"[^\"]*\"/version = \"$VERSION\"/" Project.toml
@@ -130,14 +130,14 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           registry: General
-          package_dir: packages/EarthSciSerialization.jl
+          package_dir: pkg/EarthSciAST.jl
 
       - name: Tag Julia package
-        working-directory: packages/EarthSciSerialization.jl
+        working-directory: pkg/EarthSciAST.jl
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          git tag -a "EarthSciSerialization-v$VERSION" -m "EarthSciSerialization v$VERSION"
-          git push origin "EarthSciSerialization-v$VERSION"
+          git tag -a "EarthSciAST-v$VERSION" -m "EarthSciAST v$VERSION"
+          git push origin "EarthSciAST-v$VERSION"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -154,24 +154,24 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Update version in Cargo.toml
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           sed -i "s/version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-          cargo update -p earthsci-toolkit --precise $VERSION
+          cargo update -p earthsci-ast --precise $VERSION
 
       - name: Build for release
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
         run: cargo build --release --all-features
 
       - name: Publish to crates.io
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Build binary assets
-        working-directory: packages/earthsci-toolkit-rs
+        working-directory: pkg/earthsci-ast-rs
         run: |
           rustup target add x86_64-unknown-linux-gnu
           rustup target add x86_64-apple-darwin
@@ -189,7 +189,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
-          files: packages/earthsci-toolkit-rs/dist/*
+          files: pkg/earthsci-ast-rs/dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -208,14 +208,14 @@ jobs:
           go-version: '1.23'
 
       - name: Update version
-        working-directory: packages/esm-format-go
+        working-directory: pkg/earthsci-ast-go
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "Building version: $VERSION"
           sed -i "s/Version = \"[^\"]*\"/Version = \"$VERSION\"/" pkg/esm/version.go 2>/dev/null || true
 
       - name: Build for multiple platforms
-        working-directory: packages/esm-format-go
+        working-directory: pkg/earthsci-ast-go
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o esm-go-linux-amd64 ./main.go
@@ -224,7 +224,7 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o esm-go-windows-amd64.exe ./main.go
 
       - name: Create release assets
-        working-directory: packages/esm-format-go
+        working-directory: pkg/earthsci-ast-go
         run: |
           mkdir -p dist
           mv esm-go-* dist/
@@ -232,7 +232,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
-          files: packages/esm-format-go/dist/*
+          files: pkg/earthsci-ast-go/dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -248,13 +248,13 @@ jobs:
           go-version: '1.23'
 
       - name: Tag Go module
-        working-directory: packages/esm-format-go
+        working-directory: pkg/earthsci-ast-go
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag -a "esm-format-go/v$VERSION" -m "Go module v$VERSION"
-          git push origin "esm-format-go/v$VERSION"
+          git tag -a "earthsci-ast-go/v$VERSION" -m "Go module v$VERSION"
+          git push origin "earthsci-ast-go/v$VERSION"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -264,7 +264,7 @@ jobs:
       - name: Trigger module indexing
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          MODULE_PATH="github.com/ctessum/EarthSciSerialization/packages/esm-format-go"
+          MODULE_PATH="github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go"
           curl -X GET "https://proxy.golang.org/$MODULE_PATH/@v/v$VERSION.info" || true
 
   # ---------------------------------------------------------------------------
@@ -282,18 +282,18 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-          cache-dependency-path: packages/earthsci-toolkit/package-lock.json
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Install dependencies
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm ci
 
       - name: Build package
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm run build
 
       - name: Publish to NPM
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -310,18 +310,18 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-          cache-dependency-path: packages/earthsci-toolkit/package-lock.json
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Install dependencies
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm ci
 
       - name: Build package
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm run build
 
       - name: Update version to beta
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: |
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           BETA_VERSION="${CURRENT_VERSION}-beta.$(date +%s)"
@@ -329,7 +329,7 @@ jobs:
           echo "Publishing version: $BETA_VERSION"
 
       - name: Publish beta to NPM
-        working-directory: packages/earthsci-toolkit
+        working-directory: pkg/earthsci-ast-ts
         run: npm publish --tag beta
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

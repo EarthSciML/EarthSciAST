@@ -1,14 +1,14 @@
 # Basic Functionality (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/compat_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/compat_test.jl`
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
         # Test basic type creation
         @test_nowarn NumExpr(1.0)
         @test_nowarn VarExpr("x")
-        @test_nowarn OpExpr("+", EarthSciSerialization.Expr[NumExpr(1.0), NumExpr(2.0)])
+        @test_nowarn OpExpr("+", EarthSciAST.Expr[NumExpr(1.0), NumExpr(2.0)])
         println("Basic expression types work ✓")
 
         # Test model creation
@@ -21,10 +21,10 @@ using EarthSciSerialization
         model = Model(variables, equations)
         esm_file = EsmFile("1.0", Dict("test" => model))
 
-        json_str = EarthSciSerialization.serialize(esm_file)
+        json_str = EarthSciAST.serialize(esm_file)
         @test isa(json_str, String)
 
-        parsed = EarthSciSerialization.parse(json_str)
+        parsed = EarthSciAST.parse(json_str)
         @test isa(parsed, EsmFile)
         println("Serialization roundtrip works ✓")
 ```

@@ -4,7 +4,7 @@
     "name": "max_product_saturation",
     "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.1; bead ess-my4.1.5). The `max_product` semiring — (max,-inf;*,1) — used for best-path / saturation contractions where the strongest multiplicative term wins. State `best[i]` reduces the product body i*j with the max oplus over j drawn from the `options` interval index set: best[1]=max_{j=1..3}(1*j)=max(1,2,3)=3, best[2]=max_{j=1..3}(2*j)=max(2,4,6)=6 at t=1. The oplus is max and the otimes is * (product body), distinguishing this from max_sum (which would use a + body) and from sum_product (which would + the terms). The 0-bar identity for max_product is -inf (an empty reduction), asserted at the per-binding unit level since -inf is not an integrable ODE rate. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",
@@ -16,17 +16,25 @@
       "ess-my4.1.5"
     ]
   },
+  "index_sets": {
+    "options": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
   "models": {
     "MaxProductSaturation": {
       "tolerance": {
-        "rel": 1e-6,
-        "abs": 1e-9
-      },
-      "index_sets": {
-        "options": { "kind": "interval", "size": 3 }
+        "rel": 1e-06,
+        "abs": 1e-09
       },
       "variables": {
-        "best": { "type": "state", "shape": ["i"] }
+        "best": {
+          "type": "state",
+          "shape": [
+            "i"
+          ]
+        }
       },
       "equations": [
         {
@@ -34,21 +42,52 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["best", "i"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "best",
+                    "i"
+                  ]
+                }
+              ],
               "wrt": "t"
             },
-            "ranges": { "i": [1, 2] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ]
+            }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
+            "output_idx": [
+              "i"
+            ],
             "semiring": "max_product",
-            "ranges": { "i": [1, 2], "j": { "from": "options" } },
-            "expr": { "op": "*", "args": ["i", "j"] }
+            "ranges": {
+              "i": [
+                1,
+                2
+              ],
+              "j": {
+                "from": "options"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "i",
+                "j"
+              ]
+            }
           }
         }
       ],
@@ -60,10 +99,21 @@
             "best[1]": 0.0,
             "best[2]": 0.0
           },
-          "time_span": { "start": 0.0, "end": 1.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
           "assertions": [
-            { "variable": "best[1]", "time": 1.0, "expected": 3.0 },
-            { "variable": "best[2]", "time": 1.0, "expected": 6.0 }
+            {
+              "variable": "best[1]",
+              "time": 1.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "best[2]",
+              "time": 1.0,
+              "expected": 6.0
+            }
           ]
         }
       ]

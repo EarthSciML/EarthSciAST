@@ -1,23 +1,23 @@
 # validate function - complete validation (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/structural_validation_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/structural_validation_test.jl`
 
 ```julia
-metadata = EarthSciSerialization.Metadata("test-model")
+metadata = EarthSciAST.Metadata("test-model")
 
         @testset "Valid file" begin
             variables = Dict(
-                "x" => EarthSciSerialization.ModelVariable(EarthSciSerialization.StateVariable, default=1.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)
             )
             equations = [
-                EarthSciSerialization.Equation(EarthSciSerialization.OpExpr("D", EarthSciSerialization.Expr[EarthSciSerialization.VarExpr("x")], wrt="t"), EarthSciSerialization.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.Expr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
             ]
-            model = EarthSciSerialization.Model(variables, equations)
-            esm_file = EarthSciSerialization.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            model = EarthSciAST.Model(variables, equations)
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
 
-            result = EarthSciSerialization.validate(esm_file)
+            result = EarthSciAST.validate(esm_file)
             # Note: Schema validation might fail due to simplified conversion in validate function
-            @test result isa EarthSciSerialization.ValidationResult
+            @test result isa EarthSciAST.ValidationResult
             @test isempty(result.structural_errors)
             @test isempty(result.unit_warnings)
 ```

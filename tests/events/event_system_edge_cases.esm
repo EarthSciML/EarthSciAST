@@ -89,6 +89,33 @@
               "y"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "y"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "z"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -306,6 +333,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "position"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "velocity"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "temperature"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -462,6 +516,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "local_var"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -576,6 +639,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "state_var"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -786,6 +858,24 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "input_signal"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "output_signal"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -951,16 +1041,10 @@
       "description": "Complex cross-system discrete event with compound conditions"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T00:10:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T00:10:00Z"
     }
   }
 }

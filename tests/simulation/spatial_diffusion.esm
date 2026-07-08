@@ -57,48 +57,10 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "u_dirichlet_xmin": {
-          "variable": "u",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "u_dirichlet_xmax": {
-          "variable": "u",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "u_dirichlet_xmin_2": {
-          "variable": "u",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 0.0
-        },
-        "u_dirichlet_xmax_2": {
-          "variable": "u",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 0.0
-        }
-      }
+      ]
     }
   },
-  "domains": {
-    "default": {
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1.0
-        }
-      },
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

@@ -1,6 +1,6 @@
 # Coupled systems with multiple components (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Create two coupled models demonstrating component interaction
@@ -11,8 +11,8 @@
 
         model1_eqs = [
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("x1")], wrt="t"),
-                OpExpr("*", EarthSciSerialization.Expr[OpExpr("-", EarthSciSerialization.Expr[VarExpr("k1")]), VarExpr("x1")])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("x1")], wrt="t"),
+                OpExpr("*", EarthSciAST.Expr[OpExpr("-", EarthSciAST.Expr[VarExpr("k1")]), VarExpr("x1")])
             )
         ]
 
@@ -25,8 +25,8 @@
 
         model2_eqs = [
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("x2")], wrt="t"),
-                OpExpr("*", EarthSciSerialization.Expr[VarExpr("k2"), VarExpr("x1")])  # Coupling to x1
+                OpExpr("D", EarthSciAST.Expr[VarExpr("x2")], wrt="t"),
+                OpExpr("*", EarthSciAST.Expr[VarExpr("k2"), VarExpr("x1")])  # Coupling to x1
             )
         ]
 
@@ -36,8 +36,8 @@
         sys1 = to_mtk_system(model1, "Component1")
         sys2 = to_mtk_system(model2, "Component2")
 
-        @test sys1 isa EarthSciSerialization.MockMTKSystem
-        @test sys2 isa EarthSciSerialization.MockMTKSystem
+        @test sys1 isa EarthSciAST.MockMTKSystem
+        @test sys2 isa EarthSciAST.MockMTKSystem
 
         # Verify coupling information is preserved
         @test "x1" in sys1.states

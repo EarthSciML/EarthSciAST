@@ -69,22 +69,34 @@ Exit codes:
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The shared harness (manifest loading, adapter dispatch, CLI skeleton) lives
+# in scripts/conformance_lib.py; hyphenated runner filenames cannot import
+# each other, so put scripts/ on sys.path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
+    KNOWN_BINDINGS,
+    REPO_ROOT,
+    AdapterHarness,
+    ManifestError,
+    _eprint,
+    build_parser,
+    cli_main,
+    print_summary,
+    write_report,
+)
+from conformance_lib import load_manifest as _load_manifest  # noqa: E402
+
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "geometry" / "manifest.json"
 
-KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
+# Adapter addressing: $EARTHSCI_GEOMETRY_ADAPTER_<BINDING> or
+# earthsci-geometry-adapter-<binding> on PATH (dormant — see PRODUCERS above).
+_ADAPTERS = AdapterHarness("geometry")
 
 # Tolerance defaults — the spec pins only one numeric literal (atol ≈ 1e-15·R²,
 # the sliver floor); rtol, the conservation tolerance, and the partition-of-unity
@@ -92,15 +104,11 @@ KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
 # (CONFORMANCE_SPEC.md §5.8.2-3). The manifest's `tolerances` block overrides
 # these; they are the documented fallbacks.
 DEFAULT_TOLERANCES = {
-    "area_rtol": 1e-9,          # matches REGRID_DEFAULT_RTOL in both bindings
+    "area_rtol": 1e-9,  # matches REGRID_DEFAULT_RTOL in both bindings
     "area_atol_factor": 1e-15,  # atol = factor · R²  (R = characteristic length)
     "partition_of_unity_atol": 1e-12,
     "conservation_atol": 1e-9,
 }
-
-
-def _eprint(*args: Any) -> None:
-    print(*args, file=sys.stderr)
 
 
 # === The reference implementation =========================================
@@ -187,8 +195,7 @@ def _left(a: list[float], b: list[float], p: list[float]) -> float:
     return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 
 
-def _edge_intersect(s: list[float], e: list[float],
-                    a: list[float], b: list[float]) -> list[float]:
+def _edge_intersect(s: list[float], e: list[float], a: list[float], b: list[float]) -> list[float]:
     """Intersection of segment s→e with the infinite line a→b."""
     dc = (a[0] - b[0], a[1] - b[1])
     dp = (s[0] - e[0], s[1] - e[1])
@@ -202,8 +209,7 @@ def _edge_intersect(s: list[float], e: list[float],
     return [x, y]
 
 
-def _clip_planar(subject: list[list[float]],
-                 clip: list[list[float]]) -> list[list[float]]:
+def _clip_planar(subject: list[list[float]], clip: list[list[float]]) -> list[list[float]]:
     """Sutherland–Hodgman: clip the subject polygon against each edge of the
     convex CCW clip polygon. Boundary points count as inside (≥ 0) so that a
     purely edge-tangent overlap yields a degenerate (zero-area) ring rather than
@@ -243,14 +249,11 @@ def _shoelace_area(ring: list[list[float]]) -> float:
     return abs(acc) * 0.5
 
 
-def reference_overlap_area(poly_a: list, poly_b: list, manifold: str,
-                           atol: float) -> float:
+def reference_overlap_area(poly_a: list, poly_b: list, manifold: str, atol: float) -> float:
     """Reference A_ij for a single candidate pair (planar only). Sub-atol slivers
     snap to exactly zero."""
     if manifold != "planar":
-        raise GeometryError(
-            f"reference clip is planar-only; got manifold {manifold!r}"
-        )
+        raise GeometryError(f"reference clip is planar-only; got manifold {manifold!r}")
     ring = _clip_planar(poly_a, poly_b)
     area = _shoelace_area(ring)
     return 0.0 if area <= atol else area
@@ -274,7 +277,7 @@ def reference_assemble(fixture: dict, payload: dict, atol: float) -> dict:
     n_src, n_tgt = len(src), len(tgt)
     a_ij = [[0.0] * n_tgt for _ in range(n_src)]
     areas: list[list] = []
-    for (i, j) in pairs:
+    for i, j in pairs:
         a = reference_overlap_area(src[i], tgt[j], manifold, atol)
         a_ij[i][j] = a
         areas.append([i, j, a])
@@ -292,12 +295,12 @@ def reference_assemble(fixture: dict, payload: dict, atol: float) -> dict:
     src_areas = fixture.get("src_areas")
     if f_src is not None and src_areas is not None:
         f_tgt = [
-            (sum(a_ij[i][j] * f_src[i] for i in range(n_src)) / a_j[j])
-            if a_j[j] > 0.0 else 0.0
+            (sum(a_ij[i][j] * f_src[i] for i in range(n_src)) / a_j[j]) if a_j[j] > 0.0 else 0.0
             for j in range(n_tgt)
         ]
         cons = sum(a_j[j] * f_tgt[j] for j in range(n_tgt)) - sum(
-            src_areas[i] * f_src[i] for i in range(n_src))
+            src_areas[i] * f_src[i] for i in range(n_src)
+        )
         record["conservation_residual"] = cons
     return record
 
@@ -318,14 +321,15 @@ def normalize_pairs(pairs: list, base: int) -> list[list[int]]:
     return sorted(out)
 
 
-def remap_pairs(pairs: list, base: int, src_order: list[int],
-                tgt_order: list[int]) -> list[list[int]]:
+def remap_pairs(
+    pairs: list, base: int, src_order: list[int], tgt_order: list[int]
+) -> list[list[int]]:
     """Translate a permuted-variant's emitted pairs back to canonical labels:
     base-normalize, then map each permuted position through the variant's
     src_order / tgt_order to its canonical index. Proves the candidate set is
     permutation-invariant (§5.8.5)."""
     out = []
-    for (i, j) in pairs:
+    for i, j in pairs:
         out.append([src_order[i - base], tgt_order[j - base]])
     return sorted(out)
 
@@ -333,53 +337,21 @@ def remap_pairs(pairs: list, base: int, src_order: list[int],
 # === Manifest loading =====================================================
 
 
-class ManifestError(Exception):
-    pass
-
-
 def load_manifest(path: Path) -> dict:
-    try:
-        with path.open() as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise ManifestError(f"failed to load manifest {path}: {e}") from e
-    _validate_shape(manifest, path)
-    return manifest
+    return _load_manifest(
+        path,
+        categories=("geometry_conformance",),
+        fixture_fields=("manifold", "dx", "dy", "inputs", "expected"),
+        validate_fixture=_validate_fixture,
+    )
 
 
-def _validate_shape(manifest: Any, path: Path) -> None:
-    if not isinstance(manifest, dict):
-        raise ManifestError(f"{path}: top-level must be a JSON object")
-    if manifest.get("category") != "geometry_conformance":
-        raise ManifestError(
-            f"{path}: category must be 'geometry_conformance', "
-            f"got {manifest.get('category')!r}"
-        )
-    if not isinstance(manifest.get("version"), str):
-        raise ManifestError(f"{path}: version must be a string")
-    fixtures = manifest.get("fixtures")
-    if not isinstance(fixtures, list) or not fixtures:
-        raise ManifestError(f"{path}: fixtures must be a non-empty array")
-    seen: set[str] = set()
-    for i, fx in enumerate(fixtures):
-        if not isinstance(fx, dict):
-            raise ManifestError(f"{path}: fixtures[{i}] must be an object")
-        fid = fx.get("id")
-        if not isinstance(fid, str) or not fid:
-            raise ManifestError(f"{path}: fixtures[{i}].id must be a non-empty string")
-        if fid in seen:
-            raise ManifestError(f"{path}: duplicate fixture id {fid!r}")
-        seen.add(fid)
-        for field in ("manifold", "dx", "dy", "inputs", "expected"):
-            if field not in fx:
-                raise ManifestError(f"{path}: fixtures[{fid}] missing '{field}'")
-        if "canonical" not in fx["inputs"]:
-            raise ManifestError(
-                f"{path}: fixtures[{fid}].inputs missing 'canonical'")
-        for field in ("candidate_index_set", "candidate_serialized"):
-            if field not in fx["expected"]:
-                raise ManifestError(
-                    f"{path}: fixtures[{fid}].expected missing '{field}'")
+def _validate_fixture(fx: dict, fid: str, path: Path) -> None:
+    if "canonical" not in fx["inputs"]:
+        raise ManifestError(f"{path}: fixtures[{fid}].inputs missing 'canonical'")
+    for field in ("candidate_index_set", "candidate_serialized"):
+        if field not in fx["expected"]:
+            raise ManifestError(f"{path}: fixtures[{fid}].expected missing '{field}'")
 
 
 def fixture_atol(fixture: dict, tolerances: dict) -> float:
@@ -387,59 +359,6 @@ def fixture_atol(fixture: dict, tolerances: dict) -> float:
     characteristic length, default 1)."""
     r = fixture.get("characteristic_length", 1.0)
     return tolerances["area_atol_factor"] * r * r
-
-
-# === Adapter discovery / invocation =======================================
-
-
-def discover_adapter(binding: str) -> list[str] | None:
-    env_cmd = os.environ.get(f"EARTHSCI_GEOMETRY_ADAPTER_{binding.upper()}")
-    if env_cmd:
-        return shlex.split(env_cmd)
-    on_path = shutil.which(f"earthsci-geometry-adapter-{binding}")
-    if on_path:
-        return [on_path]
-    return None
-
-
-def run_adapter(binding: str, argv: list[str], manifest_path: Path,
-                timeout: float | None) -> dict:
-    with tempfile.NamedTemporaryFile(
-        "r", suffix=".json", prefix=f"geometry-{binding}-", delete=False
-    ) as tmp:
-        out_path = Path(tmp.name)
-    try:
-        cmd = [*argv, "--manifest", str(manifest_path), "--output", str(out_path)]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, check=False)
-        except FileNotFoundError as e:
-            return {"binding": binding, "adapter_status": "missing",
-                    "error": str(e), "fixtures": {}}
-        except subprocess.TimeoutExpired:
-            return {"binding": binding, "adapter_status": "timeout",
-                    "error": f"adapter timed out after {timeout}s", "fixtures": {}}
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            return {"binding": binding, "adapter_status": "no_output",
-                    "error": "adapter wrote no output", "exit_code": proc.returncode,
-                    "stderr": (proc.stderr or "").strip()[-2000:], "fixtures": {}}
-        try:
-            with out_path.open() as f:
-                payload = json.load(f)
-        except json.JSONDecodeError as e:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": f"adapter output not valid JSON: {e}", "fixtures": {}}
-        if not isinstance(payload, dict) or "fixtures" not in payload:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": "adapter output missing 'fixtures'", "fixtures": {}}
-        payload.setdefault("binding", binding)
-        payload["adapter_status"] = "ok"
-        return payload
-    finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
 
 
 # === Comparison ===========================================================
@@ -461,8 +380,7 @@ def area_match(a_ref: float, a_got: float, atol: float, rtol: float) -> bool:
     return abs(a_got - a_ref) <= atol + rtol * a_ref
 
 
-def compare_to_golden(fixture: dict, produced: dict, base: int,
-                      tolerances: dict) -> dict:
+def compare_to_golden(fixture: dict, produced: dict, base: int, tolerances: dict) -> dict:
     """Compare one producer's output for one fixture to the committed golden:
     byte-identity on the candidate set; partition-of-unity to a tight epsilon;
     conservation (tiling fixtures only) within tolerance; per-pair areas within
@@ -493,8 +411,7 @@ def compare_to_golden(fixture: dict, produced: dict, base: int,
     # sub-checks are skipped for this fixture rather than failed. The planar
     # fixtures need no backend, so this only ever degrades the spherical cells.
     if produced.get("narrow_phase_unavailable"):
-        return {"match": not problems, "problems": problems,
-                "narrow_phase_skipped": True}
+        return {"match": not problems, "problems": problems, "narrow_phase_skipped": True}
 
     # (2a) Partition-of-unity — exact by construction, tight epsilon.
     pou = produced.get("partition_of_unity_max_residual")
@@ -509,8 +426,7 @@ def compare_to_golden(fixture: dict, produced: dict, base: int,
         cons = produced.get("conservation_residual")
         if cons is None:
             problems.append(
-                "fixture is conservation_exact but adapter emitted no "
-                "'conservation_residual'"
+                "fixture is conservation_exact but adapter emitted no 'conservation_residual'"
             )
         elif abs(float(cons)) > tolerances["conservation_atol"]:
             problems.append(
@@ -571,8 +487,7 @@ def compare_variants(fixture: dict, produced: dict, base: int) -> dict:
         src_order = vspec.get("src_order")
         tgt_order = vspec.get("tgt_order")
         if src_order is not None and tgt_order is not None:
-            remapped = remap_pairs([tuple(p) for p in got_pairs], base,
-                                   src_order, tgt_order)
+            remapped = remap_pairs([tuple(p) for p in got_pairs], base, src_order, tgt_order)
         else:
             remapped = normalize_pairs([tuple(p) for p in got_pairs], base)
         got_ser = canonical_serialize(remapped)
@@ -585,9 +500,9 @@ def compare_variants(fixture: dict, produced: dict, base: int) -> dict:
     return {"match": not problems, "problems": problems}
 
 
-def compare_cross_binding(fixture: dict, ref: dict, ref_base: int,
-                          other: dict, other_base: int,
-                          tolerances: dict) -> list[str]:
+def compare_cross_binding(
+    fixture: dict, ref: dict, ref_base: int, other: dict, other_base: int, tolerances: dict
+) -> list[str]:
     """Per-pair area agreement between a binding and the reference binding
     (§5.8.2). Used for fixtures the golden does not pin numerically (the spherical
     cells, whose areas are S2/GeometryOps-derived): two bindings may legitimately
@@ -639,8 +554,9 @@ def self_test(manifest_path: Path) -> int:
             _eprint(f"    golden={exp['candidate_serialized']!r}")
             _eprint(f"    got   ={produced['serialized']!r}")
         else:
-            print(f"self-test OK   [{fx['id']}]: candidate set == golden "
-                  f"({produced['serialized']})")
+            print(
+                f"self-test OK   [{fx['id']}]: candidate set == golden ({produced['serialized']})"
+            )
 
         if fx["manifold"] == "planar":
             verdict = compare_to_golden(fx, produced, 0, tolerances)
@@ -650,8 +566,7 @@ def self_test(manifest_path: Path) -> int:
                 for p in verdict["problems"]:
                     _eprint(f"  {p}")
             else:
-                print(f"self-test OK   [{fx['id']}]: planar areas + invariants "
-                      "reproduce golden")
+                print(f"self-test OK   [{fx['id']}]: planar areas + invariants reproduce golden")
         else:
             # Spherical: candidate set is reproduced above; if the golden pins
             # areas, confirm they satisfy the partition-of-unity identity so the
@@ -693,29 +608,31 @@ def self_test(manifest_path: Path) -> int:
         verdict = compare_to_golden(ref_fx, bad, 0, tolerances)
         # normalize_pairs re-sorts, so a scrambled-but-complete set canonicalizes
         # to the golden and SHOULD pass — that is the order-independence contract.
-        if not verdict["match"] and any("candidate set differs" in p
-                                        for p in verdict["problems"]):
+        if not verdict["match"] and any("candidate set differs" in p for p in verdict["problems"]):
             rc = 1
-            _eprint("self-test FAIL [neg/reorder]: re-sorted candidate set "
-                    "wrongly rejected (broad phase must be order-independent)")
+            _eprint(
+                "self-test FAIL [neg/reorder]: re-sorted candidate set "
+                "wrongly rejected (broad phase must be order-independent)"
+            )
         else:
-            print("self-test OK   [neg/reorder]: permuted candidate set "
-                  "canonicalizes to golden")
+            print("self-test OK   [neg/reorder]: permuted candidate set canonicalizes to golden")
         # C1b: a candidate set MISSING a pair must be rejected.
         missing = {"candidate_pairs": golden_set[:-1]}
         verdict2 = compare_to_golden(ref_fx, missing, 0, tolerances)
         if verdict2["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/missing_pair]: harness accepted an "
-                    "incomplete candidate set (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/missing_pair]: harness accepted an "
+                "incomplete candidate set (it must reject)"
+            )
         else:
-            print("self-test OK   [neg/missing_pair]: incomplete candidate set "
-                  "rejected")
+            print("self-test OK   [neg/missing_pair]: incomplete candidate set rejected")
 
     # C2: float bin component must be rejected by the broad phase.
     try:
-        candidate_overlap_pairs([[[0.0, 0.0], [1.0, 1.0]]],
-                                [[[0.0, 0.0], [1.0, 1.0]]], dx=float("nan"), dy=1.0)
+        candidate_overlap_pairs(
+            [[[0.0, 0.0], [1.0, 1.0]]], [[[0.0, 0.0], [1.0, 1.0]]], dx=float("nan"), dy=1.0
+        )
     except (GeometryError, ValueError):
         print("self-test OK   [neg/float_in_key]: degenerate bin step rejected")
     else:
@@ -730,9 +647,14 @@ def self_test(manifest_path: Path) -> int:
             _eprint("self-test FAIL [neg/float_in_key]: float bin NOT rejected")
 
     # C3: an area outside tolerance must be flagged.
-    planar_fx = next((f for f in fixtures
-                      if f["manifold"] == "planar" and "areas" in f["expected"]
-                      and f["expected"]["areas"]), None)
+    planar_fx = next(
+        (
+            f
+            for f in fixtures
+            if f["manifold"] == "planar" and "areas" in f["expected"] and f["expected"]["areas"]
+        ),
+        None,
+    )
     if planar_fx is not None:
         atol = fixture_atol(planar_fx, tolerances)
         good = reference_assemble(planar_fx, planar_fx["inputs"]["canonical"], atol)
@@ -741,20 +663,26 @@ def self_test(manifest_path: Path) -> int:
         verdict = compare_to_golden(planar_fx, bad, 0, tolerances)
         if verdict["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/area_off]: harness accepted an area "
-                    "1.0 outside tolerance (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/area_off]: harness accepted an area "
+                "1.0 outside tolerance (it must reject)"
+            )
         else:
             print("self-test OK   [neg/area_off]: out-of-tolerance area rejected")
 
     # C4: a partition-of-unity residual above the epsilon must be flagged.
     if planar_fx is not None:
-        bad = {"candidate_pairs": planar_fx["expected"]["candidate_index_set"],
-               "partition_of_unity_max_residual": 1e-3}
+        bad = {
+            "candidate_pairs": planar_fx["expected"]["candidate_index_set"],
+            "partition_of_unity_max_residual": 1e-3,
+        }
         verdict = compare_to_golden(planar_fx, bad, 0, tolerances)
         if verdict["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/pou]: harness accepted a broken "
-                    "partition-of-unity residual (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/pou]: harness accepted a broken "
+                "partition-of-unity residual (it must reject)"
+            )
         else:
             print("self-test OK   [neg/pou]: broken partition-of-unity rejected")
 
@@ -769,7 +697,7 @@ def _verify_invariant_algebra(fixture: dict, exp: dict, tolerances: dict) -> Non
     n_tgt = 0
     cols: dict[int, list[float]] = {}
     for row in exp["areas"]:
-        i, j, a = row[0], row[1], float(row[2])
+        j, a = row[1], float(row[2])
         cols.setdefault(j, []).append(a)
         n_tgt = max(n_tgt, j + 1)
     for j, col in cols.items():
@@ -777,16 +705,19 @@ def _verify_invariant_algebra(fixture: dict, exp: dict, tolerances: dict) -> Non
         if s > 0.0:
             pou = abs(sum(a / s for a in col) - 1.0)
             if pou > tolerances["partition_of_unity_atol"]:
-                print(f"self-test WARN [{fixture['id']}]: golden spherical areas "
-                      f"violate partition-of-unity (residual {pou:g})",
-                      file=sys.stderr)
+                print(
+                    f"self-test WARN [{fixture['id']}]: golden spherical areas "
+                    f"violate partition-of-unity (residual {pou:g})",
+                    file=sys.stderr,
+                )
 
 
 # === Default run mode (producers) =========================================
 
 
-def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
-              timeout: float | None) -> int:
+def run_suite(
+    manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
+) -> int:
     manifest = load_manifest(manifest_path)
     pin = manifest.get("base_pin", {})
     tolerances = {**DEFAULT_TOLERANCES, **manifest.get("tolerances", {})}
@@ -794,8 +725,7 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
 
     if not bindings:
         bindings = list(manifest.get("bindings_required") or [])
-        bindings.extend(b for b in (manifest.get("bindings_optional") or [])
-                        if b not in bindings)
+        bindings.extend(b for b in (manifest.get("bindings_optional") or []) if b not in bindings)
     for b in bindings:
         if b not in KNOWN_BINDINGS:
             _eprint(f"error: unknown binding {b!r}; known: {KNOWN_BINDINGS}")
@@ -804,27 +734,19 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters: dict[str, dict] = {}
-    for b in bindings:
-        argv = discover_adapter(b)
-        if argv is None:
-            adapters[b] = {"binding": b, "adapter_status": "missing",
-                           "error": ("adapter not found; expected on PATH as "
-                                     f"earthsci-geometry-adapter-{b} or via "
-                                     f"$EARTHSCI_GEOMETRY_ADAPTER_{b.upper()}"),
-                           "fixtures": {}}
-            continue
-        adapters[b] = run_adapter(b, argv, manifest_path, timeout)
+    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
-    report: dict[str, Any] = {"manifest_path": str(manifest_path),
-                              "status": "ok", "bindings": {}}
+    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
 
     for b in bindings:
         ar = adapters[b]
         b_base = pin.get(b, 0)
-        b_report: dict[str, Any] = {"adapter_status": ar.get("adapter_status"),
-                                    "error": ar.get("error"), "fixtures": {}}
+        b_report: dict[str, Any] = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
         if ar.get("adapter_status") != "ok":
             if b in required:
                 overall_ok = False
@@ -874,13 +796,14 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
                 other_fx = ar.get("fixtures", {}).get(fx["id"])
                 if ref_fx is None or other_fx is None:
                     continue
-                probs = compare_cross_binding(fx, ref_fx, ref_base,
-                                              other_fx, b_base, tolerances)
+                probs = compare_cross_binding(fx, ref_fx, ref_base, other_fx, b_base, tolerances)
                 if probs:
                     ok = False
                     pair_report[fx["id"]] = probs
             cross[f"{b}_vs_{reference_binding}"] = {
-                "status": "ok" if ok else "fail", "problems": pair_report}
+                "status": "ok" if ok else "fail",
+                "problems": pair_report,
+            }
             if not ok:
                 overall_ok = False
     if cross:
@@ -889,16 +812,14 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
     any_ok = any(a.get("adapter_status") == "ok" for a in adapters.values())
     if not any_ok and not required:
         report["status"] = "no_producers"
-        print("No geometry adapters registered for any requested binding, and "
-              "none are required. The contract is gated by --self-test here.")
+        print(
+            "No geometry adapters registered for any requested binding, and "
+            "none are required. The contract is gated by --self-test here."
+        )
     else:
         report["status"] = "ok" if overall_ok else "fail"
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
-        json.dump(report, f, indent=2, sort_keys=True)
-        f.write("\n")
-
+    write_report(report, output_path)
     _print_summary(report)
     if report["status"] == "fail":
         return 1
@@ -906,14 +827,7 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
 
 
 def _print_summary(report: dict) -> None:
-    print("=== Geometry Conformance Report ===")
-    print(f"manifest: {report['manifest_path']}")
-    print(f"status:   {report['status'].upper()}")
-    for b, br in report.get("bindings", {}).items():
-        print(f"  {b:>12}  {br.get('status')}  ({br.get('adapter_status')})")
-        for fid, fr in br.get("fixtures", {}).items():
-            if fr.get("status") != "ok":
-                print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
+    print_summary(report, "=== Geometry Conformance Report ===")
     for pair, pr in report.get("cross_binding", {}).items():
         print(f"  cross {pair}: {pr.get('status')}")
         for fid, probs in pr.get("problems", {}).items():
@@ -923,39 +837,19 @@ def _print_summary(report: dict) -> None:
 # === CLI ==================================================================
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
-                   help="Path to the geometry manifest.json.")
-    p.add_argument("--output", type=Path,
-                   default=Path("conformance-results/geometry/report.json"),
-                   help="Where to write the aggregated report.")
-    p.add_argument("--bindings", default="",
-                   help="Comma-separated bindings (default: manifest required+optional).")
-    p.add_argument("--timeout", type=float, default=None,
-                   help="Per-adapter timeout in seconds.")
-    p.add_argument("--self-test", action="store_true",
-                   help="Assert the contract against the embedded reference "
-                        "implementation and golden example, then exit.")
-    return p.parse_args(argv)
+def parse_args(argv: list[str]):
+    return build_parser(
+        doc=__doc__,
+        default_manifest=DEFAULT_MANIFEST,
+        default_output=Path("conformance-results/geometry/report.json"),
+        manifest_help="Path to the geometry manifest.json.",
+        self_test_help="Assert the contract against the embedded reference "
+        "implementation and golden example, then exit.",
+    ).parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.self_test:
-        return self_test(args.manifest)
-    if not args.manifest.is_file():
-        _eprint(f"error: manifest not found: {args.manifest}")
-        return 2
-    bindings = [b.strip() for b in args.bindings.split(",") if b.strip()]
-    try:
-        return run_suite(args.manifest, bindings, args.output, args.timeout)
-    except ManifestError as e:
-        _eprint(f"manifest error: {e}")
-        return 2
+    return cli_main(argv, parse_args=parse_args, self_test=self_test, run_suite=run_suite)
 
 
 if __name__ == "__main__":

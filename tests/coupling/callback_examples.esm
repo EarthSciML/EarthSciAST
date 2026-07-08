@@ -146,7 +146,7 @@
           "description": "Growth stage (1-4)"
         },
         "max_growth_rate": {
-          "units": "kg/(m^2\u00b7day)",
+          "units": "kg/(m^2·day)",
           "default": 0.05,
           "description": "Maximum growth rate",
           "type": "parameter"
@@ -355,17 +355,11 @@
       }
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-04-01T00:00:00Z",
-        "end": "2024-09-30T00:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-04-01T00:00:00Z",
+      "end": "2024-09-30T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

@@ -166,70 +166,35 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO2"
+            ]
+          },
+          "rhs": 0.0
         }
-      ],
-      "boundary_conditions": {
-        "O3_zero_gradient_xmin": {
-          "variable": "O3",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_xmin": {
-          "variable": "NO",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_xmin": {
-          "variable": "NO2",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_xmax": {
-          "variable": "O3",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_xmax": {
-          "variable": "NO",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_xmax": {
-          "variable": "NO2",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_ymin": {
-          "variable": "O3",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_ymin": {
-          "variable": "NO",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_ymin": {
-          "variable": "NO2",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_ymax": {
-          "variable": "O3",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        },
-        "NO_zero_gradient_ymax": {
-          "variable": "NO",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        },
-        "NO2_zero_gradient_ymax": {
-          "variable": "NO2",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "AdvectionTransport": {
       "reference": {
@@ -305,6 +270,15 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": 0.0
         }
       ]
     },
@@ -458,36 +432,6 @@
         "file_period": "PT3H",
         "records_per_file": 1
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "temperature": {
           "file_variable": "temperature",
@@ -524,36 +468,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v6/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "NOx_emission_rate": {
@@ -773,33 +687,13 @@
       "description": "Reduce emissions on weekends (days 5-6 of week)"
     }
   ],
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-07-01T00:00:00Z",
-        "end": "2024-07-08T00:00:00Z",
-        "reference_time": "2024-07-01T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 100000.0,
-          "units": "meters",
-          "grid_spacing": 5000.0
-        },
-        "y": {
-          "min": 0.0,
-          "max": 100000.0,
-          "units": "meters",
-          "grid_spacing": 5000.0
-        }
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-07-01T00:00:00Z",
+      "end": "2024-07-08T00:00:00Z",
+      "reference_time": "2024-07-01T00:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

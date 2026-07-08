@@ -5,27 +5,27 @@ on:
     branches: [ main ]
     paths:
       - 'esm-schema.json'
-      - 'packages/*/src/esm-schema.json'
-      - 'packages/*/data/esm-schema.json'
-      - 'packages/*/src/*/data/esm-schema.json'
-      - 'packages/*/pkg/*/esm-schema.json'
-      - 'packages/*/package.json'
-      - 'packages/*/pyproject.toml'
-      - 'packages/*/Cargo.toml'
-      - 'packages/*/Project.toml'
+      - 'pkg/*/src/esm-schema.json'
+      - 'pkg/*/data/esm-schema.json'
+      - 'pkg/*/src/*/data/esm-schema.json'
+      - 'pkg/*/pkg/*/esm-schema.json'
+      - 'pkg/*/package.json'
+      - 'pkg/*/pyproject.toml'
+      - 'pkg/*/Cargo.toml'
+      - 'pkg/*/Project.toml'
       - 'scripts/sync-schema.sh'
   pull_request:
     branches: [ main ]
     paths:
       - 'esm-schema.json'
-      - 'packages/*/src/esm-schema.json'
-      - 'packages/*/data/esm-schema.json'
-      - 'packages/*/src/*/data/esm-schema.json'
-      - 'packages/*/pkg/*/esm-schema.json'
-      - 'packages/*/package.json'
-      - 'packages/*/pyproject.toml'
-      - 'packages/*/Cargo.toml'
-      - 'packages/*/Project.toml'
+      - 'pkg/*/src/esm-schema.json'
+      - 'pkg/*/data/esm-schema.json'
+      - 'pkg/*/src/*/data/esm-schema.json'
+      - 'pkg/*/pkg/*/esm-schema.json'
+      - 'pkg/*/package.json'
+      - 'pkg/*/pyproject.toml'
+      - 'pkg/*/Cargo.toml'
+      - 'pkg/*/Project.toml'
       - 'scripts/sync-schema.sh'
 
 jobs:

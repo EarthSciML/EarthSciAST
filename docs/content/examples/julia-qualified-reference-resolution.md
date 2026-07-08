@@ -1,6 +1,6 @@
 # Qualified Reference Resolution (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reference_resolution_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reference_resolution_test.jl`
 
 ```julia
 @testset "Reference Syntax Validation" begin

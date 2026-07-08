@@ -1,4 +1,4 @@
-baseURL = "https://earthsciml.github.io/EarthSciSerialization/"
+baseURL = "https://earthsciml.github.io/EarthSciAST/"
 languageCode = "en-us"
 title = "ESM Format Documentation"
 # No theme — layouts are provided directly under layouts/.
@@ -11,7 +11,7 @@ enableRobotsTXT = true
 
 [params]
   description = "Complete documentation for the EarthSciML Serialization Format."
-  repoURL = "https://github.com/EarthSciML/EarthSciSerialization"
+  repoURL = "https://github.com/EarthSciML/EarthSciAST"
 
 [markup]
   [markup.goldmark.renderer]

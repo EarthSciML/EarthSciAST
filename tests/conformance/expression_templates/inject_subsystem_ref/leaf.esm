@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "advection_leaf",
+    "description": "A discretization-agnostic PDE leaf: a bare spatial derivative D(c, wrt: lon) with NO expression_template_imports of its own. Un-runnable in isolation (unlowered_operator) — the mounting assembler injects the discretization (esm-spec §9.7.10 form A)."
+  },
+  "models": {
+    "Advection": {
+      "variables": {
+        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
+        "u": { "type": "parameter", "units": "m/s", "default": 5.5, "description": "zonal wind" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [ { "op": "-", "args": ["u"] },
+                                        { "op": "D", "args": ["c"], "wrt": "lon" } ] } }
+      ]
+    }
+  }
+}

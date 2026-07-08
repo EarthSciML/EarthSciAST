@@ -1,0 +1,70 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "USGS3DEP_Slopes",
+    "description": "Source: EarthSciData/src/usgs3dep.jl — USGS3DEPSlopeFileSet / USGS3DEPSlopes(). Wraps the underlying USGS3DEPFileSet and computes terrain slope components ds_dx and ds_dy. Parameter footprint: parent USGS3DEPFileSet (mirror, bbox, width, height, freq_info) plus component symbol (:ds_dx | :ds_dy). Static dataset — same URL template as the parent elevation loader, exposing derived slope variables.",
+    "authors": [
+      "EarthSciAST gt-mos"
+    ],
+    "tags": [
+      "topography",
+      "static",
+      "derived",
+      "earthscidata.jl"
+    ]
+  },
+  "data_loaders": {
+    "USGS3DEP_Slopes": {
+      "kind": "static",
+      "source": {
+        "url_template": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage?bbox={bbox_w},{bbox_s},{bbox_e},{bbox_n}&bboxSR=4326&imageSR=4326&size={width},{height}&format=tiff&pixelType=F32&interpolation=+RSP_BilinearInterpolation&f=image"
+      },
+      "variables": {
+        "ds_dx": {
+          "file_variable": "elevation",
+          "units": "1",
+          "description": "Slope component in the x (lon) direction, derived as ∂elevation/∂x (dimensionless rise-over-run)"
+        },
+        "ds_dy": {
+          "file_variable": "elevation",
+          "units": "1",
+          "description": "Slope component in the y (lat) direction, derived as ∂elevation/∂y (dimensionless rise-over-run)"
+        }
+      },
+      "reference": {
+        "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) — derived slope via USGS3DEPSlopes",
+        "url": "https://www.usgs.gov/3d-elevation-program"
+      },
+      "metadata": {
+        "tags": [
+          "topography",
+          "static",
+          "slopes",
+          "derived"
+        ],
+        "derivation": "Finite-difference gradient of elevation in lon/lat"
+      }
+    }
+  },
+  "models": {
+    "stub": {
+      "variables": {
+        "x": {
+          "type": "state"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "description": "esm-spec §9.7.10 form C / §6.6.6: a discretization-agnostic PDE leaf (bare D(c, wrt: lon), no import of its own) whose inline tests each carry expression_template_imports naming the discretization to run under. Each test runs as an independent per-test ephemeral build, so one suite exercises the leaf under two grid resolutions with no conflict. Unlike a component's own imports, a test's imports are authored per-run config and SURVIVE parse->emit: the enclosing component round-trips with its D intact and each test keeps its import field.",
+    "name": "inject_test_block"
+  },
+  "models": {
+    "Advection": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "u"
+                ],
+                "op": "-"
+              },
+              {
+                "args": [
+                  "c"
+                ],
+                "op": "D",
+                "wrt": "lon"
+              }
+            ],
+            "op": "*"
+          }
+        }
+      ],
+      "tests": [
+        {
+          "assertions": [
+            {
+              "expected": 3.0,
+              "reduce": "mean",
+              "time": 10.0,
+              "tolerance": {
+                "abs": 1.0e-6
+              },
+              "variable": "c"
+            }
+          ],
+          "description": "Constant field is preserved under central differences on the 288x181 grid.",
+          "expression_template_imports": [
+            {
+              "bindings": {
+                "NLAT": 181,
+                "NLON": 288
+              },
+              "only": [
+                "central_D_lon_zero_grad_bc"
+              ],
+              "ref": "./central_D_lon_zero_grad_bc.esm"
+            }
+          ],
+          "id": "central_n288",
+          "initial_conditions": {
+            "c": 3.0
+          },
+          "time_span": {
+            "end": 10.0,
+            "start": 0.0
+          }
+        },
+        {
+          "assertions": [
+            {
+              "expected": 3.0,
+              "reduce": "mean",
+              "time": 10.0,
+              "tolerance": {
+                "abs": 1.0e-6
+              },
+              "variable": "c"
+            }
+          ],
+          "description": "Same suite, coarser 144x91 grid — one suite, many schemes.",
+          "expression_template_imports": [
+            {
+              "bindings": {
+                "NLAT": 91,
+                "NLON": 144
+              },
+              "only": [
+                "central_D_lon_zero_grad_bc"
+              ],
+              "ref": "./central_D_lon_zero_grad_bc.esm"
+            }
+          ],
+          "id": "central_n144",
+          "initial_conditions": {
+            "c": 3.0
+          },
+          "time_span": {
+            "end": 10.0,
+            "start": 0.0
+          }
+        }
+      ],
+      "variables": {
+        "c": {
+          "description": "tracer",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "type": "state",
+          "units": "kg/m^3"
+        },
+        "u": {
+          "default": 5.5,
+          "description": "zonal wind",
+          "type": "parameter",
+          "units": "m/s"
+        }
+      }
+    }
+  }
+}

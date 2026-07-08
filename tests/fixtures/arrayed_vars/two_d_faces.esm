@@ -3,20 +3,28 @@
   "metadata": {
     "name": "TwoDFaces",
     "description": "Arrayed-variable schema (RFC §10.2): a 2-D cell-centered pressure and an x_face-staggered velocity on the same (x, y) domain.",
-    "authors": ["gt-dzdi"],
+    "authors": [
+      "gt-dzdi"
+    ],
     "created": "2026-04-19T00:00:00Z",
-    "tags": ["arrayed_vars", "2d", "staggered"]
+    "tags": [
+      "arrayed_vars",
+      "2d",
+      "staggered"
+    ]
   },
   "models": {
     "StaggeredFlow2D": {
-      "domain": "plane",
       "variables": {
         "p": {
           "type": "state",
           "units": "Pa",
           "default": 0.0,
           "description": "Pressure on cell centers",
-          "shape": ["x", "y"],
+          "shape": [
+            "x",
+            "y"
+          ],
           "location": "cell_center"
         },
         "u": {
@@ -24,7 +32,10 @@
           "units": "m/s",
           "default": 0.0,
           "description": "x-component of velocity on x-normal faces",
-          "shape": ["x", "y"],
+          "shape": [
+            "x",
+            "y"
+          ],
           "location": "x_face"
         },
         "kappa": {
@@ -36,34 +47,48 @@
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["p"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "p"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "*",
             "args": [
-              { "op": "-", "args": ["kappa"] },
+              {
+                "op": "-",
+                "args": [
+                  "kappa"
+                ]
+              },
               "p"
             ]
           }
         },
         {
-          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "*",
             "args": [
-              { "op": "-", "args": ["kappa"] },
+              {
+                "op": "-",
+                "args": [
+                  "kappa"
+                ]
+              },
               "u"
             ]
           }
         }
       ]
-    }
-  },
-  "domains": {
-    "plane": {
-      "spatial": {
-        "x": { "min": 0.0, "max": 1.0, "grid_spacing": 0.01, "units": "m" },
-        "y": { "min": 0.0, "max": 1.0, "grid_spacing": 0.01, "units": "m" }
-      }
     }
   }
 }

@@ -174,30 +174,17 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "tracer"
+            ]
+          },
+          "rhs": 1e-09
         }
-      ],
-      "boundary_conditions": {
-        "tracer_zero_gradient_xmin": {
-          "variable": "tracer",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_xmax": {
-          "variable": "tracer",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_ymin": {
-          "variable": "tracer",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_ymax": {
-          "variable": "tracer",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "DivergenceTest": {
       "reference": {
@@ -277,29 +264,7 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "tracer_zero_gradient_xmin": {
-          "variable": "tracer",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_xmax": {
-          "variable": "tracer",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_ymin": {
-          "variable": "tracer",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "tracer_zero_gradient_ymax": {
-          "variable": "tracer",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "LaplacianAccuracy": {
       "reference": {
@@ -412,45 +377,13 @@
       "equations": []
     }
   },
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T01:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 100000.0,
-          "units": "meters",
-          "grid_spacing": 1000.0
-        },
-        "y": {
-          "min": 0.0,
-          "max": 100000.0,
-          "units": "meters",
-          "grid_spacing": 1000.0
-        }
-      },
-      "coordinate_transforms": [
-        {
-          "id": "cartesian_meters",
-          "description": "Cartesian coordinates in meters for finite difference operators",
-          "dimensions": [
-            "x",
-            "y"
-          ]
-        }
-      ],
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "tracer": 1e-09
-        }
-      },
-      "element_type": "Float64",
-      "array_type": "Array"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z"
+    },
+    "element_type": "Float64",
+    "array_type": "Array"
   }
 }

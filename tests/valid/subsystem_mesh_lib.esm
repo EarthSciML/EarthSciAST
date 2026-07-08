@@ -1,0 +1,33 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "subsystem_mesh_lib",
+    "description": "A standalone mesh subsystem file — the ESD MPAS-style mount pattern (esm-spec §4.7 'Index-set merge'). The file OWNS its axes: top-level index_sets declare cells (interval, 5) and vertices (interval, 4), and the single Mesh model's variables are shaped over them. Mounted by reference (tests/valid/subsystem_index_set_merge.esm), these index_sets merge into the importing document's registry: deep-equal redeclaration is idempotent, an absent name is added, and a non-deep-equal collision is the load-time error subsystem_index_set_conflict (tests/invalid/template_imports/subsystem_index_set_conflict.esm). Loads standalone as an ordinary single-model document.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-07-02T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "merge", "mesh", "mount"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 5 },
+    "vertices": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "Mesh": {
+      "variables": {
+        "area": { "type": "parameter", "units": "m^2", "shape": ["cells"], "default": 1.5, "description": "cell areas" },
+        "q": { "type": "state", "units": "mol/m^3", "shape": ["cells"], "default": 0.5, "description": "cell-centered tracer" }
+      },
+      "equations": [
+        {
+          "_comment": "First-order decay per cell: d(q_i)/dt = -0.25 * q_i.",
+          "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+          "rhs": {
+            "op": "aggregate", "output_idx": ["i"], "args": ["q"],
+            "ranges": { "i": { "from": "cells" } },
+            "expr": { "op": "*", "args": [-0.25, { "op": "index", "args": ["q", "i"] }] }
+          }
+        }
+      ]
+    }
+  }
+}

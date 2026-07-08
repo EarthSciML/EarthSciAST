@@ -4,7 +4,7 @@
     "name": "hyperbolic_trig_leaves",
     "description": "Cross-binding conformance fixture (bead ess-v9a.1) for the six hyperbolic scalar leaf ops sinh / cosh / tanh and their inverses asinh / acosh / atanh. Each state variable integrates a CONSTANT hyperbolic RHS from a zero initial condition, so y(t=1) = rate*1 = rate exactly — no integrator-tolerance dependency and all bindings (Julia tree_walk, Python numpy simulate, Rust simulate) must agree on the same inline `tests[].assertions[].expected`. sinh(1)=1.1752011936438014, cosh(1)=1.5430806348152437, tanh(1)=0.7615941559557649, asinh(1)=0.881373587019543, acosh(2)=1.3169578969248166 (arg>1, a non-trivial inverse value rather than acosh(1)=0), and atanh(0.5)=0.5493061443340549 (|arg|<1). The hyperbolic family is unary, elementwise, and spec'd like the trigonometric family (esm-spec.md §4.2) with no new control primitive; these leaves support future Mercator-style reprojection work under RFC pure-io-data-loaders §4.5.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "scalar-leaves",

@@ -3,8 +3,16 @@
   "metadata": {
     "name": "MassActionSubstrateCancellation",
     "description": "Cross-binding conformance fixture (esm-06a): mass-action lowering must apply the substrate product to EVERY reaction per esm-spec.md §7.4, even when the rate field references a substrate (cancellation form). Old behavior in Python+Julia+Rust used a detect-and-skip heuristic that returned `k/A` unchanged, producing dynamics independent of B and yielding NaN at A=0 (the geoschem_fullchem R12 pathology). This fixture asserts the spec-conformant analytic trajectory; binding bindings whose runner still implements the heuristic will fail it.",
-    "authors": ["esm-06a conformance"],
-    "tags": ["conformance", "mass-action", "substrate-cancellation", "esm-06a", "esm-uwe"]
+    "authors": [
+      "esm-06a conformance"
+    ],
+    "tags": [
+      "conformance",
+      "mass-action",
+      "substrate-cancellation",
+      "esm-06a",
+      "esm-uwe"
+    ]
   },
   "reaction_systems": {
     "CancellationSystem": {
@@ -40,52 +48,102 @@
           "id": "R0",
           "name": "cancellation_step",
           "substrates": [
-            {"species": "A", "stoichiometry": 1},
-            {"species": "B", "stoichiometry": 1}
+            {
+              "species": "A",
+              "stoichiometry": 1
+            },
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
           ],
           "products": [
-            {"species": "C", "stoichiometry": 1}
+            {
+              "species": "C",
+              "stoichiometry": 1
+            }
           ],
           "rate": {
             "op": "/",
-            "args": ["k", "A"]
+            "args": [
+              "k",
+              "A"
+            ]
           }
         }
       ],
-      "tolerance": {"rel": 1.0e-6, "abs": 1.0e-10},
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-10
+      },
       "tests": [
         {
           "id": "spec_conformant_cancellation",
           "description": "Analytic-reference trajectory under spec §7.4 mass-action: A(t) = 1 + exp(-0.5 t), B(t) = exp(-0.5 t), C(t) = 1 - exp(-0.5 t). The old detect-and-skip heuristic produced rate = k/A unmodified (no B dependence), giving a strictly different trajectory — a binding that still applies the heuristic will miss every t>0 assertion.",
-          "initial_conditions": {"A": 2.0, "B": 1.0, "C": 0.0},
-          "parameter_overrides": {"k": 0.5},
-          "time_span": {"start": 0.0, "end": 5.0},
+          "initial_conditions": {
+            "A": 2.0,
+            "B": 1.0,
+            "C": 0.0
+          },
+          "parameter_overrides": {
+            "k": 0.5
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 5.0
+          },
           "assertions": [
-            {"variable": "A", "time": 0.0, "expected": 2.0},
-            {"variable": "B", "time": 0.0, "expected": 1.0},
-            {"variable": "C", "time": 0.0, "expected": 0.0},
-            {"variable": "A", "time": 1.0, "expected": 1.6065306597126334},
-            {"variable": "B", "time": 1.0, "expected": 0.6065306597126334},
-            {"variable": "C", "time": 1.0, "expected": 0.3934693402873666},
-            {"variable": "A", "time": 5.0, "expected": 1.0820849986238988},
-            {"variable": "B", "time": 5.0, "expected": 0.0820849986238988},
-            {"variable": "C", "time": 5.0, "expected": 0.9179150013761012}
+            {
+              "variable": "A",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "B",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "C",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "A",
+              "time": 1.0,
+              "expected": 1.6065306597126334
+            },
+            {
+              "variable": "B",
+              "time": 1.0,
+              "expected": 0.6065306597126334
+            },
+            {
+              "variable": "C",
+              "time": 1.0,
+              "expected": 0.3934693402873666
+            },
+            {
+              "variable": "A",
+              "time": 5.0,
+              "expected": 1.0820849986238987
+            },
+            {
+              "variable": "B",
+              "time": 5.0,
+              "expected": 0.0820849986238988
+            },
+            {
+              "variable": "C",
+              "time": 5.0,
+              "expected": 0.9179150013761012
+            }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "CancellationSystem.A": 2.0,
-          "CancellationSystem.B": 1.0,
-          "CancellationSystem.C": 0.0
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

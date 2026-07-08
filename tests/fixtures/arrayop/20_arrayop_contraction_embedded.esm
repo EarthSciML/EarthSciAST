@@ -4,7 +4,7 @@
     "name": "arrayop_20_contraction_embedded",
     "description": "Exercises the eval_arrayop contraction path where an arrayop node appears as a sub-expression (embedded inside a scalar equation RHS). Three state variables driven by contracted arrayop expressions: (z) '+' reduction sum_{j=1}^{3} j^2 = 14 => z(1)=14; (w) 'max' reduction max_{j=1}^{4} j = 4 => w(1)=4; (z3) index into arrayop[i]{sum_j j*(i+j), j in [1,2]} at i=1 gives 8 => z3(1)=8. All three previously returned NaN due to eval_arrayop ignoring contracted indices.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "arrayop",
@@ -27,7 +27,7 @@
           "_comment": "D(z)/dt = sum_{j=1}^{3} j^2 = 1+4+9 = 14. Scalar arrayop (empty output_idx) with '+' reducer, embedded as RHS.",
           "lhs": { "op": "D", "args": ["z"], "wrt": "t" },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": [],
             "reduce": "+",
@@ -39,7 +39,7 @@
           "_comment": "D(w)/dt = max_{j=1}^{4} j = 4. Scalar arrayop with 'max' reducer.",
           "lhs": { "op": "D", "args": ["w"], "wrt": "t" },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
             "output_idx": [],
             "reduce": "max",
@@ -54,7 +54,7 @@
             "op": "index",
             "args": [
               {
-                "op": "arrayop",
+                "op": "aggregate",
                 "args": [],
                 "output_idx": ["i"],
                 "reduce": "+",

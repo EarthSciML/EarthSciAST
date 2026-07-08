@@ -18,7 +18,7 @@
   "models": {
     "AtmosphericChemistry": {
       "reference": {
-        "notes": "Simplified O3-NO-NO2 photostationary state chemistry: NO2 + h\u03bd \u2192 NO + O, O + O2 \u2192 O3, O3 + NO \u2192 NO2 + O2"
+        "notes": "Simplified O3-NO-NO2 photostationary state chemistry: NO2 + hν → NO + O, O + O2 → O3, O3 + NO → NO2 + O2"
       },
       "variables": {
         "O3": {
@@ -55,7 +55,7 @@
           "type": "parameter",
           "units": "s^-1",
           "default": 100.0,
-          "description": "O + O2 \u2192 O3 rate (fast, assumed instantaneous)"
+          "description": "O + O2 → O3 rate (fast, assumed instantaneous)"
         },
         "O": {
           "type": "observed",
@@ -163,6 +163,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 50.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO"
+            ]
+          },
+          "rhs": 10.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO2"
+            ]
+          },
+          "rhs": 20.0
         }
       ],
       "tolerance": {
@@ -188,18 +215,75 @@
             "end": 3600.0
           },
           "assertions": [
-            { "variable": "NO",  "time": 0.0,    "expected": 10.0 },
-            { "variable": "NO2", "time": 0.0,    "expected": 20.0 },
-            { "variable": "O3",  "time": 0.0,    "expected": 50.0 },
-            { "variable": "NO",  "time": 540.0,  "expected": 26.024997 },
-            { "variable": "NO2", "time": 540.0,  "expected": 3.975003  },
-            { "variable": "O3",  "time": 540.0,  "expected": 66.024997 },
-            { "variable": "NO",  "time": 1140.0, "expected": 26.114863 },
-            { "variable": "NO2", "time": 1140.0, "expected": 3.885137  },
-            { "variable": "O3",  "time": 1140.0, "expected": 66.114863 },
-            { "variable": "NO",  "time": 3600.0, "expected": 26.115137, "tolerance": { "abs": 1e-04 } },
-            { "variable": "NO2", "time": 3600.0, "expected": 3.884863,  "tolerance": { "abs": 1e-04 } },
-            { "variable": "O3",  "time": 3600.0, "expected": 66.115137, "tolerance": { "abs": 1e-04 } }
+            {
+              "variable": "NO",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "NO2",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "O3",
+              "time": 0.0,
+              "expected": 50.0
+            },
+            {
+              "variable": "NO",
+              "time": 540.0,
+              "expected": 26.024997
+            },
+            {
+              "variable": "NO2",
+              "time": 540.0,
+              "expected": 3.975003
+            },
+            {
+              "variable": "O3",
+              "time": 540.0,
+              "expected": 66.024997
+            },
+            {
+              "variable": "NO",
+              "time": 1140.0,
+              "expected": 26.114863
+            },
+            {
+              "variable": "NO2",
+              "time": 1140.0,
+              "expected": 3.885137
+            },
+            {
+              "variable": "O3",
+              "time": 1140.0,
+              "expected": 66.114863
+            },
+            {
+              "variable": "NO",
+              "time": 3600.0,
+              "expected": 26.115137,
+              "tolerance": {
+                "abs": 0.0001
+              }
+            },
+            {
+              "variable": "NO2",
+              "time": 3600.0,
+              "expected": 3.884863,
+              "tolerance": {
+                "abs": 0.0001
+              }
+            },
+            {
+              "variable": "O3",
+              "time": 3600.0,
+              "expected": 66.115137,
+              "tolerance": {
+                "abs": 0.0001
+              }
+            }
           ]
         },
         {
@@ -215,11 +299,19 @@
             "end": 1800.0
           },
           "tolerance": {
-            "abs": 1e-04
+            "abs": 0.0001
           },
           "assertions": [
-            { "variable": "NO2", "time": 1800.0, "expected": 3.884864 },
-            { "variable": "O3",  "time": 1800.0, "expected": 66.115136 }
+            {
+              "variable": "NO2",
+              "time": 1800.0,
+              "expected": 3.884864
+            },
+            {
+              "variable": "O3",
+              "time": 1800.0,
+              "expected": 66.115136
+            }
           ]
         }
       ],
@@ -228,12 +320,9 @@
           "id": "default_run",
           "description": "One-hour simulation of the box model under default parameters, plotting NO, NO2, and O3 concentration vs time. This reproduces the standard photostationary-state approach used in introductory atmospheric chemistry courses.",
           "initial_state": {
-            "type": "per_variable",
-            "values": {
-              "NO": 10.0,
-              "NO2": 20.0,
-              "O3": 50.0
-            }
+            "NO": 10.0,
+            "NO2": 20.0,
+            "O3": 50.0
           },
           "parameters": {
             "j_NO2": 0.008,
@@ -248,12 +337,27 @@
               "id": "concentrations_vs_time",
               "type": "line",
               "description": "NO, NO2, and O3 mixing ratios over one hour, showing the approach to photostationary state.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "NO", "label": "mixing ratio (ppbv)" },
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "NO",
+                "label": "mixing ratio (ppbv)"
+              },
               "series": [
-                { "name": "NO",  "variable": "NO"  },
-                { "name": "NO2", "variable": "NO2" },
-                { "name": "O3",  "variable": "O3"  }
+                {
+                  "name": "NO",
+                  "variable": "NO"
+                },
+                {
+                  "name": "NO2",
+                  "variable": "NO2"
+                },
+                {
+                  "name": "O3",
+                  "variable": "O3"
+                }
               ]
             }
           ]
@@ -261,20 +365,10 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2026-01-01T00:00:00Z",
-        "end": "2026-01-01T01:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "AtmosphericChemistry.O3": 50.0,
-          "AtmosphericChemistry.NO": 10.0,
-          "AtmosphericChemistry.NO2": 20.0
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2026-01-01T00:00:00Z",
+      "end": "2026-01-01T01:00:00Z"
     }
   }
 }

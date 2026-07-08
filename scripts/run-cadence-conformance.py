@@ -50,22 +50,34 @@ Exit codes:
 
 from __future__ import annotations
 
-import argparse
 import copy
 import json
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The shared harness (manifest loading, adapter dispatch, CLI skeleton) lives
+# in scripts/conformance_lib.py; hyphenated runner filenames cannot import
+# each other, so put scripts/ on sys.path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
+    KNOWN_BINDINGS,
+    REPO_ROOT,
+    AdapterHarness,
+    ManifestError,
+    _eprint,
+    build_parser,
+    cli_main,
+    print_summary,
+    write_report,
+)
+from conformance_lib import load_manifest as _load_manifest  # noqa: E402
+
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "cadence" / "manifest.json"
 
-KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
+# Adapter addressing: $EARTHSCI_CADENCE_ADAPTER_<BINDING> or
+# earthsci-cadence-adapter-<binding> on PATH.
+_ADAPTERS = AdapterHarness("cadence")
 
 # The cadence lattice (CONFORMANCE_SPEC.md §5.7): const ⊏ discrete ⊏ continuous.
 # class(node) = max over inputs is the lattice join.
@@ -75,10 +87,6 @@ RANK_CLASS = {v: k for k, v in CLASS_RANK.items()}
 # The relational / value-invention ops that may not run on the hot path (§5.7
 # guard 2): one classifying CONTINUOUS is a hard error.
 RELATIONAL_OPS = {"distinct", "join", "skolem", "rank"}
-
-
-def _eprint(*args: Any) -> None:
-    print(*args, file=sys.stderr)
 
 
 # === The reference classifier + folder ====================================
@@ -272,8 +280,11 @@ def assert_acyclic_index_sets(model: dict) -> None:
         collect(eq.get("rhs"))
 
     # Edges: set --(from_faq)--> node --(reads)--> set.
-    set_to_node = {name: s["from_faq"] for name, s in index_sets.items()
-                   if s.get("kind") == "derived" and s.get("from_faq")}
+    set_to_node = {
+        name: s["from_faq"]
+        for name, s in index_sets.items()
+        if s.get("kind") == "derived" and s.get("from_faq")
+    }
 
     # Detect a cycle over set → from_faq node → read sets → …
     WHITE, GRAY, BLACK = 0, 1, 2
@@ -287,7 +298,7 @@ def assert_acyclic_index_sets(model: dict) -> None:
             if nxt not in set_to_node:
                 continue  # only derived sets participate in the topology DAG
             if color.get(nxt, WHITE) == GRAY:
-                cyc = stack[stack.index(nxt):] + [nxt]
+                cyc = stack[stack.index(nxt) :] + [nxt]
                 raise CadenceError(
                     "cycle in the ≤DISCRETE index-set dependency graph "
                     f"(implicit solve, out of scope — §5.7 guard 1): "
@@ -352,11 +363,13 @@ def compute_fold(label: str, spec: dict, inputs: dict) -> list:
     if kind == "identity":
         return fold_identity(inputs[spec.get("array", label)])
     if kind == "edge_enumeration":
-        return fold_edge_enumeration(inputs["face_lo"], inputs["face_hi"],
-                                     inputs.get("skolem", "undirected"))
+        return fold_edge_enumeration(
+            inputs["face_lo"], inputs["face_hi"], inputs.get("skolem", "undirected")
+        )
     if kind == "rank":
-        edges = fold_edge_enumeration(inputs["face_lo"], inputs["face_hi"],
-                                      inputs.get("skolem", "undirected"))
+        edges = fold_edge_enumeration(
+            inputs["face_lo"], inputs["face_hi"], inputs.get("skolem", "undirected")
+        )
         return fold_rank(edges)
     raise CadenceError(f"buffer {label!r}: unknown fold kind {kind!r}")
 
@@ -364,46 +377,12 @@ def compute_fold(label: str, spec: dict, inputs: dict) -> list:
 # === Manifest / fixture loading ===========================================
 
 
-class ManifestError(Exception):
-    pass
-
-
 def load_manifest(path: Path) -> dict:
-    try:
-        with path.open() as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise ManifestError(f"failed to load manifest {path}: {e}") from e
-    _validate_shape(manifest, path)
-    return manifest
-
-
-def _validate_shape(manifest: Any, path: Path) -> None:
-    if not isinstance(manifest, dict):
-        raise ManifestError(f"{path}: top-level must be a JSON object")
-    if manifest.get("category") != "cadence_partition_conformance":
-        raise ManifestError(
-            f"{path}: category must be 'cadence_partition_conformance', "
-            f"got {manifest.get('category')!r}"
-        )
-    if not isinstance(manifest.get("version"), str):
-        raise ManifestError(f"{path}: version must be a string")
-    fixtures = manifest.get("fixtures")
-    if not isinstance(fixtures, list) or not fixtures:
-        raise ManifestError(f"{path}: fixtures must be a non-empty array")
-    seen: set = set()
-    for i, fx in enumerate(fixtures):
-        if not isinstance(fx, dict):
-            raise ManifestError(f"{path}: fixtures[{i}] must be an object")
-        fid = fx.get("id")
-        if not isinstance(fid, str) or not fid:
-            raise ManifestError(f"{path}: fixtures[{i}].id must be a non-empty string")
-        if fid in seen:
-            raise ManifestError(f"{path}: duplicate fixture id {fid!r}")
-        seen.add(fid)
-        for field in ("fixture", "model", "class_summary", "materialization_points"):
-            if field not in fx:
-                raise ManifestError(f"{path}: fixtures[{fid}] missing '{field}'")
+    return _load_manifest(
+        path,
+        categories=("cadence_partition_conformance",),
+        fixture_fields=("fixture", "model", "class_summary", "materialization_points"),
+    )
 
 
 def load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict:
@@ -418,6 +397,13 @@ def load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict:
     loaders = doc.get("data_loaders")
     if loaders and "data_loaders" not in model:
         model = {**model, "data_loaders": loaders}
+    # Attach the document's top-level `index_sets` too: in ESM v0.8.0 `index_sets`
+    # moved to the document level, so the partition's structural check (which reads
+    # `model["index_sets"]` to confirm an output buffer targets a declared index
+    # set) needs them threaded onto the model here.
+    index_sets = doc.get("index_sets")
+    if index_sets and "index_sets" not in model:
+        model = {**model, "index_sets": index_sets}
     return model
 
 
@@ -446,9 +432,7 @@ def compare_to_golden(fx: dict, produced: dict) -> dict:
     got_thr = sorted(m.get("threshold") for m in produced.get("materialization_points", []))
     want_thr = sorted(m["threshold"] for m in fx["materialization_points"])
     if got_thr != want_thr:
-        problems.append(
-            f"materialization thresholds differ: golden={want_thr} got={got_thr}"
-        )
+        problems.append(f"materialization thresholds differ: golden={want_thr} got={got_thr}")
     exp = (fx.get("const_fold") or {}).get("expected", {})
     got_buffers = produced.get("const_fold_buffers", {})
     for label, spec in exp.items():
@@ -500,12 +484,16 @@ def self_test(manifest_path: Path) -> int:
                 _eprint(f"self-test FAIL [{fx['id']}/class]: {p}")
         if counts != fx["class_summary"]:
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}/class_summary]: "
-                    f"derived {counts} != golden {fx['class_summary']}")
+            _eprint(
+                f"self-test FAIL [{fx['id']}/class_summary]: "
+                f"derived {counts} != golden {fx['class_summary']}"
+            )
         if not problems and counts == fx["class_summary"]:
-            print(f"self-test OK   [{fx['id']}]: class agreement "
-                  f"(const={counts['const']} discrete={counts['discrete']} "
-                  f"continuous={counts['continuous']})")
+            print(
+                f"self-test OK   [{fx['id']}]: class agreement "
+                f"(const={counts['const']} discrete={counts['discrete']} "
+                f"continuous={counts['continuous']})"
+            )
 
     # --- Check B: materialization set + emptiness match the golden. --------
     for fx in fixtures:
@@ -516,27 +504,38 @@ def self_test(manifest_path: Path) -> int:
         for rhs in model_nodes(model):
             materialization_frontier(rhs, model, frontier)
         got_thr = sorted(m["threshold"] for m in frontier)
-        want_thr = sorted(m["threshold"] for m in fx["materialization_points"]
-                          if m.get("kind") == "expr_edge")
+        want_thr = sorted(
+            m["threshold"] for m in fx["materialization_points"] if m.get("kind") == "expr_edge"
+        )
         if got_thr != want_thr:
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}/materialization]: "
-                    f"expr-edge thresholds derived {got_thr} != golden {want_thr}")
+            _eprint(
+                f"self-test FAIL [{fx['id']}/materialization]: "
+                f"expr-edge thresholds derived {got_thr} != golden {want_thr}"
+            )
         else:
             print(f"self-test OK   [{fx['id']}]: materialization frontier {got_thr or '[]'}")
 
         derived_hot_empty = not any(has_continuous(rhs, model) for rhs in model_nodes(model))
         if derived_hot_empty != fx.get("hot_tree_empty"):
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}/hot_tree_empty]: "
-                    f"derived {derived_hot_empty} != golden {fx.get('hot_tree_empty')}")
-        derived_handler_empty = not any("discrete->" in m["threshold"] for m in frontier) \
-            and not any(m.get("threshold", "").startswith("discrete")
-                        for m in fx["materialization_points"] if m.get("kind") != "expr_edge")
+            _eprint(
+                f"self-test FAIL [{fx['id']}/hot_tree_empty]: "
+                f"derived {derived_hot_empty} != golden {fx.get('hot_tree_empty')}"
+            )
+        derived_handler_empty = not any(
+            "discrete->" in m["threshold"] for m in frontier
+        ) and not any(
+            m.get("threshold", "").startswith("discrete")
+            for m in fx["materialization_points"]
+            if m.get("kind") != "expr_edge"
+        )
         if derived_handler_empty != fx.get("event_handler_empty"):
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}/event_handler_empty]: "
-                    f"derived {derived_handler_empty} != golden {fx.get('event_handler_empty')}")
+            _eprint(
+                f"self-test FAIL [{fx['id']}/event_handler_empty]: "
+                f"derived {derived_handler_empty} != golden {fx.get('event_handler_empty')}"
+            )
 
         # Structural check on output_buffer points: each must name a real
         # derived index set or be a real const output.
@@ -544,8 +543,10 @@ def self_test(manifest_path: Path) -> int:
             if mp.get("kind") == "output_buffer" and "produces" in mp:
                 if mp["produces"] not in model.get("index_sets", {}):
                     rc = 1
-                    _eprint(f"self-test FAIL [{fx['id']}/materialization]: "
-                            f"output_buffer produces {mp['produces']!r}, not a declared index set")
+                    _eprint(
+                        f"self-test FAIL [{fx['id']}/materialization]: "
+                        f"output_buffer produces {mp['produces']!r}, not a declared index set"
+                    )
 
     # --- Check C: CONST-folded buffers serialize byte-for-byte to golden. --
     for fx in fixtures:
@@ -561,8 +562,10 @@ def self_test(manifest_path: Path) -> int:
                 continue
             if serialized != spec["serialized"]:
                 rc = 1
-                _eprint(f"self-test FAIL [{fx['id']}/fold:{label}]: byte mismatch\n"
-                        f"    golden={spec['serialized']!r}\n    got   ={serialized!r}")
+                _eprint(
+                    f"self-test FAIL [{fx['id']}/fold:{label}]: byte mismatch\n"
+                    f"    golden={spec['serialized']!r}\n    got   ={serialized!r}"
+                )
             elif value != spec.get("value", value):
                 rc = 1
                 _eprint(f"self-test FAIL [{fx['id']}/fold:{label}]: value mismatch")
@@ -581,7 +584,9 @@ def self_test(manifest_path: Path) -> int:
             print(f"self-test OK   [{fx['id']}]: guards pass (no continuous relational, acyclic)")
         except CadenceError as e:
             rc = 1
-            _eprint(f"self-test FAIL [{fx['id']}/guard]: guard wrongly rejected a valid fixture: {e}")
+            _eprint(
+                f"self-test FAIL [{fx['id']}/guard]: guard wrongly rejected a valid fixture: {e}"
+            )
 
     # --- Check E: negative controls — the guards must REJECT bad input. -----
     rc |= _negative_controls(models)
@@ -597,8 +602,10 @@ def _negative_controls(models: dict) -> int:
     base = models.get("mixed_stencil")
     if base is not None:
         bad = copy.deepcopy(base)
-        flipped = any(_flip_first_expect_cadence(rhs, frm="const", to="continuous")
-                      for rhs in model_nodes(bad))
+        flipped = any(
+            _flip_first_expect_cadence(rhs, frm="const", to="continuous")
+            for rhs in model_nodes(bad)
+        )
         if not flipped:
             rc = 1
             _eprint("self-test FAIL [neg/expect_cadence]: could not build the negative control")
@@ -610,30 +617,39 @@ def _negative_controls(models: dict) -> int:
                 print("self-test OK   [neg/expect_cadence]: wrong expect_cadence rejected")
             else:
                 rc = 1
-                _eprint("self-test FAIL [neg/expect_cadence]: a wrong expect_cadence "
-                        "was NOT flagged (it must be)")
+                _eprint(
+                    "self-test FAIL [neg/expect_cadence]: a wrong expect_cadence "
+                    "was NOT flagged (it must be)"
+                )
 
     # E2: a CONTINUOUS relational (distinct) node must be rejected (guard 2).
     bad_model = {
         "variables": {"u": {"type": "state"}, "lo": {"type": "parameter"}},
         "index_sets": {"faces": {"kind": "interval", "size": 4}},
-        "equations": [{
-            "lhs": {"op": "index", "args": ["edge_exists", "e"]},
-            "rhs": {
-                "op": "aggregate", "distinct": True, "semiring": "bool_and_or",
-                "output_idx": ["e"], "ranges": {"f": {"from": "faces"}},
-                # the key reads state u → the distinct node classifies CONTINUOUS
-                "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
-                "expr": {"op": "true", "args": []},
-            },
-        }],
+        "equations": [
+            {
+                "lhs": {"op": "index", "args": ["edge_exists", "e"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["e"],
+                    "ranges": {"f": {"from": "faces"}},
+                    # the key reads state u → the distinct node classifies CONTINUOUS
+                    "key": {"op": "skolem", "args": ["edge", {"op": "index", "args": ["u", "f"]}]},
+                    "expr": {"op": "true", "args": []},
+                },
+            }
+        ],
     }
     try:
         for rhs in model_nodes(bad_model):
             assert_no_continuous_relational(rhs, bad_model)
         rc = 1
-        _eprint("self-test FAIL [neg/continuous_relational]: a state-dependent "
-                "distinct was NOT rejected (guard 2 must reject it)")
+        _eprint(
+            "self-test FAIL [neg/continuous_relational]: a state-dependent "
+            "distinct was NOT rejected (guard 2 must reject it)"
+        )
     except CadenceError:
         print("self-test OK   [neg/continuous_relational]: continuous distinct rejected")
 
@@ -645,23 +661,39 @@ def _negative_controls(models: dict) -> int:
             "setB": {"kind": "derived", "from_faq": "nodeB"},
         },
         "equations": [
-            {"lhs": {"op": "index", "args": ["a", "x"]},
-             "rhs": {"op": "aggregate", "id": "nodeA", "distinct": True,
-                     "semiring": "bool_and_or", "output_idx": ["x"],
-                     "ranges": {"y": {"from": "setB"}},  # nodeA reads setB
-                     "expr": {"op": "true", "args": []}}},
-            {"lhs": {"op": "index", "args": ["b", "x"]},
-             "rhs": {"op": "aggregate", "id": "nodeB", "distinct": True,
-                     "semiring": "bool_and_or", "output_idx": ["x"],
-                     "ranges": {"y": {"from": "setA"}},  # nodeB reads setA → cycle
-                     "expr": {"op": "true", "args": []}}},
+            {
+                "lhs": {"op": "index", "args": ["a", "x"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "id": "nodeA",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["x"],
+                    "ranges": {"y": {"from": "setB"}},  # nodeA reads setB
+                    "expr": {"op": "true", "args": []},
+                },
+            },
+            {
+                "lhs": {"op": "index", "args": ["b", "x"]},
+                "rhs": {
+                    "op": "aggregate",
+                    "id": "nodeB",
+                    "distinct": True,
+                    "semiring": "bool_and_or",
+                    "output_idx": ["x"],
+                    "ranges": {"y": {"from": "setA"}},  # nodeB reads setA → cycle
+                    "expr": {"op": "true", "args": []},
+                },
+            },
         ],
     }
     try:
         assert_acyclic_index_sets(cyclic)
         rc = 1
-        _eprint("self-test FAIL [neg/from_faq_cycle]: a from_faq cycle was NOT "
-                "rejected (guard 1 must reject it)")
+        _eprint(
+            "self-test FAIL [neg/from_faq_cycle]: a from_faq cycle was NOT "
+            "rejected (guard 1 must reject it)"
+        )
     except CadenceError:
         print("self-test OK   [neg/from_faq_cycle]: index-set cycle rejected")
 
@@ -690,61 +722,11 @@ def _flip_first_expect_cadence(node: Any, frm: str, to: str) -> bool:
 # === Default run mode (producers, ess-my4.3.7+) ===========================
 
 
-def discover_adapter(binding: str) -> list[str] | None:
-    env_cmd = os.environ.get(f"EARTHSCI_CADENCE_ADAPTER_{binding.upper()}")
-    if env_cmd:
-        return shlex.split(env_cmd)
-    on_path = shutil.which(f"earthsci-cadence-adapter-{binding}")
-    if on_path:
-        return [on_path]
-    return None
-
-
-def run_adapter(binding: str, argv: list, manifest_path: Path, timeout) -> dict:
-    with tempfile.NamedTemporaryFile(
-        "r", suffix=".json", prefix=f"cadence-{binding}-", delete=False
-    ) as tmp:
-        out_path = Path(tmp.name)
-    try:
-        cmd = [*argv, "--manifest", str(manifest_path), "--output", str(out_path)]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, check=False)
-        except FileNotFoundError as e:
-            return {"binding": binding, "adapter_status": "missing",
-                    "error": str(e), "fixtures": {}}
-        except subprocess.TimeoutExpired:
-            return {"binding": binding, "adapter_status": "timeout",
-                    "error": f"adapter timed out after {timeout}s", "fixtures": {}}
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            return {"binding": binding, "adapter_status": "no_output",
-                    "error": "adapter wrote no output", "exit_code": proc.returncode,
-                    "stderr": (proc.stderr or "").strip()[-2000:], "fixtures": {}}
-        try:
-            with out_path.open() as f:
-                payload = json.load(f)
-        except json.JSONDecodeError as e:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": f"adapter output not valid JSON: {e}", "fixtures": {}}
-        if not isinstance(payload, dict) or "fixtures" not in payload:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": "adapter output missing 'fixtures'", "fixtures": {}}
-        payload.setdefault("binding", binding)
-        payload["adapter_status"] = "ok"
-        return payload
-    finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
-
-
 def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -> int:
     manifest = load_manifest(manifest_path)
     if not bindings:
         bindings = list(manifest.get("bindings_required") or [])
-        bindings.extend(b for b in (manifest.get("bindings_optional") or [])
-                        if b not in bindings)
+        bindings.extend(b for b in (manifest.get("bindings_optional") or []) if b not in bindings)
     for b in bindings:
         if b not in KNOWN_BINDINGS:
             _eprint(f"error: unknown binding {b!r}; known: {KNOWN_BINDINGS}")
@@ -753,24 +735,17 @@ def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters: dict = {}
-    for b in bindings:
-        argv = discover_adapter(b)
-        if argv is None:
-            adapters[b] = {"binding": b, "adapter_status": "missing",
-                           "error": ("adapter not found; expected on PATH as "
-                                     f"earthsci-cadence-adapter-{b} or via "
-                                     f"$EARTHSCI_CADENCE_ADAPTER_{b.upper()}"),
-                           "fixtures": {}}
-            continue
-        adapters[b] = run_adapter(b, argv, manifest_path, timeout)
+    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
     report: dict = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
     for b in bindings:
         ar = adapters[b]
-        b_report: dict = {"adapter_status": ar.get("adapter_status"),
-                          "error": ar.get("error"), "fixtures": {}}
+        b_report: dict = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
         if ar.get("adapter_status") != "ok":
             b_report["status"] = "fail" if b in required else "skipped"
             if b in required:
@@ -802,64 +777,34 @@ def run_suite(manifest_path: Path, bindings: list, output_path: Path, timeout) -
         # --self-test gate is the green check in such an environment. (Once a
         # binding is in `bindings_required`, a missing producer fails above.)
         report["status"] = "no_producers"
-        print("No cadence-partition adapters registered for any requested binding, "
-              "and none are required. The contract is gated by --self-test here.")
+        print(
+            "No cadence-partition adapters registered for any requested binding, "
+            "and none are required. The contract is gated by --self-test here."
+        )
     else:
         report["status"] = "ok" if overall_ok else "fail"
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
-        json.dump(report, f, indent=2, sort_keys=True)
-        f.write("\n")
-    _print_summary(report)
+    write_report(report, output_path)
+    print_summary(report, "=== Cadence-Partition Conformance Report ===")
     return 1 if report["status"] == "fail" else 0
-
-
-def _print_summary(report: dict) -> None:
-    print("=== Cadence-Partition Conformance Report ===")
-    print(f"manifest: {report['manifest_path']}")
-    print(f"status:   {report['status'].upper()}")
-    for b, br in report.get("bindings", {}).items():
-        print(f"  {b:>12}  {br.get('status')}  ({br.get('adapter_status')})")
-        for fid, fr in br.get("fixtures", {}).items():
-            if fr.get("status") != "ok":
-                print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
 
 
 # === CLI ==================================================================
 
 
-def parse_args(argv: list) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
-                   help="Path to the cadence manifest.json.")
-    p.add_argument("--output", type=Path,
-                   default=Path("conformance-results/cadence/report.json"),
-                   help="Where to write the aggregated report.")
-    p.add_argument("--bindings", default="",
-                   help="Comma-separated bindings (default: manifest required+optional).")
-    p.add_argument("--timeout", type=float, default=None,
-                   help="Per-adapter timeout in seconds.")
-    p.add_argument("--self-test", action="store_true",
-                   help="Assert the contract against the embedded reference "
-                        "classifier + folder and golden, then exit.")
-    return p.parse_args(argv)
+def parse_args(argv: list):
+    return build_parser(
+        doc=__doc__,
+        default_manifest=DEFAULT_MANIFEST,
+        default_output=Path("conformance-results/cadence/report.json"),
+        manifest_help="Path to the cadence manifest.json.",
+        self_test_help="Assert the contract against the embedded reference "
+        "classifier + folder and golden, then exit.",
+    ).parse_args(argv)
 
 
 def main(argv: list | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.self_test:
-        return self_test(args.manifest)
-    if not args.manifest.is_file():
-        _eprint(f"error: manifest not found: {args.manifest}")
-        return 2
-    bindings = [b.strip() for b in args.bindings.split(",") if b.strip()]
-    try:
-        return run_suite(args.manifest, bindings, args.output, args.timeout)
-    except ManifestError as e:
-        _eprint(f"manifest error: {e}")
-        return 2
+    return cli_main(argv, parse_args=parse_args, self_test=self_test, run_suite=run_suite)
 
 
 if __name__ == "__main__":

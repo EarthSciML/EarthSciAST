@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_11_reshape_roundtrip",
     "description": "Exercises `reshape`. u[1:6] is held constant (D(u[i]) = 0). A scalar probe variable `diff` integrates the difference between u[3] and the 3rd element of `reshape(reshape(u,[2,3]),[6])`, i.e. the round-trip through a 2x3 view and back to a 6-vector. If reshape is shape-preserving in column-major order (which both Julia's `Symbolics.reshape` and the downstream bindings must agree on), the difference is identically zero, diff stays at 0, and the analytical value at t=1 is exactly 0.0. A second scalar `col` directly samples `reshape(u,[2,3])[1,2]` which in column-major is element 3 of u — so col(t) integrates u[3] = 3.0 giving col(1) = 3.0.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "reshape"]
   },
   "models": {

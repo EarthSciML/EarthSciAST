@@ -70,6 +70,24 @@
               "g"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "height"
+            ]
+          },
+          "rhs": 10.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "velocity"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -129,15 +147,72 @@
             "end": 10.0
           },
           "assertions": [
-            { "variable": "height",   "time": 0.0, "expected": 10.0 },
-            { "variable": "velocity", "time": 0.0, "expected": 0.0  },
-            { "variable": "height",   "time": 0.998492, "expected": 5.109785, "tolerance": { "abs": 0.01 } },
-            { "variable": "velocity", "time": 0.998492, "expected": -9.795204, "tolerance": { "abs": 0.02 } },
-            { "variable": "height",   "time": 1.984081, "expected": 4.882389, "tolerance": { "abs": 0.05 } },
-            { "variable": "height",   "time": 2.967430, "expected": 3.321709, "tolerance": { "abs": 0.05 } },
-            { "variable": "height",   "time": 4.919295, "expected": 1.003747, "tolerance": { "abs": 0.05 } },
-            { "variable": "height",   "time": 6.805605, "expected": 0.013223, "tolerance": { "abs": 0.05 } },
-            { "variable": "height",   "time": 10.0,     "expected": 0.0,      "tolerance": { "abs": 0.02 } }
+            {
+              "variable": "height",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "velocity",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "height",
+              "time": 0.998492,
+              "expected": 5.109785,
+              "tolerance": {
+                "abs": 0.01
+              }
+            },
+            {
+              "variable": "velocity",
+              "time": 0.998492,
+              "expected": -9.795204,
+              "tolerance": {
+                "abs": 0.02
+              }
+            },
+            {
+              "variable": "height",
+              "time": 1.984081,
+              "expected": 4.882389,
+              "tolerance": {
+                "abs": 0.05
+              }
+            },
+            {
+              "variable": "height",
+              "time": 2.96743,
+              "expected": 3.321709,
+              "tolerance": {
+                "abs": 0.05
+              }
+            },
+            {
+              "variable": "height",
+              "time": 4.919295,
+              "expected": 1.003747,
+              "tolerance": {
+                "abs": 0.05
+              }
+            },
+            {
+              "variable": "height",
+              "time": 6.805605,
+              "expected": 0.013223,
+              "tolerance": {
+                "abs": 0.05
+              }
+            },
+            {
+              "variable": "height",
+              "time": 10.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 0.02
+              }
+            }
           ]
         }
       ],
@@ -146,11 +221,8 @@
           "id": "default_drop",
           "description": "A single ball dropped from h=10 m and allowed to bounce for 10 s under default gravity and restitution. Plots height and velocity versus time on a shared time axis.",
           "initial_state": {
-            "type": "per_variable",
-            "values": {
-              "height": 10.0,
-              "velocity": 0.0
-            }
+            "height": 10.0,
+            "velocity": 0.0
           },
           "parameters": {
             "g": 9.81,
@@ -165,34 +237,37 @@
               "id": "height_vs_time",
               "type": "line",
               "description": "Ball height versus simulation time, illustrating the decaying envelope of successive bounces.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "height", "label": "height (m)" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "height",
+                "label": "height (m)"
+              }
             },
             {
               "id": "velocity_vs_time",
               "type": "line",
               "description": "Ball vertical velocity versus time, showing the discontinuous jumps at each elastic collision.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "velocity", "label": "velocity (m/s)" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "velocity",
+                "label": "velocity (m/s)"
+              }
             }
           ]
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2026-01-01T00:00:00Z",
-        "end": "2026-01-01T00:10:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "BallDynamics.height": 10.0,
-          "BallDynamics.velocity": 0.0
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2026-01-01T00:00:00Z",
+      "end": "2026-01-01T00:10:00Z"
     }
   }
 }

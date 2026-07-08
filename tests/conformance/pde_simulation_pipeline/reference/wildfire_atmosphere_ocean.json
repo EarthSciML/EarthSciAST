@@ -1,0 +1,158 @@
+{
+  "fixture": "wildfire_atmosphere_ocean",
+  "description": "Independent closed-form reference for the pde_simulation_pipeline category. 5 coupled models (AtmosphericDynamics, WildfirePropagation, FireSpreadCalculator, OceanDynamics, AirSeaFluxCalculator) flatten into a single 11-state ODE. The only active dynamics is the per-cell ocean surface-temperature ODE D(SST[o]) = surface_heat_flux[o]/4.18e6, where surface_heat_flux is the atmosphere-grid sensible flux field flux_field=[50,150,250,350] conservatively regridded onto the 3-cell ocean grid by the INLINE overlap weights (bin-skolem broad phase + polygon_intersection_area narrow phase). Overlap areas A=[[1,0,0],[1,0,0],[0,1,0],[0,0.5,0.5]] (atmos 4 x ocean 3), target areas A_o=[2,1.5,0.5], weights W=A/A_o partition to unity, so surface_heat_flux=[100, 850/3, 350] W/m^2. u_ocean is ic-only (no advection) so each SST cell integrates independently and D(SST) is state-independent. Every other state carries no D-equation (wind_u/wind_v/phi/u_ocean) or is heated only when the fire front is active (phi<0, which never happens: phi is ic-only), so T, wind_u, wind_v, phi, fuel, u_ocean hold their ICs and the system is EXACTLY linear: SST(t)=290 + t*surface_heat_flux/4.18e6, closed form (no numerical integrator needed). Derived from the fixture's declared math ONLY, independent of every binding's evaluator.",
+  "constants": {
+    "heat_capacity_denom": 4180000.0,
+    "flux_field": [
+      50.0,
+      150.0,
+      250.0,
+      350.0
+    ],
+    "overlap_areas_A": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.5,
+        0.5
+      ]
+    ],
+    "target_areas_Ao": [
+      2.0,
+      1.5,
+      0.5
+    ],
+    "surface_heat_flux": [
+      100.0,
+      283.3333333333333,
+      350.0
+    ]
+  },
+  "grid": {
+    "atmos_cells": 4,
+    "ocean_cells": 3
+  },
+  "state_order": [
+    "T",
+    "wind_u",
+    "wind_v",
+    "phi",
+    "fuel",
+    "SST[1]",
+    "SST[2]",
+    "SST[3]",
+    "u_ocean[1]",
+    "u_ocean[2]",
+    "u_ocean[3]"
+  ],
+  "rhs_probes": [
+    {
+      "id": "u0",
+      "t": 0.0,
+      "state": {
+        "T": 288.0,
+        "wind_u": 0.0,
+        "wind_v": 0.0,
+        "phi": 1.0,
+        "fuel": 10.0,
+        "SST[1]": 290.0,
+        "SST[2]": 290.0,
+        "SST[3]": 290.0,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      },
+      "analytic_rhs": {
+        "T": 0.0,
+        "wind_u": 0.0,
+        "wind_v": 0.0,
+        "phi": 0.0,
+        "fuel": 0.0,
+        "SST[1]": 2.3923444976076556e-05,
+        "SST[2]": 6.778309409888356e-05,
+        "SST[3]": 8.373205741626794e-05,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      }
+    },
+    {
+      "id": "perturbed_unburned",
+      "t": 0.0,
+      "state": {
+        "T": 295.0,
+        "wind_u": 1.5,
+        "wind_v": 2.0,
+        "phi": 1.0,
+        "fuel": 8.0,
+        "SST[1]": 288.0,
+        "SST[2]": 291.5,
+        "SST[3]": 293.0,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      },
+      "analytic_rhs": {
+        "T": 0.0,
+        "wind_u": 0.0,
+        "wind_v": 0.0,
+        "phi": 0.0,
+        "fuel": 0.0,
+        "SST[1]": 2.3923444976076556e-05,
+        "SST[2]": 6.778309409888356e-05,
+        "SST[3]": 8.373205741626794e-05,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      }
+    }
+  ],
+  "trajectory": {
+    "checkpoints": [
+      0.0,
+      3600.0
+    ],
+    "reference": {
+      "0.0": {
+        "T": 288.0,
+        "wind_u": 0.0,
+        "wind_v": 0.0,
+        "phi": 1.0,
+        "fuel": 10.0,
+        "SST[1]": 290.0,
+        "SST[2]": 290.0,
+        "SST[3]": 290.0,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      },
+      "3600.0": {
+        "T": 288.0,
+        "wind_u": 0.0,
+        "wind_v": 0.0,
+        "phi": 1.0,
+        "fuel": 10.0,
+        "SST[1]": 290.0861244019139,
+        "SST[2]": 290.24401913875596,
+        "SST[3]": 290.30143540669854,
+        "u_ocean[1]": 0.0,
+        "u_ocean[2]": 0.0,
+        "u_ocean[3]": 0.0
+      }
+    }
+  }
+}

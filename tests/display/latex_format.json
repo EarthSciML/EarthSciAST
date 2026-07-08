@@ -3,12 +3,24 @@
     "description": "Time derivatives using frac notation",
     "test_cases": [
       {
-        "input": {"op": "D", "args": ["O3"], "wrt": "t"},
+        "input": {
+          "op": "D",
+          "args": [
+            "O3"
+          ],
+          "wrt": "t"
+        },
         "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
         "description": "Species time derivative with frac and mathrm"
       },
       {
-        "input": {"op": "D", "args": ["concentration"], "wrt": "t"},
+        "input": {
+          "op": "D",
+          "args": [
+            "concentration"
+          ],
+          "wrt": "t"
+        },
         "latex": "\\frac{\\partial \\mathrm{concentration}}{\\partial t}",
         "description": "Variable time derivative with mathrm formatting"
       }
@@ -18,12 +30,24 @@
     "description": "Spatial gradients",
     "test_cases": [
       {
-        "input": {"op": "grad", "args": ["T"], "dim": "x"},
+        "input": {
+          "op": "grad",
+          "args": [
+            "T"
+          ],
+          "dim": "x"
+        },
         "latex": "\\frac{\\partial T}{\\partial x}",
         "description": "Temperature gradient - single letters don't need mathrm"
       },
       {
-        "input": {"op": "grad", "args": ["pressure"], "dim": "y"},
+        "input": {
+          "op": "grad",
+          "args": [
+            "pressure"
+          ],
+          "dim": "y"
+        },
         "latex": "\\frac{\\partial \\mathrm{pressure}}{\\partial y}",
         "description": "Multi-letter variable needs mathrm"
       }
@@ -33,17 +57,47 @@
     "description": "Fractions for division",
     "test_cases": [
       {
-        "input": {"op": "/", "args": ["a", "b"]},
+        "input": {
+          "op": "/",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "latex": "\\frac{a}{b}",
         "description": "Simple division as fraction"
       },
       {
-        "input": {"op": "/", "args": [{"op": "+", "args": ["a", "b"]}, "c"]},
+        "input": {
+          "op": "/",
+          "args": [
+            {
+              "op": "+",
+              "args": [
+                "a",
+                "b"
+              ]
+            },
+            "c"
+          ]
+        },
         "latex": "\\frac{a + b}{c}",
         "description": "Complex numerator"
       },
       {
-        "input": {"op": "/", "args": ["a", {"op": "*", "args": ["b", "c"]}]},
+        "input": {
+          "op": "/",
+          "args": [
+            "a",
+            {
+              "op": "*",
+              "args": [
+                "b",
+                "c"
+              ]
+            }
+          ]
+        },
         "latex": "\\frac{a}{b c}",
         "description": "Complex denominator - multiplication uses space in LaTeX"
       }
@@ -78,12 +132,25 @@
     "description": "Multiplication - implicit (space) in LaTeX",
     "test_cases": [
       {
-        "input": {"op": "*", "args": ["a", "b"]},
+        "input": {
+          "op": "*",
+          "args": [
+            "a",
+            "b"
+          ]
+        },
         "latex": "a b",
         "description": "Multiplication by juxtaposition"
       },
       {
-        "input": {"op": "*", "args": ["k", "\\mathrm{O_3}", "\\mathrm{NO}"]},
+        "input": {
+          "op": "*",
+          "args": [
+            "k",
+            "\\mathrm{O_3}",
+            "\\mathrm{NO}"
+          ]
+        },
         "latex": "k \\mathrm{O_3} \\mathrm{NO}",
         "description": "Rate constant times species concentrations"
       }
@@ -98,7 +165,7 @@
         "description": "Scientific notation with times symbol"
       },
       {
-        "input": 2.46e19,
+        "input": 24600000000000000000,
         "latex": "2.46 \\times 10^{19}",
         "description": "Large number in scientific notation"
       }
@@ -108,17 +175,38 @@
     "description": "Mathematical operators",
     "test_cases": [
       {
-        "input": {"op": "exp", "args": [{"op": "/", "args": ["-E", "RT"]}]},
+        "input": {
+          "op": "exp",
+          "args": [
+            {
+              "op": "/",
+              "args": [
+                "-E",
+                "RT"
+              ]
+            }
+          ]
+        },
         "latex": "\\exp\\left(\\frac{-E}{RT}\\right)",
         "description": "Exponential function with fraction argument"
       },
       {
-        "input": {"op": "sqrt", "args": ["x"]},
+        "input": {
+          "op": "sqrt",
+          "args": [
+            "x"
+          ]
+        },
         "latex": "\\sqrt{x}",
         "description": "Square root"
       },
       {
-        "input": {"op": "sin", "args": ["\\theta"]},
+        "input": {
+          "op": "sin",
+          "args": [
+            "\\theta"
+          ]
+        },
         "latex": "\\sin(\\theta)",
         "description": "Sine function"
       }
@@ -128,12 +216,30 @@
     "description": "Exponents and superscripts",
     "test_cases": [
       {
-        "input": {"op": "^", "args": ["x", 2]},
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            2
+          ]
+        },
         "latex": "x^2",
         "description": "Simple squared"
       },
       {
-        "input": {"op": "^", "args": ["x", {"op": "+", "args": ["n", 1]}]},
+        "input": {
+          "op": "^",
+          "args": [
+            "x",
+            {
+              "op": "+",
+              "args": [
+                "n",
+                1
+              ]
+            }
+          ]
+        },
         "latex": "x^{n + 1}",
         "description": "Complex exponent with braces"
       }
@@ -143,12 +249,22 @@
     "description": "Nabla operators",
     "test_cases": [
       {
-        "input": {"op": "div", "args": ["\\mathbf{v}"]},
+        "input": {
+          "op": "div",
+          "args": [
+            "\\mathbf{v}"
+          ]
+        },
         "latex": "\\nabla \\cdot \\mathbf{v}",
         "description": "Divergence with vector notation"
       },
       {
-        "input": {"op": "laplacian", "args": ["T"]},
+        "input": {
+          "op": "laplacian",
+          "args": [
+            "T"
+          ]
+        },
         "latex": "\\nabla^2 T",
         "description": "Laplacian operator"
       }
@@ -161,11 +277,39 @@
         "input": {
           "op": "=",
           "args": [
-            {"op": "D", "args": ["O3"], "wrt": "t"},
-            {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["k_{NO_O3}"]}, "\\mathrm{O_3}", "\\mathrm{NO}", "M"]},
-              {"op": "*", "args": ["j_{NO2}", "\\mathrm{NO_2}"]}
-            ]}
+            {
+              "op": "D",
+              "args": [
+                "O3"
+              ],
+              "wrt": "t"
+            },
+            {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "k_{NO_O3}"
+                      ]
+                    },
+                    "\\mathrm{O_3}",
+                    "\\mathrm{NO}",
+                    "M"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "j_{NO2}",
+                    "\\mathrm{NO_2}"
+                  ]
+                }
+              ]
+            }
           ]
         },
         "latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t} = -k_{NO_O3} \\mathrm{O_3} \\mathrm{NO} M + j_{NO2} \\mathrm{NO_2}",

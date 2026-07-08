@@ -48,25 +48,33 @@ Exit codes:
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The shared harness (manifest loading, adapter dispatch, CLI skeleton) lives
+# in scripts/conformance_lib.py; hyphenated runner filenames cannot import
+# each other, so put scripts/ on sys.path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
+    KNOWN_BINDINGS,
+    REPO_ROOT,
+    AdapterHarness,
+    ManifestError,
+    _eprint,
+    build_parser,
+    cli_main,
+    print_summary,
+    write_report,
+)
+from conformance_lib import load_manifest as _load_manifest  # noqa: E402
+
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "conformance" / "determinism" / "manifest.json"
 
-KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
-
-
-def _eprint(*args: Any) -> None:
-    print(*args, file=sys.stderr)
+# Adapter addressing: $EARTHSCI_DETERMINISM_ADAPTER_<BINDING> or
+# earthsci-determinism-adapter-<binding> on PATH.
+_ADAPTERS = AdapterHarness("determinism")
 
 
 # === The reference implementation =========================================
@@ -192,9 +200,7 @@ def _compute(fixture: dict, payload: dict) -> dict:
         elif "tuples" in payload:
             tuples = [tuple(t) for t in payload["tuples"]]
         else:
-            raise DeterminismError(
-                f"fixture {fixture['id']}: input needs 'faces' or 'tuples'"
-            )
+            raise DeterminismError(f"fixture {fixture['id']}: input needs 'faces' or 'tuples'")
         keys = skolem(tuples, fixture["skolem"])
         index_set = distinct_sorted(keys)
     elif primitive == "group_by_sum":
@@ -219,105 +225,20 @@ def normalize_dense_ids(reported: list[int], emission_base: int) -> list[int]:
 # === Manifest loading =====================================================
 
 
-class ManifestError(Exception):
-    pass
-
-
 def load_manifest(path: Path) -> dict:
-    try:
-        with path.open() as f:
-            manifest = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise ManifestError(f"failed to load manifest {path}: {e}") from e
-    _validate_shape(manifest, path)
-    return manifest
+    return _load_manifest(
+        path,
+        categories=("determinism_conformance",),
+        fixture_fields=("primitive", "inputs", "expected"),
+        validate_fixture=_validate_fixture,
+    )
 
 
-def _validate_shape(manifest: Any, path: Path) -> None:
-    if not isinstance(manifest, dict):
-        raise ManifestError(f"{path}: top-level must be a JSON object")
-    if manifest.get("category") != "determinism_conformance":
-        raise ManifestError(
-            f"{path}: category must be 'determinism_conformance', "
-            f"got {manifest.get('category')!r}"
-        )
-    if not isinstance(manifest.get("version"), str):
-        raise ManifestError(f"{path}: version must be a string")
-    fixtures = manifest.get("fixtures")
-    if not isinstance(fixtures, list) or not fixtures:
-        raise ManifestError(f"{path}: fixtures must be a non-empty array")
-    seen: set[str] = set()
-    for i, fx in enumerate(fixtures):
-        if not isinstance(fx, dict):
-            raise ManifestError(f"{path}: fixtures[{i}] must be an object")
-        fid = fx.get("id")
-        if not isinstance(fid, str) or not fid:
-            raise ManifestError(f"{path}: fixtures[{i}].id must be a non-empty string")
-        if fid in seen:
-            raise ManifestError(f"{path}: duplicate fixture id {fid!r}")
-        seen.add(fid)
-        for field in ("primitive", "inputs", "expected"):
-            if field not in fx:
-                raise ManifestError(f"{path}: fixtures[{fid}] missing '{field}'")
-        exp = fx["expected"]
-        for field in ("index_set", "serialized", "dense_ids_canonical"):
-            if field not in exp:
-                raise ManifestError(
-                    f"{path}: fixtures[{fid}].expected missing '{field}'"
-                )
-
-
-# === Adapter discovery / invocation (M2/M3) ===============================
-
-
-def discover_adapter(binding: str) -> list[str] | None:
-    env_cmd = os.environ.get(f"EARTHSCI_DETERMINISM_ADAPTER_{binding.upper()}")
-    if env_cmd:
-        return shlex.split(env_cmd)
-    on_path = shutil.which(f"earthsci-determinism-adapter-{binding}")
-    if on_path:
-        return [on_path]
-    return None
-
-
-def run_adapter(binding: str, argv: list[str], manifest_path: Path,
-                timeout: float | None) -> dict:
-    with tempfile.NamedTemporaryFile(
-        "r", suffix=".json", prefix=f"determinism-{binding}-", delete=False
-    ) as tmp:
-        out_path = Path(tmp.name)
-    try:
-        cmd = [*argv, "--manifest", str(manifest_path), "--output", str(out_path)]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, check=False)
-        except FileNotFoundError as e:
-            return {"binding": binding, "adapter_status": "missing",
-                    "error": str(e), "fixtures": {}}
-        except subprocess.TimeoutExpired:
-            return {"binding": binding, "adapter_status": "timeout",
-                    "error": f"adapter timed out after {timeout}s", "fixtures": {}}
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            return {"binding": binding, "adapter_status": "no_output",
-                    "error": "adapter wrote no output", "exit_code": proc.returncode,
-                    "stderr": (proc.stderr or "").strip()[-2000:], "fixtures": {}}
-        try:
-            with out_path.open() as f:
-                payload = json.load(f)
-        except json.JSONDecodeError as e:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": f"adapter output not valid JSON: {e}", "fixtures": {}}
-        if not isinstance(payload, dict) or "fixtures" not in payload:
-            return {"binding": binding, "adapter_status": "invalid_output",
-                    "error": "adapter output missing 'fixtures'", "fixtures": {}}
-        payload.setdefault("binding", binding)
-        payload["adapter_status"] = "ok"
-        return payload
-    finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
+def _validate_fixture(fx: dict, fid: str, path: Path) -> None:
+    exp = fx["expected"]
+    for field in ("index_set", "serialized", "dense_ids_canonical"):
+        if field not in exp:
+            raise ManifestError(f"{path}: fixtures[{fid}].expected missing '{field}'")
 
 
 # === Comparison ===========================================================
@@ -339,9 +260,7 @@ def compare_to_golden(fixture: dict, produced: dict, emission_base: int) -> dict
 
     got_set = produced.get("index_set")
     if got_set != exp["index_set"]:
-        problems.append(
-            f"index_set differs: golden={exp['index_set']!r} got={got_set!r}"
-        )
+        problems.append(f"index_set differs: golden={exp['index_set']!r} got={got_set!r}")
 
     raw_ids = produced.get("dense_ids_canonical")
     if raw_ids is not None and emission_base:
@@ -429,8 +348,7 @@ def self_test(manifest_path: Path) -> int:
             for p in result["problems"]:
                 _eprint(f"  {p}")
         else:
-            print(f"self-test OK   [{fx['id']}]: reference == golden "
-                  f"({produced['serialized']})")
+            print(f"self-test OK   [{fx['id']}]: reference == golden ({produced['serialized']})")
 
     # --- Check B: every adversarial variant collapses to the golden. -------
     for fx in fixtures:
@@ -456,8 +374,10 @@ def self_test(manifest_path: Path) -> int:
             rc = 1
             _eprint(f"self-test FAIL [{fx['id']}]: base-pin round-trip broke")
         else:
-            print(f"self-test OK   [{fx['id']}]: rank base-pin round-trips "
-                  f"(julia {julia_emission} -> canonical {canonical})")
+            print(
+                f"self-test OK   [{fx['id']}]: rank base-pin round-trips "
+                f"(julia {julia_emission} -> canonical {canonical})"
+            )
 
     # --- Check D: negative controls — the harness must REJECT bad output. --
     # D1: first-seen / unsorted order must be flagged, not accepted.
@@ -473,8 +393,10 @@ def self_test(manifest_path: Path) -> int:
         verdict = compare_to_golden(ref_fx, bad, emission_base=0)
         if verdict["match"]:
             rc = 1
-            _eprint("self-test FAIL [neg/first_seen_order]: harness accepted "
-                    "unsorted index set (it must reject)")
+            _eprint(
+                "self-test FAIL [neg/first_seen_order]: harness accepted "
+                "unsorted index set (it must reject)"
+            )
         else:
             print("self-test OK   [neg/first_seen_order]: unsorted output rejected")
 
@@ -494,15 +416,15 @@ def self_test(manifest_path: Path) -> int:
 # === Default run mode (producers, M2/M3) ==================================
 
 
-def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
-              timeout: float | None) -> int:
+def run_suite(
+    manifest_path: Path, bindings: list[str], output_path: Path, timeout: float | None
+) -> int:
     manifest = load_manifest(manifest_path)
     pin = manifest.get("rank_base_pin", {})
 
     if not bindings:
         bindings = list(manifest.get("bindings_required") or [])
-        bindings.extend(b for b in (manifest.get("bindings_optional") or [])
-                        if b not in bindings)
+        bindings.extend(b for b in (manifest.get("bindings_optional") or []) if b not in bindings)
     for b in bindings:
         if b not in KNOWN_BINDINGS:
             _eprint(f"error: unknown binding {b!r}; known: {KNOWN_BINDINGS}")
@@ -511,27 +433,19 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
     required = set(manifest.get("bindings_required") or [])
     fixtures = manifest["fixtures"]
 
-    adapters: dict[str, dict] = {}
-    for b in bindings:
-        argv = discover_adapter(b)
-        if argv is None:
-            adapters[b] = {"binding": b, "adapter_status": "missing",
-                           "error": ("adapter not found; expected on PATH as "
-                                     f"earthsci-determinism-adapter-{b} or via "
-                                     f"$EARTHSCI_DETERMINISM_ADAPTER_{b.upper()}"),
-                           "fixtures": {}}
-            continue
-        adapters[b] = run_adapter(b, argv, manifest_path, timeout)
+    adapters = _ADAPTERS.collect(bindings, manifest_path, timeout)
 
-    report: dict[str, Any] = {"manifest_path": str(manifest_path),
-                              "status": "ok", "bindings": {}}
+    report: dict[str, Any] = {"manifest_path": str(manifest_path), "status": "ok", "bindings": {}}
     overall_ok = True
 
     for b in bindings:
         ar = adapters[b]
         b_base = pin.get(b, 0)
-        b_report: dict[str, Any] = {"adapter_status": ar.get("adapter_status"),
-                                    "error": ar.get("error"), "fixtures": {}}
+        b_report: dict[str, Any] = {
+            "adapter_status": ar.get("adapter_status"),
+            "error": ar.get("error"),
+            "fixtures": {},
+        }
         if ar.get("adapter_status") != "ok":
             if b in required:
                 overall_ok = False
@@ -571,69 +485,36 @@ def run_suite(manifest_path: Path, bindings: list[str], output_path: Path,
         # failure. (Once a binding is in `bindings_required`, a missing producer
         # below fails instead of silently passing here.)
         report["status"] = "no_producers"
-        print("No determinism adapters registered for any requested binding, and "
-              "none are required. The contract is gated by --self-test here.")
+        print(
+            "No determinism adapters registered for any requested binding, and "
+            "none are required. The contract is gated by --self-test here."
+        )
     else:
         report["status"] = "ok" if overall_ok else "fail"
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
-        json.dump(report, f, indent=2, sort_keys=True)
-        f.write("\n")
-
-    _print_summary(report)
+    write_report(report, output_path)
+    print_summary(report, "=== Determinism Conformance Report ===")
     if report["status"] == "fail":
         return 1
     return 0
 
 
-def _print_summary(report: dict) -> None:
-    print("=== Determinism Conformance Report ===")
-    print(f"manifest: {report['manifest_path']}")
-    print(f"status:   {report['status'].upper()}")
-    for b, br in report.get("bindings", {}).items():
-        print(f"  {b:>12}  {br.get('status')}  ({br.get('adapter_status')})")
-        for fid, fr in br.get("fixtures", {}).items():
-            if fr.get("status") != "ok":
-                print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
-
-
 # === CLI ==================================================================
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
-                   help="Path to the determinism manifest.json.")
-    p.add_argument("--output", type=Path,
-                   default=Path("conformance-results/determinism/report.json"),
-                   help="Where to write the aggregated report.")
-    p.add_argument("--bindings", default="",
-                   help="Comma-separated bindings (default: manifest required+optional).")
-    p.add_argument("--timeout", type=float, default=None,
-                   help="Per-adapter timeout in seconds.")
-    p.add_argument("--self-test", action="store_true",
-                   help="Assert the contract against the embedded reference "
-                        "implementation and golden example, then exit.")
-    return p.parse_args(argv)
+def parse_args(argv: list[str]):
+    return build_parser(
+        doc=__doc__,
+        default_manifest=DEFAULT_MANIFEST,
+        default_output=Path("conformance-results/determinism/report.json"),
+        manifest_help="Path to the determinism manifest.json.",
+        self_test_help="Assert the contract against the embedded reference "
+        "implementation and golden example, then exit.",
+    ).parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.self_test:
-        return self_test(args.manifest)
-    if not args.manifest.is_file():
-        _eprint(f"error: manifest not found: {args.manifest}")
-        return 2
-    bindings = [b.strip() for b in args.bindings.split(",") if b.strip()]
-    try:
-        return run_suite(args.manifest, bindings, args.output, args.timeout)
-    except ManifestError as e:
-        _eprint(f"manifest error: {e}")
-        return 2
+    return cli_main(argv, parse_args=parse_args, self_test=self_test, run_suite=run_suite)
 
 
 if __name__ == "__main__":

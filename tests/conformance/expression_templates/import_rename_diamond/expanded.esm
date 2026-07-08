@@ -1,0 +1,58 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "a.cells": {
+      "kind": "interval",
+      "size": 6
+    },
+    "b.cells": {
+      "kind": "interval",
+      "size": 9
+    }
+  },
+  "metadata": {
+    "description": "Rename-aware diamond/dedup semantics (esm-spec 9.7.4 + 9.7.7): the same library file imported three times. Edges 1 and 2 are identical (prefix a, NC = 6) and dedupe at first occurrence exactly as an unrenamed diamond; edge 3 (prefix b, NC = 9) is a DISTINCT registration - no deep-equal dedup across renames. Both renamed rule instances (a.scale_by_cells, b.scale_by_cells) register and both match the axis-less scale_by_cells node; the 9.6.3 equal-priority tie breaks by the 9.7.4 effective order (DFS post-order over the edges), so the earlier instance a wins and y expands to 6 * x, not 9 * x",
+    "name": "import_rename_diamond"
+  },
+  "models": {
+    "Diamond": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "x"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "x"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "variables": {
+        "x": {
+          "default": 1.5,
+          "description": "scalar state",
+          "type": "state",
+          "units": "1"
+        },
+        "y": {
+          "description": "scale_by_cells(x): lowered by the FIRST registered instance (a, NC = 6)",
+          "expression": {
+            "args": [
+              6,
+              "x"
+            ],
+            "op": "*"
+          },
+          "type": "observed",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

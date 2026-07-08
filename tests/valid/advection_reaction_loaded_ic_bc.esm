@@ -1,0 +1,679 @@
+{
+    "esm": "0.8.0",
+    "metadata": {
+        "name": "AdvectionReactionLoadedICBC",
+        "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose two-arg grad templates each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data loader via scoped-reference ic equations (ChemistryICs). Runs end to end through EarthSciAST.simulate. Every loaded field is bound from its declared data_loader and injected through the data-Provider seam: the initial fields via the scoped-reference `ic` equations (ChemistryICs -> InitialConditions), the wind field and per-species western inflow BCs via `variable_map` param_to_var couplings (Meteorology.u_wind -> Advection.u_wind, BoundaryConditions.*_inflow -> Advection.*_inflow; spec 11.5 'BCs from data'). lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",
+        "authors": [
+            "EarthSciML Test Suite"
+        ],
+        "created": "2026-06-30T00:00:00Z",
+        "tags": [
+            "reaction-system",
+            "advection",
+            "scoped-reference-ic",
+            "loaded-boundary-condition",
+            "operator-compose",
+            "pointwise-lift",
+            "runnable-simulation"
+        ]
+    },
+    "index_sets": {
+        "lon": {
+            "kind": "interval",
+            "size": 4
+        },
+        "lat": {
+            "kind": "interval",
+            "size": 2
+        }
+    },
+    "reaction_systems": {
+        "Chemistry": {
+            "coupletype": "ChemistryCoupler",
+            "reference": {
+                "notes": "0-D O3-NOx photochemistry (the reaction part). A reaction system is 0-D: each species is a scalar with a `default`, and it hosts no `ic` of its own. It is lowered to GENERIC per-species scalar ODEs (`D(sp)=Σ mass-action terms`) BEFORE coupling, then spatially LIFTED onto the lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise. A non-constant / loaded-field IC for a lifted species is declared with a scoped-reference `ic` in ChemistryICs (spec 11.4.1)."
+            },
+            "species": {
+                "O3": {
+                    "units": "ppb",
+                    "default": 40,
+                    "description": "Ozone. Scalar default; its spatial initial field is set by ic(Chemistry.O3) in ChemistryICs once lifted."
+                },
+                "NO": {
+                    "units": "ppb",
+                    "default": 0.1,
+                    "description": "Nitric oxide."
+                },
+                "NO2": {
+                    "units": "ppb",
+                    "default": 1,
+                    "description": "Nitrogen dioxide."
+                }
+            },
+            "parameters": {
+                "k1": {
+                    "units": "ppb^-1 s^-1",
+                    "default": 0.018,
+                    "description": "NO + O3 -> NO2 rate constant (mass-action: effective rate k1*NO*O3)."
+                },
+                "jNO2": {
+                    "units": "1/s",
+                    "default": 0.005,
+                    "description": "NO2 photolysis rate (NO2 + hv -> NO + O3)."
+                }
+            },
+            "reactions": [
+                {
+                    "id": "R1",
+                    "name": "NO_O3",
+                    "substrates": [
+                        {
+                            "species": "NO",
+                            "stoichiometry": 1
+                        },
+                        {
+                            "species": "O3",
+                            "stoichiometry": 1
+                        }
+                    ],
+                    "products": [
+                        {
+                            "species": "NO2",
+                            "stoichiometry": 1
+                        }
+                    ],
+                    "rate": "k1"
+                },
+                {
+                    "id": "R2",
+                    "name": "NO2_photolysis",
+                    "substrates": [
+                        {
+                            "species": "NO2",
+                            "stoichiometry": 1
+                        }
+                    ],
+                    "products": [
+                        {
+                            "species": "NO",
+                            "stoichiometry": 1
+                        },
+                        {
+                            "species": "O3",
+                            "stoichiometry": 1
+                        }
+                    ],
+                    "rate": "jNO2"
+                }
+            ],
+            "tolerance": {
+                "rel": 1.0e-6,
+                "abs": 1.0e-8
+            },
+            "tests": [
+                {
+                    "id": "lifted_reaction_advection_loaded_ic_bc",
+                    "description": "End-to-end tree-walk run (EarthSciAST.simulate) of the SPATIALLY-LIFTED reaction network: Chemistry is lowered to generic per-species ODEs, operator_compose merges each with its per-species advection (two-arg grad, per-species loaded western inflow), and the pointwise lift array-ifies the merged equations onto the 4x2 grid. The lifted species are seeded from the loaded InitialConditions.* fields by scoped-reference ic equations (spec 11.4.1). t=0 assertions pin the loaded initial fields; t=600 assertions pin the coupled reaction+advection trajectory. Loaded fields (const arrays) are supplied by the runner; see loaded_ic_bc_simulation_test.jl.",
+                    "time_span": {
+                        "start": 0,
+                        "end": 600
+                    },
+                    "tolerance": {
+                        "abs": 0.0001,
+                        "rel": 1.0e-5
+                    },
+                    "assertions": [
+                        {
+                            "variable": "O3[1,1]",
+                            "time": 0,
+                            "expected": 38,
+                            "tolerance": {
+                                "abs": 1.0e-9
+                            }
+                        },
+                        {
+                            "variable": "O3[4,2]",
+                            "time": 0,
+                            "expected": 47,
+                            "tolerance": {
+                                "abs": 1.0e-9
+                            }
+                        },
+                        {
+                            "variable": "NO[1,1]",
+                            "time": 0,
+                            "expected": 0.1,
+                            "tolerance": {
+                                "abs": 1.0e-9
+                            }
+                        },
+                        {
+                            "variable": "NO2[3,1]",
+                            "time": 0,
+                            "expected": 0.9,
+                            "tolerance": {
+                                "abs": 1.0e-9
+                            }
+                        },
+                        {
+                            "variable": "O3[1,1]",
+                            "time": 600,
+                            "expected": 34.797506781720664
+                        },
+                        {
+                            "variable": "O3[4,2]",
+                            "time": 600,
+                            "expected": 35.66089795504217
+                        },
+                        {
+                            "variable": "NO[1,1]",
+                            "time": 600,
+                            "expected": 0.01641470334161223,
+                            "tolerance": {
+                                "abs": 1.0e-6,
+                                "rel": 0.0001
+                            }
+                        },
+                        {
+                            "variable": "NO2[1,1]",
+                            "time": 600,
+                            "expected": 1.6832850160453867
+                        },
+                        {
+                            "variable": "NO2[3,1]",
+                            "time": 600,
+                            "expected": 1.7093366875798413
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    "models": {
+        "Advection": {
+            "reference": {
+                "notes": "Per-species (non-generic) lon advection operator. Each equation transports ONE lifted chemistry species and carries its OWN loaded western Dirichlet inflow via a TWO-ARG grad template grad(<sp>, <sp>_inflow, dim:lon) — the schema does not constrain grad arity, so a second metavariable binds the per-species boundary field. operator_compose(Chemistry, Advection) MERGES each D(Chemistry.<sp>) advection contribution with the reaction ODE for that species (additive coupling), and the pointwise lift then array-ifies the merged equations onto the grid. Naming the reaction species explicitly (vs. the generic `_var` operator) is what lets each species bind its own inflow field; this is a legitimate additive operator contribution, not an over-determination."
+            },
+            "variables": {
+                "u_wind": {
+                    "type": "parameter",
+                    "units": "m/s",
+                    "shape": [
+                        "lon",
+                        "lat"
+                    ],
+                    "description": "Eastward wind FIELD on the lon/lat grid (grid-shaped). Bound from Meteorology.u_wind; indexed per cell by the lift."
+                },
+                "O3_inflow": {
+                    "type": "parameter",
+                    "units": "ppb",
+                    "shape": [
+                        "lat"
+                    ],
+                    "description": "O3 western-inflow field, shaped over the lat boundary it feeds; from BoundaryConditions.O3_inflow."
+                },
+                "NO_inflow": {
+                    "type": "parameter",
+                    "units": "ppb",
+                    "shape": [
+                        "lat"
+                    ],
+                    "description": "NO western-inflow field over lat; from BoundaryConditions.NO_inflow."
+                },
+                "NO2_inflow": {
+                    "type": "parameter",
+                    "units": "ppb",
+                    "shape": [
+                        "lat"
+                    ],
+                    "description": "NO2 western-inflow field over lat; from BoundaryConditions.NO2_inflow."
+                },
+                "dx": {
+                    "type": "parameter",
+                    "units": "m",
+                    "default": 100,
+                    "description": "Eastward grid spacing."
+                }
+            },
+            "expression_templates": {
+                "grad_lon_inflow": {
+                    "description": "Two-arg grad template: grad(f, inflow, dim:lon) binds the species field to `f` and its own loaded western-inflow field to `inflow`. Lowers to a makearray over the 4x2 grid: interior central difference, a loaded Dirichlet inflow on the west face (i=1) reading index(inflow, j), and a one-sided outflow on the east face (i=4).",
+                    "params": [
+                        "f",
+                        "inflow"
+                    ],
+                    "match": {
+                        "op": "grad",
+                        "args": [
+                            "f",
+                            "inflow"
+                        ],
+                        "dim": "lon"
+                    },
+                    "body": {
+                        "op": "makearray",
+                        "args": [
+                        ],
+                        "regions": [
+                            [
+                                [
+                                    2,
+                                    3
+                                ],
+                                [
+                                    1,
+                                    2
+                                ]
+                            ],
+                            [
+                                [
+                                    1,
+                                    1
+                                ],
+                                [
+                                    1,
+                                    2
+                                ]
+                            ],
+                            [
+                                [
+                                    4,
+                                    4
+                                ],
+                                [
+                                    1,
+                                    2
+                                ]
+                            ]
+                        ],
+                        "values": [
+                            {
+                                "op": "/",
+                                "args": [
+                                    {
+                                        "op": "-",
+                                        "args": [
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "f",
+                                                    {
+                                                        "op": "+",
+                                                        "args": [
+                                                            "i",
+                                                            1
+                                                        ]
+                                                    },
+                                                    "j"
+                                                ]
+                                            },
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "f",
+                                                    {
+                                                        "op": "-",
+                                                        "args": [
+                                                            "i",
+                                                            1
+                                                        ]
+                                                    },
+                                                    "j"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "op": "*",
+                                        "args": [
+                                            2,
+                                            "dx"
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "op": "/",
+                                "args": [
+                                    {
+                                        "op": "-",
+                                        "args": [
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "f",
+                                                    {
+                                                        "op": "+",
+                                                        "args": [
+                                                            "i",
+                                                            1
+                                                        ]
+                                                    },
+                                                    "j"
+                                                ]
+                                            },
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "inflow",
+                                                    "j"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "op": "*",
+                                        "args": [
+                                            2,
+                                            "dx"
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "op": "/",
+                                "args": [
+                                    {
+                                        "op": "-",
+                                        "args": [
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "f",
+                                                    "i",
+                                                    "j"
+                                                ]
+                                            },
+                                            {
+                                                "op": "index",
+                                                "args": [
+                                                    "f",
+                                                    {
+                                                        "op": "-",
+                                                        "args": [
+                                                            "i",
+                                                            1
+                                                        ]
+                                                    },
+                                                    "j"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "dx"
+                                ]
+                            }
+                        ]
+                    }
+                }
+            },
+            "equations": [
+                {
+                    "_comment": "d(O3)/dt advection contribution with the O3-specific loaded inflow BC; merged with R1/R2 by operator_compose.",
+                    "lhs": {
+                        "op": "D",
+                        "args": [
+                            "Chemistry.O3"
+                        ],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {
+                                "op": "-",
+                                "args": [
+                                    "u_wind"
+                                ]
+                            },
+                            {
+                                "op": "grad",
+                                "args": [
+                                    "Chemistry.O3",
+                                    "O3_inflow"
+                                ],
+                                "dim": "lon"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "_comment": "d(NO)/dt advection contribution with the NO-specific loaded inflow BC.",
+                    "lhs": {
+                        "op": "D",
+                        "args": [
+                            "Chemistry.NO"
+                        ],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {
+                                "op": "-",
+                                "args": [
+                                    "u_wind"
+                                ]
+                            },
+                            {
+                                "op": "grad",
+                                "args": [
+                                    "Chemistry.NO",
+                                    "NO_inflow"
+                                ],
+                                "dim": "lon"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "_comment": "d(NO2)/dt advection contribution with the NO2-specific loaded inflow BC.",
+                    "lhs": {
+                        "op": "D",
+                        "args": [
+                            "Chemistry.NO2"
+                        ],
+                        "wrt": "t"
+                    },
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {
+                                "op": "-",
+                                "args": [
+                                    "u_wind"
+                                ]
+                            },
+                            {
+                                "op": "grad",
+                                "args": [
+                                    "Chemistry.NO2",
+                                    "NO2_inflow"
+                                ],
+                                "dim": "lon"
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        "ChemistryICs": {
+            "reference": {
+                "notes": "Dedicated IC model (spec 11.4.1): empty `variables`, only scoped-reference `ic` equations. Each ic targets a Chemistry species by scoped reference `Chemistry.<sp>`; the RHS is a loaded field from the InitialConditions loader. Julia resolves these against the FLATTENED system AFTER the pointwise lift: the target is the grid-shaped (lifted) species `Chemistry.O3`, and the loaded [lon,lat] field is folded into u0 cell-by-cell at build time (tree_walk.jl _resolve_field_ic)."
+            },
+            "variables": {
+            },
+            "equations": [
+                {
+                    "_comment": "Star pattern: scoped-reference ic for a LIFTED reaction-system species, RHS a loaded field (spec 11.4.1).",
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "Chemistry.O3"
+                        ]
+                    },
+                    "rhs": "InitialConditions.O3_init"
+                },
+                {
+                    "_comment": "Scoped-reference ic for NO from the loaded field.",
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "Chemistry.NO"
+                        ]
+                    },
+                    "rhs": "InitialConditions.NO_init"
+                },
+                {
+                    "_comment": "Scoped-reference ic for NO2 from the loaded field.",
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "Chemistry.NO2"
+                        ]
+                    },
+                    "rhs": "InitialConditions.NO2_init"
+                }
+            ]
+        }
+    },
+    "coupling": [
+        {
+            "type": "operator_compose",
+            "systems": [
+                "Chemistry",
+                "Advection"
+            ],
+            "lifting": "pointwise",
+            "description": "Spatially lift the 0-D chemistry onto the lon/lat grid and add per-species advection to each species tendency. pointwise lifting evaluates the reaction network independently at each grid cell; the merged reaction+advection state ODEs are array-ified by the flattener's pointwise lift."
+        },
+        {
+            "type": "variable_map",
+            "from": "Meteorology.u_wind",
+            "to": "Advection.u_wind",
+            "transform": "param_to_var",
+            "description": "Loaded wind FIELD (spec 11.5): the grid-shaped Meteorology.u_wind loader variable replaces the constant Advection.u_wind parameter. param_to_var carries the [lon,lat] grid shape onto the loader name so the pointwise lift indexes it per cell."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.O3_inflow",
+            "to": "Advection.O3_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for O3 (spec 11.5 'BCs from data'): BoundaryConditions.O3_inflow feeds the Dirichlet ghost read by grad_lon_inflow."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.NO_inflow",
+            "to": "Advection.NO_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for NO (spec 11.5 'BCs from data')."
+        },
+        {
+            "type": "variable_map",
+            "from": "BoundaryConditions.NO2_inflow",
+            "to": "Advection.NO2_inflow",
+            "transform": "param_to_var",
+            "description": "Loaded western-inflow field for NO2 (spec 11.5 'BCs from data')."
+        }
+    ],
+    "data_loaders": {
+        "InitialConditions": {
+            "kind": "grid",
+            "source": {
+                "url_template": "file:///data/ICs/chem_initial_{date:%Y%m%d_%H%M}.nc"
+            },
+            "temporal": {
+                "start": "2024-05-01T00:00:00Z",
+                "end": "2024-05-01T00:00:00Z",
+                "file_period": "PT1H",
+                "frequency": "PT1H",
+                "records_per_file": 1
+            },
+            "variables": {
+                "O3_init": {
+                    "file_variable": "O3",
+                    "units": "ppb",
+                    "description": "Initial O3 field over [lon,lat]; RHS of ic(Chemistry.O3). Grid shape lives on the lifted target Chemistry.O3."
+                },
+                "NO_init": {
+                    "file_variable": "NO",
+                    "units": "ppb",
+                    "description": "Initial NO field over [lon,lat]; RHS of ic(Chemistry.NO)."
+                },
+                "NO2_init": {
+                    "file_variable": "NO2",
+                    "units": "ppb",
+                    "description": "Initial NO2 field over [lon,lat]; RHS of ic(Chemistry.NO2)."
+                }
+            },
+            "metadata": {
+                "tags": [
+                    "initial-conditions",
+                    "chemistry"
+                ]
+            }
+        },
+        "BoundaryConditions": {
+            "kind": "grid",
+            "source": {
+                "url_template": "file:///data/BCs/chem_boundary_{date:%Y%m%d_%H%M}.nc"
+            },
+            "temporal": {
+                "start": "2024-05-01T00:00:00Z",
+                "end": "2024-05-03T00:00:00Z",
+                "file_period": "PT1H",
+                "frequency": "PT1H",
+                "records_per_file": 1
+            },
+            "variables": {
+                "O3_inflow": {
+                    "file_variable": "O3_bc",
+                    "units": "ppb",
+                    "description": "Per-species western-inflow field over lat; bound to Advection.O3_inflow, read as the Dirichlet ghost by grad_lon_inflow."
+                },
+                "NO_inflow": {
+                    "file_variable": "NO_bc",
+                    "units": "ppb",
+                    "description": "Per-species western-inflow field for NO; bound to Advection.NO_inflow."
+                },
+                "NO2_inflow": {
+                    "file_variable": "NO2_bc",
+                    "units": "ppb",
+                    "description": "Per-species western-inflow field for NO2; bound to Advection.NO2_inflow."
+                }
+            },
+            "metadata": {
+                "tags": [
+                    "boundary-conditions",
+                    "chemistry"
+                ]
+            }
+        },
+        "Meteorology": {
+            "kind": "grid",
+            "source": {
+                "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc"
+            },
+            "temporal": {
+                "start": "2024-05-01T00:00:00Z",
+                "end": "2024-05-03T00:00:00Z",
+                "file_period": "PT1H",
+                "frequency": "PT1H",
+                "records_per_file": 1
+            },
+            "variables": {
+                "u_wind": {
+                    "file_variable": "U10M",
+                    "units": "m/s",
+                    "description": "Eastward wind field over [lon,lat]; bound to Advection.u_wind."
+                }
+            },
+            "metadata": {
+                "tags": [
+                    "meteorology",
+                    "reanalysis"
+                ]
+            }
+        }
+    }
+}

@@ -1,38 +1,99 @@
 {
-  "esm": "0.2.0",
+  "esm": "0.8.0",
   "metadata": {
     "name": "InterfaceDefinitions",
-    "description": "Test fixture for interface definitions with dimension_mapping, constraints, and regridding methods\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
+    "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
     "authors": [
       "EarthSciML"
     ],
     "created": "2026-04-09T00:00:00Z",
     "tags": [
       "interfaces",
-      "dimension-mapping",
       "regridding",
-      "constraints",
-      "migrated_from_v01"
+      "cross-grid",
+      "lifting",
+      "migrated_to_v08"
     ]
+  },
+  "index_sets": {
+    "upper_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lower_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "rg_coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "rg_cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "rg_candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "rg_candidate_set"
+    }
   },
   "models": {
     "UpperAtmosphere": {
-      "domain": "upper_atmos",
       "variables": {
         "O3": {
           "type": "state",
           "units": "mol/mol",
           "default": 1e-07,
-          "description": "Ozone mixing ratio"
+          "shape": [
+            "upper_cells"
+          ],
+          "description": "Ozone mixing ratio on the stratospheric grid"
         },
         "T": {
           "type": "state",
           "units": "K",
           "default": 220.0,
-          "description": "Temperature"
+          "shape": [
+            "upper_cells"
+          ],
+          "description": "Temperature on the stratospheric grid"
+        },
+        "O3_field": {
+          "type": "observed",
+          "shape": [
+            "upper_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              5e-08,
+              6e-08,
+              7e-08
+            ],
+            "args": []
+          },
+          "description": "SPATIALLY-VARYING stratospheric ozone field on the 3-cell stratospheric grid (non-uniform on purpose). Coupled onto LowerAtmosphere.O3_strat and regridded onto the troposphere across the tropopause."
         }
       },
       "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 1e-07
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T"
+            ]
+          },
+          "rhs": 220.0
+        },
         {
           "lhs": {
             "op": "D",
@@ -53,83 +114,759 @@
           },
           "rhs": 0.0
         }
-      ],
-      "boundary_conditions": {
-        "O3_periodic_lon_min": {
-          "variable": "O3",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "T_periodic_lon_min": {
-          "variable": "T",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "O3_zero_gradient_lat_min": {
-          "variable": "O3",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_lat_min": {
-          "variable": "T",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_lat_max": {
-          "variable": "O3",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_lat_max": {
-          "variable": "T",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_pressure_min": {
-          "variable": "O3",
-          "side": "pressure_min",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_pressure_min": {
-          "variable": "T",
-          "side": "pressure_min",
-          "kind": "zero_gradient"
-        },
-        "O3_zero_gradient_pressure_max": {
-          "variable": "O3",
-          "side": "pressure_max",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_pressure_max": {
-          "variable": "T",
-          "side": "pressure_max",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "LowerAtmosphere": {
-      "domain": "lower_atmos",
       "variables": {
         "T": {
           "type": "state",
           "units": "K",
           "default": 288.0,
-          "description": "Temperature"
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Temperature on the tropospheric grid"
         },
         "q": {
           "type": "state",
           "units": "kg/kg",
           "default": 0.01,
-          "description": "Specific humidity"
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Specific humidity on the tropospheric grid"
         },
-        "O3_boundary": {
+        "O3": {
+          "type": "state",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Tropospheric ozone on the lower-atmosphere grid; relaxed toward the regridded stratospheric boundary O3_boundary (stratosphere-troposphere exchange across the tropopause)"
+        },
+        "tropopause_relax": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1e-06,
+          "description": "Relaxation rate of tropospheric ozone toward the regridded stratospheric ozone boundary"
+        },
+        "O3_strat": {
           "type": "parameter",
           "units": "mol/mol",
           "default": 5e-08,
-          "description": "Ozone from upper atmosphere"
+          "shape": [
+            "upper_cells"
+          ],
+          "description": "Stratospheric ozone sampled on the 3-cell upper-atmosphere grid (a SPATIALLY-VARYING field from UpperAtmosphere), regridded onto the 4-cell troposphere by the inline conservative weights below."
+        },
+        "rg_src_poly": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  1,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file SOURCE-grid geometry: one closed lon-lat vertex ring per source cell (the 3-cell stratospheric grid). The `poly_a` operand of the ranged clip \u2014 the weights are computed FROM this geometry, not supplied."
+        },
+        "rg_tgt_poly": {
+          "type": "observed",
+          "shape": [
+            "lower_cells",
+            "rg_cell_verts",
+            "rg_coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  3,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  3,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file TARGET-grid geometry: one closed lon-lat vertex ring per target cell (the 4-cell tropospheric grid). A GENUINELY DIFFERENT grid (distinct cell count and vertex rings) tiling the same domain, so the overlaps are fractional."
+        },
+        "rg_src_lon": {
+          "type": "observed",
+          "shape": [
+            "upper_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.0,
+              2.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative longitude (bbox-min) \u2014 enters only the integer binning via floor, never a raw join comparison."
+        },
+        "rg_src_lat": {
+          "type": "observed",
+          "shape": [
+            "upper_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Source-cell representative latitude for binning."
+        },
+        "rg_tgt_lon": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.5,
+              2.0,
+              3.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative longitude for binning."
+        },
+        "rg_tgt_lat": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          },
+          "description": "Target-cell representative latitude for binning."
+        },
+        "rg_dx": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin width (integer quantization step).",
+          "default": 2.0
+        },
+        "rg_dy": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Broad-phase bin height.",
+          "default": 2.0
+        },
+        "rg_atol": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Sliver floor: an overlap area at or below atol is dropped.",
+          "default": 1e-12
+        },
+        "rg_src_bin": {
+          "type": "state",
+          "shape": [
+            "upper_cells"
+          ],
+          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) \u2014 the equi-join column."
+        },
+        "rg_tgt_bin": {
+          "type": "state",
+          "shape": [
+            "lower_cells"
+          ],
+          "description": "Integer bin key of each target cell, identically quantized."
+        },
+        "rg_pairs": {
+          "type": "state",
+          "shape": [
+            "rg_candidate_pairs"
+          ],
+          "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
+        },
+        "rg_A": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [],
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_src_poly",
+                    "u"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_tgt_poly",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate \u2014 replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+        },
+        "rg_At": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "rg_A",
+                "u",
+                "l"
+              ]
+            }
+          },
+          "description": "Target-cell area denominator A_j = \u03a3_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter \u2014 the row-sum normalization, computed from geometry, not supplied."
+        },
+        "rg_W": {
+          "type": "observed",
+          "shape": [
+            "upper_cells",
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_At",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "The conservative regrid weights W_ij = A_ij/A_j over the candidate pairs. Partition-of-unity \u03a3_i W_ij = 1 by construction (denominator is the row-sum of the same areas)."
+        },
+        "O3_boundary": {
+          "type": "observed",
+          "shape": [
+            "lower_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_W",
+                    "u",
+                    "l"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "O3_strat",
+                    "u"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "Ozone boundary value on the tropospheric grid, regridded from the stratosphere via the INLINE conservative weights: O3_boundary[l] = \u03a3_u W[u,l]\u00b7O3_strat[u], W = A/A_l from cell geometry (the old tropopause interface as a real overlap-weighted regrid)."
         }
       },
       "equations": [
+        {
+          "_comment": "BROAD PHASE (1a): bin each SOURCE cell to an integer lon-lat bin key.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_src_bin",
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lon",
+                            "u"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_src_lat",
+                            "u"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1b): bin each TARGET cell identically.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin",
+              "l"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lon",
+                            "l"
+                          ]
+                        },
+                        "rg_dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rg_tgt_lat",
+                            "l"
+                          ]
+                        },
+                        "rg_dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "BROAD PHASE (1c): candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or): keep (i,j) whose bin keys are EQUAL.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_pairs",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "bool_and_or",
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "id": "rg_candidate_set",
+            "distinct": true,
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "key": {
+              "op": "skolem",
+              "args": [
+                "pair",
+                "u",
+                "l"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "q"
+            ]
+          },
+          "rhs": 0.01
+        },
         {
           "lhs": {
             "op": "D",
@@ -149,63 +886,42 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "_comment": "Consume the regridded stratospheric ozone boundary: tropospheric O3 relaxes toward O3_boundary (the tropopause regrid output), so the cross-domain regridding is integrated into the dynamics rather than dead.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "tropopause_relax",
+              {
+                "op": "-",
+                "args": [
+                  "O3_boundary",
+                  "O3"
+                ]
+              }
+            ]
+          }
         }
-      ],
-      "boundary_conditions": {
-        "T_periodic_lon_min": {
-          "variable": "T",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "q_periodic_lon_min": {
-          "variable": "q",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "T_zero_gradient_lat_min": {
-          "variable": "T",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "q_zero_gradient_lat_min": {
-          "variable": "q",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_lat_max": {
-          "variable": "T",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "q_zero_gradient_lat_max": {
-          "variable": "q",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_lev_min": {
-          "variable": "T",
-          "side": "lev_min",
-          "kind": "zero_gradient"
-        },
-        "q_zero_gradient_lev_min": {
-          "variable": "q",
-          "side": "lev_min",
-          "kind": "zero_gradient"
-        },
-        "T_zero_gradient_lev_max": {
-          "variable": "T",
-          "side": "lev_max",
-          "kind": "zero_gradient"
-        },
-        "q_zero_gradient_lev_max": {
-          "variable": "q",
-          "side": "lev_max",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "LandSurface": {
-      "domain": "land",
       "variables": {
         "T_soil": {
           "type": "state",
@@ -227,6 +943,24 @@
         }
       },
       "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T_soil"
+            ]
+          },
+          "rhs": 290.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "soil_moisture"
+            ]
+          },
+          "rhs": 0.3
+        },
         {
           "lhs": {
             "op": "D",
@@ -253,42 +987,9 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "T_soil_periodic_lon_min": {
-          "variable": "T_soil",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "soil_moisture_periodic_lon_min": {
-          "variable": "soil_moisture",
-          "side": "lon_min",
-          "kind": "periodic"
-        },
-        "T_soil_zero_gradient_lat_min": {
-          "variable": "T_soil",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_zero_gradient_lat_min": {
-          "variable": "soil_moisture",
-          "side": "lat_min",
-          "kind": "zero_gradient"
-        },
-        "T_soil_zero_gradient_lat_max": {
-          "variable": "T_soil",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        },
-        "soil_moisture_zero_gradient_lat_max": {
-          "variable": "soil_moisture",
-          "side": "lat_max",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     },
     "IceSheet": {
-      "domain": "ice",
       "variables": {
         "thickness": {
           "type": "state",
@@ -306,6 +1007,15 @@
       "equations": [
         {
           "lhs": {
+            "op": "ic",
+            "args": [
+              "thickness"
+            ]
+          },
+          "rhs": 1000.0
+        },
+        {
+          "lhs": {
             "op": "D",
             "args": [
               "thickness"
@@ -319,221 +1029,24 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "thickness_zero_gradient_xmin": {
-          "variable": "thickness",
-          "side": "xmin",
-          "kind": "zero_gradient"
-        },
-        "thickness_zero_gradient_xmax": {
-          "variable": "thickness",
-          "side": "xmax",
-          "kind": "zero_gradient"
-        },
-        "thickness_zero_gradient_ymin": {
-          "variable": "thickness",
-          "side": "ymin",
-          "kind": "zero_gradient"
-        },
-        "thickness_zero_gradient_ymax": {
-          "variable": "thickness",
-          "side": "ymax",
-          "kind": "zero_gradient"
-        }
-      }
+      ]
     }
   },
-  "domains": {
-    "upper_atmos": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees",
-          "grid_spacing": 2.5
-        },
-        "lat": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees",
-          "grid_spacing": 2.5
-        },
-        "pressure": {
-          "min": 1.0,
-          "max": 100.0,
-          "units": "hPa",
-          "grid_spacing": 10.0
-        }
-      },
-      "spatial_ref": "WGS84",
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      },
-      "element_type": "Float64"
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-02T00:00:00Z"
     },
-    "lower_atmos": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        },
-        "lat": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees",
-          "grid_spacing": 1.0
-        },
-        "lev": {
-          "min": 0.0,
-          "max": 15000.0,
-          "units": "m",
-          "grid_spacing": 500.0
-        }
-      },
-      "spatial_ref": "WGS84",
-      "initial_conditions": {
-        "type": "constant",
-        "value": 288.0
-      },
-      "element_type": "Float64"
-    },
-    "land": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "lon": {
-          "min": -180.0,
-          "max": 180.0,
-          "units": "degrees",
-          "grid_spacing": 0.5
-        },
-        "lat": {
-          "min": -90.0,
-          "max": 90.0,
-          "units": "degrees",
-          "grid_spacing": 0.5
-        }
-      },
-      "spatial_ref": "WGS84",
-      "initial_conditions": {
-        "type": "constant",
-        "value": 290.0
-      },
-      "element_type": "Float64"
-    },
-    "ice": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-02T00:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": -500000.0,
-          "max": 500000.0,
-          "units": "m",
-          "grid_spacing": 5000.0
-        },
-        "y": {
-          "min": -500000.0,
-          "max": 500000.0,
-          "units": "m",
-          "grid_spacing": 5000.0
-        }
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 1000.0
-      },
-      "element_type": "Float64"
-    }
-  },
-  "interfaces": {
-    "tropopause": {
-      "description": "Tropopause interface between upper and lower atmosphere",
-      "domains": [
-        "upper_atmos",
-        "lower_atmos"
-      ],
-      "dimension_mapping": {
-        "shared": {
-          "upper_atmos.lon": "lower_atmos.lon",
-          "upper_atmos.lat": "lower_atmos.lat"
-        },
-        "constraints": {
-          "upper_atmos.pressure": {
-            "value": "max"
-          },
-          "lower_atmos.lev": {
-            "value": "max"
-          }
-        }
-      },
-      "regridding": {
-        "method": "bilinear"
-      }
-    },
-    "land_atmosphere": {
-      "description": "Land-atmosphere interface at ground level",
-      "domains": [
-        "lower_atmos",
-        "land"
-      ],
-      "dimension_mapping": {
-        "shared": {
-          "lower_atmos.lon": "land.lon",
-          "lower_atmos.lat": "land.lat"
-        },
-        "constraints": {
-          "lower_atmos.lev": {
-            "value": "min"
-          }
-        }
-      },
-      "regridding": {
-        "method": "conservative"
-      }
-    },
-    "ice_atmosphere": {
-      "description": "Ice sheet to atmosphere interface with coordinate transform",
-      "domains": [
-        "lower_atmos",
-        "ice"
-      ],
-      "dimension_mapping": {
-        "shared": {},
-        "constraints": {
-          "lower_atmos.lev": {
-            "value": "min"
-          }
-        }
-      },
-      "regridding": {
-        "method": "nearest"
-      }
-    }
+    "element_type": "Float64"
   },
   "coupling": [
     {
       "type": "variable_map",
-      "from": "UpperAtmosphere.O3",
-      "to": "LowerAtmosphere.O3_boundary",
+      "from": "UpperAtmosphere.O3_field",
+      "to": "LowerAtmosphere.O3_strat",
       "transform": "param_to_var",
-      "interface": "tropopause",
-      "description": "Ozone flux from stratosphere to troposphere"
+      "lifting": "pointwise",
+      "description": "Spatially-varying stratospheric ozone field supplied to the lower atmosphere on the 3-cell upper grid; LowerAtmosphere regrids it onto the 4-cell troposphere (O3_boundary) via the inline conservative overlap weights across the tropopause."
     },
     {
       "type": "variable_map",
@@ -541,8 +1054,8 @@
       "to": "LandSurface.atm_precip",
       "transform": "conversion_factor",
       "factor": 0.001,
-      "interface": "land_atmosphere",
-      "description": "Precipitation from atmosphere to land surface"
+      "lifting": "mean",
+      "description": "Tropospheric humidity reduced (mean) from the spatial grid to the 0-D land surface as precipitation"
     }
   ]
 }

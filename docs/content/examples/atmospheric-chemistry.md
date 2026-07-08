@@ -329,7 +329,7 @@ This is captured in the `temperature_dependence` field for parameters.
 ### Julia Implementation
 
 ```julia
-using EarthSciSerialization, ModelingToolkit, DifferentialEquations, Plots
+using EarthSciAST, ModelingToolkit, DifferentialEquations, Plots
 
 # Load the atmospheric chemistry model
 esm_file = load_esm("atmospheric_chemistry.esm")
@@ -375,7 +375,7 @@ plot!(time_hours, steady_state_ratio, label="PSS Ratio", linestyle=:dash)
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import odeint
-from earthsci_toolkit import load_esm, to_unicode
+from earthsci_ast import load_esm, to_unicode
 
 # Load model
 esm_file = load_esm('atmospheric_chemistry.esm')
@@ -467,7 +467,7 @@ print(f"PSS Ratio (should ≈ 1): {pss_ratio:.3f}")
 ### TypeScript Visualization
 
 ```typescript
-import { load, validate, toUnicode, toLatex } from 'earthsci-toolkit';
+import { load, validate, toUnicode, toLatex } from '@earthsciml/ast';
 import * as d3 from 'd3';
 
 // Load and validate model

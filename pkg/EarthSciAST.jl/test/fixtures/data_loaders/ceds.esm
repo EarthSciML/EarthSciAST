@@ -1,0 +1,66 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "CEDS_NOx_example",
+    "description": "Covers EarthSciData.jl/src/ceds.jl CEDSFileSet. Files are per species, chunked across year ranges, with 8 anthropogenic sectors summed into emiss_sector. relpath/filename format: {species}-em-anthro_input4MIPs_emissions_CMIP_{version}_gn_{y1}01-{y2}12.nc. Default mirror: https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work. Monthly frequency. Lon/lat 0.5 deg global. CEDS v2017-05-18 anthropogenic NOx emissions on a 0.5-degree global lat-lon grid.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-loader",
+      "emissions",
+      "ceds",
+      "anthropogenic"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {},
+      "equations": []
+    }
+  },
+  "data_loaders": {
+    "CEDS_NOx": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/{species}-em-anthro_input4MIPs_emissions_CMIP_CEDS-2017-05-18_gn_{year_range}.nc"
+      },
+      "temporal": {
+        "start": "1750-01-01T00:00:00Z",
+        "end": "2014-12-31T23:59:59Z",
+        "file_period": "P10Y",
+        "frequency": "P1M",
+        "time_variable": "time"
+      },
+      "variables": {
+        "NOx_emiss": {
+          "file_variable": "NOx_em_anthro",
+          "units": "kg m^-2 s^-1",
+          "description": "Anthropogenic NOx emission flux, summed over selected sectors"
+        }
+      },
+      "reference": {
+        "citation": "Hoesly, R. M., et al. (2018) Historical (1750-2014) anthropogenic emissions of reactive gases and aerosols from the Community Emissions Data System (CEDS). Geosci. Model Dev., 11, 369-408.",
+        "doi": "10.5194/gmd-11-369-2018"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic",
+          "historical"
+        ],
+        "version": "CEDS-2017-05-18",
+        "sectors": [
+          "AGR",
+          "ENE",
+          "IND",
+          "TRA",
+          "RCO",
+          "SLV",
+          "WST",
+          "SHP"
+        ]
+      }
+    }
+  }
+}

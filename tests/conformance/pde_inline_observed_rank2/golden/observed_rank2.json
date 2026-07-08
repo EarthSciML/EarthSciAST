@@ -1,0 +1,34 @@
+{
+    "fixture": "observed_rank2",
+    "assertions": [
+        {
+            "test_id": "observed_rank2",
+            "reduce": "max",
+            "actual": 8.25,
+            "assertion_idx": 1,
+            "variable": "scaled"
+        },
+        {
+            "test_id": "observed_rank2",
+            "reduce": "min",
+            "actual": 0.75,
+            "assertion_idx": 2,
+            "variable": "scaled"
+        },
+        {
+            "test_id": "observed_rank2",
+            "reduce": null,
+            "actual": 5.25,
+            "assertion_idx": 3,
+            "variable": "scaled"
+        },
+        {
+            "test_id": "observed_rank2",
+            "reduce": null,
+            "actual": 3.75,
+            "assertion_idx": 4,
+            "variable": "scaled"
+        }
+    ],
+    "reference_binding": "julia"
+}

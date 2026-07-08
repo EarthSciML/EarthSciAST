@@ -83,57 +83,7 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "velocity_dirichlet_xmin": {
-          "variable": "velocity",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "pressure_dirichlet_xmin": {
-          "variable": "pressure",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "velocity_dirichlet_xmax": {
-          "variable": "velocity",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "pressure_dirichlet_xmax": {
-          "variable": "pressure",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "velocity_neumann_xmin": {
-          "variable": "velocity",
-          "side": "xmin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "pressure_neumann_xmin": {
-          "variable": "pressure",
-          "side": "xmin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "velocity_neumann_xmax": {
-          "variable": "velocity",
-          "side": "xmax",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "pressure_neumann_xmax": {
-          "variable": "pressure",
-          "side": "xmax",
-          "kind": "neumann",
-          "value": 0.0
-        }
-      }
+      ]
     },
     "HeatTransfer": {
       "reference": {
@@ -187,33 +137,7 @@
             ]
           }
         }
-      ],
-      "boundary_conditions": {
-        "temperature_dirichlet_xmin": {
-          "variable": "temperature",
-          "side": "xmin",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "temperature_dirichlet_xmax": {
-          "variable": "temperature",
-          "side": "xmax",
-          "kind": "dirichlet",
-          "value": 1.0
-        },
-        "temperature_neumann_xmin": {
-          "variable": "temperature",
-          "side": "xmin",
-          "kind": "neumann",
-          "value": 0.0
-        },
-        "temperature_neumann_xmax": {
-          "variable": "temperature",
-          "side": "xmax",
-          "kind": "neumann",
-          "value": 0.0
-        }
-      }
+      ]
     }
   },
   "coupling": [
@@ -271,25 +195,11 @@
       }
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T01:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1.0,
-          "grid_spacing": 0.01,
-          "units": "m"
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {}
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

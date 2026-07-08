@@ -1,6 +1,6 @@
 # Model Component Types (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/runtests.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/runtests.jl`
 
 ```julia
 # Test Species
@@ -19,7 +19,7 @@
         # Test Reaction
         reactants = Dict("A" => 1, "B" => 1)
         products = Dict("C" => 1)
-        rate = OpExpr("*", EarthSciSerialization.Expr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
+        rate = OpExpr("*", EarthSciAST.Expr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
         reaction = Reaction(reactants, products, rate)
         @test reaction.reactants == reactants
         @test reaction.products == products

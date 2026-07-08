@@ -21,11 +21,24 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Language implementation directories
-JULIA_DIR="$PROJECT_ROOT/packages/EarthSciSerialization.jl"
-TYPESCRIPT_DIR="$PROJECT_ROOT/packages/earthsci-toolkit"
-PYTHON_DIR="$PROJECT_ROOT/packages/earthsci_toolkit"
-RUST_DIR="$PROJECT_ROOT/packages/earthsci-toolkit-rs"
-GO_DIR="$PROJECT_ROOT/packages/esm-format-go"
+JULIA_DIR="$PROJECT_ROOT/pkg/EarthSciAST.jl"
+TYPESCRIPT_DIR="$PROJECT_ROOT/pkg/earthsci-ast-ts"
+PYTHON_DIR="$PROJECT_ROOT/pkg/earthsci-ast-py"
+RUST_DIR="$PROJECT_ROOT/pkg/earthsci-ast-rs"
+GO_DIR="$PROJECT_ROOT/pkg/earthsci-ast-go"
+
+# Prefer the Python binding's virtualenv if it exists, so every `python3` call in
+# this script (the pytest suite, the conformance runners, and the per-binding
+# producers) resolves to an interpreter that has the toolkit and its deps
+# (pytest, jsonschema, scipy, numpy) installed. A bare system `python3` (e.g.
+# Homebrew) typically lacks these. Falls back to whatever `python3` is on PATH
+# when the venv is absent (e.g. a CI image where the deps are provisioned
+# globally). Create it with:  cd pkg/earthsci-ast-py && python3 -m venv
+# .venv && .venv/bin/pip install -e '.[test]'
+PYVENV_BIN="$PYTHON_DIR/.venv/bin"
+if [ -x "$PYVENV_BIN/python3" ]; then
+    export PATH="$PYVENV_BIN:$PATH"
+fi
 
 # Test categories
 VALID_TESTS_DIR="$TESTS_DIR/valid"
@@ -293,22 +306,6 @@ generate_report() {
 # re-serializes each expression, and the runner diffs the outputs. Writes
 # a per-fixture divergence report alongside the per-language conformance
 # outputs so reviewers can see which expression shapes cause divergence.
-# Sanity-check the family-agnostic grid conformance runner (gt-usme).
-# The runner consumes ESD-side family suites; here we only verify that
-# the runner's own plumbing — manifest loading, adapter dispatch,
-# diff classification, exit codes — is intact. Real family suites are
-# exercised by ESD's CI when its per-family generators land.
-run_grid_conformance_self_test() {
-    log "Running grid-conformance runner self-test..."
-    if python3 "$SCRIPT_DIR/run-grid-conformance.py" --self-test; then
-        success "Grid-conformance runner self-test passed"
-        return 0
-    else
-        error "Grid-conformance runner self-test failed"
-        return 1
-    fi
-}
-
 # Sanity-check the cross-binding determinism harness (ess-my4.5). Until the M2
 # join impls and M3 relational engine land per-binding producers, the harness
 # asserts the §5.5 determinism contract against an embedded reference
@@ -365,7 +362,12 @@ run_determinism_conformance_python() {
         return 0
     fi
     log "Running determinism conformance with the Python relational engine..."
-    EARTHSCI_DETERMINISM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.determinism_adapter" \
+    # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the cadence /
+    # PDE-sim Python producers). Without it, `python3 -m earthsci_ast...`
+    # can't import the package (the venv carries only deps, not an editable
+    # install), so the adapter emits no output and the producer fails.
+    EARTHSCI_DETERMINISM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.determinism_adapter" \
+    PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-determinism-conformance.py" \
             --bindings python \
             --output "$OUTPUT_DIR/determinism/python_report.json"
@@ -422,8 +424,8 @@ run_cadence_conformance_self_test() {
 }
 
 # Drive the REAL Julia partition pass (ess-my4.3.7) through the cadence harness:
-# the adapter (packages/EarthSciSerialization.jl/scripts/cadence_adapter.jl) runs
-# EarthSciSerialization.Cadence over the three §6.1 fixtures and the runner
+# the adapter (pkg/EarthSciAST.jl/scripts/cadence_adapter.jl) runs
+# EarthSciAST.Cadence over the three §6.1 fixtures and the runner
 # asserts its class map, materialization set, and CONST-folded buffers are
 # byte-identical to the golden. Julia is `bindings_optional` in the manifest, so
 # a missing adapter (no julia) is skipped, but a MISMATCH fails. Rust/Python
@@ -441,7 +443,7 @@ run_cadence_conformance_julia() {
 }
 
 # Drive the REAL Rust partition pass (ess-my4.3.8) through the cadence harness:
-# the adapter binary (packages/earthsci-toolkit-rs/src/bin/earthsci-cadence-adapter-rust.rs)
+# the adapter binary (pkg/earthsci-ast-rs/src/bin/earthsci-cadence-adapter-rust.rs)
 # runs the Rust Cadence module over the §6.1 fixtures and the runner asserts its
 # class map, materialization set, and CONST-folded buffers are byte-identical to
 # the golden. Rust is `bindings_optional`, so a missing adapter is skipped but a
@@ -459,7 +461,7 @@ run_cadence_conformance_rust() {
 }
 
 # Drive the REAL Python partition pass (ess-my4.3.9) through the cadence harness:
-# the adapter (packages/earthsci_toolkit/src/earthsci_toolkit/cli/cadence_adapter.py)
+# the adapter (pkg/earthsci-ast-py/src/earthsci_ast/cli/cadence_adapter.py)
 # runs the Python Cadence module over the §6.1 fixtures and the runner asserts the
 # same golden. Python is `bindings_optional` — missing adapter skipped, mismatch
 # fails. (Mirrors run_cadence_conformance_julia; ess-my4.3.10.)
@@ -470,11 +472,11 @@ run_cadence_conformance_python() {
     fi
     log "Running cadence-partition conformance with the Python partition pass..."
     # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the PDE-sim
-    # adapter below). Without it, `python3 -m earthsci_toolkit...` imports
-    # whatever earthsci_toolkit is globally installed — an editable install
+    # adapter below). Without it, `python3 -m earthsci_ast...` imports
+    # whatever earthsci_ast is globally installed — an editable install
     # points at a FIXED path (another worktree), so the adapter runs stale code
     # and emits no conforming output for any branch that changed cadence.py.
-    EARTHSCI_CADENCE_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.cadence_adapter" \
+    EARTHSCI_CADENCE_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.cadence_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-cadence-conformance.py" \
             --bindings python \
@@ -543,11 +545,86 @@ run_pde_simulation_conformance_python() {
         return 0
     fi
     log "Running PDE-simulation conformance with the Python simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.pde_simulation_adapter" \
+    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings python \
             --output "$OUTPUT_DIR/pde_simulation/python_report.json"
+}
+
+# === Full-pipeline PDE conformance (pde_simulation_pipeline; DESIGN.md) ===
+# Sibling to the pre-discretized tier above, for fixtures that require the FULL
+# lowering pipeline (reaction-gen -> template match -> operator_compose ->
+# pointwise-lift -> scoped-`ic`) with loaded IC/BC/wind fields injected through
+# each binding's data-Provider seam from the manifest `inputs`. The system is
+# nonlinear (mass-action), so there is NO matrix-exponential trajectory anchor:
+# each binding's trajectory is gated against BOTH the Julia golden and an
+# INDEPENDENT reference integrator (tests/conformance/pde_simulation_pipeline/
+# reference/), while the discretized RHS is gated tightly against that same
+# reference. Julia/Python/Rust are all bindings_required; Go and TS are out of
+# scope. The self-test asserts the Julia golden reproduces the independent
+# reference (Gate-G0 equivalent) and that the harness rejects perturbed output.
+PDE_PIPELINE_MANIFEST="$PROJECT_ROOT/tests/conformance/pde_simulation_pipeline/manifest.json"
+
+run_pde_pipeline_conformance_self_test() {
+    log "Running full-pipeline PDE conformance harness self-test..."
+    if python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --manifest "$PDE_PIPELINE_MANIFEST" --self-test; then
+        success "Full-pipeline PDE conformance harness self-test passed"
+        return 0
+    else
+        error "Full-pipeline PDE conformance harness self-test failed"
+        return 1
+    fi
+}
+
+# Julia is the reference binding. Its adapter runs the fixture through the full
+# provider-injected pipeline (Tsit5) and the runner asserts a match to the
+# committed golden (golden it produced) AND the independent reference.
+run_pde_pipeline_conformance_julia() {
+    if ! check_language_availability "julia" "$JULIA_DIR"; then
+        warning "Julia unavailable — skipping Julia full-pipeline PDE producer check"
+        return 0
+    fi
+    log "Running full-pipeline PDE conformance with the Julia reference simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia $JULIA_DIR/scripts/pde_simulation_adapter.jl" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --manifest "$PDE_PIPELINE_MANIFEST" \
+            --bindings julia \
+            --output "$OUTPUT_DIR/pde_simulation_pipeline/julia_report.json"
+}
+
+# Rust drives the vectorized arrayop evaluator (ArrayCompiled::from_flattened +
+# debug_eval_rhs) + diffsol, with the provider forcing installed into the
+# compiled instance. `cargo run` provisions the s2bindings shim lib path.
+run_pde_pipeline_conformance_rust() {
+    if ! check_language_availability "rust" "$RUST_DIR"; then
+        warning "Rust unavailable — skipping Rust full-pipeline PDE producer check"
+        return 0
+    fi
+    log "Running full-pipeline PDE conformance with the Rust vectorized simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --manifest "$PDE_PIPELINE_MANIFEST" \
+            --bindings rust \
+            --output "$OUTPUT_DIR/pde_simulation_pipeline/rust_report.json"
+}
+
+# Python drives the NumPy interpreter (_build_numpy_rhs) + SciPy solve_ivp with
+# loaded fields injected through the `providers=` seam. PYTHONPATH is pinned to
+# the repo's package src so the adapter resolves from this checkout.
+run_pde_pipeline_conformance_python() {
+    if ! check_language_availability "python" "$PYTHON_DIR"; then
+        warning "Python unavailable — skipping Python full-pipeline PDE producer check"
+        return 0
+    fi
+    log "Running full-pipeline PDE conformance with the Python simulator..."
+    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
+    PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
+        python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
+            --manifest "$PDE_PIPELINE_MANIFEST" \
+            --bindings python \
+            --output "$OUTPUT_DIR/pde_simulation_pipeline/python_report.json"
 }
 
 run_property_corpus() {
@@ -643,13 +720,6 @@ main() {
             exit 1
         fi
 
-        if run_grid_conformance_self_test; then
-            success "Grid-conformance runner self-test completed"
-        else
-            error "Grid-conformance runner self-test failed"
-            exit 1
-        fi
-
         if run_determinism_conformance_self_test; then
             success "Determinism-conformance harness self-test completed"
         else
@@ -738,6 +808,34 @@ main() {
             success "PDE-simulation Python producer check completed"
         else
             error "PDE-simulation Python producer check failed"
+            exit 1
+        fi
+
+        if run_pde_pipeline_conformance_self_test; then
+            success "Full-pipeline PDE conformance harness self-test completed"
+        else
+            error "Full-pipeline PDE conformance harness self-test failed"
+            exit 1
+        fi
+
+        if run_pde_pipeline_conformance_julia; then
+            success "Full-pipeline PDE Julia producer check completed"
+        else
+            error "Full-pipeline PDE Julia producer check failed"
+            exit 1
+        fi
+
+        if run_pde_pipeline_conformance_rust; then
+            success "Full-pipeline PDE Rust producer check completed"
+        else
+            error "Full-pipeline PDE Rust producer check failed"
+            exit 1
+        fi
+
+        if run_pde_pipeline_conformance_python; then
+            success "Full-pipeline PDE Python producer check completed"
+        else
+            error "Full-pipeline PDE Python producer check failed"
             exit 1
         fi
 

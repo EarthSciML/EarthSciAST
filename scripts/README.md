@@ -1,6 +1,6 @@
-# EarthSciSerialization Dependency Management System
+# EarthSciAST Dependency Management System
 
-This directory contains a comprehensive dependency management system for the EarthSciSerialization multi-language workspace, supporting TypeScript, Python, and Julia packages.
+This directory contains a comprehensive dependency management system for the EarthSciAST multi-language workspace, supporting TypeScript, Python, and Julia packages.
 
 ## Overview
 
@@ -84,24 +84,24 @@ The `workspace.json` file defines all packages in the workspace:
 
 ```json
 {
-  "name": "EarthSciSerialization",
+  "name": "EarthSciAST",
   "version": "0.1.0",
   "workspaces": {
-    "packages": ["packages/*"]
+    "packages": ["pkg/*"]
   },
   "dependencies": {
     "esm-format-js": {
-      "path": "./packages/earthsci-toolkit",
+      "path": "./pkg/earthsci-ast-ts",
       "version": "0.1.0",
       "type": "typescript"
     },
-    "earthsci-toolkit-py": {
-      "path": "./packages/earthsci_toolkit",
+    "earthsci-ast-py": {
+      "path": "./pkg/earthsci-ast-py",
       "version": "0.1.0",
       "type": "python"
     },
     "esm-format-jl": {
-      "path": "./packages/EarthSciSerialization.jl",
+      "path": "./pkg/EarthSciAST.jl",
       "version": "0.1.0",
       "type": "julia"
     }
@@ -186,7 +186,7 @@ The system generates comprehensive JSON reports with:
 ```json
 {
   "timestamp": "2026-02-15T10:30:00Z",
-  "workspace": "EarthSciSerialization",
+  "workspace": "EarthSciAST",
   "reports": {
     "typescript": {
       "packages": 1,

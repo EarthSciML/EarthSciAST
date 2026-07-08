@@ -6,7 +6,7 @@ Complete API reference for the EarthSci Toolkit Rust library.
 
 ### add_equation
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:149`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:149`
 
 ```rust
 pub fn add_equation(model: &Model, equation: Equation) -> EditResult<Model> {
@@ -27,7 +27,7 @@ Add an equation to a model
 
 ### add_model
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:52`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:52`
 
 ```rust
 pub fn add_model(esm_file: &EsmFile, model_id: &str, model: Model) -> EditResult<EsmFile> {
@@ -49,7 +49,7 @@ Add a new model to an ESM file
 
 ### add_reaction
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:285`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:285`
 
 ```rust
 pub fn add_reaction(system: &ReactionSystem, reaction: Reaction) -> EditResult<ReactionSystem> {
@@ -70,7 +70,7 @@ Add a reaction to a reaction system
 
 ### add_reaction_system
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:207`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:207`
 
 ```rust
 pub fn add_reaction_system(esm_file: &EsmFile, system_id: &str, system: ReactionSystem) -> EditResult<EsmFile> {
@@ -92,7 +92,7 @@ Add a reaction system to an ESM file
 
 ### add_species
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:238`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:238`
 
 ```rust
 pub fn add_species(system: &ReactionSystem, species: Species) -> EditResult<ReactionSystem> {
@@ -113,7 +113,7 @@ Add a species to a reaction system
 
 ### add_variable
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:108`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:108`
 
 ```rust
 pub fn add_variable(model: &Model, var_name: &str, variable: ModelVariable) -> EditResult<Model> {
@@ -135,7 +135,7 @@ Add a variable to a model
 
 ### add_vectors_simd
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:162`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:162`
 
 ```rust
 pub fn add_vectors_simd(a: &[f64], b: &[f64], result: &mut [f64]) -> Result<(), PerformanceError> {
@@ -147,7 +147,7 @@ SIMD-optimized vector addition
 
 ### alloc_slice
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:264`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:264`
 
 ```rust
 pub fn alloc_slice<T>(&self, len: usize) -> &mut [T]
@@ -159,7 +159,7 @@ Allocate a slice for storing intermediate results
 
 ### allocated_bytes
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:277`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:277`
 
 ```rust
 pub fn allocated_bytes(&self) -> usize {
@@ -171,7 +171,7 @@ Get current allocated bytes
 
 ### base
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:57`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:57`
 
 ```rust
 pub fn base(dimension: Dimension, power: i32, scale: f64) -> Self {
@@ -183,7 +183,7 @@ Create a unit with a single dimension
 
 ### benchmark_parsing
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:246`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:246`
 
 ```rust
 pub fn benchmark_parsing(json_str: &str, iterations: u32) -> Result<f64, JsValue> {
@@ -193,7 +193,7 @@ pub fn benchmark_parsing(json_str: &str, iterations: u32) -> Result<f64, JsValue
 
 ### check_dimensional_consistency
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:250`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:250`
 
 ```rust
 pub fn check_dimensional_consistency(lhs_unit: &Unit, rhs_unit: &Unit) -> Result<(), UnitError> {
@@ -214,7 +214,7 @@ Check dimensional consistency of an equation
 
 ### component_exists
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:156`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:156`
 
 ```rust
 pub fn component_exists(esm_file: &EsmFile, component_id: &str) -> bool {
@@ -235,7 +235,7 @@ Check if a component exists in the ESM file
 
 ### component_graph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:60`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:60`
 
 ```rust
 pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
@@ -255,7 +255,7 @@ Build a component graph from an ESM file
 
 ### compute_stoichiometric_matrix
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:212`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:212`
 
 ```rust
 pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValue, JsValue> {
@@ -265,7 +265,7 @@ pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValu
 
 ### compute_stoichiometric_matrix_parallel
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:96`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:96`
 
 ```rust
 pub fn compute_stoichiometric_matrix_parallel(
@@ -277,7 +277,7 @@ Parallel stoichiometric matrix computation
 
 ### contains
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:47`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:47`
 
 ```rust
 pub fn contains(expr: &Expr, var_name: &str) -> bool {
@@ -298,7 +298,7 @@ Check if an expression contains a specific variable
 
 ### convert_units
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:271`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:271`
 
 ```rust
 pub fn convert_units(value: f64, from_unit: &Unit, to_unit: &Unit) -> Result<f64, UnitError> {
@@ -320,7 +320,7 @@ Convert between compatible units
 
 ### create_compact_expression
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:196`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:196`
 
 ```rust
 pub fn create_compact_expression(expr_str: &str) -> Result<JsValue, JsValue> {
@@ -330,7 +330,7 @@ pub fn create_compact_expression(expr_str: &str) -> Result<JsValue, JsValue> {
 
 ### derive_odes
 
-**File:** `packages/earthsci-toolkit-rs/src/reactions.rs:51`
+**File:** `pkg/earthsci-ast-rs/src/reactions.rs:51`
 
 ```rust
 pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
@@ -361,7 +361,7 @@ Returns `DeriveError` for invalid stoichiometry, missing rate laws, or unit conv
 
 ### dimensionless
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:49`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:49`
 
 ```rust
 pub fn dimensionless() -> Self {
@@ -373,7 +373,7 @@ Create a dimensionless unit
 
 ### divide
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:89`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:89`
 
 ```rust
 pub fn divide(&self, other: &Unit) -> Unit {
@@ -385,7 +385,7 @@ Divide two units
 
 ### dot_product_simd
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:214`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:214`
 
 ```rust
 pub fn dot_product_simd(a: &[f64], b: &[f64]) -> Result<f64, PerformanceError> {
@@ -397,7 +397,7 @@ SIMD-optimized dot product
 
 ### errors
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:29`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:29`
 
 ```rust
 pub fn errors(&self) -> Vec<StructuralError> {
@@ -409,7 +409,7 @@ Get all errors as a combined vector (for compatibility with old API)
 
 ### evaluate
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:106`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:106`
 
 ```rust
 pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec<String>> {
@@ -431,7 +431,7 @@ Evaluate an expression with given variable values
 
 ### evaluate_batch
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:79`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:79`
 
 ```rust
 pub fn evaluate_batch(
@@ -443,7 +443,7 @@ Evaluate multiple expressions in parallel
 
 ### evaluate_fast
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:340`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:340`
 
 ```rust
 pub fn evaluate_fast(&self, variables: &HashMap<String, f64>) -> Result<f64, PerformanceError> {
@@ -453,7 +453,7 @@ pub fn evaluate_fast(&self, variables: &HashMap<String, f64>) -> Result<f64, Per
 
 ### expression_graph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:282`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:282`
 
 ```rust
 pub fn expression_graph<T>(input: &T) -> ExpressionGraph
@@ -473,7 +473,7 @@ Build an expression graph from various ESM components
 
 ### fast_parse
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:41`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:41`
 
 ```rust
 pub fn fast_parse(json_bytes: &mut [u8]) -> Result<EsmFile, PerformanceError> {
@@ -483,7 +483,7 @@ pub fn fast_parse(json_bytes: &mut [u8]) -> Result<EsmFile, PerformanceError> {
 
 ### fast_parse
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:49`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:49`
 
 ```rust
 pub fn fast_parse(json_str: &str) -> Result<EsmFile, PerformanceError> {
@@ -493,7 +493,7 @@ pub fn fast_parse(json_str: &str) -> Result<EsmFile, PerformanceError> {
 
 ### free_parameters
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:33`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:33`
 
 ```rust
 pub fn free_parameters(expr: &Expr) -> HashSet<String> {
@@ -516,7 +516,7 @@ parameters from variables at the expression level.
 
 ### free_variables
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:15`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:15`
 
 ```rust
 pub fn free_variables(expr: &Expr) -> HashSet<String> {
@@ -536,7 +536,7 @@ Extract all free variables from an expression
 
 ### from_expr
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:304`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:304`
 
 ```rust
 pub fn from_expr(expr: &Expr) -> Self {
@@ -548,7 +548,7 @@ Create a compact expression from a standard expression
 
 ### get_component_type
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:199`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:199`
 
 ```rust
 pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<ComponentType> {
@@ -570,7 +570,7 @@ Get the type of a component
 
 ### get_performance_info
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:227`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:227`
 
 ```rust
 pub fn get_performance_info() -> JsValue {
@@ -580,7 +580,7 @@ pub fn get_performance_info() -> JsValue {
 
 ### has_errors
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:24`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:24`
 
 ```rust
 pub fn has_errors(&self) -> bool {
@@ -592,7 +592,7 @@ Check if there are any errors (schema or structural)
 
 ### is_compatible
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:66`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:66`
 
 ```rust
 pub fn is_compatible(&self, other: &Unit) -> bool {
@@ -604,7 +604,7 @@ Check if two units have compatible dimensions
 
 ### load
 
-**File:** `packages/earthsci-toolkit-rs/src/parse.rs:82`
+**File:** `pkg/earthsci-ast-rs/src/parse.rs:82`
 
 ```rust
 pub fn load(json_str: &str) -> Result<EsmFile, EsmError> {
@@ -627,7 +627,7 @@ It will throw an error for malformed JSON or schema violations.
 # Examples
 
 ```rust
-use earthsci_toolkit::load;
+use earthsci_ast::load;
 
 let json = r#"
 {
@@ -652,7 +652,7 @@ assert_eq!(esm_file.esm, "0.1.0");
 
 ### load
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:31`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:31`
 
 ```rust
 pub fn load(json_str: &str) -> Result<JsValue, JsValue> {
@@ -662,7 +662,7 @@ pub fn load(json_str: &str) -> Result<JsValue, JsValue> {
 
 ### main
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:263`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:263`
 
 ```rust
 pub fn main() {
@@ -672,7 +672,7 @@ pub fn main() {
 
 ### multiply
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:71`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:71`
 
 ```rust
 pub fn multiply(&self, other: &Unit) -> Unit {
@@ -684,7 +684,7 @@ Multiply two units
 
 ### multiply_vectors_simd
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:188`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:188`
 
 ```rust
 pub fn multiply_vectors_simd(a: &[f64], b: &[f64], result: &mut [f64]) -> Result<(), PerformanceError> {
@@ -696,7 +696,7 @@ SIMD-optimized element-wise multiplication
 
 ### new
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:63`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:63`
 
 ```rust
 pub fn new(num_threads: Option<usize>) -> Result<Self, PerformanceError> {
@@ -708,7 +708,7 @@ Create a new parallel evaluator with specified number of threads
 
 ### new
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:250`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:250`
 
 ```rust
 pub fn new() -> Self {
@@ -720,7 +720,7 @@ Create a new model allocator with specified capacity
 
 ### parse_unit
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:136`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:136`
 
 ```rust
 pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
@@ -746,7 +746,7 @@ Supports common unit notations like:
 
 ### power
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:107`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:107`
 
 ```rust
 pub fn power(&self, exponent: i32) -> Unit {
@@ -758,7 +758,7 @@ Raise unit to a power
 
 ### remove_equation
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:165`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:165`
 
 ```rust
 pub fn remove_equation(model: &Model, index: usize) -> EditResult<Model> {
@@ -779,7 +779,7 @@ Remove an equation from a model by index
 
 ### remove_model
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:83`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:83`
 
 ```rust
 pub fn remove_model(esm_file: &EsmFile, model_id: &str) -> EditResult<EsmFile> {
@@ -800,7 +800,7 @@ Remove a model from an ESM file
 
 ### remove_reaction
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:301`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:301`
 
 ```rust
 pub fn remove_reaction(system: &ReactionSystem, index: usize) -> EditResult<ReactionSystem> {
@@ -821,7 +821,7 @@ Remove a reaction from a reaction system by index
 
 ### remove_species
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:262`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:262`
 
 ```rust
 pub fn remove_species(system: &ReactionSystem, species_name: &str) -> EditResult<ReactionSystem> {
@@ -842,7 +842,7 @@ Remove a species from a reaction system
 
 ### remove_variable
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:129`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:129`
 
 ```rust
 pub fn remove_variable(model: &Model, var_name: &str) -> EditResult<Model> {
@@ -863,7 +863,7 @@ Remove a variable from a model
 
 ### replace_equation
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:186`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:186`
 
 ```rust
 pub fn replace_equation(model: &Model, index: usize, equation: Equation) -> EditResult<Model> {
@@ -885,7 +885,7 @@ Replace an equation in a model
 
 ### reset
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:272`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:272`
 
 ```rust
 pub fn reset(&mut self) {
@@ -897,7 +897,7 @@ Reset the allocator for reuse
 
 ### save
 
-**File:** `packages/earthsci-toolkit-rs/src/serialize.rs:46`
+**File:** `pkg/earthsci-ast-rs/src/serialize.rs:46`
 
 ```rust
 pub fn save(esm_file: &EsmFile) -> Result<String, EsmError> {
@@ -920,7 +920,7 @@ The output will be pretty-printed for human readability.
 # Examples
 
 ```rust
-use earthsci_toolkit::{EsmFile, Metadata, save};
+use earthsci_ast::{EsmFile, Metadata, save};
 
 let esm_file = EsmFile {
 esm: "0.1.0".to_string(),
@@ -949,7 +949,7 @@ assert!(json.contains("\"esm\": \"0.1.0\""));
 
 ### save
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:46`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:46`
 
 ```rust
 pub fn save(esm_file_js: &JsValue) -> Result<String, JsValue> {
@@ -959,7 +959,7 @@ pub fn save(esm_file_js: &JsValue) -> Result<String, JsValue> {
 
 ### save_compact
 
-**File:** `packages/earthsci-toolkit-rs/src/serialize.rs:64`
+**File:** `pkg/earthsci-ast-rs/src/serialize.rs:64`
 
 ```rust
 pub fn save_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
@@ -983,7 +983,7 @@ extra whitespace, suitable for storage or transmission.
 
 ### simplify
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:145`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:145`
 
 ```rust
 pub fn simplify(expr: &Expr) -> Expr {
@@ -1003,7 +1003,7 @@ Simplify an expression (basic symbolic simplification)
 
 ### stoichiometric_matrix
 
-**File:** `packages/earthsci-toolkit-rs/src/reactions.rs:304`
+**File:** `pkg/earthsci-ast-rs/src/reactions.rs:304`
 
 ```rust
 pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
@@ -1027,7 +1027,7 @@ Negative values indicate reactants, positive values indicate products.
 
 ### substitute
 
-**File:** `packages/earthsci-toolkit-rs/src/substitute.rs:16`
+**File:** `pkg/earthsci-ast-rs/src/substitute.rs:16`
 
 ```rust
 pub fn substitute(expr: &Expr, substitutions: &std::collections::HashMap<String, Expr>) -> Expr {
@@ -1048,7 +1048,7 @@ Substitute variables in an expression
 
 ### substitute
 
-**File:** `packages/earthsci-toolkit-rs/src/expression.rs:70`
+**File:** `pkg/earthsci-ast-rs/src/expression.rs:70`
 
 ```rust
 pub fn substitute(expr: &Expr, bindings: &HashMap<String, Expr>) -> Expr {
@@ -1072,7 +1072,7 @@ scoped reference resolution. Returns a new expression (immutable).
 
 ### substitute
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:132`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:132`
 
 ```rust
 pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue> {
@@ -1082,7 +1082,7 @@ pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue>
 
 ### substitute_in_expression
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:348`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:348`
 
 ```rust
 pub fn substitute_in_expression(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
@@ -1103,7 +1103,7 @@ Create a copy of an expression with variable substitution
 
 ### substitute_in_model
 
-**File:** `packages/earthsci-toolkit-rs/src/substitute.rs:51`
+**File:** `pkg/earthsci-ast-rs/src/substitute.rs:51`
 
 ```rust
 pub fn substitute_in_model(
@@ -1124,7 +1124,7 @@ Substitute variables in all expressions within a model
 
 ### substitute_in_reaction_system
 
-**File:** `packages/earthsci-toolkit-rs/src/substitute.rs:81`
+**File:** `pkg/earthsci-ast-rs/src/substitute.rs:81`
 
 ```rust
 pub fn substitute_in_reaction_system(
@@ -1145,7 +1145,7 @@ Substitute variables in all expressions within a reaction system
 
 ### to_ascii
 
-**File:** `packages/earthsci-toolkit-rs/src/display.rs:523`
+**File:** `pkg/earthsci-ast-rs/src/display.rs:523`
 
 ```rust
 pub fn to_ascii(expr: &Expr) -> String {
@@ -1157,7 +1157,7 @@ Convert an expression to ASCII representation
 
 ### to_ascii
 
-**File:** `packages/earthsci-toolkit-rs/src/pretty_print.rs:74`
+**File:** `pkg/earthsci-ast-rs/src/pretty_print.rs:74`
 
 ```rust
 pub fn to_ascii(expr: &Expr) -> String {
@@ -1177,7 +1177,7 @@ Convert an expression to ASCII representation
 
 ### to_dot
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:465`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:465`
 
 ```rust
 pub fn to_dot(&self) -> String {
@@ -1193,7 +1193,7 @@ Export graph to DOT format for Graphviz
 
 ### to_dot
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:543`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:543`
 
 ```rust
 pub fn to_dot(&self) -> String {
@@ -1209,7 +1209,7 @@ Export graph to DOT format for Graphviz
 
 ### to_json_graph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:532`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:532`
 
 ```rust
 pub fn to_json_graph(&self) -> String {
@@ -1225,7 +1225,7 @@ Export graph to JSON format
 
 ### to_json_graph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:604`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:604`
 
 ```rust
 pub fn to_json_graph(&self) -> String {
@@ -1241,7 +1241,7 @@ Export graph to JSON format
 
 ### to_latex
 
-**File:** `packages/earthsci-toolkit-rs/src/display.rs:361`
+**File:** `pkg/earthsci-ast-rs/src/display.rs:361`
 
 ```rust
 pub fn to_latex(expr: &Expr) -> String {
@@ -1253,7 +1253,7 @@ Convert an expression to LaTeX notation
 
 ### to_latex
 
-**File:** `packages/earthsci-toolkit-rs/src/pretty_print.rs:42`
+**File:** `pkg/earthsci-ast-rs/src/pretty_print.rs:42`
 
 ```rust
 pub fn to_latex(expr: &Expr) -> String {
@@ -1273,7 +1273,7 @@ Convert an expression to LaTeX notation
 
 ### to_latex
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:103`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:103`
 
 ```rust
 pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
@@ -1283,7 +1283,7 @@ pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
 
 ### to_mermaid
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:501`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:501`
 
 ```rust
 pub fn to_mermaid(&self) -> String {
@@ -1299,7 +1299,7 @@ Export graph to Mermaid format
 
 ### to_mermaid
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:577`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:577`
 
 ```rust
 pub fn to_mermaid(&self) -> String {
@@ -1315,7 +1315,7 @@ Export graph to Mermaid format
 
 ### to_unicode
 
-**File:** `packages/earthsci-toolkit-rs/src/display.rs:191`
+**File:** `pkg/earthsci-ast-rs/src/display.rs:191`
 
 ```rust
 pub fn to_unicode(&self) -> String {
@@ -1327,7 +1327,7 @@ Convert expression to Unicode mathematical notation
 
 ### to_unicode
 
-**File:** `packages/earthsci-toolkit-rs/src/display.rs:356`
+**File:** `pkg/earthsci-ast-rs/src/display.rs:356`
 
 ```rust
 pub fn to_unicode(expr: &Expr) -> String {
@@ -1339,7 +1339,7 @@ Convert an expression to Unicode mathematical notation
 
 ### to_unicode
 
-**File:** `packages/earthsci-toolkit-rs/src/pretty_print.rs:14`
+**File:** `pkg/earthsci-ast-rs/src/pretty_print.rs:14`
 
 ```rust
 pub fn to_unicode(expr: &Expr) -> String {
@@ -1359,7 +1359,7 @@ Convert an expression to Unicode mathematical notation
 
 ### to_unicode
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:74`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:74`
 
 ```rust
 pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
@@ -1369,7 +1369,7 @@ pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
 
 ### update_model_metadata
 
-**File:** `packages/earthsci-toolkit-rs/src/edit.rs:324`
+**File:** `pkg/earthsci-ast-rs/src/edit.rs:324`
 
 ```rust
 pub fn update_model_metadata(model: &Model, name: Option<String>, description: Option<String>) -> EditResult<Model> {
@@ -1391,7 +1391,7 @@ Update model metadata
 
 ### validate
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:160`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:160`
 
 ```rust
 pub fn validate(esm_file: &EsmFile) -> ValidationResult {
@@ -1420,7 +1420,7 @@ This goes beyond schema validation to check:
 # Examples
 
 ```rust
-use earthsci_toolkit::{validate, EsmFile, Metadata};
+use earthsci_ast::{validate, EsmFile, Metadata};
 
 let esm_file = EsmFile {
 esm: "0.1.0".to_string(),
@@ -1449,7 +1449,7 @@ assert!(result.is_valid);
 
 ### validate
 
-**File:** `packages/earthsci-toolkit-rs/src/wasm.rs:59`
+**File:** `pkg/earthsci-ast-rs/src/wasm.rs:59`
 
 ```rust
 pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
@@ -1459,7 +1459,7 @@ pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
 
 ### validate_schema
 
-**File:** `packages/earthsci-toolkit-rs/src/parse.rs:109`
+**File:** `pkg/earthsci-ast-rs/src/parse.rs:109`
 
 ```rust
 pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
@@ -1482,7 +1482,7 @@ This performs schema validation only. The JSON is assumed to be valid.
 
 ### validate_with_schema
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:204`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:204`
 
 ```rust
 pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationResult {
@@ -1496,7 +1496,7 @@ This function combines schema and structural validation
 
 ### with_capacity
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:257`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:257`
 
 ```rust
 pub fn with_capacity(capacity: usize) -> Self {
@@ -1510,7 +1510,7 @@ Create allocator with pre-allocated capacity
 
 ### AffectEquation
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:214`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:214`
 
 ```rust
 pub struct AffectEquation {
@@ -1520,7 +1520,7 @@ pub struct AffectEquation {
 
 ### CompactExpr
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:295`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:295`
 
 ```rust
 pub struct CompactExpr {
@@ -1530,7 +1530,7 @@ pub struct CompactExpr {
 
 ### ComponentGraph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:7`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:7`
 
 ```rust
 pub struct ComponentGraph {
@@ -1540,7 +1540,7 @@ pub struct ComponentGraph {
 
 ### ComponentNode
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:16`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:16`
 
 ```rust
 pub struct ComponentNode {
@@ -1550,7 +1550,7 @@ pub struct ComponentNode {
 
 ### ContinuousEvent
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:224`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:224`
 
 ```rust
 pub struct ContinuousEvent {
@@ -1560,7 +1560,7 @@ pub struct ContinuousEvent {
 
 ### CouplingEdge
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:40`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:40`
 
 ```rust
 pub struct CouplingEdge {
@@ -1570,7 +1570,7 @@ pub struct CouplingEdge {
 
 ### DataLoader
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:343`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:343`
 
 ```rust
 pub struct DataLoader {
@@ -1580,7 +1580,7 @@ pub struct DataLoader {
 
 ### DependencyEdge
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:264`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:264`
 
 ```rust
 pub struct DependencyEdge {
@@ -1590,7 +1590,7 @@ pub struct DependencyEdge {
 
 ### DiscreteEvent
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:172`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:172`
 
 ```rust
 pub struct DiscreteEvent {
@@ -1600,7 +1600,7 @@ pub struct DiscreteEvent {
 
 ### Domain
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:451`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:451`
 
 ```rust
 pub struct Domain {
@@ -1610,7 +1610,7 @@ pub struct Domain {
 
 ### Equation
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:162`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:162`
 
 ```rust
 pub struct Equation {
@@ -1620,7 +1620,7 @@ pub struct Equation {
 
 ### EsmFile
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:10`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:10`
 
 ```rust
 pub struct EsmFile {
@@ -1630,7 +1630,7 @@ pub struct EsmFile {
 
 ### ExpressionGraph
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:233`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:233`
 
 ```rust
 pub struct ExpressionGraph {
@@ -1640,7 +1640,7 @@ pub struct ExpressionGraph {
 
 ### ExpressionNode
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:90`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:90`
 
 ```rust
 pub struct ExpressionNode {
@@ -1650,7 +1650,7 @@ pub struct ExpressionNode {
 
 ### ExpressionNode
 
-**File:** `packages/earthsci-toolkit-rs/src/graph.rs:242`
+**File:** `pkg/earthsci-ast-rs/src/graph.rs:242`
 
 ```rust
 pub struct ExpressionNode {
@@ -1660,7 +1660,7 @@ pub struct ExpressionNode {
 
 ### FunctionalAffect
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:251`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:251`
 
 ```rust
 pub struct FunctionalAffect {
@@ -1670,7 +1670,7 @@ pub struct FunctionalAffect {
 
 ### Metadata
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:48`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:48`
 
 ```rust
 pub struct Metadata {
@@ -1680,7 +1680,7 @@ pub struct Metadata {
 
 ### Model
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:108`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:108`
 
 ```rust
 pub struct Model {
@@ -1690,7 +1690,7 @@ pub struct Model {
 
 ### ModelAllocator
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:243`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:243`
 
 ```rust
 pub struct ModelAllocator {
@@ -1700,7 +1700,7 @@ pub struct ModelAllocator {
 
 ### ModelVariable
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:130`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:130`
 
 ```rust
 pub struct ModelVariable {
@@ -1710,7 +1710,7 @@ pub struct ModelVariable {
 
 ### Operator
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:359`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:359`
 
 ```rust
 pub struct Operator {
@@ -1720,7 +1720,7 @@ pub struct Operator {
 
 ### ParallelEvaluator
 
-**File:** `packages/earthsci-toolkit-rs/src/performance.rs:56`
+**File:** `pkg/earthsci-ast-rs/src/performance.rs:56`
 
 ```rust
 pub struct ParallelEvaluator {
@@ -1730,7 +1730,7 @@ pub struct ParallelEvaluator {
 
 ### ParseError
 
-**File:** `packages/earthsci-toolkit-rs/src/parse.rs:12`
+**File:** `pkg/earthsci-ast-rs/src/parse.rs:12`
 
 ```rust
 pub struct ParseError {
@@ -1740,7 +1740,7 @@ pub struct ParseError {
 
 ### Reaction
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:311`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:311`
 
 ```rust
 pub struct Reaction {
@@ -1750,7 +1750,7 @@ pub struct Reaction {
 
 ### ReactionSystem
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:274`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:274`
 
 ```rust
 pub struct ReactionSystem {
@@ -1760,7 +1760,7 @@ pub struct ReactionSystem {
 
 ### SchemaError
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:36`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:36`
 
 ```rust
 pub struct SchemaError {
@@ -1770,7 +1770,7 @@ pub struct SchemaError {
 
 ### SchemaValidationError
 
-**File:** `packages/earthsci-toolkit-rs/src/parse.rs:27`
+**File:** `pkg/earthsci-ast-rs/src/parse.rs:27`
 
 ```rust
 pub struct SchemaValidationError {
@@ -1780,7 +1780,7 @@ pub struct SchemaValidationError {
 
 ### Solver
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:463`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:463`
 
 ```rust
 pub struct Solver {
@@ -1790,7 +1790,7 @@ pub struct Solver {
 
 ### Species
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:292`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:292`
 
 ```rust
 pub struct Species {
@@ -1800,7 +1800,7 @@ pub struct Species {
 
 ### StoichiometricEntry
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:332`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:332`
 
 ```rust
 pub struct StoichiometricEntry {
@@ -1810,7 +1810,7 @@ pub struct StoichiometricEntry {
 
 ### StructuralError
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:47`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:47`
 
 ```rust
 pub struct StructuralError {
@@ -1820,7 +1820,7 @@ pub struct StructuralError {
 
 ### Unit
 
-**File:** `packages/earthsci-toolkit-rs/src/units.rs:8`
+**File:** `pkg/earthsci-ast-rs/src/units.rs:8`
 
 ```rust
 pub struct Unit {
@@ -1830,7 +1830,7 @@ pub struct Unit {
 
 ### ValidationResult
 
-**File:** `packages/earthsci-toolkit-rs/src/validate.rs:11`
+**File:** `pkg/earthsci-ast-rs/src/validate.rs:11`
 
 ```rust
 pub struct ValidationResult {
@@ -1840,7 +1840,7 @@ pub struct ValidationResult {
 
 ### VariableMapping
 
-**File:** `packages/earthsci-toolkit-rs/src/types.rs:439`
+**File:** `pkg/earthsci-ast-rs/src/types.rs:439`
 
 ```rust
 pub struct VariableMapping {

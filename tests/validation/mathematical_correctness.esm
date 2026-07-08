@@ -108,7 +108,7 @@
     },
     "StoichiometricBalance": {
       "reference": {
-        "notes": "Test complex stoichiometric balancing: 2A + B \u2192 3C + D"
+        "notes": "Test complex stoichiometric balancing: 2A + B → 3C + D"
       },
       "species": {
         "A": {
@@ -228,7 +228,7 @@
               }
             ]
           },
-          "description": "Kinetic energy = \u00bdmv\u00b2"
+          "description": "Kinetic energy = ½mv²"
         },
         "potential_energy": {
           "type": "observed",
@@ -247,7 +247,7 @@
               }
             ]
           },
-          "description": "Potential energy = \u00bdkx\u00b2"
+          "description": "Potential energy = ½kx²"
         },
         "total_energy": {
           "type": "observed",
@@ -299,6 +299,24 @@
               "position"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "position"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "velocity"
+            ]
+          },
+          "rhs": 0.0
         }
       ]
     },
@@ -345,7 +363,7 @@
         },
         "total_momentum": {
           "type": "observed",
-          "units": "kg\u22c5m/s",
+          "units": "kg⋅m/s",
           "expression": {
             "op": "+",
             "args": [
@@ -446,6 +464,42 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x1"
+            ]
+          },
+          "rhs": -1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "x2"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v1"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v2"
+            ]
+          },
+          "rhs": -0.5
         }
       ],
       "continuous_events": [
@@ -615,7 +669,7 @@
               }
             ]
           },
-          "description": "\u03b1u + \u03b2v"
+          "description": "αu + βv"
         },
         "derivative_of_combination": {
           "type": "observed",
@@ -627,7 +681,7 @@
             ],
             "wrt": "t"
           },
-          "description": "d(\u03b1u + \u03b2v)/dt"
+          "description": "d(αu + βv)/dt"
         },
         "combination_of_derivatives": {
           "type": "observed",
@@ -663,7 +717,7 @@
               }
             ]
           },
-          "description": "\u03b1(du/dt) + \u03b2(dv/dt)"
+          "description": "α(du/dt) + β(dv/dt)"
         }
       },
       "equations": [
@@ -698,31 +752,34 @@
               "v"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": 1.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": 2.0
         }
       ]
     }
   },
-  "domains": {
-    "default": {
-      "independent_variable": "t",
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T01:00:00Z"
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "position": 1.0,
-          "velocity": 0.0,
-          "x1": -1.0,
-          "x2": 1.0,
-          "v1": 1.0,
-          "v2": -0.5,
-          "u": 1.0,
-          "v": 2.0
-        }
-      },
-      "element_type": "Float64"
-    }
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z"
+    },
+    "element_type": "Float64"
   }
 }

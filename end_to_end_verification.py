@@ -18,12 +18,12 @@ from typing import Dict, Any, Tuple, List, Optional
 import sys
 import os
 
-# Add the earthsci_toolkit package to the path
-sys.path.insert(0, str(Path(__file__).parent / "packages" / "earthsci_toolkit" / "src"))
+# Add the earthsci_ast package to the path
+sys.path.insert(0, str(Path(__file__).parent / "pkg" / "earthsci-ast-py" / "src"))
 
-from earthsci_toolkit.parse import load
-from earthsci_toolkit.simulation import simulate, SimulationResult
-from earthsci_toolkit.types import (
+from earthsci_ast.parse import load
+from earthsci_ast.simulation import simulate, SimulationResult
+from earthsci_ast.types import (
     ReactionSystem, Species, Reaction, Parameter, Model
 )
 

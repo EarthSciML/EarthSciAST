@@ -4,7 +4,7 @@
     "name": "join_not_array",
     "description": "INVALID (bead ess-my4.2.1): an `aggregate` node whose `join` is a bare object instead of an array of join clauses (RFC semiring-faq-unified-ir §5.3 / §8). `join` is declared `type: array` (a list of `{ \"on\": … }` clauses), so supplying a single object is a pure schema (type) violation — caught by every binding.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.capable"
+      "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
       "aggregate",
@@ -13,17 +13,17 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
   "models": {
     "BadJoinShape": {
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": [
-            "onroad",
-            "nonroad"
-          ]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -33,21 +33,37 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "aggregate",
             "output_idx": [],
             "ranges": {
-              "src": { "from": "sourceType" }
+              "src": {
+                "from": "sourceType"
+              }
             },
-            "join": { "on": [["src", "sourceType"]] },
+            "join": {
+              "on": [
+                [
+                  "src",
+                  "sourceType"
+                ]
+              ]
+            },
             "expr": {
               "op": "index",
-              "args": ["u", "src"]
+              "args": [
+                "u",
+                "src"
+              ]
             },
-            "args": ["u"]
+            "args": [
+              "u"
+            ]
           }
         }
       ]

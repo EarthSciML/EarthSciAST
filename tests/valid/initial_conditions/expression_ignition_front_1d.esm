@@ -2,9 +2,9 @@
   "esm": "0.6.0",
   "metadata": {
     "name": "expression_ignition_front_1d",
-    "description": "Cross-binding conformance golden for the `expression` initial-condition type (bead ess-gjn, epic campfire-e2e ea-6sh). The domain declares a 1-D spatial grid x in [0,1] at grid_spacing 0.25 (5 nodes) and an `expression` initial condition: u's initial field is the ignition-front profile psi(x) = 0.5 * (1 + tanh((x - 0.3) / 0.15)), the EXISTING expression AST evaluated at every grid node at t=0 (no new primitive). The state u[i] is method-of-lines discretized with trivial dynamics D(u[i])/dt = 0, so u holds at its IC and the assertions isolate the expression-IC evaluation: u[i](t) == psi(x_i) for x_i = 0, 0.25, 0.5, 0.75, 1.0. The front is asymmetric, so an axis-reversed seeding would fail. Python evaluates this end-to-end; Julia and Rust load + validate it as the shared contract for their (deferred) expression-IC evaluation.",
+    "description": "Cross-binding conformance golden for an expression initial condition, written as an `ic` equation (v0.8.0 §11.4: there is no domain-level `initial_conditions` field and no domain grid). u's initial field is the ignition-front profile psi(x) = 0.5 * (1 + tanh((x - 0.3) / 0.15)), a coordinate expression over the spatial coordinate `x` (referenced by name; in v0.8.0 the coordinate is ordinary data associated with the spatial index, not a domain grid), written `ic(u) ~ psi(x)`. Evaluated at the 1-D nodes x = [0, 0.25, 0.5, 0.75, 1.0]. The state u[i] is method-of-lines discretized with trivial dynamics D(u[i])/dt = 0, so u holds at its IC and the assertions isolate the expression-IC evaluation: u[i](t) == psi(x_i). The front is asymmetric, so an axis-reversed seeding would fail. Python evaluates this end-to-end; Julia and Rust load + validate it as the shared contract for their (deferred) expression-IC evaluation.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "initial-conditions",
@@ -22,7 +22,6 @@
         "rel": 1e-6,
         "abs": 1e-9
       },
-      "domain": "line",
       "variables": {
         "u": {
           "type": "state",
@@ -32,6 +31,34 @@
         }
       },
       "equations": [
+        {
+          "_comment": "Expression IC: ic(u) ~ psi(x) = 0.5*(1 + tanh((x - 0.3)/0.15)), a coordinate expression over the spatial coordinate x (referenced by name), evaluated at the nodes x = [0, 0.25, 0.5, 0.75, 1.0].",
+          "lhs": { "op": "ic", "args": ["u"] },
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.5,
+              {
+                "op": "+",
+                "args": [
+                  1,
+                  {
+                    "op": "tanh",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          { "op": "-", "args": ["x", 0.3] },
+                          0.15
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
         {
           "_comment": "D(u[i])/dt = 0 over i in [1,5]; u[i] holds at its expression IC psi(x_i).",
           "lhs": {
@@ -57,7 +84,7 @@
       "tests": [
         {
           "id": "ignition_front_ic",
-          "description": "psi(x) = 0.5*(1 + tanh((x - 0.3)/0.15)) seeded from the domain expression IC at x = [0, 0.25, 0.5, 0.75, 1.0]; D(u)/dt = 0 holds it constant, asserted at t=0 (the IC itself) and at t=1.",
+          "description": "psi(x) = 0.5*(1 + tanh((x - 0.3)/0.15)) seeded from the ic(u) equation at x = [0, 0.25, 0.5, 0.75, 1.0]; D(u)/dt = 0 holds it constant, asserted at t=0 (the IC itself) and at t=1.",
           "time_span": { "start": 0.0, "end": 1.0 },
           "assertions": [
             { "variable": "u[1]", "time": 0.0, "expected": 0.01798620996209155 },
@@ -69,47 +96,6 @@
           ]
         }
       ]
-    }
-  },
-  "domains": {
-    "line": {
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1.0,
-          "grid_spacing": 0.25,
-          "units": "m"
-        }
-      },
-      "initial_conditions": {
-        "type": "expression",
-        "values": {
-          "u": {
-            "op": "*",
-            "args": [
-              0.5,
-              {
-                "op": "+",
-                "args": [
-                  1,
-                  {
-                    "op": "tanh",
-                    "args": [
-                      {
-                        "op": "/",
-                        "args": [
-                          { "op": "-", "args": ["x", 0.3] },
-                          0.15
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      }
     }
   }
 }

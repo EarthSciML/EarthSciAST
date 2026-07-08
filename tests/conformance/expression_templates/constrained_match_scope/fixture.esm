@@ -1,0 +1,36 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "constrained_match_scope",
+    "description": "Static match-scoping constraints (esm-spec §9.6.1 `where`; docs/content/rfcs/match-pattern-scoping-constraints.md): ONE shape-constrained div rule in a document with TWO shaped variables. The rule's pattern {op: div, args: [F]} structurally matches both div nodes, but `where: {F: {shape: [edges]}}` makes it eligible only where F binds to a bare variable declared over exactly [edges]. So div(F_edge) is rewritten and div(F_cell) is NOT — it survives lowering intact (loading is permissive, §9.6.3 constraint 6; it would be rejected by `unlowered_operator` only if evaluated). Positive and negative case in one expanded golden; constraint evaluation is fully static (declared shapes only), so all five bindings agree byte-for-byte.",
+    "authors": ["match-pattern-scoping-constraints conformance"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 7 },
+    "edges": { "kind": "interval", "size": 12 }
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "F_edge": { "type": "state", "units": "1", "default": 1.5, "shape": ["edges"], "description": "Edge-normal flux (over the constrained index set)" },
+        "F_cell": { "type": "state", "units": "1", "default": 2.5, "shape": ["cells"], "description": "Cell-centered field (fails the shape constraint)" },
+        "inv_area": { "type": "parameter", "units": "1", "default": 0.5, "description": "Stand-in 1/A_i stencil coefficient" },
+        "div_edge": { "type": "observed", "units": "1", "shape": ["cells"], "description": "div of an edge-field: the constrained rule fires",
+          "expression": { "op": "div", "args": ["F_edge"] }
+        },
+        "div_cell": { "type": "observed", "units": "1", "shape": ["cells"], "description": "div of a cell-field: constraint-excluded, stays unlowered",
+          "expression": { "op": "div", "args": ["F_cell"] }
+        }
+      },
+      "equations": [],
+      "expression_templates": {
+        "fv_div_edges": {
+          "params": ["F"],
+          "match": { "op": "div", "args": ["F"] },
+          "where": { "F": { "shape": ["edges"] } },
+          "body": { "op": "*", "args": ["inv_area", "F"] }
+        }
+      }
+    }
+  }
+}

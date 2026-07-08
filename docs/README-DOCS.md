@@ -92,7 +92,7 @@ python3 scripts/validate_docs.py --json-output validation-results.json
 The documentation system includes a GitHub Actions workflow (`.github/workflows/docs.yml`) that:
 
 1. **Triggers on changes** to:
-   - Source code in `packages/`
+   - Source code in `pkg/`
    - Documentation in `docs/`
    - Documentation scripts
 

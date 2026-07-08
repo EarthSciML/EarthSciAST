@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "nonterminating_rewrite",
+    "description": "A self-reintroducing rule whose body wraps the matched pattern in another copy of itself, so every pass produces a strictly larger tree and the rewrite never reaches a fixpoint. The bounded-fixpoint engine (esm-spec §9.6.3) must reject the file with `rewrite_rule_nonterminating` once MAX_REWRITE_PASSES=64 productive passes have run without converging. Nontermination is caught by the pass bound at load time, NOT by a static pre-check. See docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8.",
+    "authors": ["open-op-namespace-fixpoint-rewrite conformance"]
+  },
+  "models": {
+    "m": {
+      "variables": {
+        "u": {"type": "state", "units": "1", "default": 0.0, "description": "Scalar field"},
+        "w": {"type": "observed", "units": "1", "description": "Target of the self-reintroducing rule",
+          "expression": {"op": "grad", "args": ["u"], "dim": "x"}
+        }
+      },
+      "equations": [],
+      "expression_templates": {
+        "grad_loops_forever": {
+          "params": ["f"],
+          "priority": 0,
+          "match": {"op": "grad", "args": ["f"], "dim": "x"},
+          "body": {"op": "grad", "args": [{"op": "grad", "args": ["f"], "dim": "x"}], "dim": "x"}
+        }
+      }
+    }
+  }
+}

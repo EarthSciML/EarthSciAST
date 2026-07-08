@@ -5,28 +5,76 @@
       "category": "Arithmetic Precedence",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "*", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "a·b + c",
           "latex": "a \\cdot b + c",
           "ascii": "a * b + c",
           "note": "Multiplication binds tighter than addition"
         },
         {
-          "input": {"op": "*", "args": [{"op": "+", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "*",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "(a + b)·c",
           "latex": "(a + b) \\cdot c",
           "ascii": "(a + b) * c",
           "note": "Parentheses required for addition inside multiplication"
         },
         {
-          "input": {"op": "^", "args": ["a", {"op": "+", "args": ["b", "c"]}]},
+          "input": {
+            "op": "^",
+            "args": [
+              "a",
+              {
+                "op": "+",
+                "args": [
+                  "b",
+                  "c"
+                ]
+              }
+            ]
+          },
           "unicode": "a^(b + c)",
           "latex": "a^{b + c}",
           "ascii": "a^(b + c)",
           "note": "Exponentiation requires parentheses for addition in exponent"
         },
         {
-          "input": {"op": "+", "args": [{"op": "^", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "a^b + c",
           "latex": "a^{b} + c",
           "ascii": "a^b + c",
@@ -34,33 +82,76 @@
         }
       ]
     },
-
     {
       "category": "Unary Minus Precedence",
       "cases": [
         {
-          "input": {"op": "-", "args": [{"op": "*", "args": ["a", "b"]}]},
+          "input": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              }
+            ]
+          },
           "unicode": "−a·b",
           "latex": "-a \\cdot b",
           "ascii": "-a * b",
           "note": "Unary minus binds tighter than multiplication"
         },
         {
-          "input": {"op": "*", "args": [{"op": "-", "args": ["a"]}, "b"]},
+          "input": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              },
+              "b"
+            ]
+          },
           "unicode": "−a·b",
           "latex": "-a \\cdot b",
           "ascii": "-a * b",
           "note": "Same result: unary minus has high precedence"
         },
         {
-          "input": {"op": "-", "args": [{"op": "^", "args": ["a", "b"]}]},
+          "input": {
+            "op": "-",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              }
+            ]
+          },
           "unicode": "−a^b",
           "latex": "-a^{b}",
           "ascii": "-a^b",
           "note": "Unary minus binds looser than exponentiation"
         },
         {
-          "input": {"op": "^", "args": [{"op": "-", "args": ["a"]}, "b"]},
+          "input": {
+            "op": "^",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              },
+              "b"
+            ]
+          },
           "unicode": "(−a)^b",
           "latex": "(-a)^{b}",
           "ascii": "(-a)^b",
@@ -68,26 +159,58 @@
         }
       ]
     },
-
     {
       "category": "Function Application",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "sin", "args": ["x"]}, "y"]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "sin",
+                "args": [
+                  "x"
+                ]
+              },
+              "y"
+            ]
+          },
           "unicode": "sin(x) + y",
           "latex": "\\sin(x) + y",
           "ascii": "sin(x) + y",
           "note": "Function application has highest precedence"
         },
         {
-          "input": {"op": "sin", "args": [{"op": "+", "args": ["x", "y"]}]},
+          "input": {
+            "op": "sin",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "x",
+                  "y"
+                ]
+              }
+            ]
+          },
           "unicode": "sin(x + y)",
           "latex": "\\sin(x + y)",
           "ascii": "sin(x + y)",
           "note": "Addition inside function argument"
         },
         {
-          "input": {"op": "*", "args": [{"op": "exp", "args": ["x"]}, "y"]},
+          "input": {
+            "op": "*",
+            "args": [
+              {
+                "op": "exp",
+                "args": [
+                  "x"
+                ]
+              },
+              "y"
+            ]
+          },
           "unicode": "exp(x)·y",
           "latex": "\\exp(x) \\cdot y",
           "ascii": "exp(x) * y",
@@ -95,26 +218,61 @@
         }
       ]
     },
-
     {
       "category": "Calculus Operators",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "D", "args": ["x"], "wrt": "t"}, "y"]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "x"
+                ],
+                "wrt": "t"
+              },
+              "y"
+            ]
+          },
           "unicode": "∂x/∂t + y",
           "latex": "\\frac{\\partial x}{\\partial t} + y",
           "ascii": "D(x,t) + y",
           "note": "Derivative has function-like precedence"
         },
         {
-          "input": {"op": "D", "args": [{"op": "+", "args": ["x", "y"]}], "wrt": "t"},
+          "input": {
+            "op": "D",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "x",
+                  "y"
+                ]
+              }
+            ],
+            "wrt": "t"
+          },
           "unicode": "∂(x + y)/∂t",
           "latex": "\\frac{\\partial (x + y)}{\\partial t}",
           "ascii": "D(x + y, t)",
           "note": "Derivative of sum requires parentheses"
         },
         {
-          "input": {"op": "grad", "args": [{"op": "*", "args": ["f", "g"]}], "dim": "x"},
+          "input": {
+            "op": "grad",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "f",
+                  "g"
+                ]
+              }
+            ],
+            "dim": "x"
+          },
           "unicode": "∂(f·g)/∂x",
           "latex": "\\frac{\\partial (f \\cdot g)}{\\partial x}",
           "ascii": "grad(f * g, x)",
@@ -122,40 +280,99 @@
         }
       ]
     },
-
     {
       "category": "Associativity",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "+", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "a + b + c",
           "latex": "a + b + c",
           "ascii": "a + b + c",
           "note": "Addition is left-associative, no extra parentheses"
         },
         {
-          "input": {"op": "+", "args": ["a", {"op": "+", "args": ["b", "c"]}]},
+          "input": {
+            "op": "+",
+            "args": [
+              "a",
+              {
+                "op": "+",
+                "args": [
+                  "b",
+                  "c"
+                ]
+              }
+            ]
+          },
           "unicode": "a + b + c",
           "latex": "a + b + c",
           "ascii": "a + b + c",
           "note": "Addition is associative, same result"
         },
         {
-          "input": {"op": "*", "args": [{"op": "*", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "a·b·c",
           "latex": "a \\cdot b \\cdot c",
           "ascii": "a * b * c",
           "note": "Multiplication is associative"
         },
         {
-          "input": {"op": "^", "args": ["a", {"op": "^", "args": ["b", "c"]}]},
+          "input": {
+            "op": "^",
+            "args": [
+              "a",
+              {
+                "op": "^",
+                "args": [
+                  "b",
+                  "c"
+                ]
+              }
+            ]
+          },
           "unicode": "a^(b^c)",
           "latex": "a^{b^{c}}",
           "ascii": "a^(b^c)",
           "note": "Exponentiation is right-associative"
         },
         {
-          "input": {"op": "^", "args": [{"op": "^", "args": ["a", "b"]}, "c"]},
+          "input": {
+            "op": "^",
+            "args": [
+              {
+                "op": "^",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              "c"
+            ]
+          },
           "unicode": "(a^b)^c",
           "latex": "(a^{b})^{c}",
           "ascii": "(a^b)^c",
@@ -163,19 +380,64 @@
         }
       ]
     },
-
     {
       "category": "Mixed Operations",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "*", "args": [{"op": "sin", "args": ["x"]}, {"op": "cos", "args": ["y"]}]}, {"op": "^", "args": ["z", 2]}]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "sin",
+                    "args": [
+                      "x"
+                    ]
+                  },
+                  {
+                    "op": "cos",
+                    "args": [
+                      "y"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "^",
+                "args": [
+                  "z",
+                  2
+                ]
+              }
+            ]
+          },
           "unicode": "sin(x)·cos(y) + z²",
           "latex": "\\sin(x) \\cdot \\cos(y) + z^{2}",
           "ascii": "sin(x) * cos(y) + z^2",
           "note": "Complex expression with all precedence levels"
         },
         {
-          "input": {"op": "/", "args": [{"op": "+", "args": ["a", "b"]}, {"op": "*", "args": ["c", "d"]}]},
+          "input": {
+            "op": "/",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "c",
+                  "d"
+                ]
+              }
+            ]
+          },
           "unicode": "(a + b)/(c·d)",
           "latex": "\\frac{a + b}{c \\cdot d}",
           "ascii": "(a + b) / (c * d)",
@@ -183,19 +445,43 @@
         }
       ]
     },
-
     {
       "category": "Chemical Species",
       "cases": [
         {
-          "input": {"op": "*", "args": ["O3", "NO"]},
+          "input": {
+            "op": "*",
+            "args": [
+              "O3",
+              "NO"
+            ]
+          },
           "unicode": "O₃·NO",
           "latex": "\\mathrm{O_3} \\cdot \\mathrm{NO}",
           "ascii": "O3 * NO",
           "note": "Chemical species with subscripts"
         },
         {
-          "input": {"op": "+", "args": [{"op": "D", "args": ["CH2O"], "wrt": "t"}, {"op": "*", "args": ["k_OH", "CH2O", "OH"]}]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "CH2O"
+                ],
+                "wrt": "t"
+              },
+              {
+                "op": "*",
+                "args": [
+                  "k_OH",
+                  "CH2O",
+                  "OH"
+                ]
+              }
+            ]
+          },
           "unicode": "∂CH₂O/∂t + k_OH·CH₂O·OH",
           "latex": "\\frac{\\partial \\mathrm{CH_2O}}{\\partial t} + k_{\\mathrm{OH}} \\cdot \\mathrm{CH_2O} \\cdot \\mathrm{OH}",
           "ascii": "D(CH2O,t) + k_OH * CH2O * OH",
@@ -203,19 +489,46 @@
         }
       ]
     },
-
     {
       "category": "Spatial Operators",
       "cases": [
         {
-          "input": {"op": "+", "args": [{"op": "grad", "args": ["phi"], "dim": "x"}, {"op": "laplacian", "args": ["psi"]}]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "grad",
+                "args": [
+                  "phi"
+                ],
+                "dim": "x"
+              },
+              {
+                "op": "laplacian",
+                "args": [
+                  "psi"
+                ]
+              }
+            ]
+          },
           "unicode": "∂φ/∂x + ∇²ψ",
           "latex": "\\frac{\\partial \\phi}{\\partial x} + \\nabla^2 \\psi",
           "ascii": "grad(phi,x) + laplacian(psi)",
           "note": "Spatial operators in atmospheric modeling"
         },
         {
-          "input": {"op": "div", "args": [{"op": "*", "args": ["u", "tracer"]}]},
+          "input": {
+            "op": "div",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "u",
+                  "tracer"
+                ]
+              }
+            ]
+          },
           "unicode": "∇·(u·tracer)",
           "latex": "\\nabla \\cdot (u \\cdot \\mathrm{tracer})",
           "ascii": "div(u * tracer)",
@@ -223,19 +536,54 @@
         }
       ]
     },
-
     {
       "category": "Logical Operations",
       "cases": [
         {
-          "input": {"op": "and", "args": [{"op": ">", "args": ["x", 0]}, {"op": "<", "args": ["x", 10]}]},
+          "input": {
+            "op": "and",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "x",
+                  0
+                ]
+              },
+              {
+                "op": "<",
+                "args": [
+                  "x",
+                  10
+                ]
+              }
+            ]
+          },
           "unicode": "x > 0 ∧ x < 10",
           "latex": "x > 0 \\land x < 10",
           "ascii": "(x > 0) and (x < 10)",
           "note": "Logical conjunction of comparisons"
         },
         {
-          "input": {"op": "or", "args": [{"op": "<=", "args": ["t", 0]}, {"op": ">=", "args": ["t", 86400]}]},
+          "input": {
+            "op": "or",
+            "args": [
+              {
+                "op": "<=",
+                "args": [
+                  "t",
+                  0
+                ]
+              },
+              {
+                "op": ">=",
+                "args": [
+                  "t",
+                  86400
+                ]
+              }
+            ]
+          },
           "unicode": "t ≤ 0 ∨ t ≥ 86400",
           "latex": "t \\leq 0 \\lor t \\geq 86400",
           "ascii": "(t <= 0) or (t >= 86400)",
@@ -243,19 +591,34 @@
         }
       ]
     },
-
     {
       "category": "Event Operators",
       "cases": [
         {
-          "input": {"op": "Pre", "args": ["velocity"]},
+          "input": {
+            "op": "Pre",
+            "args": [
+              "velocity"
+            ]
+          },
           "unicode": "Pre(velocity)",
           "latex": "\\mathrm{Pre}(\\mathrm{velocity})",
           "ascii": "Pre(velocity)",
           "note": "Pre operator for events"
         },
         {
-          "input": {"op": "+", "args": [{"op": "Pre", "args": ["x"]}, 1]},
+          "input": {
+            "op": "+",
+            "args": [
+              {
+                "op": "Pre",
+                "args": [
+                  "x"
+                ]
+              },
+              1
+            ]
+          },
           "unicode": "Pre(x) + 1",
           "latex": "\\mathrm{Pre}(x) + 1",
           "ascii": "Pre(x) + 1",
@@ -264,7 +627,6 @@
       ]
     }
   ],
-
   "rendering_requirements": {
     "unicode_format": {
       "multiplication": "·",
@@ -288,7 +650,6 @@
         "!=": "≠"
       }
     },
-
     "latex_format": {
       "fractions": "\\frac{numerator}{denominator}",
       "derivatives": "\\frac{\\partial var}{\\partial t}",
@@ -307,16 +668,71 @@
         "log": "\\ln"
       }
     },
-
     "precedence_rules": [
-      {"level": 1, "operators": ["function_application", "Pre", "D", "grad", "div", "laplacian"]},
-      {"level": 2, "operators": ["^"], "associativity": "right"},
-      {"level": 3, "operators": ["-"], "note": "unary minus"},
-      {"level": 4, "operators": ["*", "/"], "associativity": "left"},
-      {"level": 5, "operators": ["+", "-"], "associativity": "left"},
-      {"level": 6, "operators": [">", "<", ">=", "<=", "==", "!="]},
-      {"level": 7, "operators": ["and"]},
-      {"level": 8, "operators": ["or"]}
+      {
+        "level": 1,
+        "operators": [
+          "function_application",
+          "Pre",
+          "D",
+          "grad",
+          "div",
+          "laplacian"
+        ]
+      },
+      {
+        "level": 2,
+        "operators": [
+          "^"
+        ],
+        "associativity": "right"
+      },
+      {
+        "level": 3,
+        "operators": [
+          "-"
+        ],
+        "note": "unary minus"
+      },
+      {
+        "level": 4,
+        "operators": [
+          "*",
+          "/"
+        ],
+        "associativity": "left"
+      },
+      {
+        "level": 5,
+        "operators": [
+          "+",
+          "-"
+        ],
+        "associativity": "left"
+      },
+      {
+        "level": 6,
+        "operators": [
+          ">",
+          "<",
+          ">=",
+          "<=",
+          "==",
+          "!="
+        ]
+      },
+      {
+        "level": 7,
+        "operators": [
+          "and"
+        ]
+      },
+      {
+        "level": 8,
+        "operators": [
+          "or"
+        ]
+      }
     ]
   }
 }

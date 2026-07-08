@@ -2,7 +2,7 @@
 // TypeScript/JavaScript expression round-trip driver for property-corpus
 // conformance (gt-3fbf).
 //
-// Invokes the earthsci-toolkit expression-coercion path (mirroring the
+// Invokes the @earthsciml/ast expression-coercion path (mirroring the
 // internal coerceExpression helper in parse.ts) and JSON.stringify for
 // serialization. Emits a JSON object
 // {fixture_name: {"ok": bool, "value"|"error": ...}} to stdout.
@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 
-// Mirrors coerceExpression in packages/earthsci-toolkit/src/parse.ts. Kept
+// Mirrors coerceExpression in pkg/earthsci-ast-ts/src/parse.ts. Kept
 // as a literal re-implementation rather than a direct import because
 // coerceExpression is not part of the binding's public API; re-implementing
 // it here keeps the driver self-contained while still exercising the same

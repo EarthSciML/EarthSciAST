@@ -1,6 +1,6 @@
 # Schema Validation (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/validate_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/validate_test.jl`
 
 ```julia
 @testset "validate_schema function" begin
@@ -25,7 +25,7 @@
 
         errors = validate_schema(valid_data)
         @test isempty(errors)
-        @test isa(errors, Vector{EarthSciSerialization.SchemaError})
+        @test isa(errors, Vector{EarthSciAST.SchemaError})
 
         # Test invalid data - missing required field
         invalid_data = Dict(
@@ -35,7 +35,7 @@
 
         errors = validate_schema(invalid_data)
         @test !isempty(errors)
-        @test isa(errors, Vector{EarthSciSerialization.SchemaError})
+        @test isa(errors, Vector{EarthSciAST.SchemaError})
         for error in errors
             @test isa(error.path, String)
             @test isa(error.message, String)

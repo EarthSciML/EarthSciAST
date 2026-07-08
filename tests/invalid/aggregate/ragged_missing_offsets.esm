@@ -4,7 +4,7 @@
     "name": "ragged_missing_offsets",
     "description": "INVALID (bead ess-my4.1.1): a document-scoped `index_sets` registry entry of kind \"ragged\" that omits the required `offsets` and `values` backing-factor names (RFC semiring-faq-unified-ir §5.2 / §8). The IndexSet schema's kind-conditional `allOf` requires `of`, `offsets`, and `values` when kind is \"ragged\"; omitting them is a pure schema (required-property) violation — caught by every binding.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "index-set",
@@ -13,14 +13,16 @@
       "schema"
     ]
   },
+  "index_sets": {
+    "edges_of_cell": {
+      "kind": "ragged",
+      "of": [
+        "cells"
+      ]
+    }
+  },
   "models": {
     "BadRagged": {
-      "index_sets": {
-        "edges_of_cell": {
-          "kind": "ragged",
-          "of": ["cells"]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -30,7 +32,9 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": -1

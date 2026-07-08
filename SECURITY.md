@@ -2,16 +2,16 @@
 
 ## Package Verification and Security Scanning
 
-This document describes the security measures implemented for the EarthSciSerialization project to ensure package integrity, authenticity, and safety across all supported language ecosystems.
+This document describes the security measures implemented for the EarthSciAST project to ensure package integrity, authenticity, and safety across all supported language ecosystems.
 
 ## Overview
 
-The EarthSciSerialization project implements comprehensive security scanning and package verification for all distributed packages:
+The EarthSciAST project implements comprehensive security scanning and package verification for all distributed packages:
 
-- **Julia**: EarthSciSerialization.jl
-- **Python**: earthsci_toolkit
-- **TypeScript/JavaScript**: earthsci-toolkit, esm-editor
-- **Rust**: earthsci-toolkit
+- **Julia**: EarthSciAST.jl
+- **Python**: earthsci_ast
+- **TypeScript/JavaScript**: @earthsciml/ast, earthsci-ast-editor
+- **Rust**: earthsci-ast
 
 ## Security Tools
 
@@ -40,7 +40,7 @@ A comprehensive security scanner that performs:
 python3 scripts/package-security-scanner.py
 
 # Scan specific package
-python3 scripts/package-security-scanner.py --package packages/earthsci_toolkit --package-type python
+python3 scripts/package-security-scanner.py --package pkg/earthsci-ast-py --package-type python
 
 # Use custom configuration
 python3 scripts/package-security-scanner.py --config .security-config.json
@@ -68,7 +68,7 @@ python3 scripts/package-signature-verifier.py
 python3 scripts/package-signature-verifier.py --create-signatures --key-id YOUR_GPG_KEY
 
 # Verify specific package
-python3 scripts/package-signature-verifier.py --package packages/earthsci_toolkit --package-type python
+python3 scripts/package-signature-verifier.py --package pkg/earthsci-ast-py --package-type python
 ```
 
 ## Security Configuration

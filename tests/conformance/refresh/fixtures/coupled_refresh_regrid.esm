@@ -2,9 +2,9 @@
   "esm": "0.6.0",
   "metadata": {
     "name": "coupled_refresh_regrid",
-    "description": "Shared offline fixture for the cross-language REFRESH-PATH conformance (bead ess-14f.12 / RS-R4, parent ess-14f; CONFORMANCE_SPEC.md §5.10). A discretized, COUPLED, non-PDE model whose forcing is read from data loaders at a discrete cadence and REGRIDDED from the loader's native grid onto the simulation grid before it reaches the RHS. Two components over a 3-cell index i in [1,3]: `Box.c[i]` accumulates a loader-fed source scaled by a loaded factor (D(c[i]) = scale[i]*src[i]); `Sink.d[i]` integrates the coupled tracer across the component boundary (D(d[i]) = Box.c[i]). `src` is DISCRETE — its loader `emis` declares a `temporal` block, so it refreshes at the hourly cadence anchors; `scale` is CONST — its loader `factors` has no `temporal`, so it materializes once. BOTH loader fields are delivered on a COARSER 6-cell native grid and conservatively regridded (2:1 area-weighted coarsening) onto the 3-cell sim grid, so the refresh path exercises a genuine non-identity regrid kernel, not the identity pass-through. The forcing is piecewise-constant across the cadence segments, so the regridded arrays and the integrated trajectory are closed-form and checkable to solver tolerance — the analytic golden lives in golden/coupled_refresh_regrid.json. NOTE the two-view contract (RFC pure-io-data-loaders §4.6; mirrors tests/segmented_refresh_solve.rs): the loader-fed `src`/`scale` are declared `discrete`+`data_ingest` here so the cadence classifier resolves them CONST/DISCRETE, but the typed array-simulate compiler has no Discrete VariableType — a consumer STRIPS the loader-fed discrete declarations before compiling the RHS, where `src`/`scale` then resolve through the forcing buffer the regrid seam writes.",
+    "description": "Shared offline fixture for the cross-language REFRESH-PATH conformance (CONFORMANCE_SPEC.md §5.10). A discretized, COUPLED, non-PDE model whose forcing is read from data loaders at a discrete cadence and REGRIDDED from the loader's coarse 6-cell native grid onto the 3-cell simulation grid — IN-MODEL, as a coupling expression, not through a regrid seam. The 2:1 area-weighted coarsening is a const weight matrix `W[i,j]` (an in-file `const` observed): `F_tgt[j] = sum_i W[i,j]*F_src[i]`, `scale_tgt[j] = sum_i W[i,j]*scale_src[i]`. `F_src` is DISCRETE — its loader `emis` declares a `temporal` block, so it refreshes at the hourly cadence anchors and the regridded `F_tgt` is a DISCRETE-materialized field (state-free but forcing-tainted). `scale_src` is CONST — its loader `factors` has no `temporal`, so it materializes once and the regridded `scale_tgt` is CONST-cadence. The coupled states integrate the regridded forcing: `D(c[j]) = scale_tgt[j]*F_tgt[j]` (the forced tracer) and `D(d[j]) = c[j]` (a dependent variable integrating the tracer across the cadence). The forcing is piecewise-constant across the cadence segments, so the regridded arrays and the integrated trajectory are closed-form and checkable to solver tolerance — the analytic golden lives in golden/coupled_refresh_regrid.json. TWO-VIEW contract (RFC pure-io-data-loaders §4.6): the loader-fed `F_src`/`scale_src` are declared `discrete`+`data_ingest` here so the cadence classifier resolves them CONST/DISCRETE, but the typed array-simulate compiler has no Discrete VariableType — a consumer STRIPS the loader-fed discrete declarations before compiling the RHS, where `F_src`/`scale_src` then resolve through the forcing buffer refreshed at each cadence anchor. There is NO regrid seam / RegridApplier (removed as obsolete in v0.8.0): regridding is an ordinary in-model coupling contraction over the native forcing.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "refresh-path",
@@ -13,11 +13,11 @@
       "temporal",
       "discrete-variable",
       "regrid",
+      "in-model-regrid",
       "conservative",
       "cadence",
       "coupled",
-      "conformance",
-      "ess-14f.12"
+      "conformance"
     ]
   },
   "data_loaders": {
@@ -32,10 +32,10 @@
         "records_per_file": 24
       },
       "variables": {
-        "src": {
+        "F_src": {
           "file_variable": "surface_source",
           "units": "kg/s",
-          "description": "Time-varying loader-fed source field, refreshed every hour as the loader advances to the next record. Its `temporal` block makes the loader output DISCRETE (RFC pure-io-data-loaders §4.6). Delivered on the coarse 6-cell native grid and conservatively regridded onto the 3-cell sim grid."
+          "description": "Time-varying loader-fed source field on the coarse 6-cell native grid, refreshed every hour as the loader advances to the next record. Its `temporal` block makes the loader output DISCRETE (RFC pure-io-data-loaders §4.6). Regridded in-model onto the 3-cell sim grid by the `W` contraction (`F_tgt`)."
         }
       }
     },
@@ -45,95 +45,147 @@
         "url_template": "file:///data/factors/scale.nc"
       },
       "variables": {
-        "scale": {
+        "scale_src": {
           "file_variable": "scale_factor",
           "units": "1",
-          "description": "Static per-cell scale factor. Its loader has NO `temporal` block, so the partition seeds it CONST (materialized once). Also delivered on the coarse 6-cell native grid and conservatively regridded onto the 3-cell sim grid."
+          "description": "Static per-cell scale factor on the coarse 6-cell native grid. Its loader has NO `temporal` block, so the partition seeds it CONST (materialized once). Regridded in-model onto the 3-cell sim grid by the `W` contraction (`scale_tgt`)."
         }
       }
     }
   },
   "models": {
-    "Box": {
+    "M": {
       "variables": {
-        "c": {
-          "type": "state",
-          "shape": ["i"],
-          "default": 0.0,
-          "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step). D(c[i]) = scale[i]*src[i]."
+        "W": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["src_cells", "tgt_cells"],
+          "description": "Const conservative-regrid weight matrix W[i,j] (i=1..6 native source cells, j=1..3 sim target cells): the 2:1 area-weighted coarsening. Each target cell j averages its two source cells (W=0.5), so W is the in-model realization of the native->sim regrid. A build-once const observed.",
+          "expression": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [0.5, 0.0, 0.0],
+              [0.5, 0.0, 0.0],
+              [0.0, 0.5, 0.0],
+              [0.0, 0.5, 0.0],
+              [0.0, 0.0, 0.5],
+              [0.0, 0.0, 0.5]
+            ]
+          }
         },
-        "src": {
+        "F_src": {
           "type": "discrete",
-          "shape": ["i"],
+          "shape": ["src_cells"],
           "refresh": { "kind": "data_ingest", "source": "emis" },
-          "description": "Loader-fed source read from the `emis` DataLoader (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip; the regrid seam writes its regridded value there."
+          "description": "Loader-fed source read from the `emis` DataLoader (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
         },
-        "scale": {
+        "scale_src": {
           "type": "discrete",
-          "shape": ["i"],
+          "shape": ["src_cells"],
           "refresh": { "kind": "data_ingest", "source": "factors" },
-          "description": "Loader-fed scale factor read from the `factors` DataLoader (NO temporal): CONST cadence, materialized once. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
-        }
-      },
-      "equations": [
-        {
-          "_comment": "D(c[i]) = scale[i]*src[i]. scale is CONST (loader without temporal, materialized once); src is DISCRETE (loader with temporal, refreshed per anchor). Both are regridded from the 6-cell native grid onto i in [1,3]. Dense [1,3] ranges (not {from:<set>}) — index_sets are not yet carried through flatten (ess-14f.13).",
-          "lhs": {
-            "op": "arrayop",
+          "description": "Loader-fed scale factor read from the `factors` DataLoader (NO temporal): CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
+        },
+        "F_tgt": {
+          "type": "observed",
+          "units": "kg/s",
+          "shape": ["tgt_cells"],
+          "description": "In-model regridded source on the 3-cell sim grid: F_tgt[j] = sum_i W[i,j]*F_src[i]. State-free but DISCRETE-forcing-tainted (reads F_src), so it materializes once per cadence refresh — the in-model regrid is the DISCRETE-materialized field.",
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": ["j"],
+            "ranges": { "i": [1, 6], "j": [1, 3] },
             "args": [],
-            "output_idx": ["i"],
-            "ranges": { "i": [1, 3] },
-            "expr": {
-              "op": "D",
-              "args": [{ "op": "index", "args": ["c", "i"] }],
-              "wrt": "t"
-            }
-          },
-          "rhs": {
-            "op": "arrayop",
-            "args": [],
-            "output_idx": ["i"],
-            "ranges": { "i": [1, 3] },
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["scale", "i"] },
-                { "op": "index", "args": ["src", "i"] }
+                { "op": "index", "args": ["W", "i", "j"] },
+                { "op": "index", "args": ["F_src", "i"] }
               ]
             }
           }
-        }
-      ]
-    },
-    "Sink": {
-      "variables": {
+        },
+        "scale_tgt": {
+          "type": "observed",
+          "units": "1",
+          "shape": ["tgt_cells"],
+          "description": "In-model regridded scale on the 3-cell sim grid: scale_tgt[j] = sum_i W[i,j]*scale_src[i]. Reads only const W and the CONST loader scale_src, so it is CONST-cadence (materialized once).",
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": ["j"],
+            "ranges": { "i": [1, 6], "j": [1, 3] },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["W", "i", "j"] },
+                { "op": "index", "args": ["scale_src", "i"] }
+              ]
+            }
+          }
+        },
+        "c": {
+          "type": "state",
+          "shape": ["tgt_cells"],
+          "default": 0.0,
+          "description": "Integrated tracer concentration on the sim grid — CONTINUOUS cadence (changes every step). D(c[j]) = scale_tgt[j]*F_tgt[j], the regridded forcing."
+        },
         "d": {
           "type": "state",
-          "shape": ["i"],
+          "shape": ["tgt_cells"],
           "default": 0.0,
-          "description": "Integrated coupled tracer — CONTINUOUS. D(d[i]) = Box.c[i], a dotted cross-system reference the flatten namespacing carries through."
+          "description": "Integrated coupled tracer — CONTINUOUS. D(d[j]) = c[j]; a dependent variable integrating the forced tracer across the cadence, coupled to c."
         }
       },
       "equations": [
         {
-          "_comment": "D(d[i]) = Box.c[i]. The coupling: Sink integrates Box's state across the component boundary.",
+          "_comment": "D(c[j]) = scale_tgt[j]*F_tgt[j]. scale_tgt is CONST (const loader, materialized once); F_tgt is DISCRETE (temporal loader, refreshed per anchor). Both are in-model regrids of the 6-cell native fields onto j in [1,3]. Dense [1,3] ranges (not {from:<set>}) — index_sets are not yet carried through flatten.",
           "lhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
-            "ranges": { "i": [1, 3] },
+            "output_idx": ["j"],
+            "ranges": { "j": [1, 3] },
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["d", "i"] }],
+              "args": [{ "op": "index", "args": ["c", "j"] }],
               "wrt": "t"
             }
           },
           "rhs": {
-            "op": "arrayop",
+            "op": "aggregate",
             "args": [],
-            "output_idx": ["i"],
-            "ranges": { "i": [1, 3] },
-            "expr": { "op": "index", "args": ["Box.c", "i"] }
+            "output_idx": ["j"],
+            "ranges": { "j": [1, 3] },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["scale_tgt", "j"] },
+                { "op": "index", "args": ["F_tgt", "j"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "D(d[j]) = c[j]. The coupling: d integrates the forced tracer c.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["j"],
+            "ranges": { "j": [1, 3] },
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["d", "j"] }],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["j"],
+            "ranges": { "j": [1, 3] },
+            "expr": { "op": "index", "args": ["c", "j"] }
           }
         }
       ]

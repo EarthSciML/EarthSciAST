@@ -1,0 +1,475 @@
+{
+  "category": "pde_simulation_pipeline",
+  "version": "0.1-draft",
+  "status": "phase-0-scaffold",
+  "description": "Cross-language conformance for FULL-pipeline PDE simulations that require data loaders, per-species Dirichlet BCs, and nonlinear (mass-action) reactions (DESIGN.md). Sibling to `pde_simulation` (pre-discretized, linear, matrix-exponential-anchored). Here fixtures run the full lowering pipeline (reaction-gen -> template match -> operator_compose -> pointwise-lift -> scoped-`ic`) with loaded fields injected through each binding's data-Provider seam from the manifest `inputs`. Because the system is nonlinear there is no matrix-exponential `analytic`; the trajectory anchor is an independent reference integrator (see `reference/`). Phase 0 = contract + reference integrator + manifest scaffold + Gate G0; adapters, golden, and test-conformance.sh wiring are Phase 2.",
+  "reference_binding": "julia",
+  "reference_integrator": "reference/reference_integrator.py",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator",
+    "typescript": "rewrite-only port; no makearray lowering / simulator"
+  },
+  "tolerances": {
+    "rhs_rtol": 1e-09,
+    "rhs_atol": 1e-11,
+    "traj_golden_rtol": 1e-06,
+    "traj_golden_atol": 1e-09,
+    "traj_analytic_rtol": 0.0001,
+    "traj_analytic_atol": 1e-06
+  },
+  "trajectory_anchoring": {
+    "mode": "reference",
+    "note": "Nonlinear system: no matrix-exponential `trajectory.analytic`. Each binding's trajectory is gated against BOTH the Julia golden (`traj_golden` band) and the independent `trajectory.reference` (`traj_analytic` band, which absorbs integrator differences). The runner treats absent `trajectory.analytic` + present `trajectory.reference` as this category's sanctioned mode (DESIGN.md 6)."
+  },
+  "integrators": {
+    "reference": {
+      "algorithm": "DOPRI5 (hand-rolled, adaptive)",
+      "rtol": 1e-11,
+      "atol": 1e-13
+    },
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-10,
+      "abstol": 1e-12
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-10,
+      "atol": 1e-12
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-10,
+      "abstol": 1e-12
+    }
+  },
+  "fixtures": [
+    {
+      "id": "advection_reaction_loaded_ic_bc",
+      "path": "../../valid/advection_reaction_loaded_ic_bc.esm",
+      "model": "AdvectionReactionLoadedICBC",
+      "pipeline": "full",
+      "tags": [
+        "reaction-system",
+        "advection",
+        "operator-compose",
+        "pointwise-lift",
+        "scoped-reference-ic",
+        "loaded-boundary-condition",
+        "provider-injection",
+        "nonlinear"
+      ],
+      "grid": {
+        "lon": 4,
+        "lat": 2,
+        "species": [
+          "O3",
+          "NO",
+          "NO2"
+        ],
+        "dx": 100.0
+      },
+      "inputs": {
+        "InitialConditions.O3_init": [
+          [
+            38,
+            42
+          ],
+          [
+            39,
+            43
+          ],
+          [
+            41,
+            45
+          ],
+          [
+            43,
+            47
+          ]
+        ],
+        "InitialConditions.NO_init": [
+          [
+            0.1,
+            0.12
+          ],
+          [
+            0.11,
+            0.13
+          ],
+          [
+            0.09,
+            0.14
+          ],
+          [
+            0.12,
+            0.15
+          ]
+        ],
+        "InitialConditions.NO2_init": [
+          [
+            1.0,
+            1.2
+          ],
+          [
+            1.1,
+            1.3
+          ],
+          [
+            0.9,
+            1.4
+          ],
+          [
+            1.2,
+            1.5
+          ]
+        ],
+        "Meteorology.u_wind": [
+          [
+            2.0,
+            2.2
+          ],
+          [
+            2.1,
+            2.3
+          ],
+          [
+            2.2,
+            2.4
+          ],
+          [
+            2.3,
+            2.5
+          ]
+        ],
+        "BoundaryConditions.O3_inflow": [
+          35.0,
+          36.0
+        ],
+        "BoundaryConditions.NO_inflow": [
+          0.2,
+          0.25
+        ],
+        "BoundaryConditions.NO2_inflow": [
+          1.5,
+          1.6
+        ]
+      },
+      "state_order": [
+        "O3[1,1]",
+        "O3[1,2]",
+        "O3[2,1]",
+        "O3[2,2]",
+        "O3[3,1]",
+        "O3[3,2]",
+        "O3[4,1]",
+        "O3[4,2]",
+        "NO[1,1]",
+        "NO[1,2]",
+        "NO[2,1]",
+        "NO[2,2]",
+        "NO[3,1]",
+        "NO[3,2]",
+        "NO[4,1]",
+        "NO[4,2]",
+        "NO2[1,1]",
+        "NO2[1,2]",
+        "NO2[2,1]",
+        "NO2[2,2]",
+        "NO2[3,1]",
+        "NO2[3,2]",
+        "NO2[4,1]",
+        "NO2[4,2]"
+      ],
+      "rhs_probes": [
+        {
+          "id": "u0_loaded",
+          "t": 0.0,
+          "state": {
+            "O3[1,1]": 38.0,
+            "O3[1,2]": 42.0,
+            "O3[2,1]": 39.0,
+            "O3[2,2]": 43.0,
+            "O3[3,1]": 41.0,
+            "O3[3,2]": 45.0,
+            "O3[4,1]": 43.0,
+            "O3[4,2]": 47.0,
+            "NO[1,1]": 0.1,
+            "NO[1,2]": 0.12,
+            "NO[2,1]": 0.11,
+            "NO[2,2]": 0.13,
+            "NO[3,1]": 0.09,
+            "NO[3,2]": 0.14,
+            "NO[4,1]": 0.12,
+            "NO[4,2]": 0.15,
+            "NO2[1,1]": 1.0,
+            "NO2[1,2]": 1.2,
+            "NO2[2,1]": 1.1,
+            "NO2[2,2]": 1.3,
+            "NO2[3,1]": 0.9,
+            "NO2[3,2]": 1.4,
+            "NO2[4,1]": 1.2,
+            "NO2[4,2]": 1.5
+          },
+          "analytic_rhs": {
+            "O3[1,1]": -0.10339999999999999,
+            "O3[1,2]": -0.16171999999999997,
+            "O3[2,1]": -0.10321999999999999,
+            "O3[2,2]": -0.12861999999999998,
+            "O3[3,1]": -0.10591999999999999,
+            "O3[3,2]": -0.15439999999999998,
+            "O3[4,1]": -0.13287999999999997,
+            "O3[4,2]": -0.1694,
+            "NO[1,1]": -0.0625,
+            "NO[1,2]": -0.08339999999999997,
+            "NO[2,1]": -0.071615,
+            "NO[2,2]": -0.09434999999999999,
+            "NO[3,1]": -0.06202999999999999,
+            "NO[3,2]": -0.10664,
+            "NO[4,1]": -0.08756999999999997,
+            "NO[4,2]": -0.11964999999999998,
+            "NO2[1,1]": 0.0674,
+            "NO2[1,2]": 0.08801999999999997,
+            "NO2[2,1]": 0.07276999999999999,
+            "NO2[2,2]": 0.09182,
+            "NO2[3,1]": 0.06081999999999999,
+            "NO2[3,2]": 0.104,
+            "NO2[4,1]": 0.07997999999999997,
+            "NO2[4,2]": 0.11689999999999998
+          }
+        },
+        {
+          "id": "const_field",
+          "t": 0.0,
+          "state": {
+            "O3[1,1]": 40.0,
+            "O3[1,2]": 40.0,
+            "O3[2,1]": 40.0,
+            "O3[2,2]": 40.0,
+            "O3[3,1]": 40.0,
+            "O3[3,2]": 40.0,
+            "O3[4,1]": 40.0,
+            "O3[4,2]": 40.0,
+            "NO[1,1]": 0.1,
+            "NO[1,2]": 0.1,
+            "NO[2,1]": 0.1,
+            "NO[2,2]": 0.1,
+            "NO[3,1]": 0.1,
+            "NO[3,2]": 0.1,
+            "NO[4,1]": 0.1,
+            "NO[4,2]": 0.1,
+            "NO2[1,1]": 1.0,
+            "NO2[1,2]": 1.0,
+            "NO2[2,1]": 1.0,
+            "NO2[2,2]": 1.0,
+            "NO2[3,1]": 1.0,
+            "NO2[3,2]": 1.0,
+            "NO2[4,1]": 1.0,
+            "NO2[4,2]": 1.0
+          },
+          "analytic_rhs": {
+            "O3[1,1]": -0.11699999999999999,
+            "O3[1,2]": -0.11099999999999999,
+            "O3[2,1]": -0.06699999999999999,
+            "O3[2,2]": -0.06699999999999999,
+            "O3[3,1]": -0.06699999999999999,
+            "O3[3,2]": -0.06699999999999999,
+            "O3[4,1]": -0.06699999999999999,
+            "O3[4,2]": -0.06699999999999999,
+            "NO[1,1]": -0.06599999999999999,
+            "NO[1,2]": -0.06534999999999999,
+            "NO[2,1]": -0.06699999999999999,
+            "NO[2,2]": -0.06699999999999999,
+            "NO[3,1]": -0.06699999999999999,
+            "NO[3,2]": -0.06699999999999999,
+            "NO[4,1]": -0.06699999999999999,
+            "NO[4,2]": -0.06699999999999999,
+            "NO2[1,1]": 0.072,
+            "NO2[1,2]": 0.0736,
+            "NO2[2,1]": 0.06699999999999999,
+            "NO2[2,2]": 0.06699999999999999,
+            "NO2[3,1]": 0.06699999999999999,
+            "NO2[3,2]": 0.06699999999999999,
+            "NO2[4,1]": 0.06699999999999999,
+            "NO2[4,2]": 0.06699999999999999
+          }
+        },
+        {
+          "id": "lon_ramp",
+          "t": 0.0,
+          "state": {
+            "O3[1,1]": 35.1,
+            "O3[1,2]": 35.2,
+            "O3[2,1]": 40.1,
+            "O3[2,2]": 40.2,
+            "O3[3,1]": 45.1,
+            "O3[3,2]": 45.2,
+            "O3[4,1]": 50.1,
+            "O3[4,2]": 50.2,
+            "NO[1,1]": 0.35,
+            "NO[1,2]": 0.45,
+            "NO[2,1]": 0.4,
+            "NO[2,2]": 0.5,
+            "NO[3,1]": 0.45000000000000007,
+            "NO[3,2]": 0.55,
+            "NO[4,1]": 0.5,
+            "NO[4,2]": 0.6000000000000001,
+            "NO2[1,1]": 1.3,
+            "NO2[1,2]": 1.4,
+            "NO2[2,1]": 1.5,
+            "NO2[2,2]": 1.5999999999999999,
+            "NO2[3,1]": 1.7000000000000002,
+            "NO2[3,2]": 1.8,
+            "NO2[4,1]": 1.9000000000000001,
+            "NO2[4,2]": 2.0
+          },
+          "analytic_rhs": {
+            "O3[1,1]": -0.26563000000000003,
+            "O3[1,2]": -0.32432,
+            "O3[2,1]": -0.38622,
+            "O3[2,2]": -0.4688,
+            "O3[3,1]": -0.46681000000000006,
+            "O3[3,2]": -0.5584800000000001,
+            "O3[4,1]": -0.5564,
+            "O3[4,2]": -0.6571600000000001,
+            "NO[1,1]": -0.21663,
+            "NO[1,2]": -0.28086999999999995,
+            "NO[2,1]": -0.28226999999999997,
+            "NO[2,2]": -0.35495,
+            "NO[3,1]": -0.35791000000000006,
+            "NO[3,2]": -0.43968,
+            "NO[4,1]": -0.44254999999999994,
+            "NO[4,2]": -0.53341,
+            "NO2[1,1]": 0.21463,
+            "NO2[1,2]": 0.27812,
+            "NO2[2,1]": 0.27702,
+            "NO2[2,2]": 0.3492,
+            "NO2[3,1]": 0.35241000000000006,
+            "NO2[3,2]": 0.43368,
+            "NO2[4,1]": 0.43679999999999997,
+            "NO2[4,2]": 0.5271600000000001
+          }
+        }
+      ],
+      "trajectory": {
+        "checkpoints": [
+          0.0,
+          600.0
+        ],
+        "reference": "reference/advection_reaction_loaded_ic_bc.json"
+      },
+      "golden": "golden/advection_reaction_loaded_ic_bc.json"
+    },
+    {
+      "id": "wildfire_atmosphere_ocean",
+      "path": "../../valid/wildfire_atmosphere_ocean.esm",
+      "model": "Flattened",
+      "pipeline": "full",
+      "tags": [
+        "coupling",
+        "conservative-regrid",
+        "polygon-intersection-area",
+        "bin-skolem-broad-phase",
+        "lifting",
+        "operator-compose",
+        "pointwise-lift",
+        "mean-reduction",
+        "scoped-reference-ic",
+        "no-external-inputs"
+      ],
+      "grid": {
+        "atmos_cells": 4,
+        "ocean_cells": 3
+      },
+      "inputs": {},
+      "state_order": [
+        "T",
+        "wind_u",
+        "wind_v",
+        "phi",
+        "fuel",
+        "SST[1]",
+        "SST[2]",
+        "SST[3]",
+        "u_ocean[1]",
+        "u_ocean[2]",
+        "u_ocean[3]"
+      ],
+      "rhs_probes": [
+        {
+          "id": "u0",
+          "t": 0.0,
+          "state": {
+            "T": 288.0,
+            "wind_u": 0.0,
+            "wind_v": 0.0,
+            "phi": 1.0,
+            "fuel": 10.0,
+            "SST[1]": 290.0,
+            "SST[2]": 290.0,
+            "SST[3]": 290.0,
+            "u_ocean[1]": 0.0,
+            "u_ocean[2]": 0.0,
+            "u_ocean[3]": 0.0
+          },
+          "analytic_rhs": {
+            "T": 0.0,
+            "wind_u": 0.0,
+            "wind_v": 0.0,
+            "phi": 0.0,
+            "fuel": 0.0,
+            "SST[1]": 2.3923444976076556e-05,
+            "SST[2]": 6.778309409888356e-05,
+            "SST[3]": 8.373205741626794e-05,
+            "u_ocean[1]": 0.0,
+            "u_ocean[2]": 0.0,
+            "u_ocean[3]": 0.0
+          }
+        },
+        {
+          "id": "perturbed_unburned",
+          "t": 0.0,
+          "state": {
+            "T": 295.0,
+            "wind_u": 1.5,
+            "wind_v": 2.0,
+            "phi": 1.0,
+            "fuel": 8.0,
+            "SST[1]": 288.0,
+            "SST[2]": 291.5,
+            "SST[3]": 293.0,
+            "u_ocean[1]": 0.0,
+            "u_ocean[2]": 0.0,
+            "u_ocean[3]": 0.0
+          },
+          "analytic_rhs": {
+            "T": 0.0,
+            "wind_u": 0.0,
+            "wind_v": 0.0,
+            "phi": 0.0,
+            "fuel": 0.0,
+            "SST[1]": 2.3923444976076556e-05,
+            "SST[2]": 6.778309409888356e-05,
+            "SST[3]": 8.373205741626794e-05,
+            "u_ocean[1]": 0.0,
+            "u_ocean[2]": 0.0,
+            "u_ocean[3]": 0.0
+          }
+        }
+      ],
+      "trajectory": {
+        "checkpoints": [
+          0.0,
+          3600.0
+        ],
+        "reference": "reference/wildfire_atmosphere_ocean.json"
+      },
+      "golden": "golden/wildfire_atmosphere_ocean.json"
+    }
+  ]
+}

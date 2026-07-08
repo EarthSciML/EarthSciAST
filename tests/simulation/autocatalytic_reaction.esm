@@ -138,17 +138,7 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {},
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "ChemicalSystem.A": 100.0,
-          "ChemicalSystem.B": 1.0,
-          "ChemicalSystem.C": 0.0
-        }
-      }
-    }
+  "domain": {
+    "temporal": {}
   }
 }

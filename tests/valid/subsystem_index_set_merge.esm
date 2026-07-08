@@ -1,0 +1,31 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "subsystem_index_set_merge",
+    "description": "The importing side of the §4.7 'Index-set merge' pin (esm-spec §4.7, mirroring §9.7.5). The Host model mounts ./subsystem_mesh_lib.esm by reference. The host document redeclares cells (interval, 5) DEEP-EQUAL to the mesh file's declaration — idempotent — and does NOT declare vertices, which the merge brings in from the mesh file (post-load, index_sets.vertices.size == 4). The host's own diag variable is shaped over cells without owning the axis semantics: the mesh file remains the source of truth and any size disagreement would be the load-time error subsystem_index_set_conflict (see tests/invalid/template_imports/subsystem_index_set_conflict.esm).",
+    "authors": ["EarthSciAST"],
+    "created": "2026-07-02T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "merge", "mount", "deep-equal"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 5 }
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.5, "description": "host scalar state" },
+        "diag": { "type": "parameter", "units": "1", "shape": ["cells"], "default": 0.5, "description": "host per-cell parameter shaped over the mesh file's axis" }
+      },
+      "equations": [
+        {
+          "_comment": "d(x)/dt = -0.5 * x; the host's dynamics do not touch the mesh, the fixture pins the registry merge.",
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] }
+        }
+      ],
+      "subsystems": {
+        "M": { "ref": "./subsystem_mesh_lib.esm" }
+      }
+    }
+  }
+}

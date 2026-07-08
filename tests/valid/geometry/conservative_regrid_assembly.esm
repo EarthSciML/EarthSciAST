@@ -2,9 +2,9 @@
   "esm": "0.6.0",
   "metadata": {
     "name": "conservative_regrid_assembly",
-    "description": "M4 EVALUABLE conservative-regridding ASSEMBLY (RFC semiring-faq-unified-ir §A.8 / §8.1 / §6.1; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.6, the Julia assembly). The companion-and-counterpart to the STRUCTURAL conservative_regrid_overlap_join.esm (ess-my4.4.5): that document expresses the FULL idiom including the bin-Skolem broad phase (skolem + a distinct/bool_and_or candidate-set aggregate) and is schema-only — `skolem`/`distinct` are resolver concerns no numeric evaluator runs. THIS document drops the value-invention half and keeps the part the Julia tree-walk evaluator actually RUNS: the numeric assembly `F_tgt[j] = (1/A_j[j])·Σ_i A_ij[i,j]·F_src[i]`, verified end-to-end on a concrete fixture grid pair (the dedicated Julia test geometry_assembly_conformance_test.jl builds A_ij from the cell polygons via the landed planar intersect_polygon + polygon_area kernel, then drives this fixture through build_evaluator with A_ij / F_src / dst_areas supplied as const_arrays). The A.8 mapping, piece by piece: (1) OVERLAP PAIRS {(i,j):A_ij>0} — the bin-Skolem overlap join. The broad-phase candidate set is the value-equality `join.on [[i,j]]`: each cell's integer broad-phase BIN key (the content-addressed id that skolem(\"bin\", floor(lon/dx), floor(lat/dy)) would mint) is carried as the CATEGORICAL MEMBER of its cell in `src_cells`/`tgt_cells` (member = bin key, POSITION = cell ordinal indexing A_ij/F_src), so the equi-join admits a pair iff src and tgt share a bin (the same data-derived join idiom as join_disaggregation_m2m.esm). The tolerance-dependent SURVIVING-overlap set is then the `filter A_ij[i,j] > atol` that drops sub-sliver candidates (§5.8.5: candidate set ⊋ surviving set). (2) A_ij — built ONCE by the narrow phase `polygon_area(intersect_polygon(src_i, tgt_j))` and consumed here as the static-partition (§6.1) overlap-area FACTOR (ConservativeRegridding.jl's `intersections` matrix of RAW areas). Its per-entry provenance is demonstrated on a representative candidate pair by the `clip`/`A_ij_rep` narrow-phase observeds (the landed ess-my4.4.3 kernel); the dedicated test asserts the representative area equals the matching A_ij entry. (3) A_j = Σ_i A_ij — the group-by-`j` `sum_product` FAQ (ConservativeRegridding.jl's row-sums → `dst_areas`); the `A_j` state recomputes it from the SAME areas that feed the apply, so the partition-of-unity Σ_i A_ij/A_j = 1 holds by construction (§5.8.3). (4) APPLY Σ_i A_ij·F_src[i] — the `sum_product` FAQ over the surviving overlap set (the sparse mat-vec `mul!(dst, intersections, src)`). (5) NORMALIZE /A_j — folded into the apply body as the `/ dst_areas[j]` factor (elementwise, build-time-foldable per A.8; ConservativeRegridding.jl's `dst ./= dst_areas`). `dst_areas` is the build-once stored denominator; the `A_j` FAQ verifies the row-sum reproduces it. Because every state is a D-equation from a zero IC the derivative du = f!(u0) the evaluator returns IS the assembled value (A_j, F_tgt) and the narrow-phase area — exact, no integrator. NO inline `tests` block: this fixture is supplied A_ij / F_src / dst_areas as const_arrays at evaluation time and so is not generically simulatable from inline initial_conditions alone; per CONFORMANCE_SPEC.md §5.8 it is therefore SCHEMA-and-structurally-validated by the Python/Rust/Go/TypeScript geometry loaders (the same gate as intersect_polygon_planar_area.esm) and numerically EVALUATED only by the Julia assembly test. The per-binding apply is ess-my4.4.6 (Julia, this) / .7 / .12.",
+    "description": "Conservative-regridding assembly with weights computed INLINE from cell geometry (RFC semiring-faq-unified-ir \u00a7A.8 / \u00a78.1; CONFORMANCE_SPEC.md \u00a75.8; esm-spec.md \u00a78.6.1; bead ess-my4.4.6). The source (F_src=[10,20,30,40]) is a SPATIALLY-VARYING field on a 4-cell source grid, remapped onto a DIFFERENT 4-cell target grid whose cell boundaries are shifted so the overlaps are fractional. Both grids tile [0,4]x[0,1] as in-file `const` vertex rings (src_poly / tgt_poly). The overlap weights are NOT supplied: A_ij = polygon_intersection_area(src_i, tgt_j) is declared inline via the FUSED planar clip+area leaf (\u00a78.6.1), ranged over the bin-skolem candidate pairs; the candidate pairs come from the bin-skolem broad phase (floor \u2192 skolem bin keys \u2192 distinct equi-join on the materialized bin buffers), A_j = \u03a3_i A_ij is the row-sum normalization, and W_ij = A_ij/A_j. F_tgt[j] = \u03a3_i W_ij\u00b7F_src[i] = [40/3, 20, 100/3, 40], conserving global mass \u03a3_j A_j\u00b7F_tgt = \u03a3_i A_i\u00b7F_src = 100 with partition-of-unity \u03a3_i W_ij = 1 by construction. Because the fused leaf returns the SCALAR overlap area (defined to equal the intersect_polygon clip + shoelace area) and hides the clip ring inside the kernel, A_ij is an ordinary DENSE aggregate over the candidate set with NO ragged intermediate \u2014 the densely-evaluable narrow phase of \u00a78.6.1, unlike the earlier ragged-clip form conservative_regrid_overlap_join.esm still documents. The dedicated Julia test geometry_assembly_conformance_test.jl asserts the inline fused-leaf provenance and drives the narrow phase (A_ij) plus apply/normalize (A_j, F_tgt, conservation, partition-of-unity) numerically from the in-file geometry.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "geometry",
@@ -12,116 +12,597 @@
       "assembly",
       "overlap-join",
       "bin-skolem",
-      "intersect_polygon",
-      "polygon-area",
+      "polygon_intersection_area",
+      "fused-leaf",
       "sum_product",
       "join",
       "filter",
+      "inline-weights",
       "partition-of-unity",
       "conservation",
-      "dst-areas",
       "end-to-end",
-      "evaluable",
       "ess-my4.4.6"
     ]
   },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cell_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "candidate_pairs": {
+      "kind": "derived",
+      "from_faq": "candidate_set"
+    }
+  },
   "models": {
     "ConservativeRegridAssembly": {
-      "index_sets": {
-        "coord": {
-          "kind": "interval",
-          "size": 2
-        },
-        "cell_verts": {
-          "kind": "interval",
-          "size": 4
-        },
-        "src_cells": {
-          "kind": "categorical",
-          "members": ["b0", "b0", "b1", "b1"]
-        },
-        "tgt_cells": {
-          "kind": "categorical",
-          "members": ["b0", "b0", "b1", "b1"]
-        },
-        "clip_ring": {
-          "kind": "derived",
-          "from_faq": "overlap_clip"
-        }
-      },
       "variables": {
-        "A_ij": {
-          "type": "parameter",
-          "shape": ["src_cells", "tgt_cells"],
-          "description": "The build-once sparse overlap-area matrix A_ij = polygon_area(intersect_polygon(src_i, tgt_j)) — ConservativeRegridding.jl's `intersections` matrix of RAW areas, the static-partition (§6.1) NARROW-phase output the assembly consumes as a factor. Supplied as a const_array at evaluation time (the dedicated Julia test fills it by running the landed planar clip kernel over the fixture grid pair). Entries for non-candidate (different-bin) pairs and sub-`atol` slivers are 0; both are excluded by the join + zero-area filter of the assembly aggregates."
+        "src_poly": {
+          "type": "observed",
+          "shape": [
+            "src_cells",
+            "cell_verts",
+            "coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ],
+                [
+                  0.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.0,
+                  0.0
+                ],
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  3.0,
+                  0.0
+                ],
+                [
+                  3.0,
+                  1.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3.0,
+                  0.0
+                ],
+                [
+                  4.0,
+                  0.0
+                ],
+                [
+                  4.0,
+                  1.0
+                ],
+                [
+                  3.0,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file SOURCE-cell geometry: one closed lon-lat vertex ring per source cell (src_poly[i,v,1]=lon, src_poly[i,v,2]=lat), declared as a `const` array. The `poly_a` operand of the ranged narrow-phase clip. This is the cell geometry the overlap weights are computed FROM \u2014 nothing about the weights is supplied opaquely."
+        },
+        "tgt_poly": {
+          "type": "observed",
+          "shape": [
+            "tgt_cells",
+            "cell_verts",
+            "coord"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ],
+                [
+                  0.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2.0,
+                  0.0
+                ],
+                [
+                  3.5,
+                  0.0
+                ],
+                [
+                  3.5,
+                  1.0
+                ],
+                [
+                  2.0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3.5,
+                  0.0
+                ],
+                [
+                  4.0,
+                  0.0
+                ],
+                [
+                  4.0,
+                  1.0
+                ],
+                [
+                  3.5,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          },
+          "description": "In-file TARGET-cell geometry: one closed lon-lat vertex ring per target cell \u2014 the `poly_b` operand of the ranged clip. The source and target grids tile the same domain [0,4]x[0,1] with DIFFERENT cell boundaries so the overlaps are fractional (the interesting regridding case)."
+        },
+        "src_lon": {
+          "type": "observed",
+          "shape": [
+            "src_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "output_idx": ["i"],
+            "args": ["src_poly"],
+            "reduce": "min",
+            "ranges": {
+              "i": { "from": "src_cells" },
+              "v": { "from": "cell_verts" }
+            },
+            "expr": { "op": "index", "args": ["src_poly", "i", "v", 1] }
+          },
+          "description": "Source-cell representative longitude (bbox-min corner) \u2014 the float coord that enters ONLY the integer binning via `floor`, never a raw join comparison (\u00a75.8.5)."
+        },
+        "src_lat": {
+          "type": "observed",
+          "shape": [
+            "src_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "output_idx": ["i"],
+            "args": ["src_poly"],
+            "reduce": "min",
+            "ranges": {
+              "i": { "from": "src_cells" },
+              "v": { "from": "cell_verts" }
+            },
+            "expr": { "op": "index", "args": ["src_poly", "i", "v", 2] }
+          },
+          "description": "Source-cell representative latitude for binning."
+        },
+        "tgt_lon": {
+          "type": "observed",
+          "shape": [
+            "tgt_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "output_idx": ["j"],
+            "args": ["tgt_poly"],
+            "reduce": "min",
+            "ranges": {
+              "j": { "from": "tgt_cells" },
+              "v": { "from": "cell_verts" }
+            },
+            "expr": { "op": "index", "args": ["tgt_poly", "j", "v", 1] }
+          },
+          "description": "Target-cell representative longitude for binning."
+        },
+        "tgt_lat": {
+          "type": "observed",
+          "shape": [
+            "tgt_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "output_idx": ["j"],
+            "args": ["tgt_poly"],
+            "reduce": "min",
+            "ranges": {
+              "j": { "from": "tgt_cells" },
+              "v": { "from": "cell_verts" }
+            },
+            "expr": { "op": "index", "args": ["tgt_poly", "j", "v", 2] }
+          },
+          "description": "Target-cell representative latitude for binning."
         },
         "F_src": {
-          "type": "parameter",
-          "shape": ["src_cells"],
-          "description": "The source field being remapped (a build-once `parameter` here; time-varying F_src is the dynamic-cadence case of §6.1, where the apply FAQ becomes continuous). Supplied as a const_array."
+          "type": "observed",
+          "shape": [
+            "src_cells"
+          ],
+          "expression": {
+            "op": "const",
+            "value": [
+              10.0,
+              20.0,
+              30.0,
+              40.0
+            ],
+            "args": []
+          },
+          "description": "The SPATIALLY-VARYING source field being remapped (F_src=[10,20,30,40]). Non-uniform on purpose: a uniform field broadcast through the weights would be a no-op, so conservation and partition-of-unity are non-trivial."
         },
-        "dst_areas": {
+        "dx": {
           "type": "parameter",
-          "shape": ["tgt_cells"],
-          "description": "The build-once target-cell area denominator A_j = Σ_i A_ij stored at regridder-build time — ConservativeRegridding.jl's `dst_areas`. The NORMALIZE factor: the apply body divides by dst_areas[j] (the `dst ./= dst_areas` step folded into the FAQ). Supplied as a const_array; the `A_j` FAQ state recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, §5.8.3)."
+          "shape": [],
+          "description": "Bin width in degrees \u2014 the integer quantization step of the broad phase (\u00a75.8.5).",
+          "default": 2.0
+        },
+        "dy": {
+          "type": "parameter",
+          "shape": [],
+          "description": "Bin height in degrees.",
+          "default": 2.0
         },
         "atol": {
           "type": "parameter",
           "shape": [],
-          "description": "Sliver floor (§5.8.2): an overlap area at or below `atol` is treated as equal-to-zero. The threshold of the zero-area `filter` that turns the byte-identical CANDIDATE set (from the bin join) into the tolerance-dependent SURVIVING-overlap set (§5.8.5)."
+          "description": "Sliver floor (\u00a75.8.2): an overlap area at or below atol is treated as zero and dropped by the surviving-overlap filter.",
+          "default": 1e-12
         },
-        "src_poly_rep": {
-          "type": "parameter",
-          "shape": ["cell_verts", "coord"],
-          "description": "A representative source cell as a closed lon-lat vertex ring — the `poly_a` operand of the narrow-phase clip demo. Supplied as a const_array. In the full mesh there is one ring per source cell and the clip runs once per candidate pair to fill each A_ij entry; here it is shown on one representative pair."
+        "src_bin": {
+          "type": "state",
+          "shape": [
+            "src_cells"
+          ],
+          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)). The equi-join column the candidate set joins on (materialized bin buffer)."
         },
-        "tgt_poly_rep": {
-          "type": "parameter",
-          "shape": ["cell_verts", "coord"],
-          "description": "A representative target cell ring — the `poly_b` operand of the clip demo (the target cell that overlaps src_poly_rep on a fractional sub-cell area)."
+        "tgt_bin": {
+          "type": "state",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Integer bin key of each target cell \u2014 identically quantized, so a shared key means the two cells fall in the same broad-phase bucket."
         },
-        "clip": {
+        "pair_exists": {
+          "type": "state",
+          "shape": [
+            "candidate_pairs"
+          ],
+          "description": "Membership over the bin-skolem candidate overlap-pair set (the broad phase), materialized as the derived candidate_pairs index set via from_faq:\"candidate_set\"."
+        },
+        "A_ij": {
           "type": "observed",
-          "shape": ["clip_ring", "coord"],
-          "description": "NARROW-PHASE DEMO: the clipped overlap ring A ∩ B for the representative candidate pair — the `intersect_polygon` leaf output, a vertex ring of data-dependent length whose vertices are the derived `clip_ring` index set. One such clip per candidate pair fills the build-once A_ij factor.",
-          "expression": {
-            "op": "intersect_polygon",
-            "id": "overlap_clip",
-            "manifold": "planar",
-            "args": ["src_poly_rep", "tgt_poly_rep"]
-          }
-        },
-        "A_ij_rep": {
-          "type": "observed",
-          "shape": [],
-          "description": "NARROW-PHASE DEMO: the representative overlap area A_ij = polygon_area(clip) — an ORDINARY sum_product FAQ over the clipped ring (planar shoelace / Gauss-Green cross-term 0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v) over the closed ring). This is how each entry of the build-once A_ij factor is produced; the dedicated Julia test asserts it equals the matching A_ij[i,j] supplied to the assembly.",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
           "expression": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
             "ranges": {
-              "v": { "from": "clip_ring" }
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
             },
-            "args": ["clip"],
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [],
             "expr": {
-              "op": "*",
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
               "args": [
-                0.5,
                 {
-                  "op": "-",
+                  "op": "index",
+                  "args": [
+                    "src_poly",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "tgt_poly",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "NARROW PHASE (densely evaluable): the overlap-area matrix A_ij[i,j] = polygon_intersection_area(src_poly[i], tgt_poly[j]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1). Ranged over the SAME bin-skolem candidate pairs (join.on [[src_bin,tgt_bin]]) as the row-sum / apply, so it is dense over the broad-phase candidate set with NO ragged intermediate: the fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel. This replaces the earlier ragged-ring narrow phase (which surfaced a data-dependent per-clip vertex set and was only structurally valid). The weights are DECLARED from cell geometry in-file, not hand-supplied; the row-sum / apply halves below consume A_ij as the per-pair overlap-area factor."
+        },
+        "A_j": {
+          "type": "observed",
+          "shape": [
+            "tgt_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            }
+          },
+          "description": "Target-cell area denominator A_j[j] = \u03a3_i A_ij[i,j] \u2014 the group-by-`j` row-sum over the bin-skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]]) with the sub-atol sliver filter. The normalize denominator; = ConservativeRegridding.jl's `dst_areas`, here computed from geometry, not supplied."
+        },
+        "W_ij": {
+          "type": "observed",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          },
+          "description": "The conservative regrid weights W_ij = A_ij[i,j] / A_j[j] over the candidate pairs. Partition-of-unity \u03a3_i W_ij = 1 holds BY CONSTRUCTION because the denominator A_j is the row-sum of the SAME areas (\u00a75.8.3)."
+        },
+        "A_j_check": {
+          "type": "state",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Tracer that recomputes A_j from the SAME A_ij feeding the apply (zero IC \u21d2 du = A_j), the partition-of-unity-by-construction proof."
+        },
+        "F_tgt": {
+          "type": "state",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "The regridded field F_tgt[j] = \u03a3_i W_ij[i,j]\u00b7F_src[i] = (1/A_j[j])\u00b7\u03a3_i A_ij[i,j]\u00b7F_src[i] \u2014 the apply sum_product FAQ over the candidate set. Zero IC \u21d2 du = F_tgt. Conservation \u03a3_j A_j\u00b7F_tgt[j] = \u03a3_i A_i\u00b7F_src[i] and PoU \u03a3_i W_ij = 1 hold."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "(1a) BROAD PHASE \u2014 bin each SOURCE cell to an integer lon-lat bin key skolem(\"bin\", floor(lon/dx), floor(lat/dy)).",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "src_bin",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
                   "args": [
                     {
-                      "op": "*",
+                      "op": "/",
                       "args": [
-                        { "op": "index", "args": ["clip", "v", 1] },
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lon",
+                            "i"
+                          ]
+                        },
+                        "dx"
                       ]
-                    },
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
                     {
-                      "op": "*",
+                      "op": "/",
                       "args": [
-                        { "op": "index", "args": ["clip", { "op": "+", "args": ["v", 1] }, 1] },
-                        { "op": "index", "args": ["clip", "v", 2] }
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lat",
+                            "i"
+                          ]
+                        },
+                        "dy"
                       ]
                     }
                   ]
@@ -130,92 +611,285 @@
             }
           }
         },
-        "narrow_phase_area": {
-          "type": "state",
-          "shape": [],
-          "description": "Tracer that consumes the representative narrow-phase area so the clip + polygon_area FAQ evaluate in a well-formed ODE: d(narrow_phase_area)/dt = A_ij_rep from a zero IC, so du = A_ij_rep. The dedicated test checks it equals the representative overlap area (and the matching A_ij entry)."
-        },
-        "A_j": {
-          "type": "state",
-          "shape": ["tgt_cells"],
-          "description": "Target-cell area denominator A_j = Σ_i A_ij — the group-by-`j` row-sum of the overlap-area matrix (ConservativeRegridding.jl's `dst_areas`), recomputed by the FAQ from the SAME A_ij that feeds the apply. d(A_j[j])/dt from a zero IC, so du = A_j[j]. The test asserts it reproduces the supplied `dst_areas`, which is the partition-of-unity-by-construction proof (§5.8.3)."
-        },
-        "F_tgt": {
-          "type": "state",
-          "shape": ["tgt_cells"],
-          "description": "The regridded field F_tgt[j] = (1/A_j[j])·Σ_i A_ij[i,j]·F_src[i] = Σ_i W_ij·F_src[i] with W_ij = A_ij/A_j — the apply FAQ (sparse mat-vec) with the normalize `/ dst_areas[j]` folded into the body. d(F_tgt[j])/dt from a zero IC, so du = F_tgt[j]. The test asserts conservation Σ_j A_j·F_tgt[j] = Σ_i A_i·F_src[i] and partition-of-unity Σ_i W_ij = 1."
-        }
-      },
-      "equations": [
         {
-          "_comment": "NARROW-PHASE DEMO consumer: d(narrow_phase_area)/dt = A_ij_rep (the representative polygon_area(intersect_polygon(...)) overlap area). A_ij_rep is a scalar observed substituted inline; from a zero IC du = A_ij_rep.",
-          "lhs": { "op": "D", "args": ["narrow_phase_area"], "wrt": "t" },
-          "rhs": "A_ij_rep"
-        },
-        {
-          "_comment": "(1)+(3) A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` sum_product FAQ (row-sums → dst_areas). The OVERLAP JOIN restricts the contraction to bin-Skolem CANDIDATE pairs: join.on [[i,j]] admits (i,j) iff member(src_cells[i]) == member(tgt_cells[j]) (shared bin key). The `filter A_ij[i,j] > atol` drops sub-atol slivers → the SURVIVING-overlap set. LHS output range is dense [1,4] (sizes A_j); the contracted source index i and the joined target index j draw {from} the categorical bin sets so the join reads bin members. Zero IC ⇒ du[A_j[j]] = A_j[j].",
+          "_comment": "(1b) BROAD PHASE \u2014 bin each TARGET cell identically.",
           "lhs": {
-            "op": "aggregate",
-            "args": [],
-            "output_idx": ["j"],
-            "expr": { "op": "D", "args": [{ "op": "index", "args": ["A_j", "j"] }], "wrt": "t" },
-            "ranges": { "j": [1, 4] }
+            "op": "index",
+            "args": [
+              "tgt_bin",
+              "j"
+            ]
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["j"],
-            "ranges": {
-              "i": { "from": "src_cells" },
-              "j": { "from": "tgt_cells" }
-            },
-            "join": [
-              { "on": [["i", "j"]] }
+            "output_idx": [
+              "j"
             ],
-            "filter": {
-              "op": ">",
-              "args": [{ "op": "index", "args": ["A_ij", "i", "j"] }, "atol"]
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              }
             },
-            "args": ["A_ij"],
-            "expr": { "op": "index", "args": ["A_ij", "i", "j"] }
+            "args": [],
+            "expr": {
+              "op": "skolem",
+              "args": [
+                "bin",
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lon",
+                            "j"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lat",
+                            "j"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
           }
         },
         {
-          "_comment": "(4)+(5) APPLY + NORMALIZE — F_tgt[j] = Σ_i A_ij[i,j]·F_src[i] / dst_areas[j]. The sum_product FAQ over the surviving overlap set (same bin join + zero-area filter as A_j) is the sparse mat-vec `mul!(dst, intersections, src)`; the elementwise `/ dst_areas[j]` factor folded into the body is the normalize `dst ./= dst_areas` (dst_areas is the build-once stored denominator A_j). Together F_tgt = Σ_i W_ij·F_src[i], W_ij = A_ij/A_j, Σ_i W_ij = 1 by construction. Zero IC ⇒ du[F_tgt[j]] = F_tgt[j].",
+          "_comment": "(1c) BROAD PHASE \u2014 candidate overlap-pair set = the bin-skolem equi-join (distinct bool_and_or, id candidate_set): keep (i,j) whose bin keys are EQUAL; skolem(\"pair\",i,j) names each surviving candidate.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "pair_exists",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "bool_and_or",
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "id": "candidate_set",
+            "distinct": true,
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "key": {
+              "op": "skolem",
+              "args": [
+                "pair",
+                "i",
+                "j"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "_comment": "(3) A_j[j] = \u03a3_i A_ij[i,j] over the bin-skolem candidate pairs (join on the materialized bin buffers) with the sliver filter. A_ij is computed inline from geometry above. Zero IC \u21d2 du[A_j_check] = A_j.",
           "lhs": {
             "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                4
+              ]
+            },
             "args": [],
-            "output_idx": ["j"],
-            "expr": { "op": "D", "args": [{ "op": "index", "args": ["F_tgt", "j"] }], "wrt": "t" },
-            "ranges": { "j": [1, 4] }
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j_check",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
           },
           "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
-            "output_idx": ["j"],
+            "output_idx": [
+              "j"
+            ],
             "ranges": {
-              "i": { "from": "src_cells" },
-              "j": { "from": "tgt_cells" }
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
             },
             "join": [
-              { "on": [["i", "j"]] }
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
             ],
             "filter": {
               "op": ">",
-              "args": [{ "op": "index", "args": ["A_ij", "i", "j"] }, "atol"]
-            },
-            "args": ["A_ij", "F_src", "dst_areas"],
-            "expr": {
-              "op": "/",
               "args": [
                 {
-                  "op": "*",
+                  "op": "index",
                   "args": [
-                    { "op": "index", "args": ["A_ij", "i", "j"] },
-                    { "op": "index", "args": ["F_src", "i"] }
+                    "A_ij",
+                    "i",
+                    "j"
                   ]
                 },
-                { "op": "index", "args": ["dst_areas", "j"] }
+                "atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "(4)+(5) APPLY + NORMALIZE \u2014 D(F_tgt[j]) = \u03a3_i W_ij[i,j]\u00b7F_src[i], W_ij = A_ij/A_j (normalize folded into the inline weights). Same bin-skolem candidate join + zero-area filter. Zero IC \u21d2 du[F_tgt] = F_tgt.",
+          "lhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                4
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F_tgt",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "W_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "F_src",
+                    "i"
+                  ]
+                }
               ]
             }
           }

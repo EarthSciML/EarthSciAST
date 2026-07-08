@@ -1,0 +1,11 @@
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "import_unknown_only", "description": "The only filter names a template the target library does not declare (template_import_unknown_name, esm-spec 9.7.2)" },
+  "models": {
+    "M": {
+      "expression_template_imports": [ { "ref": "../../valid/template_import_lib.esm", "only": ["does_not_exist"] } ],
+      "variables": { "x": { "type": "state", "units": "1", "default": 0.0 } },
+      "equations": [ { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } } ]
+    }
+  }
+}

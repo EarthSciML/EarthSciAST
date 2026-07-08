@@ -11,9 +11,9 @@ substitution results, and graph structures.
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Any, Set
+from typing import Dict, Any
 import difflib
-from collections import defaultdict
+
 
 class ConformanceAnalysis:
     def __init__(self):
@@ -33,8 +33,9 @@ class ConformanceAnalysis:
             "substitution_analysis": self.substitution_analysis,
             "graph_analysis": self.graph_analysis,
             "divergence_summary": self.divergence_summary,
-            "overall_status": self.overall_status
+            "overall_status": self.overall_status,
         }
+
 
 def load_language_results(output_dir: Path, language: str) -> Dict[str, Any]:
     """Load results from a specific language implementation."""
@@ -44,11 +45,12 @@ def load_language_results(output_dir: Path, language: str) -> Dict[str, Any]:
         return {}
 
     try:
-        with open(results_file, 'r') as f:
+        with open(results_file, "r") as f:
             return json.load(f)
     except Exception as e:
         print(f"Error loading results for {language}: {e}")
         return {}
+
 
 def _effective_is_valid(result: Dict[str, Any]) -> bool:
     """Derive whether a language considers a file valid, regardless of which fields it emits.
@@ -72,7 +74,7 @@ def compare_validation_results(language_results: Dict[str, Dict[str, Any]]) -> D
         "files_tested": set(),
         "divergence": {},
         "error_consistency": {},
-        "summary": {"total_files": 0, "consistent_files": 0, "divergent_files": 0}
+        "summary": {"total_files": 0, "consistent_files": 0, "divergent_files": 0},
     }
 
     # Collect all files tested across languages
@@ -98,7 +100,7 @@ def compare_validation_results(language_results: Dict[str, Dict[str, Any]]) -> D
                         if filename in results["validation_results"][category]:
                             file_results[lang] = {
                                 "category": category,
-                                **results["validation_results"][category][filename]
+                                **results["validation_results"][category][filename],
                             }
 
         if len(file_results) < 2:
@@ -134,10 +136,11 @@ def compare_validation_results(language_results: Dict[str, Dict[str, Any]]) -> D
             validation_analysis["divergence"][filename] = {
                 "languages": list(file_results.keys()),
                 "inconsistencies": inconsistencies,
-                "details": file_results
+                "details": file_results,
             }
 
     return validation_analysis
+
 
 def compare_display_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Compare display format outputs across languages."""
@@ -147,7 +150,7 @@ def compare_display_results(language_results: Dict[str, Dict[str, Any]]) -> Dict
         "test_files": set(),
         "divergence": {},
         "format_consistency": {"unicode": {}, "latex": {}, "ascii": {}},
-        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0}
+        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0},
     }
 
     # Collect all test files
@@ -186,15 +189,17 @@ def compare_display_results(language_results: Dict[str, Dict[str, Any]]) -> Dict
                         lang_formula = result["chemical_formulas"][i]
 
                         # Compare unicode output
-                        if (ref_formula.get("output_unicode") != lang_formula.get("output_unicode")):
-                            divergences.append({
-                                "type": "chemical_formula_unicode",
-                                "input": ref_formula.get("input", ""),
-                                "reference_lang": reference_lang,
-                                "reference_output": ref_formula.get("output_unicode", ""),
-                                "divergent_lang": lang,
-                                "divergent_output": lang_formula.get("output_unicode", "")
-                            })
+                        if ref_formula.get("output_unicode") != lang_formula.get("output_unicode"):
+                            divergences.append(
+                                {
+                                    "type": "chemical_formula_unicode",
+                                    "input": ref_formula.get("input", ""),
+                                    "reference_lang": reference_lang,
+                                    "reference_output": ref_formula.get("output_unicode", ""),
+                                    "divergent_lang": lang,
+                                    "divergent_output": lang_formula.get("output_unicode", ""),
+                                }
+                            )
 
         # Compare expressions
         if "expressions" in reference_result:
@@ -208,15 +213,17 @@ def compare_display_results(language_results: Dict[str, Dict[str, Any]]) -> Dict
 
                         # Compare outputs for each format
                         for output_format in ["output_unicode", "output_latex", "output_ascii"]:
-                            if (ref_expr.get(output_format) != lang_expr.get(output_format)):
-                                divergences.append({
-                                    "type": f"expression_{output_format.split('_')[1]}",
-                                    "input": ref_expr.get("input", ""),
-                                    "reference_lang": reference_lang,
-                                    "reference_output": ref_expr.get(output_format, ""),
-                                    "divergent_lang": lang,
-                                    "divergent_output": lang_expr.get(output_format, "")
-                                })
+                            if ref_expr.get(output_format) != lang_expr.get(output_format):
+                                divergences.append(
+                                    {
+                                        "type": f"expression_{output_format.split('_')[1]}",
+                                        "input": ref_expr.get("input", ""),
+                                        "reference_lang": reference_lang,
+                                        "reference_output": ref_expr.get(output_format, ""),
+                                        "divergent_lang": lang,
+                                        "divergent_output": lang_expr.get(output_format, ""),
+                                    }
+                                )
 
         if divergences:
             display_analysis["divergence"][test_file] = divergences
@@ -228,6 +235,7 @@ def compare_display_results(language_results: Dict[str, Dict[str, Any]]) -> Dict
 
     return display_analysis
 
+
 def compare_substitution_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Compare substitution results across languages."""
     print("Comparing substitution results...")
@@ -235,7 +243,7 @@ def compare_substitution_results(language_results: Dict[str, Dict[str, Any]]) ->
     substitution_analysis = {
         "test_files": set(),
         "divergence": {},
-        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0}
+        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0},
     }
 
     # Collect all test files
@@ -273,16 +281,18 @@ def compare_substitution_results(language_results: Dict[str, Dict[str, Any]]) ->
                         lang_test = result[i]
 
                         # Compare results
-                        if (ref_test.get("result") != lang_test.get("result")):
-                            divergences.append({
-                                "test_index": i,
-                                "input": ref_test.get("input", ""),
-                                "substitutions": ref_test.get("substitutions", {}),
-                                "reference_lang": reference_lang,
-                                "reference_result": ref_test.get("result", ""),
-                                "divergent_lang": lang,
-                                "divergent_result": lang_test.get("result", "")
-                            })
+                        if ref_test.get("result") != lang_test.get("result"):
+                            divergences.append(
+                                {
+                                    "test_index": i,
+                                    "input": ref_test.get("input", ""),
+                                    "substitutions": ref_test.get("substitutions", {}),
+                                    "reference_lang": reference_lang,
+                                    "reference_result": ref_test.get("result", ""),
+                                    "divergent_lang": lang,
+                                    "divergent_result": lang_test.get("result", ""),
+                                }
+                            )
 
         if divergences:
             substitution_analysis["divergence"][test_file] = divergences
@@ -294,6 +304,7 @@ def compare_substitution_results(language_results: Dict[str, Dict[str, Any]]) ->
 
     return substitution_analysis
 
+
 def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Compare graph generation results across languages."""
     print("Comparing graph results...")
@@ -302,7 +313,7 @@ def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[s
         "test_files": set(),
         "divergence": {},
         "structure_consistency": {},
-        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0}
+        "summary": {"total_tests": 0, "consistent_tests": 0, "divergent_tests": 0},
     }
 
     # Collect all test files
@@ -341,22 +352,26 @@ def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[s
 
                 # Compare node and edge counts
                 if ref_graph.get("nodes") != lang_graph.get("nodes"):
-                    divergences.append({
-                        "type": "node_count",
-                        "reference_lang": reference_lang,
-                        "reference_count": ref_graph.get("nodes"),
-                        "divergent_lang": lang,
-                        "divergent_count": lang_graph.get("nodes")
-                    })
+                    divergences.append(
+                        {
+                            "type": "node_count",
+                            "reference_lang": reference_lang,
+                            "reference_count": ref_graph.get("nodes"),
+                            "divergent_lang": lang,
+                            "divergent_count": lang_graph.get("nodes"),
+                        }
+                    )
 
                 if ref_graph.get("edges") != lang_graph.get("edges"):
-                    divergences.append({
-                        "type": "edge_count",
-                        "reference_lang": reference_lang,
-                        "reference_count": ref_graph.get("edges"),
-                        "divergent_lang": lang,
-                        "divergent_count": lang_graph.get("edges")
-                    })
+                    divergences.append(
+                        {
+                            "type": "edge_count",
+                            "reference_lang": reference_lang,
+                            "reference_count": ref_graph.get("edges"),
+                            "divergent_lang": lang,
+                            "divergent_count": lang_graph.get("edges"),
+                        }
+                    )
 
                 # Compare DOT format output (basic structure)
                 ref_dot = ref_graph.get("dot_format", "")
@@ -364,16 +379,22 @@ def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[s
 
                 if ref_dot != lang_dot and ref_dot and lang_dot:
                     # Check for structural differences rather than exact text match
-                    ref_lines = sorted([line.strip() for line in ref_dot.split('\n') if '->' in line])
-                    lang_lines = sorted([line.strip() for line in lang_dot.split('\n') if '->' in line])
+                    ref_lines = sorted(
+                        [line.strip() for line in ref_dot.split("\n") if "->" in line]
+                    )
+                    lang_lines = sorted(
+                        [line.strip() for line in lang_dot.split("\n") if "->" in line]
+                    )
 
                     if ref_lines != lang_lines:
-                        divergences.append({
-                            "type": "dot_structure",
-                            "reference_lang": reference_lang,
-                            "divergent_lang": lang,
-                            "diff": list(difflib.unified_diff(ref_lines, lang_lines, n=0))
-                        })
+                        divergences.append(
+                            {
+                                "type": "dot_structure",
+                                "reference_lang": reference_lang,
+                                "divergent_lang": lang,
+                                "diff": list(difflib.unified_diff(ref_lines, lang_lines, n=0)),
+                            }
+                        )
 
         if divergences:
             graph_analysis["divergence"][test_file] = divergences
@@ -385,20 +406,21 @@ def compare_graph_results(language_results: Dict[str, Dict[str, Any]]) -> Dict[s
 
     return graph_analysis
 
+
 def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any]:
     """Calculate overall divergence summary across all test categories."""
     summary = {
         "total_divergent_categories": 0,
         "categories": {},
         "critical_divergences": [],
-        "overall_score": 0.0
+        "overall_score": 0.0,
     }
 
     categories = [
         ("validation", analysis.validation_analysis),
         ("display", analysis.display_analysis),
         ("substitution", analysis.substitution_analysis),
-        ("graph", analysis.graph_analysis)
+        ("graph", analysis.graph_analysis),
     ]
 
     total_score = 0.0
@@ -407,8 +429,12 @@ def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any
     for category_name, category_data in categories:
         if "summary" in category_data:
             category_summary = category_data["summary"]
-            total_tests = category_summary.get("total_tests", category_summary.get("total_files", 0))
-            divergent_tests = category_summary.get("divergent_tests", category_summary.get("divergent_files", 0))
+            total_tests = category_summary.get(
+                "total_tests", category_summary.get("total_files", 0)
+            )
+            divergent_tests = category_summary.get(
+                "divergent_tests", category_summary.get("divergent_files", 0)
+            )
 
             if total_tests > 0:
                 consistency_score = (total_tests - divergent_tests) / total_tests
@@ -416,7 +442,11 @@ def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any
                     "total_tests": total_tests,
                     "divergent_tests": divergent_tests,
                     "consistency_score": consistency_score,
-                    "status": "PASS" if consistency_score >= 0.9 else "WARN" if consistency_score >= 0.7 else "FAIL"
+                    "status": "PASS"
+                    if consistency_score >= 0.9
+                    else "WARN"
+                    if consistency_score >= 0.7
+                    else "FAIL",
                 }
 
                 total_score += consistency_score
@@ -427,11 +457,13 @@ def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any
 
                     # Identify critical divergences
                     if consistency_score < 0.7:
-                        summary["critical_divergences"].append({
-                            "category": category_name,
-                            "score": consistency_score,
-                            "divergent_count": divergent_tests
-                        })
+                        summary["critical_divergences"].append(
+                            {
+                                "category": category_name,
+                                "score": consistency_score,
+                                "divergent_count": divergent_tests,
+                            }
+                        )
 
     # Calculate overall score (only count categories that actually have tests)
     if categories_with_tests > 0:
@@ -441,12 +473,19 @@ def calculate_divergence_summary(analysis: ConformanceAnalysis) -> Dict[str, Any
 
     return summary
 
+
 def main():
     parser = argparse.ArgumentParser(description="Compare cross-language conformance outputs")
     parser.add_argument("--output-dir", required=True, help="Directory containing language results")
-    parser.add_argument("--languages", nargs="+", default=["julia", "typescript", "python", "rust"],
-                       help="Languages to compare")
-    parser.add_argument("--comparison-output", required=True, help="Output file for comparison analysis")
+    parser.add_argument(
+        "--languages",
+        nargs="+",
+        default=["julia", "typescript", "python", "rust"],
+        help="Languages to compare",
+    )
+    parser.add_argument(
+        "--comparison-output", required=True, help="Output file for comparison analysis"
+    )
 
     args = parser.parse_args()
 
@@ -467,7 +506,9 @@ def main():
         print("Error: Need at least 2 language implementations to perform comparison")
         return 1
 
-    print(f"\nComparing results from {len(language_results)} languages: {list(language_results.keys())}")
+    print(
+        f"\nComparing results from {len(language_results)} languages: {list(language_results.keys())}"
+    )
 
     # Perform comparisons
     analysis = ConformanceAnalysis()
@@ -493,7 +534,7 @@ def main():
     comparison_output = Path(args.comparison_output)
     comparison_output.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(comparison_output, 'w') as f:
+    with open(comparison_output, "w") as f:
         json.dump(analysis.to_dict(), f, indent=2, default=str)
 
     print(f"\nComparison analysis written to: {comparison_output}")
@@ -503,9 +544,12 @@ def main():
     if analysis.divergence_summary["critical_divergences"]:
         print("\nCritical divergences found:")
         for divergence in analysis.divergence_summary["critical_divergences"]:
-            print(f"  - {divergence['category']}: {divergence['score']:.2%} consistency ({divergence['divergent_count']} divergent tests)")
+            print(
+                f"  - {divergence['category']}: {divergence['score']:.2%} consistency ({divergence['divergent_count']} divergent tests)"
+            )
 
     return 0 if analysis.overall_status in ["PASS", "WARN"] else 1
+
 
 if __name__ == "__main__":
     exit(main())

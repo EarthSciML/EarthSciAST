@@ -39,15 +39,7 @@
         "initial_conditions": {
           "type": "constant",
           "value": 0.0
-        },
-        "boundary_conditions": [
-          {
-            "type": "zero_gradient",
-            "dimensions": [
-              "x"
-            ]
-          }
-        ]
+        }
       }
     }
   },
@@ -72,19 +64,7 @@
             "default": 0.0
           }
         },
-        "equations": [],
-        "boundary_conditions": {
-          "u_zero_gradient_xmin": {
-            "variable": "u",
-            "side": "xmin",
-            "kind": "zero_gradient"
-          },
-          "u_zero_gradient_xmax": {
-            "variable": "u",
-            "side": "xmax",
-            "kind": "zero_gradient"
-          }
-        }
+        "equations": []
       }
     },
     "domains": {

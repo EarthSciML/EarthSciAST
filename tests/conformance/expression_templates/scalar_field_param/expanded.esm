@@ -1,0 +1,95 @@
+{
+  "esm": "0.8.0",
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "authors": [
+      "esm conformance"
+    ],
+    "description": "Scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5): one `overlap_area` template whose `body` carries a parameter name (`K_manifold`) as the string VALUE of the scalar `manifold` field of a `polygon_intersection_area` node — a substitution site, the exact mirror of the match-side scalar-field binding rule — instantiated twice with different manifold literals (planar, spherical). All five bindings MUST expand both observeds to the same post-substitution nodes (expanded.esm); the bound value must be a literal admissible for the field, enforced on the EXPANDED form per §9.6.4 (an inadmissible binding, e.g. \"bogus\", is rejected with `geometry_manifold_invalid` — exercised by the per-binding unit suites, not this fixture). The document schema admits any string in the `manifold` position of the template body (anyOf enum/string) precisely so this library-style file schema-validates as a document.",
+    "name": "expression_templates_scalar_field_param",
+    "tags": [
+      "expression_templates",
+      "scalar-field-substitution",
+      "manifold",
+      "geometry",
+      "conformance"
+    ]
+  },
+  "models": {
+    "Overlap": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "u"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "u"
+            ],
+            "op": "-"
+          }
+        }
+      ],
+      "variables": {
+        "area_planar": {
+          "description": "First instantiation: the manifold parameter bound to the literal 'planar'.",
+          "expression": {
+            "args": [
+              "poly_a",
+              "poly_b"
+            ],
+            "manifold": "planar",
+            "op": "polygon_intersection_area"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "area_spherical": {
+          "description": "Second instantiation: the SAME template bound to 'spherical' — the one-file two-manifold factoring the scalar-field substitution rule exists for.",
+          "expression": {
+            "args": [
+              "poly_a",
+              "poly_b"
+            ],
+            "manifold": "spherical",
+            "op": "polygon_intersection_area"
+          },
+          "type": "observed",
+          "units": "1"
+        },
+        "poly_a": {
+          "shape": [
+            "verts",
+            "coord"
+          ],
+          "type": "parameter"
+        },
+        "poly_b": {
+          "shape": [
+            "verts",
+            "coord"
+          ],
+          "type": "parameter"
+        },
+        "u": {
+          "default": 0.5,
+          "type": "state",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

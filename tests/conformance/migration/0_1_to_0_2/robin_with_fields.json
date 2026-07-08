@@ -48,25 +48,7 @@
         "initial_conditions": {
           "type": "constant",
           "value": 0.0
-        },
-        "boundary_conditions": [
-          {
-            "type": "robin",
-            "dimensions": [
-              "x"
-            ],
-            "robin_alpha": 2.0,
-            "robin_beta": 1.0,
-            "robin_gamma": 3.5
-          },
-          {
-            "type": "dirichlet",
-            "dimensions": [
-              "y"
-            ],
-            "value": 288.15
-          }
-        ]
+        }
       }
     }
   },
@@ -95,37 +77,7 @@
             "default": 1.0
           }
         },
-        "equations": [],
-        "boundary_conditions": {
-          "T_robin_xmin": {
-            "variable": "T",
-            "side": "xmin",
-            "kind": "robin",
-            "robin_alpha": 2.0,
-            "robin_beta": 1.0,
-            "robin_gamma": 3.5
-          },
-          "T_robin_xmax": {
-            "variable": "T",
-            "side": "xmax",
-            "kind": "robin",
-            "robin_alpha": 2.0,
-            "robin_beta": 1.0,
-            "robin_gamma": 3.5
-          },
-          "T_dirichlet_ymin": {
-            "variable": "T",
-            "side": "ymin",
-            "kind": "dirichlet",
-            "value": 288.15
-          },
-          "T_dirichlet_ymax": {
-            "variable": "T",
-            "side": "ymax",
-            "kind": "dirichlet",
-            "value": 288.15
-          }
-        }
+        "equations": []
       }
     },
     "domains": {

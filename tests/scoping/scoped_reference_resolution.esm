@@ -33,7 +33,71 @@
           "description": "Solar constant"
         }
       },
-      "equations": [],
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "global_time"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Atmosphere.temperature_mean"
+            ]
+          },
+          "rhs": 288.15
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Atmosphere.Chemistry.TroposphericChemistry.O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Atmosphere.Chemistry.TroposphericChemistry.NO"
+            ]
+          },
+          "rhs": 1e-10
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Atmosphere.Chemistry.TroposphericChemistry.NO2"
+            ]
+          },
+          "rhs": 1e-09
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Atmosphere.Chemistry.StratosphericChemistry.O3_strat"
+            ]
+          },
+          "rhs": 8e-06
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Ocean.sea_surface_temperature"
+            ]
+          },
+          "rhs": 285.0
+        }
+      ],
       "subsystems": {
         "Atmosphere": {
           "reference": {
@@ -366,6 +430,15 @@
               "carbon_pool"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "carbon_pool"
+            ]
+          },
+          "rhs": 5.0
         }
       ],
       "subsystems": {
@@ -394,36 +467,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v6/{date:%Y%m%d_%H%M}.nc"
-      },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
       },
       "variables": {
         "NO_emissions": {
@@ -554,33 +597,10 @@
       "description": "Couple stratosphere-troposphere ozone exchange using four-level scoped references"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-06-01T00:00:00Z",
-        "end": "2024-06-01T12:00:00Z"
-      },
-      "spatial": {
-        "z": {
-          "min": 0.0,
-          "max": 50000.0,
-          "units": "m",
-          "grid_spacing": 1000.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "EarthSystem.global_time": 0.0,
-          "EarthSystem.Atmosphere.temperature_mean": 288.15,
-          "EarthSystem.Atmosphere.Chemistry.TroposphericChemistry.O3": 4e-08,
-          "EarthSystem.Atmosphere.Chemistry.TroposphericChemistry.NO": 1e-10,
-          "EarthSystem.Atmosphere.Chemistry.TroposphericChemistry.NO2": 1e-09,
-          "EarthSystem.Atmosphere.Chemistry.StratosphericChemistry.O3_strat": 8e-06,
-          "EarthSystem.Ocean.sea_surface_temperature": 285.0,
-          "BiosphereModel.carbon_pool": 5.0
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-06-01T00:00:00Z",
+      "end": "2024-06-01T12:00:00Z"
     }
   }
 }

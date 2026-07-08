@@ -42,7 +42,13 @@
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["N"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "N"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "*",
             "args": [
@@ -52,7 +58,13 @@
                 "op": "-",
                 "args": [
                   1,
-                  { "op": "/", "args": ["N", "K"] }
+                  {
+                    "op": "/",
+                    "args": [
+                      "N",
+                      "K"
+                    ]
+                  }
                 ]
               }
             ]
@@ -81,13 +93,38 @@
             "rel": 1e-05
           },
           "assertions": [
-            { "variable": "N", "time":  0.0, "expected":  1.0 },
-            { "variable": "N", "time":  5.0, "expected": 10.957205155884768 },
-            { "variable": "N", "time": 10.0, "expected": 59.985960181303476 },
-            { "variable": "N", "time": 15.0, "expected": 94.80871535685075,
-              "tolerance": { "abs": 1e-04 } },
-            { "variable": "N", "time": 30.0, "expected": 99.99697165873832,
-              "tolerance": { "abs": 1e-04, "rel": 1e-08 } }
+            {
+              "variable": "N",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "N",
+              "time": 5.0,
+              "expected": 10.957205155884768
+            },
+            {
+              "variable": "N",
+              "time": 10.0,
+              "expected": 59.985960181303476
+            },
+            {
+              "variable": "N",
+              "time": 15.0,
+              "expected": 94.80871535685075,
+              "tolerance": {
+                "abs": 0.0001
+              }
+            },
+            {
+              "variable": "N",
+              "time": 30.0,
+              "expected": 99.99697165873832,
+              "tolerance": {
+                "abs": 0.0001,
+                "rel": 1e-08
+              }
+            }
           ]
         },
         {
@@ -105,9 +142,19 @@
             "end": 30.0
           },
           "assertions": [
-            { "variable": "N", "time":  0.0, "expected": 150.0 },
-            { "variable": "N", "time": 30.0, "expected": 100.0,
-              "tolerance": { "abs": 1e-03 } }
+            {
+              "variable": "N",
+              "time": 0.0,
+              "expected": 150.0
+            },
+            {
+              "variable": "N",
+              "time": 30.0,
+              "expected": 100.0,
+              "tolerance": {
+                "abs": 0.001
+              }
+            }
           ]
         }
       ],
@@ -116,8 +163,7 @@
           "id": "single_run",
           "description": "A single default run illustrating the classic sigmoid approach to carrying capacity.",
           "initial_state": {
-            "type": "constant",
-            "value": 1.0
+            "N": 1.0
           },
           "parameters": {
             "r": 0.5,
@@ -132,15 +178,25 @@
               "id": "population_vs_time",
               "type": "line",
               "description": "Population size versus time, showing sigmoidal growth.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "N", "label": "population" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "N",
+                "label": "population"
+              }
             },
             {
               "id": "population_scatter",
               "type": "scatter",
               "description": "Same trajectory as a scatter plot, useful when the data is sparse.",
-              "x": { "variable": "t" },
-              "y": { "variable": "N" }
+              "x": {
+                "variable": "t"
+              },
+              "y": {
+                "variable": "N"
+              }
             }
           ]
         },
@@ -148,8 +204,7 @@
           "id": "rK_heatmap_sweep",
           "description": "A 2-D Cartesian sweep over r and K, plotting the final population on a heatmap and illustrating both scale types (linear in r, logarithmic in K). Because N(final) -> K for any r>0 when the run is long enough, this sweep mostly visualizes the convergence-to-carrying-capacity surface.",
           "initial_state": {
-            "type": "constant",
-            "value": 1.0
+            "N": 1.0
           },
           "time_span": {
             "start": 0.0,
@@ -160,11 +215,21 @@
             "dimensions": [
               {
                 "parameter": "r",
-                "range": { "start": 0.1, "stop": 1.0, "count": 10, "scale": "linear" }
+                "range": {
+                  "start": 0.1,
+                  "stop": 1.0,
+                  "count": 10,
+                  "scale": "linear"
+                }
               },
               {
                 "parameter": "K",
-                "range": { "start": 10.0, "stop": 1000.0, "count": 5, "scale": "log" }
+                "range": {
+                  "start": 10.0,
+                  "stop": 1000.0,
+                  "count": 5,
+                  "scale": "log"
+                }
               }
             ]
           },
@@ -173,25 +238,48 @@
               "id": "final_N_heatmap",
               "type": "heatmap",
               "description": "Final population as a function of r (x) and K (y). Uses reduce=final so the value is independent of the exact time grid.",
-              "x": { "variable": "r", "label": "growth rate r (1/s)" },
-              "y": { "variable": "K", "label": "carrying capacity K" },
-              "value": { "variable": "N", "reduce": "final" }
+              "x": {
+                "variable": "r",
+                "label": "growth rate r (1/s)"
+              },
+              "y": {
+                "variable": "K",
+                "label": "carrying capacity K"
+              },
+              "value": {
+                "variable": "N",
+                "reduce": "final"
+              }
             },
             {
               "id": "max_N_heatmap",
               "type": "heatmap",
               "description": "Same sweep, but coloring by the maximum N observed during the run. Equivalent to the final run for monotone trajectories, but distinguishes overshoot for oscillatory models.",
-              "x": { "variable": "r" },
-              "y": { "variable": "K" },
-              "value": { "variable": "N", "reduce": "max" }
+              "x": {
+                "variable": "r"
+              },
+              "y": {
+                "variable": "K"
+              },
+              "value": {
+                "variable": "N",
+                "reduce": "max"
+              }
             },
             {
               "id": "N_at_fixed_time_heatmap",
               "type": "heatmap",
               "description": "Population at t=10 across the sweep, using at_time instead of reduce.",
-              "x": { "variable": "r" },
-              "y": { "variable": "K" },
-              "value": { "variable": "N", "at_time": 10.0 }
+              "x": {
+                "variable": "r"
+              },
+              "y": {
+                "variable": "K"
+              },
+              "value": {
+                "variable": "N",
+                "at_time": 10.0
+              }
             }
           ]
         },
@@ -199,10 +287,7 @@
           "id": "enumerated_r_sweep",
           "description": "A 1-D sweep over an enumerated set of r values, illustrating the values form of sweep dimensions (as opposed to generated ranges).",
           "initial_state": {
-            "type": "per_variable",
-            "values": {
-              "N": 1.0
-            }
+            "N": 1.0
           },
           "parameters": {
             "K": 100.0
@@ -216,7 +301,15 @@
             "dimensions": [
               {
                 "parameter": "r",
-                "values": [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+                "values": [
+                  0.1,
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0,
+                  1.5,
+                  2.0
+                ]
               }
             ]
           },
@@ -225,8 +318,14 @@
               "id": "trajectories_overlay",
               "type": "line",
               "description": "Population trajectories for each r in the sweep, overlaid on one axis.",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "N", "label": "population" }
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "N",
+                "label": "population"
+              }
             }
           ]
         }
@@ -239,18 +338,38 @@
         "notes": "A -> B reaction system used to demonstrate that tests/examples have identical shape on ReactionSystem as on Model."
       },
       "species": {
-        "A": { "units": "mol/L", "default": 1.0 },
-        "B": { "units": "mol/L", "default": 0.0 }
+        "A": {
+          "units": "mol/L",
+          "default": 1.0
+        },
+        "B": {
+          "units": "mol/L",
+          "default": 0.0
+        }
       },
       "parameters": {
-        "k": { "units": "1/s", "default": 0.1, "description": "First-order rate constant" }
+        "k": {
+          "units": "1/s",
+          "default": 0.1,
+          "description": "First-order rate constant"
+        }
       },
       "reactions": [
         {
           "id": "R1",
           "name": "A_to_B",
-          "substrates": [ { "species": "A", "stoichiometry": 1 } ],
-          "products":   [ { "species": "B", "stoichiometry": 1 } ],
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
           "rate": "k"
         }
       ],
@@ -273,12 +392,32 @@
             "end": 50.0
           },
           "assertions": [
-            { "variable": "A", "time":  0.0, "expected": 1.0 },
-            { "variable": "A", "time": 10.0, "expected": 0.36787944117144233 },
-            { "variable": "A", "time": 50.0, "expected": 0.006737946999085467,
-              "tolerance": { "abs": 1e-08 } },
-            { "variable": "B", "time": 50.0, "expected": 0.9932620530009145,
-              "tolerance": { "abs": 1e-08 } }
+            {
+              "variable": "A",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "A",
+              "time": 10.0,
+              "expected": 0.36787944117144233
+            },
+            {
+              "variable": "A",
+              "time": 50.0,
+              "expected": 0.006737946999085467,
+              "tolerance": {
+                "abs": 1e-08
+              }
+            },
+            {
+              "variable": "B",
+              "time": 50.0,
+              "expected": 0.9932620530009145,
+              "tolerance": {
+                "abs": 1e-08
+              }
+            }
           ]
         }
       ],
@@ -287,20 +426,37 @@
           "id": "decay_trace",
           "description": "Plot A and B vs time for a single default run.",
           "initial_state": {
-            "type": "per_variable",
-            "values": { "A": 1.0, "B": 0.0 }
+            "A": 1.0,
+            "B": 0.0
           },
-          "parameters": { "k": 0.1 },
-          "time_span": { "start": 0.0, "end": 50.0 },
+          "parameters": {
+            "k": 0.1
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
           "plots": [
             {
               "id": "ab_vs_time",
               "type": "line",
-              "x": { "variable": "t", "label": "time (s)" },
-              "y": { "variable": "A", "label": "concentration (mol/L)" },
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
+              "y": {
+                "variable": "A",
+                "label": "concentration (mol/L)"
+              },
               "series": [
-                { "name": "A", "variable": "A" },
-                { "name": "B", "variable": "B" }
+                {
+                  "name": "A",
+                  "variable": "A"
+                },
+                {
+                  "name": "B",
+                  "variable": "B"
+                }
               ]
             }
           ]
@@ -309,20 +465,34 @@
           "id": "multi_y_trace",
           "description": "Demonstrates inline multi-series y array (v0.5.0): y takes an array of PlotAxis rather than a single one. Parsers project the array onto the canonical Y (first entry) plus Series.",
           "initial_state": {
-            "type": "per_variable",
-            "values": { "A": 1.0, "B": 0.0 }
+            "A": 1.0,
+            "B": 0.0
           },
-          "parameters": { "k": 0.1 },
-          "time_span": { "start": 0.0, "end": 50.0 },
+          "parameters": {
+            "k": 0.1
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 50.0
+          },
           "plots": [
             {
               "id": "ab_multi_y",
               "type": "line",
               "description": "A and B plotted with inline array-form y.",
-              "x": { "variable": "t", "label": "time (s)" },
+              "x": {
+                "variable": "t",
+                "label": "time (s)"
+              },
               "y": [
-                { "variable": "A", "label": "A" },
-                { "variable": "B", "label": "B" }
+                {
+                  "variable": "A",
+                  "label": "A"
+                },
+                {
+                  "variable": "B",
+                  "label": "B"
+                }
               ]
             }
           ]

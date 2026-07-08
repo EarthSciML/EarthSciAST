@@ -4,7 +4,7 @@
     "name": "join_on_key_not_string",
     "description": "INVALID (bead ess-my4.2.5): an `aggregate` node whose `join` clause `on` pair carries a NON-STRING key column — `[\"src\", 2]` names the right key column with the integer 2 instead of a column-name string (RFC semiring-faq-unified-ir §5.3 / §8). A join `on` pair names two KEY COLUMNS (range symbols / index-set names), which are always strings; the matched VALUES may be integers, but the column identifiers in `on` are not. The schema constrains each `on` pair item to `type: string`, so an integer key-column identifier is a pure schema (item-type) violation, caught by every binding at validation time. (Distinct from join_on_pair_not_pair.esm, which violates the pair arity, and join_not_array.esm, which violates the `join` container type.)",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",
@@ -14,14 +14,17 @@
       "ess-my4.2.5"
     ]
   },
+  "index_sets": {
+    "sourceType": {
+      "kind": "categorical",
+      "members": [
+        "onroad",
+        "nonroad"
+      ]
+    }
+  },
   "models": {
     "NonStringJoinKey": {
-      "index_sets": {
-        "sourceType": {
-          "kind": "categorical",
-          "members": ["onroad", "nonroad"]
-        }
-      },
       "variables": {
         "u": {
           "type": "state"
@@ -31,23 +34,39 @@
         {
           "lhs": {
             "op": "D",
-            "args": ["u"],
+            "args": [
+              "u"
+            ],
             "wrt": "t"
           },
           "rhs": {
             "op": "aggregate",
             "output_idx": [],
             "ranges": {
-              "src": { "from": "sourceType" }
+              "src": {
+                "from": "sourceType"
+              }
             },
             "join": [
-              { "on": [["src", 2]] }
+              {
+                "on": [
+                  [
+                    "src",
+                    2
+                  ]
+                ]
+              }
             ],
             "expr": {
               "op": "index",
-              "args": ["u", "src"]
+              "args": [
+                "u",
+                "src"
+              ]
             },
-            "args": ["u"]
+            "args": [
+              "u"
+            ]
           }
         }
       ]

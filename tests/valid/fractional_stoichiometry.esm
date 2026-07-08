@@ -3,7 +3,7 @@
   "metadata": {
     "name": "FractionalStoichiometry",
     "description": "Atmospheric-chemistry-style reactions with non-integer product yields (e.g., 0.87 CH2O from ISOP+O3). Exercises the v0.2.x schema relaxation of StoichiometryEntry.stoichiometry from integer to positive number (gt-1e96). Integer-valued substrate coefficients coexist with fractional-valued product coefficients.",
-    "authors": ["EarthSciSerialization contributors"],
+    "authors": ["EarthSciAST contributors"],
     "created": "2026-04-20T00:00:00Z",
     "tags": ["reactions", "fractional-stoichiometry", "atmospheric-chemistry", "gt-1e96"]
   },

@@ -1,6 +1,6 @@
 # Comprehensive test coverage against ESM specification features (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Test complete ESM format coverage including all variable types
@@ -15,14 +15,14 @@
 
             # Observed variables with complex expressions
             "ideal_gas_law" => ModelVariable(ObservedVariable;
-                expression=OpExpr("*", EarthSciSerialization.Expr[
+                expression=OpExpr("*", EarthSciAST.Expr[
                     VarExpr("R"), VarExpr("temperature")
                 ]),
                 description="RT term in ideal gas law"),
             "exponential_decay" => ModelVariable(ObservedVariable;
-                expression=OpExpr("exp", EarthSciSerialization.Expr[
-                    OpExpr("*", EarthSciSerialization.Expr[
-                        OpExpr("-", EarthSciSerialization.Expr[VarExpr("k_rate")]),
+                expression=OpExpr("exp", EarthSciAST.Expr[
+                    OpExpr("*", EarthSciAST.Expr[
+                        OpExpr("-", EarthSciAST.Expr[VarExpr("k_rate")]),
                         VarExpr("t")
                     ])
                 ]),
@@ -33,15 +33,15 @@
         comprehensive_eqs = [
             # Simple differential equation
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("temperature")], wrt="t"),
-                OpExpr("*", EarthSciSerialization.Expr[VarExpr("k_rate"), VarExpr("temperature")])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("temperature")], wrt="t"),
+                OpExpr("*", EarthSciAST.Expr[VarExpr("k_rate"), VarExpr("temperature")])
             ),
             # More complex differential equation
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("pressure")], wrt="t"),
-                OpExpr("+", EarthSciSerialization.Expr[
-                    OpExpr("*", EarthSciSerialization.Expr[VarExpr("R"), VarExpr("temperature")]),
-                    OpExpr("^", EarthSciSerialization.Expr[VarExpr("pressure"), NumExpr(0.5)])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("pressure")], wrt="t"),
+                OpExpr("+", EarthSciAST.Expr[
+                    OpExpr("*", EarthSciAST.Expr[VarExpr("R"), VarExpr("temperature")]),
+                    OpExpr("^", EarthSciAST.Expr[VarExpr("pressure"), NumExpr(0.5)])
                 ])
             )
         ]
@@ -53,9 +53,9 @@
             description="Reset temperature every 10 time units"
         )
 
-        pressure_condition = OpExpr("-", EarthSciSerialization.Expr[VarExpr("pressure"), NumExpr(200000.0)])
+        pressure_condition = OpExpr("-", EarthSciAST.Expr[VarExpr("pressure"), NumExpr(200000.0)])
         condition_event = ContinuousEvent(
-            EarthSciSerialization.Expr[pressure_condition],
+            EarthSciAST.Expr[pressure_condition],
             [AffectEquation("pressure", NumExpr(101325.0))],
             description="Reset pressure if it exceeds 2 atm"
         )
@@ -67,7 +67,7 @@
         # Test conversion preserves all features
         mtk_sys = to_mtk_system(comprehensive_model, "ComprehensiveModel")
 
-        @test mtk_sys isa EarthSciSerialization.MockMTKSystem
+        @test mtk_sys isa EarthSciAST.MockMTKSystem
         @test length(mtk_sys.states) == 2        # temperature, pressure
         @test length(mtk_sys.parameters) == 2    # R, k_rate
         @test length(mtk_sys.observed_variables) == 2  # ideal_gas_law, exponential_decay

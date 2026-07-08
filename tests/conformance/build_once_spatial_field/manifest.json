@@ -1,0 +1,31 @@
+{
+  "category": "build_once_spatial_field_consumption",
+  "version": "1.0",
+  "description": "Cross-language conformance for a BUILD-ONCE SPATIAL FIELD materialized once at setup and consumed elementwise by an ODE (CONFORMANCE_SPEC.md §5.12). A geometry leaf (`polygon_intersection_area` over const cell rings) produces a per-cell `area` field; a build-once centered first difference of it — authored as the periodic `makearray` STENCIL a discretization rule lowers `D` to — yields `darea`; and a per-cell ODE `D(u[c]) = darea[c] - u[c]` GATHERS the build-once `darea` at every RHS call. This locks the two paths the terrain-regrid coupling surfaced in the Julia runner: (1) the setup-time materializer must evaluate a NON-aggregate build-once array op (a `makearray` with no `output_idx`, plus `reshape`) — not only aggregates; and (2) a build-once materialized array must be exposed to the ODE RHS as a gatherable const array (`index(darea, c)`). The forcing is CONST, so the golden trajectory u_c(t) = darea_c (1 - e^-t) is analytic and exact. Complements `tests/conformance/geometry/` (build-once regrid areas, no downstream ODE) and `tests/conformance/subsystem_loader/` (bind a CONST loader field consumed bare/gather, no geometry).",
+  "reference_binding": "analytic",
+  "bindings_required": ["julia", "python", "rust"],
+  "bindings_optional": [],
+  "scope_excluded": {
+    "go": "rewrite-only port; no array/ODE simulator",
+    "typescript": "rewrite-only port; no array/ODE simulator"
+  },
+  "tolerances": {
+    "traj_rtol": 1e-04,
+    "traj_atol": 1e-06
+  },
+  "integrators": {
+    "julia": {"solver": "Tsit5", "reltol": 1e-10, "abstol": 1e-12},
+    "python": {"solver": "LSODA", "reltol": 1e-10, "abstol": 1e-12},
+    "rust": {"solver": "Bdf", "reltol": 1e-10, "abstol": 1e-12}
+  },
+  "fixtures": [
+    {
+      "id": "build_once_spatial_ode",
+      "fixture": "fixtures/build_once_spatial_ode.esm",
+      "golden": "golden/build_once_spatial_ode.json",
+      "state_order": ["Field.u[1]", "Field.u[2]", "Field.u[3]"],
+      "setup_fields": ["Field.area", "Field.darea"],
+      "tags": ["build-once", "setup-materialization", "makearray", "polygon-intersection-area", "gather", "array-ode", "const"]
+    }
+  ]
+}

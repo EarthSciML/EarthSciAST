@@ -108,6 +108,42 @@
               "NO"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "O3"
+            ]
+          },
+          "rhs": 4e-08
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO"
+            ]
+          },
+          "rhs": 1e-10
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "NO2"
+            ]
+          },
+          "rhs": 1e-09
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "Photochemistry.NO2_photo"
+            ]
+          },
+          "rhs": 1e-09
         }
       ],
       "continuous_events": [
@@ -303,36 +339,6 @@
       "source": {
         "url_template": "file:///data/WRF_output/{date:%Y%m%d_%H%M}.nc"
       },
-      "grid": {
-        "family": "cartesian",
-        "crs": {
-          "projection": "longlat",
-          "datum": "WGS84"
-        },
-        "description": "Native grid migrated from the loader's former 'spatial' block (RFC pure-io-data-loaders §4.1); the loader describes this grid but performs no reprojection or regridding.",
-        "dimensions": [
-          "lon",
-          "lat"
-        ],
-        "extents": {
-          "lon": {
-            "n": "n_lon",
-            "spacing": "uniform"
-          },
-          "lat": {
-            "n": "n_lat",
-            "spacing": "uniform"
-          }
-        },
-        "parameters": {
-          "n_lon": {
-            "description": "lon cell count, resolved from the source dataset at load time"
-          },
-          "n_lat": {
-            "description": "lat cell count, resolved from the source dataset at load time"
-          }
-        }
-      },
       "variables": {
         "wind_speed": {
           "file_variable": "wind_speed",
@@ -407,29 +413,10 @@
       "description": "Cross-system event showing required scoped references in coupling context"
     }
   ],
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-07-01T00:00:00Z",
-        "end": "2024-07-01T06:00:00Z"
-      },
-      "spatial": {
-        "x": {
-          "min": 0.0,
-          "max": 1000.0,
-          "units": "m",
-          "grid_spacing": 10.0
-        }
-      },
-      "initial_conditions": {
-        "type": "per_variable",
-        "values": {
-          "SimpleChemistry.O3": 4e-08,
-          "SimpleChemistry.NO": 1e-10,
-          "SimpleChemistry.NO2": 1e-09,
-          "SimpleChemistry.Photochemistry.NO2_photo": 1e-09
-        }
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-07-01T00:00:00Z",
+      "end": "2024-07-01T06:00:00Z"
     }
   }
 }

@@ -142,6 +142,33 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "oscillator_1"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "oscillator_2"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "oscillator_3"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -629,6 +656,15 @@
               0.1
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "accumulator"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "discrete_events": [
@@ -1246,6 +1282,24 @@
               }
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "normal_state"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "error_prone_state"
+            ]
+          },
+          "rhs": 0.0
         }
       ],
       "continuous_events": [
@@ -1372,16 +1426,10 @@
       ]
     }
   },
-  "domains": {
-    "default": {
-      "temporal": {
-        "start": "2024-01-01T00:00:00Z",
-        "end": "2024-01-01T00:20:00Z"
-      },
-      "initial_conditions": {
-        "type": "constant",
-        "value": 0.0
-      }
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T00:20:00Z"
     }
   }
 }

@@ -1,0 +1,3324 @@
+/* eslint-disable */
+/**
+ * embedded-schema.ts — GENERATED FILE. DO NOT EDIT BY HAND.
+ *
+ * Derived verbatim from the canonical repo-root `esm-schema.json` by
+ * `scripts/generate-embedded-schema.mjs`. The TypeScript binding cannot read a
+ * file at runtime (it must run in the browser), so the canonical schema is
+ * embedded here and bundled by Rollup. `parse.ts` imports this object and
+ * hands it to Ajv.
+ *
+ * To change the schema, edit `esm-schema.json` and run `npm run generate-schema`.
+ * The drift guard `scripts/sync-schema.sh --check` fails CI if this file falls
+ * out of sync with the canonical schema.
+ */
+import type { AnySchemaObject } from 'ajv'
+
+// prettier-ignore
+export const schema: AnySchemaObject = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://earthsciml.org/schemas/esm/0.8.0/esm.schema.json",
+  "title": "ESM Format",
+  "description": "EarthSciML Serialization Format (v0.8.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
+  "type": "object",
+  "required": [
+    "esm",
+    "metadata"
+  ],
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "models"
+      ]
+    },
+    {
+      "required": [
+        "reaction_systems"
+      ]
+    },
+    {
+      "required": [
+        "data_loaders"
+      ]
+    },
+    {
+      "required": [
+        "expression_templates"
+      ]
+    }
+  ],
+  "properties": {
+    "esm": {
+      "type": "string",
+      "description": "Format version string (semver).",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "models": {
+      "type": "object",
+      "description": "ODE-based model components, keyed by unique identifier. Each component may be defined inline or included by reference to an external ESM file containing exactly one top-level model (esm-spec.md §4.7).",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/Model"
+          },
+          {
+            "$ref": "#/$defs/SubsystemRef"
+          }
+        ]
+      }
+    },
+    "reaction_systems": {
+      "type": "object",
+      "description": "Reaction network components, keyed by unique identifier.",
+      "additionalProperties": {
+        "$ref": "#/$defs/ReactionSystem"
+      }
+    },
+    "data_loaders": {
+      "type": "object",
+      "description": "External data source registrations (by reference).",
+      "additionalProperties": {
+        "$ref": "#/$defs/DataLoader"
+      }
+    },
+    "enums": {
+      "type": "object",
+      "description": "File-local symbol-to-positive-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to positive integers. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.",
+      "additionalProperties": {
+        "$ref": "#/$defs/EnumDeclaration"
+      }
+    },
+    "coupling": {
+      "type": "array",
+      "description": "Composition and coupling rules.",
+      "items": {
+        "$ref": "#/$defs/CouplingEntry"
+      }
+    },
+    "domain": {
+      "$ref": "#/$defs/Domain",
+      "description": "The single temporal domain shared by every component in the document (temporal extent + numeric representation). A document has at most one domain; all spatial models live on it, and 0-D models simply have scalar-shaped variables."
+    },
+    "function_tables": {
+      "type": "object",
+      "description": "Component-scoped sampled function tables (v0.4.0). Each entry declares ordered named axes plus a literal nested-array data block, optionally tagged with output names; the `table_lookup` AST op references a table by id, supplies a per-axis input-coordinate expression map, and selects which output to return. Tables are syntactic sugar over `interp.linear` / `interp.bilinear` / `index`: a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup. See esm-spec.md §9.5 and docs/rfcs/sampled-tables.md.",
+      "additionalProperties": {
+        "$ref": "#/$defs/FunctionTable"
+      }
+    },
+    "index_sets": {
+      "type": "object",
+      "description": "Document-scoped registry of named index sets (RFC semiring-faq-unified-ir §5.2), keyed by name — the single, document-level declaration site for every iteration domain (grid axes, categorical dimensions, data-derived sets) shared by all models in the document. An `aggregate` range references one by name as { \"from\": <name> }. Each entry is an interval (dense axis), categorical enumeration, data-derived set, or ragged / dependent inner set. A reference resolves by name to exactly one entry; resolvers MUST error on an undeclared name.",
+      "additionalProperties": {
+        "$ref": "#/$defs/IndexSet"
+      }
+    },
+    "expression_templates": {
+      "type": "object",
+      "description": "Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).",
+      "additionalProperties": {
+        "$ref": "#/$defs/ExpressionTemplate"
+      }
+    },
+    "expression_template_imports": {
+      "type": "array",
+      "description": "Ordered imports of template-library files at document top level — only valid in a library file layering on other libraries (esm-spec §9.7.2). Models and reaction systems carry their own `expression_template_imports` field.",
+      "items": {
+        "$ref": "#/$defs/TemplateImport"
+      }
+    },
+    "metaparameters": {
+      "$ref": "#/$defs/Metaparameters"
+    }
+  },
+  "$defs": {
+    "Metadata": {
+      "type": "object",
+      "description": "Authorship, provenance, and description.",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Short identifier for the model configuration."
+        },
+        "description": {
+          "type": "string"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "license": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 creation timestamp."
+        },
+        "modified": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 last-modified timestamp."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Reference"
+          }
+        },
+        "system_class": {
+          "type": "string",
+          "enum": [
+            "ode",
+            "dae"
+          ],
+          "description": "Diagnostic stamped by discretize(): whether the resolved system is a pure ODE or a DAE (RFC §12)."
+        },
+        "dae_info": {
+          "type": "object",
+          "description": "Diagnostic stamped by discretize(): algebraic-equation accounting (RFC §12).",
+          "properties": {
+            "algebraic_equation_count": {
+              "type": "integer"
+            },
+            "per_model": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "discretized_from": {
+          "type": "object",
+          "description": "Diagnostic stamped by discretize(): identifies the source document this was discretized from (RFC §12).",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The metadata.name of the source document."
+            }
+          }
+        },
+        "x_esd": {
+          "type": "object",
+          "description": "Reserved extension point for downstream-catalog machine-readable metadata (e.g. the EarthSciDiscretizations rule-library catalog). Free-form JSON: the schema validates only that this is an object. The core spec NEVER interprets, validates, or transforms its contents — core tooling MUST NOT assign meaning to them and MUST preserve them across parse → emit like any other metadata field. Downstream catalogs define and version their own conventions inside it (esm-spec §3)."
+        }
+      }
+    },
+    "Reference": {
+      "type": "object",
+      "description": "Academic citation or data source reference.",
+      "additionalProperties": false,
+      "properties": {
+        "doi": {
+          "type": "string"
+        },
+        "citation": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "Expression": {
+      "description": "Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.",
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ExpressionNode"
+        }
+      ]
+    },
+    "ExpressionNode": {
+      "type": "object",
+      "description": "An operation in the expression AST.",
+      "required": [
+        "op",
+        "args"
+      ],
+      "properties": {
+        "op": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^([A-Za-z_][A-Za-z0-9_.]*|[-+*/^<>=!]+)$",
+          "description": "Operator name. TWO TIERS (esm-spec §4.2). (1) The CLOSED evaluable-core set — every binding's evaluator implements each one directly: `+ - * / ^`, the comparisons/booleans (`> < >= <= == != and or not`), the elementary functions (`exp log log10 sqrt abs sign sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh min max floor ceil`), `ifelse`, the calculus form-ops `D` and `ic` (structural / equation-LHS use only), `Pre`, `true`, and the array/query ops (`aggregate makearray index broadcast reshape transpose concat skolem rank argmin argmax intersect_polygon polygon_intersection_area fn enum const table_lookup apply_expression_template`). (2) The OPEN rewrite-target tier — ANY other identifier: a spatial `D` on a right-hand side, the optional sugar ops `grad`/`div`/`laplacian`/`integral`, or a user op such as `godunov_hamiltonian`. A rewrite-target op carries NO evaluator implementation and MUST be eliminated by a rewrite rule (§9.6) before evaluation. Loading is permissive — a file MAY load with rewrite-target ops still present (e.g. a coupling/scoping example that never simulates) — but one reaching evaluation/compilation without being lowered is rejected with `unlowered_operator`. The `pattern` only rejects malformed strings — it does NOT enforce membership in the core set, so the open tier stays expressible. The evaluable-core set is the ONLY set the format privileges.",
+          "$comment": "The evaluable-core set is normative and closed; each binding pins it as its evaluator's op registry. It is documented (not enum-enforced) so the open rewrite-target tier remains expressible. grad/div/laplacian/integral are NOT core — they are optional author sugar lowered by rewrite rules (esm-spec §9.6.8); the discretization rule std-lib lives in ../earthscidiscretizations, not this repo."
+        },
+        "id": {
+          "type": "string",
+          "description": "Stable node identity (RFC semiring-faq-unified-ir §6.1): an optional, author-assigned identifier that makes this expression node addressable as a vertex in the inter-node dependency DAG the partition pass walks. Its primary use is to be the referent of a derived index set: an `index_sets` entry of kind \"derived\" names, via `from_faq`, the index-set-producing `aggregate` node that materializes it — and it names it by this id. When present it MUST be unique among the expression nodes of its model; the build-time reference-resolution pass errors on a duplicate id and on a `from_faq` that names no node. Absent ⇒ the node is addressed only by its structural path and cannot be the target of a `from_faq`. Purely additive: a file using no `id` validates and resolves exactly as before."
+        },
+        "expect_cadence": {
+          "type": "string",
+          "enum": [
+            "const",
+            "discrete",
+            "continuous"
+          ],
+          "description": "Optional author assertion on this node's cadence class, checked by the dependency-partition pass (RFC semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7). A diagnostic/test hook ONLY — it changes no semantics. The pass derives every node's class from the data-dependency DAG (`class(node) = max` over inputs; `const ⊏ discrete ⊏ continuous`); when `expect_cadence` is present the pass errors if the DERIVED class disagrees with it. \"const\" = never changes, folded into the artifact (parameter / literal); \"discrete\" = changes only at discrete events, recomputed by the per-event handler (a `discrete` variable, e.g. loaded met / reloadable mesh); \"continuous\" = changes every step, evaluated in the hot per-step tree (integrated state `u`, or an explicit continuous-`t` forcing). Absent ⇒ no assertion. Purely additive: a file using no `expect_cadence` validates and partitions exactly as before."
+        },
+        "args": {
+          "type": "array",
+          "description": "Operand list. For most ops these are sub-expressions. Array ops use args for the input array operands (aggregate, broadcast, index, reshape, transpose, concat). makearray has no natural args and uses an empty array.",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          },
+          "minItems": 0
+        },
+        "wrt": {
+          "type": "string",
+          "description": "Differentiation variable for the `D` op: the time variable `t` (structural, equation-LHS use) OR a spatial axis (e.g. \"x\", \"lon\"). A `D` with a spatial `wrt`, or any `D` appearing in a right-hand-side expression position, is a rewrite-target (esm-spec §9.6.8): it MUST be lowered to a stencil by a discretization rule before evaluation, else `unlowered_operator`."
+        },
+        "dim": {
+          "type": "string",
+          "description": "Legacy alias field naming a spatial axis (e.g. \"x\", \"y\", \"z\"), used only by the optional `grad` sugar op. PREFER `D` with `wrt` set to the axis. Custom rewrite-target ops SHOULD carry scheme parameters in `attrs` instead."
+        },
+        "attrs": {
+          "type": "object",
+          "description": "Optional named scalar attributes for an OPEN rewrite-target op (esm-spec §4.2). Mirrors the role of the fixed `dim`/`side`/`wrt`/`var` slots that core ops use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its scheme parameters here. In a rewrite rule's `match`, an `attrs.<key>` whose value is a bare param name binds that param to the matched literal (esm-spec §9.6.1). Evaluable-core ops MUST NOT use `attrs`."
+        },
+        "var": {
+          "type": "string",
+          "description": "Integration variable for the integral operator: the name of the spatial dimension being integrated over (e.g., \"x\")."
+        },
+        "lower": {
+          "$ref": "#/$defs/Expression",
+          "description": "Lower integration bound for the integral operator. Any Expression: a numeric literal, a parameter reference, or an AST subtree. For a whole-domain integral both lower and upper are constants."
+        },
+        "upper": {
+          "$ref": "#/$defs/Expression",
+          "description": "Upper integration bound for the integral operator. Any Expression: a numeric literal, a parameter reference, the integration variable name (string) for a cumulative/partial integral, or an AST subtree."
+        },
+        "output_idx": {
+          "type": "array",
+          "description": "For aggregate: the result's index signature. Each entry is either a string (a symbolic index variable like \"i\", \"j\") or the integer 1 (a literal singleton dimension for reshape/broadcast). Mirrors SymbolicUtils.ArrayOp.output_idx.",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer",
+                "const": 1
+              }
+            ]
+          }
+        },
+        "expr": {
+          "$ref": "#/$defs/Expression",
+          "description": "For aggregate: the scalar body evaluated at each index point. May reference index symbols declared in output_idx as well as additional (contracted) index symbols. Mirrors SymbolicUtils.ArrayOp.expr."
+        },
+        "reduce": {
+          "type": "string",
+          "description": "For aggregate: the reduction operator applied to any index symbol that appears in expr but not in output_idx. Default is \"+\". This names only the ⊕ operator; it is a shorthand retained for files that omit \"semiring\" (⊕ = reduce, ⊗ = \"*\"). When \"semiring\" is present it supersedes \"reduce\".",
+          "enum": [
+            "+",
+            "*",
+            "max",
+            "min"
+          ],
+          "default": "+"
+        },
+        "semiring": {
+          "type": "string",
+          "description": "For aggregate: the named semiring (⊕, ⊗) that parameterizes the reduction (RFC semiring-faq-unified-ir §5.1). A closed, exhaustive registry — adding a semiring is a spec change, not a per-file extension. Absent ⇒ \"sum_product\", which reproduces today's einsum / sum-of-products semantics exactly (the strict-superset promise). The ⊕ operator, the ⊗ operator, and BOTH identity elements (the value of an empty ⊕-reduction and an empty ⊗-product) are fixed by the registry table and MUST NOT be written into the file: sum_product (+,0;×,1), max_product (max,-∞;×,1), min_sum (min,+∞;+,0), max_sum (max,-∞;+,0), bool_and_or (∨,false;∧,true).",
+          "enum": [
+            "sum_product",
+            "max_product",
+            "min_sum",
+            "max_sum",
+            "bool_and_or"
+          ],
+          "default": "sum_product"
+        },
+        "ranges": {
+          "type": "object",
+          "description": "For aggregate: optional map from index symbol name to the range it iterates over. Each value is EITHER (a) a dense integer tuple — a 2-element array [start, stop] (unit step) or a 3-element array [start, step, stop], as today, mirroring SymbolicUtils.ArrayOp.ranges — entries MAY be metaparameter expressions folded to concrete integers at load (esm-spec §9.7.6); OR (b) a reference to a declared index set (RFC semiring-faq-unified-ir §5.2): an object { \"from\": <index_sets key> }, optionally with \"of\": [parent index names] for a ragged / dependent inner set (e.g. the edges of cell \"i\"). Indices not present are inferred from the domain / operand shapes at runtime.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/MetaparameterExpression"
+                },
+                "minItems": 2,
+                "maxItems": 3
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "from"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "description": "Name of a declared index set: a key in the document-scoped top-level index_sets registry. The resolver MUST error on an undeclared name; no implicit interval is inferred, so a typo cannot silently become an empty set."
+                  },
+                  "of": {
+                    "type": "array",
+                    "description": "Parent index name(s) for a ragged / dependent inner set: the members enumerated depend on these outer indices (e.g. { \"from\": \"edges_of_cell\", \"of\": [\"i\"] } iterates the edges of cell i).",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "join": {
+          "type": "array",
+          "description": "For aggregate: optional value-equality combination of factors by key columns — an inner equi-join (RFC semiring-faq-unified-ir §5.3), subsuming ESI join and making connectivity gathers first-class. Each entry is a join clause whose \"on\" lists one or more key-column pairs [left, right]; a ⊗-product term is contributed only for index combinations whose key columns are equal on EVERY listed pair, and an unmatched row contributes the additive identity (the empty ⊕-reduction value), adding nothing under any semiring. Inner-only — there is no outer/left variant; many-to-many is defined, not an error (m·n product terms, each a ⊗-term into the enclosing ⊕-reduction); key columns must be exact-equality types (integer IDs or categorical members compared by Unicode code point) — floating-point join keys are forbidden. Absent ⇒ factors combine only by shared index name (positional einsum), exactly as today.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "on"
+            ],
+            "properties": {
+              "on": {
+                "type": "array",
+                "description": "The key-column pairs to equi-join on. Each pair is a 2-element array [left, right] naming the two factor key columns whose values must compare equal. At least one pair is required.",
+                "minItems": 1,
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        },
+        "filter": {
+          "$ref": "#/$defs/Expression",
+          "description": "For aggregate: optional boolean predicate Expression that restricts which index combinations contribute a ⊗-product term to the reduction (RFC semiring-faq-unified-ir §5.3 / §7.2). May reference any index symbol in scope (an entry of output_idx or a contracted index). Combinations for which the predicate evaluates false contribute the additive identity (the empty ⊕-reduction value) — the explicit way to express a guarded sum or a \"keep unmatched with a default\", as opposed to a join mode."
+        },
+        "distinct": {
+          "type": "boolean",
+          "default": false,
+          "description": "For aggregate: when true, the node has set semantics (dedup) and is index-set-producing — it materializes a data-derived index set rather than an array (RFC semiring-faq-unified-ir §5.5). Only meaningful under the `bool_and_or` semiring (the relational specialization, §5.1); combined with `key`, it enumerates the unique Skolem terms (e.g. the unique edges discovered from a face→vertex relation) and exposes the result as a `kind:\"derived\"` index set (§5.2) that a downstream geometric aggregate consumes. The output order is fixed by the normative determinism rules (§5.7): sort by the total tuple order, then drop adjacent duplicates — never first-seen / insertion order. Absent ⇒ false (ordinary array-producing reduction), exactly as today."
+        },
+        "key": {
+          "$ref": "#/$defs/Expression",
+          "description": "For aggregate: optional Skolem term — a deterministic, content-addressed key naming each member an index-set-producing (`distinct`) node emits (RFC semiring-faq-unified-ir §5.5). Typically a `{ \"op\": \"skolem\", \"args\": [<label>, <component>…] }` node; the components are canonicalized (a symmetric relation sorts its components, e.g. an undirected edge (min(u,v), max(u,v)); a directed one preserves order) so the same member is named identically across bindings (§5.7). Dense integer ids for the array backend then come from a `{ \"op\": \"rank\" }` over the resulting set. Floats are forbidden in keys (§5.7 / §A.5) — keys are integer or categorical ids."
+        },
+        "arg": {
+          "type": "string",
+          "description": "For the arg-witness reducers `argmin` / `argmax` (RFC semiring-faq-unified-ir §5.7 rule 6): names the contracted `ranges` index symbol whose value (a 1-based generator id) is RETURNED at the optimum. The op reduces its `expr` body (a declarative scalar FAQ, e.g. a squared-distance metric) over the inner `ranges` candidate domain — optionally pruned by a bin-Skolem `join` / `filter` — and emits the witnessing INDEX rather than the reduced value: `assign[i] = argmin_g dist(point_i, gen_g)`, the nearest-generator assignment. NET-NEW because the closed semiring registry (§5.1) returns values and the value-invention primitives distinct/skolem/rank (§5.5) return sets — neither returns the arg. Materialized at build time as an integer per-element buffer (CONST/DISCRETE cadence, like the §A.8 bin-Skolem `:map` buffers; a CONTINUOUS arg-witness is rejected by §5.7 guard 2). The NORMATIVE tie-break is the SMALLEST arg (smallest generator id): equal `expr` values resolve to the lower index, making the buffer byte-identical across bindings (§5.7). REQUIRED on `argmin` / `argmax`; ignored on any other op. An empty candidate set is an error (no index witnesses the optimum)."
+        },
+        "manifold": {
+          "type": "string",
+          "description": "For the `intersect_polygon` and `polygon_intersection_area` geometry-kernel leaf ops (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8.4): the geometry interpretation under which the two operand polygons are clipped, and the part of the op's contract that makes its tolerance-based conformance comparable. \"planar\": Cartesian/flat clipping (Sutherland–Hodgman / Foster–Hormann) — straight edges in the coordinate plane; wrong at the poles and across the antimeridian, valid only for a small projected patch. \"spherical\": great-circle edges on the unit sphere (the ConservativeRegridding.jl / GeometryOps.jl / S2 default for lon-lat earth meshes) — the correct model for global regridding. \"geodesic\": ellipsoidal-geodesic edges. Great-circle-edge assumption: under \"spherical\"/\"geodesic\" every edge — including a lon-lat edge running along a parallel, which is a small circle, not a great circle — is modelled as a great-circle geodesic, so a coarse polar cell carries a real area error (~4% for a 30° cell next to the pole, growing with the square of the cell's longitude width; RFC §B.4 / §5.8.4). The per-binding kernels offer an opt-in densification of parallel edges into short great-circle segments (`densify_parallel_edges`) to reduce it; it is off by default, so default clip behaviour is unchanged. REQUIRED on every `intersect_polygon` / `polygon_intersection_area` node (the op carries no default — the manifold must be declared, never inferred). Two bindings' clip results may be compared ONLY under the same declared manifold; the flag itself is matched EXACTLY across bindings (it is a discrete label, not a tolerance-based quantity). Meaningful only for `intersect_polygon` and `polygon_intersection_area`; ignored on any other op. TEMPLATE PARAMETERIZATION (esm-spec §9.6.1 / §9.6.3 constraint 5): inside an `expression_templates` entry's `body`, this field MAY carry a declared template-parameter name — a bare string outside the closed set — as a scalar-field substitution site, so the schema admits any string here. The closed set {planar, spherical, geodesic} is enforced on the EXPANDED form per §9.6.4: bindings MUST reject, at post-expansion validation, any `intersect_polygon` / `polygon_intersection_area` node whose `manifold` is not a member of the closed set.",
+          "anyOf": [
+            {
+              "enum": [
+                "planar",
+                "spherical",
+                "geodesic"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "regions": {
+          "type": "array",
+          "description": "For makearray: list of sub-region boxes of the output array. Each region is an array of [start, stop] pairs, one per output dimension. The nth region is filled with the nth entry of values. Overlapping regions are permitted; later regions overwrite earlier ones. Bound pairs MAY be metaparameter expressions folded to concrete integers at load (esm-spec §9.7.6). Mirrors SymbolicUtils.ArrayMaker.regions.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MetaparameterExpression"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 1
+          }
+        },
+        "values": {
+          "type": "array",
+          "description": "For makearray: list of expressions, one per entry in regions. Each value may be a scalar expression (broadcast across the region) or an array-valued expression whose shape matches the region (excluding singleton dimensions). Mirrors SymbolicUtils.ArrayMaker.values.",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "shape": {
+          "type": "array",
+          "description": "For reshape: the target shape. Each entry is either an integer (a concrete length) or a string (a symbolic dimension reference).",
+          "items": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "minItems": 1
+        },
+        "perm": {
+          "type": "array",
+          "description": "For transpose: optional axis permutation. A list of 0-based axis indices giving the new order. If omitted, the matrix-transpose convention is used (reverse axes).",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "axis": {
+          "type": "integer",
+          "description": "For concat: the 0-based axis along which to concatenate the operand arrays. All operands must have identical shape on every other axis.",
+          "minimum": 0
+        },
+        "fn": {
+          "type": "string",
+          "description": "For broadcast: the name of the scalar operator to apply element-wise to the operands in args. Must be an ExpressionNode op name drawn from the scalar subset (arithmetic, elementary functions, comparisons, etc.)."
+        },
+        "name": {
+          "type": "string",
+          "description": "For fn: the dotted module path of a function in the closed function registry (esm-spec.md §9.2). The set of valid names is fixed by the spec version; bindings MUST reject unknown names with diagnostic 'unknown_closed_function'. v0.3.0 set: datetime.year, datetime.month, datetime.day, datetime.hour, datetime.minute, datetime.second, datetime.day_of_year, datetime.julian_day, datetime.is_leap_year, interp.searchsorted, interp.linear, interp.bilinear. For apply_expression_template: the id of an `expression_templates` entry declared in the same component (esm-spec.md §9.6 / docs/rfcs/ast-expression-templates.md). Bindings MUST reject references to undeclared template names at file-load time with diagnostic 'apply_expression_template_unknown_template'."
+        },
+        "value": {
+          "description": "For const: the inline literal value carried by this expression node (any JSON number, integer, or nested array thereof; `args` MUST be empty). For the 'bc' op with kind 'constant'/'dirichlet': the boundary value — a number, a parameter/variable-reference string, or an Expression AST node."
+        },
+        "table": {
+          "type": "string",
+          "description": "For table_lookup: the id of the function_tables entry to evaluate. Bindings MUST reject references to undeclared tables at file-load time with diagnostic 'table_lookup_unknown_table'."
+        },
+        "axes": {
+          "type": "object",
+          "description": "For table_lookup: a map from axis name (matching one of the referenced table's `axes[].name` entries) to the scalar input expression supplying that coordinate at evaluation time. Every axis declared on the table MUST appear as a key; extra keys are rejected with 'table_lookup_axis_name_mismatch'. `args` MUST be empty for a table_lookup node — the per-axis expressions live here.",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "output": {
+          "description": "For table_lookup: which output of a multi-output table to return. Either a non-negative integer (0-based index into the leading data dimension) or a string (an entry in the table's `outputs` array). Single-output tables MAY omit this field (defaults to 0). Out-of-range or unknown-name selectors are rejected with 'table_lookup_output_out_of_range'.",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "bindings": {
+          "type": "object",
+          "description": "For apply_expression_template: a map from each parameter name declared by the referenced template to the Expression bound to that parameter. Every entry of the template's `params` MUST appear as a key; extra keys are rejected at load time with diagnostic 'apply_expression_template_bindings_mismatch'. Values may be numeric literals, variable name references (strings), or arbitrary Expression ASTs (full subtrees). `args` MUST be empty for an apply_expression_template node — the parameter values live here.",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "aggregate"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "output_idx",
+              "expr"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "makearray"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "regions",
+              "values"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "broadcast"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "fn"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "reshape"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "shape"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "concat"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "axis"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "fn"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "name"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "const"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "value"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "enum"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "table_lookup"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "table",
+              "axes"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "apply_expression_template"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "name",
+              "bindings"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "integral"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "var",
+              "lower",
+              "upper"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "intersect_polygon",
+                  "polygon_intersection_area"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ]
+          },
+          "then": {
+            "required": [
+              "manifold"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Equation": {
+      "type": "object",
+      "description": "An equation: lhs = rhs (or lhs ~ rhs in MTK notation).",
+      "required": [
+        "lhs",
+        "rhs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lhs": {
+          "$ref": "#/$defs/Expression"
+        },
+        "rhs": {
+          "$ref": "#/$defs/Expression"
+        },
+        "_comment": {
+          "type": "string"
+        }
+      }
+    },
+    "AffectEquation": {
+      "type": "object",
+      "description": "An affect equation in an event: lhs is the target variable (string), rhs is an expression.",
+      "required": [
+        "lhs",
+        "rhs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lhs": {
+          "type": "string",
+          "description": "Target variable name (value after the event)."
+        },
+        "rhs": {
+          "$ref": "#/$defs/Expression",
+          "description": "Expression for the new value. Use Pre(var) to reference pre-event values."
+        }
+      }
+    },
+    "ContinuousEvent": {
+      "type": "object",
+      "description": "Fires when a condition expression crosses zero (root-finding). Maps to MTK SymbolicContinuousCallback.",
+      "required": [
+        "conditions",
+        "affects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier."
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Expressions that trigger the event when they cross zero.",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          },
+          "minItems": 1
+        },
+        "affects": {
+          "type": "array",
+          "description": "Affect equations applied on positive-going zero crossings (or both directions if affect_neg is absent). Empty array for pure detection.",
+          "items": {
+            "$ref": "#/$defs/AffectEquation"
+          }
+        },
+        "affect_neg": {
+          "description": "Separate affects for negative-going zero crossings. If null or absent, affects is used for both directions.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AffectEquation"
+              }
+            }
+          ]
+        },
+        "root_find": {
+          "type": "string",
+          "description": "Root-finding direction.",
+          "enum": [
+            "left",
+            "right",
+            "all"
+          ],
+          "default": "left"
+        },
+        "reinitialize": {
+          "type": "boolean",
+          "description": "Whether to reinitialize the system after the event.",
+          "default": false
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "DiscreteEventTrigger": {
+      "description": "Trigger specification for a discrete event.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Fires when the boolean expression is true at the end of a timestep.",
+          "required": [
+            "type",
+            "expression"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "condition"
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Fires every interval time units.",
+          "required": [
+            "type",
+            "interval"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "periodic"
+            },
+            "interval": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Interval in simulation time units."
+            },
+            "initial_offset": {
+              "type": "number",
+              "description": "Offset from t=0 for the first firing.",
+              "default": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Fires at each specified time.",
+          "required": [
+            "type",
+            "times"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "preset_times"
+            },
+            "times": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 1,
+              "description": "Array of simulation times at which to fire."
+            }
+          }
+        }
+      ]
+    },
+    "FunctionalAffect": {
+      "type": "object",
+      "description": "A registered functional affect handler for complex event behavior that cannot be expressed symbolically.",
+      "required": [
+        "handler_id",
+        "read_vars",
+        "read_params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "handler_id": {
+          "type": "string",
+          "description": "Registered identifier for the affect implementation."
+        },
+        "read_vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "State variables accessed by the handler."
+        },
+        "read_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Parameters accessed by the handler."
+        },
+        "modified_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Parameters modified by the handler (implicitly discrete parameters)."
+        },
+        "config": {
+          "type": "object",
+          "description": "Handler-specific configuration.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "RefreshTrigger": {
+      "description": "Refresh-trigger descriptor for a `discrete` ModelVariable (RFC semiring-faq-unified-ir §6.1): declares WHEN the variable's per-event buffer is recomputed by the dependency-partition pass's per-event handler. It seeds the DISCRETE cadence class but is otherwise inert to the algebra — it schedules the recompute and carries no value. Exactly one of three forms, discriminated by `kind`: a `schedule` (time-driven on a tstops schedule — the MTK PresetTimeCallback / tstops analogue), a `data_ingest` event (recompute when a named external data source advances to a new record, e.g. the next met/BC slice), or a `remesh` hook (recompute on an AMR refinement / moving-mesh topology change).",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "schedule: time-driven refresh on a tstops schedule (the MTK PresetTimeCallback / tstops analogue). Recompute at the listed preset `times` and/or on a periodic `interval`; at least one of the two MUST be present.",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "schedule"
+            },
+            "times": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 1,
+              "description": "Explicit simulation times (the tstops) at which the buffer recomputes."
+            },
+            "interval": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Periodic refresh interval in simulation time units."
+            },
+            "initial_offset": {
+              "type": "number",
+              "default": 0,
+              "description": "Offset from t=0 for the first periodic refresh. Ignored when `interval` is absent."
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "times"
+              ]
+            },
+            {
+              "required": [
+                "interval"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "data_ingest: refresh driven by arrival of a new external data record. The buffer recomputes when the named data source advances to a new record (e.g. the next met / boundary-condition slice from a DataLoader).",
+          "required": [
+            "kind",
+            "source"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "data_ingest"
+            },
+            "source": {
+              "type": "string",
+              "description": "Name of the external data source (e.g. a DataLoader id or a provided-variable name) whose record advance drives the refresh. Resolution of the name is a build-time concern; the schema does not enforce the cross-reference."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "remesh: refresh driven by a mesh-topology change (AMR refinement or a moving / reloaded mesh). The buffer — typically reloadable mesh topology or coefficients derived from it — recomputes when the remesh event fires.",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "remesh"
+            },
+            "hook": {
+              "type": "string",
+              "description": "Optional name of the remesh hook / event that drives the refresh. Absent ⇒ refresh on any remesh event."
+            }
+          }
+        }
+      ]
+    },
+    "DiscreteEvent": {
+      "type": "object",
+      "description": "Fires when a boolean condition is true at end of a timestep, or at preset/periodic times. Maps to MTK SymbolicDiscreteCallback.",
+      "required": [
+        "trigger"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier."
+        },
+        "trigger": {
+          "$ref": "#/$defs/DiscreteEventTrigger"
+        },
+        "affects": {
+          "type": "array",
+          "description": "Affect equations. Required unless functional_affect is used.",
+          "items": {
+            "$ref": "#/$defs/AffectEquation"
+          }
+        },
+        "functional_affect": {
+          "$ref": "#/$defs/FunctionalAffect",
+          "description": "Registered functional affect handler (alternative to symbolic affects)."
+        },
+        "discrete_parameters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Parameters modified by this event. Required when affects modify parameters rather than state variables."
+        },
+        "reinitialize": {
+          "type": "boolean",
+          "description": "Whether to reinitialize the system after the event."
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "affects"
+          ]
+        },
+        {
+          "required": [
+            "functional_affect"
+          ]
+        }
+      ]
+    },
+    "ModelVariable": {
+      "type": "object",
+      "description": "A variable in an ODE/SDE model.",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "state",
+            "parameter",
+            "observed",
+            "brownian",
+            "discrete"
+          ],
+          "description": "state = time-dependent unknown; parameter = externally set constant; observed = derived quantity; brownian = stochastic noise process (Wiener) that drives an SDE — the presence of any brownian variable promotes the enclosing model from an ODE system to an SDE system; discrete = a variable whose shape is fixed at setup but whose values refresh only at discrete events (piecewise-constant between them) — the declared seed for the DISCRETE cadence class of the dependency-partition pass (RFC semiring-faq-unified-ir §6.1), e.g. loaded met/BC fields, scheduled emission inventories, or reloadable mesh topology. A discrete variable MUST declare its `shape` (the index sets / dims known ahead of time) and MAY declare an optional `refresh` trigger that drives when its per-event buffer recomputes. Without this kind the partition pass would be forced to mis-seed such inputs as CONST (never refresh) or CONTINUOUS (recompute every step)."
+        },
+        "units": {
+          "type": "string"
+        },
+        "default": {
+          "type": "number"
+        },
+        "default_units": {
+          "type": "string",
+          "description": "Units of the default value, if different from the declared units field. When present, validators flag a unit_inconsistency error if these do not match the declared units (including dimensionally incompatible cases like K vs kg, and same-dimension mismatches like K vs degC). Default is the same as `units`."
+        },
+        "description": {
+          "type": "string"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression",
+          "description": "Defining expression for observed variables."
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped index_sets registry. Omitted or null indicates a scalar. REQUIRED for a `discrete` variable, which by definition has a shape fixed at setup (RFC semiring-faq-unified-ir §6.1); a discrete variable that omits it is invalid. An empty array is a valid (scalar) discrete shape."
+        },
+        "location": {
+          "type": "string",
+          "description": "Optional free-form placement tag for a staggered quantity (e.g., \"cell_center\", \"edge_normal\", \"x_face\", \"vertex\"). Advisory metadata only; the index set a quantity lives on is given by `shape`. Omitted indicates no explicit placement."
+        },
+        "noise_kind": {
+          "type": "string",
+          "enum": [
+            "wiener"
+          ],
+          "default": "wiener",
+          "description": "Brownian-only: kind of stochastic process. Currently only \"wiener\" (zero-mean unit-variance Gaussian increments) is supported; reserved for future extension to \"colored\", \"correlated\", etc."
+        },
+        "correlation_group": {
+          "type": "string",
+          "description": "Brownian-only: optional opaque tag used to group correlated noise sources. Brownian variables sharing a group label are interpreted by the runtime as drawn from a joint multivariate normal whose correlation matrix is supplied externally. Brownian variables without a group label are independent. The spec does not currently encode the correlation matrix itself; that is left to a future extension."
+        },
+        "refresh": {
+          "$ref": "#/$defs/RefreshTrigger",
+          "description": "Discrete-only: optional refresh-trigger descriptor declaring WHEN this variable's per-event buffer is recomputed by the dependency-partition pass's per-event handler (RFC semiring-faq-unified-ir §6.1). One of a `schedule` (a tstops schedule — the MTK PresetTimeCallback / tstops analogue), a `data_ingest` event (arrival of a new external data record, e.g. the next met/BC slice), or a `remesh` hook (an AMR refinement / moving-mesh topology change). The trigger is inert to the algebra — it schedules the DISCRETE-cadence recompute and nothing else. Absent ⇒ the buffer is computed once at setup and never refreshed (e.g. a mesh topology loaded once at the start of a run)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "observed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "expression"
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {
+                  "const": "brownian"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "noise_kind"
+                  ]
+                },
+                {
+                  "required": [
+                    "correlation_group"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "discrete"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "shape"
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {
+                  "const": "discrete"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "refresh"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Model": {
+      "type": "object",
+      "description": "An ODE system — a fully specified set of time-dependent equations.",
+      "required": [
+        "variables",
+        "equations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "coupletype": {
+          "description": "Coupling type name. Informational label identifying this system's role in coupling.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "variables": {
+          "type": "object",
+          "description": "All variables, keyed by name.",
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelVariable"
+          }
+        },
+        "equations": {
+          "type": "array",
+          "description": "Array of {lhs, rhs} equation objects.",
+          "items": {
+            "$ref": "#/$defs/Equation"
+          }
+        },
+        "initialization_equations": {
+          "type": "array",
+          "description": "Equations that hold only at t=0 (not dynamically). Used by models whose initialization requires solving an auxiliary system before time-stepping begins (e.g. aerosol equilibrium, plume rise). Each entry is a {lhs, rhs} equation evaluated/solved at t=0.",
+          "items": {
+            "$ref": "#/$defs/Equation"
+          }
+        },
+        "guesses": {
+          "type": "object",
+          "description": "Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are Expression graphs (numbers, strings, or ExpressionNode).",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "system_kind": {
+          "type": "string",
+          "description": "Discriminates the MTK system type this model maps to. Defaults to 'ode' (time-stepping). 'nonlinear' for algebraic-only systems (no time derivative; e.g. aerosol equilibrium, Mogi). 'sde' when brownian variables are present. 'pde' for models with a spatial domain plus differential operators (often implied by the domain field; set explicitly to disambiguate).",
+          "enum": [
+            "ode",
+            "nonlinear",
+            "sde",
+            "pde"
+          ]
+        },
+        "discrete_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiscreteEvent"
+          }
+        },
+        "continuous_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContinuousEvent"
+          }
+        },
+        "subsystems": {
+          "type": "object",
+          "description": "Named child subsystems, keyed by unique identifier. A subsystem is a child model, a pure-I/O data loader (RFC pure-io-data-loaders §4.3), or a reference to an external file containing exactly one of those. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: \"ParentModel.ChildModel.var\" (and \"ParentModel.Loader.var\" for a loader subsystem). Each subsystem can be defined inline or included by reference via a local file path or URL.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Model"
+              },
+              {
+                "$ref": "#/$defs/DataLoader"
+              },
+              {
+                "$ref": "#/$defs/SubsystemRef"
+              }
+            ]
+          }
+        },
+        "tolerance": {
+          "$ref": "#/$defs/Tolerance",
+          "description": "Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own."
+        },
+        "tests": {
+          "type": "array",
+          "description": "Inline validation tests that exercise this model in isolation. Each test specifies initial conditions, parameter overrides, a time span, and scalar assertions at specific (variable, time) points.",
+          "items": {
+            "$ref": "#/$defs/Test"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "description": "Inline illustrative examples of how to run this model. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
+          "items": {
+            "$ref": "#/$defs/Example"
+          }
+        },
+        "expression_templates": {
+          "type": "object",
+          "description": "Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. Loaders MUST expand `apply_expression_template` to a fully-substituted Expression AST at load time (Option A round-trip; the canonical AST after parse-then-emit is the expanded form). Templates do NOT call other templates and do NOT recurse.",
+          "additionalProperties": {
+            "$ref": "#/$defs/ExpressionTemplate"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        }
+      }
+    },
+    "SubsystemRef": {
+      "type": "object",
+      "description": "A reference to an external ESM file containing a model, reaction system, or data loader definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.",
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional model selector. When the referenced file defines more than one top-level model, names which one to splice in. Omit for single-model files. Lets a multi-model component library (e.g. an ESD regridder file holding several kernels) be referenced by one of its models."
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Integer bindings closing the referenced document's metaparameters (esm-spec §9.7.6), e.g. a convergence wrapper instantiating a problem file at a given grid size."
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        }
+      }
+    },
+    "Species": {
+      "type": "object",
+      "description": "A reactive species in a reaction system.",
+      "additionalProperties": false,
+      "properties": {
+        "units": {
+          "type": "string"
+        },
+        "default": {
+          "type": "number"
+        },
+        "default_units": {
+          "type": "string",
+          "description": "Units of the default value, if different from the declared units field. See ModelVariable.default_units for semantics."
+        },
+        "description": {
+          "type": "string"
+        },
+        "constant": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the species participates in reactions as a reactant/product but its concentration is held fixed (no ODE integration) — a reservoir species. Maps to Catalyst's @species [isconstantspecies=true]. Absent or false means an ordinary state species with an ODE."
+        }
+      }
+    },
+    "Parameter": {
+      "type": "object",
+      "description": "A parameter in a reaction system.",
+      "additionalProperties": false,
+      "properties": {
+        "units": {
+          "type": "string"
+        },
+        "default": {
+          "type": "number"
+        },
+        "default_units": {
+          "type": "string",
+          "description": "Units of the default value, if different from the declared units field. See ModelVariable.default_units for semantics."
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "StoichiometryEntry": {
+      "type": "object",
+      "description": "A species with its stoichiometric coefficient in a reaction. Coefficients MUST be positive and finite (NaN / ±Infinity are rejected at parse time). Fractional values are supported to preserve fidelity with atmospheric-chemistry mechanisms whose products include non-integer yields (e.g. `0.87 CH2O`, `1.86 CH3O2`). Integer values remain valid — they are a subset of the permitted number range.",
+      "required": [
+        "species",
+        "stoichiometry"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "species": {
+          "type": "string"
+        },
+        "stoichiometry": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "Reaction": {
+      "type": "object",
+      "description": "A single reaction in a reaction system.",
+      "required": [
+        "id",
+        "substrates",
+        "products",
+        "rate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique reaction identifier (e.g., \"R1\")."
+        },
+        "name": {
+          "type": "string"
+        },
+        "substrates": {
+          "description": "Array of {species, stoichiometry} or null for source reactions (∅ → X).",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/StoichiometryEntry"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "products": {
+          "description": "Array of {species, stoichiometry} or null for sink reactions (X → ∅).",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/StoichiometryEntry"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "rate": {
+          "$ref": "#/$defs/Expression",
+          "description": "Rate expression: a parameter reference string, number, or expression AST."
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        }
+      }
+    },
+    "ReactionSystem": {
+      "type": "object",
+      "description": "A reaction network — declarative representation of chemical or biological reactions.",
+      "required": [
+        "species",
+        "parameters",
+        "reactions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "coupletype": {
+          "description": "Coupling type name. Informational label identifying this system's role in coupling.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "species": {
+          "type": "object",
+          "description": "Named reactive species.",
+          "additionalProperties": {
+            "$ref": "#/$defs/Species"
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Named parameters (rate constants, temperature, photolysis rates, etc.).",
+          "additionalProperties": {
+            "$ref": "#/$defs/Parameter"
+          }
+        },
+        "reactions": {
+          "type": "array",
+          "description": "Array of reaction definitions.",
+          "items": {
+            "$ref": "#/$defs/Reaction"
+          },
+          "minItems": 1
+        },
+        "constraint_equations": {
+          "type": "array",
+          "description": "Additional algebraic or ODE constraints.",
+          "items": {
+            "$ref": "#/$defs/Equation"
+          }
+        },
+        "discrete_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiscreteEvent"
+          }
+        },
+        "continuous_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContinuousEvent"
+          }
+        },
+        "subsystems": {
+          "type": "object",
+          "description": "Named child reaction systems (subsystems), keyed by unique identifier. Enables hierarchical system composition. Variables in subsystems are referenced via dot notation: \"ParentSystem.ChildSystem.species\". Each subsystem can be defined inline or included by reference via a local file path or URL.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ReactionSystem"
+              },
+              {
+                "$ref": "#/$defs/SubsystemRef"
+              }
+            ]
+          }
+        },
+        "tolerance": {
+          "$ref": "#/$defs/Tolerance",
+          "description": "System-level default numerical tolerance for tests, used when a test or assertion does not provide its own."
+        },
+        "tests": {
+          "type": "array",
+          "description": "Inline validation tests that exercise this reaction system in isolation. Each test specifies initial conditions, parameter overrides, a time span, and scalar assertions at specific (species/variable, time) points.",
+          "items": {
+            "$ref": "#/$defs/Test"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "description": "Inline illustrative examples of how to run this reaction system. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
+          "items": {
+            "$ref": "#/$defs/Example"
+          }
+        },
+        "expression_templates": {
+          "type": "object",
+          "description": "Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. Loaders MUST expand `apply_expression_template` to a fully-substituted Expression AST at load time (Option A round-trip; the canonical AST after parse-then-emit is the expanded form). Templates do NOT call other templates and do NOT recurse.",
+          "additionalProperties": {
+            "$ref": "#/$defs/ExpressionTemplate"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Ordered imports of template-library files into this component's template scope (esm-spec §9.7.2). Imported templates join the §9.6.3 effective declaration order ahead of local declarations (§9.7.4).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        }
+      }
+    },
+    "ExpressionTemplate": {
+      "type": "object",
+      "description": "A single in-file rewrite rule / Expression-AST template (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md). The `params` are metavariables; the `body` is the replacement Expression AST in which parameter occurrences are written as bare parameter-name strings. The template is applied in one of two ways. (1) WITHOUT `match`: it is invoked explicitly by name through an `apply_expression_template` node, whose `bindings` supply each parameter's AST. (2) WITH `match`: it is an auto-applied rewrite rule — `match` is a pattern Expression in which parameters are wildcards (a parameter in an operand/`args` position binds to the matched sub-AST; a parameter in a scalar field such as `dim`/`side` binds to the matched literal), and the rule fires wherever the pattern structurally matches a node. This unifies variable substitution (a bare-metavar `match`), named-template expansion (no `match`), and rewrite-target-op lowering (an operator `match` like `{op:'D', args:['f'], wrt:'x'}` → an `aggregate`/`makearray` stencil). Either way the `body` is instantiated by pure structural substitution of the bound metavariables — no evaluation, no metaprogramming. Rewriting is an outermost-first, priority-ordered, bounded-fixpoint load-time process (esm-spec §9.6.3): each pass is a pre-order walk that fires, at each node, the matching rule of highest `priority` (ties broken by declaration order); passes repeat to a fixpoint or until MAX_REWRITE_PASSES=64, at which point a non-converging rule set is rejected with diagnostic 'rewrite_rule_nonterminating'. A rewrite-target op (esm-spec §4.2) surviving the fixpoint into an evaluation position is rejected with diagnostic 'unlowered_operator'. A `body` MAY contain `apply_expression_template` nodes referencing other match-less in-scope templates (declared locally or imported, esm-spec §9.7.2); these are resolved at registration time as a statically-checked acyclic DAG (cycles rejected with 'apply_expression_template_recursive_body'; chains deeper than MAX_TEMPLATE_EXPANSION_DEPTH=32 rejected with 'template_body_expansion_too_deep') and inlined by pure substitution before the fixpoint runs (esm-spec §9.7.3). `match` patterns MUST NOT contain `apply_expression_template` nodes. An optional `where` block adds static match-scoping constraints on the captured parameters (declared-shape/index-set scoping, filtered before priority selection — see the `where` property and esm-spec §9.6.1).",
+      "required": [
+        "params",
+        "body"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "type": "array",
+          "description": "Ordered list of parameter (metavariable) names. MUST be unique within this template; MAY be empty (a zero-parameter template is a named constant fragment, common in library files). Each name occurs zero or more times inside `body` and (when present) `match`; for an explicitly-invoked template every name MUST also appear as a key in every `apply_expression_template.bindings` referencing it.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "match": {
+          "$ref": "#/$defs/Expression",
+          "description": "Optional pattern Expression that turns this template into an auto-applied rewrite rule. Parameter names appearing as bare strings in `match` are wildcards bound by structural matching. A NON-parameter string in an operand/`args` position is a literal: it matches only that exact bare variable reference — the sanctioned per-variable selector (esm-spec §9.6.1/§9.6.8), e.g. {op:'D', args:['u'], wrt:'x'} with `u` not in `params` fires only on the derivative of `u`. Absent ⇒ the template is applied only via explicit `apply_expression_template` invocation."
+        },
+        "where": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "shape"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "shape": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "description": "Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'template_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'apply_expression_template_invalid_declaration')."
+        },
+        "priority": {
+          "type": "integer",
+          "default": 0,
+          "description": "Selection precedence for an auto-applied (`match`) rule (esm-spec §9.6.3). When more than one rule matches a node, the highest `priority` wins; ties break by declaration order. This lets a compound-term rule (Godunov / WENO / flux-limited) out-rank the plain per-derivative rule so it fires on the whole compound before the inner derivatives are lowered. Ignored when `match` is absent. Absent ⇒ 0."
+        },
+        "body": {
+          "$ref": "#/$defs/Expression",
+          "description": "The replacement Expression AST. Parameter names appear as bare strings and are replaced structurally with their bound argument (from `match` or from `apply_expression_template.bindings`) at expansion time."
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "TemplateImport": {
+      "type": "object",
+      "description": "One entry of `expression_template_imports` (esm-spec §9.7.2): imports the templates (and index_sets / open metaparameters) of a template-library file. `ref` uses the §4.7 reference formats (relative path, absolute path, or URL), resolved at load before validation with canonical-path cycle detection (`template_import_cycle`). `only` filters which template names become visible to the importer (`template_import_unknown_name` for unknown names). `bindings` closes the target document's open metaparameters to integers at this edge (esm-spec §9.7.6); metaparameters left unbound are re-exported into the importing document's scope. `prefix` / `rename` namespace the surviving exported names (templates after `only`, index sets, still-open metaparameters) into the importer's vocabulary, applied transitively through every occurrence inside the imported declarations; `rebind` rewrites free variable names (keyed factors and other free names in template bodies) at the same point (esm-spec §9.7.7). Renaming happens after this edge's `bindings` instantiation and `only` filtering and before the §9.7.4/§9.7.5 merge, so the same file imported under different renames registers as distinct instances while identical edges dedupe. Identifier grammar, unknown-name, and collision checks are resolver-level (`template_import_rename_invalid`, `template_import_rename_unknown_name`, `template_import_rebind_unknown_name`, `template_import_rename_collision`).",
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path or URL of a template-library file, per the §4.7 reference-format table."
+        },
+        "only": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Template names to import; absent = all."
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Integer bindings closing the target document's metaparameters at this edge."
+        },
+        "prefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*."
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Explicit renames, exported name → importer-visible name; entries override `prefix`. Keys must name a surviving export (`template_import_rename_unknown_name`); targets are dotted identifiers (esm-spec §9.7.7)."
+        },
+        "rebind": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Free-name rebinding, free name → replacement variable name (e.g. areaCell → meshA.areaCell): rewrites free variable names occurring in the imported template bodies/matches and ragged index-set offsets/values factors. Keys must occur free in the surviving declarations (`template_import_rebind_unknown_name`) (esm-spec §9.7.7)."
+        }
+      }
+    },
+    "Metaparameters": {
+      "type": "object",
+      "description": "Document-scoped named integers bound at load (esm-spec §9.7.6): at import/subsystem edges via `bindings`, at the loader API for the root document, or by `default`. Admissible — as names or `{op, args}` integer expressions — in `index_sets` interval sizes, `aggregate` dense ranges, and `makearray` regions (folded exactly at load), and substituted as integer literals in ordinary expression positions. A metaparameter name MUST NOT collide with any visible variable/parameter/species/index-set name (`metaparameter_name_conflict`).",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "integer",
+            "description": "The only v1 metaparameter kind."
+          },
+          "default": {
+            "type": "integer",
+            "description": "Fallback applied at root resolution, after edge and loader-API bindings; a still-open metaparameter with no default is `metaparameter_unbound`."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "MetaparameterExpression": {
+      "description": "A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.",
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "args"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "+",
+                "-",
+                "*",
+                "/"
+              ]
+            },
+            "args": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/MetaparameterExpression"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Tolerance": {
+      "type": "object",
+      "description": "Numerical comparison tolerance. Any of abs/rel may be specified. If both are given, an assertion passes when either bound is satisfied: |actual - expected| <= abs  OR  |actual - expected| / max(|expected|, epsilon) <= rel.",
+      "additionalProperties": false,
+      "properties": {
+        "abs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Absolute tolerance: |actual - expected| <= abs."
+        },
+        "rel": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel."
+        }
+      }
+    },
+    "Assertion": {
+      "type": "object",
+      "description": "A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, or error-norm). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and only valid on a 0-D component. Error-norm reductions (L2_error, Linf_error) require `reference`.",
+      "required": [
+        "variable",
+        "time"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "variable": {
+          "type": "string",
+          "description": "Name of the variable or species to check. Use the local name (e.g., \"O3\") or a scoped reference relative to this component (e.g., \"subsystem.X\")."
+        },
+        "time": {
+          "type": "number",
+          "description": "Simulation time at which to evaluate the assertion. Must lie within [time_span.start, time_span.end]."
+        },
+        "expected": {
+          "type": "number",
+          "description": "Expected scalar value of the variable at the given time."
+        },
+        "tolerance": {
+          "$ref": "#/$defs/Tolerance",
+          "description": "Per-assertion tolerance override. If present, this takes precedence over the test-level and model-level defaults."
+        },
+        "coords": {
+          "type": "object",
+          "description": "Spatial-point evaluation: map from a spatial index-set / dimension name (e.g., \"x\", \"lon\") to the numeric coordinate at which to sample the field. All keys MUST be names of index sets the field is defined over. Mutually exclusive with `reduce`.",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "minProperties": 1
+        },
+        "reduce": {
+          "type": "string",
+          "description": "Domain reduction: collapse the spatial field to a single scalar before comparison. `integral`/`mean`/`max`/`min` are pure reductions; `L2_error`/`Linf_error` require a `reference` solution and compute ||u_actual - u_reference||_norm. Mutually exclusive with `coords`.",
+          "enum": [
+            "integral",
+            "mean",
+            "max",
+            "min",
+            "L2_error",
+            "Linf_error"
+          ]
+        },
+        "reference": {
+          "description": "Reference (analytic or precomputed) solution required by error-norm reductions. Either an inline Expression evaluated over the component's domain coordinates, or a from_file shape pointing at a precomputed snapshot.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "path"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "from_file"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "format": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "coords",
+              "reduce"
+            ]
+          }
+        },
+        {
+          "required": [
+            "expected"
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "reduce": {
+                "enum": [
+                  "L2_error",
+                  "Linf_error"
+                ]
+              }
+            },
+            "required": [
+              "reduce"
+            ]
+          },
+          "then": {
+            "required": [
+              "reference"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reduce": {
+                "enum": [
+                  "integral",
+                  "mean",
+                  "max",
+                  "min"
+                ]
+              }
+            },
+            "required": [
+              "reduce"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reference"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Test": {
+      "type": "object",
+      "description": "An inline validation test for the enclosing model or reaction system. Defines the run configuration (initial conditions, parameter overrides, time span) and the scalar assertions that must hold.",
+      "required": [
+        "id",
+        "time_span",
+        "assertions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier unique within this component's tests array."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this test verifies."
+        },
+        "initial_conditions": {
+          "type": "object",
+          "description": "Initial-value overrides for state variables, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "parameter_overrides": {
+          "type": "object",
+          "description": "Parameter overrides, keyed by parameter name (local to this component). Values not listed fall back to the parameter's declared default.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "time_span": {
+          "$ref": "#/$defs/TimeSpan"
+        },
+        "tolerance": {
+          "$ref": "#/$defs/Tolerance",
+          "description": "Test-level default tolerance applied to all assertions in this test that do not override it."
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests run under a per-test discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "description": "Scalar (variable, time) checks that define the pass/fail criterion of the test.",
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "TimeSpan": {
+      "type": "object",
+      "description": "Simulation time interval expressed in the component's time units.",
+      "required": [
+        "start",
+        "end"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        }
+      }
+    },
+    "SweepRange": {
+      "type": "object",
+      "description": "Generated range of parameter values.",
+      "required": [
+        "start",
+        "stop",
+        "count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "stop": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "scale": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "log"
+          ],
+          "default": "linear",
+          "description": "Spacing: linear = evenly spaced between start and stop; log = logarithmically spaced (start and stop must be strictly positive)."
+        }
+      }
+    },
+    "SweepDimension": {
+      "type": "object",
+      "description": "One axis of a parameter sweep: exactly one of values or range must be given.",
+      "required": [
+        "parameter"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "parameter": {
+          "type": "string",
+          "description": "Name of the parameter to vary (local to this component)."
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "description": "Enumerated values to use for this axis."
+        },
+        "range": {
+          "$ref": "#/$defs/SweepRange",
+          "description": "Generated range; mutually exclusive with values."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "values"
+          ]
+        },
+        {
+          "required": [
+            "range"
+          ]
+        }
+      ]
+    },
+    "ParameterSweep": {
+      "type": "object",
+      "description": "A parameter sweep specification. Currently only Cartesian product sweeps are supported — the total run count is the product of each dimension's length.",
+      "required": [
+        "type",
+        "dimensions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "cartesian"
+          ],
+          "description": "Sweep combination strategy. Currently only cartesian (full Cartesian product) is supported."
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SweepDimension"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "PlotAxis": {
+      "type": "object",
+      "description": "Axis specification: any state variable, observed variable, parameter name, or swept parameter may be used.",
+      "required": [
+        "variable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "variable": {
+          "type": "string",
+          "description": "Variable or parameter name (local to this component or scoped within a subsystem)."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable axis label. Viewers should fall back to the variable name if omitted."
+        }
+      }
+    },
+    "PlotValue": {
+      "type": "object",
+      "description": "A scalar value derived from a trajectory: used for heatmap z / color channels. Exactly one of at_time or reduce should be specified; if both are given, at_time takes precedence.",
+      "required": [
+        "variable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "variable": {
+          "type": "string",
+          "description": "Variable whose trajectory is reduced to a scalar per run."
+        },
+        "at_time": {
+          "type": "number",
+          "description": "Specific simulation time at which to sample the variable."
+        },
+        "reduce": {
+          "type": "string",
+          "enum": [
+            "max",
+            "min",
+            "mean",
+            "integral",
+            "final"
+          ],
+          "description": "Time-reduction applied to the trajectory: max/min/mean over the run, time integral, or the final value at time_span.end."
+        }
+      }
+    },
+    "PlotSeries": {
+      "type": "object",
+      "description": "A single named series for multi-series line or scatter plots.",
+      "required": [
+        "name",
+        "variable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "variable": {
+          "type": "string"
+        }
+      }
+    },
+    "Plot": {
+      "type": "object",
+      "description": "A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.",
+      "required": [
+        "id",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier unique within this example's plots array."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "line",
+            "scatter",
+            "heatmap",
+            "field_slice",
+            "field_snapshot"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "x": {
+          "$ref": "#/$defs/PlotAxis"
+        },
+        "y": {
+          "description": "Y-axis specification. May be a single PlotAxis, or an array of PlotAxis for inline multi-series line/scatter plots (alternative to the `series` field for the common case of plotting several variables against a shared x-axis).",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlotAxis"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PlotAxis"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/PlotValue",
+          "description": "Required for heatmap; defines the color channel. Ignored for line/scatter. For field_snapshot, the variable plotted as the color channel (use `value.variable`); `at_time` and `reduce` are ignored — the field is sampled at `at_time` declared on the plot."
+        },
+        "series": {
+          "type": "array",
+          "description": "Multiple named series for line or scatter plots. Ignored for heatmap and field plots.",
+          "items": {
+            "$ref": "#/$defs/PlotSeries"
+          }
+        },
+        "at_time": {
+          "type": "number",
+          "description": "Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the example's time_span."
+        },
+        "pinned_coords": {
+          "type": "object",
+          "description": "Required for field_slice and field_snapshot when the component domain has more spatial dimensions than the plot's spatial axes (1 for field_slice, 2 for field_snapshot). Maps each non-plotted spatial dimension name to the numeric coordinate at which to slice. Keys MUST be names of dimensions in component.domain.spatial that are not used by `x` (or `y` for field_snapshot).",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "heatmap"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "value"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "field_slice"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "at_time"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "field_snapshot"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "at_time",
+              "value"
+            ]
+          }
+        }
+      ]
+    },
+    "Example": {
+      "type": "object",
+      "description": "An inline illustrative example of how to run the enclosing component. Defines the run configuration and one or more plots derived from the result.",
+      "required": [
+        "id",
+        "time_span"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier unique within this component's examples array."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this example illustrates."
+        },
+        "initial_state": {
+          "type": "object",
+          "description": "Scalar initial-value overrides for this example run, keyed by state-variable name. A component's initial fields are declared with `ic` equations in the model (esm-spec §11.4); this map overrides their scalar values for this run.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Parameter overrides, keyed by parameter name (local to this component).",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "time_span": {
+          "$ref": "#/$defs/TimeSpan"
+        },
+        "parameter_sweep": {
+          "$ref": "#/$defs/ParameterSweep",
+          "description": "Optional parameter sweep. When present, the example represents a family of runs (one per Cartesian combination) rather than a single trajectory."
+        },
+        "plots": {
+          "type": "array",
+          "description": "Plot specifications derived from this example's run(s).",
+          "items": {
+            "$ref": "#/$defs/Plot"
+          }
+        },
+        "expression_template_imports": {
+          "type": "array",
+          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline examples run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
+          "items": {
+            "$ref": "#/$defs/TemplateImport"
+          }
+        }
+      }
+    },
+    "DataLoaderSource": {
+      "type": "object",
+      "description": "File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.",
+      "required": [
+        "url_template"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "url_template": {
+          "type": "string",
+          "description": "Jinja-style URL template with substitutions. Supported: {date:<strftime>} (e.g. {date:%Y%m%d}), {var}, {sector}, {species}. Custom substitutions are allowed and the runtime must accept and pass them through."
+        },
+        "mirrors": {
+          "type": "array",
+          "description": "Ordered fallback URL templates. Runtime tries each in order, first is primary. Follows the same substitution grammar as url_template.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DataLoaderTemporal": {
+      "type": "object",
+      "description": "Temporal coverage and record layout for a data source.",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 datetime — first timestamp available from this source."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 datetime — last timestamp available from this source."
+        },
+        "file_period": {
+          "type": "string",
+          "description": "ISO 8601 duration describing how much time one file covers (e.g., \"P1D\", \"P1M\", \"PT3H\")."
+        },
+        "frequency": {
+          "type": "string",
+          "description": "ISO 8601 duration describing spacing between samples within a file."
+        },
+        "records_per_file": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "string",
+              "enum": [
+                "auto"
+              ]
+            }
+          ],
+          "description": "Number of time records per file. \"auto\" means read from file at runtime."
+        },
+        "time_variable": {
+          "type": "string",
+          "description": "Name of the time coordinate variable in the file. Used when records_per_file is absent or \"auto\". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback."
+        }
+      }
+    },
+    "DataLoaderVariable": {
+      "type": "object",
+      "description": "A variable exposed by a data loader, mapped from a source-file variable.",
+      "required": [
+        "file_variable",
+        "units"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file_variable": {
+          "type": "string",
+          "description": "Name of the variable inside the source file. May differ from the schema-level variable name."
+        },
+        "units": {
+          "type": "string",
+          "description": "Units of the variable as exposed to the schema."
+        },
+        "unit_conversion": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/Expression"
+            }
+          ],
+          "description": "Optional multiplicative factor or Expression AST applied to convert source-file values to the declared units."
+        },
+        "description": {
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        }
+      }
+    },
+    "DataLoaderDeterminism": {
+      "type": "object",
+      "description": "Reproducibility contract a binary-format loader advertises to bindings. A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.",
+      "additionalProperties": false,
+      "properties": {
+        "endian": {
+          "type": "string",
+          "enum": [
+            "little",
+            "big"
+          ],
+          "description": "Byte order of on-wire numeric fields."
+        },
+        "float_format": {
+          "type": "string",
+          "enum": [
+            "ieee754_single",
+            "ieee754_double"
+          ],
+          "description": "Floating-point format of metric fields."
+        },
+        "integer_width": {
+          "type": "integer",
+          "enum": [
+            32,
+            64
+          ],
+          "description": "Integer width (in bits) of connectivity fields."
+        }
+      }
+    },
+    "DataLoader": {
+      "type": "object",
+      "description": "A generic, runtime-agnostic description of an external data source reduced to pure I/O: it locates, reads, and slices bytes from disk and exposes them as named `variables`. It performs no reprojection and no regridding; any grid geometry it reads (coordinates, connectivity, metric arrays) is exposed as ordinary variables and transformed downstream by `aggregate` FAQs and coupling expressions. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.",
+      "required": [
+        "kind",
+        "source",
+        "variables"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "grid",
+            "points",
+            "static"
+          ],
+          "description": "Structural kind of the dataset: 'grid' (gridded array source), 'points' (scattered point/station source), or 'static' (time-invariant source). Grid geometry the loader reads — coordinates, connectivity, metric arrays — is exposed as ordinary loader `variables` and consumed by `aggregate` FAQs downstream; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags."
+        },
+        "source": {
+          "$ref": "#/$defs/DataLoaderSource"
+        },
+        "temporal": {
+          "$ref": "#/$defs/DataLoaderTemporal"
+        },
+        "determinism": {
+          "$ref": "#/$defs/DataLoaderDeterminism"
+        },
+        "variables": {
+          "type": "object",
+          "description": "Variables exposed by this loader, keyed by schema-level variable name.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/DataLoaderVariable"
+          }
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Free-form metadata about the data source. The \"tags\" field (array of strings) is conventional for expressing scientific role (e.g. \"emissions\", \"reanalysis\") and is not schema-validated.",
+          "additionalProperties": true,
+          "properties": {
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "EnumDeclaration": {
+      "type": "object",
+      "description": "A file-local enum mapping symbolic names to positive integers (esm-spec.md §9.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "TranslateTarget": {
+      "description": "Translation target: a simple variable reference string or an object with var and factor.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "required": [
+            "var"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "var": {
+              "type": "string"
+            },
+            "factor": {
+              "type": "number"
+            }
+          }
+        }
+      ]
+    },
+    "ConnectorEquation": {
+      "type": "object",
+      "description": "A single equation in a ConnectorSystem linking two coupled systems.",
+      "required": [
+        "from",
+        "to",
+        "transform"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source variable (scoped reference)."
+        },
+        "to": {
+          "type": "string",
+          "description": "Target variable (scoped reference)."
+        },
+        "transform": {
+          "type": "string",
+          "enum": [
+            "additive",
+            "multiplicative",
+            "replacement"
+          ],
+          "description": "How the expression modifies the target."
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression",
+          "description": "The coupling expression."
+        }
+      }
+    },
+    "CouplingEntry": {
+      "description": "A single coupling rule connecting models, reaction systems, or data loaders.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CouplingOperatorCompose"
+        },
+        {
+          "$ref": "#/$defs/CouplingCouple"
+        },
+        {
+          "$ref": "#/$defs/CouplingVariableMap"
+        },
+        {
+          "$ref": "#/$defs/CouplingCallback"
+        },
+        {
+          "$ref": "#/$defs/CouplingEvent"
+        }
+      ]
+    },
+    "CouplingOperatorCompose": {
+      "type": "object",
+      "description": "Match LHS time derivatives and add RHS terms together.",
+      "required": [
+        "type",
+        "systems"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "operator_compose"
+        },
+        "systems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The two systems to compose."
+        },
+        "translate": {
+          "type": "object",
+          "description": "Variable mappings when LHS variables don't have matching names.",
+          "additionalProperties": {
+            "$ref": "#/$defs/TranslateTarget"
+          }
+        },
+        "lifting": {
+          "type": "string",
+          "enum": [
+            "pointwise",
+            "broadcast",
+            "mean",
+            "integral"
+          ],
+          "description": "Strategy for mapping between 0D and spatial systems."
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "CouplingCouple": {
+      "type": "object",
+      "description": "Bi-directional coupling via explicit ConnectorSystem equations.",
+      "required": [
+        "type",
+        "systems",
+        "connector"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "couple"
+        },
+        "systems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "connector": {
+          "type": "object",
+          "required": [
+            "equations"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "equations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ConnectorEquation"
+              },
+              "minItems": 1
+            }
+          }
+        },
+        "lifting": {
+          "type": "string",
+          "enum": [
+            "pointwise",
+            "broadcast",
+            "mean",
+            "integral"
+          ],
+          "description": "Strategy for mapping between 0D and spatial systems."
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "CouplingVariableMap": {
+      "type": "object",
+      "description": "Replace a parameter in one system with a variable from another.",
+      "required": [
+        "type",
+        "from",
+        "to",
+        "transform"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "variable_map"
+        },
+        "from": {
+          "type": "string",
+          "description": "Source variable (scoped reference, e.g., \"GEOSFP.T\")."
+        },
+        "to": {
+          "type": "string",
+          "description": "Target parameter (scoped reference, e.g., \"SuperFast.T\")."
+        },
+        "transform": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "param_to_var",
+                "identity",
+                "additive",
+                "multiplicative",
+                "conversion_factor"
+              ]
+            },
+            {
+              "$ref": "#/$defs/ExpressionNode"
+            }
+          ],
+          "description": "How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and expand at load per §9.6.4). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them)."
+        },
+        "factor": {
+          "type": "number",
+          "description": "Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var, identity, or an Expression transform, which replace/assign/compute without a separate scaling slot."
+        },
+        "lifting": {
+          "type": "string",
+          "enum": [
+            "pointwise",
+            "broadcast",
+            "mean",
+            "integral"
+          ],
+          "description": "Strategy for mapping between 0D and spatial systems."
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "`factor` scales the coupling, so it is only valid with a scaling transform (additive, multiplicative, conversion_factor). A bare replace (param_to_var) or assign (identity) has nothing to scale, and an Expression transform spells its own arithmetic (fold scaling into the expression), so a `factor` alongside any of those is a modeling error and is rejected rather than silently ignored. The enum constraint below enforces this: a non-enum (Expression) transform fails it whenever `factor` is present.",
+          "if": {
+            "required": [
+              "factor"
+            ]
+          },
+          "then": {
+            "properties": {
+              "transform": {
+                "enum": [
+                  "additive",
+                  "multiplicative",
+                  "conversion_factor"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CouplingCallback": {
+      "type": "object",
+      "description": "Register a callback for simulation events.",
+      "required": [
+        "type",
+        "callback_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "callback"
+        },
+        "callback_id": {
+          "type": "string",
+          "description": "Registered identifier for the callback."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "CouplingEvent": {
+      "type": "object",
+      "description": "Cross-system event involving variables from multiple coupled systems.",
+      "required": [
+        "type",
+        "event_type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "continuous",
+            "discrete"
+          ],
+          "description": "Whether this is a continuous or discrete event."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Expression"
+          },
+          "description": "Condition expressions (zero-crossing for continuous, boolean for discrete)."
+        },
+        "trigger": {
+          "$ref": "#/$defs/DiscreteEventTrigger",
+          "description": "Trigger specification (for discrete events)."
+        },
+        "affects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AffectEquation"
+          },
+          "description": "Affect equations. Required unless functional_affect is used."
+        },
+        "functional_affect": {
+          "$ref": "#/$defs/FunctionalAffect",
+          "description": "Registered functional affect handler (alternative to symbolic affects)."
+        },
+        "affect_neg": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AffectEquation"
+              }
+            }
+          ]
+        },
+        "discrete_parameters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "root_find": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "all"
+          ]
+        },
+        "reinitialize": {
+          "type": "boolean"
+        },
+        "expression_template_imports": {
+          "type": "object",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TemplateImport"
+            }
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "affects"
+          ]
+        },
+        {
+          "required": [
+            "functional_affect"
+          ]
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "continuous"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "conditions"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "discrete"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "trigger"
+            ]
+          }
+        }
+      ]
+    },
+    "IndexSet": {
+      "type": "object",
+      "description": "A named index set (RFC semiring-faq-unified-ir §5.2): the declaration shape for an iteration domain referenced from an `aggregate` range via { \"from\": <name> }. Covers grid axes and categorical dimensions under one shape. Exactly one of four kinds, each requiring its own fields.",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Which of the four index-set forms this entry is. \"interval\": a dense [1..size] grid axis. \"categorical\": an explicit enumeration of members. \"derived\": a data-derived set materialized from an index-set-producing node (a `distinct` `aggregate`, or an `intersect_polygon` ring leaf whose clipped ring has a data-dependent vertex count, §8.1). \"ragged\": a per-parent (dependent) inner set backed by CSR offsets/values factors.",
+          "enum": [
+            "interval",
+            "categorical",
+            "derived",
+            "ragged"
+          ]
+        },
+        "size": {
+          "description": "interval: number of members in the dense interval (the grid-axis length). Required when kind is \"interval\". MAY be a metaparameter expression folded to a concrete integer at load (esm-spec §9.7.6).",
+          "$ref": "#/$defs/MetaparameterExpression"
+        },
+        "members": {
+          "type": "array",
+          "description": "categorical: the explicit enumeration of members (e.g. county FIPS codes, fuel types). Required when kind is \"categorical\"."
+        },
+        "from_faq": {
+          "type": "string",
+          "description": "derived: the id of the index-set-producing node (RFC §5.5) that materializes this set, named by its `id`. Usually an `aggregate` node (`distinct: true`) — e.g. the unique edges discovered from a face→vertex relation. It MAY also be an `intersect_polygon` geometry-kernel leaf (RFC §8.1): the clipped overlap ring it returns has a data-dependent number of vertices, so the ring's vertex set is exactly such a derived index set, and `polygon_area` is then an ordinary `sum_product` FAQ over it. Required when kind is \"derived\"."
+        },
+        "of": {
+          "type": "array",
+          "description": "ragged: the parent index-set name(s) this inner set depends on (e.g. [\"cells\"] for the edges of each cell). Required when kind is \"ragged\".",
+          "items": {
+            "type": "string"
+          }
+        },
+        "offsets": {
+          "type": "string",
+          "description": "ragged: name of the keyed factor giving |set(i)| for each parent tuple — the per-parent length / CSR offsets (e.g. MPAS nEdgesOnCell). Required when kind is \"ragged\"."
+        },
+        "values": {
+          "type": "string",
+          "description": "ragged: name of the keyed factor giving the member at (i, k) for k in 1…|set(i)| — the flattened CSR member array (e.g. edgesOnCell). Required when kind is \"ragged\"."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "interval"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "size"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "categorical"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "members"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "derived"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "from_faq"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ragged"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "of",
+              "offsets",
+              "values"
+            ]
+          }
+        }
+      ]
+    },
+    "Domain": {
+      "type": "object",
+      "description": "Spatiotemporal domain specification (DomainInfo).",
+      "additionalProperties": false,
+      "properties": {
+        "independent_variable": {
+          "type": "string",
+          "description": "Name of the independent (time) variable.",
+          "default": "t"
+        },
+        "temporal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "reference_time": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "element_type": {
+          "type": "string",
+          "enum": [
+            "Float32",
+            "Float64"
+          ],
+          "description": "Floating point precision.",
+          "default": "Float64"
+        },
+        "array_type": {
+          "type": "string",
+          "description": "Array backend (e.g., \"Array\", \"CuArray\").",
+          "default": "Array"
+        }
+      }
+    },
+    "FunctionTable": {
+      "type": "object",
+      "description": "A sampled function table (esm-spec.md §9.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / `index` (nearest); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.",
+      "required": [
+        "axes",
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "axes": {
+          "type": "array",
+          "description": "Ordered list of named axes. The order of entries defines the order of inner dimensions in `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique.",
+          "items": {
+            "$ref": "#/$defs/FunctionTableAxis"
+          },
+          "minItems": 1,
+          "maxItems": 2
+        },
+        "interpolation": {
+          "type": "string",
+          "description": "Interpolation kind applied by `table_lookup`. 'linear' (1 axis) lowers to `interp.linear`. 'bilinear' (2 axes) lowers to `interp.bilinear`. 'nearest' lowers to `index` after `interp.searchsorted`. The chosen kind MUST be consistent with the number of axes; mismatch is rejected at load time with diagnostic 'table_interpolation_axes_mismatch'.",
+          "enum": [
+            "linear",
+            "bilinear",
+            "nearest"
+          ],
+          "default": "linear"
+        },
+        "out_of_bounds": {
+          "type": "string",
+          "description": "Out-of-bounds policy applied to query coordinates that fall outside an axis range. 'clamp' pins to the nearest edge — this matches the semantics of `interp.linear` and `interp.bilinear` (extrapolate-flat). 'error' MUST raise at evaluation time; bindings emit diagnostic 'table_lookup_out_of_bounds' on first violation. v0.4.0: 'clamp' is the only policy required of all five bindings; 'error' is conformant when the binding implements it.",
+          "enum": [
+            "clamp",
+            "error"
+          ],
+          "default": "clamp"
+        },
+        "outputs": {
+          "type": "array",
+          "description": "Optional ordered list of output names. When present, `table_lookup.output` MAY name an entry of this list (in addition to using a 0-based integer index). Names within a table MUST be unique. The leading dimension of `data` MUST equal the length of `outputs`.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "data": {
+          "description": "Nested-array literal carrying the table's sampled values. Leaves MUST be finite numbers (NaN entries are rejected at load time with 'table_data_nan'). Shape: [len(outputs), len(axes[0].values), ...] when `outputs` is present; [len(axes[0].values), ...] otherwise. Mismatched nesting is rejected with 'table_data_shape_mismatch'."
+        },
+        "shape": {
+          "type": "array",
+          "description": "Optional redundant shape assertion. If present, MUST match the actual nesting of `data`; loaders verify and reject mismatches with 'table_data_shape_mismatch'. `data` is the canonical representation; `shape` is a load-time assertion only.",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Optional pin of the table-schema minor version this entry was authored against. Bindings ignore the value beyond a same-major-version compatibility check; informational for tooling.",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        }
+      }
+    },
+    "FunctionTableAxis": {
+      "type": "object",
+      "description": "A single named axis inside a FunctionTable. The `values` array supplies the sample coordinates along this axis; it MUST be strictly increasing finite floats with at least 2 entries (mirrors the `interp.linear` / `interp.bilinear` axis contract in §9.2).",
+      "required": [
+        "name",
+        "values"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Axis identifier. Used as the key in `table_lookup.axes` to bind the input-coordinate expression."
+        },
+        "units": {
+          "type": "string",
+          "description": "Optional advisory units string (e.g. 'Pa', 'K'). v0.4.0 records this for documentation only — no load-time unit checking is performed against the supplied input expression. Promotion to enforcement is deferred to a future units RFC."
+        },
+        "values": {
+          "type": "array",
+          "description": "Strictly-increasing finite floats. Bindings MUST reject non-monotonic axes at load time with diagnostic 'table_axis_non_monotonic' and NaN entries with 'table_axis_nan'.",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2
+        }
+      }
+    }
+  }
+}
