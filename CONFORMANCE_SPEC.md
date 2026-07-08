@@ -1397,16 +1397,23 @@ the **discrete-cadence loader + dependent-variable refresh** consumer: the three
 simulation-capable bindings — **Rust, Python, Julia** — must agree, on a
 **numeric-tolerance** basis, when they read external forcing from data loaders at
 a cadence, **regrid** it onto the simulation grid, and integrate the resulting
-forced model. Shared **offline** fixtures live in `tests/conformance/refresh/`
-(bead `ess-14f.12`, epic `ess-14f`; plan `esio-consumer-rust-plan`).
+forced model. Shared **offline** fixtures live in `tests/conformance/refresh/`.
 
 This is the **composition** capstone over two pieces governed elsewhere: §5.7
 pins *which cadence class* each node is (CONST materialized once vs DISCRETE
 refreshed at anchors), and §5.8 pins the *regrid kernel geometry* (overlap areas,
 conservation). §5.10 pins that a consumer composes them the same way —
-`refresh(t)` → **regrid native→sim grid** → write forcing buffer → integrate the
-segment — so the **refreshed+regridded arrays** and the **integrated trajectory**
-agree across bindings.
+`refresh(t)` → write the **native** forcing buffer → **in-model regrid** +
+integrate the segment — so the **regridded arrays** and the **integrated
+trajectory** agree across bindings.
+
+The regrid is **in-model**, not a refresh-time seam: it is an ordinary coupling
+contraction the RHS evaluates (`F_tgt[j] = sum_i W[i,j]*F_src[i]`, with `W` a
+const weight matrix — the 2:1 area-weighted coarsening). The obsolete
+`RegridApplier` / `Regrid` seam was **removed in v0.8.0**; the refresh executor
+writes the native forcing straight into the buffer, and regridding is part of the
+in-model coupling relationship. This mirrors production (e.g. the wildlandfire
+ERA5 regrid).
 
 Go and TypeScript are **out of scope** (no array simulator / refresh executor).
 
@@ -1414,17 +1421,18 @@ Go and TypeScript are **out of scope** (no array simulator / refresh executor).
 
 For each fixture, every in-scope binding loads the shared `.esm` in two views —
 the **classifier view** (raw, for the cadence partition + loader binding) and the
-**simulate view** (loader-fed `discrete` vars stripped, so the RHS compiler
-resolves them as forcing names; see the set's `README.md`) — seeds one provider
-per loader **offline** from the golden's `native_fields`, wires the regrid named
-in `golden.regrid`, and reports two quantities:
+**simulate view** (loader-fed `discrete` vars + the `data_loaders` block stripped,
+so the RHS compiler resolves `F_src`/`scale_src` as forcing names; see the set's
+`README.md`) — seeds one provider per loader **offline** from the golden's
+`native_fields`, and reports two quantities:
 
-1. **Refreshed+regridded arrays** — the forcing-buffer array each loader field
-   lands in, after `materialize_const` (CONST) and after each `refresh_at` anchor
-   (DISCRETE), compared to `golden.regridded_fields`. The native fields are
-   delivered on a **coarser** grid than the sim grid, so this exercises a genuine
-   non-identity regrid (a conservative area-weighted remap through the §5.8
-   kernel); an identity pass-through fails.
+1. **Regridded arrays** — the in-model regridded observeds `F_tgt` (per DISCRETE
+   anchor) and `scale_tgt` (CONST), read through the binding's build-observability
+   sink, compared to `golden.regridded_fields`. The native fields are delivered on
+   a **coarser** 6-cell grid than the 3-cell sim grid, so this exercises a genuine
+   non-identity regrid (the in-model 2:1 area-weighted coarsening); a stale or
+   identity forcing fails. The distinct paired native values make the averaging
+   load-bearing.
 2. **Integrated trajectory** — each cadence-boundary state from the segmented
    solve (refresh once per boundary, forcing frozen within a segment, state
    threaded, fresh solver per segment), compared to `golden.trajectory`. The
@@ -1432,12 +1440,12 @@ in `golden.regrid`, and reports two quantities:
 
 | Band | rtol | atol |
 |------|------|------|
-| Refreshed+regridded arrays (vs analytic) | 1e-9 | 1e-11 |
+| Regridded arrays (vs analytic) | 1e-9 | 1e-11 |
 | Integrated trajectory (vs analytic) | 1e-4 | 1e-6 |
 
-The regrid band is tight — a conservative remap on exact (here unit) overlap
-areas is exact up to floating-point. The trajectory band matches §5.9's
-manufactured-solution band, absorbing integrator truncation.
+The regrid band is tight — a 2:1 average on exact values is exact up to
+floating-point. The trajectory band matches §5.9's manufactured-solution band,
+absorbing integrator truncation.
 
 #### 5.10.2 ⛔ Numeric-tolerance and strictly offline
 
@@ -1449,21 +1457,25 @@ byte-identical; the integrator is pinned per binding in `manifest.json`
 #### 5.10.3 Coverage
 
 The fixture `coupled_refresh_regrid` is a discretized, **coupled**, non-PDE
-forced model (`D(c[i]) = scale[i]·src[i]`; `D(d[i]) = Box.c[i]`) with **one CONST
-loader** (`factors` → `scale`, no `temporal`) and **one DISCRETE loader**
-(`emis` → `src`, hourly `temporal`), both regridded by a conservative 2:1
-coarsening. It exercises: CONST-once vs DISCRETE-per-anchor cadence, the
-non-identity regrid seam, cross-component coupling threaded across segments, and
-the closed-form check the piecewise-constant forcing affords.
+forced model over one model `M` (3-cell sim grid): `D(c[j]) =
+scale_tgt[j]·F_tgt[j]`, `D(d[j]) = c[j]`, with **one CONST loader** (`factors` →
+`scale_src`, no `temporal`) and **one DISCRETE loader** (`emis` → `F_src`, hourly
+`temporal`) on the coarse 6-cell native grid, both regridded **in-model** by the
+const-`W` 2:1 coarsening (`F_tgt`/`scale_tgt`). It exercises: CONST-once vs
+DISCRETE-per-anchor cadence, the in-model regrid (a DISCRETE-materialized `F_tgt`
+and a build-once `scale_tgt`), coupling threaded across segments, and the
+closed-form check the piecewise-constant forcing affords.
 
 #### 5.10.4 Gate
 
-The Rust producer (`cargo test --test refresh_conformance`, run by
-`test-conformance.sh`) drives the path and gates both bands against the committed
-golden, **failing loudly** on any divergence. `bindings_required` is currently
-`["rust"]`: RS-R4 establishes the shared fixture + golden and the Rust producer;
-the Python (`ess-14f.2`) and Julia (`ess-14f.6`) consumer adapters reproduce the
-same golden and move themselves into `bindings_required` when wired.
+Per-binding runners drive the path and gate both bands against the committed
+golden, **failing loudly** on any divergence: **Julia** —
+`packages/EarthSciSerialization.jl/test/refresh_conformance_test.jl`; **Python** —
+`packages/earthsci_toolkit/tests/test_refresh_conformance.py`; **Rust** —
+`packages/earthsci-toolkit-rs/tests/refresh_conformance.rs` (all run by
+`test-conformance.sh`). `bindings_required` is `["julia", "python", "rust"]` — the
+regrid is an in-model coupling every simulation binding already evaluates, so no
+regrid seam or source change is needed to consume it.
 
 ### 5.11 Subsystem-Mounted Loader Consumption (normative)
 

@@ -1,7 +1,7 @@
 {
   "fixture": "coupled_refresh_regrid",
   "reference": "analytic",
-  "description": "Closed-form golden for the refresh-path conformance fixture coupled_refresh_regrid.esm (CONFORMANCE_SPEC.md §5.10). The forcing is piecewise-constant across the cadence segments, so the regridded forcing arrays and the integrated trajectory are exact. `native_fields` are the OFFLINE loader inputs on the coarse 6-cell native grid; `regridded_fields` are the analytic result of the conservative 2:1 area-weighted coarsening onto the 3-cell sim grid (each target cell j = mean of native cells 2j, 2j+1); `trajectory` is the segmented closed-form integral. All three bindings (consumer adapters) must reproduce regridded_fields (regrid band) and trajectory (trajectory band).",
+  "description": "Closed-form golden for the refresh-path conformance fixture coupled_refresh_regrid.esm (CONFORMANCE_SPEC.md §5.10). The forcing is piecewise-constant across the cadence segments, so the IN-MODEL regridded forcing arrays and the integrated trajectory are exact. `native_fields` are the OFFLINE loader inputs on the coarse 6-cell native grid; `regridded_fields` are the analytic result of the in-model conservative 2:1 area-weighted coarsening onto the 3-cell sim grid (each target cell j = mean of native cells 2j-1, 2j, i.e. F_tgt[j] = sum_i W[i,j]*F_src[i] with W the const weight matrix in `regrid.weights`); `trajectory` is the segmented closed-form integral. All three simulation bindings reproduce regridded_fields (regrid band) and trajectory (trajectory band). The regrid is an ordinary in-model coupling contraction — there is NO regrid seam / RegridApplier (removed as obsolete in v0.8.0).",
   "cadence": {
     "tspan": [0.0, 3.0],
     "refresh_times": [0.0, 1.0, 2.0],
@@ -9,18 +9,26 @@
     "discrete_loaders": ["emis"]
   },
   "regrid": {
-    "method": "conservative",
+    "method": "in_model_weight_matrix",
     "manifold": "planar",
-    "comment": "Planar conservative remap. Source cells are 6 unit intervals [k,k+1]x[0,1]; target (sim) cells are 3 width-2 intervals [2j,2j+2]x[0,1]. Equal overlap areas => target[j] = mean(source[2j], source[2j+1]). The distinct paired native values (e.g. 0 and 2 -> 1) make the averaging load-bearing: an identity pass-through would FAIL this golden.",
+    "comment": "The 2:1 area-weighted coarsening is expressed IN-MODEL as the const weight matrix W[i,j] (i=1..6 source cells, j=1..3 target cells): F_tgt[j] = sum_i W[i,j]*F_src[i]. Source cells are 6 unit intervals [k,k+1]x[0,1]; target (sim) cells are 3 width-2 intervals [2j-2,2j]x[0,1]. Equal overlap areas => W[i,j] = 0.5 for the two source cells i in target cell j, else 0 => target[j] = mean(source[2j-1], source[2j]). The distinct paired native values (e.g. 0 and 2 -> 1) make the averaging load-bearing: an identity pass-through would FAIL this golden. NOTE: no regrid seam — W is a const observed in the model and the contraction is the RHS itself.",
     "source_grid_edges": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    "target_grid_edges": [0.0, 2.0, 4.0, 6.0]
+    "target_grid_edges": [0.0, 2.0, 4.0, 6.0],
+    "weights": [
+      [0.5, 0.0, 0.0],
+      [0.5, 0.0, 0.0],
+      [0.0, 0.5, 0.0],
+      [0.0, 0.5, 0.0],
+      [0.0, 0.0, 0.5],
+      [0.0, 0.0, 0.5]
+    ]
   },
   "native_fields": {
-    "Box.scale": {
+    "M.scale_src": {
       "cadence": "const",
       "values": [0.0, 2.0, 1.0, 3.0, 2.0, 4.0]
     },
-    "Box.src": {
+    "M.F_src": {
       "cadence": "discrete",
       "by_anchor": {
         "0.0": [0.0, 2.0, 0.0, 2.0, 0.0, 2.0],
@@ -30,8 +38,8 @@
     }
   },
   "regridded_fields": {
-    "Box.scale": [1.0, 2.0, 3.0],
-    "Box.src": {
+    "M.scale_tgt": [1.0, 2.0, 3.0],
+    "M.F_tgt": {
       "by_anchor": {
         "0.0": [1.0, 1.0, 1.0],
         "1.0": [2.0, 2.0, 2.0],
@@ -39,19 +47,23 @@
       }
     }
   },
+  "state_order": [
+    "M.c[1]", "M.c[2]", "M.c[3]",
+    "M.d[1]", "M.d[2]", "M.d[3]"
+  ],
   "trajectory": {
-    "comment": "Rate per segment r_k = scale*src_k: r0=[1,2,3], r1=[2,4,6], r2=[3,6,9]. Box.c(t)=sum_{k<t} r_k; Sink.d(t)=integral of Box.c, where over unit segment [k,k+1] the integral is c(k)+r_k/2.",
+    "comment": "Rate per segment r_k[j] = scale_tgt[j]*F_tgt_k[j]: scale_tgt=[1,2,3]; F_tgt_0=[1,1,1] -> r0=[1,2,3]; F_tgt_1=[2,2,2] -> r1=[2,4,6]; F_tgt_2=[3,3,3] -> r2=[3,6,9]. c(t)=sum_{k: anchor_k<t} r_k over the unit segments; d(t)=integral of c, where over unit segment [k,k+1] the integral is c(k)+r_k/2.",
     "1.0": {
-      "Box.c[1]": 1.0, "Box.c[2]": 2.0, "Box.c[3]": 3.0,
-      "Sink.d[1]": 0.5, "Sink.d[2]": 1.0, "Sink.d[3]": 1.5
+      "M.c[1]": 1.0, "M.c[2]": 2.0, "M.c[3]": 3.0,
+      "M.d[1]": 0.5, "M.d[2]": 1.0, "M.d[3]": 1.5
     },
     "2.0": {
-      "Box.c[1]": 3.0, "Box.c[2]": 6.0, "Box.c[3]": 9.0,
-      "Sink.d[1]": 2.5, "Sink.d[2]": 5.0, "Sink.d[3]": 7.5
+      "M.c[1]": 3.0, "M.c[2]": 6.0, "M.c[3]": 9.0,
+      "M.d[1]": 2.5, "M.d[2]": 5.0, "M.d[3]": 7.5
     },
     "3.0": {
-      "Box.c[1]": 6.0, "Box.c[2]": 12.0, "Box.c[3]": 18.0,
-      "Sink.d[1]": 7.0, "Sink.d[2]": 14.0, "Sink.d[3]": 21.0
+      "M.c[1]": 6.0, "M.c[2]": 12.0, "M.c[3]": 18.0,
+      "M.d[1]": 7.0, "M.d[2]": 14.0, "M.d[3]": 21.0
     }
   }
 }

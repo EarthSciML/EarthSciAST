@@ -1,10 +1,10 @@
 {
   "category": "refresh_path_conformance",
-  "version": "1.0",
-  "description": "Cross-language REFRESH-PATH conformance (bead ess-14f.12 / RS-R4, parent ess-14f; CONFORMANCE_SPEC.md §5.10): the discrete-cadence loader + dependent-var refresh consumer must, across bindings, (1) regrid the offline loader native fields onto the simulation grid to the same arrays and (2) integrate the resulting forced model to the same trajectory, on shared OFFLINE fixtures (no network). The forcing is piecewise-constant across the cadence segments, so the golden is analytic and exact. This complements §5.7 (cadence PARTITION — which class each node is) and §5.8 (regrid KERNEL geometry); §5.10 pins the composition: refresh-at-cadence -> regrid -> write-buffer -> integrate.",
+  "version": "2.0",
+  "description": "Cross-language REFRESH-PATH conformance (CONFORMANCE_SPEC.md §5.10): the discrete-cadence loader + dependent-var refresh consumer must, across the three simulation bindings, (1) regrid the offline loader native fields onto the simulation grid to the same arrays and (2) integrate the resulting forced model to the same trajectory, on shared OFFLINE fixtures (no network). The regrid is IN-MODEL — a const-W coupling contraction (F_tgt[j] = sum_i W[i,j]*F_src[i]) the RHS evaluates — NOT a refresh-time seam (the obsolete RegridApplier/Regrid seam was removed in v0.8.0). The forcing is piecewise-constant across the cadence segments, so the golden is analytic and exact. This complements §5.7 (cadence PARTITION — which class each node is) and §5.8 (regrid KERNEL geometry); §5.10 pins the composition: refresh-at-cadence -> write native buffer -> in-model regrid + integrate.",
   "reference_binding": "analytic",
-  "bindings_required": ["rust"],
-  "bindings_optional": ["python", "julia"],
+  "bindings_required": ["julia", "python", "rust"],
+  "bindings_optional": [],
   "scope_excluded": {
     "go": "rewrite-only port; no array simulator / refresh executor",
     "typescript": "rewrite-only port; no array simulator / refresh executor"
@@ -16,24 +16,24 @@
     "traj_atol": 1e-06
   },
   "integrators": {
-    "rust": {
-      "solver": "Bdf",
-      "reltol": 1e-08,
-      "abstol": 1e-10
-    }
+    "julia": {"solver": "Tsit5", "reltol": 1e-10, "abstol": 1e-12},
+    "python": {"solver": "LSODA", "reltol": 1e-10, "abstol": 1e-12},
+    "rust": {"solver": "Bdf", "reltol": 1e-08, "abstol": 1e-10}
   },
   "fixtures": [
     {
       "id": "coupled_refresh_regrid",
       "fixture": "fixtures/coupled_refresh_regrid.esm",
       "golden": "golden/coupled_refresh_regrid.json",
-      "classify_model": "Box",
-      "simulate_models": ["Box", "Sink"],
+      "classify_model": "M",
+      "simulate_models": ["M"],
+      "discrete_field": "M.F_tgt",
+      "const_field": "M.scale_tgt",
       "state_order": [
-        "Box.c[1]", "Box.c[2]", "Box.c[3]",
-        "Sink.d[1]", "Sink.d[2]", "Sink.d[3]"
+        "M.c[1]", "M.c[2]", "M.c[3]",
+        "M.d[1]", "M.d[2]", "M.d[3]"
       ],
-      "tags": ["coupled", "non-pde", "conservative-regrid", "const+discrete"]
+      "tags": ["coupled", "non-pde", "in-model-regrid", "conservative-regrid", "const+discrete"]
     }
   ]
 }
