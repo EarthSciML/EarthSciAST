@@ -154,10 +154,10 @@ export
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
     DiscreteMaterializer,
     # Discrete-cadence loader refresh (ess-14f.4, JL-J1; callback ctor in the
-    # DiffEqCallbacks/SciMLBase extension). Provider + regrid protocols have
-    # concrete impls in the data binding (EarthSciIO) and ESD-rule applier (JL-J2).
+    # DiffEqCallbacks/SciMLBase extension). The Provider protocol has concrete
+    # impls in the data binding (EarthSciIO); regrid is an in-model coupling
+    # expression the RHS evaluates (the obsolete RegridApplier seam was removed).
     build_refresh_callback, RefreshBuffers, RefreshError,
-    RegridApplier, IdentityRegrid, apply_regrid!,
     provider_refresh_times, provider_is_const, provider_sample,
     # One-call run entry (load → discretize → build_evaluator → seed → refresh →
     # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).

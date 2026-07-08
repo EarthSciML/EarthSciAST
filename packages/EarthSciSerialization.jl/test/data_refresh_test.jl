@@ -174,24 +174,25 @@ struct _BareSource end
         err = try RefreshBuffers(Dict("f" => [1, 2, 3])); nothing catch e; e end
         @test err isa RefreshError
 
-        # IdentityRegrid: source/buffer length mismatch is a hard error (a real
-        # regrid — JL-J2 — is required when the native grid ≠ sim grid).
+        # _write_forcing!: source/buffer length mismatch is a hard error — the
+        # provider must deliver the native forcing on the buffer's grid (regrid
+        # is an in-model coupling, not a refresh-time transform).
         err = try
-            apply_regrid!(IdentityRegrid(), zeros(3), "f", Dict("f" => [1.0, 2.0]))
+            EarthSciSerialization._write_forcing!(zeros(3), "f", Dict("f" => [1.0, 2.0]))
             nothing
         catch e; e end
         @test err isa RefreshError
 
-        # IdentityRegrid: missing variable in the sample dict.
+        # _write_forcing!: missing variable in the sample dict.
         err = try
-            apply_regrid!(IdentityRegrid(), zeros(2), "f", Dict("g" => [1.0, 2.0]))
+            EarthSciSerialization._write_forcing!(zeros(2), "f", Dict("g" => [1.0, 2.0]))
             nothing
         catch e; e end
         @test err isa RefreshError
 
-        # IdentityRegrid copies a same-length field in place, column-major-linear.
+        # _write_forcing! copies a same-length field in place, column-major-linear.
         b = zeros(4)
-        apply_regrid!(IdentityRegrid(), b, "f", Dict("f" => [9.0, 8.0, 7.0, 6.0]))
+        EarthSciSerialization._write_forcing!(b, "f", Dict("f" => [9.0, 8.0, 7.0, 6.0]))
         @test b == [9.0, 8.0, 7.0, 6.0]
 
         # Unimplemented Provider protocol → a clean RefreshError, not a MethodError.

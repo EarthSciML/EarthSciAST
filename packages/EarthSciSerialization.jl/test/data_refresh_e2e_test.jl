@@ -1,13 +1,14 @@
 # End-to-end + zero-alloc + cadence loader-refresh tests (ess-14f.6, JL-J3).
 #
 # JL-J1 (ess-14f.4) built `build_refresh_callback` — the `PresetTimeCallback`
-# whose `affect!` samples a Provider, regrids, and writes the live forcing buffer
-# in place. JL-J2 (ess-14f.5) built `ESDRegrid` — the reproject + per-method
-# regrid applier that lands a provider's RAW native arrays on the sim grid. J3 is
-# the INTEGRATION layer: it composes the library's exposed pieces — `build_evaluator`
-# (the RHS), `build_refresh_callback` (the cadence callback + tstops), and an
-# applier — into an honest `solve(prob, Tsit5(); callback, tstops)` over a loaded
-# fixture, and asserts the cadence contract end to end.
+# whose `affect!` samples a Provider and writes the live forcing buffer in place
+# (native forcing straight into the buffer; any native→sim regrid is an in-model
+# coupling the RHS evaluates, not a refresh-time transform — the obsolete
+# RegridApplier seam was removed in v0.8.0). J3 is the INTEGRATION layer: it
+# composes the library's exposed pieces — `build_evaluator` (the RHS) and
+# `build_refresh_callback` (the cadence callback + tstops) — into an honest
+# `solve(prob, Tsit5(); callback, tstops)` over a loaded fixture, and asserts the
+# cadence contract end to end.
 #
 # It is the Julia sibling of the Rust driver-level harness `segmented_refresh_solve`
 # (ess-14f.11) and the Python e2e (ess-2fy). Julia's idiom differs: where the Rust
@@ -19,9 +20,9 @@
 #
 # Acceptance clauses (bead ess-14f.6) and where each is pinned:
 #   • e2e refresh over a fixture — a coupled, discretized, non-PDE forced model is
-#     LOADED from `fixtures/refresh/coupled_forced.esm`, wired to a Provider + an
-#     applier, and integrated; the coupled closed form is matched to solver tol
-#     (testset 1, and the full reproject+regrid path in testset 4).
+#     LOADED from `fixtures/refresh/coupled_forced.esm`, wired to a Provider, and
+#     integrated; the coupled closed form is matched to solver tol
+#     (testset 1, and the full refresh path in testset 4).
 #   • refresh-once-per-boundary — the Provider is sampled EXACTLY once per cadence
 #     anchor and never between, even under many interior solver steps (testset 2;
 #     also counted in testset 4).
@@ -100,8 +101,7 @@ end
             2.0 => Dict("src" => [3.0, 3.0, 3.0])))
         cb, tstops = build_refresh_callback(model;
             providers=Dict("src" => prov),
-            buffers  =RefreshBuffers(Dict("src" => srcbuf)),   # SAME buffer object as param_arrays
-            regrid   =IdentityRegrid())                        # native already on the sim grid
+            buffers  =RefreshBuffers(Dict("src" => srcbuf)))   # SAME buffer object as param_arrays
         @test tstops == [1.0, 2.0]
 
         prob = ODE.ODEProblem(f!, u0, (0.0, 3.0), p)
@@ -163,7 +163,7 @@ end
     @testset "zero-alloc: per-step RHS allocates nothing, before and after a real refresh" begin
         # The hot per-step path only READS the live buffer, so it must allocate
         # nothing — both before any refresh and after one driven through the full
-        # callback machinery (sample → regrid → buf .=), which mutates in place.
+        # callback machinery (sample → buf .=), which mutates in place.
         file  = EarthSciSerialization.load(_refresh_fixture("coupled_forced.esm"))
         model = file.models["M"]
         scale  = [1.0, 2.0, 3.0]

@@ -28,6 +28,7 @@ from .simulation_array import (
     _build_numpy_rhs,
     _densify_solution,
     _element_names,
+    _fill_build_inspection,
 )
 
 
@@ -368,8 +369,9 @@ def _simulate_with_loaders(
       an injected ``provider_factory`` — e.g. a real EarthSciIO provider).
       CONST → ``materialize()`` once, DISCRETE → ``refresh(t)`` at the seed and
       each boundary, with boundaries taken from ``Provider.refresh_times()``.
-      Native arrays are reprojected + regridded onto the model grid (C4) before
-      binding."""
+      Native arrays are bound RAW (on their native grid); any native→sim regrid
+      is an in-model coupling expression the RHS evaluates (the obsolete regrid
+      seam was removed in v0.8.0), not a bind-time transform."""
     try:
         t0, t1 = float(tspan[0]), float(tspan[1])
 
@@ -401,9 +403,11 @@ def _simulate_with_loaders(
             # Provider-object path (default): build one Provider per loader field
             # at setup (EarthSciIO Provider contract; in-tree default backed by
             # load_data), CONST → materialize() once, DISCRETE → refresh() at the
-            # seed and each boundary. Build the lon/lat target grid ONCE (geometry
-            # cached) so each native field is reprojected + regridded (C4) onto
-            # the domain grid before binding; no target ⇒ raw injection.
+            # seed and each boundary. Native fields are bound RAW (on their native
+            # grid); any native→sim regrid is an in-model coupling expression the
+            # RHS evaluates (the obsolete regrid seam was removed in v0.8.0). The
+            # `target` below is the data-FETCH domain (server-side subset bbox /
+            # CDS area), NOT a regrid target.
             from .data_loaders.provider import build_default_provider
 
             target = _build_loader_target(flat)
@@ -534,6 +538,269 @@ def _simulate_with_loaders(
             # Advance the cadence: refresh discrete loaders for the NEXT segment.
             if seg_end < t1:
                 _refresh_discrete(seg_end)
+
+        t_out = np.concatenate(t_chunks)
+        y_out = np.concatenate(y_chunks, axis=1)
+        return SimulationResult(
+            t=t_out,
+            y=y_out,
+            vars=list(elem_names),
+            success=True,
+            message=last_message,
+            nfev=nfev,
+            njev=njev,
+            nlu=nlu,
+        )
+
+    except UnsupportedDimensionalityError:
+        raise
+    except Exception as e:
+        return SimulationResult(
+            t=np.array([]),
+            y=np.array([[]]),
+            vars=[],
+            success=False,
+            message=f"Simulation failed: {e}",
+            nfev=0,
+            njev=0,
+            nlu=0,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Cadence-aware ``providers=`` path (top-level ``data_loaders`` injection seam).
+#
+# The plain ``providers=`` seam (``simulation.simulate``) materializes EVERY
+# provider ONCE at t0 and integrates in a single shot — correct for a static
+# loader (terrain, fuel), but a DISCRETE provider (hourly ERA5 met) then stays
+# frozen at the ignition hour. The helpers below make that seam cadence-aware:
+# CONST providers still materialize once, but a DISCRETE provider is re-sampled
+# (its cadence record — the hour's ``valid_time`` slice) at every refresh
+# boundary and the integration is segmented on those boundaries. This is the
+# Python counterpart of the ESS-Julia ``simulate`` discrete-provider seam
+# (``simulate.jl``): there a discrete provider is seeded into a LIVE
+# ``param_arrays`` buffer and refreshed by the solver callback; here we rebuild
+# the NumPy RHS per segment (see :func:`_simulate_with_discrete_providers`).
+# --------------------------------------------------------------------------- #
+
+
+def _provider_is_discrete(provider: Any) -> bool:
+    """True if a ``providers=`` entry refreshes on a cadence (is DISCRETE).
+
+    The definitive signal is a non-empty :meth:`Provider.refresh_times` (the
+    EarthSciIO DISCRETE contract): a CONST provider (``is_const`` / no
+    ``temporal``) returns ``[]``, and a plain callable / ``sample`` / bare stub
+    exposes no ``refresh_times`` at all — so both stay on the materialize-once
+    path and existing const runs are byte-for-byte unchanged.
+    """
+    if not (hasattr(provider, "refresh_times") and hasattr(provider, "refresh")):
+        return False
+    if getattr(provider, "is_const", False):
+        return False
+    try:
+        return len(list(provider.refresh_times())) > 0
+    except Exception:
+        return False
+
+
+def _provider_refresh_field(provider: Any, when: _dt.datetime) -> np.ndarray:
+    """One DISCRETE provider's single data variable at absolute time ``when``.
+
+    :meth:`Provider.refresh` snaps ``when`` to the loader cadence anchor and
+    slices that record off the ``time_dim`` axis (the hour's ``valid_time`` for
+    ERA5), so the returned native array is one lower rank than the multi-record
+    file — e.g. ``[valid_time, pressure_level, lat, lon]`` → ``[pressure_level,
+    lat, lon]``, matching the model's 3-D ``[era5_lev, era5_y, era5_x]`` field.
+    One provider is bound per consumer variable, so a multi-variable dataset is a
+    binding error (mirrors :func:`_provider_sample_field`).
+    """
+    nds = provider.refresh(when)
+    names = (
+        nds.variable_names()
+        if hasattr(nds, "variable_names")
+        else list(getattr(nds, "variables", {}) or {})
+    )
+    if len(names) != 1:
+        raise SimulationError(
+            f"EarthSciIO provider yields {len(names)} data variables "
+            f"{sorted(names)}; bind one provider per consumer variable "
+            "(providers={'Loader.var': provider}) so each sample is a single field"
+        )
+    return np.asarray(nds[names[0]].data, dtype=float)
+
+
+def _provider_epoch(provider: Any, t0: float) -> Optional[_dt.datetime]:
+    """Absolute instant of simulation-clock ``t0`` for a DISCRETE provider.
+
+    Sim-clock 0 is the run start; the runner anchors the provider ``window`` start
+    at that instant (the ignition hour), so the epoch that maps a refresh anchor
+    onto the sim clock is ``window[0] - t0``. Falls back to the first refresh
+    anchor when the provider carries no window. Normalised to naive UTC so it
+    compares cleanly with the (naive) cadence anchors.
+    """
+    win = getattr(provider, "window", None)
+    anchor = win[0] if (win is not None and win[0] is not None) else None
+    if anchor is None:
+        try:
+            times = list(provider.refresh_times())
+        except Exception:
+            times = []
+        anchor = times[0] if times else None
+    if anchor is None:
+        return None
+    if getattr(anchor, "tzinfo", None) is not None:
+        anchor = anchor.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+    return anchor - _dt.timedelta(seconds=float(t0))
+
+
+def _simulate_with_discrete_providers(
+    flat: FlattenedSystem,
+    tspan: Tuple[float, float],
+    parameters: Dict[str, float],
+    initial_conditions: Dict[str, float],
+    method: str,
+    rtol: float,
+    atol: float,
+    providers: Dict[str, Any],
+    inspect: Optional[Any] = None,
+) -> SimulationResult:
+    """Cadence-aware ``providers=`` integration: segment on the DISCRETE
+    providers' refresh boundaries so a time-varying loader changes in-sim.
+
+    CONST providers (terrain, fuel) are sampled ONCE (``materialize``) and bound
+    as fixed loader arrays; each DISCRETE provider (hourly ERA5 met) is seeded at
+    ``t0`` and re-sampled — its cadence record, the hour's ``valid_time`` slice —
+    at every refresh boundary. Boundaries are the union of the discrete
+    providers' :meth:`Provider.refresh_times`, mapped onto the sim clock through
+    the provider epoch (:func:`_provider_epoch`).
+
+    Because the NumPy build HOISTS a state-free, loader-derived regrid into the
+    build-once static geometry (``_time_varying_observeds`` keys only off state /
+    ``t``, never off a loader array), mutating the loader buffer in place would
+    NOT refresh a hoisted ``Era5Regrid.*_xy``. So the RHS is **rebuilt per
+    segment** with the refreshed loader arrays — the const-hoisted regrid then
+    reflects the current hour, and the fire behaviour stack (EMC / MidflameWind /
+    Rothermel) it feeds varies over the run. This is the Python analog of the
+    Julia ``live_param`` taint that defers the regrid off the const setup
+    partition. The build inspection is filled from the seed (t0) build, so
+    ``setup_arrays`` still exposes the ignition-hour geometry the const path did.
+
+    With no discrete provider the caller never routes here (it takes the
+    materialize-once path), so existing const runs are unaffected.
+    """
+    try:
+        t0, t1 = float(tspan[0]), float(tspan[1])
+
+        discrete_names = [n for n, p in providers.items() if _provider_is_discrete(p)]
+        const_names = [n for n in providers if n not in discrete_names]
+
+        # Sim-clock ↔ datetime epoch. Prefer the run domain's reference_time
+        # (shared by all loaders); else derive it per discrete provider from its
+        # run window (the runner anchors the window start at the ignition hour =
+        # the instant of sim-clock t0).
+        sim_epoch = _sim_clock_epoch(flat)
+        epochs: Dict[str, Optional[_dt.datetime]] = {
+            n: (sim_epoch if sim_epoch is not None else _provider_epoch(providers[n], t0))
+            for n in discrete_names
+        }
+
+        # Interior segment boundaries: the union of the discrete providers'
+        # refresh anchors (hourly for ERA5) mapped onto the sim clock; only
+        # strictly-interior (t0, t1) anchors split the integration.
+        boundaries: Set[float] = set()
+        for n in discrete_names:
+            epoch = epochs[n]
+            if epoch is None:
+                continue
+            try:
+                anchors = list(providers[n].refresh_times())
+            except Exception:
+                anchors = []
+            for anchor in anchors:
+                b = _delta_seconds(anchor, epoch)
+                if t0 < b < t1:
+                    boundaries.add(float(b))
+        seg_ends = sorted(boundaries) + [t1]
+
+        # Shared loader-array registry. CONST providers: materialized ONCE.
+        # DISCRETE providers: seeded / refreshed by _refresh_discrete per segment.
+        loader_arrays: Dict[str, np.ndarray] = {}
+        for n in const_names:
+            loader_arrays[n] = np.asarray(_provider_sample_field(providers[n], t0), dtype=float)
+
+        def _refresh_discrete(when_seconds: float) -> None:
+            for n in discrete_names:
+                epoch = epochs[n]
+                if epoch is None:
+                    # No epoch anchor → treat as const (materialize once at t0).
+                    loader_arrays[n] = np.asarray(
+                        _provider_sample_field(providers[n], t0), dtype=float
+                    )
+                else:
+                    abs_time = epoch + _dt.timedelta(seconds=float(when_seconds))
+                    loader_arrays[n] = _provider_refresh_field(providers[n], abs_time)
+
+        # Spread the dense-output budget across segments (parity with
+        # _simulate_with_loaders) so a multi-segment run keeps a comparable grid.
+        per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
+
+        t_current = t0
+        y_current: Optional[np.ndarray] = None
+        elem_names: List[str] = []
+        t_chunks: List[np.ndarray] = []
+        y_chunks: List[np.ndarray] = []
+        nfev = njev = nlu = 0
+        last_message = ""
+        for seg_idx, seg_end in enumerate(seg_ends):
+            # Refresh the discrete forcing to the hour covering this segment start,
+            # then REBUILD the RHS so the const-hoisted regrid picks up the slice.
+            _refresh_discrete(t_current)
+            build = _build_numpy_rhs(
+                flat, parameters, initial_conditions, loader_arrays=loader_arrays
+            )
+            if seg_idx == 0:
+                y_current = build.y0
+                elem_names = _element_names(build.state_names, build.shapes)
+                if inspect is not None:
+                    _fill_build_inspection(inspect, flat, build, t0, loader_arrays=loader_arrays)
+            sol = solve_ivp(
+                fun=build.rhs_function,
+                t_span=(t_current, seg_end),
+                y0=y_current,
+                method=method,
+                rtol=rtol,
+                atol=atol,
+                dense_output=True,
+            )
+            nfev += int(sol.nfev)
+            njev += int(sol.njev)
+            nlu += int(sol.nlu)
+            last_message = sol.message
+            if not sol.success:
+                return SimulationResult(
+                    t=np.array([]),
+                    y=np.array([[]]),
+                    vars=[],
+                    success=False,
+                    message=(
+                        f"Simulation failed in cadence segment "
+                        f"[{t_current}, {seg_end}]: {sol.message}"
+                    ),
+                    nfev=nfev,
+                    njev=njev,
+                    nlu=nlu,
+                )
+            seg_t, seg_y = _densify_solution(sol, (t_current, seg_end), min_points=per_seg_pts)
+            # Drop the seam node (shared with the previous segment's end; state is
+            # continuous across a refresh, only the forcing jumps).
+            if seg_idx == 0:
+                t_chunks.append(seg_t)
+                y_chunks.append(seg_y)
+            else:
+                t_chunks.append(seg_t[1:])
+                y_chunks.append(seg_y[:, 1:])
+            t_current = seg_end
+            y_current = sol.y[:, -1]
 
         t_out = np.concatenate(t_chunks)
         y_out = np.concatenate(y_chunks, axis=1)

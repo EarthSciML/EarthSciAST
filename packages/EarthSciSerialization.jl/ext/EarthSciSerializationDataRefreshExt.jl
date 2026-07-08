@@ -17,9 +17,9 @@ fallback throws a `RefreshError` telling the user what to load.
 module EarthSciSerializationDataRefreshExt
 
 import EarthSciSerialization as ESS
-using EarthSciSerialization: Model, RefreshBuffers, RegridApplier, IdentityRegrid,
+using EarthSciSerialization: Model, RefreshBuffers,
     RefreshError, provider_is_const, provider_refresh_times, provider_sample,
-    apply_regrid!
+    _write_forcing!
 import DiffEqCallbacks: PresetTimeCallback
 import SciMLBase: u_modified!
 
@@ -55,7 +55,6 @@ end
 function ESS.build_refresh_callback(model::Model;
                                     providers::AbstractDict,
                                     buffers::RefreshBuffers,
-                                    regrid::RegridApplier = IdentityRegrid(),
                                     post_refresh::Function = () -> nothing)
     groups = _group_discrete_providers(providers, buffers)
 
@@ -68,8 +67,9 @@ function ESS.build_refresh_callback(model::Model;
     sort!(tstops)
     unique!(tstops)
 
-    # The affect: at each anchor, sample → regrid → write each buffer IN PLACE,
-    # then force the integrator to recompute its cached derivative.
+    # The affect: at each anchor, sample → write each native forcing into its
+    # buffer IN PLACE, then force the integrator to recompute its cached
+    # derivative. (Regrid is an in-model coupling the RHS evaluates, not here.)
     #
     # `u_modified!(integrator, true)` — NOT `false`. We changed the forcing buffer
     # in `p`, so `f(u, p, t)` changed even though `u` did not. FSAL integrators
@@ -92,7 +92,7 @@ function ESS.build_refresh_callback(model::Model;
         for (prov, vars) in groups
             sample = provider_sample(prov, t)
             for var in vars
-                apply_regrid!(regrid, buffers[var], var, sample)
+                _write_forcing!(buffers[var], var, sample)
             end
         end
         post_refresh()

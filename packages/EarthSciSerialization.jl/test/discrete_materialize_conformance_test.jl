@@ -94,7 +94,6 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         cb, tstops = _ESS_DM.build_refresh_callback(model;
             providers = Dict("src" => prov),
             buffers = _ESS_DM.RefreshBuffers(Dict("src" => srcbuf2)),  # SAME buffer object
-            regrid = _ESS_DM.IdentityRegrid(),
             post_refresh = dm2.materialize!)
         @test tstops == interior
 

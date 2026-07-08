@@ -17,24 +17,24 @@
 # `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciSerializationDataRefreshExt.jl)
 # so the base library never pulls a solver-adjacent stack into `[deps]`.
 #
-# This file (core) owns three decoupled seams; concrete implementations live
+# This file (core) owns two decoupled seams; concrete implementations live
 # outside ESS, exactly like the GridAccessor / AbstractGrid traits:
 #
 #   1. the Provider protocol  — `provider_refresh_times` / `provider_is_const` /
 #      `provider_sample`. Satisfied by the EarthSciIO Julia Provider
 #      (esio-9nb.5) via a thin adapter, or by a mock in tests. ESS never imports
 #      EarthSciIO; it calls these generics, which the data binding fills in.
-#   2. the RegridApplier seam — `apply_regrid!`. The native→sim-grid transform.
-#      The conservative/bspline ESD-rule applier is JL-J2 (ess-14f.5); the
-#      built-in `IdentityRegrid` here is the no-op passthrough used when the
-#      native grid already is the sim grid (and in J1's own tests).
-#   3. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
+#   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
 #      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
+#      `affect!` writes the freshly sampled native forcing straight into them
+#      (`_write_forcing!`); any native→sim regrid is an in-model coupling
+#      expression the RHS evaluates, not a refresh-time transform (the obsolete
+#      `RegridApplier` seam was removed in v0.8.0).
 
 """
     RefreshError(msg)
 
-Thrown by the data-refresh surface: an unimplemented Provider/RegridApplier
+Thrown by the data-refresh surface: an unimplemented Provider
 protocol method, a buffer that is not a dense `Array{Float64}`, a
 shape/length mismatch at refresh time, or a call to
 [`build_refresh_callback`](@ref) before the `DiffEqCallbacks` / `SciMLBase`
@@ -89,8 +89,8 @@ provider_is_const(p) = isempty(provider_refresh_times(p))
     provider_sample(provider, t::Real) -> sample
 
 The native-grid data for `provider` at cadence tick `t` (solver seconds). The
-return value is opaque to ESS — it is handed straight to
-[`apply_regrid!`](@ref), which knows how to extract a named variable from it.
+return value is opaque to ESS — it is handed straight to the forcing-write seam
+(`_write_forcing!`), which extracts a named variable from it.
 For the EarthSciIO provider this is `refresh(p, t)` returning a `NativeDataset`;
 for a mock it can be any per-variable container (e.g. a `Dict{String,Vector}`).
 """
@@ -100,71 +100,45 @@ provider_sample(p, ::Real) = throw(RefreshError(
     "(EarthSciIO) or a mock must add a method"))
 
 # --------------------------------------------------------------------------- #
-# RegridApplier seam (native → sim grid; ESD-rule impl is JL-J2 / ess-14f.5)
+# Forcing-write seam — pull a freshly sampled field out of a provider sample and
+# write it into the live buffer IN PLACE. There is NO native→sim regrid here:
+# regridding is an ordinary in-model coupling expression over the native forcing
+# (the obsolete `RegridApplier` seam was removed in v0.8.0). The buffer aliases
+# the `param_arrays` storage the RHS reads live, so the write MUST mutate in
+# place (`copyto!`), never rebind — a fresh allocation would silently detach the
+# refresh from `f!`.
 # --------------------------------------------------------------------------- #
 
-"""
-    RegridApplier
-
-Abstract supertype for the native→sim-grid transform applied to a freshly
-sampled forcing field before it lands in the live buffer. Concrete subtypes
-implement [`apply_regrid!`](@ref).
-
-The conservative-overlap / bspline applier backed by ESD rules (caching the
-static target geometry + overlap matrix once at setup) is JL-J2 (`ess-14f.5`).
-[`IdentityRegrid`](@ref) is the built-in passthrough for the case where the
-native grid already is the sim grid.
-"""
-abstract type RegridApplier end
-
-"""
-    apply_regrid!(regrid::RegridApplier, buffer::Array{Float64},
-                  var::AbstractString, sample) -> buffer
-
-Write the regridded `var` field, extracted from `sample` (a
-[`provider_sample`](@ref) result), into `buffer` IN PLACE and return it.
-Implementations MUST mutate `buffer` (`copyto!` / `.=`), never rebind it — the
-buffer aliases the `param_arrays` storage the RHS reads live, so a fresh
-allocation would silently detach the refresh from `f!`.
-"""
-function apply_regrid! end
-apply_regrid!(r::RegridApplier, ::Array{Float64}, ::AbstractString, _sample) =
-    throw(RefreshError("apply_regrid! not implemented for $(typeof(r))"))
-
-"""
-    IdentityRegrid()
-
-The no-op [`RegridApplier`](@ref): copies a sampled native field straight into
-the buffer, with no reprojection or regridding. Valid when the provider already
-returns data on the simulation grid (and the workhorse for J1's own tests). The
-`sample` may be an `AbstractDict` keyed by variable name, or a bare
-`AbstractArray` for a single-variable sample. The source must match the buffer
-element count; the copy is column-major-linear, matching the `_VK_PGATHER`
-linearization (ess-14f.3).
-"""
-struct IdentityRegrid <: RegridApplier end
-
-# Pull the field for `var` out of an opaque provider sample.
-_regrid_field(sample::AbstractDict, var::AbstractString) = begin
+# Pull the field for `var` out of an opaque provider sample: an `AbstractDict`
+# keyed by variable name, or a bare `AbstractArray` for a single-variable sample.
+_sample_field(sample::AbstractDict, var::AbstractString) = begin
     haskey(sample, var) || throw(RefreshError(
-        "IdentityRegrid: variable '$var' not in the provider sample " *
-        "(present: $(collect(keys(sample))))"))
+        "provider sample has no variable '$var' (present: $(collect(keys(sample))))"))
     sample[var]
 end
-_regrid_field(sample::AbstractArray, ::AbstractString) = sample
-_regrid_field(sample, var::AbstractString) = throw(RefreshError(
-    "IdentityRegrid cannot extract '$var' from a sample of type $(typeof(sample)); " *
-    "supply an AbstractDict (var => field) or a bare AbstractArray, or use a " *
-    "RegridApplier that understands this sample type"))
+_sample_field(sample::AbstractArray, ::AbstractString) = sample
+_sample_field(sample, var::AbstractString) = throw(RefreshError(
+    "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
+    "supply an AbstractDict (var => field) or a bare AbstractArray"))
 
-function apply_regrid!(::IdentityRegrid, buffer::Array{Float64},
-                       var::AbstractString, sample)
-    field = _regrid_field(sample, var)
+"""
+    _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
+
+Write the freshly sampled `var` field (from a [`provider_sample`](@ref) result)
+into `buffer` IN PLACE and return it. The native field lands directly in the
+buffer — any regrid onto the sim grid is an in-model coupling expression the RHS
+evaluates downstream, not a refresh-time transform. The copy is
+column-major-linear, matching the `_VK_PGATHER` linearization (ess-14f.3); it
+mutates `buffer` (never rebinds), since the buffer aliases the `param_arrays`
+storage the RHS gathers live.
+"""
+function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
+    field = _sample_field(sample, var)
     length(field) == length(buffer) || throw(RefreshError(
-        "IdentityRegrid: source field '$var' has $(length(field)) elements but the " *
-        "buffer has $(length(buffer)); a non-trivial regrid (JL-J2) is required for " *
-        "a native grid that differs from the sim grid"))
-    copyto!(buffer, field)   # in-place, column-major-linear — aliases param_arrays
+        "forcing '$var': provider field has $(length(field)) elements but the buffer " *
+        "has $(length(buffer)); the provider must deliver the native forcing on the " *
+        "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"))
+    copyto!(buffer, field)
     return buffer
 end
 
@@ -179,7 +153,7 @@ end
 Registry mapping a forcing variable name to its live buffer — the dense
 `Array{Float64}` bound BY REFERENCE through
 `build_evaluator(model; param_arrays = …)` (ess-14f.3). The refresh callback's
-`affect!` writes regridded data into these exact objects in place, so the RHS
+`affect!` writes the freshly sampled forcing into these exact objects in place, so the RHS
 (which gathers the same aliased storage via `_NK_PARAM_GATHER`) sees the update
 on its next evaluation.
 
@@ -222,7 +196,7 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
 # --------------------------------------------------------------------------- #
 
 """
-    build_refresh_callback(model::Model; providers, buffers, regrid = IdentityRegrid(),
+    build_refresh_callback(model::Model; providers, buffers,
                            post_refresh = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
@@ -235,8 +209,7 @@ forcing = Dict("wind" => zeros(nx, ny))
 f!, u0, p, tspan, _ = build_evaluator(model; param_arrays = forcing, …)
 cb, tstops = build_refresh_callback(model;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
-    buffers   = RefreshBuffers(forcing),         # same array objects as param_arrays
-    regrid    = IdentityRegrid())                # or the JL-J2 ESD-rule applier
+    buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
 prob = ODEProblem(f!, u0, tspan, p)              # USER's solver call
 sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 ```
@@ -244,10 +217,13 @@ sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 `providers` maps each forcing variable to a data provider (the
 [`provider_refresh_times`](@ref) / [`provider_is_const`](@ref) /
 [`provider_sample`](@ref) protocol). Several variables may share one provider
-object; it is then sampled once per cadence boundary.
+object; it is then sampled once per cadence boundary. The provider delivers the
+native forcing on the buffer's grid; any native→sim regrid is an ordinary
+in-model coupling expression the RHS evaluates (the obsolete `RegridApplier`
+seam was removed in v0.8.0), not a refresh-time transform.
 
 * **DISCRETE** providers (non-empty `provider_refresh_times`) are refreshed at
-  each anchor: `affect!` samples, regrids, and writes the buffer in place, then
+  each anchor: `affect!` samples and writes the buffer in place, then
   calls `u_modified!(integrator, true)`. The forcing lives in `p`, so changing it
   changes `f(u, p, t)` even though `u` is untouched; `true` forces an FSAL
   integrator (Tsit5, …) to recompute its cached derivative from the refreshed

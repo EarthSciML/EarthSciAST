@@ -175,11 +175,11 @@ end
 # `provider_sample` result and coerce to a dense Float64 array, preserving the
 # native (e.g. [lon,lat]) shape so a scoped-`ic` fold reads it per cell and the
 # array-gather indexes it. Reuses the same sample-extraction seam as the refresh
-# callback's `IdentityRegrid` (`_regrid_field`: AbstractDict var=>field, or a
+# callback's forcing write (`_sample_field`: AbstractDict var=>field, or a
 # bare AbstractArray for a single-variable sample).
 # --------------------------------------------------------------------------- #
 _provider_const_field(sample, var::AbstractString) =
-    Array{Float64}(_regrid_field(sample, String(var)))
+    Array{Float64}(_sample_field(sample, String(var)))
 
 # --------------------------------------------------------------------------- #
 # Solve seam — the method lives in EarthSciSerializationSimulateExt (SciMLBase).
@@ -221,8 +221,9 @@ Keyword arguments
   scoped-reference `ic(Sys.sp) ~ Loader.var` folds the seeded field into u0 and a
   loader→consumer `variable_map` binding resolves the consumer gather from it.
   DISCRETE providers get a [`build_refresh_callback`](@ref) so their forcing
-  refreshes in place at its cadence; `regrid` selects the
-  [`RegridApplier`](@ref) (default [`IdentityRegrid`](@ref)).
+  refreshes in place at its cadence. The provider delivers the native forcing on
+  the buffer's grid; any native→sim regrid is an in-model coupling expression
+  the RHS evaluates (the obsolete `RegridApplier` seam was removed in v0.8.0).
 * `reltol`, `abstol`, `saveat` — forwarded to the solver.
 * `model_name` — select one model when the document holds several.
 * `inspect::BuildInspection` — optional build-observability sink forwarded to
@@ -239,7 +240,6 @@ function simulate(input, tspan;
                   const_arrays::AbstractDict = Dict{String,Any}(),
                   param_arrays::AbstractDict = Dict{String,Any}(),
                   providers::Union{Nothing,AbstractDict} = nothing,
-                  regrid::RegridApplier = IdentityRegrid(),
                   model_name::Union{Nothing,AbstractString} = nothing,
                   reltol::Float64 = DEFAULT_SIM_RELTOL,
                   abstol::Float64 = DEFAULT_SIM_ABSTOL,
@@ -258,6 +258,7 @@ function simulate(input, tspan;
     # (R2) and when the loader→consumer `variable_map` binding routes a consumer
     # gather to the loader name. DISCRETE providers ride the refresh callback.
     merged_const = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    merged_param = Dict{String,Any}(String(k) => v for (k, v) in param_arrays)
     discrete_providers = Dict{String,Any}()
     if providers !== nothing
         t0 = Float64(tspan[1])
@@ -266,6 +267,15 @@ function simulate(input, tspan;
             if provider_is_const(prov)
                 merged_const[k] = _provider_const_field(provider_sample(prov, t0), k)
             else
+                # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
+                # and register it in `param_arrays`. That makes the loader field a
+                # `live_param`, so the setup partition (`_geometry_setup_vars`) taints
+                # any in-model regrid over it: `F_tgt = A_ij ⊗ F_src / A_j` keeps its
+                # overlap WEIGHTS at setup but stays a runtime observed / discrete-
+                # materialized cache, instead of a build-once setup const where the
+                # (still-unbound) live `F_src` would fail. The refresh callback then
+                # rewrites this SAME buffer in place at each cadence tick.
+                merged_param[k] = _provider_const_field(provider_sample(prov, t0), k)
                 discrete_providers[k] = prov
             end
         end
@@ -281,7 +291,7 @@ function simulate(input, tspan;
         model_name = model_name,
         parameter_overrides = overrides,
         const_arrays = merged_const,
-        param_arrays = Dict{String,Any}(String(k) => v for (k, v) in param_arrays),
+        param_arrays = merged_param,
         inspect = inspect,
         materialize_out = dm)
 
@@ -295,8 +305,7 @@ function simulate(input, tspan;
         model = _select_model(file, model_name)
         cb, tstops = build_refresh_callback(model;
             providers = discrete_providers,
-            buffers = RefreshBuffers(Dict{String,Any}(String(k) => v for (k, v) in param_arrays)),
-            regrid = regrid,
+            buffers = RefreshBuffers(merged_param),
             post_refresh = dm.materialize!)   # recompute discrete caches per boundary
     end
 

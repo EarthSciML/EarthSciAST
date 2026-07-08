@@ -15,7 +15,7 @@
 //!     [`refresh_times`](RefreshExecutor::refresh_times) (the cadence anchors),
 //!     [`materialize_const`](RefreshExecutor::materialize_const) (CONST load
 //!     once), and [`refresh_at`](RefreshExecutor::refresh_at) (DISCRETE refresh
-//!     at an anchor, regrid, write the buffer).
+//!     at an anchor, write the buffer).
 //!
 //! This file is the **driver** that composes them into a segmented time
 //! integration — the user-owned harness the plan (§6) deliberately keeps *out*
@@ -70,7 +70,7 @@
 
 use earthsci_toolkit::flatten::flatten;
 use earthsci_toolkit::provider::{
-    CadenceProvider, ForcingBuffer, IdentityRegrid, NativeField, ProviderError, RefreshExecutor,
+    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_toolkit::simulate_array::ArrayCompiled;
 use earthsci_toolkit::{SimulateOptions, Solution, SolverChoice, load};
@@ -218,7 +218,7 @@ impl CadenceProvider for ScheduledProvider {
     }
 }
 
-/// A 1-D native field from a value vector (regrid is the identity here).
+/// A 1-D native field from a value vector (written straight into the buffer).
 fn field(v: &[f64]) -> NativeField {
     NativeField::new(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
 }
@@ -357,17 +357,12 @@ fn build_executor(compiled: &ArrayCompiled) -> Wiring {
         ),
     ]);
 
-    // `IdentityRegrid`: this fixture's native fields are already on the sim grid
-    // (shape [3] = i∈[1,3]), so no regrid is needed. A real consumer plugs R-2's
-    // ESD-rule regrid bridge (ess-14f.10) into this same `Regrid` seam; the
-    // executor calls it between `refresh` and the forcing-buffer write.
-    let exec = RefreshExecutor::new(
-        &doc["models"]["Box"],
-        &doc,
-        providers,
-        Box::new(IdentityRegrid),
-    )
-    .expect("classify + pair providers");
+    // No regrid seam: this fixture's native fields are already on the sim grid
+    // (shape [3] = i∈[1,3]), so the executor writes them straight into the buffer.
+    // A real consumer expresses any native→sim regrid as an in-model coupling
+    // contraction the RHS evaluates, not a refresh-time transform.
+    let exec = RefreshExecutor::new(&doc["models"]["Box"], &doc, providers)
+        .expect("classify + pair providers");
 
     Wiring {
         exec,

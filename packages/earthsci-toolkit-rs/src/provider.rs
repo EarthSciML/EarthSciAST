@@ -10,8 +10,10 @@
 //! integrator reads each step; PR-3 (ess-14f.8) let the array runtime consume a
 //! coupled, flattened model. This module is the **refresh executor** between a
 //! data provider and that buffer: it GETs CONST forcings once, REFRESHes DISCRETE
-//! forcings at their cadence anchors, regrids each native field onto the sim
-//! grid, and writes it into the forcing buffer.
+//! forcings at their cadence anchors, and writes each native field straight into
+//! the forcing buffer. There is no native→sim regrid here — regridding is an
+//! ordinary in-model coupling expression the RHS evaluates (the obsolete regrid
+//! seam was removed in v0.8.0).
 //!
 //! It is the ESS "**refresh callable + refresh_times**" surface a driver consumes
 //! — explicitly *not* a solver. The segmented integration loop that calls it
@@ -49,12 +51,11 @@
 //!
 //! # No new engine primitive
 //!
-//! This is consumer/glue code: a provider *trait*, a regrid *seam*, and an
-//! executor that drives them into the existing PR-1 buffer. No arrayop, no
-//! scalarizer arm, no `VariableType` variant, no lift of the event/spatial
-//! rejections — `declarative-bc-no-new-primitives` holds. The regrid itself stays
-//! declarative in ESD (R-2 / ess-14f.10 *evaluates* the ESD rules; this module
-//! only calls the [`Regrid`] seam).
+//! This is consumer/glue code: a provider *trait* and an executor that drives it
+//! into the existing PR-1 buffer. No arrayop, no scalarizer arm, no
+//! `VariableType` variant, no lift of the event/spatial rejections —
+//! `declarative-bc-no-new-primitives` holds. Regridding stays declarative in the
+//! model (an in-model coupling contraction the RHS evaluates), not a seam here.
 
 use crate::cadence::{self, Cadence};
 use indexmap::IndexMap;
@@ -65,7 +66,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// A refresh-executor / classification failure: a malformed loader-fed variable,
-/// a missing provider, a cadence-classification disagreement, or a regrid error.
+/// a missing provider, a cadence-classification disagreement, or a buffer write error.
 /// Mirrors the lightweight string-wrapped style of [`crate::cadence::CadenceError`].
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
@@ -76,7 +77,7 @@ fn err(msg: impl Into<String>) -> ProviderError {
 }
 
 /// The PR-1 forcing-buffer handle ([`ArrayCompiled::forcing_handle`]): a shared,
-/// interior-mutable map from variable name to its current regridded field. The
+/// interior-mutable map from variable name to its current native field. The
 /// refresh executor *writes* it between cadence segments; the captured RHS /
 /// Jacobian closures *read* it live on the next step. `Rc<RefCell<…>>` for the
 /// same reason the rest of the array RHS scratch is — diffsol's RHS is `Fn`, not
@@ -89,22 +90,23 @@ pub type ForcingBuffer = Rc<RefCell<HashMap<String, ArrayD<f64>>>>;
 /// coordinate axes (axis name → coordinate values, in native-grid order).
 ///
 /// Regridding/reprojection onto the model's simulation grid is the owning model's
-/// job (ESD / R-2), **not** the provider's — so `materialize`/`refresh` return a
-/// `NativeField` untouched, and the executor pushes it through the [`Regrid`] seam
-/// before the forcing-buffer write. `NativeField = {array, coords}` matches the
-/// Python/Julia/Rust contract in data-providers plan §4.6.
+/// job (an in-model coupling expression the RHS evaluates), **not** the
+/// provider's — so `materialize`/`refresh` return a `NativeField`, and the
+/// executor writes its array straight into the forcing buffer. `NativeField =
+/// {array, coords}` matches the Python/Julia/Rust contract in data-providers plan §4.6.
 #[derive(Debug, Clone)]
 pub struct NativeField {
     /// The field values on the provider's native grid.
     pub array: ArrayD<f64>,
-    /// The native-grid coordinate axes (axis name → coordinate values). Consumed
-    /// by the regrid seam (R-2); [`IdentityRegrid`] ignores them.
+    /// The native-grid coordinate axes (axis name → coordinate values). Carried
+    /// for a model whose in-model regrid coupling needs them; the executor writes
+    /// only `array`.
     pub coords: IndexMap<String, Vec<f64>>,
 }
 
 impl NativeField {
     /// A field with no coordinate metadata — convenience for an already-on-grid
-    /// loader or a test whose regrid is the identity.
+    /// loader or a test whose forcing is consumed directly.
     pub fn new(array: ArrayD<f64>) -> Self {
         Self {
             array,
@@ -133,7 +135,7 @@ pub trait CadenceProvider {
     fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError>;
 
     /// DISCRETE refresh at cadence anchor `t` (solver seconds): re-read the slice.
-    /// `Some(fields)` when the record advanced (regrid + buffer write follow);
+    /// `Some(fields)` when the record advanced (a buffer write follows);
     /// `None` when it has not — the executor then **skips the buffer write**
     /// (None-skip), leaving the previously-loaded field in place. A provider also
     /// returns `None` for a `t` that is not one of its own anchors, so the executor
@@ -146,28 +148,11 @@ pub trait CadenceProvider {
     fn refresh_times(&self) -> Vec<f64>;
 }
 
-/// The native→sim-grid regrid seam. The executor calls it between
-/// `provider.refresh`/`materialize` and the forcing-buffer write; R-2
-/// (ess-14f.10) supplies the real ESD-rule regrid bridge. Kept as a seam so R-1 is
-/// independently testable and so the regrid stays declarative in ESD rather than
-/// re-implemented imperatively in Rust.
-pub trait Regrid {
-    /// Regrid one loader-fed variable's native field onto the model's simulation
-    /// grid, returning the array that lands in the forcing buffer.
-    fn regrid(&self, var: &str, native: &NativeField) -> Result<ArrayD<f64>, ProviderError>;
-}
-
-/// Identity regrid: pass the native array straight through. Used by R-1's tests
-/// and by any loader whose native grid already matches the sim grid; R-2 replaces
-/// it with the ESD-rule regrid bridge.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct IdentityRegrid;
-
-impl Regrid for IdentityRegrid {
-    fn regrid(&self, _var: &str, native: &NativeField) -> Result<ArrayD<f64>, ProviderError> {
-        Ok(native.array.clone())
-    }
-}
+// There is NO native→sim-grid regrid seam: the freshly sampled native forcing is
+// written straight into the buffer, and any native→sim regrid is an ordinary
+// in-model coupling expression the RHS evaluates downstream (the obsolete
+// `Regrid`/`IdentityRegrid` seam was removed in v0.8.0 — regridding is declarative
+// in the model, not re-implemented imperatively in Rust).
 
 /// One loader's binding: its declared cadence and the model variables it feeds.
 /// A loader's `temporal` block decides a single cadence for *all* its outputs, so
@@ -281,8 +266,9 @@ struct LoaderProvider {
 ///
 /// Pairs each loader's [`CadenceProvider`] with its declared cadence (from
 /// [`classify_loader_bindings`]), materializes CONST forcings once, and refreshes
-/// DISCRETE forcings at their cadence anchors — each time pushing the native field
-/// through the [`Regrid`] seam and writing it into the PR-1 [`ForcingBuffer`].
+/// DISCRETE forcings at their cadence anchors — each time writing the native field
+/// straight into the PR-1 [`ForcingBuffer`] (any native→sim regrid is an in-model
+/// coupling expression the RHS evaluates, not a seam here).
 ///
 /// Lifecycle a driver follows (R-3):
 /// 1. [`RefreshExecutor::new`] — classify + pair providers.
@@ -293,7 +279,6 @@ struct LoaderProvider {
 ///    continue the segmented solve.
 pub struct RefreshExecutor {
     loaders: Vec<LoaderProvider>,
-    regrid: Box<dyn Regrid>,
 }
 
 impl RefreshExecutor {
@@ -305,7 +290,6 @@ impl RefreshExecutor {
         model: &Value,
         doc: &Value,
         mut providers: HashMap<String, Box<dyn CadenceProvider>>,
-        regrid: Box<dyn Regrid>,
     ) -> Result<Self, ProviderError> {
         let bindings = classify_loader_bindings(model, doc)?;
         let mut loaders = Vec::with_capacity(bindings.len());
@@ -318,7 +302,7 @@ impl RefreshExecutor {
             })?;
             loaders.push(LoaderProvider { binding, provider });
         }
-        Ok(Self { loaders, regrid })
+        Ok(Self { loaders })
     }
 
     /// The classified loader bindings, for a driver that wants to inspect what is
@@ -327,9 +311,9 @@ impl RefreshExecutor {
         self.loaders.iter().map(|lp| &lp.binding)
     }
 
-    /// CONST forcings: `materialize()` each CONST loader **once**, regrid, and
-    /// write into `forcing`. Call at setup, before the segmented integration loop;
-    /// DISCRETE loaders are untouched here. Returns the variable names written
+    /// CONST forcings: `materialize()` each CONST loader **once** and write the
+    /// native field into `forcing`. Call at setup, before the segmented integration
+    /// loop; DISCRETE loaders are untouched here. Returns the variable names written
     /// (sorted), for assertion/logging. Idempotent in effect — calling twice just
     /// re-reads and overwrites with identical values — but a CONST field is meant
     /// to be loaded once.
@@ -337,14 +321,14 @@ impl RefreshExecutor {
         &mut self,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
-        let RefreshExecutor { loaders, regrid } = self;
+        let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Const {
                 continue;
             }
             let fields = lp.provider.materialize()?;
-            write_fields(regrid.as_ref(), &fields, forcing, &mut written)?;
+            write_fields(&fields, forcing, &mut written)?;
         }
         written.sort();
         written.dedup();
@@ -367,8 +351,8 @@ impl RefreshExecutor {
     }
 
     /// Refresh at cadence anchor `t`: for each DISCRETE provider, call
-    /// `refresh(t)`; on `Some(fields)`, regrid each field and write it into
-    /// `forcing`; on `None` (record unchanged, or `t` not this provider's anchor),
+    /// `refresh(t)`; on `Some(fields)`, write each native field into `forcing`;
+    /// on `None` (record unchanged, or `t` not this provider's anchor),
     /// **skip the write** — the previously-loaded field stays in the buffer
     /// (None-skip). CONST loaders never refresh. Returns the variable names
     /// (re)written at this anchor (sorted).
@@ -381,7 +365,7 @@ impl RefreshExecutor {
         t: f64,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
-        let RefreshExecutor { loaders, regrid } = self;
+        let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Discrete {
@@ -390,7 +374,7 @@ impl RefreshExecutor {
             // `None` (record unchanged, or `t` not this provider's anchor) → skip
             // the buffer write (None-skip); the previously-loaded field stays put.
             if let Some(fields) = lp.provider.refresh(t)? {
-                write_fields(regrid.as_ref(), &fields, forcing, &mut written)?;
+                write_fields(&fields, forcing, &mut written)?;
             }
         }
         written.sort();
@@ -399,19 +383,18 @@ impl RefreshExecutor {
     }
 }
 
-/// Regrid each native field and write it into the forcing buffer, recording the
-/// variable names written. The buffer's `borrow_mut` is taken per-insert (not held
-/// across the regrid call), so a future regrid that reads other buffer entries
-/// cannot deadlock the `RefCell`.
+/// Write each freshly sampled native field straight into the forcing buffer,
+/// recording the variable names written. There is no regrid here — any native→sim
+/// regrid is an in-model coupling expression the RHS evaluates. The buffer's
+/// `borrow_mut` is taken per-insert (not held across the loop), so it cannot
+/// deadlock the `RefCell`.
 fn write_fields(
-    regrid: &dyn Regrid,
     fields: &HashMap<String, NativeField>,
     forcing: &ForcingBuffer,
     written: &mut Vec<String>,
 ) -> Result<(), ProviderError> {
     for (var, native) in fields {
-        let regridded = regrid.regrid(var, native)?;
-        forcing.borrow_mut().insert(var.clone(), regridded);
+        forcing.borrow_mut().insert(var.clone(), native.array.clone());
         written.push(var.clone());
     }
     Ok(())
@@ -513,15 +496,6 @@ mod tests {
         }
     }
 
-    /// A non-identity regrid (scale every cell by `k`) — proves the executor
-    /// routes native fields through the [`Regrid`] seam before the buffer write.
-    struct ScaleRegrid(f64);
-    impl Regrid for ScaleRegrid {
-        fn regrid(&self, _var: &str, native: &NativeField) -> Result<ArrayD<f64>, ProviderError> {
-            Ok(&native.array * self.0)
-        }
-    }
-
     /// A doc with one DISCRETE loader (`met`, has `temporal`) feeding `wind`, one
     /// CONST loader (`topo`, no `temporal`) feeding `elev`, and an ordinary state.
     fn mixed_doc() -> Value {
@@ -608,7 +582,6 @@ mod tests {
             &doc["models"]["M"],
             &doc,
             providers,
-            Box::new(IdentityRegrid),
         )
         .unwrap();
 
@@ -671,7 +644,6 @@ mod tests {
             &doc["models"]["M"],
             &doc,
             providers,
-            Box::new(IdentityRegrid),
         )
         .unwrap();
 
@@ -699,7 +671,6 @@ mod tests {
             &doc["models"]["M"],
             &doc,
             providers,
-            Box::new(IdentityRegrid),
         )
         .unwrap();
         let forcing = buffer();
@@ -738,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_routes_native_field_through_the_regrid_seam() {
+    fn refresh_writes_native_field_into_buffer() {
         let doc = mixed_doc();
         let met = FakeProvider::discrete_loader("wind", vec![(0.0, Some(5.0))]);
         let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
@@ -748,28 +719,23 @@ mod tests {
                 Box::new(FakeProvider::const_loader("elev", 4.0)) as Box<dyn CadenceProvider>,
             ),
         ]);
-        // ScaleRegrid(×3): the buffer must hold 3× the native value.
-        let mut exec = RefreshExecutor::new(
-            &doc["models"]["M"],
-            &doc,
-            providers,
-            Box::new(ScaleRegrid(3.0)),
-        )
-        .unwrap();
+        // No regrid seam: the native field lands in the buffer unchanged (any
+        // native→sim regrid is an in-model coupling the RHS evaluates).
+        let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
         let forcing = buffer();
 
         exec.materialize_const(&forcing).unwrap();
         assert_eq!(
             buf_get(&forcing, "elev"),
-            Some(vec![12.0]),
-            "CONST regridded ×3"
+            Some(vec![4.0]),
+            "CONST native field written unchanged"
         );
 
         exec.refresh_at(0.0, &forcing).unwrap();
         assert_eq!(
             buf_get(&forcing, "wind"),
-            Some(vec![15.0]),
-            "DISCRETE regridded ×3"
+            Some(vec![5.0]),
+            "DISCRETE native field written unchanged"
         );
     }
 
@@ -788,7 +754,6 @@ mod tests {
             &doc["models"]["M"],
             &doc,
             providers,
-            Box::new(IdentityRegrid),
         )
         .map(|_| ())
         .unwrap_err();
@@ -861,7 +826,6 @@ mod tests {
             &class_doc["models"]["Forced"],
             &class_doc,
             providers,
-            Box::new(IdentityRegrid),
         )
         .unwrap();
 

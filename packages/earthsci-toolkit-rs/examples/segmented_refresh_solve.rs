@@ -46,7 +46,7 @@
 
 use earthsci_toolkit::flatten::flatten;
 use earthsci_toolkit::provider::{
-    CadenceProvider, ForcingBuffer, IdentityRegrid, NativeField, ProviderError, RefreshExecutor,
+    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_toolkit::simulate_array::ArrayCompiled;
 use earthsci_toolkit::{SimulateOptions, Solution, SolverChoice, load};
@@ -276,12 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 as Box<dyn CadenceProvider>,
         ),
     ]);
-    let mut exec = RefreshExecutor::new(
-        &doc["models"]["Box"],
-        &doc,
-        providers,
-        Box::new(IdentityRegrid),
-    )?;
+    let mut exec = RefreshExecutor::new(&doc["models"]["Box"], &doc, providers)?;
 
     // The forcing buffer the RHS reads live, and zero initial conditions.
     let forcing = compiled.forcing_handle();
