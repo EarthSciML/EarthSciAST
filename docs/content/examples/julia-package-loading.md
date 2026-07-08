@@ -1,10 +1,10 @@
 # Package Loading (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/compat_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/compat_test.jl`
 
 ```julia
-# Test that EarthSciSerialization loads without errors
-        @test_nowarn using EarthSciSerialization
-        println("EarthSciSerialization.jl loads successfully ✓")
+# Test that EarthSciAST loads without errors
+        @test_nowarn using EarthSciAST
+        println("EarthSciAST.jl loads successfully ✓")
 ```
 

@@ -1,12 +1,12 @@
-# EarthSciSerialization.Expression Operations (Julia)
+# EarthSciAST.Expression Operations (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/expression_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/expression_test.jl`
 
 ```julia
 @testset "substitute function" begin
         # Test NumExpr (should remain unchanged)
         num = NumExpr(3.14)
-        bindings = Dict{String,EarthSciSerialization.Expr}("x" => NumExpr(2.0))
+        bindings = Dict{String,EarthSciAST.Expr}("x" => NumExpr(2.0))
         @test substitute(num, bindings) === num
 
         # Test VarExpr with binding
@@ -18,7 +18,7 @@
         @test substitute(var_y, bindings) === var_y
 
         # Test OpExpr substitution
-        sum_expr = OpExpr("+", EarthSciSerialization.Expr[var_x, var_y])
+        sum_expr = OpExpr("+", EarthSciAST.Expr[var_x, var_y])
         result = substitute(sum_expr, bindings)
         @test result isa OpExpr
         @test result.op == "+"
@@ -27,7 +27,7 @@
         @test result.args[2] === var_y
 
         # Test nested OpExpr substitution
-        nested = OpExpr("*", EarthSciSerialization.Expr[OpExpr("+", EarthSciSerialization.Expr[var_x, NumExpr(1.0)]), var_y])
+        nested = OpExpr("*", EarthSciAST.Expr[OpExpr("+", EarthSciAST.Expr[var_x, NumExpr(1.0)]), var_y])
         result = substitute(nested, bindings)
         @test result isa OpExpr
         @test result.op == "*"
@@ -35,7 +35,7 @@
         @test result.args[1].args[1] === bindings["x"]
 
         # Test OpExpr with wrt and dim fields
-        diff_expr = OpExpr("D", EarthSciSerialization.Expr[var_x], wrt="t", dim="time")
+        diff_expr = OpExpr("D", EarthSciAST.Expr[var_x], wrt="t", dim="time")
         result = substitute(diff_expr, bindings)
         @test result.wrt == "t"
         @test result.dim == "time"

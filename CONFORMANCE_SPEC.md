@@ -143,11 +143,11 @@ All implementations MUST implement `substitute` with the following behavior:
    test is required.
 
 These semantics are exercised by:
-- Python: `packages/earthsci_toolkit/tests/test_substitute.py`
+- Python: `pkg/earthsci-ast-py/tests/test_substitute.py`
   (class `TestSubstitutionErrorHandling`)
-- Rust: `packages/earthsci-toolkit-rs/tests/substitution.rs`
+- Rust: `pkg/earthsci-ast-rs/tests/substitution.rs`
   (the `edge cases and error handling` section)
-- Julia: `packages/EarthSciSerialization.jl/test/expression_test.jl`
+- Julia: `pkg/EarthSciAST.jl/test/expression_test.jl`
   (`@testset "substitute edge cases"`)
 
 #### 2.2.4 Graph Generation Tests (`tests/graphs/`)
@@ -551,7 +551,7 @@ The comparison system categorizes divergences as:
 > footguns; **the rules below are the contract.** They are exercised by the
 > adversarial harness in `tests/conformance/determinism/` (see §5.5.4).
 
-`earthsci-toolkit` is **parallel native implementations** (Julia, Rust,
+`EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by this suite — not one core behind FFI. The
 value-invention primitives `distinct`, `skolem`, and `rank`, the arg-witness
 reducers `argmin`/`argmax` (§5.5.1 rule 6), together with
@@ -900,16 +900,16 @@ values**, so agreement is the cross-binding semiring-equivalence proof:
 | `categorical_index_set.esm` | a `categorical` `{from}` contraction (cardinality = member count) |
 
 - **Julia, Rust, Python** evaluate every fixture and match its inline
-  `expected` (`packages/EarthSciSerialization.jl/test/aggregate_conformance_test.jl`,
-  `packages/earthsci-toolkit-rs/tests/aggregate_conformance_tests.rs`,
-  `packages/earthsci_toolkit/tests/test_aggregate_conformance.py`), and each
+  `expected` (`pkg/EarthSciAST.jl/test/aggregate_conformance_test.jl`,
+  `pkg/earthsci-ast-rs/tests/aggregate_conformance_tests.rs`,
+  `pkg/earthsci-ast-py/tests/test_aggregate_conformance.py`), and each
   asserts the full `0̄` / `1̄` identity table (including the non-finite rows) in
   its evaluator unit suite.
 - **Go, TypeScript** parse + schema-validate every valid fixture and reject the
   invalid ones, covering the additive fields (`op:"aggregate"`, the `semiring`
   enum, `ranges` `{from}` references, the `index_sets` registry) with no
-  evaluator (`packages/esm-format-go/pkg/esm/aggregate_fixtures_test.go`,
-  `packages/earthsci-toolkit/src/aggregate-fixtures.test.ts`).
+  evaluator (`pkg/earthsci-ast-go/pkg/esm/aggregate_fixtures_test.go`,
+  `pkg/earthsci-ast-ts/src/aggregate-fixtures.test.ts`).
 
 ### 5.7 Cadence-Partition Pass (normative)
 
@@ -1313,7 +1313,7 @@ FAQ → `A_j` row-sum → apply → normalize — and is driven through the eval
 reference binding (**Julia**) evaluates it end-to-end and asserts the conservation
 + partition-of-unity invariants and the spherical Van Oosterom–Strackee /
 analytic-rectangle oracle values in
-`packages/EarthSciSerialization.jl/test/geometry_overlap_join_conformance_test.jl`.
+`pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl`.
 The two cross-binding building blocks run in every evaluating binding: the
 **broad-phase candidate set** is materialized by the value-invention front-door
 (`materialize_value_invention`, Julia/Python/Rust, §5.5) and the **`polygon_area`
@@ -1470,9 +1470,9 @@ closed-form check the piecewise-constant forcing affords.
 
 Per-binding runners drive the path and gate both bands against the committed
 golden, **failing loudly** on any divergence: **Julia** —
-`packages/EarthSciSerialization.jl/test/refresh_conformance_test.jl`; **Python** —
-`packages/earthsci_toolkit/tests/test_refresh_conformance.py`; **Rust** —
-`packages/earthsci-toolkit-rs/tests/refresh_conformance.rs` (all run by
+`pkg/EarthSciAST.jl/test/refresh_conformance_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_refresh_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/refresh_conformance.rs` (all run by
 `test-conformance.sh`). `bindings_required` is `["julia", "python", "rust"]` — the
 regrid is an in-model coupling every simulation binding already evaluates, so no
 regrid seam or source change is needed to consume it.
@@ -1529,11 +1529,11 @@ to `<owner>.<subkey>.<var>` observeds, **bare-scalar** loader consumption,
 
 Per-binding runners drive the fixture and gate the trajectory band against the
 committed golden: **Julia** —
-`packages/EarthSciSerialization.jl/test/subsystem_loader_conformance_test.jl`;
+`pkg/EarthSciAST.jl/test/subsystem_loader_conformance_test.jl`;
 **Python** —
-`packages/earthsci_toolkit/tests/test_subsystem_loader_conformance.py`;
+`pkg/earthsci-ast-py/tests/test_subsystem_loader_conformance.py`;
 **Rust** —
-`packages/earthsci-toolkit-rs/tests/subsystem_loader_conformance.rs`.
+`pkg/earthsci-ast-rs/tests/subsystem_loader_conformance.rs`.
 `bindings_required` is `["python", "julia", "rust"]`. Rust's flattener now lowers
 a DataLoader mounted as a model subsystem (`flatten.rs`
 `lower_loader_subsystems`): each loader variable becomes a const-array-backed
@@ -1606,11 +1606,11 @@ array **gathered into the ODE RHS** (Gap 2), and CONST build-once materializatio
 
 Per-binding runners drive the fixture and gate the trajectory band against the
 committed golden: **Julia** —
-`packages/EarthSciSerialization.jl/test/build_once_spatial_field_conformance_test.jl`;
+`pkg/EarthSciAST.jl/test/build_once_spatial_field_conformance_test.jl`;
 **Python** —
-`packages/earthsci_toolkit/tests/test_build_once_spatial_field_conformance.py`;
+`pkg/earthsci-ast-py/tests/test_build_once_spatial_field_conformance.py`;
 **Rust** —
-`packages/earthsci-toolkit-rs/tests/build_once_spatial_field_conformance.rs`.
+`pkg/earthsci-ast-rs/tests/build_once_spatial_field_conformance.rs`.
 `bindings_required` is `["julia", "python", "rust"]` (Julia is where the two gaps
 were fixed — the setup-materializer + const-array crossing; Python and Rust
 already evaluate `polygon_intersection_area` + `makearray` + the array ODE
@@ -1702,11 +1702,11 @@ the piecewise-constant forcing affords.
 
 Per-binding runners drive the fixture and gate the trajectory band against the
 committed golden: **Julia** —
-`packages/EarthSciSerialization.jl/test/discrete_materialize_conformance_test.jl`;
+`pkg/EarthSciAST.jl/test/discrete_materialize_conformance_test.jl`;
 **Python** —
-`packages/earthsci_toolkit/tests/test_discrete_materialize_conformance.py`;
+`pkg/earthsci-ast-py/tests/test_discrete_materialize_conformance.py`;
 **Rust** —
-`packages/earthsci-toolkit-rs/tests/discrete_materialize_conformance.rs`.
+`pkg/earthsci-ast-rs/tests/discrete_materialize_conformance.rs`.
 `bindings_required` is `["julia", "python", "rust"]` (Julia is where the
 discrete-materialization cut lives — the `DiscreteMaterializer` sink + the refresh
 callback's `post_refresh` hook — so it additionally gates the field band; Python
@@ -1729,7 +1729,7 @@ The `.github/workflows/conformance-testing.yml` workflow:
 
 Conformance tests run automatically on:
 - Pushes to `main` or `develop` branches
-- Pull requests affecting `packages/`, `tests/`, or `scripts/`
+- Pull requests affecting `pkg/`, `tests/`, or `scripts/`
 - Manual workflow dispatch
 
 ### 6.3 Workflow Dependencies
@@ -1866,9 +1866,9 @@ The test fixture format is designed to accommodate:
 
 ## 11. Reference Implementation
 
-The Julia `EarthSciSerialization.jl` library serves as the reference implementation for conformance test development. When adding new test fixtures:
+The Julia `EarthSciAST.jl` library serves as the reference implementation for conformance test development. When adding new test fixtures:
 
-1. Verify behavior using `EarthSciSerialization.jl`
+1. Verify behavior using `EarthSciAST.jl`
 2. Generate expected outputs using Julia implementation
 3. Validate that other implementations produce equivalent results
 4. Document any acceptable implementation differences

@@ -25,7 +25,7 @@ Each library implementation is classified into tiers:
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
 | **Analysis** | Unit checking, equation counting, stoichiometric matrix computation, conservation law detection | All languages |
-| **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `esm-editor` (SolidJS) |
+| **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `earthsci-ast-editor` (SolidJS) |
 | **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
 
@@ -210,13 +210,13 @@ Convert expression tree back to ESM JSON format (the inverse of parsing). Must p
 
 ### 2.4 Library Scope and Dependency Policy
 
-**Libraries set up systems; they do not solve them.** The general scope of an EarthSciSerialization library is to parse, validate, edit, flatten, and convert ESM format files into simulation-ready native solver objects (e.g., `ModelingToolkit.System` in Julia, SciPy-compatible function handles in Python, `diffsol` `OdeProblem` in Rust). **Libraries SHOULD NOT embed their own ODE/PDE solver nor export wrapper functions that perform actual time integration.** This keeps the runtime dependency graph small, avoids version-pinning disputes with downstream solvers, and lets users pick the solver appropriate for their problem.
+**Libraries set up systems; they do not solve them.** The general scope of an EarthSciAST library is to parse, validate, edit, flatten, and convert ESM format files into simulation-ready native solver objects (e.g., `ModelingToolkit.System` in Julia, SciPy-compatible function handles in Python, `diffsol` `OdeProblem` in Rust). **Libraries SHOULD NOT embed their own ODE/PDE solver nor export wrapper functions that perform actual time integration.** This keeps the runtime dependency graph small, avoids version-pinning disputes with downstream solvers, and lets users pick the solver appropriate for their problem.
 
 #### 2.4.1 Rationale
 
 - **Dependency weight.** ODE/PDE solvers bring large transitive dependency trees (SciPy pulls NumPy + BLAS + LAPACK; `OrdinaryDiffEq.jl` pulls the full DifferentialEquations.jl ecosystem with dozens of subpackages). Libraries that only construct systems can ship with far smaller runtime footprints.
 - **Solver choice.** Users are better positioned to pick solvers than library authors. A library that hard-codes BDF forces everyone into that solver; a library that produces a native system object lets each user plug in Tsit5, Rosenbrock23, Radau, or a custom method.
-- **Browser and embedded targets.** Smaller runtimes are easier to compile to WebAssembly or run in constrained environments. This matters specifically for the Rust + WebAssembly browser-simulation path (`earthsci-toolkit-rs` + `diffsol`) where every transitive dependency adds to the `.wasm` bundle size.
+- **Browser and embedded targets.** Smaller runtimes are easier to compile to WebAssembly or run in constrained environments. This matters specifically for the Rust + WebAssembly browser-simulation path (`earthsci-ast-rs` + `diffsol`) where every transitive dependency adds to the `.wasm` bundle size.
 
 #### 2.4.2 Testing Requirement for Simulation-Capable Packages
 
@@ -228,9 +228,9 @@ Libraries at a tier that produces simulation-ready systems (currently: Julia via
 
 #### 2.4.3 Preferred Patterns
 
-- **Python.** The solver (`scipy.integrate`) is a test dependency. The runtime package imports it lazily only inside simulation entry points, or the simulation entry point is gated behind an optional `simulate` extra (e.g., `pip install earthsci-toolkit[simulate]`).
+- **Python.** The solver (`scipy.integrate`) is a test dependency. The runtime package imports it lazily only inside simulation entry points, or the simulation entry point is gated behind an optional `simulate` extra (e.g., `pip install earthsci-ast[simulate]`).
 - **Rust.** The solver (`diffsol`) is a feature-gated dependency. A `simulate` Cargo feature brings `diffsol` in; users who only need parse/validate/flatten/graph can depend on the crate without the `simulate` feature and avoid the solver transitive weight.
-- **Julia.** The solver (`OrdinaryDiffEq` or a specific subpackage like `OrdinaryDiffEqRosenbrock`) is a test dependency declared in `[targets].test` of `Project.toml`, **not** in `[deps]`. For users who want a one-line simulate API, the library provides a Julia package extension (e.g., `EarthSciSerializationSolverExt.jl` via a `weakdep` on `OrdinaryDiffEq`), loaded only when the user explicitly does `using OrdinaryDiffEq` alongside the main package. The extension approach preserves the "library sets up systems but does not solve" principle while still giving users easy access to simulation when they want it.
+- **Julia.** The solver (`OrdinaryDiffEq` or a specific subpackage like `OrdinaryDiffEqRosenbrock`) is a test dependency declared in `[targets].test` of `Project.toml`, **not** in `[deps]`. For users who want a one-line simulate API, the library provides a Julia package extension (e.g., `EarthSciASTSolverExt.jl` via a `weakdep` on `OrdinaryDiffEq`), loaded only when the user explicitly does `using OrdinaryDiffEq` alongside the main package. The extension approach preserves the "library sets up systems but does not solve" principle while still giving users easy access to simulation when they want it.
 
 #### 2.4.4 Current Conformance Status
 
@@ -238,9 +238,9 @@ Libraries at a tier that produces simulation-ready systems (currently: Julia via
 
 | Library | Status | Notes |
 |---|---|---|
-| Python (`earthsci_toolkit`) | ✅ conforms | `tests/test_simulation.py` calls `scipy.integrate.solve_ivp` on multiple canonical problems and asserts trajectory correctness. |
-| Rust (`earthsci-toolkit-rs`) | ✅ conforms (partial) | `tests/simulate_tests.rs` runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. `diffsol` is currently an unconditional dependency; moving it behind a `simulate` feature flag is a recommended follow-up. |
-| Julia (`EarthSciSerialization.jl`) | ❌ does not conform | The test suite constructs `ODESystem` objects but never calls `solve()`. `real_mtk_integration_test.jl` has `@test_skip` gates and only verifies the returned object is a non-`MockMTKSystem`. Tracked as a follow-up gap. |
+| Python (`earthsci_ast`) | ✅ conforms | `tests/test_simulation.py` calls `scipy.integrate.solve_ivp` on multiple canonical problems and asserts trajectory correctness. |
+| Rust (`earthsci-ast-rs`) | ✅ conforms (partial) | `tests/simulate_tests.rs` runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. `diffsol` is currently an unconditional dependency; moving it behind a `simulate` feature flag is a recommended follow-up. |
+| Julia (`EarthSciAST.jl`) | ❌ does not conform | The test suite constructs `ODESystem` objects but never calls `solve()`. `real_mtk_integration_test.jl` has `@test_skip` gates and only verifies the returned object is a non-`MockMTKSystem`. Tracked as a follow-up gap. |
 
 ---
 
@@ -644,7 +644,7 @@ Adding an explicit `Advection` model on the same grid with `_var` placeholder eq
 
 ### 4.8 Graph Representations
 
-Every library must be able to produce two distinct graph representations of an `.esm` file. These graphs are **data-only**: libraries return language-idiomatic adjacency structures (nodes, edges, connectivity) but do **not** render, lay out, or visualize the graph. Rendering is the sole concern of downstream consumers (`esm-editor`'s `<CouplingGraph>` component, CLI export to DOT/Mermaid, or user code).
+Every library must be able to produce two distinct graph representations of an `.esm` file. These graphs are **data-only**: libraries return language-idiomatic adjacency structures (nodes, edges, connectivity) but do **not** render, lay out, or visualize the graph. Rendering is the sole concern of downstream consumers (`earthsci-ast-editor`'s `<CouplingGraph>` component, CLI export to DOT/Mermaid, or user code).
 
 #### 4.8.1 System Graph (Component-Level)
 
@@ -691,7 +691,7 @@ Edges:
   GEOSFP —[v]→ Advection            (variable_map)
 ```
 
-This is the graph that `esm-editor`'s `<CouplingGraph>` component renders visually.
+This is the graph that `earthsci-ast-editor`'s `<CouplingGraph>` component renders visually.
 
 #### 4.8.2 Expression Graph (Variable-Level)
 
@@ -785,7 +785,7 @@ Libraries should also support serializing graphs to common interchange formats (
 
 ## 5. Language-Specific Libraries
 
-### 5.1 Julia — `EarthSciSerialization.jl`
+### 5.1 Julia — `EarthSciAST.jl`
 
 **Tier: Full**
 
@@ -803,11 +803,11 @@ Julia is the primary language for EarthSciML and has the richest integration sto
 #### 5.1.2 Core API
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Load and save
-file = EarthSciSerialization.load("model.esm")
-EarthSciSerialization.save(file, "model_v2.esm")
+file = EarthSciAST.load("model.esm")
+EarthSciAST.save(file, "model_v2.esm")
 
 # Pretty-print a model
 display(file.models["SuperFast"])
@@ -816,7 +816,7 @@ display(file.models["SuperFast"])
 #   ∂NO₂/∂t = k_NO_O₃·O₃·NO·M − jNO₂·NO₂
 
 # LaTeX
-EarthSciSerialization.to_latex(file.models["SuperFast"])
+EarthSciAST.to_latex(file.models["SuperFast"])
 
 # Print entire file summary
 show(file)
@@ -829,7 +829,7 @@ show(file)
 #   Domain: lon [-130, -100], 2024-05-01 to 2024-05-03
 
 # Validation
-result = EarthSciSerialization.validate(file)
+result = EarthSciAST.validate(file)
 result.is_valid          # true
 result.structural_errors # []
 result.unit_warnings     # [UnitWarning("k_NO_O3 units cm^3/molec/s may be inconsistent...")]
@@ -846,14 +846,14 @@ S = stoichiometric_matrix(file.reaction_systems["SimpleOzone"])
 
 #### 5.1.3 MTK/Catalyst Conversion (Full Tier)
 
-The key capability unique to Julia: bidirectional conversion between ESM and live MTK/Catalyst objects. As of v0.0.2 this is delivered via **Julia package extensions** (the `EarthSciSerializationMTKExt` and `EarthSciSerializationCatalystExt` submodules). Users do not need to call any availability-check function — they simply `using` `ModelingToolkit` and/or `Catalyst` and the constructors below become defined.
+The key capability unique to Julia: bidirectional conversion between ESM and live MTK/Catalyst objects. As of v0.0.2 this is delivered via **Julia package extensions** (the `EarthSciASTMTKExt` and `EarthSciASTCatalystExt` submodules). Users do not need to call any availability-check function — they simply `using` `ModelingToolkit` and/or `Catalyst` and the constructors below become defined.
 
-**Weak dependencies.** `ModelingToolkit`, `Catalyst`, and `Symbolics` are declared in `[weakdeps]` of `EarthSciSerialization.jl`'s `Project.toml`. Loading `EarthSciSerialization` alone does **not** force the solver stack to load — precompilation of the main package is fast and side-effect free.
+**Weak dependencies.** `ModelingToolkit`, `Catalyst`, and `Symbolics` are declared in `[weakdeps]` of `EarthSciAST.jl`'s `Project.toml`. Loading `EarthSciAST` alone does **not** force the solver stack to load — precompilation of the main package is fast and side-effect free.
 
 **Public API.** The public API is constructor dispatch on the foreign system types:
 
 ```julia
-using EarthSciSerialization, ModelingToolkit, Catalyst
+using EarthSciAST, ModelingToolkit, Catalyst
 
 # ESM → FlattenedSystem (single intermediate, always-first step)
 flat = flatten(file)
@@ -876,8 +876,8 @@ pde = ModelingToolkit.PDESystem(file.models["Atmosphere"]; name=:Atmosphere)
 rxn = Catalyst.ReactionSystem(file.reaction_systems["SimpleOzone"]; name=:Ozone)
 
 # Reverse direction (round-trip for tests and tooling)
-model = EarthSciSerialization.Model(sys)
-rxn_m = EarthSciSerialization.ReactionSystem(rxn)
+model = EarthSciAST.Model(sys)
+rxn_m = EarthSciAST.ReactionSystem(rxn)
 
 # Simulate
 using OrdinaryDiffEq
@@ -888,14 +888,14 @@ sol = solve(prob, Tsit5())
 **Fallback without MTK/Catalyst.** If the user has not imported `ModelingToolkit` or `Catalyst`, the same constructor pattern is available via `MockMTKSystem`, `MockPDESystem`, and `MockCatalystSystem` — plain-Julia struct types exported from the main package:
 
 ```julia
-using EarthSciSerialization   # no MTK, no Catalyst
+using EarthSciAST   # no MTK, no Catalyst
 
 mock_sys = MockMTKSystem(file.models["SuperFast"];    name=:SuperFast)
 mock_pde = MockPDESystem(file.models["Atmosphere"];   name=:Atmosphere)
 mock_cat = MockCatalystSystem(file.reaction_systems["SimpleOzone"]; name=:Ozone)
 ```
 
-`MockMTKSystem(::Model)` on a PDE-shaped model raises the same `ArgumentError` that redirects the user to `MockPDESystem`, and vice versa — the dispatch semantics mirror the real constructors. These mocks are the no-MTK fallbacks called out by the §1.2 capability tiers; tier detection uses `Base.get_extension(EarthSciSerialization, :EarthSciSerializationMTKExt)` rather than an ad-hoc `check_mtk_availability` helper.
+`MockMTKSystem(::Model)` on a PDE-shaped model raises the same `ArgumentError` that redirects the user to `MockPDESystem`, and vice versa — the dispatch semantics mirror the real constructors. These mocks are the no-MTK fallbacks called out by the §1.2 capability tiers; tier detection uses `Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)` rather than an ad-hoc `check_mtk_availability` helper.
 
 **Flattened system to MTK conversion details.**
 
@@ -916,7 +916,7 @@ D_coeff * Differential(<dim>)(V)(t, <dim>_0) ~ f(...)
 
 rather than emitting the slice-ODE as a pointwise source term in the lowest grid cell. This is the physically correct interpretation for surface deposition of a diffusing tracer (the surface deposition velocity has units of length/time and acts as a flux, not a volumetric source). §4.7.6.6 permits either interpretation at the spec level; the Julia library's choice is flux BC. Substitution rewrites references to `V.at_<dim>` in `f(...)` to reference the base variable `V` at the slice coordinate, so the resulting BC is self-contained.
 
-This lowering is implemented inside `EarthSciSerializationMTKExt`; the `EarthSciMLBase.slice_variable` primitive itself remains interpretation-agnostic.
+This lowering is implemented inside `EarthSciASTMTKExt`; the `EarthSciMLBase.slice_variable` primitive itself remains interpretation-agnostic.
 
 **Removed APIs (v0.0.2 breaking change, acceptable at pre-1.0).** The following names that existed in earlier pre-release versions have been deleted:
 
@@ -954,7 +954,7 @@ Callers must migrate to the constructor-dispatch API above.
 
 #### 5.1.6 End-to-End Simulation Test Coverage
 
-`EarthSciSerialization.jl` produces simulation-ready `ModelingToolkit.System`
+`EarthSciAST.jl` produces simulation-ready `ModelingToolkit.System`
 objects, so its test suite MUST verify that the returned systems integrate
 correctly end-to-end with `OrdinaryDiffEq`. Construction-only tests (verifying
 that a non-mock object is returned) are insufficient: they cannot catch
@@ -1009,7 +1009,7 @@ cover at minimum:
 remains lean and precompiles fast; users who only need `load`/`save`/`flatten`
 do not pay the cost of the full `SciMLBase` stack.
 
-**Initial conditions and parameters.** The `EarthSciSerializationMTKExt`
+**Initial conditions and parameters.** The `EarthSciASTMTKExt`
 constructor wires `ModelVariable.default` values into the Symbolics variables
 via `Symbolics.setdefaultval`, so `ODEProblem(sys, [], tspan)` can be called
 with an empty `u0` / `p` map — MTK picks up the defaults automatically. This
@@ -1018,14 +1018,14 @@ initial-condition map that was already declared in the ESM model.
 
 ---
 
-### 5.2 TypeScript / SolidJS — `earthsci-toolkit` + `esm-editor`
+### 5.2 TypeScript / SolidJS — `@earthsciml/ast` + `earthsci-ast-editor`
 
-**Tier: Core + Analysis (earthsci-toolkit), Interactive Editing (esm-editor)**
+**Tier: Core + Analysis (@earthsciml/ast), Interactive Editing (earthsci-ast-editor)**
 
 The web story is split into two packages with a clean dependency boundary:
 
-- **`earthsci-toolkit`** — Pure TypeScript, zero framework dependencies. Types, parsing, validation, substitution, LaTeX/Unicode string generation. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
-- **`esm-editor`** — SolidJS-based interactive expression and model editor. Renders the AST directly as clickable, editable DOM elements. Exported as both Solid components and framework-agnostic web components.
+- **`@earthsciml/ast`** — Pure TypeScript, zero framework dependencies. Types, parsing, validation, substitution, LaTeX/Unicode string generation. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
+- **`earthsci-ast-editor`** — SolidJS-based interactive expression and model editor. Renders the AST directly as clickable, editable DOM elements. Exported as both Solid components and framework-agnostic web components.
 
 #### 5.2.1 Why SolidJS for the Editor
 
@@ -1037,7 +1037,7 @@ The expression editor is fundamentally a tree of reactive nodes. When a user cli
 - **Small bundle:** The editor component adds ~7KB gzipped (Solid runtime) vs ~40KB+ (React).
 - **Web component export:** Solid components compile to native custom elements via `solid-element`, making them embeddable in React, Vue, Svelte, plain HTML, or the seshat.pub platform without framework coupling.
 
-#### 5.2.2 `earthsci-toolkit` — Pure TypeScript Library
+#### 5.2.2 `@earthsciml/ast` — Pure TypeScript Library
 
 **Dependencies:** `ajv` (schema validation). No framework, no DOM.
 
@@ -1071,7 +1071,7 @@ import {
   deriveODEs, stoichiometricMatrix,
   toLatex, toUnicode, toAscii,
   type EsmFile, type Expr, type Model
-} from 'earthsci-toolkit';
+} from '@earthsciml/ast';
 
 // Parse from JSON string or object
 const file: EsmFile = load(jsonString);
@@ -1138,12 +1138,12 @@ type DiscreteEventTrigger =
 
 Types should be auto-generated from the JSON Schema where possible (using `json-schema-to-typescript`), then augmented with utility functions.
 
-#### 5.2.3 `esm-editor` — SolidJS Interactive Editor
+#### 5.2.3 `earthsci-ast-editor` — SolidJS Interactive Editor
 
-**Dependencies:** `solid-js`, `solid-element` (web component export), `earthsci-toolkit` (peer dependency).
+**Dependencies:** `solid-js`, `solid-element` (web component export), `@earthsciml/ast` (peer dependency).
 
 ```
-esm-editor/
+earthsci-ast-editor/
 ├── src/
 │   ├── components/
 │   │   ├── ExpressionNode.tsx    # Core: renders a single AST node
@@ -1179,7 +1179,7 @@ Every AST node renders as a Solid component that knows its own path, handles cli
 ```tsx
 // Conceptual structure — each AST node is an interactive component
 import { Component, Show, For, createSignal } from 'solid-js';
-import type { Expr, ExprNode } from 'earthsci-toolkit';
+import type { Expr, ExprNode } from '@earthsciml/ast';
 
 interface ExpressionNodeProps {
   expr: Expr;                      // reactive (from Solid store)
@@ -1313,7 +1313,7 @@ const DerivativeLayout: Component<{node: ExprNode; path: ...}> = (props) => (
 
 ```typescript
 import { createSignal, createMemo } from 'solid-js';
-import type { EsmFile } from 'earthsci-toolkit';
+import type { EsmFile } from '@earthsciml/ast';
 
 // Build equivalence classes from coupling rules at file load / on coupling change
 function buildVarEquivalences(file: EsmFile): Map<string, Set<string>> {
@@ -1381,8 +1381,8 @@ Scoped references are normalized: both `O3` (bare) and `SimpleOzone.O3` (qualifi
 
 ```typescript
 import { createStore, produce } from 'solid-js/store';
-import type { EsmFile } from 'earthsci-toolkit';
-import { validate } from 'earthsci-toolkit';
+import type { EsmFile } from '@earthsciml/ast';
+import { validate } from '@earthsciml/ast';
 
 const [file, setFile] = createStore<EsmFile>(loadedFile);
 
@@ -1413,7 +1413,7 @@ const { undo, redo, canUndo, canRedo } = createUndoHistory(file, setFile);
 
 #### 5.2.6 Web Component Export
 
-`esm-editor` components are exported as standard web components via `solid-element`, making them embeddable in any framework:
+`earthsci-ast-editor` components are exported as standard web components via `solid-element`, making them embeddable in any framework:
 
 ```typescript
 // web-components.ts
@@ -1445,13 +1445,13 @@ Usage in the seshat.pub platform or any other framework — no adapter needed.
 
 #### 5.2.7 Higher-Level Editor Components
 
-Beyond individual expressions, `esm-editor` provides composed editors for entire sections:
+Beyond individual expressions, `earthsci-ast-editor` provides composed editors for entire sections:
 
 **`<ModelEditor>`** — Displays all equations in a model with editable variables panel, equation list, and event editor. Variables show type badges (state/parameter/observed) and units.
 
 **`<ReactionEditor>`** — Reaction system editor showing reactions in chemical notation (`NO + O₃ →[k₁] NO₂`) with clickable rate expressions. Add/remove reactions via UI.
 
-**`<CouplingGraph>`** — Visual directed graph of model components and their coupling relationships. Nodes are models/reaction systems/data loaders; edges are coupling entries. Click an edge to edit the coupling rule. Consumes the data-only graph structure from `earthsci-toolkit`'s `component_graph()` and handles layout and rendering internally (e.g., using `d3-force` for layout, Solid for DOM rendering).
+**`<CouplingGraph>`** — Visual directed graph of model components and their coupling relationships. Nodes are models/reaction systems/data loaders; edges are coupling entries. Click an edge to edit the coupling rule. Consumes the data-only graph structure from `@earthsciml/ast`'s `component_graph()` and handles layout and rendering internally (e.g., using `d3-force` for layout, Solid for DOM rendering).
 
 **`<FileSummary>`** — Read-only overview panel showing the structured summary (as specified in Section 6.3 of this document), with links that scroll to / select the relevant editor section.
 
@@ -1459,7 +1459,7 @@ Beyond individual expressions, `esm-editor` provides composed editors for entire
 
 #### 5.2.8 Code Generation
 
-The pure `earthsci-toolkit` library (not the editor) provides code generation for backend simulation. Code generation covers **models and reaction systems** — their variables, parameters, equations, reactions, and events. Coupling and domain configuration are emitted as structured comments or stubs that the user can complete manually.
+The pure `@earthsciml/ast` library (not the editor) provides code generation for backend simulation. Code generation covers **models and reaction systems** — their variables, parameters, equations, reactions, and events. Coupling and domain configuration are emitted as structured comments or stubs that the user can complete manually.
 
 **Scope:** Code generation must handle:
 
@@ -1475,7 +1475,7 @@ Code generation does **not** need to handle (these are emitted as TODO comments)
 - Data loaders and operators (runtime-specific; emitted as placeholder comments with the loader/operator ID).
 
 ```typescript
-import { toJuliaCode, toPythonCode } from 'earthsci-toolkit';
+import { toJuliaCode, toPythonCode } from '@earthsciml/ast';
 
 // Generate a self-contained Julia script
 const julia: string = toJuliaCode(file);
@@ -1494,7 +1494,7 @@ const julia: string = toJuliaCode(file);
 // Generate a self-contained Python script
 const python: string = toPythonCode(file);
 // Output:
-//   import earthsci_toolkit as esm
+//   import earthsci_ast as esm
 //   file = esm.load_string('''...''')
 //   solution = esm.simulate(file, tspan=(0, 86400), ...)
 ```
@@ -1514,7 +1514,7 @@ const python: string = toPythonCode(file);
 
 ---
 
-### 5.3 Python — `earthsci_toolkit`
+### 5.3 Python — `earthsci_ast`
 
 **Tier: Core + Analysis + Simulation**
 
@@ -1531,7 +1531,7 @@ Python provides simulation capability via SymPy for symbolic manipulation and Sc
 #### 5.3.2 Package Structure
 
 ```
-earthsci_toolkit/
+earthsci_ast/
 ├── __init__.py
 ├── types.py          # Dataclass definitions for ESM types
 ├── parse.py          # JSON → dataclasses
@@ -1549,7 +1549,7 @@ earthsci_toolkit/
 #### 5.3.3 Core API
 
 ```python
-import earthsci_toolkit as esm
+import earthsci_ast as esm
 
 # Load and save
 file = esm.load("model.esm")
@@ -1689,7 +1689,7 @@ esm.explore(file)  # widget showing models, reactions, coupling graph
 
 ---
 
-### 5.4 Rust — `earthsci-toolkit`
+### 5.4 Rust — `earthsci-ast`
 
 **Tier: Core + Analysis**
 
@@ -1764,7 +1764,7 @@ pub enum CouplingEntry {
 The Rust library can be compiled to WASM and used by the TypeScript library for performance-critical operations (validation, large expression manipulation). The TypeScript library would use the pure-TS implementation by default but optionally delegate to WASM:
 
 ```typescript
-import { validate } from 'earthsci-toolkit';
+import { validate } from '@earthsciml/ast';
 import { validate as validateWasm } from 'esm-format-wasm'; // optional fast path
 ```
 
@@ -1817,7 +1817,7 @@ The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed
 - **Interpreted RHS, finite-difference Jacobian.** The interpreter walks an internal `ResolvedExpr` tree (variable references resolved to typed indices into the state, parameter, observed, and `t` slots). The Jacobian-vector product handed to diffsol is forward-difference; v1 deliberately does not generate symbolic or compiled-WASM Jacobians, since the bead is correctness-focused.
 
 ```rust
-use earthsci_toolkit::{Compiled, SimulateOptions, SolverChoice, simulate};
+use earthsci_ast::{Compiled, SimulateOptions, SolverChoice, simulate};
 use std::collections::HashMap;
 
 let compiled = Compiled::from_file(&file)?;
@@ -1839,7 +1839,7 @@ The v1 acceptance harness includes the Robertson stiff problem (verified against
 
 ---
 
-### 5.5 Go — `earthsci-toolkit` (Optional)
+### 5.5 Go — `earthsci-ast-go` (Optional)
 
 **Tier: Core**
 
@@ -1999,7 +1999,7 @@ tests/
 
 ### 7.2 Test Fixture Authoring
 
-The conformance test suite must be authored as a standalone, language-independent artifact stored in the `EarthSciSerialization` repository alongside the schema and specs. Test fixtures are **not** generated from any single library implementation — they are the canonical source of truth.
+The conformance test suite must be authored as a standalone, language-independent artifact stored in the `EarthSciAST` repository alongside the schema and specs. Test fixtures are **not** generated from any single library implementation — they are the canonical source of truth.
 
 **Minimum fixture set for Phase 1 (required before cross-language conformance testing):**
 
@@ -2082,16 +2082,16 @@ migrate(file: EsmFile, target_version: string) → EsmFile
 
 19. Rust: WASM compilation for web use.
 20. Rust: CLI tool.
-21. `earthsci-toolkit`: Julia and Python code generation.
-22. `esm-editor`: `ExpressionNode` component with click-to-select, hover highlight, CSS math layout.
-23. `esm-editor`: Inline editing (double-click numbers/variables), autocomplete.
-24. `esm-editor`: Structural editing (wrap/unwrap/delete/drag-reorder).
-25. `esm-editor`: Expression palette sidebar.
-26. `esm-editor`: `ModelEditor`, `ReactionEditor` composed components.
-27. `esm-editor`: `CouplingGraph` visualization.
-28. `esm-editor`: `ValidationPanel` with error-to-node linking.
-29. `esm-editor`: Undo/redo history.
-30. `esm-editor`: Web component export via `solid-element`.
+21. `@earthsciml/ast`: Julia and Python code generation.
+22. `earthsci-ast-editor`: `ExpressionNode` component with click-to-select, hover highlight, CSS math layout.
+23. `earthsci-ast-editor`: Inline editing (double-click numbers/variables), autocomplete.
+24. `earthsci-ast-editor`: Structural editing (wrap/unwrap/delete/drag-reorder).
+25. `earthsci-ast-editor`: Expression palette sidebar.
+26. `earthsci-ast-editor`: `ModelEditor`, `ReactionEditor` composed components.
+27. `earthsci-ast-editor`: `CouplingGraph` visualization.
+28. `earthsci-ast-editor`: `ValidationPanel` with error-to-node linking.
+29. `earthsci-ast-editor`: Undo/redo history.
+30. `earthsci-ast-editor`: Web component export via `solid-element`.
 31. Julia: full EarthSciML integration (data loaders, operators, spatial simulation).
 
 ---
@@ -2108,14 +2108,14 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Unit string parsing grammar undefined | Section 3.3 | Unit strings are free-form. A formal grammar or recognized-token list (including `molec`, `ppb`, `ppm`) would improve cross-language consistency. |
 | Python simulation with spatial operators | Section 5.3.5 | Coupling resolution with `operator_compose` involving spatial derivatives (grad, laplacian) is not meaningful for 0D simulation. The spec should clarify that Python simulation skips spatial terms or raises an error. |
 | Code generation templates underspecified | Section 5.2.8 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
-| `esm-editor` CSS theming / dark mode | Section 5.2.4 | No specification for CSS custom properties or theme customization. |
+| `earthsci-ast-editor` CSS theming / dark mode | Section 5.2.4 | No specification for CSS custom properties or theme customization. |
 | Concurrency / thread safety | All libraries | Not addressed. Relevant for Julia (multi-threaded solvers) and Rust (Send/Sync bounds). |
 
 ---
 
 ## 11. Summary Table
 
-| Capability | Julia | TS `earthsci-toolkit` | Solid `esm-editor` | Python | Rust | Go |
+| Capability | Julia | TS `@earthsciml/ast` | Solid `earthsci-ast-editor` | Python | Rust | Go |
 |---|---|---|---|---|---|---|
 | Parse / serialize | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | Schema validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |

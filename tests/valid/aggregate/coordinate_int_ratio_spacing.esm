@@ -4,7 +4,7 @@
     "name": "coordinate_int_ratio_spacing",
     "description": "Cross-binding canonical-number conformance fixture for an INTEGER RATIO spelled INSIDE an aggregate `expr` body (CONFORMANCE_SPEC §5.5.3.1 rule 1). Two cell-centre coordinate maps compute x_i = (i - 1/2)/N over unit-interval grids of N = 8 and N = 16 cells: the grid spacing 1/N is spelled as the exact integer ratio {op:/,args:[1,N]} inside each aggregate `expr` (the sibling {op:-,args:[i,0.5]} carries a float 0.5, and the aggregate sits under a float-heavy cos(pi*...) init expression). This is the shape that exposed the divergence: the Julia binding's JSON3 reader applies a context-dependent structural number inference that materialises a bare integer token (1, 8, 16) as Float64 inside such a deeply-nested, schema-repeating document, so the same integer ratio serialized as 1.0/8.0 in Julia but 1/8 in Python/Rust/TS/Go, and could never be byte-identical. §5.5.3.1 rule 1 (a JSON number whose value is integral and Int64-representable is an integer literal, regardless of source spelling) is applied uniformly at the AST-literal boundary so every binding preserves the integer literals. The standalone spacing observeds dxA/dxB carry the SAME 1/N integer ratio OUTSIDE any aggregate and must render identically. Value check: each coordinate rate is a constant from rest, so coord*[i] at t=1 equals (i-1/2)/N exactly — coordA[1]=(1-0.5)/8=0.0625, coordA[2]=0.1875; coordB[1]=(1-0.5)/16=0.03125 — confirming the integer ratio 1/8 evaluates as true division to 0.125 (and 1/16 to 0.0625).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",

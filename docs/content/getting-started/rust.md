@@ -8,13 +8,13 @@ The Rust implementation provides high-performance parsing, validation, and CLI t
 Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-earthsci-toolkit = "0.1.0"
+earthsci-ast = "0.1.0"
 ```
 
 ### CLI Tool from Source
 ```bash
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci-toolkit-rs
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-rs
 cargo install --path . --features cli
 ```
 
@@ -24,7 +24,7 @@ cargo install --path . --features cli
 cargo install wasm-pack
 
 # Build WASM package
-cd packages/earthsci-toolkit-rs
+cd pkg/earthsci-ast-rs
 wasm-pack build --target web --features wasm
 ```
 
@@ -44,7 +44,7 @@ The Rust implementation provides **Core + CLI** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```rust
-use earthsci_toolkit::{load, save, validate, EsmFile};
+use earthsci_ast::{load, save, validate, EsmFile};
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Working with Expressions
 
 ```rust
-use earthsci_toolkit::{Expression, parse_expression, to_unicode, to_latex, substitute, free_variables};
+use earthsci_ast::{Expression, parse_expression, to_unicode, to_latex, substitute, free_variables};
 use std::collections::HashMap;
 
 fn expression_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -186,7 +186,7 @@ esm schema --version
 ### Error Handling
 
 ```rust
-use earthsci_toolkit::{EsmError, ValidationError, load, validate};
+use earthsci_ast::{EsmError, ValidationError, load, validate};
 
 fn robust_loading(filename: &str) -> Result<(), EsmError> {
     let content = std::fs::read_to_string(filename)
@@ -225,7 +225,7 @@ fn robust_loading(filename: &str) -> Result<(), EsmError> {
 ### Performance Optimization
 
 ```rust
-use earthsci_toolkit::{EsmFile, load_streaming, validate_streaming};
+use earthsci_ast::{EsmFile, load_streaming, validate_streaming};
 use std::fs::File;
 use std::io::BufReader;
 
@@ -248,7 +248,7 @@ fn handle_large_file(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 // Zero-copy parsing for read-only access
 fn zero_copy_analysis(content: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = earthsci_toolkit::parse_borrowed(content)?;
+    let esm_file = earthsci_ast::parse_borrowed(content)?;
 
     // Work with borrowed data (no allocations for string data)
     println!("Model name: {}", esm_file.metadata.name);
@@ -262,7 +262,7 @@ fn zero_copy_analysis(content: &str) -> Result<(), Box<dyn std::error::Error>> {
 ### Custom Validation Rules
 
 ```rust
-use earthsci_toolkit::{EsmFile, ValidationResult, ValidationError, Validator};
+use earthsci_ast::{EsmFile, ValidationResult, ValidationError, Validator};
 
 struct CustomValidator;
 
@@ -340,7 +340,7 @@ wasm-pack build --target bundler --features wasm
 ### Using in JavaScript/TypeScript
 
 ```javascript
-import init, { load, validate, to_unicode } from './pkg/earthsci_toolkit.js';
+import init, { load, validate, to_unicode } from './pkg/earthsci_ast.js';
 
 async function main() {
     // Initialize the WASM module
@@ -394,7 +394,7 @@ main();
     <div id="errors"></div>
 
     <script type="module">
-        import init, { load, validate, to_unicode } from './pkg/earthsci_toolkit.js';
+        import init, { load, validate, to_unicode } from './pkg/earthsci_ast.js';
 
         await init();
 
@@ -474,13 +474,13 @@ jobs:
       run: |
         mkdir dist
         cp target/${{ matrix.target }}/release/esm* dist/
-        tar -czf earthsci-toolkit-${{ matrix.name }}.tar.gz -C dist .
+        tar -czf earthsci-ast-${{ matrix.name }}.tar.gz -C dist .
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: earthsci-toolkit-${{ matrix.name }}
-        path: earthsci-toolkit-${{ matrix.name }}.tar.gz
+        name: earthsci-ast-${{ matrix.name }}
+        path: earthsci-ast-${{ matrix.name }}.tar.gz
 ```
 
 ### Docker Integration
@@ -504,8 +504,8 @@ ENTRYPOINT ["esm"]
 
 ```bash
 # Build and run
-docker build -t earthsci-toolkit .
-docker run --rm -v $(pwd):/data earthsci-toolkit validate /data/model.esm
+docker build -t earthsci-ast .
+docker run --rm -v $(pwd):/data earthsci-ast validate /data/model.esm
 ```
 
 ## Testing and Benchmarking
@@ -588,7 +588,7 @@ mod tests {
 
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use earthsci_toolkit::{load, validate};
+use earthsci_ast::{load, validate};
 
 fn bench_load_large_file(c: &mut Criterion) {
     let large_esm = generate_large_test_file(1000); // 1000 models
@@ -678,7 +678,7 @@ fn run_external_validator(filename: &str) -> Result<bool, Box<dyn std::error::Er
 ## Next Steps
 
 - **Reference** — Browse the [Rust API Reference](../api/rust/)
-- **Source** — Read the [earthsci-toolkit-rs crate source](https://github.com/EarthSciML/EarthSciSerialization/tree/main/packages/earthsci-toolkit-rs)
+- **Source** — Read the [earthsci-ast-rs crate source](https://github.com/EarthSciML/EarthSciAST/tree/main/pkg/earthsci-ast-rs)
 - **Examples** — Explore the [examples directory](../examples/)
 
 ## Common Patterns
@@ -686,7 +686,7 @@ fn run_external_validator(filename: &str) -> Result<bool, Box<dyn std::error::Er
 ### Builder Pattern for Model Construction
 
 ```rust
-use earthsci_toolkit::{EsmFile, Model, ModelVariable, ModelEquation, Metadata};
+use earthsci_ast::{EsmFile, Model, ModelVariable, ModelEquation, Metadata};
 
 pub struct EsmBuilder {
     file: EsmFile,
@@ -745,4 +745,4 @@ let esm_file = EsmBuilder::new("Atmospheric Chemistry")
     .build();
 ```
 
-Ready for high-performance ESM processing? Browse the [Rust API Reference](../api/rust/) and the [crate source](https://github.com/EarthSciML/EarthSciSerialization/tree/main/packages/earthsci-toolkit-rs).
+Ready for high-performance ESM processing? Browse the [Rust API Reference](../api/rust/) and the [crate source](https://github.com/EarthSciML/EarthSciAST/tree/main/pkg/earthsci-ast-rs).

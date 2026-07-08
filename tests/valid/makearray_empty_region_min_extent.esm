@@ -3,7 +3,7 @@
   "metadata": {
     "name": "makearray_empty_region_min_extent",
     "description": "A §9.6.8-style discretized-derivative makearray at the scheme's MINIMUM admissible extent (esm-spec §4.3.2 'Empty and inverted bounds'). The interior region [2, N-1] is metaparameterized (§9.7.6) and at the default N = 2 folds to the canonical EMPTY bound [2, 1]: the region covers no cells, its value (the centered-difference aggregate) is never consulted, and the two single-cell boundary-face regions [1,1] and [2,2] tile the whole lon axis with the one-sided differences. This MUST load cleanly — empty is a legal, load-clean spelling. Re-binding N = 1 at the loader API folds the interior region to [2, 0], which is INVERTED (stop < start - 1) and MUST be rejected at load with makearray_region_inverted (§9.6.6): the 3-point scheme cannot exist on a 1-cell grid, and the loud failure at the binding site is what surfaces the mis-sized instantiation (the Julia test template_imports_test.jl drives both bindings of this same file).",
-    "authors": ["EarthSciSerialization"],
+    "authors": ["EarthSciAST"],
     "created": "2026-07-02T00:00:00Z",
     "tags": ["makearray", "regions", "empty-bound", "metaparameters", "discretization", "minimum-extent"]
   },

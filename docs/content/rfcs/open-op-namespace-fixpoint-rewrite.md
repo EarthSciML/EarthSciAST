@@ -234,7 +234,7 @@ Under `tests/conformance/expression_templates/` (mechanism only — real schemes
 ## 9. Migration & binding work (post-approval)
 
 - **Schema:** apply Change A/B to `esm-schema.json` and the 4 byte-identical copies
-  (`packages/{EarthSciSerialization.jl/data,earthsci-toolkit-rs/src,esm-format-go/pkg/esm,earthsci_toolkit/src/earthsci_toolkit/data}/esm-schema.json`).
+  (`pkg/{EarthSciAST.jl/data,earthsci-ast-rs/src,earthsci-ast-go/pkg/esm,earthsci_ast/src/earthsci_ast/data}/esm-schema.json`).
 - **Bindings (all five):** rewrite engine → outermost-first + `priority` + bounded fixpoint;
   add the evaluable-core registry + `unlowered_operator` gate; generalize `D`'s `wrt`.
 - **Fixture audit — low risk:** files that **bring their own** `match` rules for

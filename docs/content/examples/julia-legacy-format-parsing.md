@@ -1,6 +1,6 @@
 # Legacy Format Parsing (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/solver_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/solver_test.jl`
 
 ```julia
 # Test legacy format with algorithm field

@@ -13,7 +13,7 @@ description: "Strip the data loader down to a single responsibility — read/upd
 
 > **Status:** Draft proposal. **Bead:** unassigned.
 > **Target repos (cross-rig):**
-> - **EarthSciSerialization (ESS)** — the `.esm` schema/spec: `DataLoader`,
+> - **EarthSciAST (ESS)** — the `.esm` schema/spec: `DataLoader`,
 >   the GDD `Grid` family, subsystem inclusion (§4.7), top-level document
 >   validation, loader-seeded cadence, and a small expression-operator-set
 >   addition (hyperbolic trig).

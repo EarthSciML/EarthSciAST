@@ -4,14 +4,14 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'scripts/package-security-scanner.py'
       - 'scripts/package-signature-verifier.py'
       - '.security-config.json'
   pull_request:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
   schedule:
     # Run daily security scans at 2 AM UTC
     - cron: '0 2 * * *'
@@ -350,34 +350,34 @@ jobs:
         mkdir -p sbom-reports
 
         # Python SBOM
-        if [ -d "packages/earthsci_toolkit" ]; then
-          cd packages/earthsci_toolkit
+        if [ -d "pkg/earthsci-ast-py" ]; then
+          cd pkg/earthsci-ast-py
           pip install -e .
-          cyclonedx-py environment -o ../../sbom-reports/earthsci_toolkit-sbom.json
+          cyclonedx-py environment -o ../../sbom-reports/earthsci-ast-py-sbom.json
           cd ../..
         fi
 
         # Node.js SBOM
-        if [ -d "packages/earthsci-toolkit" ]; then
-          cd packages/earthsci-toolkit
-          cyclonedx-npm -o ../../sbom-reports/earthsci-toolkit-sbom.json
+        if [ -d "pkg/earthsci-ast-ts" ]; then
+          cd pkg/earthsci-ast-ts
+          cyclonedx-npm -o ../../sbom-reports/earthsci-ast-ts-sbom.json
           cd ../..
         fi
 
-        if [ -d "packages/esm-editor" ]; then
-          cd packages/esm-editor
-          cyclonedx-npm -o ../../sbom-reports/esm-editor-sbom.json
+        if [ -d "pkg/earthsci-ast-editor" ]; then
+          cd pkg/earthsci-ast-editor
+          cyclonedx-npm -o ../../sbom-reports/earthsci-ast-editor-sbom.json
           cd ../..
         fi
 
     - name: Run advanced static analysis
       run: |
         echo "Running Semgrep static analysis..."
-        semgrep --config=auto --json --output=semgrep-results.json packages/ || true
+        semgrep --config=auto --json --output=semgrep-results.json pkg/ || true
 
         echo "Running Bandit for Python packages..."
-        if [ -d "packages/earthsci_toolkit" ]; then
-          bandit -r packages/earthsci_toolkit -f json -o bandit-results.json || true
+        if [ -d "pkg/earthsci-ast-py" ]; then
+          bandit -r pkg/earthsci-ast-py -f json -o bandit-results.json || true
         fi
 
     - name: Upload analysis results

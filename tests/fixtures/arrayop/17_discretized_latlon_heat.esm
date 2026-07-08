@@ -4,7 +4,7 @@
     "name": "arrayop_17_discretized_latlon_heat",
     "description": "Discretized heat equation on a lat-lon grid: Nlon=4 (periodic), Nlat=2 (non-periodic). dlon=pi/2, coefficient=1/dlon^2=4/pi^2~=0.4052847345693511. IC: u[i,j,0]=sin(2*lon_i) giving [1,-1,1,-1] for each lat row. Eigenvalue lambda=-2*coeff*2=-16/pi^2~=-1.6211389382774044. At T=0.25: decay=exp(lambda*0.25)~=0.6667869265380654. The lon (i) dimension is periodic: neighbor indices wrap via ifelse. The lat (j) dimension is non-periodic with out-of-bounds returning 0 (ghost cells). Tests the periodic-wrapping indexed-state path (ess-m1e, lat_lon family).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "arrayop",

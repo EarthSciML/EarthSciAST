@@ -254,7 +254,7 @@ HTML_TEMPLATE = """
 
         <div class="footer">
             <p>This report was generated automatically by the ESM Format cross-language conformance testing infrastructure.</p>
-            <p>For more information, see the <a href="https://github.com/ctessum/EarthSciSerialization">EarthSciSerialization project</a>.</p>
+            <p>For more information, see the <a href="https://github.com/EarthSciML/EarthSciAST">EarthSciAST project</a>.</p>
         </div>
     </div>
 

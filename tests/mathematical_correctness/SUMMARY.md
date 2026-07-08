@@ -93,7 +93,7 @@ Specifications for identical results across Julia, TypeScript, Python, Rust, and
 
 ### Python Implementation ✅
 - All 31 existing mathematical verification tests **PASS**
-- Integration with `earthsci_toolkit.verification` module **COMPLETE**
+- Integration with `earthsci_ast.verification` module **COMPLETE**
 - Test fixtures properly structured for automated loading
 
 ### Validation System ✅

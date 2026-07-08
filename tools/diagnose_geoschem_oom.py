@@ -14,11 +14,11 @@ diagnostic must NOT trigger it). The compiled RHS is stashed onto
 instead of taking the cse=True path inside ``_compile_flat_rhs``.
 
 Pipeline phases instrumented (all via the canonical pathway —
-parse → flatten → lambdify → simulate from earthsci_toolkit):
+parse → flatten → lambdify → simulate from earthsci_ast):
 
-  1. imports_loaded             import earthsci_toolkit + sympy + scipy stack
-  2. esm_loaded                 earthsci_toolkit.load(geoschem_fullchem.esm)
-  3. flatten_done               earthsci_toolkit.flatten(esm_file)
+  1. imports_loaded             import earthsci_ast + sympy + scipy stack
+  2. esm_loaded                 earthsci_ast.load(geoschem_fullchem.esm)
+  3. flatten_done               earthsci_ast.flatten(esm_file)
   4. lambdify_no_cse            _flat_to_sympy_rhs + sp.lambdify(cse=False),
                                 stashed onto flat._simulate_compile_cache
   5. simulate_clean_troposphere simulate(flat, …) for inline test #1
@@ -49,7 +49,7 @@ from pathlib import Path
 import psutil
 
 # Capture process-baseline RSS + clock BEFORE importing anything heavy so the
-# first phase delta reflects the real cost of `import earthsci_toolkit` etc.
+# first phase delta reflects the real cost of `import earthsci_ast` etc.
 _PROC = psutil.Process(os.getpid())
 _BASELINE_RSS = _PROC.memory_info().rss
 _BASELINE_T = time.perf_counter()
@@ -60,7 +60,7 @@ MAX_PHASE_SECONDS = 5 * 60
 # Prefer the in-repo package over a `pip install -e` from a sibling worktree
 # so the diagnostic always exercises the version it ships alongside.
 _THIS = Path(__file__).resolve()
-_PKG_SRC = _THIS.parent.parent / "packages" / "earthsci_toolkit" / "src"
+_PKG_SRC = _THIS.parent.parent / "pkg" / "earthsci-ast-py" / "src"
 if _PKG_SRC.is_dir():
     sys.path.insert(0, str(_PKG_SRC))
 
@@ -139,9 +139,9 @@ def _find_esm() -> Path:
 
 # ----- 1. imports_loaded -------------------------------------------------
 _arm()
-import earthsci_toolkit as ek  # noqa: E402
-from earthsci_toolkit.simulation import simulate  # noqa: E402
-from earthsci_toolkit.sympy_bridge import (  # noqa: E402
+import earthsci_ast as ek  # noqa: E402
+from earthsci_ast.simulation import simulate  # noqa: E402
+from earthsci_ast.sympy_bridge import (  # noqa: E402
     _LAMBDIFY_MODULES,
     _compile_flat_rhs,
 )

@@ -1,6 +1,6 @@
 # Mass Action Rate Tests (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reactions_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reactions_test.jl`
 
 ```julia
 species_A = Species("A")

@@ -12,8 +12,8 @@ import sys
 import os
 from typing import Dict, List
 
-# Add the earthsci_toolkit package to path for direct import
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../packages/earthsci_toolkit/src'))
+# Add the earthsci_ast package to path for direct import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../pkg/earthsci-ast-py/src'))
 
 # Define the types we need directly (to avoid import issues)
 from dataclasses import dataclass
@@ -42,7 +42,7 @@ class ModelVariable:
     description: str = None
 
 # Import our new initial conditions setup system
-from earthsci_toolkit.initial_conditions_setup import (
+from earthsci_ast.initial_conditions_setup import (
     InitialConditionProcessor,
     InitialConditionConfig,
     FieldConstraint,

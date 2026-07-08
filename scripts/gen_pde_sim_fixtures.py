@@ -401,7 +401,7 @@ def _finish(fid, model_name, model, L, b, order, n, spacing, bc, t_end, ic_kind)
         "metadata": {
             "name": fid,
             "description": _describe(fid, n, spacing, bc, ic_kind),
-            "authors": ["EarthSciSerialization/polecats/gastown.nux"],
+            "authors": ["EarthSciAST/polecats/gastown.nux"],
             "tags": ["arrayop", "conformance", "pde", "simulation", bc, ic_kind],
         },
         "models": {model_name: model},

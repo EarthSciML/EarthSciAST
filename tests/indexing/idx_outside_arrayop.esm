@@ -3,7 +3,7 @@
   "metadata": {
     "name": "idx_outside_arrayop",
     "description": "Exercises the standalone `index` op in scalar expression contexts outside of `arrayop.expr`, per RFC discretization.md §5.1 (C1). The fixture uses `index` on a declared array-shaped state variable with (a) an integer-literal index and (b) a composite-arithmetic index expression, both on the RHS of a scalar ODE. No symbolic index variables appear — bare-string args are ordinary parameter references. All five bindings MUST parse, round-trip, and evaluate this fixture; bindings which also supply a numeric evaluator MUST produce the analytically-known scalar trajectory below.",
-    "authors": ["EarthSciSerialization/polecats/chrome"],
+    "authors": ["EarthSciAST/polecats/chrome"],
     "tags": ["indexing", "conformance", "index", "rfc-discretization-5.1"]
   },
   "models": {

@@ -4,7 +4,7 @@
     "name": "unregistered_semiring",
     "description": "INVALID (bead ess-my4.1.1): an `aggregate` node whose `semiring` value (\"tropical_max\") is not a member of the closed registry enum [sum_product, max_product, min_sum, max_sum, bool_and_or] (RFC semiring-faq-unified-ir §5.1). Adding a semiring is a spec change, not a per-file extension, so the schema MUST reject an unregistered name. This is a pure schema (enum) violation — caught by every binding.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

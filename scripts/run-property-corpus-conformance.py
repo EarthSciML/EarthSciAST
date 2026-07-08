@@ -75,7 +75,7 @@ def detect_bindings() -> List[Binding]:
 
     # Rust via cargo example (prebuild so per-fixture invocation is fast).
     cargo = shutil.which("cargo")
-    rust_dir = PROJECT_ROOT / "packages" / "earthsci-toolkit-rs"
+    rust_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-rs"
     bindings.append(
         Binding(
             name="rust",
@@ -95,7 +95,7 @@ def detect_bindings() -> List[Binding]:
 
     # Go via `go run`.
     go = shutil.which("go")
-    go_dir = PROJECT_ROOT / "packages" / "esm-format-go"
+    go_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-go"
     bindings.append(
         Binding(
             name="go",

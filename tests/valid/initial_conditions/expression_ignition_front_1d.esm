@@ -4,7 +4,7 @@
     "name": "expression_ignition_front_1d",
     "description": "Cross-binding conformance golden for an expression initial condition, written as an `ic` equation (v0.8.0 §11.4: there is no domain-level `initial_conditions` field and no domain grid). u's initial field is the ignition-front profile psi(x) = 0.5 * (1 + tanh((x - 0.3) / 0.15)), a coordinate expression over the spatial coordinate `x` (referenced by name; in v0.8.0 the coordinate is ordinary data associated with the spatial index, not a domain grid), written `ic(u) ~ psi(x)`. Evaluated at the 1-D nodes x = [0, 0.25, 0.5, 0.75, 1.0]. The state u[i] is method-of-lines discretized with trivial dynamics D(u[i])/dt = 0, so u holds at its IC and the assertions isolate the expression-IC evaluation: u[i](t) == psi(x_i). The front is asymmetric, so an axis-reversed seeding would fail. Python evaluates this end-to-end; Julia and Rust load + validate it as the shared contract for their (deferred) expression-IC evaluation.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "initial-conditions",

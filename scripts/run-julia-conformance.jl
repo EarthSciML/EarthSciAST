@@ -3,7 +3,7 @@
 """
 Julia conformance test runner for ESM Format cross-language testing.
 
-This script runs the Julia EarthSciSerialization.jl implementation against test fixtures
+This script runs the Julia EarthSciAST.jl implementation against test fixtures
 and generates standardized outputs for comparison with other language implementations.
 """
 
@@ -13,10 +13,10 @@ using Pkg
 # path WITHOUT cd-ing into it, so caller-supplied relative paths (notably
 # the output dir in ARGS) keep resolving against the caller's cwd.
 project_dir = dirname(dirname(@__FILE__))
-julia_package = joinpath(project_dir, "packages", "EarthSciSerialization.jl")
+julia_package = joinpath(project_dir, "pkg", "EarthSciAST.jl")
 Pkg.activate(julia_package)
 
-using EarthSciSerialization
+using EarthSciAST
 using JSON3
 using Printf
 using Dates
@@ -56,8 +56,8 @@ function run_validation_dir(dir::String; expect_error::Bool=false)
     for filename in filter(f -> endswith(f, ".esm"), readdir(dir))
         filepath = joinpath(dir, filename)
         try
-            esm_data = EarthSciSerialization.load(filepath)
-            result = EarthSciSerialization.validate(esm_data)
+            esm_data = EarthSciAST.load(filepath)
+            result = EarthSciAST.validate(esm_data)
 
             results[filename] = Dict(
                 "is_valid" => result.is_valid,
@@ -122,14 +122,14 @@ function run_display_tests(tests_dir::String)
                         if haskey(formula_test, "input")
                             input_formula = String(formula_test["input"])
                             try
-                                unicode_result = EarthSciSerialization.render_chemical_formula(input_formula)
+                                unicode_result = EarthSciAST.render_chemical_formula(input_formula)
                                 # Actual renderer output for latex/ascii too
                                 # (previously the fixture's own expected_latex
                                 # and the raw input were echoed back, so the
                                 # comparator could never see Julia diverge).
-                                latex_result = EarthSciSerialization.format_chemical_subscripts(
+                                latex_result = EarthSciAST.format_chemical_subscripts(
                                     input_formula, :latex)
-                                ascii_result = EarthSciSerialization.format_chemical_subscripts(
+                                ascii_result = EarthSciAST.format_chemical_subscripts(
                                     input_formula, :ascii)
 
                                 push!(formula_results, Dict(
@@ -158,13 +158,13 @@ function run_display_tests(tests_dir::String)
                         if haskey(expr_test, "input")
                             input_expr = expr_test["input"]
                             try
-                                expr = EarthSciSerialization.parse_expression(input_expr)
+                                expr = EarthSciAST.parse_expression(input_expr)
                                 # Real renderer output (the previously called
                                 # `pretty_print` does not exist in this package,
                                 # so every expression test recorded an error).
-                                unicode_result = EarthSciSerialization.format_expression(expr, :unicode)
-                                latex_result = EarthSciSerialization.format_expression(expr, :latex)
-                                ascii_result = EarthSciSerialization.format_expression_ascii(expr)
+                                unicode_result = EarthSciAST.format_expression(expr, :unicode)
+                                latex_result = EarthSciAST.format_expression(expr, :latex)
+                                ascii_result = EarthSciAST.format_expression_ascii(expr)
 
                                 push!(expression_results, Dict(
                                     "input" => input_expr,
@@ -215,17 +215,17 @@ function run_substitution_tests(tests_dir::String)
                     for test_case in test_data["tests"]
                         if haskey(test_case, "expression") && haskey(test_case, "substitutions")
                             try
-                                expr = EarthSciSerialization.parse_expression(test_case["expression"])
+                                expr = EarthSciAST.parse_expression(test_case["expression"])
                                 substitutions = Dict(
-                                    k => EarthSciSerialization.parse_expression(v)
+                                    k => EarthSciAST.parse_expression(v)
                                     for (k, v) in test_case["substitutions"]
                                 )
 
-                                result_expr = EarthSciSerialization.substitute(expr, substitutions)
+                                result_expr = EarthSciAST.substitute(expr, substitutions)
                                 # ASCII rendering: deterministic and the most
                                 # portable cross-language comparison format
                                 # (`pretty_print` does not exist in this package).
-                                result_str = EarthSciSerialization.to_ascii(result_expr)
+                                result_str = EarthSciAST.to_ascii(result_expr)
 
                                 push!(test_results, Dict(
                                     "input" => test_case["expression"],
@@ -279,10 +279,10 @@ function _load_esm_source(tests_dir::String, fixture_path::String, source)
     if source isa AbstractString
         path = _resolve_graph_input_file(tests_dir, fixture_path, source)
         path === nothing && throw(ErrorException("ESM file not found: $source"))
-        return EarthSciSerialization.load(path)
+        return EarthSciAST.load(path)
     else
         json_str = JSON3.write(source)
-        return EarthSciSerialization.load(IOBuffer(json_str))
+        return EarthSciAST.load(IOBuffer(json_str))
     end
 end
 
@@ -294,7 +294,7 @@ function _exercise_graph_fixture(esm_data)
     record = Dict{String, Any}("loaded" => true)
 
     try
-        result = EarthSciSerialization.validate(esm_data)
+        result = EarthSciAST.validate(esm_data)
         record["validation"] = Dict(
             "is_valid" => result.is_valid,
             "schema_error_count" => length(result.schema_errors),
@@ -305,7 +305,7 @@ function _exercise_graph_fixture(esm_data)
     end
 
     try
-        cg = EarthSciSerialization.component_graph(esm_data)
+        cg = EarthSciAST.component_graph(esm_data)
         record["component_graph"] = Dict(
             "nodes" => length(cg.nodes),
             "edges" => length(cg.edges),
@@ -315,7 +315,7 @@ function _exercise_graph_fixture(esm_data)
     end
 
     try
-        eg = EarthSciSerialization.expression_graph(esm_data)
+        eg = EarthSciAST.expression_graph(esm_data)
         record["expression_graph"] = Dict(
             "nodes" => length(eg.nodes),
             "edges" => length(eg.edges),
@@ -418,9 +418,9 @@ function run_mathematical_correctness_tests(tests_dir::String)
     for filename in filter(f -> endswith(f, ".esm"), readdir(math_dir))
         filepath = joinpath(math_dir, filename)
         try
-            esm_data = EarthSciSerialization.load(filepath)
+            esm_data = EarthSciAST.load(filepath)
             try
-                result = EarthSciSerialization.validate(esm_data)
+                result = EarthSciAST.validate(esm_data)
                 results[filename] = Dict(
                     "loaded" => true,
                     "is_valid" => result.is_valid,

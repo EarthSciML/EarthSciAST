@@ -4,7 +4,7 @@
     "name": "continuous_relational_node",
     "description": "INVALID — CADENCE-PARTITION-LEVEL (bead ess-my4.3.11; RFC semiring-faq-unified-ir §6.1, CONFORMANCE_SPEC.md §5.7.6 guard 2). A relational / value-invention `aggregate` node (`distinct: true` under `bool_and_or`) whose Skolem `key` reads the `state` variable `u`. The cadence-partition pass classifies the node CONTINUOUS (class = max over inputs; a state input is CONTINUOUS), and guard 2 — \"no relational engine on the hot path\" — REJECTS it: state-dependent topology may not run per step in v1. This is SCHEMA-VALID (the schema does not encode cadence, exactly as a state-dependent distinct is well-formed against esm-schema.json), so the schema-only bindings (TypeScript, Go) ACCEPT it and tests/invalid/expected_errors.json marks it `resolver_only: true`. It is rejected only by the partition guard in the evaluating bindings: Julia Cadence.run_guards → CadenceError; Rust cadence::partition_model → Err(CadenceError); Python cadence.partition → CadenceError (message contains \"CONTINUOUS\"). Contrast tests/valid/cadence/pure_topology.esm, where the SAME primitives over CONST mesh literals fold into the artifact and are allowed.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "aggregate",

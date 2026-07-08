@@ -2,7 +2,7 @@
 # Regenerate the esm-spec §9.7 conformance goldens (template-library imports +
 # load-time metaparameters) from the Julia reference implementation.
 #
-#   julia --project=packages/EarthSciSerialization.jl scripts/generate-template-import-goldens.jl
+#   julia --project=pkg/EarthSciAST.jl scripts/generate-template-import-goldens.jl
 #
 # Writes (deterministic: sorted keys, 2-space indent):
 #   tests/conformance/expression_templates/import_smoke/expanded.esm
@@ -22,8 +22,8 @@
 # through the full typed load (subsystem-ref `bindings` resolve in the typed
 # phase) and are re-emitted with `serialize_esm_file`.
 
-using EarthSciSerialization
-using EarthSciSerialization: resolve_template_machinery, lower_expression_templates,
+using EarthSciAST
+using EarthSciAST: resolve_template_machinery, lower_expression_templates,
     serialize_esm_file, JSONLikeDict
 using JSON3
 
@@ -100,14 +100,14 @@ end
 # Subsystem-ref bindings (esm-spec §9.7.6 site 3): full typed load, then emit.
 for (wrapper, golden) in [("wrapper_n4.esm", "expanded_n4.esm"),
                           ("wrapper_n8.esm", "expanded_n8.esm")]
-    file = EarthSciSerialization.load(joinpath(CONF, "metaparameter_resolutions", wrapper))
+    file = EarthSciAST.load(joinpath(CONF, "metaparameter_resolutions", wrapper))
     _write_golden(joinpath(CONF, "metaparameter_resolutions", golden),
                   serialize_esm_file(file))
 end
 
 # tests/invalid/template_imports/body_chain_too_deep.esm — a 33-template
 # body-reference chain (one over MAX_TEMPLATE_EXPANSION_DEPTH = 32).
-let n = EarthSciSerialization.MAX_TEMPLATE_EXPANSION_DEPTH + 1
+let n = EarthSciAST.MAX_TEMPLATE_EXPANSION_DEPTH + 1
     tpl = Dict{String,Any}()
     for i in 1:n
         name = "c_" * lpad(i, 2, '0')

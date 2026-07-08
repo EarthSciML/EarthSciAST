@@ -4,7 +4,7 @@
     "name": "arrayop_23_pure_matvec_contraction",
     "description": "Cross-port conformance fixture for arrayop contraction (ess-zmm). Two pure-index ODEs: (1) reduce=+ matvec: D(y[i])/dt = sum_{j=1}^{3} i*j, giving y[1]=6, y[2]=12 at t=1; (2) reduce=max column-max: D(w[i])/dt = max_{j=1}^{3}(i+j), giving w[1]=4, w[2]=5 at t=1. No state variable appears in the contraction body — reduction is purely over index expressions. Executing ports: Python, Rust, Julia (both MTK and tree-walk paths). Non-executing ports skip: TypeScript, Go (no arrayop numeric executor). Ref: ess-zmm.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",

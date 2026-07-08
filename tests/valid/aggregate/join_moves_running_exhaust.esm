@@ -4,7 +4,7 @@
     "name": "join_moves_running_exhaust",
     "description": "M2 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.3 / §7.2; bead ess-my4.2.5). The MOVES running-exhaust contraction as the DEGENERATE POSITIONAL join (§7.2): each `on` key column is one of the aggregate's own loop indices, so the value-equality gate admits every declared (sourceType x fuelType) combination — it is byte-identical to combining the factors by shared index name. running_exhaust[p] = SUM over src in sourceType, fuel in fuelType of (src*fuel)*p, with the two-key join on [[src,sourceType],[fuel,fuelType]] resolving to the self-equality no-op (src<->src, fuel<->fuel). The categorical sourceType/fuelType sets each resolve to [1,|members|] (2 members each), so the contraction has |sourceType|*|fuelType| = 4 product terms per output bin p: running_exhaust[1]=1*(1*1+1*2+2*1+2*2)=9, running_exhaust[2]=2*9=18 at t=1 from zero ICs. This is the join form ALL THREE evaluating bindings agree on: Julia/Python resolve the named key to the unique symbol drawing {from} the set (self-equality), Rust treats a loop-index key column as the positional no-op (the data-derived value-equality engine is M3). Constant-RHS shape so Julia / Rust / Python agree to integration tolerance; Go/TS validate the additive join schema.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

@@ -1,7 +1,7 @@
-# Upstream gap — `earthsci-toolkit-rs` ODE solver hangs (no fail-fast guard) on stiff / non-smooth / large RHS
+# Upstream gap — `earthsci-ast-rs` ODE solver hangs (no fail-fast guard) on stiff / non-smooth / large RHS
 
 **Status:** Bug report / upstream gap (filed from the EarthSciDiscretizations conformance work)
-**Component:** `packages/earthsci-toolkit-rs` — `src/simulate.rs` / `simulate_array.rs` (the diffsol integration loop)
+**Component:** `pkg/earthsci-ast-rs` — `src/simulate.rs` / `simulate_array.rs` (the diffsol integration loop)
 **Severity:** blocks Rust from the numeric conformance categories on a large class of cases
 
 ## Symptom
@@ -81,7 +81,7 @@ is the acceptance test for this fix.
 
 ## References
 
-- `packages/earthsci-toolkit-rs/src/simulate.rs` — `SolverChoice { Bdf, Sdirk, Erk }` and the
+- `pkg/earthsci-ast-rs/src/simulate.rs` — `SolverChoice { Bdf, Sdirk, Erk }` and the
   `problem.bdf()/tr_bdf2()/tsit45()` step loops (`simulate.rs` ~L684, `simulate_array.rs` ~L1935).
 - Downstream evidence: the 33 `blocked_upstream_bindings.rust` manifest entries in
   `../earthscidiscretizations/tests/conformance/`.

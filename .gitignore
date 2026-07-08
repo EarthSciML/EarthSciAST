@@ -63,8 +63,8 @@ Cargo.lock
 *.dylib
 *.test
 *.out
-# Repo-root Go binaries (not packages/esm-format-go/)
-/esm-format-go
+# Repo-root Go binaries (not pkg/earthsci-ast-go/)
+/earthsci-ast-go
 /esm-go
 
 # Claude Code local files
@@ -98,17 +98,17 @@ conformance-results/
 
 # Generated simulation/verification plots (produced by running scripts, not fixtures)
 /atmospheric_chemistry_verification.png
-/packages/earthsci_toolkit/atmospheric_chemistry_simulation.png
-/packages/earthsci_toolkit/test_simulation_plot.png
+/pkg/earthsci-ast-py/atmospheric_chemistry_simulation.png
+/pkg/earthsci-ast-py/test_simulation_plot.png
 
 # Scratch outputs from running the Rust CLI in the package root
-/packages/earthsci-toolkit-rs/atmospheric_model/
-/packages/earthsci-toolkit-rs/coupling_model/
-/packages/earthsci-toolkit-rs/ecosystem_model/
-/packages/earthsci-toolkit-rs/my_test_project/
-/packages/earthsci-toolkit-rs/model.esm
-/packages/earthsci-toolkit-rs/test_complete.esm
-/packages/earthsci-toolkit-rs/test_model.esm
+/pkg/earthsci-ast-rs/atmospheric_model/
+/pkg/earthsci-ast-rs/coupling_model/
+/pkg/earthsci-ast-rs/ecosystem_model/
+/pkg/earthsci-ast-rs/my_test_project/
+/pkg/earthsci-ast-rs/model.esm
+/pkg/earthsci-ast-rs/test_complete.esm
+/pkg/earthsci-ast-rs/test_model.esm
 
 # Generated documentation data
 **/api-data.json

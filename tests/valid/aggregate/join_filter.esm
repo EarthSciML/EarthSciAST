@@ -4,7 +4,7 @@
     "name": "join_filter",
     "description": "M2 schema fixture (RFC semiring-faq-unified-ir §5.3 / §7.2; bead ess-my4.2.1): an `aggregate` node carrying the two additive M2 fields — a value-equality `join` (inner equi-join of factors on key-column pairs) and a boolean `filter` predicate. Exercises the schema deltas: `join` is an array of `{ \"on\": [[left, right], …] }` clauses (each pair exactly length-2, at least one pair), and `filter` is a `$ref` Expression restricting which index combinations contribute a ⊗-product term. Models the ESI-style MOVES contraction `aggregate(derive(join…))` (§7.2): sum over the categorical `src`/`fuel` index sets of `activity·base_rate`, combining factors by value equality of (src↔sourceType, fuel↔fuelType) and keeping only rows whose `base_rate` is positive. This is the strict-superset additive form of an ordinary arrayop and validates against the schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.capable"
+      "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
       "aggregate",

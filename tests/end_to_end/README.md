@@ -138,7 +138,7 @@ These end-to-end fixtures should be integrated into the language-specific test s
 
 ### Julia Example
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Load and parse the ESM file
 esm = load_esm("coupled_atmospheric_system.esm")
@@ -156,20 +156,20 @@ validate_simulation_results(sol, "coupled_atmospheric_system_results.json")
 
 ### Python Example
 ```python
-import earthsci_toolkit
+import earthsci_ast
 
 # Load and parse the ESM file
-esm = earthsci_toolkit.load_esm("ocean_atmosphere_biogeochemistry.esm")
+esm = earthsci_ast.load_esm("ocean_atmosphere_biogeochemistry.esm")
 
 # Convert to callable function
-rhs_func, jacobian = earthsci_toolkit.to_scipy_function(esm)
+rhs_func, jacobian = earthsci_ast.to_scipy_function(esm)
 
 # Solve with BDF method
 from scipy.integrate import solve_ivp
 sol = solve_ivp(rhs_func, t_span, y0, method='BDF', jac=jacobian)
 
 # Validate results
-earthsci_toolkit.validate_results(sol, "ocean_atmosphere_biogeochemistry_results.json")
+earthsci_ast.validate_results(sol, "ocean_atmosphere_biogeochemistry_results.json")
 ```
 
 ## Contributing

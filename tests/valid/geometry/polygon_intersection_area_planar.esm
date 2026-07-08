@@ -3,7 +3,7 @@
   "metadata": {
     "name": "polygon_intersection_area_planar",
     "description": "Conformance fixture for the `polygon_intersection_area` fused geometry leaf (esm-spec.md §8.6.1): the SCALAR overlap area of two polygons under a declared `manifold`, defined to equal `polygon_area(intersect_polygon(a, b))` but with NO exposed clip ring. Two unit-aligned squares — src (0,0)-(2,0)-(2,2)-(0,2) and tgt (1,1)-(3,1)-(3,3)-(1,3), supplied inline as `const` vertex rings — overlap in the [1,2]x[1,2] box, so the planar overlap area is exactly 1.0. Unlike intersect_polygon_planar_area.esm (which surfaces the clip ring as a derived index set and areas it with a sum_product FAQ), the fused leaf returns the scalar directly, so the whole computation is a dense, evaluable expression with no ragged intermediate — this is the form that makes the conservative-regrid narrow phase densely evaluable over a candidate set (§8.6.1). The `planar` manifold is dependency-free (Sutherland-Hodgman clip + shoelace area); the `spherical`/`geodesic` manifolds delegate to the pinned S2 kernel. Cross-binding area agreement is tolerance-based (CONFORMANCE_SPEC.md §5.8.4), inherited from the intersect_polygon + polygon_area contract.",
-    "authors": ["EarthSciSerialization"],
+    "authors": ["EarthSciAST"],
     "created": "2026-07-01T00:00:00Z",
     "tags": [
       "geometry",

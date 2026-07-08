@@ -59,10 +59,10 @@ The canonical schema is `esm-schema.json` at the repo root. **Edit only the root
 2. Bump the version embedded in `$id` according to the table above.
 3. Update the schema's top-level `description` field if the change is significant — historical entries for v0.3.0 and v0.4.0 demonstrate the expected wording (one or two sentences per minor version, linking to the RFC if any).
 4. Run `scripts/sync-schema.sh` to copy the new root schema into all four binding-mirror locations:
-   - `packages/esm-format-go/pkg/esm/esm-schema.json`
-   - `packages/earthsci-toolkit-rs/src/esm-schema.json`
-   - `packages/EarthSciSerialization.jl/data/esm-schema.json`
-   - `packages/earthsci_toolkit/src/earthsci_toolkit/data/esm-schema.json`
+   - `pkg/earthsci-ast-go/pkg/esm/esm-schema.json`
+   - `pkg/earthsci-ast-rs/src/esm-schema.json`
+   - `pkg/EarthSciAST.jl/data/esm-schema.json`
+   - `pkg/earthsci-ast-py/src/earthsci_ast/data/esm-schema.json`
 5. Run `scripts/sync-schema.sh --check` to confirm everything is aligned. This is exactly what the `schema-sync-check.yml` workflow does on CI.
 
 The five copies exist because each language's package registry only ships files inside the package directory; the schema must be embedded as package data in each binding. See the comment block at the top of `scripts/sync-schema.sh` for the canonical list and rationale.
@@ -75,11 +75,11 @@ Touch points per binding:
 
 | Binding | Package path | Files that typically need updating |
 |---|---|---|
-| Python | `packages/earthsci_toolkit/` | `src/earthsci_toolkit/parse.py`, `src/earthsci_toolkit/esm_types.py`, `tests/test_*` |
-| Julia | `packages/EarthSciSerialization.jl/` | `src/parse.jl` (or equivalent), `src/types.jl`, `test/` |
-| Rust | `packages/earthsci-toolkit-rs/` | `src/lib.rs`, `src/types.rs`, `tests/` |
-| Go | `packages/esm-format-go/` | `pkg/esm/types.go`, `pkg/esm/parse.go`, `*_test.go` |
-| TypeScript | `packages/earthsci-toolkit/` | `src/*.ts` if the change affects parsing (the TS package is publish-only for the schema in some releases — check the package's actual responsibilities) |
+| Python | `pkg/earthsci-ast-py/` | `src/earthsci_ast/parse.py`, `src/earthsci_ast/esm_types.py`, `tests/test_*` |
+| Julia | `pkg/EarthSciAST.jl/` | `src/parse.jl` (or equivalent), `src/types.jl`, `test/` |
+| Rust | `pkg/earthsci-ast-rs/` | `src/lib.rs`, `src/types.rs`, `tests/` |
+| Go | `pkg/earthsci-ast-go/` | `pkg/esm/types.go`, `pkg/esm/parse.go`, `*_test.go` |
+| TypeScript | `pkg/earthsci-ast-ts/` | `src/*.ts` if the change affects parsing (the TS package is publish-only for the schema in some releases — check the package's actual responsibilities) |
 
 For each binding:
 
@@ -87,10 +87,10 @@ For each binding:
 2. Update the runtime types/dataclasses to expose the new structure to consumers (or to normalize the new shape onto an existing internal representation — this is what `_parse_plot` does for inline-array `y` mapping onto the existing `series` list).
 3. Add or update tests covering the new shape with at least one round-trip fixture.
 4. Bump the binding-manifest version string to match the schema version. The manifests are listed in `scripts/sync-schema.sh` under `VERSION_MANIFESTS`:
-   - `packages/earthsci-toolkit/package.json`
-   - `packages/earthsci_toolkit/pyproject.toml`
-   - `packages/earthsci-toolkit-rs/Cargo.toml`
-   - `packages/EarthSciSerialization.jl/Project.toml`
+   - `pkg/earthsci-ast-ts/package.json`
+   - `pkg/earthsci-ast-py/pyproject.toml`
+   - `pkg/earthsci-ast-rs/Cargo.toml`
+   - `pkg/EarthSciAST.jl/Project.toml`
 
 (Go uses module-path versioning via tags and is not in `VERSION_MANIFESTS`.)
 
@@ -104,7 +104,7 @@ A schema change can produce three flavors of effect on already-on-disk component
 2. **New authoring form** — components MAY use the new shape. Components that adopt the new shape **MUST** declare the new schema version in their top-level `"esm":` field. Components that retain the old shape may keep their existing version declaration.
 3. **Breaking change** — every component on disk must be migrated to the new shape. Components that have not been migrated MUST keep the old `"esm":` version (and will not validate against the new schema). A migration sweep — usually a polecat-driven run — is part of the same change.
 
-For flavors 2 and 3, file a bead in `EarthSciModels` (or wherever the affected components live) tracking the per-file sweep, linked to the `EarthSciSerialization` change bead.
+For flavors 2 and 3, file a bead in `EarthSciModels` (or wherever the affected components live) tracking the per-file sweep, linked to the `EarthSciAST` change bead.
 
 For flavor 1 (a non-breaking widening, like adding an array form of `plots.y`), no immediate `.esm` edits are required, but a migration plan can be filed if you want existing components to start using the new shape as a future cleanup.
 

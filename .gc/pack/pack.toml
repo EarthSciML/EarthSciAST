@@ -1,7 +1,7 @@
-# EarthSciSerialization rig-local pack.
+# EarthSciAST rig-local pack.
 #
 # Ships ESS-specific formulas (currently: mol-update-spec-schema). The pack is
-# imported by the EarthSciSerialization rig in the city's city.toml alongside
+# imported by the EarthSciAST rig in the city's city.toml alongside
 # the standard gastown pack.
 
 [pack]

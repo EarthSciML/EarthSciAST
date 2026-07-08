@@ -2,7 +2,7 @@
   "esm": "0.4.0",
   "metadata": {
     "name": "AlgebraicDiameterGrowth",
-    "description": "Cross-binding conformance fixture (esm-sph): a single ODE coupled to TWO algebraic equations defining intermediate variables. Mirrors the diameter-growth shape that polecat nux's audit caught silently producing 1000x-wrong answers in earthsci_toolkit.simulation.simulate (escalation hq-wisp-ywi). A binding that silently drops the algebraic equations and leaves the intermediates at their default value 0 will compute dD_p/dt = 0 and produce D_p(t) ≡ D_p(0), failing every t > 0 assertion.",
+    "description": "Cross-binding conformance fixture (esm-sph): a single ODE coupled to TWO algebraic equations defining intermediate variables. Mirrors the diameter-growth shape that polecat nux's audit caught silently producing 1000x-wrong answers in earthsci_ast.simulation.simulate (escalation hq-wisp-ywi). A binding that silently drops the algebraic equations and leaves the intermediates at their default value 0 will compute dD_p/dt = 0 and produce D_p(t) ≡ D_p(0), failing every t > 0 assertion.",
     "authors": ["esm-sph conformance"],
     "tags": ["conformance", "algebraic-elimination", "dae", "esm-sph"]
   },

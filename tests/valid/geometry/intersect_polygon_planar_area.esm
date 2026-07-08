@@ -4,7 +4,7 @@
     "name": "intersect_polygon_planar_area",
     "description": "M4 conservative-regridding geometry kernel — the EVALUABLE planar companion to intersect_polygon_clip_area (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.4, the Python kernel). The `intersect_polygon` LEAF clips two lon-lat polygon rings under a declared `manifold` and returns the overlap vertex ring of DATA-DEPENDENT length; the ring rides the value-invention machinery as a kind:\"derived\" index set named by the clip node's `id` (from_faq). `polygon_area` is NOT a new op — it is an ORDINARY sum_product FAQ over that ring. Here the body is the REAL planar shoelace / Gauss–Green integrand `0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v)` over the closed clip ring (the evaluator returns the ring closed, so the wrap edge is an ordinary v+1 lookup). The two source/target cells are unit-aligned squares overlapping in the [1,2]×[1,2] box, so the planar overlap area is exactly 1.0. The `planar` manifold is dependency-free (numpy Sutherland–Hodgman); the `spherical`/`geodesic` manifolds delegate the clip to the pinned optional `spherely` (S2). The Python evaluator (ess-my4.4.4) evaluates this fixture's clip + area-FAQ directly; cross-binding area agreement is tolerance-based (§5.8.2 / B.5).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "geometry",

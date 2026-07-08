@@ -7,13 +7,13 @@ Julia provides the most complete ESM format implementation with full ModelingToo
 ### From Package Registry
 ```julia
 using Pkg
-Pkg.add("EarthSciSerialization")
+Pkg.add("EarthSciAST")
 ```
 
 ### Development Installation
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")
+Pkg.add(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")
 ```
 
 ## Core Capabilities
@@ -31,7 +31,7 @@ The Julia implementation provides **Full** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Load from file
 esm_file = load_esm("model.esm")
@@ -55,7 +55,7 @@ end
 ### Working with Expressions
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Parse mathematical expression
 expr = parse_expression("""{"op": "+", "args": ["x", {"op": "^", "args": ["y", "2"]}]}""")
@@ -79,7 +79,7 @@ println("After substitution: ", to_unicode(substituted))  # 2 + t²
 The Julia implementation excels at converting ESM models to ModelingToolkit systems for numerical simulation:
 
 ```julia
-using EarthSciSerialization, ModelingToolkit, DifferentialEquations
+using EarthSciAST, ModelingToolkit, DifferentialEquations
 
 # Load atmospheric chemistry model
 esm_file = load_esm("atmospheric_model.esm")
@@ -117,7 +117,7 @@ f = ODEFunction(simplified, jac=true, sparse=true)
 For models with chemical reactions, ESM Format integrates with Catalyst.jl:
 
 ```julia
-using EarthSciSerialization, Catalyst
+using EarthSciAST, Catalyst
 
 # Load reaction system model
 esm_file = load_esm("reaction_network.esm")
@@ -139,7 +139,7 @@ jump_sol = solve(jump_prob, SSAStepper())
 ### Creating Models Programmatically
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Create a new ESM file
 esm_file = ESMFile(
@@ -206,7 +206,7 @@ coupled_esm = ESMFile(
 ## Unit Analysis and Validation
 
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Load model with units
 esm_file = load_esm("model_with_units.esm")

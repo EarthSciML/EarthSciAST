@@ -4,7 +4,7 @@
     "name": "arrayop_16_discretized_2d_heat",
     "description": "Discretized 2D heat equation on a 3x3 interior grid (Cartesian, uniform, h=0.25) with homogeneous Dirichlet BCs (ghost cells at i=0,4 and j=0,4 equal zero). Stencil coefficient 1/h^2=16. IC: u[i,j,0]=sin(i*pi/4)*sin(j*pi/4). Exact discrete solution: u[i,j,t]=sin(i*pi/4)*sin(j*pi/4)*exp(lambda_2D*t) where lambda_2D=2*16*(2*cos(pi/4)-2)=-18.745165204060956. The single-arrayop equation accesses neighbor cells u[i+/-1,j] and u[i,j+/-1]; out-of-bounds reads return 0 (ghost cell). Tests the neighbor-coupled indexed-state path (ess-ing).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",

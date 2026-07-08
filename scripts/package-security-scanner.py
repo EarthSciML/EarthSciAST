@@ -4,7 +4,7 @@ Package Security Scanner and Verification System
 
 This comprehensive tool implements package verification with signature validation,
 vulnerability scanning, license compliance checking, and security policy enforcement
-for all distributed packages in the EarthSciSerialization project.
+for all distributed packages in the EarthSciAST project.
 
 Supports: Julia, Python, TypeScript/JavaScript, Rust packages
 """
@@ -549,18 +549,18 @@ class PackageVerifier:
 
         return "passed"
 
-    def scan_all_packages(self, packages_dir: str = "packages") -> Dict[str, Any]:
+    def scan_all_packages(self, packages_dir: str = "pkg") -> Dict[str, Any]:
         """Scan all packages in the project."""
         if not os.path.exists(packages_dir):
             raise SecurityScannerError(f"Packages directory not found: {packages_dir}")
 
         package_mapping = {
-            "EarthSciSerialization.jl": "julia",
-            "earthsci_toolkit": "python",
-            "earthsci-toolkit": "npm",
-            "earthsci-toolkit-rs": "rust",
-            "esm-editor": "npm",
-            # 'esm-format-go': 'go',  # TODO: scanner lacks _scan_go_package; add when Go support lands
+            "EarthSciAST.jl": "julia",
+            "earthsci-ast-py": "python",
+            "earthsci-ast-ts": "npm",
+            "earthsci-ast-rs": "rust",
+            "earthsci-ast-editor": "npm",
+            # 'earthsci-ast-go': 'go',  # TODO: scanner lacks _scan_go_package; add when Go support lands
         }
 
         for package_name, package_type in package_mapping.items():
@@ -636,8 +636,8 @@ def main():
     parser = argparse.ArgumentParser(description="Package Security Scanner and Verification System")
     parser.add_argument(
         "--packages-dir",
-        default="packages",
-        help="Directory containing packages to scan (default: packages)",
+        default="pkg",
+        help="Directory containing packages to scan (default: pkg)",
     )
     parser.add_argument("--config", help="Path to configuration file")
     parser.add_argument(

@@ -1,0 +1,100 @@
+{
+  "_comment": "NEI 2016 Monthly Emissions fixture. Expresses an instantiation of EarthSciData.jl NEI2016MonthlyEmisFileSet with sector='all'. Source: EarthSciData.jl src/nei2016monthly.jl (struct NEI2016MonthlyEmisFileSet at lines 142-166, relpath at lines 173-177). The url_template encodes the path grammar 'emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_{sector}_12US1_month_{MM}.ncf'. Data is only available for 2016. Grid is 12km CONUS (12US1).",
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "NEI2016MonthlyFixture",
+    "description": "NEI 2016 monthly gridded emissions (12US1 CONUS grid, all sectors) expressed in the STAC-like DataLoader schema.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "created": "2026-04-14T00:00:00Z",
+    "tags": [
+      "earthscidata-coverage",
+      "nei",
+      "emissions",
+      "anthropogenic"
+    ]
+  },
+  "data_loaders": {
+    "NEI2016Monthly": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://gaftp.epa.gov/Air/emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_all_12US1_month_{date:%m}.ncf"
+      },
+      "temporal": {
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-12-31T23:59:59Z",
+        "file_period": "P1M",
+        "frequency": "P1M",
+        "records_per_file": 1,
+        "time_variable": "TSTEP"
+      },
+      "variables": {
+        "NO": {
+          "file_variable": "NO",
+          "units": "mol/s",
+          "description": "NO emissions (requires diurnal/DOW factors + delp_dry_surface conversion applied at runtime to reach kg/m^2/s)"
+        },
+        "NO2": {
+          "file_variable": "NO2",
+          "units": "mol/s",
+          "description": "NO2 emissions"
+        },
+        "CO": {
+          "file_variable": "CO",
+          "units": "mol/s",
+          "description": "CO emissions"
+        },
+        "SO2": {
+          "file_variable": "SO2",
+          "units": "mol/s",
+          "description": "SO2 emissions"
+        },
+        "ISOP": {
+          "file_variable": "ISOP",
+          "units": "mol/s",
+          "description": "Isoprene emissions"
+        }
+      },
+      "reference": {
+        "citation": "US EPA, 2016v1 National Emissions Inventory (NEI) emissions modeling platform.",
+        "url": "https://www.epa.gov/air-emissions-modeling/2016v1-platform"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic",
+          "conus"
+        ],
+        "earthscidata_source": "src/nei2016monthly.jl::NEI2016MonthlyEmisFileSet",
+        "sector": "all",
+        "diurnal_factors": "runtime",
+        "dow_factors": "runtime",
+        "notes": "Runtime applies diurnal (DIURNAL_FACTORS, DIURNAL_FACTORS_NOx, DIURNAL_FACTORS_ISOP) and day-of-week (DayofWeekFactors_NOx, DayofWeekFactors_CO) scaling. These are runtime-only transforms outside the schema."
+      }
+    }
+  },
+  "models": {
+    "placeholder": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

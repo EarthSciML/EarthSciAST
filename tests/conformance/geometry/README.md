@@ -18,7 +18,7 @@ contract** — `CONFORMANCE_SPEC.md` §5.8, the normative form of RFC
 
 ## Why this exists
 
-`earthsci-toolkit` is **parallel native implementations** (Julia/GeometryOps,
+`EarthSciAST` is **parallel native implementations** (Julia/GeometryOps,
 Python/S2, …) verified by a conformance suite — not one core behind FFI. The
 conservative regridder (`F_tgt[j] = (1/A_j)·Σ_i A_ij·F_src[i]`) is the place
 where the two stacks' geometry kernels meet, and they will **not** agree
@@ -135,8 +135,8 @@ Conventions:
   fixtures need no backend, so they always run.
 
 Keep adapters thin: the contract lives in the assembly modules
-(`packages/EarthSciSerialization.jl/src/conservative_regrid.jl`,
-`packages/earthsci_toolkit/src/earthsci_toolkit/conservative_regrid.py`), not in
+(`pkg/EarthSciAST.jl/src/conservative_regrid.jl`,
+`pkg/earthsci-ast-py/src/earthsci_ast/conservative_regrid.py`), not in
 the adapter.
 
 ## Tolerances

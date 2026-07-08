@@ -4,7 +4,7 @@
     "name": "intersect_polygon_bad_manifold",
     "description": "INVALID (bead ess-my4.4.2): an `intersect_polygon` node whose `manifold` is \"flat\" \u2014 not a member of the closed set {planar, spherical, geodesic} (RFC semiring-faq-unified-ir \u00a78.1; CONFORMANCE_SPEC.md \u00a75.8.4). The manifold is a discrete label matched EXACTLY across bindings, so its value set is a closed registry. Since the esm-spec \u00a79.6.1 scalar-field substitution-site widening, the document schema admits any string in the manifold position (so a template body can carry a parameter name there); the closed set is therefore enforced by the POST-EXPANSION validator (\u00a79.6.4), diagnostic `geometry_manifold_invalid` \u2014 for this template-free file the raw tree IS the expanded form, so every binding still rejects it at load. \"flat\" is a common mistake for \"planar\".",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",

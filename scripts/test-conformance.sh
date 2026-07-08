@@ -21,11 +21,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Language implementation directories
-JULIA_DIR="$PROJECT_ROOT/packages/EarthSciSerialization.jl"
-TYPESCRIPT_DIR="$PROJECT_ROOT/packages/earthsci-toolkit"
-PYTHON_DIR="$PROJECT_ROOT/packages/earthsci_toolkit"
-RUST_DIR="$PROJECT_ROOT/packages/earthsci-toolkit-rs"
-GO_DIR="$PROJECT_ROOT/packages/esm-format-go"
+JULIA_DIR="$PROJECT_ROOT/pkg/EarthSciAST.jl"
+TYPESCRIPT_DIR="$PROJECT_ROOT/pkg/earthsci-ast-ts"
+PYTHON_DIR="$PROJECT_ROOT/pkg/earthsci-ast-py"
+RUST_DIR="$PROJECT_ROOT/pkg/earthsci-ast-rs"
+GO_DIR="$PROJECT_ROOT/pkg/earthsci-ast-go"
 
 # Prefer the Python binding's virtualenv if it exists, so every `python3` call in
 # this script (the pytest suite, the conformance runners, and the per-binding
@@ -33,7 +33,7 @@ GO_DIR="$PROJECT_ROOT/packages/esm-format-go"
 # (pytest, jsonschema, scipy, numpy) installed. A bare system `python3` (e.g.
 # Homebrew) typically lacks these. Falls back to whatever `python3` is on PATH
 # when the venv is absent (e.g. a CI image where the deps are provisioned
-# globally). Create it with:  cd packages/earthsci_toolkit && python3 -m venv
+# globally). Create it with:  cd pkg/earthsci-ast-py && python3 -m venv
 # .venv && .venv/bin/pip install -e '.[test]'
 PYVENV_BIN="$PYTHON_DIR/.venv/bin"
 if [ -x "$PYVENV_BIN/python3" ]; then
@@ -363,10 +363,10 @@ run_determinism_conformance_python() {
     fi
     log "Running determinism conformance with the Python relational engine..."
     # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the cadence /
-    # PDE-sim Python producers). Without it, `python3 -m earthsci_toolkit...`
+    # PDE-sim Python producers). Without it, `python3 -m earthsci_ast...`
     # can't import the package (the venv carries only deps, not an editable
     # install), so the adapter emits no output and the producer fails.
-    EARTHSCI_DETERMINISM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.determinism_adapter" \
+    EARTHSCI_DETERMINISM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.determinism_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-determinism-conformance.py" \
             --bindings python \
@@ -424,8 +424,8 @@ run_cadence_conformance_self_test() {
 }
 
 # Drive the REAL Julia partition pass (ess-my4.3.7) through the cadence harness:
-# the adapter (packages/EarthSciSerialization.jl/scripts/cadence_adapter.jl) runs
-# EarthSciSerialization.Cadence over the three §6.1 fixtures and the runner
+# the adapter (pkg/EarthSciAST.jl/scripts/cadence_adapter.jl) runs
+# EarthSciAST.Cadence over the three §6.1 fixtures and the runner
 # asserts its class map, materialization set, and CONST-folded buffers are
 # byte-identical to the golden. Julia is `bindings_optional` in the manifest, so
 # a missing adapter (no julia) is skipped, but a MISMATCH fails. Rust/Python
@@ -443,7 +443,7 @@ run_cadence_conformance_julia() {
 }
 
 # Drive the REAL Rust partition pass (ess-my4.3.8) through the cadence harness:
-# the adapter binary (packages/earthsci-toolkit-rs/src/bin/earthsci-cadence-adapter-rust.rs)
+# the adapter binary (pkg/earthsci-ast-rs/src/bin/earthsci-cadence-adapter-rust.rs)
 # runs the Rust Cadence module over the §6.1 fixtures and the runner asserts its
 # class map, materialization set, and CONST-folded buffers are byte-identical to
 # the golden. Rust is `bindings_optional`, so a missing adapter is skipped but a
@@ -461,7 +461,7 @@ run_cadence_conformance_rust() {
 }
 
 # Drive the REAL Python partition pass (ess-my4.3.9) through the cadence harness:
-# the adapter (packages/earthsci_toolkit/src/earthsci_toolkit/cli/cadence_adapter.py)
+# the adapter (pkg/earthsci-ast-py/src/earthsci_ast/cli/cadence_adapter.py)
 # runs the Python Cadence module over the §6.1 fixtures and the runner asserts the
 # same golden. Python is `bindings_optional` — missing adapter skipped, mismatch
 # fails. (Mirrors run_cadence_conformance_julia; ess-my4.3.10.)
@@ -472,11 +472,11 @@ run_cadence_conformance_python() {
     fi
     log "Running cadence-partition conformance with the Python partition pass..."
     # PYTHONPATH pins the adapter to THIS worktree's src (mirrors the PDE-sim
-    # adapter below). Without it, `python3 -m earthsci_toolkit...` imports
-    # whatever earthsci_toolkit is globally installed — an editable install
+    # adapter below). Without it, `python3 -m earthsci_ast...` imports
+    # whatever earthsci_ast is globally installed — an editable install
     # points at a FIXED path (another worktree), so the adapter runs stale code
     # and emits no conforming output for any branch that changed cadence.py.
-    EARTHSCI_CADENCE_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.cadence_adapter" \
+    EARTHSCI_CADENCE_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.cadence_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-cadence-conformance.py" \
             --bindings python \
@@ -545,7 +545,7 @@ run_pde_simulation_conformance_python() {
         return 0
     fi
     log "Running PDE-simulation conformance with the Python simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.pde_simulation_adapter" \
+    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings python \
@@ -619,7 +619,7 @@ run_pde_pipeline_conformance_python() {
         return 0
     fi
     log "Running full-pipeline PDE conformance with the Python simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_toolkit.cli.pde_simulation_adapter" \
+    EARTHSCI_PDE_SIM_ADAPTER_PYTHON="python3 -m earthsci_ast.cli.pde_simulation_adapter" \
     PYTHONPATH="$PYTHON_DIR/src:${PYTHONPATH:-}" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --manifest "$PDE_PIPELINE_MANIFEST" \

@@ -321,7 +321,7 @@ collision fixture (two templates in one namespace) and joins the valid suite.
 
 ## 10. Binding implementation notes — porting checklist (wave 2)
 
-Julia (`packages/EarthSciSerialization.jl/src/template_imports.jl`,
+Julia (`pkg/EarthSciAST.jl/src/template_imports.jl`,
 `_apply_edge_renames!`) is the reference and generated the goldens. **Python, Rust,
 TypeScript, and Go port in a later wave**; the compliance matrix rows carry
 Julia = implemented, others = pending until then. Per binding, the §9.7 import resolver

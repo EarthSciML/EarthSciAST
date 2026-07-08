@@ -16,7 +16,7 @@ the fixtures may be useful if the corresponding test wiring is ever implemented.
 | `expressions/`  |   17 | Expression AST round-trip / parser error / evaluation tests | gt-tvz shared conformance harness, gt-72z fuzz  |
 | `reactions/`    |    4 | Reaction-system ODE generation + stoichiometric matrices    | Binding-level reaction-system tests             |
 | `domain_solver/`|    7 | Spatial/temporal domain discretization + solver configs     | Binding-level domain/solver tests               |
-| `editing/`      |    5 | Editor operation fixtures (add/remove/merge/extract)        | `packages/esm-editor` test suite                |
+| `editing/`      |    5 | Editor operation fixtures (add/remove/merge/extract)        | `pkg/earthsci-ast-editor` test suite                |
 
 ## Decision rule
 

@@ -4,7 +4,7 @@
     "name": "min_sum_tropical",
     "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.1; bead ess-my4.1.5). The `min_sum` tropical semiring — (min,+inf;+,0) — used for shortest-path / least-cost contractions. State `dist[i]` reduces the additive body i+j with the min oplus over j drawn from the `paths` interval index set: dist[1]=min_{j=1..3}(1+j)=min(2,3,4)=2, dist[2]=min_{j=1..3}(2+j)=min(3,4,5)=3 at t=1. The oplus is min and the otimes is + (so the body is written as a sum), distinguishing this semiring from sum_product / max_product. The 0-bar identity for min_sum is +inf (an empty reduction), asserted at the per-binding unit level in every evaluator since +inf is not an integrable ODE rate; here a non-empty range exercises the min oplus end-to-end. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",

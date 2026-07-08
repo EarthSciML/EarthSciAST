@@ -15,10 +15,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "packages" / "earthsci_toolkit" / "src"))
+sys.path.insert(0, str(ROOT / "pkg" / "earthsci-ast-py" / "src"))
 
-from earthsci_toolkit.parse import _parse_expression  # noqa: E402
-from earthsci_toolkit.serialize import _serialize_expression  # noqa: E402
+from earthsci_ast.parse import _parse_expression  # noqa: E402
+from earthsci_ast.serialize import _serialize_expression  # noqa: E402
 
 
 def roundtrip_one(path: Path) -> dict:

@@ -4,7 +4,7 @@
     "name": "float_join_key",
     "description": "INVALID at BUILD TIME, not schema time (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1). A value-equality join over a categorical key set whose members are FLOATS: `keys` = [1.5, 2.5]. Floating-point join keys are forbidden because equality is not portable across bindings (a 5.0 repr is platform-dependent), exactly as floats are forbidden in Skolem/order keys. This is SCHEMA-VALID — the schema's categorical `members` is an untyped array, so Go/TS load it cleanly and it must NOT live alongside the schema-rejected fixtures in the parent directory (hence the build_time/ subdir, which the Go/TS non-recursive *.esm globs skip). The rejection is enforced by the EVALUATING bindings at build: Julia raises TreeWalkError, Python raises through simulate (success=False). Mirrors the engine-level unit tests in tree_walk_join_test.jl and test_numpy_interpreter_join.py.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

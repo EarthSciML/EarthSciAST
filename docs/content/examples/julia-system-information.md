@@ -1,6 +1,6 @@
 # System Information (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/compat_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/compat_test.jl`
 
 ```julia
 println("\n=== System Information ===")

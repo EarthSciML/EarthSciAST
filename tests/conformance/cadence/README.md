@@ -72,7 +72,7 @@ structural fixture `tests/valid/aggregate/edge_enumeration_area_eff.esm`.
 ## Two phases
 
 All three producers have landed — Julia (`ess-my4.3.7`,
-`EarthSciSerialization.Cadence`), Rust (`ess-my4.3.8`), and Python
+`EarthSciAST.Cadence`), Rust (`ess-my4.3.8`), and Python
 (`ess-my4.3.9`) — and all three adapters are now wired into
 `scripts/test-conformance.sh` (`run_cadence_conformance_{julia,rust,python}`,
 ess-my4.3.10). The harness still runs in two phases, exactly like the determinism
@@ -100,14 +100,14 @@ and grid-conformance runners' `--self-test`:
    default run mode invokes every registered adapter on this same manifest and
    asserts its class map, materialization set, and `CONST`-folded buffers are
    identical to the golden and to each other. The Julia adapter
-   (`packages/EarthSciSerialization.jl/scripts/cadence_adapter.jl`) is wired
+   (`pkg/EarthSciAST.jl/scripts/cadence_adapter.jl`) is wired
    into `scripts/test-conformance.sh` as `run_cadence_conformance_julia` (it
    sets `$EARTHSCI_CADENCE_ADAPTER_JULIA` and runs `--bindings julia`); the
    Julia package's own `test/cadence_test.jl` asserts the same golden directly.
    The Rust adapter
-   (`packages/earthsci-toolkit-rs/src/bin/earthsci-cadence-adapter-rust.rs`,
+   (`pkg/earthsci-ast-rs/src/bin/earthsci-cadence-adapter-rust.rs`,
    `run_cadence_conformance_rust`) and the Python adapter
-   (`packages/earthsci_toolkit/src/earthsci_toolkit/cli/cadence_adapter.py`,
+   (`pkg/earthsci-ast-py/src/earthsci_ast/cli/cadence_adapter.py`,
    `run_cadence_conformance_python`) are wired the same way; each binding's own
    suite (`cadence_conformance.rs`, `test_cadence_partition.py`) also asserts the
    golden directly. All three stay `bindings_optional` so a bare runner invocation

@@ -26,7 +26,7 @@ CONST provider per field from the golden's `loaders[*].native`, and integrates
 The other loader fixtures only cover **top-level** `data_loaders` /
 **variable_map-coupled** subsystem loaders consumed via a **gather** (see
 `tests/valid/advection_reaction_loaded_ic_bc.esm` and
-`packages/earthsci_toolkit/tests/fixtures/loader_injection/loader_consumer.esm`).
+`pkg/earthsci-ast-py/tests/fixtures/loader_injection/loader_consumer.esm`).
 Neither exercises a **subsystem-mounted** loader consumed **directly by the
 owning model** — and in particular neither exercises a **bare-scalar** reference
 `raw.k` (as opposed to an `index(...)` gather). That direct path was the
@@ -59,9 +59,9 @@ For the fixture, a binding's adapter:
 
 Per-binding runners:
 
-* **Julia** — `packages/EarthSciSerialization.jl/test/subsystem_loader_conformance_test.jl`
-* **Python** — `packages/earthsci_toolkit/tests/test_subsystem_loader_conformance.py`
-* **Rust** — `packages/earthsci-toolkit-rs/tests/subsystem_loader_conformance.rs`
+* **Julia** — `pkg/EarthSciAST.jl/test/subsystem_loader_conformance_test.jl`
+* **Python** — `pkg/earthsci-ast-py/tests/test_subsystem_loader_conformance.py`
+* **Rust** — `pkg/earthsci-ast-rs/tests/subsystem_loader_conformance.rs`
 
 ## Bindings
 

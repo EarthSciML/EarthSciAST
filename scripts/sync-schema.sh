@@ -12,19 +12,19 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CANONICAL="${REPO_ROOT}/esm-schema.json"
 
 TARGETS=(
-  "packages/esm-format-go/pkg/esm/esm-schema.json"
-  "packages/earthsci-toolkit-rs/src/esm-schema.json"
-  "packages/EarthSciSerialization.jl/data/esm-schema.json"
-  "packages/earthsci_toolkit/src/earthsci_toolkit/data/esm-schema.json"
+  "pkg/earthsci-ast-go/pkg/esm/esm-schema.json"
+  "pkg/earthsci-ast-rs/src/esm-schema.json"
+  "pkg/EarthSciAST.jl/data/esm-schema.json"
+  "pkg/earthsci-ast-py/src/earthsci_ast/data/esm-schema.json"
 )
 
 # Binding manifests that must share a synchronized version string.
-# Go (esm-format-go) uses module-path versioning via git tags and is not listed.
+# Go (earthsci-ast-go) uses module-path versioning via git tags and is not listed.
 VERSION_MANIFESTS=(
-  "packages/earthsci-toolkit/package.json"
-  "packages/earthsci_toolkit/pyproject.toml"
-  "packages/earthsci-toolkit-rs/Cargo.toml"
-  "packages/EarthSciSerialization.jl/Project.toml"
+  "pkg/earthsci-ast-ts/package.json"
+  "pkg/earthsci-ast-py/pyproject.toml"
+  "pkg/earthsci-ast-rs/Cargo.toml"
+  "pkg/EarthSciAST.jl/Project.toml"
 )
 
 if [[ ! -f "$CANONICAL" ]]; then
@@ -59,7 +59,7 @@ for target in "${TARGETS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# TypeScript embedded schema (packages/earthsci-toolkit/src/embedded-schema.ts).
+# TypeScript embedded schema (pkg/earthsci-ast-ts/src/embedded-schema.ts).
 #
 # The TS binding cannot read a JSON file at runtime (it must work in the
 # browser), so it embeds the schema in a TypeScript module that Rollup bundles
@@ -73,10 +73,10 @@ done
 # install. Plain (non --check) mode regenerates the embedded module, mirroring
 # the `cp` of the JSON copies above.
 # ---------------------------------------------------------------------------
-TS_EMBEDDED="packages/earthsci-toolkit/src/embedded-schema.ts"
-TS_GENERATOR="${REPO_ROOT}/packages/earthsci-toolkit/scripts/generate-embedded-schema.mjs"
+TS_EMBEDDED="pkg/earthsci-ast-ts/src/embedded-schema.ts"
+TS_GENERATOR="${REPO_ROOT}/pkg/earthsci-ast-ts/scripts/generate-embedded-schema.mjs"
 if [[ ! -f "$TS_GENERATOR" ]]; then
-  echo "MISSING: $TS_EMBEDDED generator (packages/earthsci-toolkit/scripts/generate-embedded-schema.mjs)"
+  echo "MISSING: $TS_EMBEDDED generator (pkg/earthsci-ast-ts/scripts/generate-embedded-schema.mjs)"
   drifted=1
 elif [[ "$check_mode" == true ]]; then
   if ts_result=$(node "$TS_GENERATOR" --check 2>&1); then
@@ -84,7 +84,7 @@ elif [[ "$check_mode" == true ]]; then
   else
     echo "DRIFT:   $TS_EMBEDDED"
     echo "         ${ts_result}"
-    echo "         Regenerate with: cd packages/earthsci-toolkit && npm run generate-schema"
+    echo "         Regenerate with: cd pkg/earthsci-ast-ts && npm run generate-schema"
     drifted=1
   fi
 else

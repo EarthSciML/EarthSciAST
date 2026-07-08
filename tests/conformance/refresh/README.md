@@ -114,6 +114,6 @@ ports; no array simulator / refresh executor).
 
 ## Runners
 
-* **Julia** — `packages/EarthSciSerialization.jl/test/refresh_conformance_test.jl`
-* **Python** — `packages/earthsci_toolkit/tests/test_refresh_conformance.py`
-* **Rust** — `packages/earthsci-toolkit-rs/tests/refresh_conformance.rs`
+* **Julia** — `pkg/EarthSciAST.jl/test/refresh_conformance_test.jl`
+* **Python** — `pkg/earthsci-ast-py/tests/test_refresh_conformance.py`
+* **Rust** — `pkg/earthsci-ast-rs/tests/refresh_conformance.rs`

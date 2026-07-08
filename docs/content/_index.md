@@ -1,5 +1,5 @@
 ---
-title: "EarthSciSerialization"
+title: "EarthSciAST"
 description: "Language-agnostic JSON-based format for earth science model components."
 ---
 
@@ -29,9 +29,9 @@ suite.
 
 ## Specification
 
-The authoritative format specification is [`esm-spec.md`](https://github.com/EarthSciML/EarthSciSerialization/blob/main/esm-spec.md)
+The authoritative format specification is [`esm-spec.md`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-spec.md)
 at the repository root, alongside the machine-readable
-[`esm-schema.json`](https://github.com/EarthSciML/EarthSciSerialization/blob/main/esm-schema.json).
+[`esm-schema.json`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-schema.json).
 
 Design proposals and extensions live under [RFCs](rfcs/), including the
 [discretization RFC](rfcs/discretization/) and
@@ -40,5 +40,5 @@ Design proposals and extensions live under [RFCs](rfcs/), including the
 ## What's new
 
 Recent changes are tracked via release notes in the
-[GitHub releases page](https://github.com/EarthSciML/EarthSciSerialization/releases).
+[GitHub releases page](https://github.com/EarthSciML/EarthSciAST/releases).
 A curated changelog will be wired in here once available.

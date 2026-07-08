@@ -4,7 +4,7 @@
     "name": "join_on_empty",
     "description": "INVALID (bead ess-my4.2.5): an `aggregate` node whose `join` clause carries an EMPTY `on` list — `\"on\": []` (RFC semiring-faq-unified-ir §5.3 / §8). The schema requires at least one [left, right] key-column pair per clause (`on` has `minItems: 1`): an equi-join with no key columns is meaningless. A length-0 `on` is a pure schema (array-length) violation, caught by every binding at validation time.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

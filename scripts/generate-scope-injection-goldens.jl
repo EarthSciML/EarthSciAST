@@ -3,7 +3,7 @@
 # goldens (RFC docs/content/rfcs/scoped-template-injection.md) from the Julia
 # reference implementation.
 #
-#   julia --project=packages/EarthSciSerialization.jl scripts/generate-scope-injection-goldens.jl
+#   julia --project=pkg/EarthSciAST.jl scripts/generate-scope-injection-goldens.jl
 #
 # Writes (deterministic: sorted keys, 2-space indent):
 #   tests/conformance/expression_templates/inject_subsystem_ref/expanded.esm
@@ -16,8 +16,8 @@
 # fixpoint, and form C (test block) round-trips with the component's rewrite
 # targets intact and each test's import field preserved.
 
-using EarthSciSerialization
-using EarthSciSerialization: serialize_esm_file
+using EarthSciAST
+using EarthSciAST: serialize_esm_file
 using JSON3
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
@@ -71,6 +71,6 @@ for (dir, fixture, golden) in [
     ("inject_coupling_entry", "fixture.esm", "expanded.esm"),
     ("inject_test_block", "fixture.esm", "roundtrip.esm"),
 ]
-    file = EarthSciSerialization.load(joinpath(CONF, dir, fixture))
+    file = EarthSciAST.load(joinpath(CONF, dir, fixture))
     _write_golden(joinpath(CONF, dir, golden), serialize_esm_file(file))
 end

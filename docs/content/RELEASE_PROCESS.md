@@ -2,13 +2,13 @@
 
 ## Overview
 
-The EarthSciSerialization project uses an automated release system that manages publishing across five language implementations:
+The EarthSciAST project uses an automated release system that manages publishing across five language implementations:
 
-- **Julia**: EarthSciSerialization.jl (Julia General Registry)
-- **TypeScript/JavaScript**: earthsci-toolkit (npm)
-- **Python**: earthsci-toolkit (PyPI)
-- **Rust**: earthsci-toolkit (crates.io)
-- **Go**: esm-format-go (Go modules)
+- **Julia**: EarthSciAST.jl (Julia General Registry)
+- **TypeScript/JavaScript**: @earthsciml/ast (npm)
+- **Python**: earthsci-ast (PyPI)
+- **Rust**: earthsci-ast (crates.io)
+- **Go**: earthsci-ast-go (Go modules)
 
 ## Semantic Versioning
 
@@ -147,20 +147,20 @@ Before each release, the system runs compatibility tests:
 Each language implementation follows consistent structure:
 
 ```
-packages/
-├── EarthSciSerialization.jl/          # Julia package
+pkg/
+├── EarthSciAST.jl/          # Julia package
 │   ├── Project.toml       # Julia dependencies
 │   └── src/
-├── earthsci-toolkit/       # TypeScript package
+├── earthsci-ast-ts/       # TypeScript package
 │   ├── package.json       # npm configuration
 │   └── src/
-├── earthsci_toolkit/            # Python package
+├── earthsci_ast/            # Python package
 │   ├── pyproject.toml     # Python packaging
 │   └── src/
-├── earthsci-toolkit-rs/    # Rust crate
+├── earthsci-ast-rs/    # Rust crate
 │   ├── Cargo.toml         # Rust dependencies
 │   └── src/
-└── esm-format-go/         # Go module
+└── earthsci-ast-go/         # Go module
     ├── go.mod             # Go dependencies
     └── pkg/
 ```
@@ -231,11 +231,11 @@ python -m build && ls dist/     # Python
 cargo package --list           # Rust
 
 # Test installation
-npm install earthsci-toolkit          # npm
-pip install earthsci-toolkit          # PyPI
-cargo add earthsci-toolkit            # crates.io
-julia> ] add EarthSciSerialization          # Julia
-go get github.com/ctessum/EarthSciSerialization/packages/esm-format-go # Go
+npm install @earthsciml/ast          # npm
+pip install earthsci-ast          # PyPI
+cargo add earthsci-ast            # crates.io
+julia> ] add EarthSciAST          # Julia
+go get github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go # Go
 ```
 
 ## Contact

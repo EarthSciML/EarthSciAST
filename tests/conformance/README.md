@@ -108,7 +108,7 @@ Each binding's test suite MUST provide an adapter that:
    tag, document the skip in-code and open a bead for the gap.
 
 Reference implementation: see
-`packages/EarthSciSerialization.jl/test/conformance_round_trip_test.jl`.
+`pkg/EarthSciAST.jl/test/conformance_round_trip_test.jl`.
 The Julia adapter is ~40 lines; any binding's adapter should be of
 comparable size. If an adapter grows beyond ~100 lines, the contract
 is probably being pushed into the adapter rather than the harness —

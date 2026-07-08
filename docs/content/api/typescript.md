@@ -6,7 +6,7 @@ Complete API reference for the ESM Format Typescript library.
 
 ### addContinuousEvent
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:387`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:387`
 
 **Signature:**
 ```typescript
@@ -24,7 +24,7 @@ Add a continuous event to a model
 
 ### addCoupling
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:464`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:464`
 
 **Signature:**
 ```typescript
@@ -42,7 +42,7 @@ Add a coupling entry to an ESM file
 
 ### addDiscreteEvent
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:404`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:404`
 
 **Signature:**
 ```typescript
@@ -60,7 +60,7 @@ Add a discrete event to a model
 
 ### addEquation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:193`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:193`
 
 **Signature:**
 ```typescript
@@ -78,7 +78,7 @@ Add a new equation to a model
 
 ### addReaction
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:262`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:262`
 
 **Signature:**
 ```typescript
@@ -96,7 +96,7 @@ Add a new reaction to a reaction system
 
 ### addSpecies
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:306`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:306`
 
 **Signature:**
 ```typescript
@@ -115,7 +115,7 @@ Add a new species to a reaction system
 
 ### addVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:61`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:61`
 
 **Signature:**
 ```typescript
@@ -134,7 +134,7 @@ Add a new variable to a model
 
 ### analyzeComplexity
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:17`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:17`
 
 **Signature:**
 ```typescript
@@ -151,7 +151,7 @@ Analyze the complexity of an expression
 
 ### buildDependencyGraph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/dependency-graph.ts:19`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/dependency-graph.ts:19`
 
 **Signature:**
 ```typescript
@@ -169,7 +169,7 @@ Build a dependency graph from an ESM file, model, or expression
 
 ### canMigrate
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/migration.ts:22`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/migration.ts:22`
 
 **Signature:**
 ```typescript
@@ -184,7 +184,7 @@ Check if migration is possible from the source version to target version.
 
 ### checkDimensions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:210`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:210`
 
 **Signature:**
 ```typescript
@@ -210,7 +210,7 @@ Follows rules from ESM spec Section 3.3.1:
 
 ### classifyComplexity
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:219`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:219`
 
 **Signature:**
 ```typescript
@@ -227,7 +227,7 @@ Classify expression complexity level
 
 ### compareAnalysis
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/index.ts:261`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/index.ts:261`
 
 **Signature:**
 ```typescript
@@ -242,7 +242,7 @@ Compare analysis results between different expressions or models
 
 ### compareComplexity
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:187`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:187`
 
 **Signature:**
 ```typescript
@@ -260,7 +260,7 @@ Compare complexity of two expressions
 
 ### componentExists
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:349`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:349`
 
 **Signature:**
 ```typescript
@@ -275,7 +275,7 @@ Utility to check if a component exists in the ESM file
 
 ### componentGraph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:290`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:290`
 
 **Signature:**
 ```typescript
@@ -292,7 +292,7 @@ Implements the Graph interface with adjacency methods.
 
 ### component_graph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:104`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:104`
 
 **Signature:**
 ```typescript
@@ -312,7 +312,7 @@ Returns a directed graph where nodes are model components and edges are coupling
 
 ### compose
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:506`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:506`
 
 **Signature:**
 ```typescript
@@ -335,7 +335,7 @@ Compose two systems using a coupling entry
 
 ### contains
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/expression.ts:65`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/expression.ts:65`
 
 **Signature:**
 ```typescript
@@ -357,7 +357,7 @@ Check if an expression contains a specific variable
 
 ### createAstStore
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/ast-store.ts:129`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/ast-store.ts:129`
 
 **Signature:**
 ```typescript
@@ -375,7 +375,7 @@ Create a centralized AST store for ESM file management
 
 ### createDebouncedValidation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:327`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:327`
 
 **Signature:**
 ```typescript
@@ -394,7 +394,7 @@ Debounced validation hook for use in components that trigger validation
 
 ### createDemoServer
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/demo/demo-pages.ts:333`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/demo/demo-pages.ts:333`
 
 **Signature:**
 ```typescript
@@ -405,7 +405,7 @@ export function createDemoServer() {
 
 ### createUndoHistory
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/history.ts:70`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/history.ts:70`
 
 **Signature:**
 ```typescript
@@ -425,7 +425,7 @@ Create undo/redo history management for an ESM file
 
 ### createUndoKeyboardHandler
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/history.ts:281`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/history.ts:281`
 
 **Signature:**
 ```typescript
@@ -441,7 +441,7 @@ Can be used independently of createUndoHistory if needed
 
 ### createValidationContext
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:306`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:306`
 
 **Signature:**
 ```typescript
@@ -460,7 +460,7 @@ Create a simplified validation context for components that only need basic valid
 
 ### createValidationSignals
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:93`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:93`
 
 **Signature:**
 ```typescript
@@ -479,7 +479,7 @@ Create reactive validation signals for an ESM file
 
 ### deriveODEs
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/reactions.ts:28`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/reactions.ts:28`
 
 **Signature:**
 ```typescript
@@ -508,7 +508,7 @@ Handles:
 
 ### detectStabilityIssues
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:324`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:324`
 
 **Signature:**
 ```typescript
@@ -525,7 +525,7 @@ Detect numerical stability issues in expressions
 
 ### differentiate
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:19`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:19`
 
 **Signature:**
 ```typescript
@@ -546,7 +546,7 @@ Compute the symbolic derivative of an expression with respect to a variable
 
 ### downloadExport
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/ModelExportUtils.ts:631`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/ModelExportUtils.ts:631`
 
 **Signature:**
 ```typescript
@@ -561,7 +561,7 @@ Download exported model as file
 
 ### estimateParallelPotential
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:282`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:282`
 
 **Signature:**
 ```typescript
@@ -578,7 +578,7 @@ Estimate parallel execution potential
 
 ### estimateSavings
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:288`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:288`
 
 **Signature:**
 ```typescript
@@ -595,7 +595,7 @@ Estimate the cost savings from factoring out common subexpressions
 
 ### evaluate
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/expression.ts:85`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/expression.ts:85`
 
 **Signature:**
 ```typescript
@@ -618,7 +618,7 @@ Evaluate an expression numerically with variable bindings
 
 ### exportModel
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/ModelExportUtils.ts:33`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/ModelExportUtils.ts:33`
 
 **Signature:**
 ```typescript
@@ -633,7 +633,7 @@ Export model to various formats
 
 ### exportResults
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/index.ts:246`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/index.ts:246`
 
 **Signature:**
 ```typescript
@@ -648,7 +648,7 @@ Export analysis results to various formats
 
 ### expressionGraph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:377`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:377`
 
 **Signature:**
 ```typescript
@@ -668,7 +668,7 @@ Creates a directed graph where nodes are variables/parameters/species and edges 
 
 ### extract
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:589`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:589`
 
 **Signature:**
 ```typescript
@@ -691,7 +691,7 @@ Extract a specific component from an ESM file into a new file
 
 ### findCommonSubexpressions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:18`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:18`
 
 **Signature:**
 ```typescript
@@ -709,7 +709,7 @@ Find common subexpressions in a single expression
 
 ### findCommonSubexpressionsAcrossExpressions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:87`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:87`
 
 **Signature:**
 ```typescript
@@ -727,7 +727,7 @@ Find common subexpressions across multiple expressions
 
 ### findCommonSubexpressionsInEsmFile
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:211`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:211`
 
 **Signature:**
 ```typescript
@@ -745,7 +745,7 @@ Find common subexpressions across an entire ESM file
 
 ### findCommonSubexpressionsInModel
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:159`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:159`
 
 **Signature:**
 ```typescript
@@ -763,7 +763,7 @@ Find common subexpressions in a model
 
 ### findCriticalPoints
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:544`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:544`
 
 **Signature:**
 ```typescript
@@ -782,7 +782,7 @@ This is a symbolic analysis - actual solving would require numerical methods
 
 ### findDeadVariables
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/dependency-graph.ts:463`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/dependency-graph.ts:463`
 
 **Signature:**
 ```typescript
@@ -797,7 +797,7 @@ Find dead variables (those that are defined but never used)
 
 ### findDependencyChains
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/dependency-graph.ts:480`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/dependency-graph.ts:480`
 
 **Signature:**
 ```typescript
@@ -812,7 +812,7 @@ Find variable dependency chains (paths from parameters to state variables)
 
 ### findExpensiveSubexpressions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/complexity.ts:242`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/complexity.ts:242`
 
 **Signature:**
 ```typescript
@@ -830,7 +830,7 @@ Find the most expensive sub-expressions in an expression
 
 ### flatten
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/flatten.ts:70`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/flatten.ts:70`
 
 **Signature:**
 ```typescript
@@ -860,7 +860,7 @@ The algorithm:
 
 ### formatResults
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/index.ts:238`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/index.ts:238`
 
 **Signature:**
 ```typescript
@@ -875,7 +875,7 @@ Format analysis results for display
 
 ### formatUserFriendly
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:195`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:195`
 
 **Signature:**
 ```typescript
@@ -886,7 +886,7 @@ export function formatUserFriendly(error: ESMError): string {
 
 ### freeParameters
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/expression.ts:45`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/expression.ts:45`
 
 **Signature:**
 ```typescript
@@ -904,7 +904,7 @@ Extract free parameters from an expression within a model context
 
 ### freeVariables
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/expression.ts:20`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/expression.ts:20`
 
 **Signature:**
 ```typescript
@@ -921,7 +921,7 @@ Extract all variable references from an expression
 
 ### generateFactoredVariableNames
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:298`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:298`
 
 **Signature:**
 ```typescript
@@ -939,7 +939,7 @@ Generate variable names for factored subexpressions
 
 ### getAvailableFormats
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/ModelExportUtils.ts:609`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/ModelExportUtils.ts:609`
 
 **Signature:**
 ```typescript
@@ -954,7 +954,7 @@ Get available export formats
 
 ### getComponentType
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:361`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:361`
 
 **Signature:**
 ```typescript
@@ -969,7 +969,7 @@ Get the type of a component by its ID
 
 ### getFileExtension
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/ModelExportUtils.ts:616`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/ModelExportUtils.ts:616`
 
 **Signature:**
 ```typescript
@@ -984,7 +984,7 @@ Get file extension for export format
 
 ### getProfiler
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:486`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:486`
 
 **Signature:**
 ```typescript
@@ -995,7 +995,7 @@ export function getProfiler(): PerformanceProfiler {
 
 ### getSupportedMigrationTargets
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/migration.ts:30`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/migration.ts:30`
 
 **Signature:**
 ```typescript
@@ -1010,7 +1010,7 @@ Get the list of schema versions that a given source version can migrate to.
 
 ### gradient
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:52`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:52`
 
 **Signature:**
 ```typescript
@@ -1028,7 +1028,7 @@ Compute the gradient (all first partial derivatives)
 
 ### groupSubexpressionsByType
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/common-subexpressions.ts:320`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/common-subexpressions.ts:320`
 
 **Signature:**
 ```typescript
@@ -1045,7 +1045,7 @@ Group common subexpressions by their structure type
 
 ### higherOrderDerivative
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:494`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:494`
 
 **Signature:**
 ```typescript
@@ -1064,7 +1064,7 @@ Compute higher-order derivatives
 
 ### isDifferentiable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:527`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:527`
 
 **Signature:**
 ```typescript
@@ -1082,7 +1082,7 @@ Check if an expression is differentiable with respect to a variable
 
 ### load
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/parse.ts:1767`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/parse.ts:1767`
 
 **Signature:**
 ```typescript
@@ -1108,7 +1108,7 @@ Load an ESM file from a JSON string or pre-parsed object
 
 ### mapVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:527`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:527`
 
 **Signature:**
 ```typescript
@@ -1128,7 +1128,7 @@ Map a variable from one system to another with optional transformation
 
 ### merge
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:553`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:553`
 
 **Signature:**
 ```typescript
@@ -1150,7 +1150,7 @@ Merge two ESM files
 
 ### migrate
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/migration.ts:40`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/migration.ts:40`
 
 **Signature:**
 ```typescript
@@ -1168,7 +1168,7 @@ Migrate an ESM file from its current schema version to the target version.
 
 ### parseUnit
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:65`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:65`
 
 **Signature:**
 ```typescript
@@ -1194,7 +1194,7 @@ Handles common patterns:
 
 ### partialDerivatives
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/differentiation.ts:36`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/differentiation.ts:36`
 
 **Signature:**
 ```typescript
@@ -1212,7 +1212,7 @@ Compute partial derivatives with respect to multiple variables
 
 ### productMatrix
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/reactions.ts:314`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/reactions.ts:314`
 
 **Signature:**
 ```typescript
@@ -1236,7 +1236,7 @@ Returns the product stoichiometric matrix (species × reactions) where:
 
 ### profileOperation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:491`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:491`
 
 **Signature:**
 ```typescript
@@ -1247,7 +1247,7 @@ export function profileOperation(operationName: string) {
 
 ### registerWebComponents
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:565`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:565`
 
 **Signature:**
 ```typescript
@@ -1258,7 +1258,7 @@ export function registerWebComponents() {
 
 ### registerWebComponents
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:420`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:420`
 
 **Signature:**
 ```typescript
@@ -1273,7 +1273,7 @@ Register all ESM editor web components
 
 ### removeCoupling
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:482`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:482`
 
 **Signature:**
 ```typescript
@@ -1292,7 +1292,7 @@ Remove a coupling entry from an ESM file by index
 
 ### removeEquation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:211`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:211`
 
 **Signature:**
 ```typescript
@@ -1311,7 +1311,7 @@ Remove an equation from a model
 
 ### removeEvent
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:422`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:422`
 
 **Signature:**
 ```typescript
@@ -1330,7 +1330,7 @@ Remove an event from a model by name
 
 ### removeReaction
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:279`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:279`
 
 **Signature:**
 ```typescript
@@ -1349,7 +1349,7 @@ Remove a reaction from a reaction system
 
 ### removeSpecies
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:328`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:328`
 
 **Signature:**
 ```typescript
@@ -1369,7 +1369,7 @@ Remove a species from a reaction system, with reference checking
 
 ### removeVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:83`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:83`
 
 **Signature:**
 ```typescript
@@ -1389,7 +1389,7 @@ Remove a variable from a model, with reference checking
 
 ### renameVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:155`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:155`
 
 **Signature:**
 ```typescript
@@ -1409,7 +1409,7 @@ Rename a variable throughout a model
 
 ### save
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/serialize.ts:15`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/serialize.ts:15`
 
 **Signature:**
 ```typescript
@@ -1432,7 +1432,7 @@ Serialize an EsmFile object to a formatted JSON string
 
 ### setupErrorLogging
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:628`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:628`
 
 **Signature:**
 ```typescript
@@ -1443,7 +1443,7 @@ export function setupErrorLogging(config: ErrorLoggerConfig = { logLevel: 'info'
 
 ### simplify
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/expression.ts:210`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/expression.ts:210`
 
 **Signature:**
 ```typescript
@@ -1464,7 +1464,7 @@ Simplify an expression using basic algebraic rules
 
 ### stoichiometricMatrix
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/reactions.ts:225`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/reactions.ts:225`
 
 **Signature:**
 ```typescript
@@ -1489,7 +1489,7 @@ Returns the net stoichiometric matrix (species × reactions) where:
 
 ### substitute
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/substitute.ts:27`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/substitute.ts:27`
 
 **Signature:**
 ```typescript
@@ -1515,7 +1515,7 @@ path through system hierarchy per format spec Section 4.3.
 
 ### substituteInEquations
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/edit.ts:245`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/edit.ts:245`
 
 **Signature:**
 ```typescript
@@ -1533,7 +1533,7 @@ Apply substitutions to all equations in a model
 
 ### substituteInModel
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/substitute.ts:148`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/substitute.ts:148`
 
 **Signature:**
 ```typescript
@@ -1554,7 +1554,7 @@ Returns a new model with substitutions applied (immutable).
 
 ### substituteInReactionSystem
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/substitute.ts:200`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/substitute.ts:200`
 
 **Signature:**
 ```typescript
@@ -1575,7 +1575,7 @@ Returns a new reaction system with substitutions applied (immutable).
 
 ### substrateMatrix
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/reactions.ts:280`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/reactions.ts:280`
 
 **Signature:**
 ```typescript
@@ -1599,7 +1599,7 @@ Returns the substrate stoichiometric matrix (species × reactions) where:
 
 ### toAscii
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/pretty-print.ts:577`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/pretty-print.ts:577`
 
 **Signature:**
 ```typescript
@@ -1614,7 +1614,7 @@ Format an expression as plain ASCII text
 
 ### toLatex
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/pretty-print.ts:536`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/pretty-print.ts:536`
 
 **Signature:**
 ```typescript
@@ -1629,7 +1629,7 @@ Format an expression as LaTeX mathematical notation
 
 ### toMathML
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/pretty-print.ts:617`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/pretty-print.ts:617`
 
 **Signature:**
 ```typescript
@@ -1644,7 +1644,7 @@ Format an expression as MathML markup for web/academic publishing
 
 ### toUnicode
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/pretty-print.ts:496`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/pretty-print.ts:496`
 
 **Signature:**
 ```typescript
@@ -1659,7 +1659,7 @@ Format an expression as Unicode mathematical notation
 
 ### validate
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/validate.ts:856`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/validate.ts:856`
 
 **Signature:**
 ```typescript
@@ -1681,7 +1681,7 @@ Validate ESM data and return structured validation result.
 
 ### validateSchema
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/parse.ts:1468`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/parse.ts:1468`
 
 **Signature:**
 ```typescript
@@ -1696,7 +1696,7 @@ Validate data against the ESM schema
 
 ### validateUnits
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:408`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:408`
 
 **Signature:**
 ```typescript
@@ -1715,7 +1715,7 @@ Validate dimensional consistency of all equations in an ESM file
 
 ### AffectEquation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:412`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:412`
 
 **Definition:**
 ```typescript
@@ -1734,7 +1734,7 @@ An affect equation in an event: lhs is the target variable (string), rhs is an e
 
 ### Assertion
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:559`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:559`
 
 **Definition:**
 ```typescript
@@ -1749,7 +1749,7 @@ A single scalar check at a (variable, time) point.
 
 ### AstStore
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/ast-store.ts:39`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/ast-store.ts:39`
 
 **Definition:**
 ```typescript
@@ -1764,7 +1764,7 @@ AST Store interface providing centralized ESM file management
 
 ### AstStoreConfig
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/ast-store.ts:27`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/ast-store.ts:27`
 
 **Definition:**
 ```typescript
@@ -1779,7 +1779,7 @@ Configuration for the AST store
 
 ### BoundaryCondition
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1195`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1195`
 
 **Definition:**
 ```typescript
@@ -1797,7 +1797,7 @@ Boundary condition for one or more dimensions.
 
 ### Change
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:73`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:73`
 
 **Definition:**
 ```typescript
@@ -1808,7 +1808,7 @@ export interface Change {
 
 ### Command
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:56`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:56`
 
 **Definition:**
 ```typescript
@@ -1819,7 +1819,7 @@ export interface Command {
 
 ### CommandResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:67`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:67`
 
 **Definition:**
 ```typescript
@@ -1830,7 +1830,7 @@ export interface CommandResult {
 
 ### CommonSubexpression
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:70`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:70`
 
 **Definition:**
 ```typescript
@@ -1841,7 +1841,7 @@ export interface CommonSubexpression {
 
 ### ComplexityMetrics
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:52`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:52`
 
 **Definition:**
 ```typescript
@@ -1852,7 +1852,7 @@ export interface ComplexityMetrics {
 
 ### ComponentGraph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:53`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:53`
 
 **Definition:**
 ```typescript
@@ -1863,7 +1863,7 @@ export interface ComponentGraph {
 
 ### ComponentNode
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:12`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:12`
 
 **Definition:**
 ```typescript
@@ -1878,7 +1878,7 @@ export interface ComponentNode {
 
 ### ConnectorEquation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1042`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1042`
 
 **Definition:**
 ```typescript
@@ -1896,7 +1896,7 @@ A single equation in a ConnectorSystem linking two coupled systems.
 
 ### ContinuousEvent
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:452`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:452`
 
 **Definition:**
 ```typescript
@@ -1915,7 +1915,7 @@ Fires when a condition expression crosses zero (root-finding). Maps to MTK Symbo
 
 ### CoordinateTransform
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1187`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1187`
 
 **Definition:**
 ```typescript
@@ -1929,7 +1929,7 @@ export interface CoordinateTransform {
 
 ### CouplingCallback
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1105`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1105`
 
 **Definition:**
 ```typescript
@@ -1947,7 +1947,7 @@ Register a callback for simulation events.
 
 ### CouplingCouple
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1016`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1016`
 
 **Definition:**
 ```typescript
@@ -1966,7 +1966,7 @@ Bi-directional coupling via explicit ConnectorSystem equations.
 
 ### CouplingEdge
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:35`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:35`
 
 **Definition:**
 ```typescript
@@ -1982,7 +1982,7 @@ export interface CouplingEdge {
 
 ### CouplingOperatorApply
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1094`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1094`
 
 **Definition:**
 ```typescript
@@ -2000,7 +2000,7 @@ Register an Operator to run during simulation.
 
 ### CouplingOperatorCompose
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:988`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:988`
 
 **Definition:**
 ```typescript
@@ -2018,7 +2018,7 @@ Match LHS time derivatives and add RHS terms together.
 
 ### CouplingVariableMap
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1063`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1063`
 
 **Definition:**
 ```typescript
@@ -2036,7 +2036,7 @@ Replace a parameter in one system with a variable from another.
 
 ### DataLoader
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:826`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:826`
 
 **Definition:**
 ```typescript
@@ -2055,7 +2055,7 @@ A generic, runtime-agnostic description of an external data source. Carries enou
 
 ### DataLoaderRegridding
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:950`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:950`
 
 **Definition:**
 ```typescript
@@ -2070,7 +2070,7 @@ Structural regridding configuration. Algorithm-specific tuning parameters are ru
 
 ### DataLoaderSource
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:853`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:853`
 
 **Definition:**
 ```typescript
@@ -2085,7 +2085,7 @@ File discovery configuration. Describes how to locate data files at runtime via 
 
 ### DataLoaderSpatial
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:895`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:895`
 
 **Definition:**
 ```typescript
@@ -2100,7 +2100,7 @@ Spatial grid description for a data source.
 
 ### DataLoaderStaggering
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:925`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:925`
 
 **Definition:**
 ```typescript
@@ -2115,7 +2115,7 @@ Per-dimension grid staggering (centered or edge-aligned).
 
 ### DataLoaderTemporal
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:866`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:866`
 
 **Definition:**
 ```typescript
@@ -2130,7 +2130,7 @@ Temporal coverage and record layout for a data source.
 
 ### DataLoaderVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:931`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:931`
 
 **Definition:**
 ```typescript
@@ -2145,7 +2145,7 @@ A variable exposed by a data loader, mapped from a source-file variable.
 
 ### DemoPageConfig
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/demo/demo-pages.ts:8`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/demo/demo-pages.ts:8`
 
 **Definition:**
 ```typescript
@@ -2156,7 +2156,7 @@ export interface DemoPageConfig {
 
 ### DependencyEdge
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:87`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:87`
 
 **Definition:**
 ```typescript
@@ -2171,7 +2171,7 @@ export interface DependencyEdge {
 
 ### DependencyGraph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:42`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:42`
 
 **Definition:**
 ```typescript
@@ -2182,7 +2182,7 @@ export interface DependencyGraph extends Graph<DependencyNode, DependencyRelatio
 
 ### DependencyNode
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:12`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:12`
 
 **Definition:**
 ```typescript
@@ -2193,7 +2193,7 @@ export interface DependencyNode {
 
 ### DependencyRelation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:28`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:28`
 
 **Definition:**
 ```typescript
@@ -2204,7 +2204,7 @@ export interface DependencyRelation {
 
 ### DerivativeResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:126`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:126`
 
 **Definition:**
 ```typescript
@@ -2215,7 +2215,7 @@ export interface DerivativeResult {
 
 ### DimensionalRep
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:14`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:14`
 
 **Definition:**
 ```typescript
@@ -2231,7 +2231,7 @@ Maps base dimensions to their powers
 
 ### Domain
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1146`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1146`
 
 **Definition:**
 ```typescript
@@ -2250,7 +2250,7 @@ Spatiotemporal domain specification (DomainInfo).
 
 ### DragState
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:41`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:41`
 
 **Definition:**
 ```typescript
@@ -2261,7 +2261,7 @@ export interface DragState {
 
 ### ESMError
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:101`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:101`
 
 **Definition:**
 ```typescript
@@ -2276,7 +2276,7 @@ export interface ESMError {
 
 ### ESMFormat2
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:208`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:208`
 
 **Definition:**
 ```typescript
@@ -2287,7 +2287,7 @@ export interface ESMFormat2 {
 
 ### EditorState
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:24`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:24`
 
 **Definition:**
 ```typescript
@@ -2298,7 +2298,7 @@ export interface EditorState {
 
 ### Equation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:404`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:404`
 
 **Definition:**
 ```typescript
@@ -2318,7 +2318,7 @@ An equation: lhs = rhs (or lhs ~ rhs in MTK notation).
 
 ### ErrorContext
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:80`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:80`
 
 **Definition:**
 ```typescript
@@ -2333,7 +2333,7 @@ export interface ErrorContext {
 
 ### ErrorLoggerConfig
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:621`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:621`
 
 **Definition:**
 ```typescript
@@ -2344,7 +2344,7 @@ export interface ErrorLoggerConfig {
 
 ### EsmCouplingGraphProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:84`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:84`
 
 **Definition:**
 ```typescript
@@ -2367,7 +2367,7 @@ interactive="true">
 
 ### EsmCouplingGraphProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:143`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:143`
 
 **Definition:**
 ```typescript
@@ -2391,7 +2391,7 @@ allow-editing="true">
 
 ### EsmExpressionEditorProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:55`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:55`
 
 **Definition:**
 ```typescript
@@ -2413,7 +2413,7 @@ show-palette="true">
 
 ### EsmExpressionNodeProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:36`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:36`
 
 **Definition:**
 ```typescript
@@ -2435,7 +2435,7 @@ allow-editing="true">
 
 ### EsmFileEditorProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:97`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:97`
 
 **Definition:**
 ```typescript
@@ -2457,7 +2457,7 @@ enable-undo="true">
 
 ### EsmFileSummaryProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:135`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:135`
 
 **Definition:**
 ```typescript
@@ -2479,7 +2479,7 @@ show-export-options="true">
 
 ### EsmModelEditorProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:59`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:59`
 
 **Definition:**
 ```typescript
@@ -2500,7 +2500,7 @@ allow-editing="true">
 
 ### EsmModelEditorProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:76`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:76`
 
 **Definition:**
 ```typescript
@@ -2522,7 +2522,7 @@ show-validation="true">
 
 ### EsmReactionEditorProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/web-components.ts:120`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/web-components.ts:120`
 
 **Definition:**
 ```typescript
@@ -2544,7 +2544,7 @@ show-validation="true">
 
 ### EsmSimulationControlsProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:157`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:157`
 
 **Definition:**
 ```typescript
@@ -2567,7 +2567,7 @@ available-backends='["julia", "python"]'>
 
 ### EsmValidationPanelProps
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/web-components.ts:108`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/web-components.ts:108`
 
 **Definition:**
 ```typescript
@@ -2589,7 +2589,7 @@ show-details="true">
 
 ### Example
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:590`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:590`
 
 **Definition:**
 ```typescript
@@ -2604,7 +2604,7 @@ An inline illustrative example of how to run the enclosing component. Defines th
 
 ### ExportOptions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/ModelExportUtils.ts:19`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/ModelExportUtils.ts:19`
 
 **Definition:**
 ```typescript
@@ -2619,7 +2619,7 @@ Export options for different formats
 
 ### ExpressionLocation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:82`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:82`
 
 **Definition:**
 ```typescript
@@ -2630,7 +2630,7 @@ export interface ExpressionLocation {
 
 ### ExpressionNode
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:346`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:346`
 
 **Definition:**
 ```typescript
@@ -2645,7 +2645,7 @@ An operation in the expression AST.
 
 ### ExpressionPattern
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:92`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:92`
 
 **Definition:**
 ```typescript
@@ -2656,7 +2656,7 @@ export interface ExpressionPattern {
 
 ### FixSuggestion
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/error-handling.ts:92`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/error-handling.ts:92`
 
 **Definition:**
 ```typescript
@@ -2671,7 +2671,7 @@ export interface FixSuggestion {
 
 ### FlattenMetadata
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/flatten.ts:35`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/flatten.ts:35`
 
 **Definition:**
 ```typescript
@@ -2690,7 +2690,7 @@ Metadata describing the origin of the flattened system.
 
 ### FlattenedEquation
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/flatten.ts:23`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/flatten.ts:23`
 
 **Definition:**
 ```typescript
@@ -2708,7 +2708,7 @@ A single equation in the flattened system, with dot-namespaced variable names.
 
 ### FlattenedSystem
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/flatten.ts:45`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/flatten.ts:45`
 
 **Definition:**
 ```typescript
@@ -2727,7 +2727,7 @@ A fully flattened representation of a coupled ESM system.
 
 ### FunctionalAffect
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:425`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:425`
 
 **Definition:**
 ```typescript
@@ -2746,7 +2746,7 @@ Registered functional affect handler (alternative to symbolic affects).
 
 ### FunctionalAffect1
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1119`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1119`
 
 **Definition:**
 ```typescript
@@ -2761,7 +2761,7 @@ Registered functional affect handler (alternative to symbolic affects).
 
 ### Graph
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:61`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:61`
 
 **Definition:**
 ```typescript
@@ -2776,7 +2776,7 @@ export interface Graph<N, E> {
 
 ### GraphExportOptions
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:162`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:162`
 
 **Definition:**
 ```typescript
@@ -2787,7 +2787,7 @@ export interface GraphExportOptions {
 
 ### HistoryEntry
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/history.ts:26`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/history.ts:26`
 
 **Definition:**
 ```typescript
@@ -2802,7 +2802,7 @@ History entry representing a state snapshot
 
 ### HoverState
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:79`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:79`
 
 **Definition:**
 ```typescript
@@ -2813,7 +2813,7 @@ export interface HoverState {
 
 ### Interface
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1228`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1228`
 
 **Definition:**
 ```typescript
@@ -2831,7 +2831,7 @@ Geometric connection between two domains of potentially different dimensionality
 
 ### InterfaceConstraint
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1268`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1268`
 
 **Definition:**
 ```typescript
@@ -2846,7 +2846,7 @@ Constraint on a non-shared dimension at the interface.
 
 ### LayoutAlgorithm
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:141`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:141`
 
 **Definition:**
 ```typescript
@@ -2857,7 +2857,7 @@ export interface LayoutAlgorithm {
 
 ### LayoutResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:149`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:149`
 
 **Definition:**
 ```typescript
@@ -2868,7 +2868,7 @@ export interface LayoutResult<N> {
 
 ### MatchResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:102`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:102`
 
 **Definition:**
 ```typescript
@@ -2879,7 +2879,7 @@ export interface MatchResult {
 
 ### Metadata
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:258`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:258`
 
 **Definition:**
 ```typescript
@@ -2898,7 +2898,7 @@ Authorship, provenance, and description.
 
 ### Model
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:289`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:289`
 
 **Definition:**
 ```typescript
@@ -2917,7 +2917,7 @@ An ODE system — a fully specified set of time-dependent equations.
 
 ### ModelVariable
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:330`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:330`
 
 **Definition:**
 ```typescript
@@ -2936,7 +2936,7 @@ A variable in an ODE model.
 
 ### Operator
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:963`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:963`
 
 **Definition:**
 ```typescript
@@ -2955,7 +2955,7 @@ A registered runtime operator (e.g., dry deposition, wet scavenging).
 
 ### Optimization
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/analysis/types.ts:112`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/analysis/types.ts:112`
 
 **Definition:**
 ```typescript
@@ -2966,7 +2966,7 @@ export interface Optimization {
 
 ### Parameter
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:775`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:775`
 
 **Definition:**
 ```typescript
@@ -2985,7 +2985,7 @@ A parameter in a reaction system.
 
 ### ParameterSweep
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:634`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:634`
 
 **Definition:**
 ```typescript
@@ -3000,7 +3000,7 @@ Optional parameter sweep. When present, the example represents a family of runs 
 
 ### Plot
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:659`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:659`
 
 **Definition:**
 ```typescript
@@ -3015,7 +3015,7 @@ A plot specification associated with an example. Only structural information is 
 
 ### PlotAxis
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:677`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:677`
 
 **Definition:**
 ```typescript
@@ -3030,7 +3030,7 @@ Axis specification: any state variable, observed variable, parameter name, or sw
 
 ### PlotSeries
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:707`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:707`
 
 **Definition:**
 ```typescript
@@ -3045,7 +3045,7 @@ A single named series for multi-series line or scatter plots.
 
 ### PlotValue
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:690`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:690`
 
 **Definition:**
 ```typescript
@@ -3060,7 +3060,7 @@ Required for heatmap; defines the color channel. Ignored for line/scatter.
 
 ### Reaction
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:783`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:783`
 
 **Definition:**
 ```typescript
@@ -3079,7 +3079,7 @@ A single reaction in a reaction system.
 
 ### ReactionSystem
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:714`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:714`
 
 **Definition:**
 ```typescript
@@ -3098,7 +3098,7 @@ A reaction network — declarative representation of chemical or biological reac
 
 ### Reference
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:280`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:280`
 
 **Definition:**
 ```typescript
@@ -3117,7 +3117,7 @@ Academic citation or data source reference.
 
 ### SchemaError
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/parse.ts:15`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/parse.ts:15`
 
 **Definition:**
 ```typescript
@@ -3135,7 +3135,7 @@ Schema validation error with JSON Pointer path
 
 ### SpatialDimension
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:1181`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:1181`
 
 **Definition:**
 ```typescript
@@ -3153,7 +3153,7 @@ Specification of a single spatial dimension.
 
 ### Species
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:767`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:767`
 
 **Definition:**
 ```typescript
@@ -3172,7 +3172,7 @@ A reactive species in a reaction system.
 
 ### StoichiometryEntry
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:806`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:806`
 
 **Definition:**
 ```typescript
@@ -3190,7 +3190,7 @@ A species with its stoichiometric coefficient in a reaction.
 
 ### StructuralError
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/validate.ts:51`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/validate.ts:51`
 
 **Definition:**
 ```typescript
@@ -3208,7 +3208,7 @@ Structural error type matching the format specification
 
 ### SubstitutionContext
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/substitute.ts:13`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/substitute.ts:13`
 
 **Definition:**
 ```typescript
@@ -3223,7 +3223,7 @@ Context for resolving scoped references during substitution
 
 ### SubsystemRef
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:484`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:484`
 
 **Definition:**
 ```typescript
@@ -3238,7 +3238,7 @@ A reference to an external ESM file containing a model or reaction system defini
 
 ### SweepRange
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:647`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:647`
 
 **Definition:**
 ```typescript
@@ -3253,7 +3253,7 @@ Generated range; mutually exclusive with values.
 
 ### Test
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:506`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:506`
 
 **Definition:**
 ```typescript
@@ -3268,7 +3268,7 @@ An inline validation test for the enclosing model or reaction system. Defines th
 
 ### TimeSpan
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:539`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:539`
 
 **Definition:**
 ```typescript
@@ -3283,7 +3283,7 @@ Simulation time interval expressed in the component's time units.
 
 ### Tolerance
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:493`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:493`
 
 **Definition:**
 ```typescript
@@ -3298,7 +3298,7 @@ Model-level default numerical tolerance for tests, used when a test or assertion
 
 ### Tolerance1
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:546`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:546`
 
 **Definition:**
 ```typescript
@@ -3313,7 +3313,7 @@ Test-level default tolerance applied to all assertions in this test that do not 
 
 ### Tolerance2
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:577`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:577`
 
 **Definition:**
 ```typescript
@@ -3328,7 +3328,7 @@ Per-assertion tolerance override. If present, this takes precedence over the tes
 
 ### Tolerance3
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/generated.ts:813`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/generated.ts:813`
 
 **Definition:**
 ```typescript
@@ -3343,7 +3343,7 @@ System-level default numerical tolerance for tests, used when a test or assertio
 
 ### TooltipData
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:86`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:86`
 
 **Definition:**
 ```typescript
@@ -3354,7 +3354,7 @@ export interface TooltipData {
 
 ### UndoHistory
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/history.ts:38`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/history.ts:38`
 
 **Definition:**
 ```typescript
@@ -3369,7 +3369,7 @@ Undo/redo history management interface
 
 ### UndoHistoryConfig
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/history.ts:14`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/history.ts:14`
 
 **Definition:**
 ```typescript
@@ -3384,7 +3384,7 @@ Configuration for undo history behavior
 
 ### UndoRedoState
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:48`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:48`
 
 **Definition:**
 ```typescript
@@ -3395,7 +3395,7 @@ export interface UndoRedoState {
 
 ### UnitResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:37`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:37`
 
 **Definition:**
 ```typescript
@@ -3410,7 +3410,7 @@ Result of dimensional analysis
 
 ### UnitWarning
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/units.ts:45`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/units.ts:45`
 
 **Definition:**
 ```typescript
@@ -3428,7 +3428,7 @@ Unit validation warning
 
 ### ValidationConfig
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:16`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:16`
 
 **Definition:**
 ```typescript
@@ -3443,7 +3443,7 @@ Configuration for validation behavior
 
 ### ValidationError
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/validate.ts:31`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/validate.ts:31`
 
 **Definition:**
 ```typescript
@@ -3462,7 +3462,7 @@ Validation error with structured details
 
 ### ValidationError
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/interactive-editor/index.ts:32`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/interactive-editor/index.ts:32`
 
 **Definition:**
 ```typescript
@@ -3477,7 +3477,7 @@ export interface ValidationError {
 
 ### ValidationErrorWithMetadata
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:28`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:28`
 
 **Definition:**
 ```typescript
@@ -3492,7 +3492,7 @@ Extended validation error with UI-specific metadata
 
 ### ValidationResult
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/validate.ts:41`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/validate.ts:41`
 
 **Definition:**
 ```typescript
@@ -3511,7 +3511,7 @@ Structured validation result
 
 ### ValidationSignals
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/esm-editor/src/primitives/validation.ts:40`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-editor/src/primitives/validation.ts:40`
 
 **Definition:**
 ```typescript
@@ -3526,7 +3526,7 @@ Validation signals interface providing reactive validation state
 
 ### VariableNode
 
-**File:** `/home/ctessum/esmlgt/EarthSciSerialization/polecats/pipboy/EarthSciSerialization/packages/earthsci-toolkit/src/graph.ts:75`
+**File:** `/home/ctessum/esmlgt/EarthSciAST/polecats/pipboy/EarthSciAST/pkg/earthsci-ast-ts/src/graph.ts:75`
 
 **Definition:**
 ```typescript

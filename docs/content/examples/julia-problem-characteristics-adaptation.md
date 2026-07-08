@@ -1,6 +1,6 @@
 # Problem Characteristics Adaptation (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/solver_optimization_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/solver_optimization_test.jl`
 
 ```julia
 base_config = Dict{String,Any}(
@@ -17,7 +17,7 @@ base_config = Dict{String,Any}(
             problem_size=100
         )
 
-        adapted_config = EarthSciSerialization.adapt_for_problem_characteristics(base_config, stiff_characteristics)
+        adapted_config = EarthSciAST.adapt_for_problem_characteristics(base_config, stiff_characteristics)
         @test adapted_config.stiff_kwargs["abstol"] == 1e-10  # Tighter tolerance
         @test adapted_config.stiff_kwargs["reltol"] == 1e-8   # Tighter tolerance
         @test adapted_config.stiff_algorithm == "QNDF"       # Stiff solver
@@ -31,7 +31,7 @@ base_config = Dict{String,Any}(
             problem_size=15000
         )
 
-        adapted_config2 = EarthSciSerialization.adapt_for_problem_characteristics(base_config, nonstiff_characteristics)
+        adapted_config2 = EarthSciAST.adapt_for_problem_characteristics(base_config, nonstiff_characteristics)
         @test adapted_config2.stiff_kwargs["abstol"] == 1e-6
         @test adapted_config2.stiff_kwargs["reltol"] == 1e-4
         @test adapted_config2.nonstiff_algorithm == "Tsit5"  # Fast explicit method

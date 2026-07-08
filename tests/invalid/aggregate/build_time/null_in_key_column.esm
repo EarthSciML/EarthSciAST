@@ -4,7 +4,7 @@
     "name": "null_in_key_column",
     "description": "INVALID at BUILD TIME, not schema time (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3). A value-equality join over a categorical key set with a NULL member: `keys` = [\"x\", null]. A null/missing key makes a row unmatchable (it joins to nothing, contributing 0-bar) and nulls never compare equal — but emitting `null` INTO a key column is a front-end error surfaced at build time, not silently dropped. This is SCHEMA-VALID (categorical `members` is an untyped array, so Go/TS load it cleanly), so it lives in the build_time/ subdir the Go/TS non-recursive *.esm globs skip, and the rejection is enforced by the EVALUATING bindings: Julia raises TreeWalkError, Python raises through simulate (success=False). Mirrors the engine-level unit tests in tree_walk_join_test.jl and test_numpy_interpreter_join.py.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

@@ -1,6 +1,6 @@
 # should generate model code with variables and equations (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/test_codegen.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/test_codegen.jl`
 
 ```julia
 file = EsmFile(

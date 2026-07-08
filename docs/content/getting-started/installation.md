@@ -6,29 +6,29 @@ Get the ESM format libraries installed and running on your system. Choose the la
 
 ### Julia
 ```bash
-julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")'
+julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")'
 ```
 
 ### TypeScript/JavaScript
 ```bash
-npm install earthsci-toolkit
+npm install @earthsciml/ast
 ```
 
 ### Python
 ```bash
-pip install earthsci-toolkit  # When available on PyPI
+pip install earthsci-ast  # When available on PyPI
 # Or install from source:
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci_toolkit
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-py
 pip install -e .
 ```
 
 ### Rust
 ```bash
-cargo install earthsci-toolkit --features cli
+cargo install earthsci-ast --features cli
 # Or add to Cargo.toml:
 # [dependencies]
-# earthsci-toolkit = "0.1.0"
+# earthsci-ast = "0.1.0"
 ```
 
 ## Detailed Installation
@@ -52,19 +52,19 @@ cargo install earthsci-toolkit --features cli
 #### From GitHub (Recommended)
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")
+Pkg.add(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")
 ```
 
 #### Development Setup
 ```julia
 using Pkg
-Pkg.develop(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")
+Pkg.develop(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")
 ```
 
 #### Verify Installation
 ```julia
-using EarthSciSerialization
-println("EarthSciSerialization.jl installed successfully!")
+using EarthSciAST
+println("EarthSciAST.jl installed successfully!")
 
 # Test basic functionality
 esm_data = """{"esm": "0.1.0", "metadata": {"name": "Test"}}"""
@@ -76,37 +76,37 @@ println("Loaded test model: ", esm_file.metadata.name)
 
 #### NPM
 ```bash
-npm install earthsci-toolkit
+npm install @earthsciml/ast
 ```
 
 #### Yarn
 ```bash
-yarn add earthsci-toolkit
+yarn add @earthsciml/ast
 ```
 
 #### Pnpm
 ```bash
-pnpm add earthsci-toolkit
+pnpm add @earthsciml/ast
 ```
 
 #### CDN (Browser)
 ```html
 <!-- ES Modules -->
 <script type="module">
-  import { load, validate } from 'https://unpkg.com/earthsci-toolkit/dist/esm/index.js';
+  import { load, validate } from 'https://unpkg.com/@earthsciml/ast/dist/esm/index.js';
 </script>
 
 <!-- UMD (older browsers) -->
-<script src="https://unpkg.com/earthsci-toolkit/dist/umd/index.js"></script>
+<script src="https://unpkg.com/@earthsciml/ast/dist/umd/index.js"></script>
 ```
 
 #### Verify Installation
 ```javascript
 // Node.js/CommonJS
-const { load, validate } = require('earthsci-toolkit');
+const { load, validate } = require('@earthsciml/ast');
 
 // ES Modules
-import { load, validate } from 'earthsci-toolkit';
+import { load, validate } from '@earthsciml/ast';
 
 // Test functionality
 const esmData = '{"esm": "0.1.0", "metadata": {"name": "Test"}}';
@@ -118,26 +118,26 @@ console.log('Loaded test model:', esmFile.metadata.name);
 
 #### From PyPI (when available)
 ```bash
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
 #### From Source
 ```bash
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci_toolkit
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-py
 pip install -e .
 ```
 
 #### With Optional Dependencies
 ```bash
 # For visualization support
-pip install earthsci-toolkit[viz]
+pip install earthsci-ast[viz]
 
 # For symbolic computation
-pip install earthsci-toolkit[symbolic]
+pip install earthsci-ast[symbolic]
 
 # All optional features
-pip install earthsci-toolkit[all]
+pip install earthsci-ast[all]
 ```
 
 #### Virtual Environment Setup
@@ -148,7 +148,7 @@ source esm_env/bin/activate  # Linux/macOS
 # esm_env\Scripts\activate   # Windows
 
 # Install package
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
 #### Conda Environment
@@ -161,17 +161,17 @@ conda activate esm_env
 conda install numpy scipy matplotlib sympy
 
 # Install ESM format
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
 #### Verify Installation
 ```python
-import earthsci_toolkit
-print("earthsci-toolkit installed successfully!")
+import earthsci_ast
+print("earthsci-ast installed successfully!")
 
 # Test basic functionality
 esm_data = '{"esm": "0.1.0", "metadata": {"name": "Test"}}'
-esm_file = earthsci_toolkit.load_esm(esm_data)
+esm_file = earthsci_ast.load_esm(esm_data)
 print(f"Loaded test model: {esm_file.metadata.name}")
 ```
 
@@ -180,12 +180,12 @@ print(f"Loaded test model: {esm_file.metadata.name}")
 #### CLI Tool
 ```bash
 # Install from GitHub
-cargo install --git https://github.com/EarthSciML/EarthSciSerialization \
-  --root . earthsci-toolkit --features cli
+cargo install --git https://github.com/EarthSciML/EarthSciAST \
+  --root . earthsci-ast --features cli
 
 # Or clone and install locally
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci-toolkit-rs
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-rs
 cargo install --path . --features cli
 ```
 
@@ -193,10 +193,10 @@ cargo install --path . --features cli
 Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-earthsci-toolkit = { git = "https://github.com/EarthSciML/EarthSciSerialization", package = "earthsci-toolkit" }
+earthsci-ast = { git = "https://github.com/EarthSciML/EarthSciAST", package = "earthsci-ast" }
 
 # Or with specific features
-earthsci-toolkit = { git = "https://github.com/EarthSciML/EarthSciSerialization", package = "earthsci-toolkit", features = ["wasm"] }
+earthsci-ast = { git = "https://github.com/EarthSciML/EarthSciAST", package = "earthsci-ast", features = ["wasm"] }
 ```
 
 #### WebAssembly
@@ -205,8 +205,8 @@ earthsci-toolkit = { git = "https://github.com/EarthSciML/EarthSciSerialization"
 cargo install wasm-pack
 
 # Clone repository
-git clone https://github.com/EarthSciML/EarthSciSerialization.git
-cd EarthSciSerialization/packages/earthsci-toolkit-rs
+git clone https://github.com/EarthSciML/EarthSciAST.git
+cd EarthSciAST/pkg/earthsci-ast-rs
 
 # Build for web
 wasm-pack build --target web --features wasm
@@ -225,7 +225,7 @@ esm validate test.esm
 
 ```rust
 // Library usage
-use earthsci_toolkit::{load, validate};
+use earthsci_ast::{load, validate};
 
 fn main() {
     let esm_data = r#"{"esm": "0.1.0", "metadata": {"name": "Test"}}"#;
@@ -242,20 +242,20 @@ For comprehensive ESM format development, you may want multiple languages:
 ```bash
 # 1. Install Julia
 curl -fsSL https://install.julialang.org | sh
-julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")'
+julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")'
 
 # 2. Install Node.js and package
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
-npm install -g earthsci-toolkit
+npm install -g @earthsciml/ast
 
 # 3. Install Python and package
 sudo apt-get install python3 python3-pip
-pip install earthsci-toolkit
+pip install earthsci-ast
 
 # 4. Install Rust and CLI
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-cargo install earthsci-toolkit --features cli
+cargo install earthsci-ast --features cli
 ```
 
 ### Docker Environment
@@ -276,10 +276,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install ESM packages
-RUN pip install earthsci-toolkit
-RUN npm install -g earthsci-toolkit
-RUN cargo install earthsci-toolkit --features cli
-RUN julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciSerialization", subdir="packages/EarthSciSerialization.jl")'
+RUN pip install earthsci-ast
+RUN npm install -g @earthsciml/ast
+RUN cargo install earthsci-ast --features cli
+RUN julia -e 'using Pkg; Pkg.add(url="https://github.com/EarthSciML/EarthSciAST", subdir="pkg/EarthSciAST.jl")'
 
 WORKDIR /workspace
 ```
@@ -317,10 +317,10 @@ npm install
 pip install --upgrade pip setuptools wheel
 
 # Install with verbose output for debugging
-pip install -v earthsci-toolkit
+pip install -v earthsci-ast
 
 # Use --user if permissions issues
-pip install --user earthsci-toolkit
+pip install --user earthsci-ast
 ```
 
 #### Rust Compilation Errors
@@ -332,7 +332,7 @@ rustup update
 cargo clean
 
 # Install with verbose output
-cargo install --verbose earthsci-toolkit --features cli
+cargo install --verbose earthsci-ast --features cli
 ```
 
 ### Platform-Specific Notes
@@ -375,6 +375,6 @@ After installation:
 
 - **Installation Issues** — Check the [Troubleshooting Guide](../troubleshooting/)
 - **Language-Specific Problems** — See individual language guides
-- **Bug Reports** — File issues in the [GitHub repository](https://github.com/EarthSciML/EarthSciSerialization)
+- **Bug Reports** — File issues in the [GitHub repository](https://github.com/EarthSciML/EarthSciAST)
 
 Ready to get started? Head to the [Quick Start Guide](quick-start.md)!

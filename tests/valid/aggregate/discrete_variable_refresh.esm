@@ -4,7 +4,7 @@
     "name": "discrete_variable_refresh",
     "description": "M3 schema fixture (RFC semiring-faq-unified-ir §6.1 / §8; bead ess-my4.3.2): the new `discrete` variable kind — a third variable role beside state (CONTINUOUS) and parameter (CONST). A discrete variable has a shape fixed at setup but values that refresh only at discrete events; it is the declared seed for the DISCRETE cadence class that the dependency-partition pass schedules into a per-event handler. This fixture declares one discrete variable for each of the three refresh-trigger forms — a `schedule` (tstops, the MTK PresetTimeCallback analogue; here a met field reloaded on a periodic interval), a `data_ingest` event (a boundary-condition field reloaded when its source advances), and a `remesh` hook (reloadable mesh topology under AMR) — plus one discrete variable with NO refresh trigger (a setup-only buffer, e.g. a mesh loaded once). Each declares its fixed `shape`; the refresh trigger is inert to the algebra. The model also carries an ordinary continuous state, so the partition is genuinely three-cadence. Validates against the schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.capable"
+      "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
       "discrete-variable",

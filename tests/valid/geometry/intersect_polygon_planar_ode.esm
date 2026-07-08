@@ -4,7 +4,7 @@
     "name": "intersect_polygon_planar_ode",
     "description": "M4 conservative-regridding geometry kernel — the END-TO-END SIMULATE/ODE companion to intersect_polygon_planar_area (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.13). This fixture is integrated as an ODE through simulate(): the array-op simulate driver materializes the array-valued observed `clip = intersect_polygon(src_poly, tgt_poly)` (its overlap ring registered as the derived `clip_ring` index set via from_faq), then the scalar observed `area = sum_product FAQ(clip)` (planar shoelace over the closed ring), then integrates the well-formed ODE d(tracer)/dt = -area·tracer. The two source/target cells are unit-aligned squares overlapping in the [1,2]×[1,2] box held as `const` observed inputs, so the planar overlap area is exactly 1.0 and tracer(t) = tracer0·exp(-t). The `planar` manifold is dependency-free (numpy Sutherland–Hodgman), so this conformance fixture runs without the optional `spherely` (S2) backend. Modeling the polygon inputs as `const` observeds keeps the whole model self-contained so the test_aggregate_conformance-style runner — which supplies only scalar initial_conditions / parameter_overrides — can drive it. Cross-binding area agreement is tolerance-based (§5.8.2 / B.5).",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "geometry",

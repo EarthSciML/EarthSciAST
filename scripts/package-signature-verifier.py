@@ -3,7 +3,7 @@
 Package Signature Verification System
 
 This tool handles cryptographic verification of package signatures to ensure
-package authenticity and integrity for the EarthSciSerialization project.
+package authenticity and integrity for the EarthSciAST project.
 
 Supports GPG signatures, checksums, and package registry verification.
 """
@@ -475,17 +475,17 @@ class PackageSignatureVerifier:
 
         return result
 
-    def verify_all_packages(self, packages_dir: str = "packages") -> Dict[str, Any]:
+    def verify_all_packages(self, packages_dir: str = "pkg") -> Dict[str, Any]:
         """Verify signatures for all packages in the project."""
         if not os.path.exists(packages_dir):
             raise SignatureVerificationError(f"Packages directory not found: {packages_dir}")
 
         package_mapping = {
-            "EarthSciSerialization.jl": "julia",
-            "earthsci_toolkit": "python",
-            "earthsci-toolkit": "npm",
-            "esm-editor": "npm",
-            "earthsci-toolkit-rs": "rust",
+            "EarthSciAST.jl": "julia",
+            "earthsci-ast-py": "python",
+            "earthsci-ast-ts": "npm",
+            "earthsci-ast-editor": "npm",
+            "earthsci-ast-rs": "rust",
         }
 
         results = {
@@ -521,8 +521,8 @@ def main():
     parser = argparse.ArgumentParser(description="Package Signature Verification System")
     parser.add_argument(
         "--packages-dir",
-        default="packages",
-        help="Directory containing packages to verify (default: packages)",
+        default="pkg",
+        help="Directory containing packages to verify (default: pkg)",
     )
     parser.add_argument("--config", help="Path to signature verification configuration file")
     parser.add_argument(
@@ -555,11 +555,11 @@ def main():
                 print("Creating signatures for all packages...")
                 # Implementation for creating signatures for all packages
                 package_mapping = {
-                    "EarthSciSerialization.jl": "julia",
-                    "earthsci_toolkit": "python",
-                    "earthsci-toolkit": "npm",
-                    "esm-editor": "npm",
-                    "earthsci-toolkit-rs": "rust",
+                    "EarthSciAST.jl": "julia",
+                    "earthsci-ast-py": "python",
+                    "earthsci-ast-ts": "npm",
+                    "earthsci-ast-editor": "npm",
+                    "earthsci-ast-rs": "rust",
                 }
 
                 for package_name in package_mapping:

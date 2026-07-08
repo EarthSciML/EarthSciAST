@@ -6,7 +6,7 @@ The adversarial harness for the **cross-binding determinism contract** —
 
 ## Why this exists
 
-`earthsci-toolkit` is **parallel native implementations** (Julia, Rust,
+`EarthSciAST` is **parallel native implementations** (Julia, Rust,
 Python, …) verified by a conformance suite — not one core behind FFI. The
 value-invention primitives (`skolem`, `distinct`, `rank`) and value-equality /
 group-by joins produce **index sets and dense IDs that other nodes consume**.

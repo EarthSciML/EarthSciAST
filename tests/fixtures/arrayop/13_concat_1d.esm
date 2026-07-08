@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_13_concat_1d",
     "description": "Exercises the `concat` op along axis 0. Two 1D arrays a[1:3] and b[1:2] are held constant; concat(a, b, axis=0) yields a length-5 vector. Scalar `head` integrates index(concat(a,b,axis=0), 2) = a[2]. Scalar `tail` integrates index(concat(a,b,axis=0), 5) = b[2]. This verifies both the concat length (we index into positions past end(a)) and element order.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "concat"]
   },
   "models": {

@@ -69,7 +69,7 @@ Found an error or want to improve the documentation? Please see our [contributin
 
 ## 🆘 Need Help?
 
-- **Documentation Issues** — File an issue in our [GitHub repository](https://github.com/EarthSciML/EarthSciSerialization)
+- **Documentation Issues** — File an issue in our [GitHub repository](https://github.com/EarthSciML/EarthSciAST)
 - **Format Questions** — Check the [troubleshooting guide](troubleshooting/) first
 - **Implementation Bugs** — Report in the appropriate package repository
 

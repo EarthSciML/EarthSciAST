@@ -34,7 +34,7 @@
         "typescript": "TypeScript binding has no arrayop numeric executor; round-trip only.",
         "go": "Go binding has no arrayop numeric executor; round-trip only."
       },
-      "notes": "Julia executes via both the tree-walk path (build_evaluator generalized-einsum unroll, tree_walk.jl:294-370) and the MTK path (EarthSciSerializationMTKExt _build_arrayop_sym). The tree-walk path requires the LHS-arrayop form; the MTK path additionally handles the embedded form. Fixture 23 uses the LHS-arrayop form, which both Julia paths support."
+      "notes": "Julia executes via both the tree-walk path (build_evaluator generalized-einsum unroll, tree_walk.jl:294-370) and the MTK path (EarthSciASTMTKExt _build_arrayop_sym). The tree-walk path requires the LHS-arrayop form; the MTK path additionally handles the embedded form. Fixture 23 uses the LHS-arrayop form, which both Julia paths support."
     },
     {
       "id": "fixtures/arrayop/21_reduce_max_min_ode",

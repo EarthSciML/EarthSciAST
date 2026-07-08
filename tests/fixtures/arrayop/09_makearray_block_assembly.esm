@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_09_makearray_block_assembly",
     "description": "Exercises the `makearray` op by assembling a 3x3 matrix from two overlapping constant-valued rectangular regions (region 1 = [1:3,1:3] at value 1.0, region 2 = [2:3,2:3] at value 2.0). Each cell u[i,j] runs the trivial linear-growth ODE D(u[i,j]) = C[i,j] starting from u[i,j]=0. After t=1 we check that the overlapping cells picked up the later region's value (2.0) and the non-overlapping border cells hold the first region's value (1.0).",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "makearray"]
   },
   "models": {

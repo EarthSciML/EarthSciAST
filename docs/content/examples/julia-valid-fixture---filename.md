@@ -1,11 +1,11 @@
 # Valid fixture: $filename (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/runtests.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/runtests.jl`
 
 ```julia
 try
-                            esm_data = EarthSciSerialization.load(filepath)
-                            @test esm_data isa EarthSciSerialization.EsmFile
+                            esm_data = EarthSciAST.load(filepath)
+                            @test esm_data isa EarthSciAST.EsmFile
                             @test !isnothing(esm_data.esm)
                             @test !isnothing(esm_data.metadata)
                             @info "✓ Successfully loaded $filename"

@@ -4,7 +4,7 @@
     "name": "arrayop_22_reduce_min_ode",
     "description": "Tests arrayop with reduce=min in the ODE equation path: D(v[i]) = arrayop[i,j reduce=min] body. Two cells converge to min_j(i+2j-2)=i. Complements fixture 21 (reduce=max) and fixture 20 (embedded max) by adding the min reducer to the ODE path coverage.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",

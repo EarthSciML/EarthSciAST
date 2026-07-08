@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "earthsci_toolkit" / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "packages" / "earthsci_toolkit" / "tests"))
+sys.path.insert(0, str(PROJECT_ROOT / "pkg" / "earthsci-ast-py" / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "pkg" / "earthsci-ast-py" / "tests"))
 
 from hypothesis import given, settings, strategies as st  # noqa: E402
 from test_property_expression import (  # noqa: E402
@@ -35,7 +35,7 @@ from test_property_expression import (  # noqa: E402
     _op_reshape,
     _op_transpose,
 )
-from earthsci_toolkit.serialize import _serialize_expression  # noqa: E402
+from earthsci_ast.serialize import _serialize_expression  # noqa: E402
 
 
 def _collect(strategy, count: int) -> list:

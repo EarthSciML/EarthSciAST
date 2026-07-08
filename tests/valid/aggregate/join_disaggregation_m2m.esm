@@ -4,7 +4,7 @@
     "name": "join_disaggregation_m2m",
     "description": "M2 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.3; bead ess-my4.2.5). A TRUE value-equality (data-derived) join exercising the DEFINED many-to-many cardinality: a key occurring m times on the left and n times on the right contributes all m*n product terms (categorical disaggregation, ESI). Two categorical key sets share the member value \"coal\" with multiplicity 2 on each side: `sources` = [coal, coal, oil], `factors` = [coal, coal, gas]. The join on [[i,j]] (i from sources, j from factors) admits a term iff member(sources[i]) == member(factors[j]) by Unicode code point. matched = (coal i's {1,2}) x (coal j's {1,2}) = 2*2 = 4; oil and gas are unmatched (contribute the additive identity 0-bar). With the constant body 1 under sum_product the scalar reduction COUNTS the admitted combinations: count(1) = 4 from a zero IC (vs 3*3 = 9 for the join-free full product), pinning the m*n cardinality. EVALUATED BY JULIA AND PYTHON: this non-positional value-equality join is the data-derived engine the dense Rust evaluator does not yet drive (M3 — Rust treats a loop-index key column as the degenerate positional no-op and would compute the full 9, so it is name-gated out of the Rust conformance suite; the inline expected=4 is a tripwire if it is ever wired in before M3). Go/TS validate the additive join schema. See join_disaggregation_m2m_permuted.esm for the determinism (order-independence) twin.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

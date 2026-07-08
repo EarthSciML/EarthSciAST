@@ -4,7 +4,7 @@
     "name": "categorical_index_set",
     "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §5.2; bead ess-my4.1.5). A `categorical` index set resolves to the dense bound [1, |members|], so a contraction drawn `{from}` it iterates one position per member. State `emissions[i]` sums the product body i*j over j drawn from the `fuels` categorical set (3 members -> j in 1..3): emissions[1]=Sum_{j=1..3}1*j=6, emissions[2]=Sum_{j=1..3}2*j=12 at t=1 — identical to an interval of size 3, which is the point: categorical membership count drives the contraction cardinality. Exercises the categorical IndexSet kind through `{from}` in the full simulate pipeline under the default-equivalent sum_product semiring. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",

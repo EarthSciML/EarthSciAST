@@ -1,6 +1,6 @@
 # ODE Derivation Tests (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reactions_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reactions_test.jl`
 
 ```julia
 # Test simple reaction A + B -> C

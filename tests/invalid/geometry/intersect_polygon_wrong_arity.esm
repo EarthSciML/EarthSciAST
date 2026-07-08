@@ -4,7 +4,7 @@
     "name": "intersect_polygon_wrong_arity",
     "description": "INVALID (bead ess-my4.4.2): an `intersect_polygon` node with THREE operands. The op is a strict BINARY clip — `args: [poly_a, poly_b]` — so the schema's intersect_polygon clause pins `args` to exactly two items (minItems:2, maxItems:2). A clip with a third polygon argument is a pure schema (array-length) violation; an n-ary overlay is not part of the op contract (chain binary clips instead). Caught by every binding at validation time.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",

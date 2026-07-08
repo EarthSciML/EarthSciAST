@@ -106,7 +106,7 @@ Save this as `minimal.esm`:
 
 ### Julia
 ```julia
-using EarthSciSerialization, ModelingToolkit, DifferentialEquations
+using EarthSciAST, ModelingToolkit, DifferentialEquations
 
 # Load the minimal example
 esm_file = load_esm("minimal.esm")
@@ -127,7 +127,7 @@ println("Decay factor: ", sol[end] / sol[1])  # Should be ≈ exp(-1)
 
 ### TypeScript
 ```typescript
-import { load, validate, toUnicode } from 'earthsci-toolkit';
+import { load, validate, toUnicode } from '@earthsciml/ast';
 import fs from 'fs';
 
 // Load and validate
@@ -152,7 +152,7 @@ console.log('Equation:', `d${equation.lhs}/dt =`, toUnicode(equation.rhs));
 
 ### Python
 ```python
-from earthsci_toolkit import load_esm, validate, to_unicode
+from earthsci_ast import load_esm, validate, to_unicode
 import numpy as np
 from scipy.integrate import odeint
 import matplotlib.pyplot as plt

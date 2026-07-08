@@ -64,7 +64,7 @@ Let's create a simple atmospheric chemistry model. Save this as `simple-model.es
 
 ### Julia
 ```julia
-using EarthSciSerialization
+using EarthSciAST
 
 # Load and parse
 esm_file = load_esm("simple-model.esm")
@@ -76,7 +76,7 @@ mtk_system = to_mtk(esm_file)
 
 ### TypeScript/JavaScript
 ```typescript
-import { load, validate, toUnicode } from 'earthsci-toolkit';
+import { load, validate, toUnicode } from '@earthsciml/ast';
 
 // Load and validate
 const esm_file = load(fs.readFileSync('simple-model.esm', 'utf8'));
@@ -93,7 +93,7 @@ if (result.isValid) {
 
 ### Python
 ```python
-from earthsci_toolkit import load_esm, validate, to_unicode
+from earthsci_ast import load_esm, validate, to_unicode
 
 # Load and validate
 esm_file = load_esm('simple-model.esm')

@@ -1,6 +1,6 @@
-# Contributing to EarthSciSerialization
+# Contributing to EarthSciAST
 
-Thank you for your interest in contributing to EarthSciSerialization! This guide covers everything you need to know to get started with development, testing, and submitting contributions to this multi-language earth science serialization project.
+Thank you for your interest in contributing to EarthSciAST! This guide covers everything you need to know to get started with development, testing, and submitting contributions to this multi-language earth science serialization project.
 
 ## Table of Contents
 
@@ -18,14 +18,14 @@ Thank you for your interest in contributing to EarthSciSerialization! This guide
 
 ## Overview
 
-EarthSciSerialization is a language-agnostic JSON-based format for earth science model components with implementations across multiple programming languages:
+EarthSciAST is a language-agnostic JSON-based format for earth science model components with implementations across multiple programming languages:
 
-- **Julia** (EarthSciSerialization.jl) - Complete MTK/Catalyst integration
-- **TypeScript** (earthsci-toolkit) - Web/Node.js types and utilities
-- **Python** (earthsci_toolkit) - Scientific Python integration
-- **Rust** (earthsci-toolkit) - High-performance implementation
-- **Go** (esm-format-go) - Lightweight Go implementation
-- **SolidJS** (esm-editor) - Interactive web-based editor
+- **Julia** (EarthSciAST.jl) - Complete MTK/Catalyst integration
+- **TypeScript** (@earthsciml/ast) - Web/Node.js types and utilities
+- **Python** (earthsci_ast) - Scientific Python integration
+- **Rust** (earthsci-ast) - High-performance implementation
+- **Go** (earthsci-ast-go) - Lightweight Go implementation
+- **SolidJS** (earthsci-ast-editor) - Interactive web-based editor
 
 All implementations must maintain conformance across languages through our comprehensive test suite.
 
@@ -46,8 +46,8 @@ Ensure you have the following installed:
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/EarthSciML/EarthSciSerialization.git
-   cd EarthSciSerialization
+   git clone https://github.com/EarthSciML/EarthSciAST.git
+   cd EarthSciAST
    ```
 
 2. **Install dependencies for all packages:**
@@ -88,14 +88,14 @@ Ensure you have the following installed:
 ## Project Structure
 
 ```
-EarthSciSerialization/
-├── packages/                 # Language-specific implementations
-│   ├── EarthSciSerialization.jl/        # Julia implementation
-│   ├── earthsci-toolkit/    # TypeScript implementation
-│   ├── earthsci_toolkit/          # Python implementation
-│   ├── earthsci-toolkit-rs/  # Rust implementation
-│   ├── esm-format-go/       # Go implementation
-│   └── esm-editor/          # SolidJS web editor
+EarthSciAST/
+├── pkg/                 # Language-specific implementations
+│   ├── EarthSciAST.jl/        # Julia implementation
+│   ├── earthsci-ast-ts/    # TypeScript implementation
+│   ├── earthsci_ast/          # Python implementation
+│   ├── earthsci-ast-rs/  # Rust implementation
+│   ├── earthsci-ast-go/       # Go implementation
+│   └── earthsci-ast-editor/          # SolidJS web editor
 ├── tests/                   # Cross-language conformance tests
 │   ├── valid/              # Valid ESM files for testing
 │   ├── invalid/            # Invalid ESM files for validation testing
@@ -224,7 +224,7 @@ test(conformance): add mathematical correctness fixtures
 
 ## Language-Specific Guidelines
 
-### Julia (EarthSciSerialization.jl)
+### Julia (EarthSciAST.jl)
 
 - **Primary Implementation**: Julia is the reference implementation
 - **Testing**: All changes must pass Julia test suite
@@ -234,11 +234,11 @@ test(conformance): add mathematical correctness fixtures
 
 ```bash
 # Julia development workflow
-cd packages/EarthSciSerialization.jl
+cd pkg/EarthSciAST.jl
 julia --project=. -e 'using Pkg; Pkg.activate("."); Pkg.test()'
 ```
 
-### TypeScript (earthsci-toolkit)
+### TypeScript (@earthsciml/ast)
 
 - **Standards**: Strict TypeScript (`npm run typecheck`), ESLint + Prettier
 - **Testing**: Vitest for unit tests
@@ -247,7 +247,7 @@ julia --project=. -e 'using Pkg; Pkg.activate("."); Pkg.test()'
 
 ```bash
 # TypeScript development workflow
-cd packages/earthsci-toolkit
+cd pkg/earthsci-ast-ts
 npm install
 npm run typecheck
 npm run lint
@@ -256,7 +256,7 @@ npm test
 npm run build
 ```
 
-### Python (earthsci_toolkit)
+### Python (earthsci_ast)
 
 - **Standards**: PEP 8, type hints, Black formatting
 - **Testing**: pytest for unit tests, mypy for type checking
@@ -265,14 +265,14 @@ npm run build
 
 ```bash
 # Python development workflow
-cd packages/earthsci_toolkit
+cd pkg/earthsci-ast-py
 pip install -e .[dev]
 python -m pytest
-python -m mypy earthsci_toolkit/
-python -m black earthsci_toolkit/
+python -m mypy earthsci_ast/
+python -m black earthsci_ast/
 ```
 
-### Rust (earthsci-toolkit)
+### Rust (earthsci-ast)
 
 - **Standards**: rustfmt, clippy, comprehensive error handling
 - **Testing**: Standard Rust testing with cargo test
@@ -281,14 +281,14 @@ python -m black earthsci_toolkit/
 
 ```bash
 # Rust development workflow
-cd packages/earthsci-toolkit-rs
+cd pkg/earthsci-ast-rs
 cargo fmt
 cargo clippy -- -D warnings
 cargo test
 cargo bench  # for performance testing
 ```
 
-### Go (esm-format-go)
+### Go (earthsci-ast-go)
 
 - **Standards**: gofmt, go vet, standard Go conventions
 - **Testing**: Go standard testing package
@@ -297,7 +297,7 @@ cargo bench  # for performance testing
 
 ```bash
 # Go development workflow
-cd packages/esm-format-go
+cd pkg/earthsci-ast-go
 go fmt ./...
 go vet ./...
 go test ./...
@@ -438,4 +438,4 @@ languages. Before filing a PR that adds one, work through this checklist:
 ./scripts/test-conformance.sh  # Run full conformance tests
 ```
 
-Thank you for contributing to EarthSciSerialization! Your contributions help advance earth science modeling capabilities across programming languages.
+Thank you for contributing to EarthSciAST! Your contributions help advance earth science modeling capabilities across programming languages.

@@ -116,6 +116,6 @@ ports; no array/ODE simulator).
 
 ## Runners
 
-* **Julia** — `packages/EarthSciSerialization.jl/test/discrete_materialize_conformance_test.jl`
-* **Python** — `packages/earthsci_toolkit/tests/test_discrete_materialize_conformance.py`
-* **Rust** — `packages/earthsci-toolkit-rs/tests/discrete_materialize_conformance.rs`
+* **Julia** — `pkg/EarthSciAST.jl/test/discrete_materialize_conformance_test.jl`
+* **Python** — `pkg/earthsci-ast-py/tests/test_discrete_materialize_conformance.py`
+* **Rust** — `pkg/earthsci-ast-rs/tests/discrete_materialize_conformance.rs`

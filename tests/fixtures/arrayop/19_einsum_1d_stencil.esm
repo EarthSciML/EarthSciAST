@@ -4,7 +4,7 @@
     "name": "arrayop_19_einsum_1d_stencil",
     "description": "Generalized-einsum form of the 1D heat equation from fixture 15. Interior cells (i in 1..2, cell index i+1) use a contracted stencil index k in [-1,0,1] with weight ifelse(k==0,-2,1) to express the standard second-difference operator: D(u[i+1]) = sum_k 25*ifelse(k==0,-2,1)*u[i+1+k]. Boundary cells (u[1] and u[4]) are scalar equations with ghost cells u[0]=u[5]=0. The same first-mode sinusoidal IC decays with eigenvalue lambda_1=25*(2*cos(pi/5)-2)=-9.5492, so u[i,t]=exp(lambda_1*t)*sin(pi*i/5). This fixture tests the generalized-einsum evaluator path: contracted index k must be unrolled at build time and combined with the reduce operator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",

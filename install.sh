@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# EarthSciSerialization Environment Setup and Installation Script
+# EarthSciAST Environment Setup and Installation Script
 # Provides automated setup for development environments across all supported languages
 
 set -e
@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 print_header() {
     echo -e "${CYAN}"
     echo "=============================================="
-    echo "  EarthSciSerialization Environment Setup"
+    echo "  EarthSciAST Environment Setup"
     echo "=============================================="
     echo -e "${NC}"
     echo ""
@@ -26,7 +26,7 @@ print_header() {
 
 print_help() {
     cat << EOF
-EarthSciSerialization Environment Setup
+EarthSciAST Environment Setup
 
 Usage: ./install.sh [options]
 

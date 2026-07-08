@@ -4,7 +4,7 @@
     "name": "join_disaggregation_m2m_permuted",
     "description": "M2 cross-binding DETERMINISM conformance fixture (RFC semiring-faq-unified-ir §5.3 / §5.7 rule 5; bead ess-my4.2.5). The permuted-input twin of join_disaggregation_m2m.esm: the SAME many-to-many value-equality join with the members of both key sets reordered — `sources` = [oil, coal, coal] (coal now at positions {2,3}), `factors` = [gas, coal, coal] (coal at {2,3}). Value-equality matching is by member VALUE, not declared position, so the admitted set is still coal x coal = 2*2 = 4 and count(1) = 4 — IDENTICAL to the canonical-order fixture. A correct implementation buckets by key value (RFC A.6) and reduces with the associative+commutative semiring oplus, so permuting either relation cannot change the result; a buggy first-seen / position-dependent implementation would diverge. Asserting the identical expected=4 across the canonical and permuted fixtures is the cross-binding permuted-input -> identical-result determinism proof (Julia + Python; Rust m*n is M3, see the canonical fixture). Go/TS validate the additive join schema.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

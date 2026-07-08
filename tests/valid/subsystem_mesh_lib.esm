@@ -3,7 +3,7 @@
   "metadata": {
     "name": "subsystem_mesh_lib",
     "description": "A standalone mesh subsystem file — the ESD MPAS-style mount pattern (esm-spec §4.7 'Index-set merge'). The file OWNS its axes: top-level index_sets declare cells (interval, 5) and vertices (interval, 4), and the single Mesh model's variables are shaped over them. Mounted by reference (tests/valid/subsystem_index_set_merge.esm), these index_sets merge into the importing document's registry: deep-equal redeclaration is idempotent, an absent name is added, and a non-deep-equal collision is the load-time error subsystem_index_set_conflict (tests/invalid/template_imports/subsystem_index_set_conflict.esm). Loads standalone as an ordinary single-model document.",
-    "authors": ["EarthSciSerialization"],
+    "authors": ["EarthSciAST"],
     "created": "2026-07-02T00:00:00Z",
     "tags": ["subsystem", "index_sets", "merge", "mesh", "mount"]
   },

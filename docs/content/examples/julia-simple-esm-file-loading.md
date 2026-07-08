@@ -1,6 +1,6 @@
 # Simple ESM File Loading (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/parse_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/parse_test.jl`
 
 ```julia
 # Create a minimal ESM file

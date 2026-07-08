@@ -56,7 +56,7 @@ class DocumentationExtractor:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root
-        self.packages_dir = project_root / "packages"
+        self.packages_dir = project_root / "pkg"
         self.docs_dir = project_root / "docs"
 
     def extract_all(self) -> Dict[str, Any]:
@@ -91,7 +91,7 @@ class DocumentationExtractor:
 
     def _extract_julia_docs(self) -> Dict[str, Any]:
         """Extract documentation from Julia package."""
-        julia_dir = self.packages_dir / "EarthSciSerialization.jl"
+        julia_dir = self.packages_dir / "EarthSciAST.jl"
         src_dir = julia_dir / "src"
 
         functions = []
@@ -102,7 +102,7 @@ class DocumentationExtractor:
             return {"functions": functions, "types": types, "examples": examples}
 
         # Extract from main module file
-        main_file = src_dir / "EarthSciSerialization.jl"
+        main_file = src_dir / "EarthSciAST.jl"
         if main_file.exists():
             functions.extend(self._parse_julia_exports(main_file))
 
@@ -277,7 +277,7 @@ class DocumentationExtractor:
 
     def _extract_python_docs(self) -> Dict[str, Any]:
         """Extract documentation from Python package."""
-        python_dir = self.packages_dir / "earthsci_toolkit"
+        python_dir = self.packages_dir / "earthsci-ast-py"
 
         functions = []
         types = []
@@ -401,7 +401,7 @@ class DocumentationExtractor:
 
     def _extract_typescript_docs(self) -> Dict[str, Any]:
         """Extract documentation from TypeScript package."""
-        ts_dirs = [self.packages_dir / "earthsci-toolkit", self.packages_dir / "esm-editor"]
+        ts_dirs = [self.packages_dir / "earthsci-ast-ts", self.packages_dir / "earthsci-ast-editor"]
 
         functions = []
         types = []
@@ -513,7 +513,7 @@ class DocumentationExtractor:
 
     def _extract_rust_docs(self) -> Dict[str, Any]:
         """Extract documentation from Rust package."""
-        rust_dir = self.packages_dir / "earthsci-toolkit"
+        rust_dir = self.packages_dir / "earthsci-ast-ts"
 
         functions = []
         types = []
@@ -905,13 +905,13 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'docs/**'
       - 'scripts/generate_docs.py'
   pull_request:
     branches: [ main ]
     paths:
-      - 'packages/**'
+      - 'pkg/**'
       - 'docs/**'
       - 'scripts/generate_docs.py'
 

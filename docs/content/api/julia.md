@@ -8,7 +8,7 @@ ModelingToolkit and Catalyst integration is provided via **package extensions**.
 The public API is **constructor dispatch** on the foreign types:
 
 ```julia
-using EarthSciSerialization, ModelingToolkit, Catalyst
+using EarthSciAST, ModelingToolkit, Catalyst
 
 # Flatten first (always) — then dispatch on FlattenedSystem
 flat = flatten(esm_file)
@@ -23,7 +23,7 @@ pde = ModelingToolkit.PDESystem(flat; name=:Atmosphere)
 cat = Catalyst.ReactionSystem(esm_file.reaction_systems["Chem"]; name=:Chem)
 
 # Reverse direction
-model = EarthSciSerialization.Model(sys)
+model = EarthSciAST.Model(sys)
 ```
 
 Calling `ModelingToolkit.System` on a PDE-shaped flattened system throws
@@ -41,7 +41,7 @@ package — no availability check needed.
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:300`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:300`
 
 ```julia
 function Base.show(io::IO, ::MIME"text/plain", expr::Expr)
@@ -56,7 +56,7 @@ Unicode display: chemical subscripts via element-aware tokenizer, ∂x/∂t deri
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:309`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:309`
 
 ```julia
 function Base.show(io::IO, ::MIME"text/latex", expr::Expr)
@@ -70,7 +70,7 @@ LaTeX display: \\frac{}{}, \\partial, \\mathrm{} for species.
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:574`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:574`
 
 ```julia
 function Base.show(io::IO, equation::Equation)
@@ -84,7 +84,7 @@ Display equation in Unicode format.
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:585`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:585`
 
 ```julia
 function Base.show(io::IO, model::Model)
@@ -98,7 +98,7 @@ Model display: show(Model) prints equation list per spec Section 6.3.
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:642`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:642`
 
 ```julia
 function Base.show(io::IO, esm_file::EsmFile)
@@ -112,7 +112,7 @@ EsmFile display: show(EsmFile) prints structured summary per spec Section 6.3.
 
 ### Base
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:696`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:696`
 
 ```julia
 function Base.show(io::IO, reaction_system::ReactionSystem)
@@ -126,7 +126,7 @@ ReactionSystem display: reactions in chemical notation.
 
 ### adapt_configuration_parameters
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:451`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:451`
 
 ```julia
 function adapt_configuration_parameters(config::SolverConfiguration, metrics::PerformanceMetrics, learning_rate::Float64)::SolverConfiguration
@@ -140,7 +140,7 @@ Adapt configuration parameters based on performance metrics.
 
 ### adapt_for_problem_characteristics
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:398`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:398`
 
 ```julia
 function adapt_for_problem_characteristics(config_dict::Dict{String,Any}, characteristics::ProblemCharacteristics)::SolverConfiguration
@@ -154,7 +154,7 @@ Adapt configuration based on problem characteristics.
 
 ### add_continuous_event
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:333`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:333`
 
 ```julia
 function add_continuous_event(model::Model, event::ContinuousEvent)::Model
@@ -168,7 +168,7 @@ Add a continuous event to a model.
 
 ### add_coupling
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:404`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:404`
 
 ```julia
 function add_coupling(file::EsmFile, entry::CouplingEntry)::EsmFile
@@ -182,7 +182,7 @@ Add a coupling entry to an ESM file.
 
 ### add_discrete_event
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:352`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:352`
 
 ```julia
 function add_discrete_event(model::Model, event::DiscreteEvent)::Model
@@ -196,7 +196,7 @@ Add a discrete event to a model.
 
 ### add_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:131`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:131`
 
 ```julia
 function add_equation(model::Model, equation::Equation)::Model
@@ -212,7 +212,7 @@ Appends the equation to the end of the equations list.
 
 ### add_error!
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:167`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:167`
 
 ```julia
 function add_error!(collector::ErrorCollector, error::ESMError)
@@ -226,7 +226,7 @@ Add an error to the collection.
 
 ### add_reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:217`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:217`
 
 ```julia
 function add_reaction(system::ReactionSystem, reaction::Reaction)::ReactionSystem
@@ -240,7 +240,7 @@ Add a new reaction to a reaction system.
 
 ### add_species
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:266`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:266`
 
 ```julia
 function add_species(system::ReactionSystem, name::String, species::Species)::ReactionSystem
@@ -254,7 +254,7 @@ Add a new species to a reaction system.
 
 ### add_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:18`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:18`
 
 ```julia
 function add_variable(model::Model, name::String, variable::ModelVariable)::Model
@@ -270,7 +270,7 @@ Creates a new model with the additional variable. Warns if variable already exis
 
 ### adjacency
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:69`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:69`
 
 ```julia
 function adjacency(graph::Graph{N, E}, node::N) where {N, E}
@@ -282,7 +282,7 @@ Get all adjacent nodes (both predecessors and successors).
 
 ### analyze_coupling_issues
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:571`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:571`
 
 ```julia
 function analyze_coupling_issues(esm_file, error_collector)
@@ -296,7 +296,7 @@ Analyze coupling-related issues and provide debugging info.
 
 ### apply_advanced_mtk_features
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1091`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1091`
 
 ```julia
 function apply_advanced_mtk_features(sys, metadata::Dict)
@@ -310,7 +310,7 @@ Apply advanced MTK features like algebraic reduction and optimization hints.
 
 ### apply_translations
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:304`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:304`
 
 ```julia
 function apply_translations(vars::Vector{String}, translate)
@@ -324,7 +324,7 @@ Apply translation mappings to variable names.
 
 ### apply_variable_transform
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:435`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:435`
 
 ```julia
 function apply_variable_transform(coupled_system, from_resolution, to_resolution, coupling)
@@ -338,7 +338,7 @@ Apply the specified transform operation between variables.
 
 ### auto_tune_solver
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:518`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:518`
 
 ```julia
 function auto_tune_solver(base_solver::Solver, problem_characteristics::ProblemCharacteristics;
@@ -354,7 +354,7 @@ Returns an optimized solver configuration.
 
 ### calculate_performance_score
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:188`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:188`
 
 ```julia
 function calculate_performance_score(metrics::PerformanceMetrics)::Float64
@@ -368,7 +368,7 @@ Calculate a composite performance score (higher is better).
 
 ### coerce_affect_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:269`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:269`
 
 ```julia
 function coerce_affect_equation(data::Any)::AffectEquation
@@ -382,7 +382,7 @@ Coerce JSON data into AffectEquation type.
 
 ### coerce_callback
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:482`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:482`
 
 ```julia
 function coerce_callback(data::AbstractDict)::CouplingCallback
@@ -396,7 +396,7 @@ Parse callback coupling entry.
 
 ### coerce_couple
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:420`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:420`
 
 ```julia
 function coerce_couple(data::AbstractDict)::CouplingCouple
@@ -410,7 +410,7 @@ Parse couple coupling entry.
 
 ### coerce_coupling_entry
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:374`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:374`
 
 ```julia
 function coerce_coupling_entry(data::Any)::CouplingEntry
@@ -424,7 +424,7 @@ Coerce JSON data into concrete CouplingEntry subtype based on the 'type' field.
 
 ### coerce_data_loader
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:346`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:346`
 
 ```julia
 function coerce_data_loader(data::Any)::DataLoader
@@ -438,7 +438,7 @@ Coerce JSON data into DataLoader type.
 
 ### coerce_domain
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:561`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:561`
 
 ```julia
 function coerce_domain(data::Any)::Domain
@@ -452,7 +452,7 @@ Coerce JSON data into Domain type.
 
 ### coerce_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:235`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:235`
 
 ```julia
 function coerce_equation(data::Any)::Equation
@@ -466,7 +466,7 @@ Coerce JSON data into Equation type.
 
 ### coerce_esm_file
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:99`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:99`
 
 ```julia
 function coerce_esm_file(data::Any)::EsmFile
@@ -480,7 +480,7 @@ Coerce raw JSON data into properly typed EsmFile with custom union type handling
 
 ### coerce_event
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:246`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:246`
 
 ```julia
 function coerce_event(data::Any)::EventType
@@ -494,7 +494,7 @@ Coerce JSON data into EventType (ContinuousEvent or DiscreteEvent).
 
 ### coerce_event
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:502`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:502`
 
 ```julia
 function coerce_event(data::AbstractDict)::CouplingEvent
@@ -508,7 +508,7 @@ Parse event coupling entry.
 
 ### coerce_functional_affect
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:280`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:280`
 
 ```julia
 function coerce_functional_affect(data::Any)::FunctionalAffect
@@ -522,7 +522,7 @@ Coerce JSON data into FunctionalAffect type.
 
 ### coerce_metadata
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:162`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:162`
 
 ```julia
 function coerce_metadata(data::Any)::Metadata
@@ -536,7 +536,7 @@ Coerce JSON data into Metadata type.
 
 ### coerce_model
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:201`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:201`
 
 ```julia
 function coerce_model(data::Any)::Model
@@ -550,7 +550,7 @@ Coerce JSON data into Model type.
 
 ### coerce_model_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:218`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:218`
 
 ```julia
 function coerce_model_variable(data::Any)::ModelVariable
@@ -564,7 +564,7 @@ Coerce JSON data into ModelVariable type.
 
 ### coerce_operator
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:360`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:360`
 
 ```julia
 function coerce_operator(data::Any)::Operator
@@ -578,7 +578,7 @@ Coerce JSON data into Operator type.
 
 ### coerce_operator_apply
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:466`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:466`
 
 ```julia
 function coerce_operator_apply(data::AbstractDict)::CouplingOperatorApply
@@ -592,7 +592,7 @@ Parse operator_apply coupling entry.
 
 ### coerce_operator_compose
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:403`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:403`
 
 ```julia
 function coerce_operator_compose(data::AbstractDict)::CouplingOperatorCompose
@@ -606,7 +606,7 @@ Parse operator_compose coupling entry.
 
 ### coerce_parameter
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:332`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:332`
 
 ```julia
 function coerce_parameter(data::Any)::Parameter
@@ -620,7 +620,7 @@ Coerce JSON data into Parameter type.
 
 ### coerce_reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:318`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:318`
 
 ```julia
 function coerce_reaction(data::Any)::Reaction
@@ -634,7 +634,7 @@ Coerce JSON data into Reaction type.
 
 ### coerce_reaction_system
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:292`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:292`
 
 ```julia
 function coerce_reaction_system(data::Any)::ReactionSystem
@@ -648,7 +648,7 @@ Coerce JSON data into ReactionSystem type.
 
 ### coerce_reference
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:187`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:187`
 
 ```julia
 function coerce_reference(data::Any)::Reference
@@ -662,7 +662,7 @@ Coerce JSON data into Reference type.
 
 ### coerce_solver
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:574`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:574`
 
 ```julia
 function coerce_solver(data::Any)::Solver
@@ -677,7 +677,7 @@ Supports both old format (algorithm field) and new format (strategy/config field
 
 ### coerce_solver_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:635`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:635`
 
 ```julia
 function coerce_solver_configuration(data)::SolverConfiguration
@@ -691,7 +691,7 @@ Coerce JSON data into SolverConfiguration type.
 
 ### coerce_species
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:305`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:305`
 
 ```julia
 function coerce_species(data::Any)::Species
@@ -705,7 +705,7 @@ Coerce JSON data into Species type.
 
 ### coerce_variable_map
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:441`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:441`
 
 ```julia
 function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
@@ -719,7 +719,7 @@ Parse variable_map coupling entry.
 
 ### component_graph
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:133`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:133`
 
 ```julia
 function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
@@ -754,7 +754,7 @@ end
 
 ### compose
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:453`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:453`
 
 ```julia
 function compose(file::EsmFile, system_a::String, system_b::String)::EsmFile
@@ -768,7 +768,7 @@ Convenience function to create an operator_compose coupling entry.
 
 ### contains
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:119`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:119`
 
 ```julia
 function contains(expr::NumExpr, var::String)::Bool
@@ -792,7 +792,7 @@ contains(sum_expr, "z")  # false
 
 ### convert_operator_enhanced
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:909`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:909`
 
 ```julia
 function convert_operator_enhanced(op::String, args::Vector, wrt::Union{String,Nothing}, advanced_features::Bool)
@@ -806,7 +806,7 @@ Enhanced operator conversion supporting more functions and advanced features.
 
 ### couple
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:341`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:341`
 
 ```julia
 function couple(coupled_system::MockCoupledSystem, coupling::CouplingCouple)
@@ -823,7 +823,7 @@ Implement bi-directional coupling via explicit ConnectorSystem equations:
 
 ### create_auto_tuning_optimizer
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:494`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:494`
 
 ```julia
 function create_auto_tuning_optimizer(; strategy="adaptive", max_evaluations=50)::SolverOptimizer
@@ -837,7 +837,7 @@ Create a solver optimizer with sensible defaults for auto-tuning.
 
 ### create_equation_imbalance_error
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:397`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:397`
 
 ```julia
 function create_equation_imbalance_error(model_name::String, num_equations::Int, num_unknowns::Int,
@@ -851,7 +851,7 @@ Create equation-unknown imbalance error with detailed suggestions.
 
 ### create_json_parse_error
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:362`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:362`
 
 ```julia
 function create_json_parse_error(message::String, file_path::String="", line_number::Union{Int, Nothing}=nothing)
@@ -865,7 +865,7 @@ Create a JSON parse error with fix suggestions.
 
 ### create_mock_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:393`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:393`
 
 ```julia
 function create_mock_catalyst_system(rsys::ReactionSystem, name::String, advanced_features::Bool)
@@ -879,7 +879,7 @@ Create a mock Catalyst system for testing when Catalyst is not available.
 
 ### create_mock_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:232`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:232`
 
 ```julia
 function create_mock_catalyst_system(rs::ReactionSystem)
@@ -894,7 +894,7 @@ Preserves all the structural information in a testable format.
 
 ### create_mock_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:201`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:201`
 
 ```julia
 function create_mock_mtk_system(model::Model, name::String, advanced_features::Bool)
@@ -908,7 +908,7 @@ Create a mock MTK system for testing when ModelingToolkit is not available.
 
 ### create_mock_mtk_system_basic
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk.jl:93`
+**File:** `pkg/EarthSciAST.jl/src/mtk.jl:93`
 
 ```julia
 function create_mock_mtk_system_basic(model::Model, name::String)
@@ -922,7 +922,7 @@ Create a mock MTK system for testing when ModelingToolkit is not available.
 
 ### create_performance_warning
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:501`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:501`
 
 ```julia
 function create_performance_warning(operation::String, duration::Float64, threshold::Float64=1.0)
@@ -936,7 +936,7 @@ Create performance warning with optimization suggestions.
 
 ### create_real_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:269`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:269`
 
 ```julia
 function create_real_catalyst_system(rsys::ReactionSystem, name::String, advanced_features::Bool)
@@ -950,7 +950,7 @@ Create a real Catalyst ReactionSystem from an ESM reaction system.
 
 ### create_real_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:93`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:93`
 
 ```julia
 function create_real_catalyst_system(rs::ReactionSystem)
@@ -965,7 +965,7 @@ Handles the full conversion pipeline with proper symbolic mathematics.
 
 ### create_real_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:104`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:104`
 
 ```julia
 function create_real_mtk_system(model::Model, name::String, advanced_features::Bool)
@@ -979,7 +979,7 @@ Create a real ModelingToolkit ODESystem from an ESM model.
 
 ### create_solver_with_method
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:620`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:620`
 
 ```julia
 function create_solver_with_method(strategy_str::String, method_str::String; kwargs...)::Solver
@@ -994,7 +994,7 @@ strategy and numerical method combination.
 
 ### create_undefined_reference_error
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:443`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:443`
 
 ```julia
 function create_undefined_reference_error(reference::String, available_variables::Vector{String}=String[],
@@ -1008,7 +1008,7 @@ Create undefined reference error with smart suggestions.
 
 ### dict_to_solver_config
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:353`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:353`
 
 ```julia
 function dict_to_solver_config(config_dict::Dict{String,Any})::SolverConfiguration
@@ -1022,7 +1022,7 @@ Convert dictionary back to SolverConfiguration.
 
 ### end_timer!
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:311`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:311`
 
 ```julia
 function end_timer!(profiler::PerformanceProfiler, operation::String)
@@ -1036,7 +1036,7 @@ End timing an operation and return duration.
 
 ### esm_to_symbolic
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:322`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:322`
 
 ```julia
 function esm_to_symbolic(expr::Expr, var_dict::Dict)
@@ -1051,7 +1051,7 @@ Handles the expression mapping required for rate expressions.
 
 ### esm_to_symbolic_enhanced
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:877`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:877`
 
 ```julia
 function esm_to_symbolic_enhanced(expr::Expr, var_dict::Dict, advanced_features::Bool)
@@ -1065,13 +1065,13 @@ Enhanced ESM to symbolic conversion with support for advanced features and bette
 
 ### esm_to_symbolic_enhanced
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst_enhanced.jl:418`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst_enhanced.jl:418`
 
 ```julia
-function esm_to_symbolic_enhanced(expr::EarthSciSerialization.Expr, var_dict::Dict, advanced_features::Bool)
+function esm_to_symbolic_enhanced(expr::EarthSciAST.Expr, var_dict::Dict, advanced_features::Bool)
 ```
 
-esm_to_symbolic_enhanced(expr::EarthSciSerialization.Expr, var_dict::Dict, advanced_features::Bool) -> Any
+esm_to_symbolic_enhanced(expr::EarthSciAST.Expr, var_dict::Dict, advanced_features::Bool) -> Any
 
 Enhanced ESM to symbolic conversion with support for advanced features.
 
@@ -1079,7 +1079,7 @@ Enhanced ESM to symbolic conversion with support for advanced features.
 
 ### evaluate
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:183`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:183`
 
 ```julia
 function evaluate(expr::NumExpr, bindings::Dict{String,Float64})::Float64
@@ -1112,7 +1112,7 @@ result = evaluate(sum_expr, bindings)  # 5.0
 
 ### expr_to_string
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:467`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:467`
 
 ```julia
 function expr_to_string(expr::Expr)
@@ -1126,7 +1126,7 @@ Convert ESM expression to string representation for mock systems.
 
 ### expression_graph
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:330`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:330`
 
 ```julia
 function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
@@ -1166,7 +1166,7 @@ graph = expression_graph(equation)
 
 ### extract
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:515`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:515`
 
 ```julia
 function extract(file::EsmFile, component_name::String)::EsmFile
@@ -1183,7 +1183,7 @@ coupling entries that reference it.
 
 ### extract_dependent_variables
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:278`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:278`
 
 ```julia
 function extract_dependent_variables(system)
@@ -1197,7 +1197,7 @@ Extract dependent variables (LHS of differential equations) from a system.
 
 ### extract_variable_name
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1206`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1206`
 
 ```julia
 function extract_variable_name(symbolic_var)
@@ -1211,7 +1211,7 @@ Extract variable name from a symbolic variable, handling various formats.
 
 ### find_subsystem
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:851`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:851`
 
 ```julia
 function find_subsystem(system::Model, name::String)::Union{Model,Nothing}
@@ -1226,7 +1226,7 @@ Returns the subsystem or nothing if not found.
 
 ### find_top_level_system
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:821`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:821`
 
 ```julia
 function find_top_level_system(esm_file::EsmFile, name::String)
@@ -1241,7 +1241,7 @@ Returns the system and its type, or (nothing, :none) if not found.
 
 ### format_chemical_subscripts
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:128`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:128`
 
 ```julia
 function format_chemical_subscripts(variable::String, format::Symbol)
@@ -1260,7 +1260,7 @@ Uses greedy 2-char-before-1-char matching for element detection per spec Section
 
 ### format_expression_latex
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:339`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:339`
 
 ```julia
 function format_expression_latex(expr::Expr)
@@ -1274,7 +1274,7 @@ Format an expression as LaTeX mathematical notation.
 
 ### format_expression_unicode
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:318`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:318`
 
 ```julia
 function format_expression_unicode(expr::Expr)
@@ -1288,7 +1288,7 @@ Format an expression as Unicode mathematical notation.
 
 ### format_node_label
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:736`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:736`
 
 ```julia
 function format_node_label(name::String, node_type::String="")::String
@@ -1303,7 +1303,7 @@ Detects chemical formulas and applies subscript formatting.
 
 ### format_number
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:197`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:197`
 
 ```julia
 function format_number(num::Real, format::Symbol)
@@ -1317,7 +1317,7 @@ Format a number in scientific notation with appropriate formatting.
 
 ### format_operator_expression
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:360`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:360`
 
 ```julia
 function format_operator_expression(node::OpExpr, format::Symbol)
@@ -1331,7 +1331,7 @@ Format an OpExpr (operator with arguments).
 
 ### format_user_friendly
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:215`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:215`
 
 ```julia
 function format_user_friendly(error::ESMError)
@@ -1345,7 +1345,7 @@ Format error message for end users.
 
 ### free_variables
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:77`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:77`
 
 ```julia
 function free_variables(expr::NumExpr)::Set{String}
@@ -1371,7 +1371,7 @@ vars = free_variables(nested)  # Set(["x", "y"])
 
 ### from_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:573`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:573`
 
 ```julia
 function from_catalyst_system(rs, name::String)
@@ -1391,7 +1391,7 @@ stoichiometry and rate expressions.
 
 ### from_mock_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1163`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1163`
 
 ```julia
 function from_mock_catalyst_system(sys::MockCatalystSystem, name::String)
@@ -1406,7 +1406,7 @@ This handles the case when Catalyst is not available but we have mock systems.
 
 ### from_mock_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1112`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1112`
 
 ```julia
 function from_mock_mtk_system(sys::MockMTKSystem, name::String)
@@ -1421,7 +1421,7 @@ This handles the case when MTK is not available but we have mock systems.
 
 ### from_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:422`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:422`
 
 ```julia
 function from_mtk_system(sys, name::String)
@@ -1441,7 +1441,7 @@ state vs parameter vs observed variable types.
 
 ### get_best_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:224`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:224`
 
 ```julia
 function get_best_configuration(optimizer::SolverOptimizer)
@@ -1455,10 +1455,10 @@ Get the current best solver configuration.
 
 ### get_expression_dimensions
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:45`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:45`
 
 ```julia
-function get_expression_dimensions(expr::EarthSciSerialization.Expr, var_units::Dict{String, String})::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(expr::EarthSciAST.Expr, var_units::Dict{String, String})::Union{Unitful.Units, Nothing}
 ```
 
 Get the dimensions of an expression by propagating units through operations.
@@ -1470,7 +1470,7 @@ evaluating an expression, assuming all variables have known units.
 
 ### get_operator_precedence
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:242`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:242`
 
 ```julia
 function get_operator_precedence(op::String)
@@ -1484,7 +1484,7 @@ Get operator precedence for proper parenthesization.
 
 ### get_performance_report
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:332`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:332`
 
 ```julia
 function get_performance_report(profiler::PerformanceProfiler)
@@ -1498,7 +1498,7 @@ Get performance report.
 
 ### get_recommended_algorithms
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:587`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:587`
 
 ```julia
 function get_recommended_algorithms(strategy::SolverStrategy, method::NumericalMethod)::Dict{String,String}
@@ -1512,7 +1512,7 @@ Get recommended algorithm combinations for a given strategy and numerical method
 
 ### get_summary
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:194`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:194`
 
 ```julia
 function get_summary(collector::ErrorCollector)
@@ -1526,7 +1526,7 @@ Get a summary of all collected errors and warnings.
 
 ### has_element_pattern
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:71`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:71`
 
 ```julia
 function has_element_pattern(variable::String)
@@ -1541,7 +1541,7 @@ Uses greedy matching algorithm per spec Section 6.1.
 
 ### infer_variable_units
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:309`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:309`
 
 ```julia
 function infer_variable_units(var_name::String, equations::Vector{Equation}, known_units::Dict{String, String})::Union{String, Nothing}
@@ -1555,7 +1555,7 @@ This can help suggest units when they are not explicitly specified.
 
 ### is_better_performance
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:165`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:165`
 
 ```julia
 function is_better_performance(new_metrics::PerformanceMetrics, current_best::PerformanceMetrics)::Bool
@@ -1570,7 +1570,7 @@ Priority: success > stability > speed > memory efficiency
 
 ### is_valid_identifier
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:932`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:932`
 
 ```julia
 function is_valid_identifier(name::String)::Bool
@@ -1584,7 +1584,7 @@ Check if a string is a valid identifier (letters, numbers, underscores, no leadi
 
 ### load
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:697`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:697`
 
 ```julia
 function load(path::String)::EsmFile
@@ -1598,7 +1598,7 @@ Load and parse an ESM file from a file path.
 
 ### load
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:708`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:708`
 
 ```julia
 function load(io::IO)::EsmFile
@@ -1612,10 +1612,10 @@ Load and parse an ESM file from an IO stream.
 
 ### map_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:463`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:463`
 
 ```julia
-function map_variable(file::EsmFile, from::String, to::String, transform::Union{EarthSciSerialization.Expr,Nothing}=nothing)::EsmFile
+function map_variable(file::EsmFile, from::String, to::String, transform::Union{EarthSciAST.Expr,Nothing}=nothing)::EsmFile
 ```
 
 map_variable(file::EsmFile, from::String, to::String, transform::Union{Expr,Nothing}=nothing) -> EsmFile
@@ -1626,7 +1626,7 @@ Convenience function to create a variable_map coupling entry.
 
 ### merge
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:478`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:478`
 
 ```julia
 function merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
@@ -1643,7 +1643,7 @@ from file_b take precedence.
 
 ### needs_parentheses
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:261`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:261`
 
 ```julia
 function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false)
@@ -1657,7 +1657,7 @@ Check if parentheses are needed around a subexpression.
 
 ### numerical_method_to_string
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:518`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:518`
 
 ```julia
 function numerical_method_to_string(method::NumericalMethod)::String
@@ -1671,7 +1671,7 @@ Convert numerical method enum to string representation.
 
 ### operator_apply
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:472`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:472`
 
 ```julia
 function operator_apply(coupled_system::MockCoupledSystem, coupling::CouplingOperatorApply, file::EsmFile)
@@ -1685,7 +1685,7 @@ Register an Operator in CoupledSystem.ops for runtime execution.
 
 ### operator_compose
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:225`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:225`
 
 ```julia
 function operator_compose(coupled_system::MockCoupledSystem, coupling::CouplingOperatorCompose)
@@ -1704,7 +1704,7 @@ Implement the operator_compose algorithm from specification Section 4.7.1:
 
 ### parse_expression
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:31`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:31`
 
 ```julia
 function parse_expression(data::Any)::Expr
@@ -1719,7 +1719,7 @@ Handles the oneOf discriminated union based on JSON structure.
 
 ### parse_mock_expression
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1230`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1230`
 
 ```julia
 function parse_mock_expression(expr_str::String)
@@ -1734,7 +1734,7 @@ This is a simple parser for mock system string representations.
 
 ### parse_mock_reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1282`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1282`
 
 ```julia
 function parse_mock_reaction(rxn_str::String)
@@ -1749,7 +1749,7 @@ Expected format: "A + 2B -> C + D, rate: k1" or "A -> B"
 
 ### parse_model_variable_type
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:62`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:62`
 
 ```julia
 function parse_model_variable_type(data::String)::ModelVariableType
@@ -1763,7 +1763,7 @@ Parse string into ModelVariableType enum.
 
 ### parse_numerical_method
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:496`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:496`
 
 ```julia
 function parse_numerical_method(method_str::String)::NumericalMethod
@@ -1777,7 +1777,7 @@ Parse numerical method string to enum value.
 
 ### parse_solver_strategy
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:462`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:462`
 
 ```julia
 function parse_solver_strategy(strategy_str::String)::SolverStrategy
@@ -1791,7 +1791,7 @@ Parse solver strategy string to enum value.
 
 ### parse_species_list
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1347`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1347`
 
 ```julia
 function parse_species_list(species_str::String)
@@ -1806,7 +1806,7 @@ Handles special case "∅" for empty (null) reactants/products.
 
 ### parse_trigger
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:79`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:79`
 
 ```julia
 function parse_trigger(data::Dict)::DiscreteEventTrigger
@@ -1820,7 +1820,7 @@ Parse JSON data into a DiscreteEventTrigger based on discriminator fields.
 
 ### parse_units
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:15`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:15`
 
 ```julia
 function parse_units(unit_str::String)::Union{Unitful.Units, Nothing}
@@ -1834,7 +1834,7 @@ Handles common scientific units and compositions used in Earth system models.
 
 ### predecessors
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:84`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:84`
 
 ```julia
 function predecessors(graph::Graph{N, E}, node::N) where {N, E}
@@ -1846,7 +1846,7 @@ Get nodes that point to this node.
 
 ### process_connector_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:375`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:375`
 
 ```julia
 function process_connector_equation(coupled_system, equation, systems)
@@ -1860,7 +1860,7 @@ Process a single connector equation, resolving scoped references and applying tr
 
 ### process_event_affects
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:1047`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:1047`
 
 ```julia
 function process_event_affects(affects, symbolic_vars::Dict, advanced_features::Bool)
@@ -1874,7 +1874,7 @@ Process event affects for MTK callbacks.
 
 ### process_events_enhanced
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:992`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:992`
 
 ```julia
 function process_events_enhanced(events::Vector{EventType}, symbolic_vars::Dict, advanced_features::Bool)
@@ -1888,7 +1888,7 @@ Enhanced event processing with comprehensive MTK callback support.
 
 ### process_reaction_events
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:388`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:388`
 
 ```julia
 function process_reaction_events(events::Vector, var_dict::Dict)
@@ -1903,7 +1903,7 @@ Returns (continuous_events, discrete_events).
 
 ### record_performance!
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:145`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:145`
 
 ```julia
 function record_performance!(optimizer::SolverOptimizer, config::SolverConfiguration, metrics::PerformanceMetrics)
@@ -1917,7 +1917,7 @@ Record a performance measurement for a given configuration.
 
 ### remove_coupling
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:426`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:426`
 
 ```julia
 function remove_coupling(file::EsmFile, index::Int)::EsmFile
@@ -1931,7 +1931,7 @@ Remove a coupling entry by index.
 
 ### remove_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:153`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:153`
 
 ```julia
 function remove_equation(model::Model, index::Int)::Model
@@ -1948,7 +1948,7 @@ Can remove by index (1-based) or by matching the left-hand side expression.
 
 ### remove_event
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:373`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:373`
 
 ```julia
 function remove_event(model::Model, name::String)::Model
@@ -1964,7 +1964,7 @@ Searches both continuous and discrete events.
 
 ### remove_reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:238`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:238`
 
 ```julia
 function remove_reaction(system::ReactionSystem, id::String)::ReactionSystem
@@ -1981,7 +1981,7 @@ this function will search by reaction equality.
 
 ### remove_species
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:297`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:297`
 
 ```julia
 function remove_species(system::ReactionSystem, name::String)::ReactionSystem
@@ -1997,7 +1997,7 @@ Warns about dependent reactions but does not automatically update them.
 
 ### remove_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:45`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:45`
 
 ```julia
 function remove_variable(model::Model, name::String)::Model
@@ -2014,7 +2014,7 @@ but does not automatically update equations that reference the variable.
 
 ### rename_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:86`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:86`
 
 ```julia
 function rename_variable(model::Model, old_name::String, new_name::String)::Model
@@ -2030,7 +2030,7 @@ Updates the variable definition and all references in equations.
 
 ### render_chemical_formula
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:703`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:703`
 
 ```julia
 function render_chemical_formula(formula::String)::String
@@ -2052,7 +2052,7 @@ render_chemical_formula("CH3OH") # "CH₃OH"
 
 ### resolve_qualified_reference
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:766`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:766`
 
 ```julia
 function resolve_qualified_reference(esm_file::EsmFile, reference::String)::ReferenceResolution
@@ -2084,7 +2084,7 @@ form a path through the subsystem hierarchy.
 
 ### save
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:620`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:620`
 
 ```julia
 function save(file::EsmFile, path::String)
@@ -2098,7 +2098,7 @@ Save an EsmFile object to a JSON file at the specified path.
 
 ### save
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:631`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:631`
 
 ```julia
 function save(file::EsmFile, io::IO)
@@ -2112,7 +2112,7 @@ Save an EsmFile object to a JSON stream.
 
 ### serialize_affect_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:109`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:109`
 
 ```julia
 function serialize_affect_equation(affect::AffectEquation)::Dict{String,Any}
@@ -2126,7 +2126,7 @@ Serialize AffectEquation to JSON-compatible format.
 
 ### serialize_callback
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:391`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:391`
 
 ```julia
 function serialize_callback(entry::CouplingCallback)::Dict{String,Any}
@@ -2140,7 +2140,7 @@ Serialize callback coupling entry.
 
 ### serialize_couple
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:333`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:333`
 
 ```julia
 function serialize_couple(entry::CouplingCouple)::Dict{String,Any}
@@ -2154,7 +2154,7 @@ Serialize couple coupling entry.
 
 ### serialize_coupling_entry
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:292`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:292`
 
 ```julia
 function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
@@ -2168,7 +2168,7 @@ Serialize CouplingEntry to JSON-compatible format based on concrete type.
 
 ### serialize_data_loader
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:254`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:254`
 
 ```julia
 function serialize_data_loader(loader::DataLoader)::Dict{String,Any}
@@ -2182,7 +2182,7 @@ Serialize DataLoader to JSON-compatible format.
 
 ### serialize_domain
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:501`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:501`
 
 ```julia
 function serialize_domain(domain::Domain)::Dict{String,Any}
@@ -2196,7 +2196,7 @@ Serialize Domain to JSON-compatible format.
 
 ### serialize_equation
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:158`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:158`
 
 ```julia
 function serialize_equation(eq::Equation)::Dict{String,Any}
@@ -2210,7 +2210,7 @@ Serialize Equation to JSON-compatible format.
 
 ### serialize_esm_file
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:584`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:584`
 
 ```julia
 function serialize_esm_file(file::EsmFile)::Dict{String,Any}
@@ -2224,7 +2224,7 @@ Serialize EsmFile to JSON-compatible format.
 
 ### serialize_event
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:80`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:80`
 
 ```julia
 function serialize_event(event::EventType)::Dict{String,Any}
@@ -2238,7 +2238,7 @@ Serialize EventType to JSON-compatible format.
 
 ### serialize_event
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:409`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:409`
 
 ```julia
 function serialize_event(entry::CouplingEvent)::Dict{String,Any}
@@ -2252,7 +2252,7 @@ Serialize event coupling entry.
 
 ### serialize_expression
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:15`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:15`
 
 ```julia
 function serialize_expression(expr::Expr)
@@ -2267,7 +2267,7 @@ Handles the union type discrimination.
 
 ### serialize_functional_affect
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:121`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:121`
 
 ```julia
 function serialize_functional_affect(affect::FunctionalAffect)::Dict{String,Any}
@@ -2281,7 +2281,7 @@ Serialize FunctionalAffect to JSON-compatible format.
 
 ### serialize_metadata
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:468`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:468`
 
 ```julia
 function serialize_metadata(metadata::Metadata)::Dict{String,Any}
@@ -2295,7 +2295,7 @@ Serialize Metadata to JSON-compatible format.
 
 ### serialize_model
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:170`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:170`
 
 ```julia
 function serialize_model(model::Model)::Dict{String,Any}
@@ -2309,7 +2309,7 @@ Serialize Model to JSON-compatible format.
 
 ### serialize_model_variable
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:137`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:137`
 
 ```julia
 function serialize_model_variable(var::ModelVariable)::Dict{String,Any}
@@ -2323,7 +2323,7 @@ Serialize ModelVariable to JSON-compatible format.
 
 ### serialize_model_variable_type
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:42`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:42`
 
 ```julia
 function serialize_model_variable_type(var_type::ModelVariableType)::String
@@ -2337,7 +2337,7 @@ Serialize ModelVariableType enum to string.
 
 ### serialize_operator
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:273`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:273`
 
 ```julia
 function serialize_operator(op::Operator)::Dict{String,Any}
@@ -2351,7 +2351,7 @@ Serialize Operator to JSON-compatible format.
 
 ### serialize_operator_apply
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:376`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:376`
 
 ```julia
 function serialize_operator_apply(entry::CouplingOperatorApply)::Dict{String,Any}
@@ -2365,7 +2365,7 @@ Serialize operator_apply coupling entry.
 
 ### serialize_operator_compose
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:315`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:315`
 
 ```julia
 function serialize_operator_compose(entry::CouplingOperatorCompose)::Dict{String,Any}
@@ -2379,7 +2379,7 @@ Serialize operator_compose coupling entry.
 
 ### serialize_parameter
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:202`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:202`
 
 ```julia
 function serialize_parameter(param::Parameter)::Dict{String,Any}
@@ -2393,7 +2393,7 @@ Serialize Parameter to JSON-compatible format.
 
 ### serialize_reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:221`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:221`
 
 ```julia
 function serialize_reaction(reaction::Reaction)::Dict{String,Any}
@@ -2407,7 +2407,7 @@ Serialize Reaction to JSON-compatible format.
 
 ### serialize_reaction_system
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:238`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:238`
 
 ```julia
 function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
@@ -2421,7 +2421,7 @@ Serialize ReactionSystem to JSON-compatible format.
 
 ### serialize_reference
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:446`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:446`
 
 ```julia
 function serialize_reference(ref::Reference)::Dict{String,Any}
@@ -2435,7 +2435,7 @@ Serialize Reference to JSON-compatible format.
 
 ### serialize_solver
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:517`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:517`
 
 ```julia
 function serialize_solver(solver::Solver)::Dict{String,Any}
@@ -2449,7 +2449,7 @@ Serialize Solver to JSON-compatible format matching the ESM schema.
 
 ### serialize_solver_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:534`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:534`
 
 ```julia
 function serialize_solver_configuration(config::SolverConfiguration)::Dict{String,Any}
@@ -2463,7 +2463,7 @@ Serialize SolverConfiguration to JSON-compatible format.
 
 ### serialize_species
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:186`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:186`
 
 ```julia
 function serialize_species(species::Species)::Dict{String,Any}
@@ -2477,7 +2477,7 @@ Serialize Species to JSON-compatible format.
 
 ### serialize_trigger
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:59`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:59`
 
 ```julia
 function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String,Any}
@@ -2491,7 +2491,7 @@ Serialize DiscreteEventTrigger to JSON-compatible format.
 
 ### serialize_variable_map
 
-**File:** `packages/EarthSciSerialization.jl/src/serialize.jl:353`
+**File:** `pkg/EarthSciAST.jl/src/serialize.jl:353`
 
 ```julia
 function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
@@ -2505,7 +2505,7 @@ Serialize variable_map coupling entry.
 
 ### set_problem_characteristics!
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:135`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:135`
 
 ```julia
 function set_problem_characteristics!(optimizer::SolverOptimizer, characteristics::ProblemCharacteristics)
@@ -2519,7 +2519,7 @@ Set the problem characteristics for the optimizer to use in parameter selection.
 
 ### simplify
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:338`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:338`
 
 ```julia
 function simplify(expr::NumExpr)::Expr
@@ -2552,7 +2552,7 @@ result = simplify(expr)  # VarExpr("x")
 
 ### solver_config_to_dict
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:322`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:322`
 
 ```julia
 function solver_config_to_dict(config::SolverConfiguration)::Dict{String,Any}
@@ -2566,7 +2566,7 @@ Convert SolverConfiguration to dictionary for manipulation.
 
 ### solver_strategy_to_string
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:481`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:481`
 
 ```julia
 function solver_strategy_to_string(strategy::SolverStrategy)::String
@@ -2580,7 +2580,7 @@ Convert solver strategy enum to string representation.
 
 ### start_timer!
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:302`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:302`
 
 ```julia
 function start_timer!(profiler::PerformanceProfiler, operation::String)
@@ -2594,7 +2594,7 @@ Start timing an operation.
 
 ### substitute
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:42`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:42`
 
 ```julia
 function substitute(expr::NumExpr, bindings::Dict{String,Expr})::Expr
@@ -2628,10 +2628,10 @@ result = substitute(nested, bindings)  # OpExpr("*", [OpExpr("+", [NumExpr(2.0),
 
 ### substitute_in_equations
 
-**File:** `packages/EarthSciSerialization.jl/src/edit.jl:191`
+**File:** `pkg/EarthSciAST.jl/src/edit.jl:191`
 
 ```julia
-function substitute_in_equations(model::Model, bindings::Dict{String, EarthSciSerialization.Expr})::Model
+function substitute_in_equations(model::Model, bindings::Dict{String, EarthSciAST.Expr})::Model
 ```
 
 substitute_in_equations(model::Model, bindings::Dict{String, Expr}) -> Model
@@ -2644,7 +2644,7 @@ Replaces variables according to the bindings dictionary.
 
 ### successors
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:97`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:97`
 
 ```julia
 function successors(graph::Graph{N, E}, node::N) where {N, E}
@@ -2656,7 +2656,7 @@ Get nodes that this node points to.
 
 ### suggest_adaptive_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:284`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:284`
 
 ```julia
 function suggest_adaptive_configuration(strategy::AdaptiveStrategy, history::OptimizationHistory,
@@ -2671,7 +2671,7 @@ Suggest next configuration using adaptive strategy.
 
 ### suggest_grid_search_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:253`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:253`
 
 ```julia
 function suggest_grid_search_configuration(strategy::GridSearchStrategy, history::OptimizationHistory,
@@ -2685,7 +2685,7 @@ Suggest next configuration using grid search strategy.
 
 ### suggest_model_improvements
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:616`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:616`
 
 ```julia
 function suggest_model_improvements(esm_file, errors)
@@ -2699,7 +2699,7 @@ Suggest improvements based on error patterns.
 
 ### suggest_next_configuration
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:233`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:233`
 
 ```julia
 function suggest_next_configuration(optimizer::SolverOptimizer, base_solver::Solver)::SolverConfiguration
@@ -2713,7 +2713,7 @@ Suggest the next configuration to try based on optimization strategy and history
 
 ### symbolic_to_esm
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:775`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:775`
 
 ```julia
 function symbolic_to_esm(symbolic_expr)
@@ -2727,7 +2727,7 @@ Convert Symbolics/MTK symbolic expression back to ESM form.
 
 ### to_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:249`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:249`
 
 ```julia
 function to_catalyst_system(reaction_system::ReactionSystem, name::String; advanced_features=false)
@@ -2754,7 +2754,7 @@ Convert an ESM ReactionSystem to a Catalyst ReactionSystem with comprehensive fe
 
 ### to_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst_enhanced.jl:94`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst_enhanced.jl:94`
 
 ```julia
 function to_catalyst_system(rsys::ReactionSystem, name::String; advanced_features=false)
@@ -2781,7 +2781,7 @@ Convert an ESM ReactionSystem to a Catalyst ReactionSystem with enhanced feature
 
 ### to_catalyst_system
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:73`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:73`
 
 ```julia
 function to_catalyst_system(rs::ReactionSystem)
@@ -2827,7 +2827,7 @@ catalyst_sys = to_catalyst_system(rs)
 
 ### to_coupled_system
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:170`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:170`
 
 ```julia
 function to_coupled_system(file::EsmFile)::MockCoupledSystem
@@ -2853,7 +2853,7 @@ in a real implementation with EarthSciMLBase.
 
 ### to_dot
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:752`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:752`
 
 ```julia
 function to_dot(graph::Graph{ComponentNode, CouplingEdge})::String
@@ -2865,7 +2865,7 @@ Export graph to DOT format for Graphviz rendering.
 
 ### to_json
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:896`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:896`
 
 ```julia
 function to_json(graph::Graph{N, E})::String where {N, E}
@@ -2877,7 +2877,7 @@ Export graph to JSON adjacency list format.
 
 ### to_mermaid
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:829`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:829`
 
 ```julia
 function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
@@ -2889,7 +2889,7 @@ Export graph to Mermaid format for markdown embedding.
 
 ### to_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:84`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:84`
 
 ```julia
 function to_mtk_system(model::Model, name::String; advanced_features=false)
@@ -2919,7 +2919,7 @@ Convert an ESM Model to a ModelingToolkit ODESystem with comprehensive features.
 
 ### to_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst_enhanced.jl:62`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst_enhanced.jl:62`
 
 ```julia
 function to_mtk_system(model::Model, name::String; advanced_features=false)
@@ -2946,7 +2946,7 @@ Convert an ESM Model to a ModelingToolkit ODESystem with enhanced features.
 
 ### to_mtk_system
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk.jl:72`
+**File:** `pkg/EarthSciAST.jl/src/mtk.jl:72`
 
 ```julia
 function to_mtk_system(model::Model, name::Union{String,Nothing}=nothing)
@@ -2981,7 +2981,7 @@ discrete events to SymbolicDiscreteCallback.
 
 ### to_subscript
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:45`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:45`
 
 ```julia
 function to_subscript(n::Integer)
@@ -2995,7 +2995,7 @@ Convert integer to Unicode subscript representation.
 
 ### to_superscript
 
-**File:** `packages/EarthSciSerialization.jl/src/display.jl:61`
+**File:** `pkg/EarthSciAST.jl/src/display.jl:61`
 
 ```julia
 function to_superscript(text::String)
@@ -3009,7 +3009,7 @@ Convert text to Unicode superscript representation.
 
 ### validate
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:148`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:148`
 
 ```julia
 function validate(file::EsmFile)::ValidationResult
@@ -3024,7 +3024,7 @@ Returns ValidationResult with all errors and warnings.
 
 ### validate_coupling_references
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:306`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:306`
 
 ```julia
 function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
@@ -3038,7 +3038,7 @@ Validate coupling references - placeholder implementation.
 
 ### validate_equation_dimensions
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:190`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:190`
 
 ```julia
 function validate_equation_dimensions(eq::Equation, var_units::Dict{String, String})::Bool
@@ -3052,7 +3052,7 @@ Checks that the left-hand side and right-hand side have the same dimensions.
 
 ### validate_event_consistency
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:446`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:446`
 
 ```julia
 function validate_event_consistency(model::Model, path::String)::Vector{StructuralError}
@@ -3068,7 +3068,7 @@ functional affect refs valid.
 
 ### validate_event_references
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:317`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:317`
 
 ```julia
 function validate_event_references(file::EsmFile, event::EventType, path::String)::Vector{StructuralError}
@@ -3082,7 +3082,7 @@ Validate event variable references.
 
 ### validate_expression_references
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:268`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:268`
 
 ```julia
 function validate_expression_references(file::EsmFile, expr::Expr, path::String)::Vector{StructuralError}
@@ -3096,7 +3096,7 @@ Validate that all variable references in an expression can be resolved.
 
 ### validate_file_dimensions
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:280`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:280`
 
 ```julia
 function validate_file_dimensions(file::EsmFile)::Bool
@@ -3110,7 +3110,7 @@ Returns true if all models and reaction systems pass dimensional validation.
 
 ### validate_model_balance
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:170`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:170`
 
 ```julia
 function validate_model_balance(model::Model, path::String)::Vector{StructuralError}
@@ -3125,7 +3125,7 @@ Each model should have equations for all state variables.
 
 ### validate_model_dimensions
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:214`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:214`
 
 ```julia
 function validate_model_dimensions(model::Model)::Bool
@@ -3139,7 +3139,7 @@ Returns true if all equations are dimensionally consistent.
 
 ### validate_model_references
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:241`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:241`
 
 ```julia
 function validate_model_references(file::EsmFile, model::Model, path::String)::Vector{StructuralError}
@@ -3153,7 +3153,7 @@ Validate variable references within a model.
 
 ### validate_reaction_consistency
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:354`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:354`
 
 ```julia
 function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector{StructuralError}
@@ -3168,7 +3168,7 @@ no null-null reactions, rate references declared.
 
 ### validate_reaction_system_dimensions
 
-**File:** `packages/EarthSciSerialization.jl/src/units.jl:239`
+**File:** `pkg/EarthSciAST.jl/src/units.jl:239`
 
 ```julia
 function validate_reaction_system_dimensions(rxn_sys::ReactionSystem)::Bool
@@ -3183,7 +3183,7 @@ For reactions, validates that rate expressions have appropriate dimensions
 
 ### validate_reference_integrity
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:218`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:218`
 
 ```julia
 function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
@@ -3197,7 +3197,7 @@ Validate that all variable references can be resolved through the hierarchy.
 
 ### validate_reference_syntax
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:901`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:901`
 
 ```julia
 function validate_reference_syntax(reference::String)::Bool
@@ -3211,7 +3211,7 @@ Validate that a reference string follows proper dot notation syntax.
 
 ### validate_schema
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:85`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:85`
 
 ```julia
 function validate_schema(data::Any)::Vector{SchemaError}
@@ -3227,7 +3227,7 @@ Each error contains the path, message, and keyword for debugging.
 
 ### validate_solver_compatibility
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:534`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:534`
 
 ```julia
 function validate_solver_compatibility(solver::Solver)::Bool
@@ -3242,7 +3242,7 @@ Returns true if configuration is compatible with strategy.
 
 ### validate_structural
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:112`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:112`
 
 ```julia
 function validate_structural(file::EsmFile)::Vector{StructuralError}
@@ -3258,7 +3258,7 @@ and event consistency.
 
 ### variable_exists_in_system
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:869`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:869`
 
 ```julia
 function variable_exists_in_system(system::Model, variable_name::String)::Bool
@@ -3272,7 +3272,7 @@ Check if a variable exists in the given system.
 
 ### variable_map
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:404`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:404`
 
 ```julia
 function variable_map(coupled_system::MockCoupledSystem, coupling::CouplingVariableMap, file::EsmFile)
@@ -3290,7 +3290,7 @@ Implement variable mapping with transform operations:
 
 ### AdaptiveStrategy
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:82`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:82`
 
 ```julia
 struct AdaptiveStrategy <: OptimizationStrategy
@@ -3304,7 +3304,7 @@ Adaptive parameter adjustment based on performance feedback.
 
 ### AffectEquation
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:80`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:80`
 
 ```julia
 struct AffectEquation
@@ -3320,7 +3320,7 @@ Assignment equation for discrete events.
 
 ### ComponentNode
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:21`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:21`
 
 ```julia
 struct ComponentNode
@@ -3332,7 +3332,7 @@ Component-level node representing a model, reaction system, data loader, or oper
 
 ### ConditionTrigger
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:108`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:108`
 
 ```julia
 struct ConditionTrigger <: DiscreteEventTrigger
@@ -3346,7 +3346,7 @@ Trigger based on boolean condition expression.
 
 ### ContinuousEvent
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:160`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:160`
 
 ```julia
 struct ContinuousEvent <: EventType
@@ -3360,7 +3360,7 @@ Event triggered by zero-crossing of condition expressions.
 
 ### CouplingCallback
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:93`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:93`
 
 ```julia
 struct CouplingCallback <: CouplingEntry
@@ -3374,7 +3374,7 @@ Register a callback for simulation events.
 
 ### CouplingCouple
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:44`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:44`
 
 ```julia
 struct CouplingCouple <: CouplingEntry
@@ -3388,7 +3388,7 @@ Bi-directional coupling via explicit ConnectorSystem equations.
 
 ### CouplingEdge
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:33`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:33`
 
 ```julia
 struct CouplingEdge
@@ -3400,7 +3400,7 @@ Edge representing coupling between components.
 
 ### CouplingEntry
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:315`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:315`
 
 ```julia
 abstract type CouplingEntry end
@@ -3414,7 +3414,7 @@ Abstract base type for coupling entries that connect model components.
 
 ### CouplingEvent
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:108`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:108`
 
 ```julia
 struct CouplingEvent <: CouplingEntry
@@ -3428,7 +3428,7 @@ Cross-system event involving variables from multiple coupled systems.
 
 ### CouplingOperatorApply
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:79`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:79`
 
 ```julia
 struct CouplingOperatorApply <: CouplingEntry
@@ -3442,7 +3442,7 @@ Register an Operator to run during simulation.
 
 ### CouplingOperatorCompose
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:27`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:27`
 
 ```julia
 struct CouplingOperatorCompose <: CouplingEntry
@@ -3457,7 +3457,7 @@ Implements operator composition algorithm from specification Section 4.7.1.
 
 ### CouplingVariableMap
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:61`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:61`
 
 ```julia
 struct CouplingVariableMap <: CouplingEntry
@@ -3471,7 +3471,7 @@ Replace a parameter in one system with a variable from another.
 
 ### DataLoader
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:323`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:323`
 
 ```julia
 struct DataLoader
@@ -3486,7 +3486,7 @@ Runtime-specific data loading functionality.
 
 ### DependencyEdge
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:56`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:56`
 
 ```julia
 struct DependencyEdge
@@ -3498,7 +3498,7 @@ Edge representing dependency between variables.
 
 ### DiscreteEvent
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:175`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:175`
 
 ```julia
 struct DiscreteEvent <: EventType
@@ -3512,7 +3512,7 @@ Event triggered by discrete triggers with functional affects.
 
 ### DiscreteEventTrigger
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:101`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:101`
 
 ```julia
 abstract type DiscreteEventTrigger end
@@ -3526,7 +3526,7 @@ Abstract base type for discrete event triggers.
 
 ### Domain
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:360`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:360`
 
 ```julia
 struct Domain
@@ -3540,7 +3540,7 @@ Spatial and temporal domain specification.
 
 ### ESMError
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:127`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:127`
 
 ```julia
 struct ESMError
@@ -3554,7 +3554,7 @@ Comprehensive error representation with diagnostics and suggestions.
 
 ### Equation
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:68`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:68`
 
 ```julia
 struct Equation
@@ -3569,7 +3569,7 @@ Used for differential equations and algebraic constraints.
 
 ### ErrorCollector
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:154`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:154`
 
 ```julia
 mutable struct ErrorCollector
@@ -3583,7 +3583,7 @@ Collects and manages errors during ESM processing.
 
 ### ErrorContext
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:86`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:86`
 
 ```julia
 struct ErrorContext
@@ -3597,7 +3597,7 @@ Additional context information for errors.
 
 ### EsmFile
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:691`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:691`
 
 ```julia
 struct EsmFile
@@ -3611,7 +3611,7 @@ Main ESM file structure containing all components.
 
 ### EventType
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:94`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:94`
 
 ```julia
 abstract type EventType end
@@ -3625,7 +3625,7 @@ Abstract base type for all event types in the ESM format.
 
 ### Expr
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:18`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:18`
 
 ```julia
 abstract type Expr end
@@ -3640,7 +3640,7 @@ Expressions can be numeric literals, variable references, or operator nodes.
 
 ### FixSuggestion
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:112`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:112`
 
 ```julia
 struct FixSuggestion
@@ -3654,7 +3654,7 @@ Actionable suggestion for fixing an error.
 
 ### FunctionalAffect
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:141`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:141`
 
 ```julia
 struct FunctionalAffect
@@ -3668,7 +3668,7 @@ Functional affect for discrete events.
 
 ### Graph
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:13`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:13`
 
 ```julia
 struct Graph{N, E}
@@ -3680,7 +3680,7 @@ Generic graph structure with nodes and edges.
 
 ### GridSearchStrategy
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:69`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:69`
 
 ```julia
 struct GridSearchStrategy <: OptimizationStrategy
@@ -3694,7 +3694,7 @@ Grid search over predefined parameter ranges.
 
 ### Metadata
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:664`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:664`
 
 ```julia
 struct Metadata
@@ -3708,7 +3708,7 @@ Authorship, provenance, and description metadata.
 
 ### MockCatalystSystem
 
-**File:** `packages/EarthSciSerialization.jl/src/mtk_catalyst.jl:858`
+**File:** `pkg/EarthSciAST.jl/src/mtk_catalyst.jl:858`
 
 ```julia
 struct MockCatalystSystem
@@ -3722,7 +3722,7 @@ Mock Catalyst system for testing and fallback when Catalyst is unavailable.
 
 ### MockCatalystSystem
 
-**File:** `packages/EarthSciSerialization.jl/src/catalyst.jl:306`
+**File:** `pkg/EarthSciAST.jl/src/catalyst.jl:306`
 
 ```julia
 struct MockCatalystSystem
@@ -3737,7 +3737,7 @@ Preserves all structural information from the ESM ReactionSystem.
 
 ### MockCoupledSystem
 
-**File:** `packages/EarthSciSerialization.jl/src/coupled.jl:138`
+**File:** `pkg/EarthSciAST.jl/src/coupled.jl:138`
 
 ```julia
 struct MockCoupledSystem
@@ -3752,7 +3752,7 @@ This would be replaced with real EarthSciMLBase integration.
 
 ### Model
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:230`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:230`
 
 ```julia
 struct Model
@@ -3767,7 +3767,7 @@ Supports hierarchical composition through subsystems.
 
 ### ModelVariable
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:208`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:208`
 
 ```julia
 struct ModelVariable
@@ -3781,7 +3781,7 @@ Structure defining a model variable with its type, default value, and optional e
 
 ### NumExpr
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:25`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:25`
 
 ```julia
 struct NumExpr <: Expr
@@ -3795,7 +3795,7 @@ Numeric literal expression containing a floating-point value.
 
 ### OpExpr
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:47`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:47`
 
 ```julia
 struct OpExpr <: Expr
@@ -3813,7 +3813,7 @@ Operator expression node containing:
 
 ### Operator
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:340`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:340`
 
 ```julia
 struct Operator
@@ -3828,7 +3828,7 @@ Platform-specific computational kernels and operations.
 
 ### OptimizationHistory
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:100`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:100`
 
 ```julia
 mutable struct OptimizationHistory
@@ -3842,7 +3842,7 @@ Tracks the history of parameter configurations and their performance.
 
 ### OptimizationStrategy
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:62`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:62`
 
 ```julia
 abstract type OptimizationStrategy end
@@ -3856,7 +3856,7 @@ Abstract base type for different parameter optimization strategies.
 
 ### Parameter
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:262`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:262`
 
 ```julia
 struct Parameter
@@ -3870,7 +3870,7 @@ Model parameter with name, default value, and optional metadata.
 
 ### ParseError
 
-**File:** `packages/EarthSciSerialization.jl/src/parse.jl:17`
+**File:** `pkg/EarthSciAST.jl/src/parse.jl:17`
 
 ```julia
 struct ParseError <: Exception
@@ -3884,7 +3884,7 @@ Exception thrown when JSON parsing fails.
 
 ### PerformanceMetrics
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:17`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:17`
 
 ```julia
 struct PerformanceMetrics
@@ -3898,7 +3898,7 @@ Stores performance metrics from solver execution.
 
 ### PerformanceProfiler
 
-**File:** `packages/EarthSciSerialization.jl/src/error_handling.jl:275`
+**File:** `pkg/EarthSciAST.jl/src/error_handling.jl:275`
 
 ```julia
 mutable struct PerformanceProfiler
@@ -3912,7 +3912,7 @@ Performance profiling tool for ESM operations.
 
 ### PeriodicTrigger
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:119`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:119`
 
 ```julia
 struct PeriodicTrigger <: DiscreteEventTrigger
@@ -3928,7 +3928,7 @@ Trigger that fires periodically.
 
 ### PresetTimesTrigger
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:132`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:132`
 
 ```julia
 struct PresetTimesTrigger <: DiscreteEventTrigger
@@ -3942,7 +3942,7 @@ Trigger that fires at preset times.
 
 ### ProblemCharacteristics
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:37`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:37`
 
 ```julia
 struct ProblemCharacteristics
@@ -3956,7 +3956,7 @@ Characterizes the mathematical properties of the problem being solved.
 
 ### QualifiedReferenceError
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:724`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:724`
 
 ```julia
 struct QualifiedReferenceError <: Exception
@@ -3971,7 +3971,7 @@ Contains detailed error information.
 
 ### Reaction
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:278`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:278`
 
 ```julia
 struct Reaction
@@ -3985,7 +3985,7 @@ Chemical reaction with reactants, products, and rate expression.
 
 ### ReactionSystem
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:294`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:294`
 
 ```julia
 struct ReactionSystem
@@ -3999,7 +3999,7 @@ Collection of chemical reactions with associated species, supporting hierarchica
 
 ### Reference
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:648`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:648`
 
 ```julia
 struct Reference
@@ -4013,7 +4013,7 @@ Academic citation or data source reference.
 
 ### ReferenceResolution
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:736`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:736`
 
 ```julia
 struct ReferenceResolution
@@ -4028,7 +4028,7 @@ and its location information.
 
 ### SchemaError
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:16`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:16`
 
 ```julia
 struct SchemaError
@@ -4043,7 +4043,7 @@ Contains path, message, and keyword from JSON Schema validation.
 
 ### SchemaValidationError
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:57`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:57`
 
 ```julia
 struct SchemaValidationError <: Exception
@@ -4058,7 +4058,7 @@ Contains detailed error information including paths and messages.
 
 ### Solver
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:441`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:441`
 
 ```julia
 struct Solver
@@ -4073,7 +4073,7 @@ solver parameters, convergence criteria, and method compatibility checking.
 
 ### SolverConfiguration
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:402`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:402`
 
 ```julia
 struct SolverConfiguration
@@ -4088,7 +4088,7 @@ Contains method-specific parameters, tolerances, and algorithms.
 
 ### SolverOptimizer
 
-**File:** `packages/EarthSciSerialization.jl/src/solver_optimization.jl:115`
+**File:** `pkg/EarthSciAST.jl/src/solver_optimization.jl:115`
 
 ```julia
 mutable struct SolverOptimizer
@@ -4102,7 +4102,7 @@ Main optimization controller that manages parameter tuning.
 
 ### Species
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:247`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:247`
 
 ```julia
 struct Species
@@ -4116,7 +4116,7 @@ Chemical species definition with name and optional properties.
 
 ### StructuralError
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:28`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:28`
 
 ```julia
 struct StructuralError
@@ -4131,7 +4131,7 @@ Contains path, message, and error type for structural issues.
 
 ### UnboundVariableError
 
-**File:** `packages/EarthSciSerialization.jl/src/expression.jl:152`
+**File:** `pkg/EarthSciAST.jl/src/expression.jl:152`
 
 ```julia
 struct UnboundVariableError <: Exception
@@ -4145,7 +4145,7 @@ Exception thrown when trying to evaluate an expression with unbound variables.
 
 ### ValidationResult
 
-**File:** `packages/EarthSciSerialization.jl/src/validate.jl:40`
+**File:** `pkg/EarthSciAST.jl/src/validate.jl:40`
 
 ```julia
 struct ValidationResult
@@ -4160,7 +4160,7 @@ unit warnings, and overall validation status.
 
 ### VarExpr
 
-**File:** `packages/EarthSciSerialization.jl/src/types.jl:34`
+**File:** `pkg/EarthSciAST.jl/src/types.jl:34`
 
 ```julia
 struct VarExpr <: Expr
@@ -4174,7 +4174,7 @@ Variable or parameter reference expression containing a name string.
 
 ### VariableNode
 
-**File:** `packages/EarthSciSerialization.jl/src/graph.jl:46`
+**File:** `pkg/EarthSciAST.jl/src/graph.jl:46`
 
 ```julia
 struct VariableNode

@@ -1,0 +1,89 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "WRF_d01_hourly",
+    "description": "Source: EarthSciData/src/wrf.jl — WRFFileSet / WRF(). Parameter footprint: mirror (NCAR RDA d340000), domain. File-per-hour NetCDF (wrfout_hourly_d01_{YYYY}-{MM}-{DD}_{HH}.nc) on the Lambert conformal WRF grid. This fixture represents the d01 domain 2018 snapshot.",
+    "authors": [
+      "EarthSciAST gt-mos"
+    ],
+    "tags": [
+      "meteorology",
+      "regional",
+      "earthscidata.jl"
+    ]
+  },
+  "data_loaders": {
+    "WRF_d01": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://data.rda.ucar.edu/d340000/{date:%Y%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H}.nc"
+      },
+      "temporal": {
+        "file_period": "PT1H",
+        "frequency": "PT1H",
+        "records_per_file": 1,
+        "time_variable": "Time"
+      },
+      "variables": {
+        "U": {
+          "file_variable": "U",
+          "units": "m/s",
+          "description": "x-wind component (WRF U, west_east_stag)"
+        },
+        "V": {
+          "file_variable": "V",
+          "units": "m/s",
+          "description": "y-wind component (WRF V, south_north_stag)"
+        },
+        "W": {
+          "file_variable": "W",
+          "units": "m/s",
+          "description": "z-wind component (WRF W, bottom_top_stag)"
+        },
+        "T": {
+          "file_variable": "T",
+          "units": "K",
+          "description": "Perturbation potential temperature (WRF T)"
+        },
+        "P": {
+          "file_variable": "P",
+          "units": "Pa",
+          "description": "Perturbation pressure (WRF P)"
+        }
+      },
+      "reference": {
+        "citation": "Skamarock, W. C., et al. (2019) A Description of the Advanced Research WRF Model Version 4. NCAR/TN-556+STR",
+        "url": "https://rda.ucar.edu/datasets/ds634.1/"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "regional",
+          "wrf"
+        ],
+        "domain": "d01"
+      }
+    }
+  },
+  "models": {
+    "stub": {
+      "variables": {
+        "x": {
+          "type": "state"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

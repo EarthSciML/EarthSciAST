@@ -4,7 +4,7 @@
     "name": "arrayop_15_discretized_1d_heat",
     "description": "Discretized 1D heat equation on 4 cells with Dirichlet BCs (ghost cells u[0]=u[5]=0). dx=0.2, stencil coefficient 1/dx^2=25. Full-grid arrayop with makearray ghost lowering (ess-j8t): region 0=[1,4] interior, region 1=[1,1] xmin ghost (u[i-1]→0), region 2=[4,4] xmax ghost (u[i+1]→0). The first-mode sinusoidal IC u[i]=sin(pi*i/5) decays with the exact discrete eigenvalue lambda_1=25*(2*cos(pi/5)-2)=-9.5492, so u[i,t]=exp(lambda_1*t)*sin(pi*i/5). This fixture tests the spatial-PDE dispatch path: simulate() must route models with shape-d state variables to the ArrayOp runtime.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "arrayop",

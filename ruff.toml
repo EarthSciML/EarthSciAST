@@ -1,5 +1,5 @@
 # Repo-wide Python lint/format configuration (ruff).
-# Scope: packages/earthsci_toolkit and scripts/ — the paths the CI lint job
+# Scope: pkg/earthsci-ast-py and scripts/ — the paths the CI lint job
 # checks. Other packages are non-Python.
 target-version = "py39"
 line-length = 100
@@ -15,6 +15,6 @@ select = ["E4", "E7", "E9", "F"]
 "scripts/*.py" = ["E402"]
 # __init__ imports the optional simulation tier inside a try guard before
 # the remaining imports; the ordering is deliberate.
-"packages/earthsci_toolkit/src/earthsci_toolkit/__init__.py" = ["E402"]
+"pkg/earthsci-ast-py/src/earthsci_ast/__init__.py" = ["E402"]
 # Property tests call pytest.importorskip("hypothesis") before importing it.
-"packages/earthsci_toolkit/tests/test_property_*.py" = ["E402"]
+"pkg/earthsci-ast-py/tests/test_property_*.py" = ["E402"]

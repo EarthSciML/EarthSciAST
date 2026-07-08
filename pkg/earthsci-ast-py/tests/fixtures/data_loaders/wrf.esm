@@ -1,0 +1,96 @@
+{
+  "_comment": "WRF regional reanalysis fixture. Expresses an instantiation of EarthSciData.jl WRFFileSet (hourly output, d01 domain). Source: EarthSciData.jl src/wrf.jl (struct WRFFileSet at lines 4-37, relpath at lines 39-45). The path grammar $year$month/wrfout_hourly_d01_{yyyy-mm-dd}_{HH:MM:SS}.nc is encoded in url_template via {date} substitutions. Staggering matches WRF's Arakawa-C grid (U on west_east edges, V on south_north edges, mass points centered).",
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "WRFFixture",
+    "description": "WRF hourly regional reanalysis (d01 domain) expressed in the STAC-like DataLoader schema.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "created": "2026-04-14T00:00:00Z",
+    "tags": [
+      "earthscidata-coverage",
+      "wrf",
+      "reanalysis",
+      "regional"
+    ]
+  },
+  "data_loaders": {
+    "WRF": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://data.rda.ucar.edu/d340000/{date:%Y%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H:%M:%S}.nc"
+      },
+      "temporal": {
+        "file_period": "PT1H",
+        "frequency": "PT1H",
+        "records_per_file": 1,
+        "time_variable": "time"
+      },
+      "variables": {
+        "U": {
+          "file_variable": "U",
+          "units": "m/s",
+          "description": "Eastward wind component (staggered on west_east_stag)"
+        },
+        "V": {
+          "file_variable": "V",
+          "units": "m/s",
+          "description": "Northward wind component (staggered on south_north_stag)"
+        },
+        "T": {
+          "file_variable": "T",
+          "units": "K",
+          "description": "Perturbation potential temperature"
+        },
+        "P": {
+          "file_variable": "P",
+          "units": "Pa",
+          "description": "Perturbation pressure"
+        },
+        "PBLH": {
+          "file_variable": "PBLH",
+          "units": "m",
+          "description": "Planetary boundary layer height"
+        }
+      },
+      "reference": {
+        "citation": "Skamarock, W.C. et al. (2019). A Description of the Advanced Research WRF Version 4. NCAR Technical Note NCAR/TN-556+STR.",
+        "url": "https://data.rda.ucar.edu/d340000/",
+        "doi": "10.5065/1dfh-6p97"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis",
+          "regional"
+        ],
+        "earthscidata_source": "src/wrf.jl::WRFFileSet",
+        "domain": "d01"
+      }
+    }
+  },
+  "models": {
+    "placeholder": {
+      "variables": {
+        "x": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

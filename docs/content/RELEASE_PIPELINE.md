@@ -1,6 +1,6 @@
 # Automated Release Pipeline Documentation
 
-This document describes the comprehensive automated release pipeline for the EarthSciSerialization project, including CI/CD integration, multi-platform distribution, and multi-language package coordination.
+This document describes the comprehensive automated release pipeline for the EarthSciAST project, including CI/CD integration, multi-platform distribution, and multi-language package coordination.
 
 ## Overview
 
@@ -46,7 +46,7 @@ The release pipeline provides:
 
 Automatic releases trigger when:
 - Changes are pushed to the `main` branch
-- Changes are detected in any `packages/` directory
+- Changes are detected in any `pkg/` directory
 - Conventional commit messages indicate the appropriate version bump type
 
 ```bash
@@ -114,19 +114,19 @@ All packages maintain synchronized version numbers:
 
 ## Package Publishing
 
-### Julia (EarthSciSerialization.jl)
+### Julia (EarthSciAST.jl)
 
 - Tests run on Julia 1.9, 1.10, 1.11, 1.12
 - Automatic registration with Julia General Registry
 - Coverage reporting via Codecov
-- Package tagged as `EarthSciSerialization-v{version}`
+- Package tagged as `EarthSciAST-v{version}`
 
 **Installation**:
 ```julia
-using Pkg; Pkg.add("EarthSciSerialization")
+using Pkg; Pkg.add("EarthSciAST")
 ```
 
-### TypeScript/JavaScript (earthsci-toolkit)
+### TypeScript/JavaScript (@earthsciml/ast)
 
 - Tests run on Node.js 18, 20, 21
 - Published to NPM registry
@@ -135,10 +135,10 @@ using Pkg; Pkg.add("EarthSciSerialization")
 
 **Installation**:
 ```bash
-npm install earthsci-toolkit
+npm install @earthsciml/ast
 ```
 
-### Python (earthsci_toolkit)
+### Python (earthsci_ast)
 
 - Tests run on Python 3.8-3.12
 - Published to PyPI with trusted publishing
@@ -147,10 +147,10 @@ npm install earthsci-toolkit
 
 **Installation**:
 ```bash
-pip install earthsci-toolkit
+pip install earthsci-ast
 ```
 
-### Rust (earthsci-toolkit)
+### Rust (earthsci-ast)
 
 - Cross-compilation for multiple targets
 - CLI binary distribution
@@ -160,7 +160,7 @@ pip install earthsci-toolkit
 **Installation**:
 ```toml
 [dependencies]
-earthsci-toolkit = "1.2.3"
+earthsci-ast = "1.2.3"
 ```
 
 ## Binary Distribution
@@ -189,10 +189,10 @@ earthsci-toolkit = "1.2.3"
 
 ```bash
 # Universal installer (recommended)
-curl -sSL https://github.com/ctessum/EarthSciSerialization/releases/latest/download/update.sh | bash
+curl -sSL https://github.com/EarthSciML/EarthSciAST/releases/latest/download/update.sh | bash
 
 # Manual installation
-wget https://github.com/ctessum/EarthSciSerialization/releases/latest/download/esm-cli-1.2.3-linux-x64.tar.gz
+wget https://github.com/EarthSciML/EarthSciAST/releases/latest/download/esm-cli-1.2.3-linux-x64.tar.gz
 tar -xzf esm-cli-1.2.3-linux-x64.tar.gz
 cd esm-cli-1.2.3-linux-x64/
 ./install.sh
@@ -268,7 +268,7 @@ Key configuration through GitHub repository settings:
 ### Common Issues
 
 1. **Release Not Triggering**
-   - Check that changes are in `packages/` directories
+   - Check that changes are in `pkg/` directories
    - Verify commit messages follow conventional commit format
    - Consider using `--force` flag for manual releases
 

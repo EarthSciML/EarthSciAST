@@ -4,7 +4,7 @@
     "name": "fvm_diffusion_sum_product",
     "description": "M1 cross-binding conformance fixture (RFC semiring-faq-unified-ir §7.1; bead ess-my4.1.5). The default `sum_product` semiring — the (+,0;×,1) ring that today's FVM diffusion / ESD discretization contraction compiles to. State `flux[i]` accumulates the sum-of-products contraction Sum_{j in faces} i*j (the einsum kernel a finite-volume diffusion stencil lowers to), an exact constant rate from zero initial conditions: flux[1]=Sum_{j=1..3}1*j=6, flux[2]=Sum_{j=1..3}2*j=12 at t=1. Companion state `degenerate[i]` reduces over an EMPTY contraction range (j in [1,0]): under sum_product the empty +-reduction returns the normative 0-bar identity (0), so degenerate[i] stays 0. The contracted index j is drawn from the `faces` interval index set via `{from}` (RFC §5.2); the output index i uses a dense range so every binding sizes the state array identically. Exercises the default (omitted) semiring, a `{from}` interval index-set contraction range, and the empty-reduction 0-bar identity (§5.1) through the full simulate pipeline. Constant-RHS shape so Julia / Rust / Python agree to integration tolerance.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.slit"
+      "EarthSciAST/polecats/gastown.slit"
     ],
     "tags": [
       "aggregate",

@@ -188,13 +188,13 @@ These fixtures demonstrate multiple error conditions in a single file, useful fo
 ## Usage in Test Suites
 
 ### Python Tests
-Located in `packages/earthsci_toolkit/tests/test_validate_structural.py`, these tests load fixtures and verify that structural validation correctly identifies the expected error codes.
+Located in `pkg/earthsci-ast-py/tests/test_validate_structural.py`, these tests load fixtures and verify that structural validation correctly identifies the expected error codes.
 
 ### Julia Tests
-Located in `packages/EarthSciSerialization.jl/test/structural_validation_test.jl`, these tests create programmatic examples of each error condition and verify the Julia implementation detects them.
+Located in `pkg/EarthSciAST.jl/test/structural_validation_test.jl`, these tests create programmatic examples of each error condition and verify the Julia implementation detects them.
 
 ### Rust Tests
-Located in `packages/earthsci-toolkit-rs/tests/structural_validation.rs`, these tests load the fixture files and verify the Rust implementation correctly identifies each error code.
+Located in `pkg/earthsci-ast-rs/tests/structural_validation.rs`, these tests load the fixture files and verify the Rust implementation correctly identifies each error code.
 
 ### Expected Results
 The `tests/invalid/expected_errors.json` file documents the exact expected validation results for each fixture, including:

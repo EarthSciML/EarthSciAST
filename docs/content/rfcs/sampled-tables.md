@@ -82,7 +82,7 @@ Constraint (5) "Existing inlined `const` arrays continue to work" is the
 right backward-compat stance, but the RFC should add an explicit
 non-promotion clause: **`tables` is opt-in; loaders MUST NOT silently
 hoist inline `const` arrays into the `tables` block during round-trip.**
-A lossy canonicalization here would surprise the editor (esm-editor) and
+A lossy canonicalization here would surprise the editor (earthsci-ast-editor) and
 the existing fixture corpus. See "Round-tripping" below.
 
 ### Op surface — **Reject as written, propose smaller alternative**
@@ -243,8 +243,8 @@ RFC can promote this to load-time validation if a units RFC lands first.
 
 ### Round-tripping (open question 5) — **Preserve, do not canonicalize**
 
-The editor (`esm-editor`), the Go round-trip implementation
-(`packages/esm-format-go`), and the existing `tests/` corpus all expect
+The editor (`earthsci-ast-editor`), the Go round-trip implementation
+(`pkg/earthsci-ast-go`), and the existing `tests/` corpus all expect
 that loading and re-saving a file yields the same JSON modulo whitespace.
 Auto-promoting inline `const` arrays into a `tables` block during save
 would break dozens of fixtures and surprise human authors. **Tables are
@@ -321,7 +321,7 @@ The RFC's impact list covers schema and bindings but misses a few:
   (b) shape-mismatch rejection fixtures, (c) cross-binding numeric
   fixtures replicating a small fastjx-style 2-D lookup with both inline
   and table-referenced inputs, asserted bit-equivalent.
-- **`esm-editor` UI.** The editor today renders `const` arrays inline;
+- **`earthsci-ast-editor` UI.** The editor today renders `const` arrays inline;
   it needs a tables panel. Not blocking spec acceptance, but should be
   tracked as a follow-up bead.
 - **Schema version bump.** `tables` is a new top-level block + new op =

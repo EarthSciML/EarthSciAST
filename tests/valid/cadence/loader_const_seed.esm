@@ -4,7 +4,7 @@
     "name": "loader_const_seed",
     "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 + RFC pure-io-data-loaders §4.6; CONFORMANCE_SPEC.md §5.7.2; bead ess-v9a.5): the LOADER-SEEDED-CONST path. The matched-pair sibling of loader_temporal_seed.esm — the SAME boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i] and the SAME `discrete` + `data_ingest` declaration of `bc`, but the top-level loader `bc_loader` declares NO `temporal` block. A loader without `temporal` describes non-time-varying data (RFC pure-io-data-loaders §4.6: `temporal` is optional; absence ⇒ non-time-varying), so the partition REFINES the declared DISCRETE seed down to CONST: the field is loaded once and folds at bind (external-resource provenance), never refreshing. The const bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the CONST->CONTINUOUS threshold — and because nothing is DISCRETE, the per-event handler is EMPTY (unlike the temporal sibling). This is the whole point of the bead: toggling the loader's `temporal` block — and nothing else — flips the same loader-output variable between DISCRETE and CONST, exactly matching §6.1. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator (the top-level `data_loaders` block is attached to the model at load so the pass can see the loader has no `temporal`); the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "cadence-partition",

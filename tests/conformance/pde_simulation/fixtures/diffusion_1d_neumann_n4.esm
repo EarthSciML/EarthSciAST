@@ -4,7 +4,7 @@
     "name": "diffusion_1d_neumann_n4",
     "description": "Discretized 1-D heat equation on 4 cells (dx=0.2, kappa=25) with neumann boundary conditions. Full-grid arrayop; boundary cells use single-cell makearray regions with the neumann ghost expression.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "arrayop",

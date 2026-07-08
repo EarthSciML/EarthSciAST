@@ -3,7 +3,7 @@
   "metadata": {
     "name": "arrayop_02_mixed_ode_algebraic",
     "description": "Mixed ODE + algebraic equation on N=5 arrays. D(u[i]) = v[i], v[i] = -u[i]. The algebraic variable v must be eliminated during mtkcompile so the compiled system has N unknowns. Final u_i(1) = i*exp(-1). Mirrors MTK fork test #2.",
-    "authors": ["EarthSciSerialization/polecats/brahmin"],
+    "authors": ["EarthSciAST/polecats/brahmin"],
     "tags": ["arrayop", "conformance", "algebraic_elimination"]
   },
   "models": {

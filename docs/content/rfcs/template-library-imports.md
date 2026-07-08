@@ -458,8 +458,8 @@ feeding the existing fixpoint engine; (e) the version gate and the §8 diagnosti
 
 | Binding | Ref loading | Templates/engine |
 |---|---|---|
-| Julia | `packages/EarthSciSerialization.jl/src/parse.jl` (`resolve_subsystem_refs!`, `_load_ref`, `_canonical_ref`) | `src/lower_expression_templates.jl` |
-| Python | `src/earthsci_toolkit/reference_resolution.py` | `src/earthsci_toolkit/lower_expression_templates.py` |
+| Julia | `pkg/EarthSciAST.jl/src/parse.jl` (`resolve_subsystem_refs!`, `_load_ref`, `_canonical_ref`) | `src/lower_expression_templates.jl` |
+| Python | `src/earthsci_ast/reference_resolution.py` | `src/earthsci_ast/lower_expression_templates.py` |
 | TypeScript | `src/ref-loading.ts` | `src/lower_expression_templates.ts` |
 | Rust | `src/ref_loading.rs` | `src/lower_expression_templates.rs` |
 | Go | `pkg/esm/subsystem_ref.go` | `pkg/esm/lower_expression_templates.go` |

@@ -4,7 +4,7 @@
     "name": "node_addressing_from_faq",
     "description": "M3 schema fixture (RFC semiring-faq-unified-ir §6.1; bead ess-my4.3.1): stable node identity + reference edges. An `aggregate` node carries the new optional `id` field (\"edge_enum\"), making it addressable; a `kind:\"derived\"` index set names that node via `from_faq`, and a downstream `aggregate` iterates the derived set via a `{ \"from\": ... }` range. This is the schema-valid form of the two inter-node reference edges the §6.1 cadence-partition pass requires — a derived index set -> its from_faq node, and a node -> the index set it references. Validates against the schema with no evaluator; the build-time reference-resolution pass (Julia/Rust/Python) turns these into real, queryable DAG edges.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.rictus"
+      "EarthSciAST/polecats/gastown.rictus"
     ],
     "tags": [
       "aggregate",

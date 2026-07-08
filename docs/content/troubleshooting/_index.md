@@ -35,7 +35,7 @@ Common issues and solutions when working with ESM Format libraries.
 
 If you can't find a solution in this guide:
 
-1. Search existing issues in the [GitHub repository](https://github.com/EarthSciML/EarthSciSerialization)
+1. Search existing issues in the [GitHub repository](https://github.com/EarthSciML/EarthSciAST)
 2. Create a minimal reproducible example
 3. Include error messages and version information
 4. File a new issue with your example

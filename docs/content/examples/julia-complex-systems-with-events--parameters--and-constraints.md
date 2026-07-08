@@ -1,6 +1,6 @@
 # Complex systems with events, parameters, and constraints (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/mtk_catalyst_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/mtk_catalyst_test.jl`
 
 ```julia
 # Create a system with continuous events - stiff chemistry example
@@ -10,31 +10,31 @@
             "k_fast" => ModelVariable(ParameterVariable; default=1000.0, description="Fast reaction rate", units="1/s"),
             "k_slow" => ModelVariable(ParameterVariable; default=0.1, description="Slow reaction rate", units="1/s"),
             "total_species" => ModelVariable(ObservedVariable;
-                expression=OpExpr("+", EarthSciSerialization.Expr[VarExpr("A"), VarExpr("B")]),
+                expression=OpExpr("+", EarthSciAST.Expr[VarExpr("A"), VarExpr("B")]),
                 description="Total mass (conserved)")
         )
 
         equations = [
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("A")], wrt="t"),
-                OpExpr("+", EarthSciSerialization.Expr[
-                    OpExpr("*", EarthSciSerialization.Expr[OpExpr("-", EarthSciSerialization.Expr[VarExpr("k_fast")]), VarExpr("A")]),
-                    OpExpr("*", EarthSciSerialization.Expr[VarExpr("k_slow"), VarExpr("B")])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("A")], wrt="t"),
+                OpExpr("+", EarthSciAST.Expr[
+                    OpExpr("*", EarthSciAST.Expr[OpExpr("-", EarthSciAST.Expr[VarExpr("k_fast")]), VarExpr("A")]),
+                    OpExpr("*", EarthSciAST.Expr[VarExpr("k_slow"), VarExpr("B")])
                 ])
             ),
             Equation(
-                OpExpr("D", EarthSciSerialization.Expr[VarExpr("B")], wrt="t"),
-                OpExpr("+", EarthSciSerialization.Expr[
-                    OpExpr("*", EarthSciSerialization.Expr[VarExpr("k_fast"), VarExpr("A")]),
-                    OpExpr("*", EarthSciSerialization.Expr[OpExpr("-", EarthSciSerialization.Expr[VarExpr("k_slow")]), VarExpr("B")])
+                OpExpr("D", EarthSciAST.Expr[VarExpr("B")], wrt="t"),
+                OpExpr("+", EarthSciAST.Expr[
+                    OpExpr("*", EarthSciAST.Expr[VarExpr("k_fast"), VarExpr("A")]),
+                    OpExpr("*", EarthSciAST.Expr[OpExpr("-", EarthSciAST.Expr[VarExpr("k_slow")]), VarExpr("B")])
                 ])
             )
         ]
 
         # Add a continuous event
-        reset_condition = OpExpr("-", EarthSciSerialization.Expr[VarExpr("A"), NumExpr(1e-12)])
+        reset_condition = OpExpr("-", EarthSciAST.Expr[VarExpr("A"), NumExpr(1e-12)])
         reset_event = ContinuousEvent(
-            EarthSciSerialization.Expr[reset_condition],
+            EarthSciAST.Expr[reset_condition],
             [AffectEquation("A", NumExpr(1e-8))],
             description="Reset A when nearly depleted"
         )
@@ -45,7 +45,7 @@
         # Test conversion to Mock MTK (with event handling)
         mtk_sys = to_mtk_system(model, "StiffChemistry")
 
-        @test mtk_sys isa EarthSciSerialization.MockMTKSystem
+        @test mtk_sys isa EarthSciAST.MockMTKSystem
         @test length(mtk_sys.states) == 2      # A, B
         @test length(mtk_sys.parameters) == 2  # k_fast, k_slow
         @test length(mtk_sys.observed_variables) == 1  # total_species

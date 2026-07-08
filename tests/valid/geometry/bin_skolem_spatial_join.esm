@@ -4,7 +4,7 @@
     "name": "bin_skolem_spatial_join",
     "description": "M4 schema fixture (RFC semiring-faq-unified-ir §A.8 / §8.1; CONFORMANCE_SPEC.md §5.8.5; bead ess-my4.4.2): the bin-Skolem spatial-join REPRESENTATION for the conservative-regridding broad phase. The candidate overlap-pair set {(i,j)} is the spatial (theta) join of source and target cells — NOT covered by M2's equi-only join.on directly — realized as a bin-Skolem EQUI-join. DECISION (bead item 3): no new `bin`/`floor` leaf op is needed; it COMPOSES from existing ops. Each cell's coordinate is quantized to an INTEGER lat-lon bin via the existing `floor` op, a bin key is minted with `skolem`, and the candidate pairs are the landed M2 `join.on` equi-join of source and target cells sharing a bin key. Integer bin keys keep the candidate set BYTE-IDENTICAL across bindings (§5.5 / §5.8.5 determinism contract — no floating-point coordinate comparison enters the broad phase); only the post-clip per-pair area (the `intersect_polygon` narrow phase, a separate fixture) is tolerance-based. The full worked overlap-join idiom + A.8 piece-by-piece mapping is bead ess-my4.4.5; STR-tree acceleration is an explicit perf follow-on, not represented here. This is a STRUCTURAL fixture: it validates against the additive schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",

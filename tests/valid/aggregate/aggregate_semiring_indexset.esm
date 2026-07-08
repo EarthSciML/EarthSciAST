@@ -4,7 +4,7 @@
     "name": "aggregate_semiring_indexset",
     "description": "M1 schema fixture (RFC semiring-faq-unified-ir §5.1 / §5.2 / §8; bead ess-my4.1.1): an `aggregate` node — the canonical op tag for the former `arrayop` — carrying an explicit `semiring` and a `ranges` entry that references a declared index set via `{ \"from\": ... }`. Exercises the additive schema deltas: op:aggregate, the closed `semiring` enum, the `ranges` index-set reference union, and the document-scoped `index_sets` registry (interval + categorical kinds). This is the strict-superset additive form of an ordinary arrayop and validates against the schema with no evaluator.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.nux"
+      "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "aggregate",

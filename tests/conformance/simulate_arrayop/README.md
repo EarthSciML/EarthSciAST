@@ -68,7 +68,7 @@ Julia supports contraction for the **LHS-arrayop form**
 (`arrayop(D(index(var,i))) = arrayop(body, reduce=R, contracted_j)`) via two paths:
 - **tree-walk** (`build_evaluator`): generalized-einsum unroll at build time
   (`tree_walk.jl:294-370`). Handles reduce ∈ {+, *, max, min}.
-- **MTK**: `_build_arrayop_sym` in `EarthSciSerializationMTKExt`, which delegates to
+- **MTK**: `_build_arrayop_sym` in `EarthSciASTMTKExt`, which delegates to
   Symbolics `ArrayOp`.
 
 Julia does NOT support the **embedded form** (`D(z) = arrayop(...)` where `z` is a

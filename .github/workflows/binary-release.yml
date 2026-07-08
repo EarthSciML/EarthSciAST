@@ -58,7 +58,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.get_version.outputs.version }}
-        release_name: EarthSciSerialization ${{ steps.get_version.outputs.version }}
+        release_name: EarthSciAST ${{ steps.get_version.outputs.version }}
         body: |
           # Cross-Platform Binary Release
 
@@ -70,7 +70,7 @@ jobs:
 
           ## Quick Install
           ```bash
-          curl -sSL https://github.com/ctessum/EarthSciSerialization/releases/latest/download/update.sh | bash
+          curl -sSL https://github.com/EarthSciML/EarthSciAST/releases/latest/download/update.sh | bash
           ```
 
           ## Manual Installation
@@ -150,7 +150,7 @@ jobs:
     - name: Setup Rust Cache
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: packages/earthsci-toolkit-rs
+        workspaces: pkg/earthsci-ast-rs
 
     - name: Setup Node.js (for TypeScript build)
       uses: actions/setup-node@v4
@@ -172,7 +172,7 @@ jobs:
 
     - name: Build Rust binary
       shell: bash
-      working-directory: packages/earthsci-toolkit-rs
+      working-directory: pkg/earthsci-ast-rs
       run: |
         cargo build --release --target ${{ matrix.config.rust_target }} --bin esm
 
@@ -189,7 +189,7 @@ jobs:
         mkdir -p "$DIST_DIR"
 
         # Copy binary
-        cp "packages/earthsci-toolkit-rs/target/${RUST_TARGET}/release/${BINARY_NAME}" "$DIST_DIR/"
+        cp "pkg/earthsci-ast-rs/target/${RUST_TARGET}/release/${BINARY_NAME}" "$DIST_DIR/"
 
         # Copy documentation
         cp README.md "$DIST_DIR/" 2>/dev/null || echo "No README found"
@@ -461,7 +461,7 @@ jobs:
           const version = "${{ needs.create-release.outputs.version || github.event.release.tag_name }}".replace(/^v/, '');
           const repo = context.repo;
 
-          const body = `# EarthSciSerialization v${version}
+          const body = `# EarthSciAST v${version}
 
           ## 🚀 Quick Install
           \`\`\`bash
@@ -486,10 +486,10 @@ jobs:
           - **Windows**: Extract and run \`install.bat\`
 
           ## 🔧 Library Packages
-          - **Python**: \`pip install earthsci-toolkit\`
-          - **TypeScript/JavaScript**: \`npm install earthsci-toolkit\`
-          - **Julia**: \`using Pkg; Pkg.add("EarthSciSerialization")\`
-          - **Rust**: Add \`earthsci-toolkit = "${version}"\` to Cargo.toml
+          - **Python**: \`pip install earthsci-ast\`
+          - **TypeScript/JavaScript**: \`npm install @earthsciml/ast\`
+          - **Julia**: \`using Pkg; Pkg.add("EarthSciAST")\`
+          - **Rust**: Add \`earthsci-ast = "${version}"\` to Cargo.toml
 
           ## ✅ Verification
           All packages include SHA256 checksums for integrity verification.

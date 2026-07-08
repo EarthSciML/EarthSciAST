@@ -1,6 +1,6 @@
 # Configuration Dictionary Conversion (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/solver_optimization_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/solver_optimization_test.jl`
 
 ```julia
 # Test solver_config_to_dict
@@ -14,7 +14,7 @@
             extra_parameters=Dict("custom_param" => 42)
         )
 
-        dict_config = EarthSciSerialization.solver_config_to_dict(config)
+        dict_config = EarthSciAST.solver_config_to_dict(config)
         @test dict_config["threads"] == 4
         @test dict_config["timestep"] == 0.01
         @test dict_config["stiff_algorithm"] == "QNDF"
@@ -25,7 +25,7 @@
         @test dict_config["custom_param"] == 42
 
         # Test dict_to_solver_config (round trip)
-        converted_config = EarthSciSerialization.dict_to_solver_config(dict_config)
+        converted_config = EarthSciAST.dict_to_solver_config(dict_config)
         @test converted_config.threads == config.threads
         @test converted_config.timestep == config.timestep
         @test converted_config.stiff_algorithm == config.stiff_algorithm

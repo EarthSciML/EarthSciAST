@@ -78,9 +78,9 @@ the trajectory at each declared output time, keyed by the **bare** element name
 
 | Binding | RHS hook | Trajectory hook | Adapter |
 |---------|----------|-----------------|---------|
-| Julia (reference) | `build_evaluator` → `f!(du,u,p,t)` (tree-walk) | `ODEProblem` + `Tsit5` | `packages/EarthSciSerialization.jl/scripts/pde_simulation_adapter.jl` |
-| Python | `earthsci_toolkit.evaluate_rhs` (NumPy interpreter) | `simulate` (SciPy `solve_ivp`) | `packages/earthsci_toolkit/.../cli/pde_simulation_adapter.py` |
-| Rust | `ArrayCompiled::debug_eval_rhs` (vectorized) | `simulate` (diffsol) | `packages/earthsci-toolkit-rs/src/bin/earthsci-pde-sim-adapter-rust.rs` |
+| Julia (reference) | `build_evaluator` → `f!(du,u,p,t)` (tree-walk) | `ODEProblem` + `Tsit5` | `pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl` |
+| Python | `earthsci_ast.evaluate_rhs` (NumPy interpreter) | `simulate` (SciPy `solve_ivp`) | `pkg/earthsci-ast-py/.../cli/pde_simulation_adapter.py` |
+| Rust | `ArrayCompiled::debug_eval_rhs` (vectorized) | `simulate` (diffsol) | `pkg/earthsci-ast-rs/src/bin/earthsci-pde-sim-adapter-rust.rs` |
 
 ## Tolerances (manifest `tolerances`)
 
@@ -116,7 +116,7 @@ python3 scripts/run-pde-simulation-conformance.py --self-test
 ./scripts/test-conformance.sh            # runs the three producers + self-test
 
 # Regenerate the Julia-reference goldens (e.g. after changing a fixture):
-EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia packages/EarthSciSerialization.jl/scripts/pde_simulation_adapter.jl" \
+EARTHSCI_PDE_SIM_ADAPTER_JULIA="julia pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl" \
   python3 scripts/run-pde-simulation-conformance.py --write-golden --bindings julia
 ```
 

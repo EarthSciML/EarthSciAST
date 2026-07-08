@@ -65,9 +65,9 @@ For the fixture, a binding's adapter:
 
 Per-binding runners:
 
-* **Julia** — `packages/EarthSciSerialization.jl/test/build_once_spatial_field_conformance_test.jl`
-* **Python** — `packages/earthsci_toolkit/tests/test_build_once_spatial_field_conformance.py`
-* **Rust** — `packages/earthsci-toolkit-rs/tests/build_once_spatial_field_conformance.rs`
+* **Julia** — `pkg/EarthSciAST.jl/test/build_once_spatial_field_conformance_test.jl`
+* **Python** — `pkg/earthsci-ast-py/tests/test_build_once_spatial_field_conformance.py`
+* **Rust** — `pkg/earthsci-ast-rs/tests/build_once_spatial_field_conformance.rs`
 
 ## Bindings
 

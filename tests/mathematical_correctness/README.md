@@ -258,8 +258,8 @@ Algebraic manipulation rules and verification:
 
 ### Conservation Law Verification
 ```python
-from earthsci_toolkit.verification import verify_reaction_system
-from earthsci_toolkit.types import ReactionSystem
+from earthsci_ast.verification import verify_reaction_system
+from earthsci_ast.types import ReactionSystem
 
 # Load test case
 system = load_test_case("conservation_laws.esm", "mass_conservation_combustion")
@@ -275,7 +275,7 @@ assert report.summary["fail"] == 0
 
 ### Dimensional Analysis
 ```python
-from earthsci_toolkit.verification import verify_dimensional_consistency
+from earthsci_ast.verification import verify_dimensional_consistency
 
 # Load dimensional test
 equation = load_test_case("dimensional_analysis.esm", "newton_second_law")
@@ -289,7 +289,7 @@ assert all(r.status == VerificationStatus.PASS for r in results)
 
 ### Numerical Precision Testing
 ```python
-from earthsci_toolkit.verification import check_numerical_stability
+from earthsci_ast.verification import check_numerical_stability
 
 # Test matrix conditioning
 matrix = load_test_matrix("numerical_correctness.esm", "hilbert_matrix")
@@ -307,16 +307,16 @@ assert stability["is_well_conditioned"]
 ### Running All Tests
 ```bash
 # Python implementation
-cd packages/earthsci_toolkit
+cd pkg/earthsci-ast-py
 source venv/bin/activate
 python -m pytest tests/test_mathematical_verification.py -v
 
 # Julia implementation
-cd packages/EarthSciSerialization.jl
+cd pkg/EarthSciAST.jl
 julia --project=. -e 'using Pkg; Pkg.test()'
 
 # TypeScript implementation
-cd packages/earthsci-toolkit
+cd pkg/earthsci-ast-ts
 npm test
 ```
 

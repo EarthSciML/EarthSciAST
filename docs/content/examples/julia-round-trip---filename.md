@@ -1,19 +1,19 @@
 # Round-trip: $filename (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/runtests.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/runtests.jl`
 
 ```julia
 try
                             # Load original
-                            original = EarthSciSerialization.load(filepath)
+                            original = EarthSciAST.load(filepath)
 
                             # Create temp file for round-trip test
                             temp_file = tempname() * ".esm"
 
                             try
                                 # Save and reload
-                                EarthSciSerialization.save(temp_file, original)
-                                reloaded = EarthSciSerialization.load(temp_file)
+                                EarthSciAST.save(temp_file, original)
+                                reloaded = EarthSciAST.load(temp_file)
 
                                 # Compare key fields
                                 @test original.esm == reloaded.esm

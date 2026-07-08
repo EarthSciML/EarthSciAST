@@ -1,6 +1,6 @@
 # Reference Resolution - Hierarchical Subsystems (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reference_resolution_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reference_resolution_test.jl`
 
 ```julia
 # Create nested model structure: Atmosphere -> Chemistry -> GasPhase

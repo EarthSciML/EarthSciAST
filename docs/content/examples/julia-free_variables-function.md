@@ -1,6 +1,6 @@
 # free_variables function (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/expression_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/expression_test.jl`
 
 ```julia
 # Test NumExpr (no variables)
@@ -12,19 +12,19 @@
         @test free_variables(var_x) == Set(["x"])
 
         # Test OpExpr with multiple variables
-        sum_expr = OpExpr("+", EarthSciSerialization.Expr[VarExpr("x"), VarExpr("y")])
+        sum_expr = OpExpr("+", EarthSciAST.Expr[VarExpr("x"), VarExpr("y")])
         @test free_variables(sum_expr) == Set(["x", "y"])
 
         # Test nested expressions
-        nested = OpExpr("*", EarthSciSerialization.Expr[OpExpr("+", EarthSciSerialization.Expr[VarExpr("x"), NumExpr(1.0)]), VarExpr("y")])
+        nested = OpExpr("*", EarthSciAST.Expr[OpExpr("+", EarthSciAST.Expr[VarExpr("x"), NumExpr(1.0)]), VarExpr("y")])
         @test free_variables(nested) == Set(["x", "y"])
 
         # Test OpExpr with wrt field
-        diff_expr = OpExpr("D", EarthSciSerialization.Expr[VarExpr("x")], wrt="t")
+        diff_expr = OpExpr("D", EarthSciAST.Expr[VarExpr("x")], wrt="t")
         @test free_variables(diff_expr) == Set(["x", "t"])
 
         # Test expression with repeated variables
-        repeated = OpExpr("+", EarthSciSerialization.Expr[VarExpr("x"), VarExpr("x"), VarExpr("y")])
+        repeated = OpExpr("+", EarthSciAST.Expr[VarExpr("x"), VarExpr("x"), VarExpr("y")])
         @test free_variables(repeated) == Set(["x", "y"])
 ```
 

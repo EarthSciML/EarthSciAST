@@ -1,0 +1,82 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "GEOSFP_I3_4x5",
+    "description": "Source: EarthSciData/src/geosfp.jl — GEOSFPFileSet / GEOSFP(). Parameter footprint: mirror, domain, filetype ({A1, A3cld, A3dyn, A3mstC, A3mstE, I3}), starttime, endtime. Files on GEOS-Chem S3 mirror, daily file period, 3-hourly samples (1-hourly for A1). This fixture represents the I3 (instantaneous 3-hourly) filetype on the 4x5 global domain.",
+    "authors": [
+      "EarthSciAST gt-mos"
+    ],
+    "tags": [
+      "meteorology",
+      "reanalysis",
+      "earthscidata.jl"
+    ]
+  },
+  "data_loaders": {
+    "GEOSFP_I3": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://geos-chem.s3-us-west-2.amazonaws.com/GEOS_4x5/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.I3.4x5.nc",
+        "mirrors": [
+          "https://geos-chem.s3-us-west-2.amazonaws.com/GEOS_4x5/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.I3.4x5.nc"
+        ]
+      },
+      "temporal": {
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8,
+        "time_variable": "time"
+      },
+      "variables": {
+        "T": {
+          "file_variable": "T",
+          "units": "K",
+          "description": "Temperature"
+        },
+        "QV": {
+          "file_variable": "QV",
+          "units": "kg/kg",
+          "description": "Specific humidity"
+        },
+        "PS": {
+          "file_variable": "PS",
+          "units": "Pa",
+          "description": "Surface pressure"
+        }
+      },
+      "reference": {
+        "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC — GEOS-FP",
+        "url": "http://geoschemdata.wustl.edu/ExtData/"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis"
+        ],
+        "domain": "4x5",
+        "filetype": "I3"
+      }
+    }
+  },
+  "models": {
+    "stub": {
+      "variables": {
+        "x": {
+          "type": "state"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0
+        }
+      ]
+    }
+  }
+}

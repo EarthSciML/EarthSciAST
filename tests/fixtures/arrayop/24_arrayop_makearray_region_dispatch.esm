@@ -4,7 +4,7 @@
     "name": "arrayop_24_arrayop_makearray_region_dispatch",
     "description": "Pins _resolve_index_of_makearray (ESS tree_walk.jl:1114) in the LHS-arrayop context. The RHS body is index(makearray(regions,values),i,j) where i,j are arrayop output loop variables — they are substituted to concrete integers during arrayop unrolling, then passed to the resolver. 3x3 2D domain: Region 1 [[1:3],[1:3]]=1.0 (base); Region 2 [[2:2],[2:2]]=4.0 overwrites the center cell. Integrating D(u[i,j])=C[i,j] from u=0 over t=[0,1] yields u[i,j](1)=C[i,j]. (ess-e9l)",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "arrayop",

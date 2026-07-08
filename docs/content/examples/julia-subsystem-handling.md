@@ -1,6 +1,6 @@
 # Subsystem Handling (Julia)
 
-**Source:** `/home/ctessum/EarthSciSerialization/packages/EarthSciSerialization.jl/test/reactions_test.jl`
+**Source:** `/home/ctessum/EarthSciAST/pkg/EarthSciAST.jl/test/reactions_test.jl`
 
 ```julia
 # Create a main system with subsystem

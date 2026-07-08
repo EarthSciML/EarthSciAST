@@ -75,7 +75,7 @@ count atom — see above).
 | `molec`    |  ✓    |   ✓    |     ✓      |  ✓   | —  |
 | `Dobson`   |  ✓    |   ✓    |     ✓      |  ✓   | —  |
 
-Go (`packages/esm-format-go`) is not required until gt-go-units lands.
+Go (`pkg/earthsci-ast-go`) is not required until gt-go-units lands.
 
 ## Verification
 

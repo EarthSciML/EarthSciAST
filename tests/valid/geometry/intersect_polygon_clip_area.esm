@@ -4,7 +4,7 @@
     "name": "intersect_polygon_clip_area",
     "description": "M4 schema fixture (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.2): the conservative-regridding geometry-kernel split. The REQUIRED new op is the `intersect_polygon` LEAF — `{ op: intersect_polygon, args: [poly_a, poly_b], manifold: spherical }` — which clips two lon-lat polygon rings and returns the overlap vertex ring of DATA-DEPENDENT length. That ring rides the M3 value-invention machinery with no new schema: the clip node carries an `id` (\"overlap_clip\") and the ring's vertex set is exposed as a kind:\"derived\" index set via from_faq (§5.2). `polygon_area` is NOT a new op — it is an ORDINARY sum_product FAQ over that ring (planar shoelace / Gauss–Green / spherical excess), structurally identical to the §7.3 area_eff example, so the only geometry-specific schema is the `intersect_polygon` op + its `manifold` flag. Polygons are ordinary [verts, coord] coordinate arrays; the lon-lat pair is the dense `coord` interval — no bespoke polygon/ring type is needed. This is a STRUCTURAL fixture: it validates against the additive schema with no evaluator (the Julia/Rust/Python clip kernels are ess-my4.4.3/.4/.11/.12; their cross-binding conformance is tolerance-based per §5.8). The area integrand below is illustrative of the sum_product STRUCTURE; the exact shoelace / spherical-excess body is supplied by the evaluator kernels.",
     "authors": [
-      "EarthSciSerialization/polecats/gastown.furiosa"
+      "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "geometry",
