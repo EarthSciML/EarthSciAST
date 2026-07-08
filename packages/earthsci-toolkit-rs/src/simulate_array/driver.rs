@@ -284,6 +284,66 @@ impl ArrayCompiled {
         opts: &SimulateOptions,
         inspect: Option<&mut BuildInspection>,
     ) -> Result<Solution, SimulateError> {
+        // CONST / single-segment: no discrete forcing, no refresh boundaries.
+        self.simulate_core(
+            tspan,
+            params,
+            initial_conditions,
+            opts,
+            inspect,
+            &HashSet::new(),
+            &[],
+            |_t| Ok(()),
+        )
+    }
+
+    /// [`Self::simulate_inspect`] with a DISCRETE-cadence forcing refresh. The
+    /// integration is SEGMENTED on `boundaries` (solver-second refresh anchors);
+    /// at each boundary `refresh_fn(t)` re-slices the live forcing buffer to that
+    /// record. Observeds transitively reaching a `discrete_forcing` name are
+    /// excluded from the build-once static hoist, so they recompute over the
+    /// refreshed buffer per segment while the CONST terrain regrid stays hoisted.
+    /// This is the Rust analog of the ESS-Julia live-field taint + segmented driver.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn simulate_with_refresh_inspect(
+        &self,
+        tspan: (f64, f64),
+        params: &HashMap<String, f64>,
+        initial_conditions: &HashMap<String, f64>,
+        opts: &SimulateOptions,
+        inspect: Option<&mut BuildInspection>,
+        discrete_forcing: &HashSet<String>,
+        boundaries: &[f64],
+        refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
+    ) -> Result<Solution, SimulateError> {
+        self.simulate_core(
+            tspan,
+            params,
+            initial_conditions,
+            opts,
+            inspect,
+            discrete_forcing,
+            boundaries,
+            refresh_fn,
+        )
+    }
+
+    /// Shared setup + segmented integration (see the two entry points above).
+    /// `boundaries` are the sorted solver-second refresh anchors strictly inside
+    /// `(t0, t_end)`; an empty `boundaries` (the CONST path) runs one segment,
+    /// byte-identical to the un-segmented driver.
+    #[allow(clippy::too_many_arguments)]
+    fn simulate_core(
+        &self,
+        tspan: (f64, f64),
+        params: &HashMap<String, f64>,
+        initial_conditions: &HashMap<String, f64>,
+        opts: &SimulateOptions,
+        inspect: Option<&mut BuildInspection>,
+        discrete_forcing: &HashSet<String>,
+        boundaries: &[f64],
+        mut refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
+    ) -> Result<Solution, SimulateError> {
         // WS3 override-naming parity: on the single-model path names are BARE
         // (`R_0`), but callers (and the Julia toolkit) key overrides by the
         // namespaced `Model.R_0`. Strip this model's `<namespace>.` prefix from
@@ -300,6 +360,11 @@ impl ArrayCompiled {
         let param_vec = self.build_param_vec(&params_owned)?;
         let ic_vec = self.build_initial_state(&ics_owned, &param_vec)?;
 
+        // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
+        // no-op for the CONST/single-segment path; for DISCRETE it primes the
+        // first record so the static regrid geometry sees a populated buffer.
+        refresh_fn(t0)?;
+
         // Hoist the STATE-FREE / `t`-free observeds (ess: static-observed hoist)
         // out of the per-step RHS. Within a single `simulate` call the forcing
         // buffer is constant (the free `simulate` never refreshes it between
@@ -311,7 +376,7 @@ impl ArrayCompiled {
         // and seed them into every RHS eval, rather than recomputing the
         // (expensive) regrid on every step. A model with no such observeds hoists
         // nothing and stays byte-identical to the un-hoisted path.
-        let static_names = self.classify_static_observeds();
+        let static_names = self.classify_static_observeds(discrete_forcing);
         let static_rules: Vec<AlgebraicRule> = self
             .observed_rules
             .iter()
@@ -348,18 +413,187 @@ impl ArrayCompiled {
         // integration is unchanged.
         if let Some(insp) = inspect {
             self.fill_inspection(insp, &static_obs, &static_names, &param_vec);
+            // Segmented (DISCRETE) run: the time-varying regrid observeds (the
+            // ERA5 t_xy/rh_xy/u_xy/v_xy over the first hour's slice) are NOT in
+            // the static hoist, so ALSO snapshot them at t0 into `setup_arrays` —
+            // a caller reading the build-time per-cell forcing (the runner's
+            // forcing print) then still sees the ERA5 fields at their t=0 record.
+            if !boundaries.is_empty() {
+                let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+                let mut snapshot = static_obs.clone();
+                materialize_observeds_append(
+                    &mut snapshot,
+                    &varying_rules,
+                    &sa0,
+                    &param_vec,
+                    &self.param_names,
+                    t0,
+                    &dr,
+                    &self.forcing,
+                );
+                for rule in &varying_rules {
+                    let name = observed_rule_var(rule);
+                    if let Some(a) = snapshot.get(name) {
+                        insp.setup_arrays.insert(name.clone(), a.clone());
+                    }
+                }
+            }
         }
 
+        let solver_name = match opts.solver {
+            SolverChoice::Bdf => "Bdf",
+            SolverChoice::Sdirk => "Sdirk",
+            SolverChoice::Erk => "Erk",
+        };
+
+        // CONST / single-segment (or no output grid to align segment samples on):
+        // the original un-segmented run — byte-identical to the pre-segmentation
+        // driver (one `run_one_segment` over the whole span with `opts` verbatim).
+        if boundaries.is_empty() || opts.output_times.is_none() {
+            let (time, mut state) = self.run_one_segment(
+                t0,
+                t_end,
+                &ic_vec,
+                &param_vec,
+                &static_obs,
+                &varying_rules,
+                opts,
+            )?;
+            let mut state_variable_names = self.scalar_state_names.clone();
+            self.append_scalar_observed_trajectories(
+                &time,
+                &mut state,
+                &mut state_variable_names,
+                &param_vec,
+                &static_obs,
+                &varying_rules,
+            );
+            return Ok(Solution {
+                time,
+                state,
+                state_variable_names,
+                metadata: SolutionMetadata {
+                    solver: solver_name.to_string(),
+                    ..Default::default()
+                },
+            });
+        }
+
+        // DISCRETE: integrate in segments split on the refresh boundaries. Segment
+        // endpoints = t0, each boundary strictly inside (t0, t_end) ascending, t_end.
+        let mut endpoints: Vec<f64> = vec![t0];
+        for &b in boundaries {
+            if b > t0 && b < t_end && *endpoints.last().unwrap() < b {
+                endpoints.push(b);
+            }
+        }
+        if *endpoints.last().unwrap() < t_end {
+            endpoints.push(t_end);
+        }
+
+        let global_out = opts.output_times.clone().expect("output grid checked Some");
+        let mut u0 = ic_vec.clone();
+        let mut time: Vec<f64> = Vec::new();
+        let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
+
+        for w in endpoints.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            // Refresh the live buffer at the START of every segment after the
+            // first (t0 was already primed by `refresh_fn(t0)` above).
+            if a != t0 {
+                refresh_fn(a)?;
+            }
+            // Requested outputs falling in this segment: (a, b] — or [a, b] for
+            // the first. Always run the solver's grid up to `b` (append if
+            // absent) so the state at `b` seeds the next segment.
+            let requested: Vec<f64> = global_out
+                .iter()
+                .copied()
+                .filter(|&g| (if a == t0 { g >= a } else { g > a }) && g <= b)
+                .collect();
+            let mut grid = requested.clone();
+            if grid.last() != Some(&b) {
+                grid.push(b);
+            }
+            let seg_opts = SimulateOptions {
+                output_times: Some(grid),
+                ..opts.clone()
+            };
+            let (seg_time, seg_state) = self.run_one_segment(
+                a,
+                b,
+                &u0,
+                &param_vec,
+                &static_obs,
+                &varying_rules,
+                &seg_opts,
+            )?;
+            // `run_solver` pushes the REQUESTED grid time verbatim, so a float
+            // equality against `requested`/`b` is exact.
+            for (i, &t) in seg_time.iter().enumerate() {
+                if t == b {
+                    u0 = (0..n_states).map(|r| seg_state[r][i]).collect();
+                }
+                if requested.iter().any(|&g| g == t) {
+                    time.push(t);
+                    for r in 0..n_states {
+                        state[r].push(seg_state[r][i]);
+                    }
+                }
+            }
+        }
+
+        // Expose scalar observed trajectories alongside the states (see
+        // [`Self::append_scalar_observed_trajectories`]). Note: this re-evaluates
+        // the varying observeds against the CURRENT (last-segment) forcing buffer,
+        // so an appended scalar observed reading a discrete forcing reflects the
+        // final hour — the array STATE trajectory (the fire front) is per-segment
+        // correct, which is what the runner reads.
+        let mut state_variable_names = self.scalar_state_names.clone();
+        self.append_scalar_observed_trajectories(
+            &time,
+            &mut state,
+            &mut state_variable_names,
+            &param_vec,
+            &static_obs,
+            &varying_rules,
+        );
+
+        Ok(Solution {
+            time,
+            state,
+            state_variable_names,
+            metadata: SolutionMetadata {
+                solver: solver_name.to_string(),
+                ..Default::default()
+            },
+        })
+    }
+
+    /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the
+    /// live forcing buffer (`self.forcing`) — which a segmented driver refreshes
+    /// between segments. Builds a fresh RHS/Jacobian closure pair (each scratch
+    /// pre-seeded with the already-materialized `static_obs`) and a fresh diffsol
+    /// problem, returning the states at `opts.output_times`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_one_segment(
+        &self,
+        t0: f64,
+        t_end: f64,
+        u0: &[f64],
+        param_vec: &[f64],
+        static_obs: &ArrMap,
+        varying_rules: &[AlgebraicRule],
+        opts: &SimulateOptions,
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError> {
+        let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
         let var_shapes = self.var_shapes.clone();
         let param_names = self.param_names.clone();
 
         let rhs_rules_jac = rhs_rules.clone();
-        // Each closure and the post-solve output exposure need the varying rule
-        // set; `static_obs` is likewise kept for the output exposure (below), so
-        // both scratch seeds clone it rather than move it.
-        let varying_rules_rhs = varying_rules.clone();
-        let varying_rules_jac = varying_rules.clone();
+        let varying_rules_rhs = varying_rules.to_vec();
+        let varying_rules_jac = varying_rules.to_vec();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
 
@@ -377,9 +611,7 @@ impl ArrayCompiled {
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
         // each closure so both the RHS and the Jacobian read the *same*
-        // model-lifetime buffer the caller mutates via `forcing_handle()`. The
-        // closures capture by move; the original `self.forcing` stays owned by
-        // the model (used for output-time observed exposure below).
+        // model-lifetime buffer the caller refreshes between segments.
         let forcing_rhs = Rc::clone(&self.forcing);
         let forcing_jac = Rc::clone(&self.forcing);
 
@@ -470,13 +702,13 @@ impl ArrayCompiled {
 
         let abstol = opts.abstol;
         let reltol = opts.reltol;
-        let ic_for_init = ic_vec.clone();
+        let ic_for_init = u0.to_vec();
 
         let builder = OdeBuilder::<FaerMat<f64>>::new()
             .t0(t0)
             .rtol(reltol)
             .atol(vec![abstol; n_states])
-            .p(param_vec.clone())
+            .p(param_vec.to_vec())
             .rhs_implicit(rhs_closure, jac_closure)
             .init(
                 move |_p: &diffsol::FaerVec<f64>, _t: f64, y: &mut diffsol::FaerVec<f64>| {
@@ -492,13 +724,7 @@ impl ArrayCompiled {
             details: e.to_string(),
         })?;
 
-        let solver_name = match opts.solver {
-            SolverChoice::Bdf => "Bdf",
-            SolverChoice::Sdirk => "Sdirk",
-            SolverChoice::Erk => "Erk",
-        };
-
-        let (time, mut state) = match opts.solver {
+        let out = match opts.solver {
             SolverChoice::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
@@ -522,28 +748,7 @@ impl ArrayCompiled {
                 crate::simulate::run_solver(&mut solver, t_end, opts)?
             }
         };
-
-        // Expose scalar observed trajectories alongside the states (see
-        // [`Self::append_scalar_observed_trajectories`]).
-        let mut state_variable_names = self.scalar_state_names.clone();
-        self.append_scalar_observed_trajectories(
-            &time,
-            &mut state,
-            &mut state_variable_names,
-            &param_vec,
-            &static_obs,
-            &varying_rules,
-        );
-
-        Ok(Solution {
-            time,
-            state,
-            state_variable_names,
-            metadata: SolutionMetadata {
-                solver: solver_name.to_string(),
-                ..Default::default()
-            },
-        })
+        Ok(out)
     }
 
     /// Expose scalar observed trajectories (e.g. an `area` FAQ) alongside the
@@ -636,7 +841,7 @@ impl ArrayCompiled {
     /// The regridded terrain (`elev_xy`) and its slopes — forcing-derived but
     /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
     /// Python `BuildInspection`.
-    fn classify_static_observeds(&self) -> HashSet<String> {
+    fn classify_static_observeds(&self, discrete_forcing: &HashSet<String>) -> HashSet<String> {
         let observed_names: HashSet<&String> =
             self.observed_rules.iter().map(observed_rule_var).collect();
         let mut static_set: HashSet<String> = HashSet::new();
@@ -646,6 +851,11 @@ impl ArrayCompiled {
             let ok = refs.iter().all(|r| {
                 r != "t"
                     && !self.var_shapes.contains_key(r)
+                    // A DISCRETE (hourly) forcing buffer is a LIVE field the driver
+                    // refreshes between segments — an observed reaching it must NOT
+                    // freeze at setup; it recomputes over the refreshed buffer. (A
+                    // CONST forcing, e.g. terrain, is absent here and stays static.)
+                    && !discrete_forcing.contains(r)
                     && (!observed_names.contains(r) || static_set.contains(r))
             });
             if ok {

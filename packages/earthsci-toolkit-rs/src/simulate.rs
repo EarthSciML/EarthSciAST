@@ -1166,11 +1166,13 @@ pub fn simulate_with_inspection(
 /// is sampled — and its geometry computed — a single time.
 ///
 /// `providers` is keyed by the forcing VARIABLE name (the coupling target), like
-/// the Julia/Python dict; each provider must feed exactly one field. DISCRETE
-/// (cadence-refreshed) providers are out of scope for this single-segment entry
-/// point — they route through [`crate::provider::RefreshExecutor`] and a
-/// segmented driver; a provider whose `refresh_times()` is non-empty is rejected
-/// here rather than silently frozen at its first record.
+/// the Julia/Python dict; each provider must feed exactly one field. This is the
+/// SINGLE discrete-aware entry point: a [`crate::provider::RefreshExecutor`] (built
+/// [`from_providers`](crate::provider::RefreshExecutor::from_providers), classifying
+/// each provider by its `refresh_times()`) seeds the CONST forcings once, and — when
+/// any provider is DISCRETE (non-empty `refresh_times`) — segments the integration on
+/// its refresh anchors, re-slicing the live forcing per segment (never frozen at the
+/// first record). CONST-only input takes the unchanged single-segment path.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn simulate_with_providers_inspect(
     file: &EsmFile,
@@ -1178,7 +1180,7 @@ pub fn simulate_with_providers_inspect(
     params: &HashMap<String, f64>,
     initial_conditions: &HashMap<String, f64>,
     opts: &SimulateOptions,
-    mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
+    providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
     inspect: Option<&mut crate::simulate_array::BuildInspection>,
 ) -> Result<Solution, SimulateError> {
     if !(crate::simulate_array::file_has_array_ops(file)
@@ -1205,41 +1207,60 @@ pub fn simulate_with_providers_inspect(
         crate::simulate_array::ArrayCompiled::from_file(file)?
     };
 
-    // Sample each provider ONCE and seed its field into the forcing buffer under
-    // the bound variable name (the coupling target). This is the CONST fold the
-    // Julia/Python `providers=` keyword performs; the model's build-once geometry
-    // reads the seeded field at setup.
-    if !providers.is_empty() {
-        let forcing = compiled.forcing_handle();
-        let mut buf = forcing.borrow_mut();
-        for (var, provider) in providers.iter_mut() {
-            if !provider.refresh_times().is_empty() {
-                return Err(SimulateError::ProviderError {
-                    name: var.clone(),
-                    details: "DISCRETE (cadence-refreshed) providers need a segmented driver \
-                              (RefreshExecutor); this entry point takes CONST providers only"
-                        .to_string(),
-                });
-            }
-            let fields = provider.materialize().map_err(|e| SimulateError::ProviderError {
-                name: var.clone(),
-                details: e.to_string(),
-            })?;
-            if fields.len() != 1 {
-                return Err(SimulateError::ProviderError {
-                    name: var.clone(),
-                    details: format!(
-                        "provider fed {} fields; a forcing variable binds exactly one",
-                        fields.len()
-                    ),
-                });
-            }
-            let (_fed_name, field) = fields.into_iter().next().expect("checked len == 1");
-            buf.insert(var.clone(), field.array);
-        }
+    // Provider management via the ONE RefreshExecutor (the same executor the
+    // model-declared `data_loaders` seam uses): classify each provider by cadence,
+    // seed the CONST forcings once, take the DISCRETE refresh anchors as the
+    // driver's segment boundaries, and re-slice the DISCRETE forcings per segment.
+    // `from_providers` classifies by `refresh_times()` — the cross-language
+    // runtime-provider paradigm (matching Julia/Python) — so a `providers=` model
+    // that carries no `data_ingest` declarations still routes through the executor.
+    let (t0, t_end) = tspan;
+    let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
+    let forcing = compiled.forcing_handle();
+    exec.materialize_const(&forcing).map_err(|e| SimulateError::ProviderError {
+        name: "<const-loader>".into(),
+        details: e.to_string(),
+    })?;
+
+    let discrete_set: std::collections::HashSet<String> = exec
+        .bindings()
+        .filter(|b| b.cadence == crate::cadence::Cadence::Discrete)
+        .flat_map(|b| b.variables.iter().cloned())
+        .collect();
+
+    // CONST-only: the single-segment entry point (unchanged behavior).
+    if discrete_set.is_empty() {
+        return compiled.simulate_inspect(tspan, params, initial_conditions, opts, inspect);
     }
 
-    compiled.simulate_inspect(tspan, params, initial_conditions, opts, inspect)
+    // DISCRETE: segment on the sorted union of the discrete providers' refresh
+    // anchors (RefreshExecutor::refresh_times is already sorted+deduped) that fall
+    // strictly inside `(t0, t_end)`.
+    let mut boundaries: Vec<f64> = exec.refresh_times();
+    boundaries.retain(|&b| b > t0 && b < t_end);
+
+    // The refresh closure the segmented driver calls at t0 and each boundary:
+    // RefreshExecutor::refresh_at re-slices every DISCRETE provider to the record
+    // active at `t` and writes it into the forcing buffer (None-skip when unchanged).
+    let refresh_fn = |t: f64| -> Result<(), SimulateError> {
+        exec.refresh_at(t, &forcing)
+            .map(|_| ())
+            .map_err(|e| SimulateError::ProviderError {
+                name: "<discrete-loader>".into(),
+                details: e.to_string(),
+            })
+    };
+
+    compiled.simulate_with_refresh_inspect(
+        tspan,
+        params,
+        initial_conditions,
+        opts,
+        inspect,
+        &discrete_set,
+        &boundaries,
+        refresh_fn,
+    )
 }
 
 // ============================================================================

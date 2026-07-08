@@ -327,6 +327,105 @@ def _provider_segment_boundaries(
     return sorted(boundaries)
 
 
+def _run_cadence_segmented_solve(
+    flat: FlattenedSystem,
+    parameters: Dict[str, float],
+    initial_conditions: Dict[str, float],
+    method: str,
+    rtol: float,
+    atol: float,
+    t0: float,
+    seg_ends: List[float],
+    loader_arrays: Dict[str, np.ndarray],
+    refresh_fn: Callable[[float], None],
+    inspect: Optional[Any] = None,
+) -> SimulationResult:
+    """The ONE discrete-cadence segmented solve — both the ``providers=`` seam
+    (:func:`_simulate_with_discrete_providers`) and the ``loader_fields`` seam
+    (:func:`_simulate_with_loaders`) route through this, so there is a single
+    segmentation implementation rather than two parallel copies.
+
+    ``loader_arrays`` is pre-seeded with the CONST loader fields; ``refresh_fn(when)``
+    updates its DISCRETE entries to the cadence record covering the segment that
+    starts at ``when`` seconds (idempotent at ``t0`` — a caller that already seeded
+    the discrete fields simply re-seeds them). For each segment we call ``refresh_fn``
+    and then REBUILD the RHS. Rebuilding is correct whether or not the NumPy build
+    hoists a state-free, loader-derived regrid into build-once static geometry: a
+    hoisted ``Era5Regrid.*_xy`` captures its loader input at build time, so a reused
+    RHS with an in-place-mutated buffer would freeze it, whereas a rebuild always
+    reflects the current segment's data (the Python analog of the Julia ``live_param``
+    taint that defers the regrid off the const-setup partition). State is threaded
+    across boundaries — continuous; only the forcing jumps. The build inspection, if
+    given, is filled from the seed (t0) build."""
+    per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
+    t_current = t0
+    y_current: Optional[np.ndarray] = None
+    elem_names: List[str] = []
+    t_chunks: List[np.ndarray] = []
+    y_chunks: List[np.ndarray] = []
+    nfev = njev = nlu = 0
+    last_message = ""
+    for seg_idx, seg_end in enumerate(seg_ends):
+        # Refresh the discrete forcing to the hour covering this segment start,
+        # then REBUILD the RHS so a const-hoisted regrid picks up the slice.
+        refresh_fn(t_current)
+        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
+        if seg_idx == 0:
+            y_current = build.y0
+            elem_names = _element_names(build.state_names, build.shapes)
+            if inspect is not None:
+                _fill_build_inspection(inspect, flat, build, t0, loader_arrays=loader_arrays)
+        sol = solve_ivp(
+            fun=build.rhs_function,
+            t_span=(t_current, seg_end),
+            y0=y_current,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            dense_output=True,
+        )
+        nfev += int(sol.nfev)
+        njev += int(sol.njev)
+        nlu += int(sol.nlu)
+        last_message = sol.message
+        if not sol.success:
+            return SimulationResult(
+                t=np.array([]),
+                y=np.array([[]]),
+                vars=[],
+                success=False,
+                message=(
+                    f"Simulation failed in cadence segment "
+                    f"[{t_current}, {seg_end}]: {sol.message}"
+                ),
+                nfev=nfev,
+                njev=njev,
+                nlu=nlu,
+            )
+        seg_t, seg_y = _densify_solution(sol, (t_current, seg_end), min_points=per_seg_pts)
+        # Drop the seam node (shared with the previous segment's end; state is
+        # continuous across a refresh, only the forcing jumps).
+        if seg_idx == 0:
+            t_chunks.append(seg_t)
+            y_chunks.append(seg_y)
+        else:
+            t_chunks.append(seg_t[1:])
+            y_chunks.append(seg_y[:, 1:])
+        t_current = seg_end
+        y_current = sol.y[:, -1]
+
+    return SimulationResult(
+        t=np.concatenate(t_chunks),
+        y=np.concatenate(y_chunks, axis=1),
+        vars=list(elem_names),
+        success=True,
+        message=last_message,
+        nfev=nfev,
+        njev=njev,
+        nlu=nlu,
+    )
+
+
 def _simulate_with_loaders(
     flat: FlattenedSystem,
     tspan: Tuple[float, float],
@@ -386,10 +485,8 @@ def _simulate_with_loaders(
             # Legacy seam: a per-call callable, kept for offline stub tests and
             # backward compatibility. Invoked once per segment (never per RHS);
             # boundaries from local frequency arithmetic.
-            def _seed() -> None:
+            def _seed_const() -> None:
                 for f in const_fields:
-                    loader_arrays[f.name] = np.asarray(loader_provider(f, t0), dtype=float)
-                for f in discrete_fields:
                     loader_arrays[f.name] = np.asarray(loader_provider(f, t0), dtype=float)
 
             def _refresh_discrete(when: float) -> None:
@@ -456,14 +553,10 @@ def _simulate_with_loaders(
                     return None
                 return epoch + _dt.timedelta(seconds=when)
 
-            def _seed() -> None:
+            def _seed_const() -> None:
                 for f in const_fields:
                     loader_arrays[f.name] = _provider_array(
                         f, providers[f.name].materialize(), target
-                    )
-                for f in discrete_fields:
-                    loader_arrays[f.name] = _provider_array(
-                        f, providers[f.name].refresh(_abs(f, t0)), target
                     )
 
             def _refresh_discrete(when: float) -> None:
@@ -476,80 +569,26 @@ def _simulate_with_loaders(
                 t1
             ]
 
-        # CONST loaders: execute ONCE before integration. DISCRETE loaders: seed
-        # the first segment's value (refreshed at boundaries below).
-        _seed()
+        # CONST loaders: execute ONCE before integration. The DISCRETE loaders are
+        # seeded per segment by the shared core (via `_refresh_discrete`, starting
+        # at t0), so they are read once per segment and never double-seeded.
+        _seed_const()
 
-        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
-        rhs_function = build.rhs_function
-        elem_names = _element_names(build.state_names, build.shapes)
-
-        # Spread the dense-output budget across segments so a multi-segment run
-        # does not multiply the per-segment grid (parity with the single-call
-        # path when there is exactly one segment).
-        per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
-
-        t_current = t0
-        y_current = build.y0
-        t_chunks: List[np.ndarray] = []
-        y_chunks: List[np.ndarray] = []
-        nfev = njev = nlu = 0
-        last_message = ""
-        for seg_idx, seg_end in enumerate(seg_ends):
-            sol = solve_ivp(
-                fun=rhs_function,
-                t_span=(t_current, seg_end),
-                y0=y_current,
-                method=method,
-                rtol=rtol,
-                atol=atol,
-                dense_output=True,
-            )
-            nfev += int(sol.nfev)
-            njev += int(sol.njev)
-            nlu += int(sol.nlu)
-            last_message = sol.message
-            if not sol.success:
-                return SimulationResult(
-                    t=np.array([]),
-                    y=np.array([[]]),
-                    vars=[],
-                    success=False,
-                    message=(
-                        f"Simulation failed in cadence segment "
-                        f"[{t_current}, {seg_end}]: {sol.message}"
-                    ),
-                    nfev=nfev,
-                    njev=njev,
-                    nlu=nlu,
-                )
-            seg_t, seg_y = _densify_solution(sol, (t_current, seg_end), min_points=per_seg_pts)
-            # Drop the seam node (shared with the previous segment's end; the
-            # state is continuous across a loader refresh, only the forcing
-            # jumps) so the stitched trajectory has no duplicated time point.
-            if seg_idx == 0:
-                t_chunks.append(seg_t)
-                y_chunks.append(seg_y)
-            else:
-                t_chunks.append(seg_t[1:])
-                y_chunks.append(seg_y[:, 1:])
-            t_current = seg_end
-            y_current = sol.y[:, -1]
-            # Advance the cadence: refresh discrete loaders for the NEXT segment.
-            if seg_end < t1:
-                _refresh_discrete(seg_end)
-
-        t_out = np.concatenate(t_chunks)
-        y_out = np.concatenate(y_chunks, axis=1)
-        return SimulationResult(
-            t=t_out,
-            y=y_out,
-            vars=list(elem_names),
-            success=True,
-            message=last_message,
-            nfev=nfev,
-            njev=njev,
-            nlu=nlu,
+        # One segmented driver for both loader seams: `_seed()` above already
+        # materialized the CONST fields into `loader_arrays`; the shared core
+        # re-seeds the DISCRETE fields per segment via `_refresh_discrete` and
+        # rebuilds the RHS so a const-hoisted regrid tracks the current record.
+        return _run_cadence_segmented_solve(
+            flat,
+            parameters,
+            initial_conditions,
+            method,
+            rtol,
+            atol,
+            t0,
+            seg_ends,
+            loader_arrays,
+            _refresh_discrete,
         )
 
     except UnsupportedDimensionalityError:
@@ -740,79 +779,18 @@ def _simulate_with_discrete_providers(
                     abs_time = epoch + _dt.timedelta(seconds=float(when_seconds))
                     loader_arrays[n] = _provider_refresh_field(providers[n], abs_time)
 
-        # Spread the dense-output budget across segments (parity with
-        # _simulate_with_loaders) so a multi-segment run keeps a comparable grid.
-        per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
-
-        t_current = t0
-        y_current: Optional[np.ndarray] = None
-        elem_names: List[str] = []
-        t_chunks: List[np.ndarray] = []
-        y_chunks: List[np.ndarray] = []
-        nfev = njev = nlu = 0
-        last_message = ""
-        for seg_idx, seg_end in enumerate(seg_ends):
-            # Refresh the discrete forcing to the hour covering this segment start,
-            # then REBUILD the RHS so the const-hoisted regrid picks up the slice.
-            _refresh_discrete(t_current)
-            build = _build_numpy_rhs(
-                flat, parameters, initial_conditions, loader_arrays=loader_arrays
-            )
-            if seg_idx == 0:
-                y_current = build.y0
-                elem_names = _element_names(build.state_names, build.shapes)
-                if inspect is not None:
-                    _fill_build_inspection(inspect, flat, build, t0, loader_arrays=loader_arrays)
-            sol = solve_ivp(
-                fun=build.rhs_function,
-                t_span=(t_current, seg_end),
-                y0=y_current,
-                method=method,
-                rtol=rtol,
-                atol=atol,
-                dense_output=True,
-            )
-            nfev += int(sol.nfev)
-            njev += int(sol.njev)
-            nlu += int(sol.nlu)
-            last_message = sol.message
-            if not sol.success:
-                return SimulationResult(
-                    t=np.array([]),
-                    y=np.array([[]]),
-                    vars=[],
-                    success=False,
-                    message=(
-                        f"Simulation failed in cadence segment "
-                        f"[{t_current}, {seg_end}]: {sol.message}"
-                    ),
-                    nfev=nfev,
-                    njev=njev,
-                    nlu=nlu,
-                )
-            seg_t, seg_y = _densify_solution(sol, (t_current, seg_end), min_points=per_seg_pts)
-            # Drop the seam node (shared with the previous segment's end; state is
-            # continuous across a refresh, only the forcing jumps).
-            if seg_idx == 0:
-                t_chunks.append(seg_t)
-                y_chunks.append(seg_y)
-            else:
-                t_chunks.append(seg_t[1:])
-                y_chunks.append(seg_y[:, 1:])
-            t_current = seg_end
-            y_current = sol.y[:, -1]
-
-        t_out = np.concatenate(t_chunks)
-        y_out = np.concatenate(y_chunks, axis=1)
-        return SimulationResult(
-            t=t_out,
-            y=y_out,
-            vars=list(elem_names),
-            success=True,
-            message=last_message,
-            nfev=nfev,
-            njev=njev,
-            nlu=nlu,
+        return _run_cadence_segmented_solve(
+            flat,
+            parameters,
+            initial_conditions,
+            method,
+            rtol,
+            atol,
+            t0,
+            seg_ends,
+            loader_arrays,
+            _refresh_discrete,
+            inspect,
         )
 
     except UnsupportedDimensionalityError:

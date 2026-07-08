@@ -261,6 +261,56 @@ struct LoaderProvider {
     provider: Box<dyn CadenceProvider>,
 }
 
+/// A [`RefreshExecutor::from_providers`] adapter that re-keys a runtime provider's
+/// single fed field to the coupling TARGET variable name — the `providers=` dict
+/// key the model's RHS gathers. Providers on that seam feed under their own loader
+/// field name (e.g. an EIO band `"elevation"`), NOT the target
+/// (`"USGS3DEP.raw.elevation"`), so [`write_fields`] — which keys by the fed name —
+/// would otherwise bind the forcing where nothing reads it. The model-declared
+/// [`RefreshExecutor::new`] seam needs no remap: there the provider feeds under the
+/// model variable name already.
+struct RemapProvider {
+    target: String,
+    inner: Box<dyn CadenceProvider>,
+}
+
+impl RemapProvider {
+    fn remap(
+        &self,
+        fields: HashMap<String, NativeField>,
+    ) -> Result<HashMap<String, NativeField>, ProviderError> {
+        if fields.len() != 1 {
+            return Err(err(format!(
+                "provider for {:?} fed {} fields; a `providers=` forcing binds exactly one",
+                self.target,
+                fields.len()
+            )));
+        }
+        let (_fed_name, field) = fields.into_iter().next().expect("checked len == 1");
+        let mut out = HashMap::with_capacity(1);
+        out.insert(self.target.clone(), field);
+        Ok(out)
+    }
+}
+
+impl CadenceProvider for RemapProvider {
+    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+        let fields = self.inner.materialize()?;
+        self.remap(fields)
+    }
+
+    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        match self.inner.refresh(t)? {
+            Some(fields) => Ok(Some(self.remap(fields)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn refresh_times(&self) -> Vec<f64> {
+        self.inner.refresh_times()
+    }
+}
+
 /// The refresh executor: the ESS "**refresh callable + refresh_times**" surface a
 /// discrete-cadence driver consumes (NOT a solver).
 ///
@@ -303,6 +353,45 @@ impl RefreshExecutor {
             loaders.push(LoaderProvider { binding, provider });
         }
         Ok(Self { loaders })
+    }
+
+    /// Build the executor directly from a runtime provider map (the `providers=`
+    /// injection seam the runners use) — the cross-language runtime-provider
+    /// paradigm the Julia/Python bindings also follow. Classify each provider by
+    /// its `refresh_times()` (non-empty ⇒ DISCRETE, empty ⇒ CONST) rather than
+    /// from a model `temporal` block, so a model whose loaders are supplied by the
+    /// caller (keyed by the one variable each feeds) — with no `data_ingest`
+    /// declarations for [`classify_loader_bindings`] to read — still gets ONE
+    /// provider-management path. Both this and the model-declared [`new`] produce
+    /// the same [`RefreshExecutor`], so both seams share `materialize_const` /
+    /// `refresh_times` / `refresh_at`.
+    ///
+    /// [`new`]: RefreshExecutor::new
+    pub fn from_providers(providers: HashMap<String, Box<dyn CadenceProvider>>) -> Self {
+        let mut loaders = Vec::with_capacity(providers.len());
+        for (var, provider) in providers {
+            let cadence = if provider.refresh_times().is_empty() {
+                Cadence::Const
+            } else {
+                Cadence::Discrete
+            };
+            // Re-key the provider's single fed field to the coupling target `var`
+            // (the name the RHS gathers); a `providers=` provider feeds under its
+            // own loader field name, which `write_fields` would otherwise use.
+            let remapped: Box<dyn CadenceProvider> = Box::new(RemapProvider {
+                target: var.clone(),
+                inner: provider,
+            });
+            loaders.push(LoaderProvider {
+                binding: LoaderBinding {
+                    loader: var.clone(),
+                    cadence,
+                    variables: vec![var],
+                },
+                provider: remapped,
+            });
+        }
+        Self { loaders }
     }
 
     /// The classified loader bindings, for a driver that wants to inspect what is

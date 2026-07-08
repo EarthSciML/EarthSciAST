@@ -107,9 +107,13 @@ from .simulation_loaders import (  # noqa: F401
     _loader_cadence_boundaries,
     _loader_file_variable,
     _provider_array,
+    _provider_epoch,
+    _provider_is_discrete,
+    _provider_refresh_field,
     _provider_sample_field,
     _provider_segment_boundaries,
     _sim_clock_epoch,
+    _simulate_with_discrete_providers,
     _simulate_with_loaders,
 )
 
@@ -307,6 +311,23 @@ def simulate(
     # loader→consumer ``variable_map`` routes a lifted gather to the loader name.
     if providers:
         t0 = float(tspan[0])
+        # Cadence-aware injection: if any provider is DISCRETE (non-empty
+        # ``refresh_times``), segment the integration on its refresh boundaries so
+        # a time-varying loader (hourly ERA5 met) changes in-sim, re-sampling the
+        # provider's cadence record per segment. With NO discrete provider this is
+        # byte-for-byte the historic materialize-once path (CONST providers only).
+        if any(_provider_is_discrete(prov) for prov in providers.values()):
+            return _simulate_with_discrete_providers(
+                flat,
+                tspan,
+                parameters,
+                initial_conditions,
+                method,
+                rtol,
+                atol,
+                providers,
+                inspect,
+            )
         loaded_arrays = {
             name: np.asarray(_provider_sample_field(prov, t0), dtype=float)
             for name, prov in providers.items()
