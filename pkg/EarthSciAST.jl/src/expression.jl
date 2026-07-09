@@ -91,6 +91,49 @@ function _bound_symbols(e::OpExpr)::Vector{String}
 end
 
 # ========================================
+# 0b. Field-preserving structural rewrite
+# ========================================
+
+"""
+    map_children(f, e::Expr) -> Expr
+
+Return a copy of `e` with `f` applied to each immediate sub-expression, preserving
+`e`'s concrete type and every non-expression field. Leaf nodes (`NumExpr`,
+`IntExpr`, `VarExpr`) are returned unchanged. For `OpExpr`, `f` is applied to every
+expression-bearing field — the SAME set [`child_exprs`](@ref) traverses (`args`,
+`lower`, `upper`, `expr_body`, `filter`, `key`, `values`, `table_axes`, and dense
+`ranges` bounds) — and the node is rebuilt via [`reconstruct`](@ref), so a newly
+added `OpExpr` field can never be silently dropped by a rewrite.
+
+This is the ONE field-preserving structural-rewrite primitive: `substitute`,
+`simplify`, and the flatten/lowering rewrites are expressed in terms of it so the
+expression-bearing field list lives in exactly one place (here and its read-only
+twin `child_exprs`).
+"""
+map_children(f, e::NumExpr)::Expr = e
+map_children(f, e::IntExpr)::Expr = e
+map_children(f, e::VarExpr)::Expr = e
+
+function map_children(f, e::OpExpr)::Expr
+    mapf(x) = x === nothing ? nothing : f(x)
+    new_args = Expr[f(arg) for arg in e.args]
+    new_values = e.values === nothing ? nothing :
+        Expr[f(v) for v in e.values]
+    new_table_axes = e.table_axes === nothing ? nothing :
+        Dict{String,Expr}(k => f(v) for (k, v) in e.table_axes)
+    new_ranges = e.ranges === nothing ? nothing :
+        Dict{String,Any}(k => (v isa AbstractVector ?
+                Any[x isa Expr ? f(x) : x for x in v] : v)
+            for (k, v) in e.ranges)
+    return reconstruct(e;
+        args = new_args,
+        lower = mapf(e.lower), upper = mapf(e.upper),
+        expr_body = mapf(e.expr_body), filter = mapf(e.filter),
+        values = new_values, table_axes = new_table_axes,
+        ranges = new_ranges, key = mapf(e.key))
+end
+
+# ========================================
 # 1. Variable Substitution
 # ========================================
 
@@ -131,35 +174,18 @@ function substitute(expr::VarExpr, bindings::Dict{String,Expr})::Expr
     return get(bindings, expr.name, expr)  # Replace if bound, otherwise keep original
 end
 
-function substitute(expr::OpExpr, bindings::Dict{String,Expr})::Expr
-    # Substitute into EVERY sub-expression the node carries — not just `args` —
-    # so substitution is complete inside aggregate/arrayop bodies, filter
-    # predicates, integral bounds, makearray values, table_lookup axis
-    # inputs, value-invention `key` expressions, and expression-valued dense
-    # `ranges` bounds. The field set mirrors [`child_exprs`](@ref), the shared
-    # traversal `free_variables`/`contains` walk. `reconstruct` then preserves
-    # all other fields (semiring, output_idx, table, manifold, id, join, …)
-    # that earlier hand-listed rebuilds silently dropped. Bound locals (index
-    # vars, `int_var`) are short local symbols never present in `bindings`
-    # (whose keys are namespaced globals / parameter names), so recursing
-    # cannot capture them.
-    sub(x) = x === nothing ? nothing : substitute(x, bindings)
-    new_args = Expr[substitute(arg, bindings) for arg in expr.args]
-    new_values = expr.values === nothing ? nothing :
-        Expr[substitute(v, bindings) for v in expr.values]
-    new_table_axes = expr.table_axes === nothing ? nothing :
-        Dict{String,Expr}(k => substitute(v, bindings) for (k, v) in expr.table_axes)
-    new_ranges = expr.ranges === nothing ? nothing :
-        Dict{String,Any}(k => (v isa AbstractVector ?
-                Any[x isa Expr ? substitute(x, bindings) : x for x in v] : v)
-            for (k, v) in expr.ranges)
-    return reconstruct(expr;
-        args = new_args,
-        lower = sub(expr.lower), upper = sub(expr.upper),
-        expr_body = sub(expr.expr_body), filter = sub(expr.filter),
-        values = new_values, table_axes = new_table_axes,
-        ranges = new_ranges, key = sub(expr.key))
-end
+# Field-preserving substitution: recurse into EVERY sub-expression the node
+# carries (via the shared `map_children` rewrite) — not just `args` — so
+# substitution is complete inside aggregate/arrayop bodies, filter predicates,
+# integral bounds, makearray values, table-lookup axis inputs, value-invention
+# `key` expressions, and expression-valued dense `ranges` bounds. `map_children`
+# routes through `reconstruct`, preserving all non-expression fields (semiring,
+# output_idx, table, manifold, id, join, …) that earlier hand-listed rebuilds
+# silently dropped. Bound locals (index vars, `int_var`) are short local symbols
+# never present in `bindings` (namespaced globals / parameter names), so
+# recursing cannot capture them.
+substitute(expr::OpExpr, bindings::Dict{String,Expr})::Expr =
+    map_children(x -> substitute(x, bindings), expr)
 
 # ========================================
 # 2. Free Variable Analysis
@@ -349,12 +375,15 @@ literal_value(expr::NumExpr) = expr.value
 literal_value(expr::IntExpr) = Float64(expr.value)
 
 function simplify(expr::OpExpr)::Expr
-    # First recursively simplify all arguments
-    simplified_args = Expr[simplify(arg) for arg in expr.args]
-    lower_simplified = expr.lower === nothing ? nothing : simplify(expr.lower)
-    upper_simplified = expr.upper === nothing ? nothing : simplify(expr.upper)
+    # Recurse into EVERY sub-expression via the shared field-preserving rewrite,
+    # so folding and identity rules also reach aggregate/arrayop bodies, filter
+    # predicates, integral bounds, makearray values, table axes, and dense range
+    # bounds — not just top-level `args`. `recursed` carries the simplified
+    # children in all fields; the algebraic rules below only reshape `args`.
+    recursed = map_children(simplify, expr)::OpExpr
+    simplified_args = recursed.args
 
-    op = expr.op
+    op = recursed.op
 
     # Try constant folding first - if all arguments are numeric, evaluate.
     # Per RFC §5.4.1, promotion happens only in evaluate, not simplify;
@@ -366,9 +395,7 @@ function simplify(expr::OpExpr)::Expr
     # table and there is no parallel operator switch in this module.
     if all(is_literal, simplified_args)
         try
-            result_value = evaluate_expr(
-                reconstruct(expr; args=simplified_args, lower=lower_simplified, upper=upper_simplified),
-                Dict{String,Float64}())
+            result_value = evaluate_expr(recursed, Dict{String,Float64}())
             all_int = all(arg -> isa(arg, IntExpr), simplified_args)
             if all_int && isfinite(result_value) && result_value == trunc(result_value) &&
                abs(result_value) <= Float64(typemax(Int64))
@@ -393,7 +420,7 @@ function simplify(expr::OpExpr)::Expr
         elseif length(non_zero_args) == 1
             return non_zero_args[1]
         else
-            return reconstruct(expr; args=Expr[non_zero_args...], lower=lower_simplified, upper=upper_simplified)
+            return reconstruct(recursed; args=Expr[non_zero_args...])
         end
 
     elseif op == "*"
@@ -411,7 +438,7 @@ function simplify(expr::OpExpr)::Expr
         elseif length(non_one_args) == 1
             return non_one_args[1]
         else
-            return reconstruct(expr; args=Expr[non_one_args...], lower=lower_simplified, upper=upper_simplified)
+            return reconstruct(recursed; args=Expr[non_one_args...])
         end
 
     elseif op == "^" && length(simplified_args) == 2
@@ -438,7 +465,7 @@ function simplify(expr::OpExpr)::Expr
             return NumExpr(1.0)
         end
 
-        return reconstruct(expr; args=simplified_args, lower=lower_simplified, upper=upper_simplified)
+        return recursed
 
     elseif op == "-" && length(simplified_args) == 2
         # x - 0 = x
@@ -446,7 +473,7 @@ function simplify(expr::OpExpr)::Expr
             return simplified_args[1]
         end
 
-        return reconstruct(expr; args=simplified_args, lower=lower_simplified, upper=upper_simplified)
+        return recursed
 
     elseif op == "/" && length(simplified_args) == 2
         # x / 1 = x
@@ -459,9 +486,9 @@ function simplify(expr::OpExpr)::Expr
             return NumExpr(0.0)
         end
 
-        return reconstruct(expr; args=simplified_args, lower=lower_simplified, upper=upper_simplified)
+        return recursed
     end
 
-    # If no simplification rules apply, return the expression with simplified arguments
-    return reconstruct(expr; args=simplified_args, lower=lower_simplified, upper=upper_simplified)
+    # If no simplification rules apply, return the fully-recursed expression.
+    return recursed
 end

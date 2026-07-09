@@ -576,6 +576,65 @@ fn array_valued_ifelse_vectorizes_and_matches_oracle() {
     }
 }
 
+/// A conservative-regrid-shaped contraction `D(u[j]) = sum_i A[i,j]·F[i]`: a
+/// weight table `A` gathered by the contraction index `i` (fixed per term) AND
+/// the output index `j` (`index(A, i, j)`), times a source vector gathered
+/// entirely by the contraction index (`index(F, i)` → a broadcast scalar). This
+/// is the table-gather pattern the level-set / behaviour-stack regrid uses;
+/// before, `eval_vec_index` bailed (index-arg count ≠ output rank) and the whole
+/// regrid walked per-cell. `A`/`F` are held-at-ic state (no `D`), so they are
+/// constant per RHS call and read as plain source arrays.
+fn regrid_gather_json(ni: usize, nj: usize) -> String {
+    const TEMPLATE: &str = r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "regrid_gather"},
+ "models": {"M": {
+   "variables": {
+     "u": {"type": "state", "shape": ["j"]},
+     "A": {"type": "state", "shape": ["i", "j"]},
+     "F": {"type": "state", "shape": ["i"]}
+   },
+   "equations": [
+    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "j"]}], "wrt": "t"},
+             "ranges": {"j": [1, __NJ__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"], "reduce": "+",
+             "ranges": {"j": [1, __NJ__], "i": [1, __NI__]},
+             "expr": {"op": "*", "args": [
+               {"op": "index", "args": ["A", "i", "j"]},
+               {"op": "index", "args": ["F", "i"]}
+             ]}}}
+   ]
+ }}
+}"#;
+    TEMPLATE
+        .replace("__NI__", &ni.to_string())
+        .replace("__NJ__", &nj.to_string())
+}
+
+#[test]
+fn regrid_table_gather_vectorizes_and_matches_oracle() {
+    let (ni, nj) = (3usize, 4usize);
+    let compiled = compile_json(&regrid_gather_json(ni, nj));
+    let n = compiled.state_variable_names().len();
+    assert_eq!(n, nj + ni * nj + ni, "state layout: u[j] + A[i,j] + F[i]");
+    let state = sample_state(n);
+    let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, sstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    assert_eq!(
+        vstats.vectorized_rules, 1,
+        "regrid table-gather did not vectorize: {vstats:?}"
+    );
+    assert_eq!(vstats.scalar_rules, 0, "regrid gather fell back: {vstats:?}");
+    assert_eq!(sstats.scalar_rules, 1, "force_scalar did not use oracle: {sstats:?}");
+    for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "regrid-gather vectorized vs oracle mismatch at {k}: {a} vs {b}"
+        );
+    }
+}
+
 #[test]
 fn einsum_kernel_op_count_is_independent_of_grid_size() {
     // The contracted-`k` stencil walks its body once per contraction value

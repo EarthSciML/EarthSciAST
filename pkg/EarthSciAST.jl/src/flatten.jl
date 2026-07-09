@@ -436,43 +436,36 @@ end
 
 function namespace_expr(expr::OpExpr, prefix::String, local_names::Set{String},
                         idx_names::Set{String}=Set{String}())::Expr
-    ns(x) = x === nothing ? nothing : namespace_expr(x, prefix, local_names, idx_names)
-    new_args = Expr[namespace_expr(a, prefix, local_names, idx_names) for a in expr.args]
-    # Recurse into EVERY variable-bearing sub-expression so prefix rewrites reach
-    # arrayop / makearray bodies, filter predicates (M2 §7.2), integral bounds
-    # (`lower`/`upper`), and table_lookup per-axis input expressions. `reconstruct`
-    # preserves all other fields (semiring, output_idx, table, output, int_var,
-    # join/join_gates, manifold, …) — earlier this rebuild hand-listed keywords
-    # and silently dropped int_var/lower/upper/table/table_axes/output. `join`/
-    # `join_gates` carry only index-symbol / position data, so they pass through.
-    new_values = expr.values === nothing ? nothing :
-        Expr[namespace_expr(v, prefix, local_names, idx_names) for v in expr.values]
-    new_table_axes = expr.table_axes === nothing ? nothing :
-        Dict{String,Expr}(
-            k => namespace_expr(v, prefix, local_names, idx_names) for (k, v) in expr.table_axes)
-    # Namespace index-set references so a flattened component's private
-    # geometry/index names don't collide with a sibling's after merge: the `id`
-    # naming a value-invention producer (matched by a derived set's `from_faq`)
-    # and every `ranges[*]` `{from: <set>}` reference. Gated on `idx_names`, which
-    # is empty for models that declare no index sets — so non-geometry models are
-    # byte-identical to before.
+    # Recurse into EVERY variable-bearing sub-expression via the shared
+    # field-preserving rewrite so prefix rewrites reach arrayop / makearray
+    # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
+    # table_lookup per-axis input expressions, makearray `values`, value-invention
+    # `key`, and expression-valued dense `ranges` bounds. `map_children` routes
+    # through `reconstruct`, preserving all other fields (semiring, output_idx,
+    # table, output, int_var, join/join_gates, manifold, …) — earlier this rebuild
+    # hand-listed keywords and silently dropped int_var/lower/upper/table/
+    # table_axes/output.
+    result = map_children(
+        x -> namespace_expr(x, prefix, local_names, idx_names), expr)::OpExpr
+    # `map_children` recurses into expression-bearing fields only. Three fields
+    # carry index-set / column identifiers that also need namespacing so a
+    # flattened component's private geometry/index names don't collide with a
+    # sibling's after merge — override them on the recursed node:
+    #  - `id`: the value-invention producer id matched by a derived set's `from_faq`,
+    #    namespaced when it is a component-local index identifier.
+    #  - `ranges`: each `IndexSetRef`'s `{from: <set>}` set name (`map_children`
+    #    copies `IndexSetRef` entries verbatim). `_namespace_ranges` is the sole
+    #    authority for `ranges`: it rewrites both the `from` references AND the
+    #    expression-valued dense bounds — the latter identically to `map_children` —
+    #    so overriding the whole field is behavior-preserving.
+    #  - `join`: a `join.on` key column may name a component-local bin buffer.
+    # `id`/`ranges` are gated on `idx_names` (empty for models that declare no
+    # index sets) and `join` is `nothing` for models without a value-equality
+    # join, so non-geometry models are byte-identical to before.
     new_id = (expr.id !== nothing && expr.id in idx_names) ? "$(prefix).$(expr.id)" : expr.id
     new_ranges = _namespace_ranges(expr.ranges, prefix, local_names, idx_names)
-    # A `join.on` key column may name a component-local variable (the regridder's
-    # bin buffers), so namespace it alongside the other variable-bearing fields.
     new_join = _namespace_join(expr.join, prefix, local_names)
-    return reconstruct(expr;
-        args=new_args,
-        expr_body=ns(expr.expr_body),
-        filter=ns(expr.filter),
-        lower=ns(expr.lower),
-        upper=ns(expr.upper),
-        values=new_values,
-        table_axes=new_table_axes,
-        id=new_id,
-        ranges=new_ranges,
-        join=new_join,
-        key=ns(expr.key))
+    return reconstruct(result; id=new_id, ranges=new_ranges, join=new_join)
 end
 
 """
@@ -1056,32 +1049,13 @@ function _substitute_placeholder(expr::Expr,
         end
         return expr
     elseif expr isa OpExpr
-        # Recurse into EVERY expression-bearing field (the same field set as
-        # `substitute`/`child_exprs`) and rebuild via `reconstruct`, which
-        # preserves all other fields (table/table_axes, int_var, join, id,
-        # manifold, key, …) that a hand-listed keyword subset used to drop.
-        sub(x) = x === nothing ? nothing : _substitute_placeholder(x, placeholder, target)
-        new_args = Expr[
-            _substitute_placeholder(a, placeholder, target) for a in expr.args]
-        new_values = expr.values === nothing ? nothing :
-            Expr[
-                _substitute_placeholder(v, placeholder, target) for v in expr.values]
-        new_table_axes = expr.table_axes === nothing ? nothing :
-            Dict{String,Expr}(
-                k => _substitute_placeholder(v, placeholder, target)
-                for (k, v) in expr.table_axes)
-        new_ranges = expr.ranges === nothing ? nothing :
-            Dict{String,Any}(k => (v isa AbstractVector ?
-                    Any[x isa Expr ?
-                        _substitute_placeholder(x, placeholder, target) : x
-                        for x in v] : v)
-                for (k, v) in expr.ranges)
-        return reconstruct(expr;
-            args=new_args,
-            lower=sub(expr.lower), upper=sub(expr.upper),
-            expr_body=sub(expr.expr_body), filter=sub(expr.filter),
-            values=new_values, table_axes=new_table_axes,
-            ranges=new_ranges, key=sub(expr.key))
+        # Recurse into EVERY expression-bearing field via the shared field-preserving
+        # rewrite and rebuild via `reconstruct`, which preserves all other fields
+        # (table/table_axes, int_var, join, id, manifold, key, …) that a hand-listed
+        # keyword subset used to drop. `placeholder`/`target` are namespaced
+        # dependent-variable names, never node-local binders, so recursing into
+        # every field cannot capture a bound index or `int_var`.
+        return map_children(x -> _substitute_placeholder(x, placeholder, target), expr)
     end
     return expr
 end
@@ -1281,14 +1255,15 @@ end
 function _collect_makearrays!(acc::Vector{OpExpr}, expr::Expr)
     expr isa OpExpr || return acc
     expr.op == "makearray" && push!(acc, expr)
-    for a in expr.args
-        _collect_makearrays!(acc, a)
-    end
-    expr.expr_body === nothing || _collect_makearrays!(acc, expr.expr_body)
-    if expr.values !== nothing
-        for v in expr.values
-            _collect_makearrays!(acc, v)
-        end
+    # Walk every immediate sub-expression via the shared traversal instead of a
+    # hand-listed {args, expr_body, values} field walk. `child_exprs` is a strict
+    # superset (it also visits `lower`/`upper`/`filter`/`key`/`table_axes`/dense
+    # `ranges` bounds), but a `makearray` — a materialized spatial array — never
+    # lives inside those scalar-valued fields, so both the set of collected nodes
+    # and their depth-first order (`args`, then `expr_body`, then `values`) are
+    # unchanged.
+    for c in child_exprs(expr)
+        _collect_makearrays!(acc, c)
     end
     return acc
 end
@@ -1550,7 +1525,6 @@ function flatten(file::EsmFile)::FlattenedSystem
     # Step 3: Apply coupling rules.
     coupling_rules_applied = String[]
     opaque_refs = String[]
-    dimension_promotions = NamedTuple[]
 
     # Top-level data-loader names — used to recognize a `param_to_var` whose
     # producer is a LOADED field, so a grid-shaped binding keeps its shape.
@@ -1590,7 +1564,7 @@ function flatten(file::EsmFile)::FlattenedSystem
     metadata = FlattenMetadata(
         sort!(collect(source_systems)),
         coupling_rules_applied;
-        dimension_promotions_applied=dimension_promotions,
+        dimension_promotions_applied=NamedTuple[],
         opaque_coupling_refs=opaque_refs,
     )
 

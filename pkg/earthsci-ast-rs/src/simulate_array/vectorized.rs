@@ -818,14 +818,33 @@ pub(super) fn vec_select<'a>(
     Some(VecValue::Owned { data: out, origin })
 }
 
-/// Vectorized `index(A, e_0, …, e_{n-1})`: a shifted / rolled array slice. Each
-/// index expression is classified per axis ([`classify_axis_index`]) as either
-/// an affine shift `sym_d ± k` (a sub-range copy; positions whose source index
-/// leaves `A`'s extent stay ghost-0, matching the scalar `eval_index`
-/// out-of-bounds → 0 homogeneous-Dirichlet convention) or a periodic wrap (a
-/// cyclic roll of the full axis). The result spans the current output box. The
-/// gather is `≤ 2^(#wrap-axes)` whole-array block copies — independent of the
-/// grid size N. Any axis the classifier does not recognize returns `None`.
+/// A constant (output-index-independent) `index(...)` axis value: a bound
+/// contraction index or an integer literal (or an affine combination of them),
+/// which SELECTS a fixed source slice rather than mapping to an output axis. The
+/// sentinel `sym` cannot name a real index, so `affine_terms` treats every
+/// variable as a contraction bind (constant, coeff 0) or bails — a coeff-0 result
+/// is the fixed 1-based index; anything referencing an output symbol is not
+/// constant. This is what a conservative-regrid gather `index(A_ij, i, j)` uses
+/// for its source-cell axis `i`.
+fn const_index_value(e: &Expr, bx: &VecBox) -> Option<i64> {
+    match affine_terms(e, "\u{0}", bx) {
+        Some((0, k)) => Some(k),
+        _ => None,
+    }
+}
+
+/// Vectorized `index(A, e_0, …, e_{n-1})`. Each source axis is classified as
+/// either an **output-mapping** axis — an affine shift `sym ± k` or a periodic
+/// wrap of the next output symbol ([`classify_axis_index`]) — or a **fixed
+/// select**: a constant / bound-contraction index ([`const_index_value`]) that
+/// picks one source slice and is consumed. The result rank is the number of
+/// mapped axes: `0` mapped ⇒ a scalar (broadcast), else it spans the output box.
+///
+/// The mapped axes fill the output box in order (a permutation bails). Fixed
+/// axes let a conservative-regrid gather vectorize: `index(A_ij, i, j)` (fixed
+/// source cell `i`, output target `j`) becomes a whole-column slice, and
+/// `index(F_src, i)` (all-fixed) a broadcast scalar — no per-cell walk. An affine
+/// axis stays ghost-0 out of bounds (homogeneous Dirichlet), matching the oracle.
 pub(super) fn eval_vec_index<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -847,7 +866,7 @@ pub(super) fn eval_vec_index<'a>(
         };
     }
     let src_ndim = arg0.shape().expect("array").len();
-    if n != src_ndim || n != bx.shape.len() {
+    if n != src_ndim {
         arg0.release(pool);
         return None;
     }
@@ -858,25 +877,89 @@ pub(super) fn eval_vec_index<'a>(
         .copied()
         .collect();
     let src_shape: DimU = arg0.shape().expect("array").iter().copied().collect();
+    let out_ndim = bx.shape.len();
 
-    // Per axis, classify the index expression and build its source→output copy
-    // segments `(out_off, len, src_off)` (all 0-based). An affine axis yields a
-    // single in-bounds segment (ghost positions stay 0); a periodic-wrap axis
-    // yields the one or two segments of a cyclic roll (full coverage, no ghost).
-    let mut axis_segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
+    // Classify each source axis. `mapped[a] = (src_axis, AxisIndex)` fills output
+    // axis `a` (in order); `fixed = (src_axis, 0-based index)` is a consumed
+    // slice. A mapped axis is tried against the NEXT unfilled output symbol; a
+    // non-affine, non-wrap axis must be a constant fixed index or the gather bails.
+    let mut mapped: SmallVec<[(usize, AxisIndex); 4]> = SmallVec::new();
+    let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
+    let mut any_fixed_oob = false;
     for d in 0..n {
-        let so = src_origin[d];
-        let ssz = src_shape[d] as i64;
-        match classify_axis_index(&node.args[1 + d], &bx.syms[d], bx) {
-            Some(AxisIndex::Affine(k)) => {
-                // output position p (0-based) → symbol bx.lo[d]+p → source 1-based
-                // bx.lo[d]+p+k → source 0-based −so; in-bounds when
-                // 0 ≤ bx.lo[d]+p+k−so ≤ ssz−1.
-                let lo_p = (so - bx.lo[d] - k).max(0);
-                let hi_p = (so + ssz - bx.lo[d] - k).min(bx.shape[d] as i64); // exclusive
+        let e = &node.args[1 + d];
+        if mapped.len() < out_ndim {
+            if let Some(ax) = classify_axis_index(e, &bx.syms[mapped.len()], bx) {
+                mapped.push((d, ax));
+                continue;
+            }
+        }
+        match const_index_value(e, bx) {
+            Some(idx1) => {
+                let i0 = idx1 - src_origin[d];
+                if i0 < 0 || i0 >= src_shape[d] as i64 {
+                    any_fixed_oob = true;
+                    fixed.push((d, 0));
+                } else {
+                    fixed.push((d, i0));
+                }
+            }
+            None => {
+                arg0.release(pool);
+                return None;
+            }
+        }
+    }
+    // The result rank is the mapped-axis count: a scalar (all fixed, broadcast) or
+    // a full output-box array. A partial rank cannot broadcast — bail.
+    if !mapped.is_empty() && mapped.len() != out_ndim {
+        arg0.release(pool);
+        return None;
+    }
+
+    // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
+    if any_fixed_oob {
+        arg0.release(pool);
+        return Some(if mapped.is_empty() {
+            VecValue::Scalar(0.0)
+        } else {
+            VecValue::Owned {
+                data: pool.take_array(bx.shape),
+                origin: bx.lo.iter().copied().collect(),
+            }
+        });
+    }
+
+    // All-fixed ⇒ a single source element, broadcast as a scalar.
+    if mapped.is_empty() {
+        let mut idx = DimU::from_elem(0usize, n);
+        for &(d, i0) in &fixed {
+            idx[d] = i0 as usize;
+        }
+        let v = arg0.view().expect("array")[IxDyn(&idx[..])];
+        arg0.release(pool);
+        return Some(VecValue::Scalar(v));
+    }
+
+    // Per output axis, build the source→output copy segments `(out_off, len,
+    // src_off)` (all 0-based) from the mapped axis's affine shift / periodic wrap.
+    // Built before the reduced view `rv` so an out-of-bounds / non-roll bail can
+    // release `arg0` without a live borrow.
+    let mut axis_segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
+    for a in 0..out_ndim {
+        let (orig_d, ax) = &mapped[a];
+        let so = src_origin[*orig_d];
+        let ssz = src_shape[*orig_d] as i64;
+        match ax {
+            AxisIndex::Affine(k) => {
+                let k = *k;
+                // output position p (0-based) → symbol bx.lo[a]+p → source 1-based
+                // bx.lo[a]+p+k → source 0-based −so; in-bounds when
+                // 0 ≤ bx.lo[a]+p+k−so ≤ ssz−1.
+                let lo_p = (so - bx.lo[a] - k).max(0);
+                let hi_p = (so + ssz - bx.lo[a] - k).min(bx.shape[a] as i64); // exclusive
                 if lo_p >= hi_p {
-                    // Entirely out of bounds on this axis ⇒ the whole result is
-                    // ghost-0 (the zero-filled pooled buffer).
+                    // Entirely out of bounds ⇒ the whole result is ghost-0.
                     arg0.release(pool);
                     return Some(VecValue::Owned {
                         data: pool.take_array(bx.shape),
@@ -887,14 +970,14 @@ pub(super) fn eval_vec_index<'a>(
                 segs.push((
                     lo_p as usize,
                     (hi_p - lo_p) as usize,
-                    (bx.lo[d] + lo_p + k - so) as usize,
+                    (bx.lo[a] + lo_p + k - so) as usize,
                 ));
                 axis_segs.push(segs);
             }
-            Some(AxisIndex::Wrap { k, period }) => {
-                // A roll requires the source axis to be the full period (origin
-                // == box low, extent == period == box extent).
-                if so != bx.lo[d] || ssz != period || bx.shape[d] as i64 != period {
+            AxisIndex::Wrap { k, period } => {
+                let (k, period) = (*k, *period);
+                // A roll requires the source axis to be the full period.
+                if so != bx.lo[a] || ssz != period || bx.shape[a] as i64 != period {
                     arg0.release(pool);
                     return None;
                 }
@@ -911,19 +994,25 @@ pub(super) fn eval_vec_index<'a>(
                 }
                 axis_segs.push(segs);
             }
-            None => {
-                arg0.release(pool);
-                return None;
-            }
         }
     }
 
-    // Copy every cartesian combination of per-axis segments into the zero-filled
-    // pooled buffer (ghost positions keep the Dirichlet 0).
+    // Reduce the source to just the mapped axes: select each fixed axis at its
+    // index (descending axis order so the lower axis indices stay valid). `rv`
+    // then has `out_ndim` axes, in mapped order = output-axis order.
+    let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
+        fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
+    fixed_desc.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut rv = arg0.view().expect("array");
+    for (d, i0) in fixed_desc {
+        rv = rv.index_axis_move(ndarray::Axis(d), i0);
+    }
+
+    // Copy every cartesian combination of per-axis segments from the reduced
+    // source `rv` into the zero-filled pooled buffer (ghost positions keep 0).
     let mut result = pool.take_array(bx.shape);
     {
-        let src_view = arg0.view().expect("array");
-        let mut pick = DimU::from_elem(0usize, n);
+        let mut pick = DimU::from_elem(0usize, out_ndim);
         loop {
             {
                 let mut out_view = result.slice_each_axis_mut(|ax| {
@@ -931,7 +1020,7 @@ pub(super) fn eval_vec_index<'a>(
                     let (o, l, _) = axis_segs[d][pick[d]];
                     Slice::from(o..o + l)
                 });
-                let src_sub = src_view.slice_each_axis(|ax| {
+                let src_sub = rv.slice_each_axis(|ax| {
                     let d = ax.axis.index();
                     let (_, l, s) = axis_segs[d][pick[d]];
                     Slice::from(s..s + l)
@@ -942,7 +1031,7 @@ pub(super) fn eval_vec_index<'a>(
             let mut d = 0;
             let mut done = false;
             loop {
-                if d == n {
+                if d == out_ndim {
                     done = true;
                     break;
                 }
@@ -958,6 +1047,7 @@ pub(super) fn eval_vec_index<'a>(
             }
         }
     }
+    drop(rv);
     arg0.release(pool);
     Some(VecValue::Owned {
         data: result,
