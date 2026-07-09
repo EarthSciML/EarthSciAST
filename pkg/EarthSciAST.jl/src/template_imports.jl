@@ -173,7 +173,7 @@ variable-reference surface syntax — with their integer values, everywhere
 except the `_META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
 expression-position substitution; no folding here).
 """
-function _substitute_metaparams(x, values::AbstractDict{String,Int64})
+function _substitute_metaparams(x, values::AbstractDict{String})
     if x isa AbstractString
         s = string(x)
         return haskey(values, s) ? values[s] : x
@@ -198,12 +198,12 @@ Metaparameter substitution over one `expression_templates` entry: the
 template's own `params` shadow like-named metaparameters inside its `body`
 and `match` (a param is the inner binder; substitution must not capture it).
 """
-function _substitute_metaparams_decl(decl, values::AbstractDict{String,Int64})
+function _substitute_metaparams_decl(decl, values::AbstractDict{String})
     params = _raw_get(decl, "params")
     shadowed = values
     if params !== nothing && _is_array(params) &&
        any(p -> haskey(values, string(p)), params)
-        v2 = Dict{String,Int64}(values)
+        v2 = Dict(values)
         for p in params
             delete!(v2, string(p))
         end
@@ -291,6 +291,84 @@ function _collect_names!(out::Vector{String}, x)
         end
     end
     return out
+end
+
+"""
+    _validate_meta_expr(x, ctx)
+
+Structural grammar check for a metaparameter expression (esm-spec §9.7.6),
+independent of whether its names are yet concrete: integer literal, name
+string, or `{op: +|-|*|/, args: [...non-empty...]}` recursively. Unlike
+[`_try_fold`](@ref) (which defers op-validation until every arg is concrete),
+this catches an inadmissible op (`%`, missing `args`, float literal) at the
+binding EDGE even when an arg is still a symbolic importer name.
+"""
+function _validate_meta_expr(x, ctx::String)
+    (x isa Integer && !(x isa Bool)) && return
+    x isa AbstractString && return
+    if x isa Number
+        throw(ExpressionTemplateError(
+            "metaparameter_type_error",
+            "$ctx: non-integer literal $(repr(x)) in a metaparameter expression (esm-spec §9.7.6)"))
+    end
+    _is_object(x) || throw(ExpressionTemplateError(
+        "metaparameter_type_error",
+        "$ctx: invalid metaparameter expression (expected integer, name, or {op, args})"))
+    op = _raw_get(x, "op")
+    args = _raw_get(x, "args")
+    ((op !== nothing && string(op) in ("+", "-", "*", "/")) &&
+     args !== nothing && _is_array(args) && !isempty(args)) ||
+        throw(ExpressionTemplateError(
+            "metaparameter_type_error",
+            "$ctx: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})"))
+    for a in args
+        _validate_meta_expr(a, ctx)
+    end
+    return
+end
+
+"""
+    require_meta_expr(v, ctx) -> v
+
+Validate that `v` is a *metaparameter expression* (esm-spec §9.7.6): an
+integer literal, a metaparameter-name string, or a `{op: +|-|*|/, args: [...]}`
+tree over the same. Returns `v` unchanged (UNFOLDED) — its free names close at
+a later binding site. Raises `metaparameter_type_error` on an inadmissible
+node.
+
+This is the relaxed replacement for [`_require_int`](@ref) at the metaparameter
+*binding* sites (import edge / subsystem edge). Before this, binding values were
+bare integers; a binding may now derive a child metaparameter from an arithmetic
+combination of the importer's metaparameters (e.g. `NTGT = NX*NY`), which import
+renaming (name→name) could not express.
+"""
+function require_meta_expr(v, ctx::String)
+    _validate_meta_expr(v, ctx)
+    return v
+end
+
+"""
+    eval_meta_expr(expr, env, ctx) -> Int64
+
+Fold a metaparameter expression to a concrete integer against a CLOSED
+environment `env` (name → int) — the importing document's metaparameter scope
+(esm-spec §9.7.6 binding value flow). Substitutes the env names, then folds with
+the exact-integer [`_try_fold`](@ref) arithmetic (`/` must divide exactly;
+64-bit overflow is an error). Raises `template_import_unknown_name` if the
+expression references a name absent from `env` — the mount-edge typo failure,
+keeping error locality at the edge that authored the expression.
+"""
+function eval_meta_expr(expr, env::AbstractDict{String,<:Integer}, ctx::String)::Int64
+    folded = _try_fold(_substitute_metaparams(expr, env), ctx)
+    if folded === nothing
+        free = sort(unique(String[n for n in _collect_names!(String[], expr) if !haskey(env, n)]))
+        throw(ExpressionTemplateError(
+            "template_import_unknown_name",
+            "$ctx: metaparameter expression references " *
+            "$(isempty(free) ? "a name" : join(free, ", ")) not in the importing " *
+            "document's metaparameter scope (esm-spec §9.7.6)"))
+    end
+    return folded
 end
 
 """
@@ -930,10 +1008,13 @@ end
     _instantiate_scope!(scope, values, ctx)
 
 Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
-substitute the bound names as integer literals throughout the exported
-templates and index sets, then fold the structural sites that are now closed.
+substitute the bound names throughout the exported templates and index sets,
+then fold the structural sites that are now closed. A bound VALUE is a
+metaparameter expression (usually an integer literal, but possibly a symbolic
+`NX*NY` over the importer's still-open metaparameters); `_fold_*` leaves any
+site still carrying a free name symbolic for the importer's close.
 """
-function _instantiate_scope!(scope::_TemplateScope, values::Dict{String,Int64}, ctx::String)
+function _instantiate_scope!(scope::_TemplateScope, values::AbstractDict{String}, ctx::String)
     newt = OrderedDict{String,Any}()
     for (n, d) in scope.templates
         nd = _substitute_metaparams_decl(d, values)
@@ -1058,9 +1139,13 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
         pop!(stack)
     end
 
-    # Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
+    # Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
+    # VALUE may be a metaparameter expression over the importer's metaparameters
+    # (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
+    # (innermost-first), so the value is carried SYMBOLICALLY into the child and
+    # folds when the importing document closes (§9.7.6 "Binding value flow").
     bindings_raw = _raw_get(entry, "bindings")
-    values = Dict{String,Int64}()
+    values = Dict{String,Any}()
     if bindings_raw !== nothing && _is_object(bindings_raw)
         for (k, v) in pairs(bindings_raw)
             name = string(k)
@@ -1068,7 +1153,8 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
                 "template_import_unknown_name",
                 "$origin: import of '$ref' binds metaparameter '$name', which the " *
                 "target neither declares nor re-exports (esm-spec §9.7.6)"))
-            values[name] = _require_int(v, "$origin: import of '$ref', binding '$name'")
+            values[name] = require_meta_expr(_to_ordered(v),
+                "$origin: import of '$ref', binding '$name'")
         end
     end
     if !isempty(values)

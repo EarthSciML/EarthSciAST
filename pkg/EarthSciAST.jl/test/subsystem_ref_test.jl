@@ -471,4 +471,112 @@
             rm(tmp_dir, recursive=true, force=true)
         end
     end
+
+    # A §4.7 subsystem-ref `bindings` value may be a metaparameter EXPRESSION
+    # (esm-spec §9.7.6 binding site 3): an integer, a name in the MOUNTING
+    # document's metaparameter scope, or a `{op:+|-|*|/, args}` tree over the
+    # same — e.g. deriving the regridder's target-cell count `NTGT = NX*NY` from
+    # the mount's grid. It folds immediately against the mounting document's
+    # already-closed metaparameter environment. Mirrors the subsystem cases of
+    # pkg/earthsci-ast-py/tests/test_metaparam_expr_bindings.py.
+    @testset "subsystem-ref bindings: metaparameter-expression values (§9.7.6)" begin
+        _child = """{
+            "esm": "0.8.0",
+            "metadata": {"name": "child_regrid"},
+            "metaparameters": {
+                "NX": {"type": "integer", "default": 2},
+                "NY": {"type": "integer", "default": 2},
+                "NTGT": {"type": "integer", "default": 4}
+            },
+            "index_sets": {
+                "tgt_cells": {"kind": "interval", "size": "NTGT"},
+                "gx": {"kind": "interval", "size": "NX"},
+                "gy": {"kind": "interval", "size": "NY"}
+            },
+            "models": {"Regrid": {
+                "variables": {"u": {"type": "state", "units": "1", "default": 0.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                               "rhs": {"op": "*", "args": [-0.5, "u"]}}]
+            }}
+        }"""
+        _parent(bindings) = """{
+            "esm": "0.8.0",
+            "metadata": {"name": "parent_mount"},
+            "metaparameters": {
+                "NX": {"type": "integer", "default": 18},
+                "NY": {"type": "integer", "default": 20}
+            },
+            "models": {"Host": {
+                "variables": {}, "equations": [],
+                "subsystems": {"Regrid": {"ref": "./child_regrid.esm", "bindings": $bindings}}
+            }}
+        }"""
+        _err(f) = try
+            f(); nothing
+        catch e
+            e isa EarthSciAST.ExpressionTemplateError ? e.code : rethrow(e)
+        end
+
+        @testset "NTGT = NX*NY derived at the mount, folded to concrete" begin
+            tmp = mktempdir()
+            try
+                write(joinpath(tmp, "child_regrid.esm"), _child)
+                p = joinpath(tmp, "parent.esm")
+                write(p, _parent(
+                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                # The child's index sets merge into the importing document's
+                # registry (§4.7); their sizes come from the folded bindings.
+                f = EarthSciAST.load(p; metaparameters=Dict("NX" => 18, "NY" => 20))
+                @test f.index_sets["tgt_cells"].size == 360   # derived NX*NY
+                @test f.index_sets["gx"].size == 18
+                @test f.index_sets["gy"].size == 20
+                @test f.models["Host"].subsystems["Regrid"] isa EarthSciAST.Model
+            finally
+                rm(tmp, recursive=true, force=true)
+            end
+        end
+
+        @testset "folds against the mounting document's defaults" begin
+            tmp = mktempdir()
+            try
+                write(joinpath(tmp, "child_regrid.esm"), _child)
+                p = joinpath(tmp, "parent.esm")
+                write(p, _parent(
+                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                f = EarthSciAST.load(p)   # parent defaults NX=18, NY=20
+                @test f.index_sets["tgt_cells"].size == 360
+            finally
+                rm(tmp, recursive=true, force=true)
+            end
+        end
+
+        @testset "plain-integer bindings still work (regression)" begin
+            tmp = mktempdir()
+            try
+                write(joinpath(tmp, "child_regrid.esm"), _child)
+                p = joinpath(tmp, "parent.esm")
+                write(p, _parent("""{"NX": 5, "NY": 6, "NTGT": 30}"""))
+                f = EarthSciAST.load(p)
+                @test f.index_sets["tgt_cells"].size == 30
+                @test f.index_sets["gx"].size == 5
+                @test f.index_sets["gy"].size == 6
+            finally
+                rm(tmp, recursive=true, force=true)
+            end
+        end
+
+        @testset "unknown free name in a binding value is loud" begin
+            tmp = mktempdir()
+            try
+                write(joinpath(tmp, "child_regrid.esm"), _child)
+                p = joinpath(tmp, "parent.esm")
+                write(p, _parent(
+                    """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""))
+                @test _err(() -> EarthSciAST.load(p; metaparameters=Dict("NX" => 18))) ==
+                      "template_import_unknown_name"
+            finally
+                rm(tmp, recursive=true, force=true)
+            end
+        end
+    end
 end

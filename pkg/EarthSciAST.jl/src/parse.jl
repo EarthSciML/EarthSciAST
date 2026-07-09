@@ -805,14 +805,29 @@ function coerce_model(data::Any)::Model
         for (k, v) in pairs(data.subsystems)
             subsystems[string(k)] = if haskey(v, :ref) && v.ref !== nothing
                 # Optional `bindings` closes the referenced document's open
-                # metaparameters at this edge (esm-spec §9.7.6 binding site 3).
+                # metaparameters at this edge (esm-spec §9.7.6 binding site 3). A
+                # binding VALUE may be a metaparameter EXPRESSION — an integer, a
+                # name in the MOUNTING document's metaparameter scope, or a
+                # `{op:+|-|*|/, args}` tree over the same (e.g. `NTGT = NX*NY`),
+                # which import renaming (name→name) cannot express. A subsystem ref
+                # is resolved as a complete document folded to concrete integers AT
+                # the mount, so — unlike an import edge — each binding value folds
+                # IMMEDIATELY against the mounting document's already-closed
+                # metaparameter environment (the mount closes its own
+                # metaparameters before its refs resolve). That environment has
+                # already been substituted into these values by
+                # `resolve_template_machinery` (which closes this document's
+                # metaparameters before coercion), so folding here collapses the
+                # expression to a concrete int; a value naming a metaparameter the
+                # document does not declare survives the substitution and fails
+                # loudly with `template_import_unknown_name`.
                 bindings = Dict{String,Int}()
                 if haskey(v, :bindings) && v.bindings !== nothing
                     for (bk, bv) in pairs(v.bindings)
-                        (bv isa Integer && !(bv isa Bool)) || throw(ExpressionTemplateError(
-                            "metaparameter_type_error",
-                            "subsystems.$(string(k)): binding '$(string(bk))' is not an integer (esm-spec §9.7.6)"))
-                        bindings[string(bk)] = Int(bv)
+                        bctx = "subsystems.$(string(k)): binding '$(string(bk))'"
+                        expr = require_meta_expr(_to_native_json(bv), bctx)
+                        bindings[string(bk)] =
+                            Int(eval_meta_expr(expr, Dict{String,Int64}(), bctx))
                     end
                 end
                 # Optional `expression_template_imports` injects a discretization

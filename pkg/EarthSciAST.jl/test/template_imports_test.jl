@@ -11,7 +11,7 @@ using EarthSciAST: lower_expression_templates, resolve_template_machinery,
     reject_template_imports_pre_v08, ExpressionTemplateError, JSONLikeDict,
     MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr,
     _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
-    _canonical_ref, _URL_FETCHER
+    _canonical_ref, _URL_FETCHER, require_meta_expr, eval_meta_expr
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
@@ -919,6 +919,182 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             end
         finally
             _URL_FETCHER[] = _old_fetcher
+        end
+    end
+
+    # ------------------------------------------------------------------
+    # metaparameter-EXPRESSION binding VALUES at import / subsystem edges
+    # (esm-spec §9.7.6). A binding value may be an integer, a metaparameter
+    # name, or a `{op:+|-|*|/, args}` tree whose free names resolve in the
+    # IMPORTING document's metaparameter scope — so a child metaparameter can
+    # be DERIVED (e.g. `NTGT = NX*NY`), which import renaming cannot express.
+    # Mirrors pkg/earthsci-ast-py/tests/test_metaparam_expr_bindings.py.
+    # ------------------------------------------------------------------
+    @testset "metaparameter-expression binding values (esm-spec §9.7.6)" begin
+        # ---- 1. the folding / validation helpers ----
+        @testset "eval_meta_expr / require_meta_expr helpers" begin
+            @test eval_meta_expr(Dict("op" => "*", "args" => ["NX", "NY"]),
+                                 Dict("NX" => 18, "NY" => 20), "t") == 360
+            @test eval_meta_expr("NX", Dict("NX" => 7), "t") == 7
+            @test eval_meta_expr(5, Dict{String,Int64}(), "t") == 5
+            # (NX + 2) * NY  with NX=4, NY=3  ->  18
+            nested = Dict("op" => "*",
+                          "args" => Any[Dict("op" => "+", "args" => Any["NX", 2]), "NY"])
+            @test eval_meta_expr(nested, Dict("NX" => 4, "NY" => 3), "t") == 18
+            # require_meta_expr returns the value UNFOLDED
+            prod = Dict("op" => "*", "args" => Any["NX", "NY"])
+            @test require_meta_expr(prod, "t") == prod
+
+            # Structural bad-op / empty-args / float caught at the edge (even with
+            # a symbolic arg); unknown free name + inexact division at fold time.
+            _hc(expr, env) = _err_code(() ->
+                (require_meta_expr(expr, "t"); eval_meta_expr(expr, env, "t")))
+            @test _hc(Dict("op" => "%", "args" => Any["NX", 2]),
+                      Dict{String,Int64}()) == "metaparameter_type_error"
+            @test _hc(Dict("op" => "*", "args" => Any[]),
+                      Dict{String,Int64}()) == "metaparameter_type_error"
+            @test _hc(1.5, Dict{String,Int64}()) == "metaparameter_type_error"
+            @test _hc(Dict("op" => "*", "args" => Any["NZ", "NY"]),
+                      Dict("NX" => 18, "NY" => 20)) == "template_import_unknown_name"
+            @test _hc(Dict("op" => "/", "args" => Any["NX", 7]),
+                      Dict("NX" => 18)) == "metaparameter_type_error"
+        end
+
+        # ---- 2. import edge: GX = NX*NY carried symbolically, folds at close ----
+        _lib_grid = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "lib_grid"},
+          "metaparameters": {"GX": {"type": "integer", "default": 2}},
+          "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
+          "expression_templates": {
+            "one": {"params": [], "body": {"op": "const", "value": 1, "args": []}}
+          }
+        }
+        """
+        _model_importing(binding) = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "model_import"},
+          "metaparameters": {
+            "NX": {"type": "integer", "default": 3},
+            "NY": {"type": "integer", "default": 4}
+          },
+          "models": {
+            "M": {
+              "expression_template_imports": [
+                {"ref": "./lib_grid.esm", "bindings": {"GX": $binding}}
+              ],
+              "variables": {"a": {"type": "parameter", "shape": ["cells"], "default": 0.0}},
+              "equations": []
+            }
+          }
+        }
+        """
+
+        @testset "import edge: product binding folds at the doc close" begin
+            mktempdir() do d
+                write(joinpath(d, "lib_grid.esm"), _lib_grid)
+                bind = """{"op": "*", "args": ["NX", "NY"]}"""
+                # explicit loader-API bindings (3 * 4)
+                out = resolve_template_machinery(JSON3.read(_model_importing(bind)), d;
+                                                 metaparameters=Dict("NX" => 3, "NY" => 4))
+                @test out["index_sets"]["cells"]["size"] == 12
+                # via metaparameter defaults (3 * 4)
+                out2 = resolve_template_machinery(JSON3.read(_model_importing(bind)), d)
+                @test out2["index_sets"]["cells"]["size"] == 12
+            end
+        end
+
+        # ---- 3. subsystem / model edge: NTGT = NX*NY folds at the mount ----
+        _child_regrid = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "child_regrid"},
+          "metaparameters": {
+            "NX": {"type": "integer", "default": 2},
+            "NY": {"type": "integer", "default": 2},
+            "NTGT": {"type": "integer", "default": 4}
+          },
+          "index_sets": {
+            "tgt_cells": {"kind": "interval", "size": "NTGT"},
+            "gx": {"kind": "interval", "size": "NX"},
+            "gy": {"kind": "interval", "size": "NY"}
+          },
+          "models": {
+            "Regrid": {
+              "variables": {"u": {"type": "state", "units": "1", "default": 0.0}},
+              "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                             "rhs": {"op": "*", "args": [-0.5, "u"]}}]
+            }
+          }
+        }
+        """
+        _parent_mount(bindings) = """
+        {
+          "esm": "0.8.0",
+          "metadata": {"name": "parent_mount"},
+          "metaparameters": {
+            "NX": {"type": "integer", "default": 18},
+            "NY": {"type": "integer", "default": 20}
+          },
+          "models": {
+            "Host": {
+              "variables": {},
+              "equations": [],
+              "subsystems": {
+                "Regrid": {"ref": "./child_regrid.esm", "bindings": $bindings}
+              }
+            }
+          }
+        }
+        """
+        _sizes(f) = Dict(n => s.size for (n, s) in f.index_sets)
+
+        @testset "mount edge: product binding folds to concrete at the mount" begin
+            mktempdir() do d
+                write(joinpath(d, "child_regrid.esm"), _child_regrid)
+                p = joinpath(d, "parent_mount.esm")
+                write(p, _parent_mount(
+                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                f = EarthSciAST.load(p; metaparameters=Dict("NX" => 18, "NY" => 20))
+                sz = _sizes(f)
+                @test sz["tgt_cells"] == 360   # NX*NY, derived — not a hand-supplied literal
+                @test sz["gx"] == 18
+                @test sz["gy"] == 20
+            end
+        end
+
+        @testset "mount edge: product binding folds against parent defaults" begin
+            mktempdir() do d
+                write(joinpath(d, "child_regrid.esm"), _child_regrid)
+                p = joinpath(d, "parent_mount.esm")
+                write(p, _parent_mount(
+                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                f = EarthSciAST.load(p)   # no API bindings -> parent defaults 18, 20
+                @test _sizes(f)["tgt_cells"] == 360
+            end
+        end
+
+        @testset "mount edge: plain-integer bindings regression" begin
+            mktempdir() do d
+                write(joinpath(d, "child_regrid.esm"), _child_regrid)
+                p = joinpath(d, "parent_plain.esm")
+                write(p, _parent_mount("""{"NX": 5, "NY": 6, "NTGT": 30}"""))
+                sz = _sizes(EarthSciAST.load(p))
+                @test sz["tgt_cells"] == 30 && sz["gx"] == 5 && sz["gy"] == 6
+            end
+        end
+
+        @testset "mount edge: unknown parent name is loud" begin
+            mktempdir() do d
+                write(joinpath(d, "child_regrid.esm"), _child_regrid)
+                p = joinpath(d, "parent_bad.esm")
+                write(p, _parent_mount(
+                    """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""))
+                @test _err_code(() -> EarthSciAST.load(p;
+                    metaparameters=Dict("NX" => 18))) == "template_import_unknown_name"
+            end
         end
     end
 end
