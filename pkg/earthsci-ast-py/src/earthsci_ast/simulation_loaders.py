@@ -654,6 +654,12 @@ def _provider_refresh_field(provider: Any, when: _dt.datetime) -> np.ndarray:
     binding error (mirrors :func:`_provider_sample_field`).
     """
     nds = provider.refresh(when)
+    return _single_var_array(nds)
+
+
+def _single_var_array(nds: Any) -> np.ndarray:
+    """The single data variable of a provider sample as a float array (raising if
+    the sample carries more than one — one provider is bound per consumer var)."""
     names = (
         nds.variable_names()
         if hasattr(nds, "variable_names")
@@ -776,6 +782,12 @@ def _simulate_with_discrete_providers(
                         _provider_sample_field(providers[n], t0), dtype=float
                     )
                 else:
+                    # A linear-interpolation loader returns the TWO bracketing
+                    # records (size-2 leading time axis); it binds RAW to the
+                    # consumer's 2-record loader field through this same path — the
+                    # model derives its own interpolation weight from the fixed
+                    # cadence (ERA5 t_interp_ref / dt_interp), so no timestamp
+                    # injection is needed here.
                     abs_time = epoch + _dt.timedelta(seconds=float(when_seconds))
                     loader_arrays[n] = _provider_refresh_field(providers[n], abs_time)
 

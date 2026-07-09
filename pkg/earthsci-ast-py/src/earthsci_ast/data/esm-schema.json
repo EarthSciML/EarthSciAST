@@ -2464,6 +2464,14 @@
         "time_variable": {
           "type": "string",
           "description": "Name of the time coordinate variable in the file. Used when records_per_file is absent or \"auto\". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback."
+        },
+        "records_per_sample": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "description": "How many time records the DISCRETE loader returns per query time — pure I/O; the loader does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
         }
       }
     },
