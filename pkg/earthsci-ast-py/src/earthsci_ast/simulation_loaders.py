@@ -365,11 +365,23 @@ def _run_cadence_segmented_solve(
     y_chunks: List[np.ndarray] = []
     nfev = njev = nlu = 0
     last_message = ""
+    # Persist the loader-INVARIANT build products (join-key bins + the const regrid
+    # GEOMETRY A_ij/A_j/W_ij) across segment rebuilds: only the loader-VOLATILE
+    # observeds (the regrid APPLY W·field) change per segment, so the expensive
+    # const geometry is materialized once at the seed build and reused, not
+    # re-clipped every hour. Seeded on the seg-0 build; read on every later build.
+    static_cache: Dict[str, Any] = {}
     for seg_idx, seg_end in enumerate(seg_ends):
         # Refresh the discrete forcing to the hour covering this segment start,
         # then REBUILD the RHS so a const-hoisted regrid picks up the slice.
         refresh_fn(t_current)
-        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
+        build = _build_numpy_rhs(
+            flat,
+            parameters,
+            initial_conditions,
+            loader_arrays=loader_arrays,
+            static_cache=static_cache,
+        )
         if seg_idx == 0:
             y_current = build.y0
             elem_names = _element_names(build.state_names, build.shapes)

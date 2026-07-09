@@ -109,6 +109,26 @@ class EvalContext:
     # bare name so the existing unresolved-symbol error surfaces). Empty ⇒ bare
     # names resolve as-is (the pre-namespacing behaviour, byte-identical).
     factor_scope: Dict[str, str] = field(default_factory=dict)
+    # Build-scoped reusable-operator cache for constant-geometry contractions
+    # (perf idea #3), keyed by the aggregate node's ``id``. A ``sum_product``
+    # join-gated reduce shaped like the conservative-regrid APPLY
+    # ``field_tgt[j] = Σ_i W_ij·field_i`` (join-admitted, ⊗ = ×) factors into a
+    # CONSTANT weight operator ``W_op`` (the loader-invariant geometry × the
+    # join-admit mask) contracted against a VARYING gathered field. ``W_op`` is
+    # built once and cached here so a cadence-segmented rebuild re-applies it (one
+    # ``einsum``) to the refreshed field instead of re-walking the weight + re-
+    # coding the join every segment. ``None`` ⇒ operator caching is off (the
+    # single-shot builds); the dense :func:`_eval_arrayop_reduce_vectorized` path
+    # (#1) and the scalar loop remain the always-correct fallbacks.
+    op_cache: Optional[Dict[int, Any]] = None
+    # Names whose materialized value is loader-INVARIANT (constant across cadence
+    # segments) — the geometry ``derived_rings`` / ``observed_values`` the build
+    # hoisted into the const partition (simulation_array `_build_numpy_rhs`). A
+    # weight operator may be cached (above) only when every constant factor it
+    # captures is one of these, so a reused ``W_op`` can never freeze a
+    # loader-dependent quantity. Empty ⇒ nothing is known-invariant, so the
+    # operator path declines and #1's dense reduce handles the node.
+    invariant_names: "frozenset[str]" = field(default_factory=frozenset)
 
 
 def ragged_factor_scope(
@@ -1587,27 +1607,49 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 "supported; equi-join keys are dense interval / categorical index "
                 "sets (RFC semiring-faq-unified-ir §5.3)"
             )
-        # Filter-only (no equi-join): the whole (out × reduce) box + its filter
-        # mask evaluate in one vectorized pass, collapsing the dense per-(i,j)
-        # Python loop of the conservative-regrid APPLY reductions (A_j row-sums,
-        # weighted field regrids) to a handful of numpy ops. A join keeps the
-        # scalar path (key coding); the vectorized reduce declines (→ None) on
-        # anything it cannot broadcast, so the scalar loop still covers it.
-        if not join_clauses:
-            vec = _eval_arrayop_reduce_vectorized(
-                expr,
-                ctx,
-                out_syms,
-                out_ranges_exp,
-                out_shape,
-                reduce_syms,
-                resolved,
-                reducer,
-                empty_zero,
-                filter_expr,
-            )
-            if vec is not None:
-                return vec
+        # Cached constant-geometry OPERATOR path (#3): a join-gated sum_product
+        # shaped like the regrid APPLY factors into a reusable weight operator
+        # W_op (built once, cached on ctx.op_cache) applied to the current field
+        # by one einsum. Declines (→ None) to the dense reduce below for anything
+        # outside that shape or when operator caching is off.
+        op = _eval_arrayop_operator_cached(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
+        )
+        if op is not None:
+            return op
+        # The whole (out × reduce) box + its filter and/or equi-join mask evaluate
+        # in one vectorized pass, collapsing the dense per-(i,j) Python loop of the
+        # conservative-regrid APPLY reductions (A_j row-sums, weighted field
+        # regrids) to a handful of numpy ops. The equi-join is coded to a dense
+        # combined-box mask (:func:`_join_admits_mask`) instead of the per-cell
+        # ``_join_admits`` gate; the vectorized reduce declines (→ None) on
+        # anything it cannot broadcast (or a key that is not a box axis), so the
+        # scalar loop still covers those cases.
+        vec = _eval_arrayop_reduce_vectorized(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
+            filter_expr,
+            raw_ranges,
+        )
+        if vec is not None:
+            return vec
         return _eval_arrayop_scalar(
             expr,
             ctx,
@@ -2065,6 +2107,162 @@ _REDUCE_UFUNCS: Dict[str, Any] = {
 }
 
 
+def _gather_operator_factor(
+    var: str, syms: List[str], ctx: EvalContext, sym_0based: Dict[str, List[int]]
+) -> Optional[np.ndarray]:
+    """Gather + slice the array backing an ``index(var, *syms)`` factor for the
+    operator path, or ``None`` if it is not a plain per-cell array gather.
+
+    Resolves ``var`` the way :func:`_eval_arrayop_vectorized` does — a state
+    array, a materialized ``derived_rings`` buffer, or a loader ``input_arrays``
+    field — and slices each declared axis to the factor's 0-based index range.
+    Diagonal / repeated subscripts and rank mismatches decline (→ ``None``) so
+    the caller falls back to the dense reduce."""
+    if len(set(syms)) != len(syms):
+        return None
+    if var in ctx.state_layout:
+        arr = _view_state_array(var, ctx)
+    elif var in ctx.derived_rings:
+        arr = np.asarray(ctx.derived_rings[var], dtype=float)
+    elif var in ctx.input_arrays:
+        arr = np.asarray(ctx.input_arrays[var], dtype=float)
+    else:
+        return None
+    if arr.ndim != len(syms):
+        return None
+    cols = [np.asarray(sym_0based[s], dtype=int) for s in syms]
+    sl = arr[cols[0]] if len(cols) == 1 else arr[np.ix_(*cols)]
+    return np.asarray(sl, dtype=float)
+
+
+def _eval_arrayop_operator_cached(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: List[str],
+    out_ranges_exp: List[List[int]],
+    out_shape: Tuple[int, ...],
+    reduce_syms: List[str],
+    resolved: Dict[str, Any],
+    raw_ranges: Dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Optional[Expr],
+) -> Optional[np.ndarray]:
+    """Cached constant-geometry OPERATOR fast path (perf idea #3).
+
+    Recognizes the conservative-regrid APPLY — a ``sum_product`` (⊕ = ``+``,
+    ⊗ = ``×``) reducing aggregate, join-gated, whose body is a product of
+    per-cell ``index`` gathers that splits into loader-INVARIANT geometry factors
+    (the weight ``W_ij``, ``ctx.invariant_names``) and a VARYING gathered field
+    (the refreshed loader quantity). It precomputes the constant weight operator
+    once — ``W_op[out…, red…] = coeff · Π(const factors) · join_admit_mask`` — and
+    caches it on ``ctx.op_cache`` keyed by the node ``id``; each call then applies
+    it to the current field with a single ``np.einsum`` that contracts the reduce
+    axes (``"ji,i->j"`` — a BLAS matvec ``field_tgt = W_op · field_src``). A
+    cadence-segmented rebuild reuses ``W_op`` across every hour instead of
+    re-walking the weight and re-coding the join each segment.
+
+    Declines (→ ``None``, caller falls to the dense
+    :func:`_eval_arrayop_reduce_vectorized`, then the scalar loop) whenever the
+    node is not this exact shape or any factor is not a plain invariant/varying
+    array gather: a non-``+`` ⊕, a ``filter``, no contraction, an affine / summed
+    body, a join key that is not a box axis, or a captured weight factor that is
+    not known-invariant (so a reused operator can never freeze changing data).
+    """
+    op_cache = ctx.op_cache
+    if op_cache is None or not ctx.invariant_names:
+        return None
+    if reducer != "+" or filter_expr is not None or not reduce_syms:
+        return None
+
+    all_syms = list(out_syms) + list(reduce_syms)
+    if len(all_syms) > 26:
+        return None
+    all_ranges_exp = list(out_ranges_exp) + _expand_reduce_ranges(resolved, reduce_syms)
+    combined_shape = tuple(len(r) for r in all_ranges_exp)
+    if 0 in out_shape:
+        return np.zeros(out_shape, dtype=float)
+
+    decomp = _decompose_body_as_scaled_product(expr.expr, frozenset(all_syms))
+    if decomp is None:
+        return None
+    coeff, index_terms = decomp
+
+    sym_0based: Dict[str, List[int]] = {
+        s: [v - 1 for v in r] for s, r in zip(all_syms, all_ranges_exp)
+    }
+    letters = {s: chr(ord("a") + k) for k, s in enumerate(all_syms)}
+    combined_spec = "".join(letters[s] for s in all_syms)
+    out_spec = "".join(letters[s] for s in out_syms)
+
+    const_terms: List[Tuple[str, List[str]]] = []
+    vary_terms: List[Tuple[str, List[str]]] = []
+    for var, syms in index_terms:
+        if not syms and var in ctx.param_values:
+            coeff *= ctx.param_values[var]
+            continue
+        if var in ctx.invariant_names:
+            const_terms.append((var, syms))
+        else:
+            vary_terms.append((var, syms))
+    # The operator form needs a constant weight AND a varying field: a pure
+    # geometry reduce (no varying factor) is already materialized once in the
+    # const partition, and a purely-varying reduce has no reusable operator.
+    if not const_terms or not vary_terms:
+        return None
+
+    node_id = id(expr)
+    cached = op_cache.get(node_id)
+    if cached is None:
+        # Build the constant weight operator W_op over the combined box, folding in
+        # the join-admit mask. Every captured factor must be a known-invariant
+        # array gather, else this operator would not be safe to reuse.
+        try:
+            const_operands: List[np.ndarray] = []
+            const_specs: List[str] = []
+            for var, syms in const_terms:
+                sl = _gather_operator_factor(var, syms, ctx, sym_0based)
+                if sl is None:
+                    return None
+                const_operands.append(sl)
+                const_specs.append("".join(letters[s] for s in syms))
+            operands = list(const_operands)
+            specs = list(const_specs)
+            if getattr(expr, "join", None):
+                sym_positions = {s: list(r) for s, r in zip(all_syms, all_ranges_exp)}
+                gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+                mask = _join_admits_mask(gates, all_syms, all_ranges_exp, combined_shape)
+                if mask is None:
+                    return None
+                operands.append(mask.astype(float))
+                specs.append(combined_spec)
+            if not operands:
+                return None
+            w_op = coeff * np.einsum(",".join(specs) + "->" + combined_spec, *operands)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+            return None
+        vary_specs = ["".join(letters[s] for s in syms) for _, syms in vary_terms]
+        cached = (np.ascontiguousarray(w_op), combined_spec, out_spec, vary_terms, vary_specs)
+        op_cache[node_id] = cached
+
+    w_op, combined_spec, out_spec, vary_terms, vary_specs = cached
+
+    # Apply: contract the cached operator against the CURRENT varying field(s).
+    try:
+        vary_operands = []
+        for var, syms in vary_terms:
+            sl = _gather_operator_factor(var, syms, ctx, sym_0based)
+            if sl is None:
+                return None
+            vary_operands.append(sl)
+        einsum_str = combined_spec + "," + ",".join(vary_specs) + "->" + out_spec
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = np.einsum(einsum_str, w_op, *vary_operands)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        return None
+    return np.asarray(out, dtype=float).reshape(out_shape)
+
+
 def _eval_arrayop_reduce_vectorized(
     expr: ExprNode,
     ctx: EvalContext,
@@ -2076,8 +2274,10 @@ def _eval_arrayop_reduce_vectorized(
     reducer: str,
     empty_zero: float,
     filter_expr: Optional[Expr],
+    raw_ranges: Optional[Dict[str, Any]] = None,
 ) -> Optional[np.ndarray]:
-    """Vectorized fast path for a (possibly filtered) NON-join reducing aggregate.
+    """Vectorized fast path for a (possibly join- and/or filter-gated) reducing
+    aggregate.
 
     The general counterpart of :func:`_materialize_map` (which only handles the
     non-reducing pure map): bind EVERY index symbol — output AND contracted — to
@@ -2086,27 +2286,35 @@ def _eval_arrayop_reduce_vectorized(
     ``index(var, i, j, …)`` factor becomes one vectorized gather via
     :func:`_eval_index`, resolving state / params / loader ``input_arrays`` /
     materialized ``derived_rings`` alike), then ⊕-reduce over the trailing
-    contracted axes. A ``filter`` predicate is evaluated over the same box to a
-    boolean mask; a non-admitted cell is set to the semiring identity 0̄
-    (``empty_zero``) so it is a no-op under ⊕ — identical to the scalar path
-    skipping it (RFC semiring-faq-unified-ir §5.3 / §7.2).
+    contracted axes.
+
+    Both gates collapse to a dense boolean mask over the SAME combined box, so a
+    non-admitted cell is set to the semiring identity 0̄ (``empty_zero``) — a
+    no-op under ⊕, identical to the scalar path skipping it (RFC
+    semiring-faq-unified-ir §5.3 / §7.2):
+
+    * a ``filter`` predicate is evaluated over the box to a boolean mask;
+    * an equi-``join`` resolves to key-column codes (:func:`_resolve_join`) whose
+      admitted tuples are the dense :func:`_join_admits_mask` over the combined
+      box — the vectorized form of the per-cell :func:`_join_admits` gate. Every
+      join key symbol (output OR contracted) is an axis of the box, so the mask
+      that the scalar loop walks tuple-by-tuple is built in one broadcast compare.
 
     This is what lets the conservative-regrid APPLY reductions — the row-sums
-    ``A_j[j] = Σ_{i:A_ij>atol} A_ij`` and the weighted regrids
-    ``field_tgt[j] = Σ_i A_ij·field_i / A_j`` — evaluate as a handful of numpy
-    ops over the already-materialized ``A_ij`` matrix instead of a Python loop
-    over every (source, target) pair (the dense ``_eval_arrayop_scalar`` walk).
+    ``A_j[j] = Σ_{i:bin(i)=bin(j)} A_ij`` and the weighted regrids
+    ``field_tgt[j] = Σ_i A_ij·field_i / A_j`` gated by a broad-phase bin
+    equi-join — evaluate as a handful of numpy ops over the already-materialized
+    ``A_ij`` matrix instead of a Python loop over every (source, target) pair (the
+    dense ``_eval_arrayop_scalar`` → ``_reduce_over_gated`` walk).
 
     Per-cell values are computed by the SAME gather the scalar path uses, so only
     the contraction's summation order changes (numpy pairwise vs sequential), on a
     par with the existing einsum fast path (:func:`_eval_arrayop_vectorized`).
     Returns ``None`` — caller falls back to the scalar loop — for an unsupported
-    ⊕, an empty index box, or any body / filter that does not evaluate + broadcast
-    cleanly over the box (e.g. a ragged bound or a non-array gather).
-
-    The caller guarantees no ``join`` clause (equi-join key coding stays on the
-    scalar path); ⊗ is folded by the body evaluation itself, so the semiring's ⊗
-    need not be ×.
+    ⊕, an empty index box, a join whose keys are not all box axes, or any body /
+    filter that does not evaluate + broadcast cleanly over the box (e.g. a ragged
+    bound or a non-array gather). ⊗ is folded by the body evaluation itself, so
+    the semiring's ⊗ need not be ×.
     """
     ufunc = _REDUCE_UFUNCS.get(reducer)
     if ufunc is None or not reduce_syms:
@@ -2114,6 +2322,7 @@ def _eval_arrayop_reduce_vectorized(
 
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
     all_syms = list(out_syms) + list(reduce_syms)
+    all_ranges_exp = list(out_ranges_exp) + red_ranges_exp
     ndim = len(all_syms)
     if ndim == 0:
         return None
@@ -2123,8 +2332,26 @@ def _eval_arrayop_reduce_vectorized(
         # empty array. Cheap to hand back so the reduce logic below stays simple.
         return np.zeros(out_shape, dtype=float)
 
+    # Resolve the equi-join gate (if any) to a dense mask over the combined box
+    # BEFORE binding the index box — key coding reads only ctx registries + the
+    # declared ranges, not the broadcast bindings. A key that is not an axis of
+    # this box (``_join_admits_mask`` → None) or a malformed clause declines to
+    # the scalar path, which re-resolves and raises the authoritative error.
+    join_mask: Optional[np.ndarray] = None
+    if getattr(expr, "join", None):
+        if raw_ranges is None:
+            return None
+        try:
+            sym_positions = {s: list(r) for s, r in zip(all_syms, all_ranges_exp)}
+            gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+            join_mask = _join_admits_mask(gates, all_syms, all_ranges_exp, combined_shape)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+            return None
+        if join_mask is None:
+            return None
+
     try:
-        with _bound_index_box(ctx, all_syms, list(out_ranges_exp) + red_ranges_exp):
+        with _bound_index_box(ctx, all_syms, all_ranges_exp):
             # A filtered-out / masked term divides by A_j=0 in the regrid body; that
             # value is immediately discarded by the mask, so silence the transient
             # divide/invalid warnings (mirrors the batched-leaf kernel).
@@ -2134,6 +2361,8 @@ def _eval_arrayop_reduce_vectorized(
                 if filter_expr is not None:
                     mask = np.asarray(_compile_expr(filter_expr)(ctx))
                     term = np.where(mask.astype(bool), term, empty_zero)
+                if join_mask is not None:
+                    term = np.where(join_mask, term, empty_zero)
     except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
         return None
 

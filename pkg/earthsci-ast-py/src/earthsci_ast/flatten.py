@@ -1673,7 +1673,21 @@ def infer_variable_shapes(flat: FlattenedSystem) -> Dict[str, Tuple[int, ...]]:
     that dimension. Variables whose index uses report a minimum below 1 get
     their shape biased so the flat size covers the full range (``max - min + 1``),
     which mirrors the Julia binding's 1-based semantics.
+
+    The result is a pure function of ``flat`` (state variables + equations), both
+    fixed for a run, yet the deep ``_collect_index_uses`` tree walk is re-run on
+    every RHS build — and the cadence-segmented loader driver rebuilds the RHS
+    once per segment (:func:`simulation_loaders._run_cadence_segmented_solve`), so
+    a 16-hour ERA5 run walks the whole AST ~16×. Memoize the walk on the ``flat``
+    instance (built once, reused every segment) and hand back a COPY so the caller
+    can freely ``update`` the dict without corrupting the cache. A fresh ``flat``
+    (every test / model load) starts with an empty cache, so nothing is shared
+    across systems.
     """
+    _cached = getattr(flat, "_infer_shapes_cache", None)
+    if _cached is not None:
+        return dict(_cached)
+
     state_names: Set[str] = set(flat.state_variables.keys())
     uses: Dict[str, List[List[int]]] = {}
     for eq in flat.equations:
@@ -1713,4 +1727,10 @@ def infer_variable_shapes(flat: FlattenedSystem) -> Dict[str, Tuple[int, ...]]:
                 pass
             shape.append(length)
         shapes[name] = tuple(shape)
+    try:
+        flat._infer_shapes_cache = dict(shapes)
+    except (AttributeError, TypeError):
+        # A slotted / frozen flat can't hold the cache attribute; skip caching
+        # (correctness is unaffected — we just recompute next time).
+        pass
     return shapes

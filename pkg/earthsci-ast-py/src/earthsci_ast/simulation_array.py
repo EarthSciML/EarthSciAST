@@ -613,6 +613,38 @@ def _time_varying_observeds(
     return varying
 
 
+def _loader_volatile_observeds(
+    ordered_observed: List[Tuple[str, Expr]],
+    volatile_loader_names: Set[str],
+) -> Set[str]:
+    """Names of observeds that change between cadence SEGMENTS (transitively
+    reference a ``discrete``-cadence loader field).
+
+    The loader analog of :func:`_time_varying_observeds`: the same single forward
+    pass over the dependency-ordered observeds, but propagating loader-volatility
+    instead of state/``t``-variance. An observed is volatile if it references a
+    discrete loader field (whose slice the segment driver refreshes at each
+    cadence boundary — :func:`simulation_loaders._run_cadence_segmented_solve`) or
+    another already-seen volatile observed.
+
+    Its complement — the loader-INVARIANT observeds — depends only on constant
+    geometry, parameters, and ``const``-cadence loaders (all fixed for the whole
+    run), so it evaluates to the SAME arrays every segment. That is precisely the
+    conservative-regrid GEOMETRY (the ``A_ij`` overlap-area clip, its row-sums
+    ``A_j``, the normalized weights ``W_ij``) — the expensive half — which the
+    build can materialize ONCE and reuse across every segment instead of
+    rebuilding per hour. ``volatile_loader_names`` is
+    ``{lf.name for lf in flat.loader_fields if lf.cadence == "discrete"}``; empty
+    (every loader const, or no loaders) ⇒ every static observed is invariant.
+    """
+    volatile: Set[str] = set()
+    for name, rhs in ordered_observed:
+        refs = _expr_referenced_names(rhs)
+        if (refs & volatile_loader_names) or (refs & volatile):
+            volatile.add(name)
+    return volatile
+
+
 def _materialize_observeds(
     ordered_observed: List[Tuple[str, Expr]],
     ctx: EvalContext,
@@ -1068,12 +1100,24 @@ def _build_numpy_rhs(
     parameters: Dict[str, float],
     initial_conditions: Dict[str, float],
     loader_arrays: Optional[Dict[str, "np.ndarray"]] = None,
+    static_cache: Optional[Dict[str, Any]] = None,
 ) -> "_NumpyRhsBuild":
     """Assemble the NumPy-interpreter RHS closure + state layout for a flattened
     array/PDE system. Shared by :func:`_simulate_with_numpy` (which integrates
     it) and :func:`evaluate_rhs` (which evaluates it once at a probe state); the
     cross-language PDE-simulation conformance tier drives the latter so a binding
-    can report f(u, t) at a fixed state, mirroring the Rust ``debug_eval_rhs``."""
+    can report f(u, t) at a fixed state, mirroring the Rust ``debug_eval_rhs``.
+
+    ``static_cache``: an OPT-IN, caller-owned dict that persists the loader-
+    INVARIANT build products (the value-invention join-key buffers and the
+    materialized conservative-regrid GEOMETRY — the ``A_ij``/``A_j``/``W_ij``
+    weights) across repeated builds of the SAME flattened system. The cadence-
+    segmented loader driver (:func:`simulation_loaders._run_cadence_segmented_solve`)
+    rebuilds the RHS once per segment so a discrete loader's refreshed slice is
+    picked up; only the loader-VOLATILE observeds (the regrid APPLY ``W·field``)
+    actually change between segments, so this reuses the const geometry instead of
+    re-clipping it every hour. ``None`` (every non-segmented caller) recomputes
+    everything, exactly as before — the split is otherwise value-transparent."""
     shapes = infer_variable_shapes(flat)
     # Prefer the concrete grid shapes assigned by the pointwise lift (esm-spec
     # §10.5). A lifted species' own operator makearray reads offset cells
@@ -1192,16 +1236,26 @@ def _build_numpy_rhs(
     # Value-invention bin buffers (RFC §5.3): materialize the broad-phase bins
     # (``rg_src_bin`` / ``rg_tgt_bin``) once, from constant geometry + params, so
     # a downstream ``join.on [[rg_src_bin, rg_tgt_bin]]`` can gate the regrid.
-    join_key_buffers, join_key_index_sets = _materialize_join_key_buffers(
-        ordered_observed,
-        bin_specs,
-        flat.index_sets,
-        param_values,
-        shapes,
-        state_layout,
-        total_size,
-        factor_scope=factor_scope,
-    )
+    # These inputs (index sets, params, shapes, layout) are fixed for the run, so
+    # a cadence-segmented rebuild reuses them from ``static_cache`` rather than
+    # re-binning every segment.
+    if static_cache is not None and "join_key_buffers" in static_cache:
+        join_key_buffers = static_cache["join_key_buffers"]
+        join_key_index_sets = static_cache["join_key_index_sets"]
+    else:
+        join_key_buffers, join_key_index_sets = _materialize_join_key_buffers(
+            ordered_observed,
+            bin_specs,
+            flat.index_sets,
+            param_values,
+            shapes,
+            state_layout,
+            total_size,
+            factor_scope=factor_scope,
+        )
+        if static_cache is not None:
+            static_cache["join_key_buffers"] = join_key_buffers
+            static_cache["join_key_index_sets"] = join_key_index_sets
 
     # Initial conditions.
     y0 = np.zeros(total_size, dtype=float)
@@ -1242,10 +1296,68 @@ def _build_numpy_rhs(
     _varying_names = _time_varying_observeds(ordered_observed, set(state_names))
     static_observed = [(n, r) for n, r in ordered_observed if n not in _varying_names]
     varying_observed = [(n, r) for n, r in ordered_observed if n in _varying_names]
-    static_observed_values: Dict[str, float] = {}
-    static_derived_rings: Dict[str, "np.ndarray"] = {}
-    if static_observed:
-        _static_ctx = EvalContext(
+
+    # Cadence split of the STATE-FREE static observeds (esm-spec §5.7 / cadence.py):
+    # loader-INVARIANT geometry (no loader dependence at all — the regrid weights
+    # A_ij, their row-sums A_j, the normalized W_ij, from grid coords + params) vs
+    # loader-DEPENDENT (transitively reads a bound loader array — the regrid APPLY
+    # W·field, the fire-behaviour stack it feeds). Only the invariant half is
+    # guaranteed identical across cadence segments, so it is materialized ONCE and
+    # cached; the loader-dependent half is re-materialized per segment (seeded with
+    # the invariant products it consumes). Any loader is treated as volatile — the
+    # cadence-segmented driver refreshes discrete slices in place, and re-applying a
+    # const loader is merely redundant, never wrong (whereas caching a discrete
+    # apply would FREEZE its stale seed slice). Loader fields survive flatten only
+    # for some pipelines (others strip the discrete decls, leaving `loader_fields`
+    # empty), so key off the actually-bound `loader_arrays` — plus any surviving
+    # `loader_fields` names — rather than a post-flatten cadence tag. A const
+    # observed can never reference a loader-dependent one, so invariant-then-
+    # loader-dependent reproduces the single combined pass value-for-value — the
+    # split is transparent when `static_cache is None`.
+    volatile_loader_names = set(loader_arrays) | {lf.name for lf in flat.loader_fields}
+    _volatile_names = _loader_volatile_observeds(static_observed, volatile_loader_names)
+    invariant_static = [(n, r) for n, r in static_observed if n not in _volatile_names]
+    volatile_static = [(n, r) for n, r in static_observed if n in _volatile_names]
+
+    if static_cache is not None and "invariant_observed_values" in static_cache:
+        invariant_observed_values = static_cache["invariant_observed_values"]
+        invariant_derived_rings = static_cache["invariant_derived_rings"]
+    else:
+        invariant_observed_values = {}
+        invariant_derived_rings = {}
+        if invariant_static:
+            _inv_ctx = EvalContext(
+                state_layout=state_layout,
+                state_shapes=shapes,
+                param_values=param_values,
+                observed_values=invariant_observed_values,
+                y=y0,
+                t=0.0,
+                index_sets=flat.index_sets,
+                input_arrays=loader_arrays if loader_arrays is not None else {},
+                join_key_buffers=join_key_buffers,
+                join_key_index_sets=join_key_index_sets,
+                factor_scope=factor_scope,
+            )
+            _materialize_observeds(invariant_static, _inv_ctx, skip_unresolved=True)
+            invariant_derived_rings = _inv_ctx.derived_rings
+        if static_cache is not None:
+            static_cache["invariant_observed_values"] = invariant_observed_values
+            static_cache["invariant_derived_rings"] = invariant_derived_rings
+
+    # Reusable constant-geometry OPERATOR cache (#3): every name the invariant pass
+    # materialized is loader-invariant, so a weight operator capturing only those
+    # factors is safe to reuse across cadence segments. The op cache lives in the
+    # caller's ``static_cache`` so it persists across rebuilds; a single-shot build
+    # (no ``static_cache``) leaves it ``None`` — the node is materialized once, so
+    # there is nothing to reuse and the dense #1 path handles it.
+    invariant_names = frozenset(invariant_observed_values) | frozenset(invariant_derived_rings)
+    op_cache = static_cache.setdefault("op_cache", {}) if static_cache is not None else None
+
+    static_observed_values: Dict[str, float] = dict(invariant_observed_values)
+    static_derived_rings: Dict[str, "np.ndarray"] = dict(invariant_derived_rings)
+    if volatile_static:
+        _vol_ctx = EvalContext(
             state_layout=state_layout,
             state_shapes=shapes,
             param_values=param_values,
@@ -1253,13 +1365,17 @@ def _build_numpy_rhs(
             y=y0,
             t=0.0,
             index_sets=flat.index_sets,
+            derived_rings=static_derived_rings,
             input_arrays=loader_arrays if loader_arrays is not None else {},
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
+            op_cache=op_cache,
+            invariant_names=invariant_names,
         )
-        _materialize_observeds(static_observed, _static_ctx, skip_unresolved=True)
-        static_derived_rings = _static_ctx.derived_rings
+        _materialize_observeds(volatile_static, _vol_ctx, skip_unresolved=True)
+        static_observed_values = _vol_ctx.observed_values
+        static_derived_rings = _vol_ctx.derived_rings
 
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
