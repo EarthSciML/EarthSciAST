@@ -1629,17 +1629,22 @@ function _compile_arrayop_equation!(vec_kernels,
             agg_gates  = eq.rhs isa OpExpr ? (eq.rhs::OpExpr).join_gates : nothing
             agg_filter = eq.rhs isa OpExpr ? (eq.rhs::OpExpr).filter : nothing
             k_nodes = _Node[]
+            # Reused across the contraction product (see the mirror in
+            # `_resolve_index_of_arrayop`): both dicts are read-only to their callees
+            # and carry a fixed key set, so overwrite-in-place beats a fresh `Dict`
+            # per tuple. `binding` seeds from this cell's `idx_env` once.
+            k_exprs = Dict{String,Expr}()
+            binding = agg_gates === nothing ? nothing : Dict{String,Int}(idx_env)
             for k_tuple in Iterators.product(cell_contract_iters...)
-                if agg_gates !== nothing
-                    binding = Dict{String,Int}(idx_env)
+                if binding !== nothing
                     for d in 1:length(contract_names)
                         binding[contract_names[d]] = k_tuple[d]
                     end
                     _join_admits(agg_gates, binding) || continue
                 end
-                k_exprs = Dict{String,Expr}(
-                    contract_names[d] => IntExpr(Int64(k_tuple[d]))
-                    for d in 1:length(contract_names))
+                for d in 1:length(contract_names)
+                    k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
+                end
                 term = _sub_preserving(sub_rhs_outer, k_exprs)
                 if agg_filter !== nothing
                     filt = _sub_preserving(_sub_preserving(agg_filter, idx_exprs), k_exprs)

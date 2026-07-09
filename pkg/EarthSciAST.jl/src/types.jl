@@ -115,7 +115,24 @@ Operator expression node containing:
   Any JSON value (number, integer, or nested array thereof); `args` MUST be
   empty for a const node.
 """
-struct OpExpr <: Expr
+# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
+# licence to mutate: the build path treats `OpExpr` as an immutable value and only
+# ever copies-with-changes through `reconstruct` (fields are never assigned after
+# construction). Mutability buys true POINTER-IDENTITY for the build-time
+# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
+# the `_stencil_var_set` cache in tree_walk/stencil.jl). With an *immutable*
+# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
+# are STRUCTURAL — every memo probe re-hashes the `op` String and walks all ~35
+# fields (measured ~17× slower per probe than pointer identity), and those probes
+# dominate the `build_evaluator` profile. A mutable struct makes `objectid`/`===`
+# (hence `IdDict` and the `r !== args[i]` "did this subtree change" identity checks
+# throughout the tree walk) pointer-based, so the memos become the O(1) identity
+# caches they were always meant to be. No custom `==`/`hash` is defined: `OpExpr`
+# is never a *value*-keyed `Dict`/`Set` key anywhere (only ever an `IdDict` key),
+# and default `==` was already non-structural for trees — two distinct-but-equal
+# `OpExpr`s compared `false` because their `args` `Vector`s differ by identity — so
+# pointer `==` matches the pre-existing de-facto behaviour.
+mutable struct OpExpr <: Expr
     op::String
     args::Vector{Expr}
     wrt::Union{String,Nothing}
@@ -233,6 +250,24 @@ struct OpExpr <: Expr
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
             id, manifold, distinct, key, arg, bindings)
+
+    # Fully-positional inner constructor — the ALLOCATION-FREE reconstruction
+    # path. The keyword constructor above builds a ~30-entry `NamedTuple` for its
+    # kwargs on every call, and `reconstruct` (the one canonical copy-with-changes
+    # site, invoked once per rewritten node in `_sub_preserving`/`_resolve_*`)
+    # would pay that on every substitution. Routing `reconstruct` through this
+    # positional form drops the per-node NamedTuple allocation entirely. The 32
+    # arguments MUST stay in exact struct-field order; there is no other 32-arg
+    # `OpExpr` method, so the positional call is unambiguous.
+    global _reconstruct_opexpr(op::String, args::Vector{Expr}, wrt, dim, int_var,
+            lower, upper, output_idx, expr_body, reduce, semiring, ranges, regions,
+            values, shape, perm, axis, fn, name, value, table, table_axes, output,
+            join, filter, join_gates, id, manifold, distinct, key, arg, bindings) =
+        new(op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
+            semiring, ranges,
+            regions, values, shape, perm, axis, fn, name, value,
+            table, table_axes, output, join, filter, join_gates,
+            id, manifold, distinct, key, arg, bindings)
 end
 
 # Accept any AbstractVector of Expr-subtypes (e.g. Vector{VarExpr},
@@ -283,15 +318,16 @@ function reconstruct(e::OpExpr;
         id = e.id, manifold = e.manifold,
         distinct = e.distinct, key = e.key,
         arg = e.arg, bindings = e.bindings)
-    return OpExpr(op, args;
-        wrt=wrt, dim=dim, int_var=int_var, lower=lower, upper=upper,
-        output_idx=output_idx, expr_body=expr_body, reduce=reduce,
-        semiring=semiring, ranges=ranges, regions=regions, values=values,
-        shape=shape, perm=perm, axis=axis, fn=fn, name=name, value=value,
-        table=table, table_axes=table_axes, output=output,
-        join=join, filter=filter, join_gates=join_gates,
-        id=id, manifold=manifold, distinct=distinct, key=key,
-        arg=arg, bindings=bindings)
+    # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
+    # the `Vector{Expr}` field and callers overwrite it with `Vector{Expr}`s, so the
+    # `isa` fast path is the norm; the widening branch preserves the historical
+    # acceptance of any `AbstractVector` of `Expr` (matching the keyword ctor's
+    # `OpExpr(op, args::AbstractVector)` widening overload).
+    argv = args isa Vector{Expr} ? args : Vector{Expr}(args)
+    return _reconstruct_opexpr(op, argv, wrt, dim, int_var, lower, upper,
+        output_idx, expr_body, reduce, semiring, ranges, regions, values, shape,
+        perm, axis, fn, name, value, table, table_axes, output, join, filter,
+        join_gates, id, manifold, distinct, key, arg, bindings)
 end
 
 # ========================================

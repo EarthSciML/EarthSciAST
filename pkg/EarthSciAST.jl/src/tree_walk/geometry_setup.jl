@@ -390,6 +390,54 @@ function _geo_agg_gate(expr, ie, ctx::_GeoCtx, setof)
     return true
 end
 
+# One resolved join-key equality: the two participating column arrays and the
+# loop-var names that index them. Everything here is INVARIANT across the output ×
+# candidate product `_materialize_geom_array` sweeps — only `ie[lvA]`/`ie[lvB]`
+# vary per cell — so it is resolved ONCE (`_resolve_geo_join_gates`) instead of
+# re-deriving `String(pair[…])`, `_geo_loopvar_for`, and two `env` Dict lookups on
+# every candidate pair (the dominant cost of the conservative-regrid broad phase).
+struct _GeoJoinGate
+    arrA::Any
+    lvA::String
+    arrB::Any
+    lvB::String
+end
+
+# Pre-resolve `expr.join` for `_geo_agg_gate_resolved`, faithfully replaying
+# `_geo_agg_gate`'s join arm: a pair whose loop vars don't resolve, or whose
+# columns aren't both in `env`, is SKIPPED here exactly as the original `continue`
+# skips it — so an omitted pair never gates, byte-for-byte as before. Returns
+# `nothing` when the node has no join (lets the fast gate skip the whole arm).
+function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
+    expr.join === nothing && return nothing
+    gates = _GeoJoinGate[]
+    for clause in expr.join, pair in clause
+        colA, colB = String(pair[1]), String(pair[2])
+        lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes)
+        lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes)
+        (lvA === nothing || lvB === nothing) && continue
+        (haskey(ctx.env, colA) && haskey(ctx.env, colB)) || continue
+        push!(gates, _GeoJoinGate(ctx.env[colA], lvA, ctx.env[colB], lvB))
+    end
+    return gates
+end
+
+# Fast twin of `_geo_agg_gate` for the hot map/contraction loops: consumes the
+# pre-resolved join gates (identical semantics to the join arm above) and still
+# evaluates the `filter` predicate per cell (it can reference per-cell values, so
+# it is not hoistable). `rgates === nothing` ⇒ no join arm.
+@inline function _geo_agg_gate_resolved(rgates, expr, ie, ctx::_GeoCtx, setof)
+    if rgates !== nothing
+        @inbounds for g in rgates
+            g.arrA[ie[g.lvA]] == g.arrB[ie[g.lvB]] || return false
+        end
+    end
+    if expr.filter !== nothing
+        _geo_eval(expr.filter, ctx, ie, setof) != 0.0 || return false
+    end
+    return true
+end
+
 # Setup-time evaluator for the geometry chain. Walks an expression to a Float64
 # (or, for `index` of a multi-dim array with FEWER indices, a slice array)
 # against the invariant `ctx` (see `_GeoCtx`) and the varying `idx_env` (loop
@@ -642,6 +690,8 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
         r isa IndexSetRef && (setof[v] = r.from)
     end
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
+    # Resolve the join gate ONCE for the whole sweep (see `_resolve_geo_join_gates`).
+    rgates = _resolve_geo_join_gates(arrayop, ctx, setof)
     arr  = zeros(Float64, exts...)
     # One reused env dict for the whole materialization (see `_geo_eval`'s
     # aggregate branch): overwrite the loop-var slots each cell instead of
@@ -655,7 +705,7 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
             # A no-contraction map still honors an output-cell join/filter gate: a
             # rejected cell keeps the zero-initialized 0̄ (a cross-bin W_ij, a
             # sub-atol sliver). Degenerate (no join/filter) ⇒ gate is always true.
-            _geo_agg_gate(arrayop, ie, ctx, setof) || continue
+            _geo_agg_gate_resolved(rgates, arrayop, ie, ctx, setof) || continue
             arr[tup...] = _geo_eval(arrayop.expr_body, ctx, ie, setof)
         end
     else
@@ -667,7 +717,7 @@ function _materialize_geom_array(arrayop, env, index_sets, derived_extents,
             acc = init
             for ct in Iterators.product((1:e for e in cexts)...)
                 for (lv, cv) in zip(contract, ct); ie[lv] = cv; end
-                _geo_agg_gate(arrayop, ie, ctx, setof) || continue
+                _geo_agg_gate_resolved(rgates, arrayop, ie, ctx, setof) || continue
                 acc = fold(acc, _geo_eval(arrayop.expr_body, ctx, ie, setof))
             end
             arr[tup...] = acc

@@ -41,8 +41,17 @@ function _sub_arg_vec(args::Vector{Expr}, bindings::Dict{String,Expr})
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
-        r = _sub_preserving(args[i], bindings)
-        if r !== args[i]
+        a = args[i]
+        # Manual union-split over the four concrete `Expr` subtypes. `args` has the
+        # abstract element type `Expr`, so a bare `_sub_preserving(a, …)` dispatches
+        # dynamically (`ijl_apply_generic`) — the single largest flat cost in the
+        # build profile. Narrowing with `isa` lets the `OpExpr`/`VarExpr` calls
+        # resolve statically and short-circuits the `NumExpr`/`IntExpr` leaves
+        # (which `_sub_preserving` returns verbatim) with no call at all.
+        r = a isa OpExpr  ? _sub_preserving(a, bindings) :
+            a isa VarExpr ? get(bindings, a.name, a) :
+            a                                            # NumExpr / IntExpr: verbatim
+        if r !== a
             if !changed
                 new_args = copy(args)
                 changed = true

@@ -204,20 +204,28 @@ function _resolve_index_of_arrayop(arrayop_expr::OpExpr, idx_args::Vector{Expr},
     end
 
     terms = Expr[]
+    # Reused across the product: `_sub_preserving`/`_join_admits` only READ these
+    # dicts (never retain them), and the key SET is identical every iteration — only
+    # the values change — so overwriting in place avoids a fresh `Dict` allocation
+    # (and its string hashing) per contracted tuple. `binding` additionally holds the
+    # (fixed) output indices, seeded once here.
+    k_exprs = Dict{String,Expr}()
+    binding = gates === nothing ? nothing : Dict{String,Int}()
+    if binding !== nothing
+        for d in 1:length(output_idx_strs)
+            binding[output_idx_strs[d]] = k_vals[d]
+        end
+    end
     for k_tuple in Iterators.product(contract_iters...)
-        if gates !== nothing
-            binding = Dict{String,Int}()
-            for d in 1:length(output_idx_strs)
-                binding[output_idx_strs[d]] = k_vals[d]
-            end
+        if binding !== nothing
             for d in 1:length(contract_names)
                 binding[contract_names[d]] = k_tuple[d]
             end
             _join_admits(gates, binding) || continue
         end
-        k_exprs = Dict{String,Expr}(
-            contract_names[d] => IntExpr(Int64(k_tuple[d]))
-            for d in 1:length(contract_names))
+        for d in 1:length(contract_names)
+            k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
+        end
         term = _sub_preserving(sub_body, k_exprs)
         if filt0 !== nothing
             filt = _sub_preserving(_sub_preserving(filt0, idx_exprs), k_exprs)
@@ -400,8 +408,16 @@ function _resolve_arg_vec(args::Vector{Expr},
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
-        r = _resolve_indices(args[i], array_var_info, var_map, const_arrays, pgather, memo)
-        if r !== args[i]
+        a = args[i]
+        # Manual union-split (see `_sub_arg_vec`): the abstract `Expr` element type
+        # makes a bare `_resolve_indices(a, …)` a dynamic dispatch. `NumExpr`/
+        # `IntExpr` resolve to themselves, so short-circuit them; `VarExpr` may
+        # const-fold (scalar loader field) so it keeps its call; `OpExpr` recurses —
+        # both now dispatch statically.
+        r = a isa OpExpr  ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo) :
+            a isa VarExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo) :
+            a                                            # NumExpr / IntExpr: verbatim
+        if r !== a
             if !changed
                 new_args = copy(args)
                 changed = true
