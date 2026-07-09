@@ -72,8 +72,19 @@ func Load(path string, opts ...LoadOption) (*EsmFile, error) {
 		return nil, err
 	}
 
+	// Capture the ROOT document's closed metaparameter environment (declared
+	// integer defaults overlaid with the loader-API bindings) from the raw JSON
+	// BEFORE LoadString's template-machinery pass has consumed the
+	// `metaparameters` block — the resolved esmFile no longer carries it. This
+	// is the scope against which a §4.7 subsystem mount edge's binding
+	// EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6 binding site 3).
+	var rootMetaEnv map[string]int64
+	if rootView, verr := decodeJSONView(data); verr == nil {
+		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], applyLoadOptions(opts).metaparameters)
+	}
+
 	// Resolve subsystem references relative to the file's directory
-	if err := ResolveSubsystemRefs(esmFile, basePath); err != nil {
+	if err := resolveSubsystemRefsWithMeta(esmFile, basePath, rootMetaEnv); err != nil {
 		return nil, fmt.Errorf("failed to resolve subsystem references: %w", err)
 	}
 

@@ -24,6 +24,20 @@ import (
 // The function modifies file in-place, replacing reference objects with the
 // resolved model or reaction system content.
 func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
+	return resolveSubsystemRefsWithMeta(file, basePath, nil)
+}
+
+// resolveSubsystemRefsWithMeta is ResolveSubsystemRefs threaded with the
+// MOUNTING document's already-closed metaparameter environment (esm-spec §9.7.6
+// binding site 3). A §4.7 subsystem ref is resolved as a complete document and
+// folded to concrete integers at the mount, so each edge binding VALUE (a
+// metaparameter expression, e.g. `NTGT = NX*NY`) folds IMMEDIATELY against this
+// environment — unlike an import edge, whose values are carried symbolically.
+// Load computes the root document's environment (declared defaults overlaid
+// with the loader-API bindings) and passes it here BEFORE the root's
+// metaparameters are consumed by the template-machinery resolver. Direct
+// callers (which have no mounting metaparameters) pass nil.
+func resolveSubsystemRefsWithMeta(file *EsmFile, basePath string, parentMeta map[string]int64) error {
 	visited := make(map[string]bool)
 	// The importing document's index_sets registry (esm-spec §4.7): a mounted
 	// subsystem file's top-level index_sets merge into it, so a mounted mesh's
@@ -32,16 +46,17 @@ func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
 	if file.IndexSets == nil {
 		file.IndexSets = map[string]IndexSet{}
 	}
-	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets)
+	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, parentMeta)
 }
 
 // resolveSubsystemRefsInternal is the recursive implementation that tracks
 // visited paths for circular reference detection and threads the importing
-// document's index_sets registry (esm-spec §4.7 index-set merge).
-func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool, registry map[string]IndexSet) error {
+// document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
+// metaparameter environment (esm-spec §9.7.6 binding site 3).
+func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
 	// Resolve subsystems in models
 	for modelName, model := range file.Models {
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry); err != nil {
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 		file.Models[modelName] = model
@@ -49,7 +64,7 @@ func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[st
 
 	// Resolve subsystems in reaction systems
 	for rsName, rs := range file.ReactionSystems {
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry); err != nil {
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 		file.ReactionSystems[rsName] = rs
@@ -113,7 +128,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]inter
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool, registry map[string]IndexSet) error {
+func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -138,11 +153,25 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 			}
 		}
 
-		// The edge's metaparameter bindings (esm-spec §9.7.6 binding site 3).
+		// The edge's metaparameter bindings (esm-spec §9.7.6 binding site 3). A
+		// binding VALUE is a metaparameter expression — an integer literal, a
+		// name in the MOUNTING document's metaparameter scope, or a `{op:
+		// +|-|*|/, args}` tree over the same (e.g. `NTGT = NX*NY`). A subsystem
+		// ref resolves as a complete document folded to concrete integers at the
+		// mount, so — unlike an import edge — its values cannot be carried
+		// symbolically; each folds IMMEDIATELY against the mounting document's
+		// already-closed environment (parentMeta). requireMetaExpr validates the
+		// structure at the edge (bad op / empty args / float → metaparameter_type_error
+		// even with a symbolic arg); evalMetaExpr folds it (a free name absent
+		// from parentMeta → template_import_unknown_name).
 		bindings := map[string]int64{}
 		for _, bk := range sortedKeys(bindingsRaw) {
-			bv, err := metaparamInt(bindingsRaw[bk],
-				fmt.Sprintf("subsystems.%s: binding '%s'", key, bk))
+			ctx := fmt.Sprintf("subsystems.%s: binding '%s'", key, bk)
+			expr, err := requireMetaExpr(bindingsRaw[bk], ctx)
+			if err != nil {
+				return err
+			}
+			bv, err := evalMetaExpr(expr, parentMeta, ctx)
 			if err != nil {
 				return err
 			}
@@ -224,6 +253,15 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		// rewrite-targets lower under the assembler-chosen discretization.
 		applySubsystemRefInjection(view, injected)
 
+		// Capture the referenced (mounted) document's own closed metaparameter
+		// environment BEFORE resolveTemplateMachinery consumes its
+		// `metaparameters` block: its declared integer defaults overlaid with
+		// this edge's folded `bindings`. This is the environment a NESTED
+		// subsystem edge inside the mounted document folds its own binding
+		// expressions against (the mounted document closes before its own refs
+		// resolve, esm-spec §9.7.6 "Ordering within load").
+		childMeta := metaEnvFromDecls(view["metaparameters"], bindings)
+
 		// Resolve the referenced document's §9.7 machinery with this edge's
 		// bindings, then run the §9.6.3 rewrite fixpoint so the inlined
 		// component carries only normal Expression ASTs (Option A).
@@ -257,7 +295,7 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 					continue
 				}
 				if subs, ok := compObj["subsystems"].(map[string]interface{}); ok {
-					if err := resolveSubsystemMap(subs, refBasePath, visited, registry); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta); err != nil {
 						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, sourceDesc, err)
 					}
 				}
@@ -298,6 +336,37 @@ func fetchRemoteRef(url string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read remote ref %q: %w", url, err)
 	}
 	return body, nil
+}
+
+// metaEnvFromDecls builds a closed metaparameter environment (name → int) from
+// a raw `metaparameters` declaration block: each declared metaparameter with an
+// integer `default` contributes that default, then the overlay (a mount edge's
+// already-folded `bindings`) wins. This mirrors the root environment Load
+// computes for the top document (declared defaults overlaid with loader-API
+// bindings, esm-spec §9.7.6 sites 4-5) and is the environment a nested §4.7
+// subsystem edge folds its own binding expressions against. Non-integer or
+// absent defaults are simply omitted (an open name is not in scope until bound).
+func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string]int64 {
+	env := map[string]int64{}
+	if decls, ok := declsRaw.(map[string]interface{}); ok {
+		for name, dRaw := range decls {
+			decl, ok := dRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			d, has := decl["default"]
+			if !has || d == nil {
+				continue
+			}
+			if iv, err := metaparamInt(d, "metaparameter default"); err == nil {
+				env[name] = iv
+			}
+		}
+	}
+	for k, v := range overlay {
+		env[k] = v
+	}
+	return env
 }
 
 // extractRef checks if a value is a reference object (a map with a "ref" key)

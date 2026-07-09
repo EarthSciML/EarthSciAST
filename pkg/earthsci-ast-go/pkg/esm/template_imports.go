@@ -280,12 +280,16 @@ var metaSubstSkipKeys = map[string]struct{}{
 	"where": {},
 }
 
-// substituteMetaparams substitutes closed metaparameter names — appearing as
-// bare strings, the variable-reference surface syntax — with their integer
-// values, everywhere except the metaSubstSkipKeys structural fields (esm-spec
+// substituteMetaparams substitutes bound metaparameter names — appearing as
+// bare strings, the variable-reference surface syntax — with their bound
+// VALUES, everywhere except the metaSubstSkipKeys structural fields (esm-spec
 // §9.7.6: expression-position substitution; no folding here). Returns a new
-// tree; the input is not modified.
-func substituteMetaparams(x interface{}, values map[string]int64) interface{} {
+// tree; the input is not modified. A bound value is usually an integer literal
+// (the document-close and folded-edge cases) but may be a metaparameter
+// EXPRESSION (a `{op, args}` tree over the importer's still-open metaparameters,
+// e.g. `NX*NY`) at an import edge — carried symbolically until the importer
+// closes (esm-spec §9.7.6 binding value flow).
+func substituteMetaparams(x interface{}, values map[string]interface{}) interface{} {
 	switch v := x.(type) {
 	case string:
 		if i, ok := values[v]; ok {
@@ -316,7 +320,7 @@ func substituteMetaparams(x interface{}, values map[string]int64) interface{} {
 // `expression_templates` entry: the template's own `params` shadow like-named
 // metaparameters inside its `body` and `match` (a param is the inner binder;
 // substitution must not capture it).
-func substituteMetaparamsDecl(decl interface{}, values map[string]int64) interface{} {
+func substituteMetaparamsDecl(decl interface{}, values map[string]interface{}) interface{} {
 	declObj, ok := decl.(map[string]interface{})
 	if !ok {
 		return substituteMetaparams(decl, values)
@@ -334,7 +338,7 @@ func substituteMetaparamsDecl(decl interface{}, values map[string]int64) interfa
 			}
 		}
 		if shadow {
-			shadowed = make(map[string]int64, len(values))
+			shadowed = make(map[string]interface{}, len(values))
 			for k, v := range values {
 				if _, isParam := pset[k]; !isParam {
 					shadowed[k] = v
@@ -503,6 +507,141 @@ func isIntToken(v interface{}) bool {
 		return true
 	}
 	return false
+}
+
+// validateMetaExpr is the structural grammar check for a metaparameter
+// expression (esm-spec §9.7.6), independent of whether its names are yet
+// concrete: an integer literal, a name string, or `{op: +|-|*|/, args:
+// [...non-empty...]}` recursively. Unlike tryFold (which defers op-validation
+// until every arg is concrete), this catches an inadmissible op (`%`), a
+// missing/empty `args`, or a float literal at the binding EDGE even when an
+// arg is still a symbolic importer name. Mirrors the Python reference
+// `_validate_meta_expr`.
+func validateMetaExpr(x interface{}, ctx string) error {
+	switch v := x.(type) {
+	case string:
+		// A bare name (variable-reference surface syntax) — always structurally
+		// admissible; whether it is in scope is decided at fold time.
+		return nil
+	case map[string]interface{}:
+		op, _ := v["op"].(string)
+		argsRaw, hasArgs := v["args"]
+		args, argsOk := argsRaw.([]interface{})
+		if (op != "+" && op != "-" && op != "*" && op != "/") || !hasArgs || !argsOk || len(args) == 0 {
+			return newETErr("metaparameter_type_error",
+				fmt.Sprintf("%s: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})", ctx))
+		}
+		for _, a := range args {
+			if err := validateMetaExpr(a, ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// A numeric leaf must be an integer literal. metaparamInt is the shared
+	// integer gate — it accepts json.Number integer grammar, native ints, and
+	// an integral float64 (the Go non-UseNumber compromise: 4 and 4.0 are
+	// indistinguishable), and rejects a fractional literal like 1.5, a bool,
+	// or a stray array — so the admissible-literal set here matches every other
+	// metaparameter site exactly.
+	if _, err := metaparamInt(x, ctx); err != nil {
+		return newETErr("metaparameter_type_error",
+			fmt.Sprintf("%s: invalid metaparameter expression (expected integer, name, or {op, args})", ctx))
+	}
+	return nil
+}
+
+// requireMetaExpr validates that v is a *metaparameter expression* (esm-spec
+// §9.7.6) — an integer literal, a metaparameter-name string, or a `{op:
+// +|-|*|/, args}` tree over the same — and returns it UNCHANGED (unfolded);
+// its free names close at a later binding site. Raises `metaparameter_type_error`
+// on an inadmissible node. This is the relaxed replacement for the integer-only
+// gate (metaparamInt) at the metaparameter *binding* sites (import edge /
+// subsystem edge): a binding may now derive a child metaparameter from an
+// arithmetic combination of the importer's metaparameters (e.g. `NTGT = NX*NY`),
+// which import renaming (name→name) could not express. Mirrors the Python
+// reference `require_meta_expr`.
+func requireMetaExpr(v interface{}, ctx string) (interface{}, error) {
+	if err := validateMetaExpr(v, ctx); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// coerceMetaExprInts normalizes the numeric leaves of a metaparameter
+// expression to int64 so tryFold (which folds only int64 / integer-grammar
+// json.Number leaves) accepts values that arrived from a non-UseNumber JSON
+// decode as integral float64 — the same 4-vs-4.0 compromise metaparamInt makes
+// at every other metaparameter site. Non-integral / non-integer literals are
+// left untouched so tryFold raises the metaparameter_type_error. Strings
+// (names) and structure are preserved.
+func coerceMetaExprInts(x interface{}) interface{} {
+	switch v := x.(type) {
+	case json.Number:
+		if !strings.ContainsAny(string(v), ".eE") {
+			if i, err := v.Int64(); err == nil {
+				return i
+			}
+		}
+		return v
+	case float64:
+		if v == math.Trunc(v) && v >= math.MinInt64 && v <= math.MaxInt64 {
+			return int64(v)
+		}
+		return v
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, c := range v {
+			out[i] = coerceMetaExprInts(c)
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for k, c := range v {
+			out[k] = coerceMetaExprInts(c)
+		}
+		return out
+	}
+	return x
+}
+
+// evalMetaExpr folds a metaparameter expression to a concrete int64 against a
+// CLOSED environment env (name → int) — the importing document's metaparameter
+// scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
+// folds with the exact-integer tryFold arithmetic (`/` must divide exactly;
+// 64-bit overflow is an error). Raises `template_import_unknown_name` if the
+// expression references a name absent from env — the mount-edge typo failure,
+// keeping error locality at the edge that authored the expression. Mirrors the
+// Python reference `eval_meta_expr`.
+func evalMetaExpr(expr interface{}, env map[string]int64, ctx string) (int64, error) {
+	envAny := make(map[string]interface{}, len(env))
+	for k, v := range env {
+		envAny[k] = v
+	}
+	val, folded, err := tryFold(coerceMetaExprInts(substituteMetaparams(expr, envAny)), ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !folded {
+		var names []string
+		collectMetaNames(&names, expr)
+		seen := map[string]bool{}
+		var free []string
+		for _, n := range names {
+			if _, ok := env[n]; !ok && !seen[n] {
+				seen[n] = true
+				free = append(free, n)
+			}
+		}
+		sort.Strings(free)
+		which := strings.Join(free, ", ")
+		if which == "" {
+			which = "a name"
+		}
+		return 0, newETErr("template_import_unknown_name",
+			fmt.Sprintf("%s: metaparameter expression references %s not in the importing document's metaparameter scope (esm-spec §9.7.6)", ctx, which))
+	}
+	return val, nil
 }
 
 // foldStructuralSites folds metaparameter expressions in the structural
@@ -1431,10 +1570,13 @@ func mergeScope(dst, src *templateScope, origin string) error {
 }
 
 // instantiateScope performs per-edge metaparameter instantiation (esm-spec
-// §9.7.6 binding site 1): substitute the bound names as integer literals
-// throughout the exported templates and index sets, then fold the structural
-// sites that are now closed.
-func instantiateScope(scope *templateScope, values map[string]int64, ctx string) error {
+// §9.7.6 binding site 1): substitute the bound names throughout the exported
+// templates and index sets, then fold the structural sites that are now closed.
+// A bound VALUE is a metaparameter expression (usually an integer literal, but
+// possibly a symbolic `NX*NY` over the importer's still-open metaparameters);
+// foldStructuralSites / foldIndexSetSizes leave any site still carrying a free
+// name symbolic for the importer's own metaparameter close.
+func instantiateScope(scope *templateScope, values map[string]interface{}, ctx string) error {
 	newT := newOrderedMap()
 	for _, n := range scope.templates.keys {
 		nd := substituteMetaparamsDecl(scope.templates.get(n), values)
@@ -1584,20 +1726,28 @@ func resolveImportEntry(entry interface{}, baseDir string, stack *[]string, orig
 		return nil, err
 	}
 
-	// Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
-	values := map[string]int64{}
+	// Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
+	// VALUE may be a metaparameter expression over the importer's metaparameters
+	// (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
+	// (innermost-first), so the value is carried SYMBOLICALLY into the child and
+	// folds when the importing document closes (§9.7.6 binding value flow).
+	values := map[string]interface{}{}
 	if bindingsRaw, ok := entryObj["bindings"].(map[string]interface{}); ok {
 		for _, name := range sortedKeys(bindingsRaw) {
 			if !scope.metaparams.has(name) {
 				return nil, newETErr("template_import_unknown_name",
 					fmt.Sprintf("%s: import of '%s' binds metaparameter '%s', which the target neither declares nor re-exports (esm-spec §9.7.6)", origin, ref, name))
 			}
-			v, err := metaparamInt(bindingsRaw[name],
+			v, err := requireMetaExpr(bindingsRaw[name],
 				fmt.Sprintf("%s: import of '%s', binding '%s'", origin, ref, name))
 			if err != nil {
 				return nil, err
 			}
-			values[name] = v
+			// Carry the value symbolically into the child (its free names are the
+			// importer's still-open metaparameters, folded at the importer's
+			// close). Normalize numeric leaves to int64 so the child's structural
+			// folds accept them; names stay symbolic.
+			values[name] = coerceMetaExprInts(v)
 		}
 	}
 	if len(values) > 0 {
@@ -1949,6 +2099,14 @@ func resolveTemplateMachinery(view map[string]interface{}, orders map[string][]s
 
 	// --- expression-position substitution of the closed values ---
 	if len(values) > 0 {
+		// The document close binds every metaparameter to a concrete integer;
+		// substituteMetaparams takes a metaparameter-expression map (the same
+		// shape an import edge carries symbolically), so lift the int64 close
+		// environment into it.
+		substVals := make(map[string]interface{}, len(values))
+		for k, v := range values {
+			substVals[k] = v
+		}
 		for _, kind := range templateComponentKinds {
 			comps, ok := view[kind].(map[string]interface{})
 			if !ok {
@@ -1963,21 +2121,21 @@ func resolveTemplateMachinery(view map[string]interface{}, orders map[string][]s
 					if k == "expression_templates" {
 						if tpl, ok := comp[k].(map[string]interface{}); ok {
 							for tn, td := range tpl {
-								tpl[tn] = substituteMetaparamsDecl(td, values)
+								tpl[tn] = substituteMetaparamsDecl(td, substVals)
 							}
 							continue
 						}
 					}
-					comp[k] = substituteMetaparams(comp[k], values)
+					comp[k] = substituteMetaparams(comp[k], substVals)
 				}
 				comps[cname] = comp
 			}
 		}
 		for _, tn := range topTemplates.keys {
-			topTemplates.m[tn] = substituteMetaparamsDecl(topTemplates.get(tn), values)
+			topTemplates.m[tn] = substituteMetaparamsDecl(topTemplates.get(tn), substVals)
 		}
 		for _, n := range docIsets.keys {
-			docIsets.m[n] = substituteMetaparams(docIsets.get(n), values)
+			docIsets.m[n] = substituteMetaparams(docIsets.get(n), substVals)
 		}
 	}
 
