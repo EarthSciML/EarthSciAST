@@ -322,6 +322,10 @@ pub(super) fn materialize_observeds_into(
         t,
         derived_rings,
         forcing,
+        // Build/setup materialization: use the vectorized overlay (bit-identical
+        // to the oracle, and this runs once, off the per-step hot path).
+        false,
+        &mut RhsStats::default(),
     );
 }
 
@@ -342,6 +346,15 @@ pub(super) fn materialize_observeds_append(
     t: f64,
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+    // When true, evaluate array observeds via the per-cell oracle (the
+    // correctness reference), skipping the vectorized whole-array fast path.
+    // Production passes `false`; the equivalence test passes `true` to obtain
+    // the reference values — mirroring the `force_scalar` contract the RHS-rule
+    // driver already honours (see [`RhsStats`]).
+    force_scalar: bool,
+    // Records how each array observed was materialized (vectorized vs per-cell),
+    // mirroring the `vectorized_rules`/`scalar_rules` split for state rules.
+    stats: &mut RhsStats,
 ) {
     for rule in observed_rules {
         match rule {
@@ -370,6 +383,71 @@ pub(super) fn materialize_observeds_append(
             } => {
                 let padded_shape: Vec<usize> =
                     output_ranges.iter().map(|(_, hi)| *hi as usize).collect();
+
+                // ---- Vectorized (whole-array) fast path --------------------
+                // A pure-map observed (output_idx over `ranges`, no contraction
+                // or filter) is structurally a `RhsRule::ArrayLoop` with no
+                // contracted index — a whole-array map. Evaluate it through the
+                // same verified vectorized overlay (`try_eval_arrayop_vectorized`
+                // → `eval_vec`) the state-derivative rules use, instead of
+                // walking the body once per grid cell. This is the dominant cost
+                // for models with time/space-varying observeds (a coupled
+                // behaviour stack re-materialized every RHS step); the level-set
+                // stencil already vectorized, but observeds never had this path.
+                //
+                // Guarded to 1-origin ranges so the produced `[lo, shape]` box
+                // equals the padded `[1, hi]` array the per-cell path below
+                // materializes (an observed array is 1-based over its full shape,
+                // so this holds in practice; a non-unit origin falls through to
+                // the oracle). Bit-identical to the per-cell result by the same
+                // overlay-equivalence argument that covers the RHS rules
+                // (downstream reads are logical `index`/`lookup`, so the pooled
+                // row-major storage is immaterial).
+                if !force_scalar
+                    && !output_ranges.is_empty()
+                    && output_ranges.iter().all(|(lo, _)| *lo == 1)
+                    && !padded_shape.contains(&0)
+                {
+                    let materialized = {
+                        let ctx = EvalCtx {
+                            state_arrays,
+                            observed_arrays: &*dst,
+                            params,
+                            param_names,
+                            loop_binds: IdxMap::default(),
+                            t,
+                            derived_rings,
+                            forcing,
+                        };
+                        let mut pool = Pool::default();
+                        try_eval_arrayop_vectorized(
+                            output_idx_names,
+                            output_ranges,
+                            body,
+                            &[],
+                            &[],
+                            ReduceKind::Sum,
+                            &ctx,
+                            &mut pool,
+                        )
+                        .map(|(val, _ops)| {
+                            let arr = val
+                                .view()
+                                .expect("vectorized observed value has a view")
+                                .to_owned();
+                            val.release(&mut pool);
+                            arr
+                        })
+                    };
+                    if let Some(arr) = materialized {
+                        dst.insert(var.clone(), arr);
+                        stats.obs_vectorized_rules += 1;
+                        continue;
+                    }
+                }
+
+                // ---- Per-cell oracle (fallback) ----------------------------
+                stats.obs_scalar_rules += 1;
                 let padded_origin: Vec<i64> = vec![1i64; padded_shape.len()];
                 let total = padded_shape.iter().copied().product::<usize>().max(1);
                 let mut buf = vec![0.0f64; total];
@@ -479,6 +557,10 @@ pub(super) fn evaluate_rhs_with_scratch(
             t,
             &derived_rings,
             forcing,
+            // Honour the oracle contract: `force_scalar` runs observeds per-cell
+            // too, so the reference trajectory is fully un-vectorized.
+            force_scalar,
+            stats,
         );
     }
 

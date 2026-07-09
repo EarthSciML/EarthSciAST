@@ -396,6 +396,85 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
         .replace("__NLAT__", &nlat.to_string())
 }
 
+/// A model with a *varying* array observed (state-dependent, so re-materialized
+/// every RHS step) whose body uses only vectorizer-covered ops — arithmetic plus
+/// `atan2` (newly routed through the whole-array `vec_combine` kernel). The state
+/// derivative reads the observed, so the observed materialization is on the hot
+/// path. Mirrors the coupled behaviour-stack shape (a spatially-varying algebraic
+/// field feeding the spatial derivative) in miniature.
+fn varying_array_observed_json(n: usize) -> String {
+    const TEMPLATE: &str = r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "obs_vec"},
+ "models": {
+  "ObsVec": {
+   "variables": {
+     "u": {"type": "state", "shape": ["i"]},
+     "w": {"type": "state", "shape": ["i"]}
+   },
+   "equations": [
+    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "index", "args": ["w", "i"]},
+             "ranges": {"i": [1, __N__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+             "expr": {"op": "+", "args": [
+               {"op": "*", "args": [
+                 {"op": "index", "args": ["u", "i"]},
+                 {"op": "index", "args": ["u", "i"]}]},
+               {"op": "atan2", "args": [{"op": "index", "args": ["u", "i"]}, 2]}
+             ]}}},
+    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, __N__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+             "expr": {"op": "index", "args": ["w", "i"]}}}
+   ]
+  }
+ }
+}"#;
+    TEMPLATE.replace("__N__", &n.to_string())
+}
+
+#[test]
+fn varying_array_observed_vectorizes_and_matches_oracle() {
+    // The structural fix (ess: observed vectorization): an array-shaped observed
+    // materializes via the whole-array overlay, not the per-cell oracle, and the
+    // result is bit-identical to the oracle. This is the dominant per-step cost
+    // for coupled models with a time/space-varying behaviour stack.
+    let n = 12usize;
+    let compiled = compile_json(&varying_array_observed_json(n));
+    let state = sample_state(n);
+
+    let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, sstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+
+    // The observed took the vectorized whole-array path (not the per-cell oracle).
+    assert_eq!(
+        vstats.obs_vectorized_rules, 1,
+        "varying array observed did not vectorize: {vstats:?}"
+    );
+    assert_eq!(
+        vstats.obs_scalar_rules, 0,
+        "varying array observed fell back to the oracle: {vstats:?}"
+    );
+    // force_scalar drives the observed through the per-cell oracle reference.
+    assert_eq!(
+        sstats.obs_scalar_rules, 1,
+        "force_scalar did not run the observed per-cell: {sstats:?}"
+    );
+    assert_eq!(sstats.obs_vectorized_rules, 0, "force_scalar still vectorized: {sstats:?}");
+
+    // The two materialization strategies are numerically identical (the vectorized
+    // path is a verified-equivalent overlay, reusing the same apply_binary kernel).
+    assert_eq!(dy_vec.len(), dy_scalar.len());
+    for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "observed vectorized vs oracle mismatch at slot {k}: {a} vs {b}"
+        );
+    }
+}
+
 #[test]
 fn einsum_kernel_op_count_is_independent_of_grid_size() {
     // The contracted-`k` stencil walks its body once per contraction value

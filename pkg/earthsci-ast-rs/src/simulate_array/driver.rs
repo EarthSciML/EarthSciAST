@@ -430,6 +430,9 @@ impl ArrayCompiled {
                     t0,
                     &dr,
                     &self.forcing,
+                    // Build-time t0 snapshot: vectorized overlay (bit-identical).
+                    false,
+                    &mut RhsStats::default(),
                 );
                 for rule in &varying_rules {
                     let name = observed_rule_var(rule);
@@ -796,6 +799,9 @@ impl ArrayCompiled {
                 time[k],
                 &dr,
                 &self.forcing,
+                // Per-segment observed snapshot (inspection): vectorized overlay.
+                false,
+                &mut RhsStats::default(),
             );
             obs
         };

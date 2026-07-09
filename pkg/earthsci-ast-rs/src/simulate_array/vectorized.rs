@@ -448,7 +448,15 @@ pub(super) fn eval_vec_op<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     match node.op.as_str() {
-        "+" | "-" | "*" | "/" | "^" | "min" | "max" => {
+        // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
+        // connectives `and`/`or` (n-ary). All fold left-to-right through
+        // `vec_combine` → `apply_binary` — the SAME kernel and order the per-cell
+        // oracle uses (`eval_arith`/`eval_binary` → `combine` → `apply_binary`),
+        // so the whole-array result is bit-identical. Routing these here (rather
+        // than bailing to the oracle) is what lets a behaviour-stack observed
+        // whose body mixes arithmetic with a wind/slope `atan2` or an
+        // `and(code>=1, code<=13)` fuel gate stay on the vectorized path.
+        "+" | "-" | "*" | "/" | "^" | "min" | "max" | "atan2" | "and" | "or" => {
             if node.op == "-" && node.args.len() == 1 {
                 return Some(vec_negate(
                     eval_vec(&node.args[0], bx, ctx, pool, ops)?,

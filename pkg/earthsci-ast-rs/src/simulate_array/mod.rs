@@ -294,6 +294,16 @@ pub struct RhsStats {
     /// wrap, …). The vectorized path is a verified-equivalent overlay; the
     /// per-cell path remains the correctness reference.
     pub scalar_rules: usize,
+    /// Number of array-shaped *observed* (algebraic) rules materialized via the
+    /// vectorized whole-array overlay rather than the per-cell oracle. For a
+    /// coupled model with a time/space-varying behaviour stack this is the
+    /// dominant per-step cost, so keeping it vectorized (not `obs_scalar_rules`)
+    /// is what makes the observed materialization N-independent.
+    pub obs_vectorized_rules: usize,
+    /// Number of array-shaped observed rules that fell back to the per-cell
+    /// oracle (a body op the vectorizer does not yet cover, a non-unit origin,
+    /// or a forced-scalar reference run).
+    pub obs_scalar_rules: usize,
 }
 
 /// Eliminated algebraic-variable definition. Evaluated once per RHS call
