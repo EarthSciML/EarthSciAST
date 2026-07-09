@@ -188,6 +188,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     contract_names: &[String],
     contract_dims: &[ContractDim],
     reduce: ReduceKind,
+    filter: Option<&Expr>,
     ctx: &EvalCtx<'a>,
     pool: &mut Pool,
 ) -> Option<(VecValue<'a>, usize)> {
@@ -208,7 +209,38 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
             cnames: &[],
             cvals: &[],
         };
-        eval_vec(body, &bx, ctx, pool, &mut ops)?
+        let body_v = eval_vec(body, &bx, ctx, pool, &mut ops)?;
+        // Pure-map §5.3 filter: an excluded output cell contributes the reduction
+        // identity 0̄ (`out = filter ? body : identity`), matching the oracle's
+        // per-cell `filter_excludes` on a non-contracting aggregate.
+        match filter {
+            None => body_v,
+            Some(f) => match eval_vec(f, &bx, ctx, pool, &mut ops) {
+                None => {
+                    body_v.release(pool);
+                    return None;
+                }
+                Some(VecValue::Scalar(c)) => {
+                    if c != 0.0 {
+                        body_v
+                    } else {
+                        body_v.release(pool);
+                        let mut ident = pool.take_array(&shape);
+                        let idv = reduce.identity();
+                        if idv != 0.0 {
+                            ident.fill(idv);
+                        }
+                        VecValue::Owned {
+                            data: ident,
+                            origin: lo.clone(),
+                        }
+                    }
+                }
+                Some(mask) => {
+                    vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?
+                }
+            },
+        }
     } else {
         eval_vec_contracted(
             output_idx_names,
@@ -218,6 +250,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
             contract_names,
             contract_dims,
             reduce,
+            filter,
             ctx,
             pool,
             &mut ops,
@@ -281,6 +314,7 @@ pub(super) fn eval_vec_contracted<'a>(
     contract_names: &[String],
     contract_dims: &[ContractDim],
     reduce: ReduceKind,
+    filter: Option<&Expr>,
     ctx: &EvalCtx<'a>,
     pool: &mut Pool,
     ops: &mut usize,
@@ -340,6 +374,43 @@ pub(super) fn eval_vec_contracted<'a>(
                 acc.release(pool);
                 return None;
             }
+        };
+        // §5.3 filter: a combination for which the predicate is false contributes
+        // the additive identity 0̄ (acc ⊕ 0̄ = acc). Gate the term with the filter
+        // mask — `vec_select(mask, term, identity)` — reusing the identical
+        // predicate the oracle's `filter_excludes` applies per cell. A SCALAR-false
+        // mask replaces the whole term with the identity; a SCALAR-true keeps it.
+        let term = match filter {
+            None => term,
+            Some(f) => match eval_vec(f, &bx, ctx, pool, ops) {
+                None => {
+                    term.release(pool);
+                    acc.release(pool);
+                    return None;
+                }
+                Some(VecValue::Scalar(c)) => {
+                    if c != 0.0 {
+                        term
+                    } else {
+                        term.release(pool);
+                        let mut ident = pool.take_array(shape);
+                        if identity != 0.0 {
+                            ident.fill(identity);
+                        }
+                        VecValue::Owned {
+                            data: ident,
+                            origin: lo.iter().copied().collect(),
+                        }
+                    }
+                }
+                Some(mask) => match vec_select(mask, term, VecValue::Scalar(identity), pool) {
+                    Some(t) => t,
+                    None => {
+                        acc.release(pool);
+                        return None;
+                    }
+                },
+            },
         };
         // `vec_combine` releases both operands on a shape mismatch before
         // returning `None`, so `?` (bail to the oracle) leaks no pooled buffer.
@@ -490,19 +561,41 @@ pub(super) fn eval_vec_op<'a>(
             if node.args.len() != 2 {
                 return None;
             }
-            let a = eval_vec_scalar(&node.args[0], bx, ctx, pool, ops)?;
-            let b = eval_vec_scalar(&node.args[1], bx, ctx, pool, ops)?;
-            Some(VecValue::Scalar(scalar_compare(&node.op, a, b)))
+            // Route through `vec_combine` → `apply_binary`, whose comparison arm
+            // IS `scalar_compare` (eval.rs) — so a SCALAR result (the einsum weight
+            // idiom `ifelse(k==0,…)`) and a whole-array 0/1 MASK (a per-cell fuel
+            // gate `code >= 1`, a regrid `overlap > 0` filter) are both produced
+            // bit-identically to the oracle, from the same kernel.
+            let a = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
+            let b = eval_vec(&node.args[1], bx, ctx, pool, ops)?;
+            vec_combine(&node.op, a, b, pool)
         }
         "ifelse" => {
             if node.args.len() != 3 {
                 return None;
             }
-            let c = eval_vec_scalar(&node.args[0], bx, ctx, pool, ops)?;
-            if c != 0.0 {
-                eval_vec(&node.args[1], bx, ctx, pool, ops)
-            } else {
-                eval_vec(&node.args[2], bx, ctx, pool, ops)
+            let cond = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
+            match cond {
+                // Scalar condition: short-circuit to the taken branch, exactly like
+                // the oracle (the untaken branch — possibly a NaN-producing lookup —
+                // is never evaluated).
+                VecValue::Scalar(c) => {
+                    if c != 0.0 {
+                        eval_vec(&node.args[1], bx, ctx, pool, ops)
+                    } else {
+                        eval_vec(&node.args[2], bx, ctx, pool, ops)
+                    }
+                }
+                // Array condition (a per-cell mask): evaluate BOTH branches and
+                // select elementwise — the whole-array analogue of the oracle's
+                // `eval_ifelse` array path. A true select keeps a NaN in the
+                // UNCHOSEN branch (an out-of-table lookup) from contaminating the
+                // result, matching the oracle.
+                cond_arr => {
+                    let a = eval_vec(&node.args[1], bx, ctx, pool, ops)?;
+                    let b = eval_vec(&node.args[2], bx, ctx, pool, ops)?;
+                    vec_select(cond_arr, a, b, pool)
+                }
             }
         }
         // Unary transcendentals / rounding over the whole box — bit-identical to
@@ -540,24 +633,6 @@ pub(super) fn eval_vec_op<'a>(
     }
 }
 
-/// Evaluate `expr` over the box and require a scalar result (a per-cell-varying
-/// array bails the fast path). Used for `ifelse` conditions / branches and
-/// comparison operands, which the einsum weight idiom keeps scalar.
-pub(super) fn eval_vec_scalar(
-    expr: &Expr,
-    bx: &VecBox,
-    ctx: &EvalCtx,
-    pool: &mut Pool,
-    ops: &mut usize,
-) -> Option<f64> {
-    match eval_vec(expr, bx, ctx, pool, ops)? {
-        VecValue::Scalar(s) => Some(s),
-        other => {
-            other.release(pool);
-            None
-        }
-    }
-}
 
 /// Scalar comparison, bit-identical to the oracle's `eval_op` arm: `==`/`!=`
 /// test exact equality via `(a-b).abs()`, the orderings use the native `f64`
@@ -689,6 +764,58 @@ pub(super) fn vec_combine<'a>(
             }
         }
     }
+}
+
+/// Whole-array `ifelse(cond, a, b)` for an ARRAY condition: `out[k] = cond[k] !=
+/// 0 ? a[k] : b[k]`, reusing the SAME `c != 0.0` test as the oracle's
+/// `eval_ifelse` array path (bit-identical). `a`/`b` are scalars (broadcast) or
+/// arrays over `cond`'s box; a box mismatch releases every operand and bails to
+/// the oracle. Also the term-gate for a §5.3 `filter` (`vec_select(mask, term,
+/// identity)`), so an excluded combination contributes the reduction identity.
+pub(super) fn vec_select<'a>(
+    cond: VecValue<'a>,
+    a: VecValue<'a>,
+    b: VecValue<'a>,
+    pool: &mut Pool,
+) -> Option<VecValue<'a>> {
+    let (cond_data, origin) = cond.into_owned(pool);
+    let shp: DimU = cond_data.shape().iter().copied().collect();
+    let box_ok = |v: &VecValue| match v.shape() {
+        None => true,
+        Some(s) => s == &shp[..] && v.origin() == Some(&origin[..]),
+    };
+    if !box_ok(&a) || !box_ok(&b) {
+        pool.give_array(cond_data);
+        a.release(pool);
+        b.release(pool);
+        return None;
+    }
+    // Materialize scalar branches into box-filled buffers so the select is a
+    // single 4-array `Zip` (this runs off the per-step hot path — the once-per-
+    // segment regrid / per-cell fuel gate — so the extra fill is not on the
+    // steady-state RHS).
+    let fill = |v: VecValue<'a>, pool: &mut Pool| -> ArrayD<f64> {
+        match v {
+            VecValue::Scalar(s) => {
+                let mut buf = pool.take_array(&shp);
+                buf.fill(s);
+                buf
+            }
+            other => other.into_owned(pool).0,
+        }
+    };
+    let a_arr = fill(a, pool);
+    let b_arr = fill(b, pool);
+    let mut out = pool.take_array(&shp);
+    ndarray::Zip::from(&mut out)
+        .and(&cond_data)
+        .and(&a_arr)
+        .and(&b_arr)
+        .for_each(|o, &c, &av, &bv| *o = if c != 0.0 { av } else { bv });
+    pool.give_array(cond_data);
+    pool.give_array(a_arr);
+    pool.give_array(b_arr);
+    Some(VecValue::Owned { data: out, origin })
 }
 
 /// Vectorized `index(A, e_0, …, e_{n-1})`: a shifted / rolled array slice. Each

@@ -1057,49 +1057,39 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
-    // ---- Vectorized fast path for a pure MAP aggregate ---------------------
-    // A standalone aggregate with NO contracted index and no `filter` (the
-    // `out == ranges` case — e.g. a level-set Godunov `|∇φ|` / upwind-gradient
-    // stencil built as a `makearray` region body) is a whole-array map, not a
-    // reduction. Evaluate it with the same `eval_vec` kernels the compiled-RHS
-    // stencil vectorizer uses — shifted-slice `index`, broadcast arithmetic,
-    // whole-array transcendentals — instead of walking the body once per cell.
-    // The kernels reuse the identical `apply_binary`/`apply_unary` functions and
-    // ghost-0 out-of-bounds convention, so the result is bit-identical to the
-    // per-cell oracle below; any op `eval_vec` does not handle returns `None`
-    // and we fall through. A local `Pool` recycles the intermediates (far fewer
-    // buffers than the per-cell path allocates temporaries).
-    if contract_names.is_empty() && filter.is_none() && !shape.is_empty() {
-        let lo: DimI = origin.iter().copied().collect();
-        let shp: DimU = shape.iter().copied().collect();
-        if !shp.contains(&0) {
-            let mut pool = Pool::default();
-            let mut ops = 0usize;
-            let bx = VecBox {
-                syms: idx_names,
-                lo: &lo[..],
-                shape: &shp[..],
-                cnames: &[],
-                cvals: &[],
-            };
-            if let Some(vv) = eval_vec(body, &bx, &*ctx, &mut pool, &mut ops) {
-                // The result must cover the output box exactly (a bare scalar is
-                // broadcast); a shape/origin mismatch means the fast path does
-                // not apply and we release and fall through.
-                let covers = match vv.shape() {
-                    None => true,
-                    Some(s) => s == &shp[..] && vv.origin().map(|o| o == &lo[..]).unwrap_or(false),
-                };
-                if covers {
-                    let out = match &vv {
-                        VecValue::Scalar(s) => ArrayD::from_elem(IxDyn(&shape), *s),
-                        _ => vv.view().expect("array value has a view").to_owned(),
-                    };
-                    vv.release(&mut pool);
-                    return Value::Array(out);
-                }
-                vv.release(&mut pool);
-            }
+    // ---- Vectorized fast path (whole-array) --------------------------------
+    // Evaluate the aggregate with the same verified `eval_vec` overlay the
+    // compiled-RHS stencil path uses, instead of walking the body once per cell:
+    //   * a pure MAP (out == ranges — e.g. a level-set Godunov `|∇φ|` stencil, a
+    //     pointwise behaviour-stack field),
+    //   * a static einsum CONTRACTION (`eval_vec_contracted` folds the window as
+    //     shifted whole-array slices — e.g. a conservative-regrid `sum_product`
+    //     over the source cells),
+    //   * a §5.3 `filter` (a per-cell fuel gate, a `overlap > 0` regrid sparsity),
+    //     carried by masking each term with the reduction identity.
+    // The kernels reuse the identical `apply_binary`/`apply_unary`/`scalar_compare`
+    // functions and ghost-0 convention, so the result is bit-identical to the
+    // per-cell oracle below; any op / ragged-bound the overlay does not handle
+    // returns `None` and we fall through. A local `Pool` recycles intermediates.
+    if !shape.is_empty() {
+        let mut pool = Pool::default();
+        if let Some((vv, _ops)) = try_eval_arrayop_vectorized(
+            idx_names,
+            &ranges,
+            body,
+            &contract_names,
+            &contract_dims,
+            reduce,
+            filter,
+            &*ctx,
+            &mut pool,
+        ) {
+            // `try_eval_arrayop_vectorized` already verified the value covers the
+            // output box exactly (bailing to `None` otherwise) and lifted a bare
+            // scalar into an owned box buffer, so a plain view→owned suffices.
+            let out = vv.view().expect("vectorized arrayop has a view").to_owned();
+            vv.release(&mut pool);
+            return Value::Array(out);
         }
     }
 

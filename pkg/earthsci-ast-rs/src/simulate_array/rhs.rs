@@ -427,6 +427,7 @@ pub(super) fn materialize_observeds_append(
                             &[],
                             &[],
                             ReduceKind::Sum,
+                            None,
                             &ctx,
                             &mut pool,
                         )
@@ -629,10 +630,12 @@ pub(super) fn evaluate_rhs_with_scratch(
                 //   * broadcast arithmetic for coefficients,
                 // then the dy sub-block is scattered in place. No per-element
                 // scalar loop walks the body, and (ess-mro) no heap allocation
-                // occurs: intermediates come from `pool`. A `filter`
-                // (data-dependent FAQ gating) is left to the per-cell oracle.
+                // occurs: intermediates come from `pool`. A static `filter` is
+                // carried by masking each term with the reduction identity
+                // (`try_eval_arrayop_vectorized`); a ragged/derived-bound filter
+                // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
-                if !force_scalar && filter.is_none() {
+                if !force_scalar {
                     if let Some(dest_lo) = lhs_shifts
                         .as_ref()
                         .and_then(|shifts| subblock_dest(vs, output_ranges, shifts))
@@ -654,6 +657,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                             contract_names,
                             contract_dims,
                             *reduce,
+                            filter,
                             &ctx,
                             pool,
                         ) {

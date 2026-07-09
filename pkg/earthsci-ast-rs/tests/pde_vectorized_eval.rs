@@ -475,6 +475,107 @@ fn varying_array_observed_vectorizes_and_matches_oracle() {
     }
 }
 
+/// A filtered einsum stencil `D(u[i]) = sum_{k∈[-1,1], k≠0} u[i+k]` — the
+/// contraction carries a §5.3 `filter` (`k != 0`) that excludes the self term,
+/// yielding `u[i-1] + u[i+1]`. Exercises the filter-masking added to the
+/// vectorized contraction fold (`eval_vec_contracted`).
+fn filtered_einsum_json(n: usize) -> String {
+    const TEMPLATE: &str = r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "filtered_einsum"},
+ "models": {"M": {
+   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "equations": [
+    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, __N__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "reduce": "+",
+             "ranges": {"i": [1, __N__], "k": [-1, 1]},
+             "filter": {"op": "!=", "args": ["k", 0]},
+             "expr": {"op": "index", "args": ["u", {"op": "+", "args": ["i", "k"]}]}}}
+   ]
+ }}
+}"#;
+    TEMPLATE.replace("__N__", &n.to_string())
+}
+
+#[test]
+fn filtered_contraction_vectorizes_and_matches_oracle() {
+    let n = 10usize;
+    let compiled = compile_json(&filtered_einsum_json(n));
+    let state = sample_state(n);
+    let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, sstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    assert_eq!(
+        vstats.vectorized_rules, 1,
+        "filtered contraction did not vectorize: {vstats:?}"
+    );
+    assert_eq!(vstats.scalar_rules, 0, "filtered contraction fell back: {vstats:?}");
+    assert_eq!(sstats.scalar_rules, 1, "force_scalar did not use oracle: {sstats:?}");
+    for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "filtered-contraction vectorized vs oracle mismatch at {k}: {a} vs {b}"
+        );
+    }
+    // Sanity: interior cell i (2..n-1) is u[i-1]+u[i+1] (self term k=0 filtered).
+    for i in 2..n {
+        let expect = state[i - 2] + state[i];
+        assert!(
+            (dy_vec[i - 1] - expect).abs() <= 1e-12,
+            "cell {i}: got {} want {expect}",
+            dy_vec[i - 1]
+        );
+    }
+}
+
+/// A pure-map stencil with an ARRAY-valued `ifelse` condition
+/// `D(u[i]) = ifelse(u[i] > 0.5, 2*u[i], 3*u[i])` — the per-cell mask + branch
+/// select exercises the whole-array comparison + `vec_select` path.
+fn array_ifelse_json(n: usize) -> String {
+    const TEMPLATE: &str = r#"{
+ "esm": "0.1.0",
+ "metadata": {"name": "array_ifelse"},
+ "models": {"M": {
+   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "equations": [
+    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
+             "ranges": {"i": [1, __N__]}},
+     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, __N__]},
+             "expr": {"op": "ifelse", "args": [
+               {"op": ">", "args": [{"op": "index", "args": ["u", "i"]}, 0.5]},
+               {"op": "*", "args": [2, {"op": "index", "args": ["u", "i"]}]},
+               {"op": "*", "args": [3, {"op": "index", "args": ["u", "i"]}]}
+             ]}}}
+   ]
+ }}
+}"#;
+    TEMPLATE.replace("__N__", &n.to_string())
+}
+
+#[test]
+fn array_valued_ifelse_vectorizes_and_matches_oracle() {
+    let n = 10usize;
+    let compiled = compile_json(&array_ifelse_json(n));
+    let state = sample_state(n);
+    let (dy_vec, vstats) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_scalar, _s) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    assert_eq!(
+        vstats.vectorized_rules, 1,
+        "array-valued ifelse did not vectorize: {vstats:?}"
+    );
+    assert_eq!(vstats.scalar_rules, 0, "array ifelse fell back: {vstats:?}");
+    for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "array-ifelse vectorized vs oracle mismatch at {k}: {a} vs {b}"
+        );
+        let expect = if state[k] > 0.5 { 2.0 * state[k] } else { 3.0 * state[k] };
+        assert!((a - expect).abs() <= 1e-12, "cell {k}: got {a} want {expect}");
+    }
+}
+
 #[test]
 fn einsum_kernel_op_count_is_independent_of_grid_size() {
     // The contracted-`k` stencil walks its body once per contraction value
