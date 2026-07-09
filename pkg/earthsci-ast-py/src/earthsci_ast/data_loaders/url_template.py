@@ -17,21 +17,25 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set, Union
+from collections.abc import Iterable
+from typing import Any
+
+from ..errors import EarthSciAstError
+from .time_resolution import _normalize_iso_z
 
 _TOKEN_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?::([^{}]*))?\}")
 
 
-class UrlTemplateError(ValueError):
+class UrlTemplateError(EarthSciAstError, ValueError):
     """Raised when a URL template cannot be expanded."""
 
 
-def template_placeholders(template: str) -> Set[str]:
+def template_placeholders(template: str) -> set[str]:
     """Return the set of placeholder names present in ``template``."""
     return {m.group(1) for m in _TOKEN_RE.finditer(template)}
 
 
-def _format_date(value: Union[_dt.datetime, _dt.date, str], fmt: Optional[str]) -> str:
+def _format_date(value: _dt.datetime | _dt.date | str, fmt: str | None) -> str:
     if isinstance(value, str):
         parsed = _parse_iso_datetime(value)
         if parsed is None:
@@ -50,11 +54,9 @@ def _format_date(value: Union[_dt.datetime, _dt.date, str], fmt: Optional[str]) 
     return dt.strftime(fmt)
 
 
-def _parse_iso_datetime(value: str) -> Optional[_dt.datetime]:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
+def _parse_iso_datetime(value: str) -> _dt.datetime | None:
     try:
-        return _dt.datetime.fromisoformat(value)
+        return _dt.datetime.fromisoformat(_normalize_iso_z(value))
     except ValueError:
         return None
 
@@ -62,8 +64,8 @@ def _parse_iso_datetime(value: str) -> Optional[_dt.datetime]:
 def expand_url_template(
     template: str,
     *,
-    date: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-    variables: Optional[Dict[str, Any]] = None,
+    date: _dt.datetime | _dt.date | str | None = None,
+    variables: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> str:
     """Expand ``template``, substituting ``{date:%fmt}`` and named placeholders.
@@ -72,12 +74,12 @@ def expand_url_template(
     wins on conflict. Raises :class:`UrlTemplateError` if a placeholder has no
     value.
     """
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     if variables:
         merged.update(variables)
     merged.update(kwargs)
 
-    def _sub(match: "re.Match[str]") -> str:
+    def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
         fmt = match.group(2)
         if name == "date":
@@ -98,18 +100,18 @@ def expand_url_template(
 
 def expand_with_mirrors(
     url_template: str,
-    mirrors: Optional[Iterable[str]],
+    mirrors: Iterable[str] | None,
     *,
-    date: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-    variables: Optional[Dict[str, Any]] = None,
+    date: _dt.datetime | _dt.date | str | None = None,
+    variables: dict[str, Any] | None = None,
     **kwargs: Any,
-) -> List[str]:
+) -> list[str]:
     """Expand ``url_template`` followed by each mirror into a fallback list.
 
     Mirrors that fail expansion (e.g. missing placeholder) are skipped so that
     a misconfigured mirror cannot break the primary URL.
     """
-    out: List[str] = [expand_url_template(url_template, date=date, variables=variables, **kwargs)]
+    out: list[str] = [expand_url_template(url_template, date=date, variables=variables, **kwargs)]
     for mirror in mirrors or ():
         try:
             out.append(expand_url_template(mirror, date=date, variables=variables, **kwargs))

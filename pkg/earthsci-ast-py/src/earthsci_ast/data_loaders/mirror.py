@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Optional, TypeVar
+from collections.abc import Iterable
+from typing import Callable, TypeVar
+
+from ..errors import EarthSciAstError
 
 T = TypeVar("T")
 
 
-class MirrorFallbackError(RuntimeError):
+class MirrorFallbackError(EarthSciAstError, RuntimeError):
     """Raised when every URL in a primary+mirrors list fails to open."""
 
-    def __init__(self, urls: List[str], errors: List[BaseException]) -> None:
+    def __init__(self, urls: list[str], errors: list[BaseException]) -> None:
         self.urls = urls
         self.errors = errors
         joined = "; ".join(f"{u}: {type(e).__name__}: {e}" for u, e in zip(urls, errors))
@@ -21,7 +24,7 @@ def open_with_fallback(
     urls: Iterable[str],
     opener: Callable[[str], T],
     *,
-    expected_errors: Optional[tuple] = None,
+    expected_errors: tuple | None = None,
 ) -> T:
     """Try each URL in order, returning the first successful ``opener(url)``.
 
@@ -32,8 +35,8 @@ def open_with_fallback(
     """
     if expected_errors is None:
         expected_errors = (OSError, RuntimeError)
-    tried: List[str] = []
-    errors: List[BaseException] = []
+    tried: list[str] = []
+    errors: list[BaseException] = []
     for url in urls:
         tried.append(url)
         try:

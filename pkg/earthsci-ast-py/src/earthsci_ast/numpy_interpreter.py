@@ -28,39 +28,51 @@ Design notes
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable
 
 import numpy as np
 
 from .cadence import Partition
 from .cadence import partition as _partition_model
+from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
 )
 
+Shape = tuple[int, ...]
 
-Shape = Tuple[int, ...]
+
+# --- Named interpreter limits (were scattered magic numbers) ---
+#: Max distinct index symbols an einsum contraction fast path can name: einsum
+#: subscript labels are single lowercase ASCII letters (``chr(ord("a") + i)``),
+#: so beyond this the fast path declines (→ ``None``) to the generic reduce.
+_EINSUM_MAX_LABELS = 26
+#: BLAKE2b digest width (bytes) for the skolem key hash: 6 bytes = 48 bits, the
+#: widest integer exactly representable in float64 and stable across processes
+#: (mirrors the Julia setup-geometry evaluator's ``hash(Tuple(vals))`` skolem).
+_SKOLEM_DIGEST_BYTES = 6
 
 
 @dataclass
 class EvalContext:
     """Runtime data passed to each recursive evaluation step."""
 
-    state_layout: Dict[str, slice]
-    state_shapes: Dict[str, Shape]
-    param_values: Dict[str, float]
-    observed_values: Dict[str, float]
+    state_layout: dict[str, slice]
+    state_shapes: dict[str, Shape]
+    param_values: dict[str, float]
+    observed_values: dict[str, float]
     y: np.ndarray
     t: float
-    locals: Dict[str, int] = field(default_factory=dict)
+    locals: dict[str, int] = field(default_factory=dict)
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
     # keyed by name. Used to resolve arrayop / aggregate range references of the
     # form {"from": <name>}. Empty ⇒ no named sets are declared.
-    index_sets: Dict[str, Any] = field(default_factory=dict)
+    index_sets: dict[str, Any] = field(default_factory=dict)
     # Runtime materialization of data-derived index sets (RFC §5.5 / §8.1),
     # keyed by the producing node's `id`. An `intersect_polygon` leaf registers
     # its clipped overlap ring here under its `id`; a `kind:"derived"` index set
@@ -69,7 +81,7 @@ class EvalContext:
     # `polygon_area` FAQ body can `index(<id>, v, c)` into it. Each value is the
     # CLOSED ring ndarray (first vertex repeated) of shape [n+1, 2]; the derived
     # set's extent is the n distinct vertices. Empty ⇒ none materialized yet.
-    derived_rings: Dict[str, np.ndarray] = field(default_factory=dict)
+    derived_rings: dict[str, np.ndarray] = field(default_factory=dict)
     # Build-time value-invention derived-index-set extents (RFC §6.1 / §5.5),
     # keyed by the producing aggregate's `id` (the `from_faq` target). Populated
     # ONCE at setup by `value_invention.materialize_value_invention` — the
@@ -77,7 +89,7 @@ class EvalContext:
     # distinct-set cardinality here, generalizing the geometry clip-ring handoff
     # (`derived_rings`) to the relational engine. A `kind:"derived"` set whose
     # `from_faq` is here resolves to the dense extent `[1, n]`. Empty ⇒ none.
-    derived_extents: Dict[str, int] = field(default_factory=dict)
+    derived_extents: dict[str, int] = field(default_factory=dict)
     # Externally-injected read-only input arrays (RFC pure-io-data-loaders §4.3),
     # keyed by the flattened observed-array symbol (e.g. ``ERA5.pl.u``). The
     # simulator executes each data loader at its cadence and binds the resulting
@@ -86,7 +98,7 @@ class EvalContext:
     # (computed per step from observed equations): these are inputs, refreshed
     # only at cadence boundaries, so the RHS is pure within a segment. Empty ⇒ no
     # data-loader fields are bound. See `simulation._simulate_with_loaders`.
-    input_arrays: Dict[str, np.ndarray] = field(default_factory=dict)
+    input_arrays: dict[str, np.ndarray] = field(default_factory=dict)
     # Build-time value-invention MAP buffers (RFC §5.3): a per-cell key buffer
     # (e.g. the broad-phase bins ``rg_src_bin`` / ``rg_tgt_bin``) that an
     # aggregate ``join.on [[rg_src_bin, rg_tgt_bin]]`` gates on. Each value is a
@@ -95,8 +107,8 @@ class EvalContext:
     # column to the range symbol whose ``{"from": <set>}`` matches. Materialized
     # ONCE at setup (:func:`simulation._materialize_join_key_buffers`) — the
     # skolem/floor bins run off the per-step hot path. Empty ⇒ no buffer joins.
-    join_key_buffers: Dict[str, np.ndarray] = field(default_factory=dict)
-    join_key_index_sets: Dict[str, str] = field(default_factory=dict)
+    join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
+    join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (esm-spec §5.4 / RFC semiring-faq-unified-ir §5.2):
     # a RAGGED index set's `offsets` / `values` keyed factors bind by BARE name
     # in the model scope (the grids' wiring contract), but flattening prefixes
@@ -108,7 +120,7 @@ class EvalContext:
     # dot-suffix match at the shallowest namespace depth; ambiguity keeps the
     # bare name so the existing unresolved-symbol error surfaces). Empty ⇒ bare
     # names resolve as-is (the pre-namespacing behaviour, byte-identical).
-    factor_scope: Dict[str, str] = field(default_factory=dict)
+    factor_scope: dict[str, str] = field(default_factory=dict)
     # Build-scoped reusable-operator cache for constant-geometry contractions
     # (perf idea #3), keyed by the aggregate node's ``id``. A ``sum_product``
     # join-gated reduce shaped like the conservative-regrid APPLY
@@ -120,7 +132,7 @@ class EvalContext:
     # coding the join every segment. ``None`` ⇒ operator caching is off (the
     # single-shot builds); the dense :func:`_eval_arrayop_reduce_vectorized` path
     # (#1) and the scalar loop remain the always-correct fallbacks.
-    op_cache: Optional[Dict[int, Any]] = None
+    op_cache: dict[int, Any] | None = None
     # Names whose materialized value is loader-INVARIANT (constant across cadence
     # segments) — the geometry ``derived_rings`` / ``observed_values`` the build
     # hoisted into the const partition (simulation_array `_build_numpy_rhs`). A
@@ -128,13 +140,13 @@ class EvalContext:
     # captures is one of these, so a reused ``W_op`` can never freeze a
     # loader-dependent quantity. Empty ⇒ nothing is known-invariant, so the
     # operator path declines and #1's dense reduce handles the node.
-    invariant_names: "frozenset[str]" = field(default_factory=frozenset)
+    invariant_names: frozenset[str] = field(default_factory=frozenset)
 
 
 def ragged_factor_scope(
-    index_sets: Optional[Dict[str, Any]],
-    var_names: "Sequence[str]",
-) -> Dict[str, str]:
+    index_sets: dict[str, Any] | None,
+    var_names: Sequence[str],
+) -> dict[str, str]:
     """Map each ragged set's bare keyed-factor name to its in-scope variable.
 
     Mirrors the Julia tree-walk ``_factor_scope`` (tree_walk.jl) exactly: for
@@ -148,7 +160,7 @@ def ragged_factor_scope(
     name bare so the existing unresolved-symbol error surfaces rather than an
     arbitrary pick. Empty for documents without ragged index sets.
     """
-    scope: Dict[str, str] = {}
+    scope: dict[str, str] = {}
     names = list(var_names)
     for entry in (index_sets or {}).values():
         if not (isinstance(entry, dict) and entry.get("kind") == "ragged"):
@@ -169,7 +181,7 @@ def ragged_factor_scope(
     return scope
 
 
-class NumpyInterpreterError(Exception):
+class NumpyInterpreterError(EarthSciAstError):
     """Raised when an expression cannot be evaluated by the NumPy interpreter."""
 
 
@@ -218,7 +230,7 @@ def _view_state_array(name: str, ctx: EvalContext) -> np.ndarray:
     return data.reshape(shape, order="C")
 
 
-def _resolve_symbol(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
+def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
     """Resolve a bare name reference."""
     if name in ctx.locals:
         v = ctx.locals[name]
@@ -256,11 +268,11 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
         return float(ctx.observed_values[name])
     try:
         return float(name)
-    except Exception:
-        raise NumpyInterpreterError(f"Unresolved symbol: {name!r}")
+    except (TypeError, ValueError) as exc:
+        raise NumpyInterpreterError(f"Unresolved symbol: {name!r}") from exc
 
 
-_SCALAR_FUNCS: Dict[str, Callable] = {
+_SCALAR_FUNCS: dict[str, Callable] = {
     "exp": np.exp,
     "log": np.log,
     "log10": np.log10,
@@ -287,7 +299,7 @@ _SCALAR_FUNCS: Dict[str, Callable] = {
 #: Comparison ops → numpy ufunc. Hoisted to module scope (was rebuilt per
 #: comparison inside eval_expr) so both the tree walker and the compiled
 #: closure share one table.
-_CMP_UFUNCS: Dict[str, Callable] = {
+_CMP_UFUNCS: dict[str, Callable] = {
     ">": np.greater,
     "<": np.less,
     ">=": np.greater_equal,
@@ -319,7 +331,7 @@ def _broadcast_fn(fn: str) -> Callable:
 # ``reduce`` field of a node names only ⊕; ⊗ and the identities come from this
 # table, never from the file. Adding a semiring is a spec change, not a per-file
 # extension, so this registry is closed and exhaustive.
-_SEMIRINGS: Dict[str, Dict[str, Any]] = {
+_SEMIRINGS: dict[str, dict[str, Any]] = {
     "sum_product": {"oplus": "+", "zero": 0.0, "otimes": "*", "one": 1.0},
     "max_product": {"oplus": "max", "zero": -np.inf, "otimes": "*", "one": 1.0},
     "min_sum": {"oplus": "min", "zero": np.inf, "otimes": "+", "one": 0.0},
@@ -328,7 +340,7 @@ _SEMIRINGS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _resolve_semiring(expr: ExprNode) -> Tuple[str, float, str]:
+def _resolve_semiring(expr: ExprNode) -> tuple[str, float, str]:
     """Return ``(reduce_op ⊕, empty_zero 0̄, otimes ⊗)`` for an aggregate node.
 
     When ``semiring`` is present it supersedes ``reduce``: the ⊕/⊗ operators and
@@ -362,9 +374,9 @@ class _RaggedRange:
     """
 
     name: str
-    of: List[str]
+    of: list[str]
     offsets: str
-    values: Optional[str]
+    values: str | None
 
 
 def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
@@ -437,7 +449,7 @@ def _resolve_range_spec(spec: Any, ctx: EvalContext) -> Any:
     raise NumpyInterpreterError(f"index set {name!r} has unknown kind {kind!r}")
 
 
-def _resolve_keyed_factor(name: str, ctx: EvalContext) -> Union[float, np.ndarray]:
+def _resolve_keyed_factor(name: str, ctx: EvalContext) -> float | np.ndarray:
     """Resolve a ragged set's keyed factor (``offsets`` / ``values``, §5.4).
 
     Keyed factors bind by BARE name in the model scope; ``ctx.factor_scope``
@@ -449,7 +461,7 @@ def _resolve_keyed_factor(name: str, ctx: EvalContext) -> Union[float, np.ndarra
     return _resolve_symbol(ctx.factor_scope.get(name, name), ctx)
 
 
-def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: Dict[str, int]) -> List[int]:
+def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: dict[str, int]) -> list[int]:
     """Expand a ragged inner set to ``[1 .. offsets[parent]]`` for one parent tuple.
 
     ``binding`` supplies the (1-based) parent index values named in ``rr.of``.
@@ -464,14 +476,14 @@ def _expand_ragged(rr: _RaggedRange, ctx: EvalContext, binding: Dict[str, int]) 
             raise NumpyInterpreterError(
                 f"ragged index set {rr.name!r} parent index {exc.args[0]!r} is "
                 f"not bound; declare it in 'of' and an enclosing range"
-            )
+            ) from exc
         n = int(round(float(off[parent_idx])))
     else:
         n = int(round(float(off)))
     return list(range(1, n + 1))
 
 
-def _eval_fn_lifted(name: str, args: List[Any], const_positions: Sequence[int]):
+def _eval_fn_lifted(name: str, args: list[Any], const_positions: Sequence[int]):
     """Evaluate a closed function, LIFTING it element-wise over grid-valued args.
 
     The registered closed functions (``interp.linear``, …) are scalar (0-D). When
@@ -503,7 +515,88 @@ def _eval_fn_lifted(name: str, args: List[Any], const_positions: Sequence[int]):
     return out.reshape(shape)
 
 
-def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
+# --- Shared per-op scalar/array semantics (single source of truth) ---
+# The tree walker (:func:`eval_expr`) and the compiled builder
+# (:func:`_build_compiled_node`) BOTH dispatch the same arithmetic / min / max /
+# ifelse / comparison / logical ops. To keep the two evaluators from silently
+# drifting, the actual value combination for each op lives HERE, exactly once,
+# and both paths call it after evaluating the operands (mirroring how
+# :func:`_gather_index` centralises the ``index`` gather). These operate on
+# ALREADY-EVALUATED operand values, so they are agnostic to how the operands
+# were produced (recursive eval vs pre-compiled closure) and therefore cannot
+# change the numerics, dtype, broadcasting or NaN/inf behaviour of either path.
+# Any op change here updates both evaluators at once.
+
+
+def _apply_add(vals: list[Any]) -> Any:
+    acc = vals[0]
+    for v in vals[1:]:
+        acc = acc + v
+    return acc
+
+
+def _apply_sub(vals: list[Any]) -> Any:
+    if len(vals) == 1:
+        return -vals[0]
+    acc = vals[0]
+    for v in vals[1:]:
+        acc = acc - v
+    return acc
+
+
+def _apply_mul(vals: list[Any]) -> Any:
+    acc = vals[0]
+    for v in vals[1:]:
+        acc = acc * v
+    return acc
+
+
+def _apply_div(a: Any, b: Any) -> Any:
+    return a / b
+
+
+def _apply_pow(a: Any, b: Any) -> Any:
+    return a**b
+
+
+def _apply_atan2(a: Any, b: Any) -> Any:
+    return np.arctan2(a, b)
+
+
+def _apply_bool_reduce(vals: list[Any], uf: Callable) -> np.ndarray:
+    """``and``/``or`` reduce (``uf`` is ``np.logical_and``/``np.logical_or``),
+    coercing the boolean result to float exactly as both original branches did."""
+    r = vals[0]
+    for v in vals[1:]:
+        r = uf(r, v)
+    return r.astype(float)
+
+
+def _apply_not(v: Any) -> np.ndarray:
+    return np.logical_not(v).astype(float)
+
+
+def _apply_minmax(vals: list[Any], uf: Callable) -> Any:
+    """``min``/``max`` reduce (``uf`` is ``np.minimum``/``np.maximum``).
+
+    Pairwise reduce (not ``ufunc.reduce``): ``np.minimum.reduce`` stacks the
+    operand list into one array first, which fails on mixed array/scalar operands
+    (e.g. ``min(field[l], scalar)``); pairwise reduction broadcasts each step,
+    keeping array operands array-valued. A single operand is returned unchanged.
+    """
+    return functools.reduce(uf, vals) if len(vals) > 1 else vals[0]
+
+
+def _apply_ifelse(cond: Any, a: Any, b: Any) -> np.ndarray:
+    return np.where(cond, a, b)
+
+
+def _apply_cmp(a: Any, b: Any, uf: Callable) -> np.ndarray:
+    """Comparison via ``uf`` (a :data:`_CMP_UFUNCS` entry), coerced to float."""
+    return uf(a, b).astype(float)
+
+
+def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     """Recursively evaluate an ESM expression against ``ctx``.
 
     Returns a Python float for scalar results or a numpy ndarray for
@@ -565,63 +658,41 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
     if op == "+":
         if not expr.args:
             return 0.0
-        vals = [eval_expr(a, ctx) for a in expr.args]
-        acc = vals[0]
-        for v in vals[1:]:
-            acc = acc + v
-        return acc
+        return _apply_add([eval_expr(a, ctx) for a in expr.args])
     if op == "-":
-        vals = [eval_expr(a, ctx) for a in expr.args]
-        if len(vals) == 1:
-            return -vals[0]
-        acc = vals[0]
-        for v in vals[1:]:
-            acc = acc - v
-        return acc
+        return _apply_sub([eval_expr(a, ctx) for a in expr.args])
     if op == "*":
         if not expr.args:
             return 1.0
-        vals = [eval_expr(a, ctx) for a in expr.args]
-        acc = vals[0]
-        for v in vals[1:]:
-            acc = acc * v
-        return acc
+        return _apply_mul([eval_expr(a, ctx) for a in expr.args])
     if op == "/":
         if len(expr.args) != 2:
             raise NumpyInterpreterError("/ expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        return a / b
+        return _apply_div(a, b)
     if op in ("^", "**", "pow"):
         if len(expr.args) != 2:
             raise NumpyInterpreterError(f"{op} expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        return a**b
+        return _apply_pow(a, b)
     if op == "atan2":
         if len(expr.args) != 2:
             raise NumpyInterpreterError("atan2 expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        return np.arctan2(a, b)
+        return _apply_atan2(a, b)
     if op in ("and", "or"):
         if len(expr.args) < 2:
             raise NumpyInterpreterError(f"{op} expects at least 2 args")
         vals = [eval_expr(a, ctx) for a in expr.args]
-        if op == "and":
-            r = vals[0]
-            for v in vals[1:]:
-                r = np.logical_and(r, v)
-        else:
-            r = vals[0]
-            for v in vals[1:]:
-                r = np.logical_or(r, v)
-        return r.astype(float)
+        return _apply_bool_reduce(vals, np.logical_and if op == "and" else np.logical_or)
     if op == "not":
         if len(expr.args) != 1:
             raise NumpyInterpreterError("not expects 1 arg")
         v = eval_expr(expr.args[0], ctx)
-        return np.logical_not(v).astype(float)
+        return _apply_not(v)
     if op in _SCALAR_FUNCS:
         if len(expr.args) != 1:
             raise NumpyInterpreterError(f"{op} expects 1 arg")
@@ -629,27 +700,23 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> Union[float, np.ndarray]:
         return _SCALAR_FUNCS[op](v)
     if op == "min":
         vals = [eval_expr(a, ctx) for a in expr.args]
-        # Pairwise reduce (not ufunc.reduce): `np.minimum.reduce` stacks the
-        # operand list into one array first, which fails on mixed array/scalar
-        # operands (e.g. `min(field[l], scalar)`); pairwise reduction broadcasts
-        # each step, keeping array operands array-valued.
-        return functools.reduce(np.minimum, vals) if len(vals) > 1 else vals[0]
+        return _apply_minmax(vals, np.minimum)
     if op == "max":
         vals = [eval_expr(a, ctx) for a in expr.args]
-        return functools.reduce(np.maximum, vals) if len(vals) > 1 else vals[0]
+        return _apply_minmax(vals, np.maximum)
     if op == "ifelse":
         if len(expr.args) != 3:
             raise NumpyInterpreterError("ifelse expects 3 args")
         cond = eval_expr(expr.args[0], ctx)
         a = eval_expr(expr.args[1], ctx)
         b = eval_expr(expr.args[2], ctx)
-        return np.where(cond, a, b)
+        return _apply_ifelse(cond, a, b)
     if op in (">", "<", ">=", "<=", "==", "!="):
         if len(expr.args) != 2:
             raise NumpyInterpreterError(f"{op} expects 2 args")
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
-        return _CMP_UFUNCS[op](a, b).astype(float)
+        return _apply_cmp(a, b, _CMP_UFUNCS[op])
     if op == "D":
         # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role (consumed by
@@ -713,14 +780,14 @@ _COMPILED_OPS: frozenset = frozenset(
 )
 
 
-def _compile_delegate(node: Expr) -> Callable[["EvalContext"], Any]:
+def _compile_delegate(node: Expr) -> Callable[[EvalContext], Any]:
     """Closure that re-evaluates ``node`` through the tree walker unchanged — the
     compiler's escape hatch for every op it does not lower (so behaviour, errors
     and numerics are byte-identical to :func:`eval_expr`)."""
     return lambda ctx: eval_expr(node, ctx)
 
 
-def _compile_expr(expr: Expr) -> Callable[["EvalContext"], Any]:
+def _compile_expr(expr: Expr) -> Callable[[EvalContext], Any]:
     """Compile an expression AST into a ``ctx -> value`` closure that reproduces
     :func:`eval_expr` exactly but pre-dispatches each node's op and pre-compiles
     its children ONCE, so a hot per-step body — the level-set front stencils, a
@@ -755,10 +822,14 @@ def _compile_expr(expr: Expr) -> Callable[["EvalContext"], Any]:
     return fn
 
 
-def _build_compiled_node(expr: ExprNode) -> Callable[["EvalContext"], Any]:
+def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
     """Compile one ExprNode (see :func:`_compile_expr`). Mirrors the corresponding
     eval_expr branch exactly; delegates any op outside ``_COMPILED_OPS`` and any
-    wrong-arity node (so the tree walker raises the identical error)."""
+    wrong-arity node (so the tree walker raises the identical error).
+
+    The per-op value combination is NOT re-implemented here: each closure defers
+    to the same ``_apply_*`` helper (``index`` to :func:`_gather_index`) that
+    :func:`eval_expr` calls, so the two evaluators cannot drift on op semantics."""
     op = expr.op
     if op not in _COMPILED_OPS:
         return _compile_delegate(expr)
@@ -790,101 +861,62 @@ def _build_compiled_node(expr: ExprNode) -> Callable[["EvalContext"], Any]:
         uf = _CMP_UFUNCS[op]
         ac = _compile_expr(args[0])
         bc = _compile_expr(args[1])
-        return lambda ctx: uf(ac(ctx), bc(ctx)).astype(float)
+        return lambda ctx: _apply_cmp(ac(ctx), bc(ctx), uf)
 
     if op == "+":
         if not args:
             return lambda ctx: 0.0
         cs = [_compile_expr(a) for a in args]
-
-        def f_add(ctx):
-            vals = [c(ctx) for c in cs]
-            acc = vals[0]
-            for v in vals[1:]:
-                acc = acc + v
-            return acc
-
-        return f_add
+        return lambda ctx: _apply_add([c(ctx) for c in cs])
 
     if op == "-":
         cs = [_compile_expr(a) for a in args]
-
-        def f_sub(ctx):
-            vals = [c(ctx) for c in cs]
-            if len(vals) == 1:
-                return -vals[0]
-            acc = vals[0]
-            for v in vals[1:]:
-                acc = acc - v
-            return acc
-
-        return f_sub
+        return lambda ctx: _apply_sub([c(ctx) for c in cs])
 
     if op == "*":
         if not args:
             return lambda ctx: 1.0
         cs = [_compile_expr(a) for a in args]
-
-        def f_mul(ctx):
-            vals = [c(ctx) for c in cs]
-            acc = vals[0]
-            for v in vals[1:]:
-                acc = acc * v
-            return acc
-
-        return f_mul
+        return lambda ctx: _apply_mul([c(ctx) for c in cs])
 
     if op == "/":
         if len(args) != 2:
             return _compile_delegate(expr)
         ac = _compile_expr(args[0])
         bc = _compile_expr(args[1])
-        return lambda ctx: ac(ctx) / bc(ctx)
+        return lambda ctx: _apply_div(ac(ctx), bc(ctx))
 
     if op in ("^", "**", "pow"):
         if len(args) != 2:
             return _compile_delegate(expr)
         ac = _compile_expr(args[0])
         bc = _compile_expr(args[1])
-        return lambda ctx: ac(ctx) ** bc(ctx)
+        return lambda ctx: _apply_pow(ac(ctx), bc(ctx))
 
     if op == "atan2":
         if len(args) != 2:
             return _compile_delegate(expr)
         ac = _compile_expr(args[0])
         bc = _compile_expr(args[1])
-        return lambda ctx: np.arctan2(ac(ctx), bc(ctx))
+        return lambda ctx: _apply_atan2(ac(ctx), bc(ctx))
 
     if op in ("and", "or"):
         if len(args) < 2:
             return _compile_delegate(expr)
         uf = np.logical_and if op == "and" else np.logical_or
         cs = [_compile_expr(a) for a in args]
-
-        def f_bool(ctx):
-            vals = [c(ctx) for c in cs]
-            r = vals[0]
-            for v in vals[1:]:
-                r = uf(r, v)
-            return r.astype(float)
-
-        return f_bool
+        return lambda ctx: _apply_bool_reduce([c(ctx) for c in cs], uf)
 
     if op == "not":
         if len(args) != 1:
             return _compile_delegate(expr)
         c0 = _compile_expr(args[0])
-        return lambda ctx: np.logical_not(c0(ctx)).astype(float)
+        return lambda ctx: _apply_not(c0(ctx))
 
     if op in ("min", "max"):
         uf = np.minimum if op == "min" else np.maximum
         cs = [_compile_expr(a) for a in args]
-
-        def f_minmax(ctx):
-            vals = [c(ctx) for c in cs]
-            return functools.reduce(uf, vals) if len(vals) > 1 else vals[0]
-
-        return f_minmax
+        return lambda ctx: _apply_minmax([c(ctx) for c in cs], uf)
 
     if op == "ifelse":
         if len(args) != 3:
@@ -892,7 +924,7 @@ def _build_compiled_node(expr: ExprNode) -> Callable[["EvalContext"], Any]:
         cc = _compile_expr(args[0])
         ac = _compile_expr(args[1])
         bc = _compile_expr(args[2])
-        return lambda ctx: np.where(cc(ctx), ac(ctx), bc(ctx))
+        return lambda ctx: _apply_ifelse(cc(ctx), ac(ctx), bc(ctx))
 
     if op == "true":
         return lambda ctx: 1.0
@@ -902,13 +934,13 @@ def _build_compiled_node(expr: ExprNode) -> Callable[["EvalContext"], Any]:
     return _compile_delegate(expr)  # unreachable (op in _COMPILED_OPS covers all)
 
 
-def _skolem_atom(value: float) -> Tuple[str, Any]:
+def _skolem_atom(value: float) -> tuple[str, Any]:
     """Canonicalise one numeric skolem component (integers kept exact)."""
     fv = float(value)
     return ("i", int(fv)) if fv == int(fv) else ("f", repr(fv))
 
 
-def _skolem_code(parts: Sequence[Tuple[str, Any]]) -> float:
+def _skolem_code(parts: Sequence[tuple[str, Any]]) -> float:
     """Hash a canonical skolem-argument tuple to a 48-bit integer code (float).
 
     BLAKE2b to 48 bits — exactly representable in float64 and stable across
@@ -917,11 +949,13 @@ def _skolem_code(parts: Sequence[Tuple[str, Any]]) -> float:
     """
     import hashlib
 
-    digest = hashlib.blake2b(repr(tuple(parts)).encode("utf-8"), digest_size=6).digest()
+    digest = hashlib.blake2b(
+        repr(tuple(parts)).encode("utf-8"), digest_size=_SKOLEM_DIGEST_BYTES
+    ).digest()
     return float(int.from_bytes(digest, "big"))
 
 
-def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
+def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
     """Evaluate a ``skolem`` key node to a deterministic integer code (as float).
 
     A skolem term is a deterministic identity for its argument tuple; it is only
@@ -934,8 +968,8 @@ def _eval_skolem(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
     ELEMENT-WISE and returned as an ndarray — otherwise the per-cell bins would
     collapse to a single code. Scalar args yield a single float code.
     """
-    evaled: List[Tuple[str, Any]] = []
-    n: Optional[int] = None
+    evaled: list[tuple[str, Any]] = []
+    n: int | None = None
     for a in expr.args:
         if isinstance(a, str):
             evaled.append(("s", a))
@@ -1053,8 +1087,8 @@ def _eval_polygon_intersection_area(expr: ExprNode, ctx: EvalContext) -> float:
 
 
 def _gather_index(
-    arr_val: Union[float, np.ndarray], idxs: List[Union[float, np.ndarray]]
-) -> Union[float, np.ndarray]:
+    arr_val: float | np.ndarray, idxs: list[float | np.ndarray]
+) -> float | np.ndarray:
     """The gather at the core of an ``index`` node: ``arr_val`` already evaluated
     to a value and ``idxs`` to its (1-based) subscripts. Factored out of
     :func:`_eval_index` so the compiled ``index`` closure (:func:`_compile_expr`)
@@ -1093,7 +1127,7 @@ def _gather_index(
     return np.asarray(sub, dtype=float)
 
 
-def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
+def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
     if not expr.args:
         raise NumpyInterpreterError("index requires at least 1 arg (the array)")
     arr_val = eval_expr(expr.args[0], ctx)
@@ -1104,7 +1138,7 @@ def _eval_index(expr: ExprNode, ctx: EvalContext) -> Union[float, np.ndarray]:
 def _decompose_body_as_scaled_product(
     body: Expr,
     all_syms: frozenset,
-) -> Optional[Tuple[float, List[Tuple[str, List[str]]]]]:
+) -> tuple[float, list[tuple[str, list[str]]]] | None:
     """Try to decompose body as (scalar_coeff, [(var, [sym, ...]), ...]).
 
     Only handles bodies that are numeric literals or products of ``index(var,
@@ -1126,7 +1160,7 @@ def _decompose_body_as_scaled_product(
         var = body.args[0]
         if not isinstance(var, str):
             return None
-        subscripts: List[str] = []
+        subscripts: list[str] = []
         for s in body.args[1:]:
             if isinstance(s, str) and s in all_syms:
                 subscripts.append(s)
@@ -1135,7 +1169,7 @@ def _decompose_body_as_scaled_product(
         return 1.0, [(var, subscripts)]
     if body.op == "*":
         coeff = 1.0
-        terms: List[Tuple[str, List[str]]] = []
+        terms: list[tuple[str, list[str]]] = []
         for arg in body.args:
             r = _decompose_body_as_scaled_product(arg, all_syms)
             if r is None:
@@ -1150,12 +1184,12 @@ def _decompose_body_as_scaled_product(
 def _eval_arrayop_vectorized(
     body: Expr,
     ctx: EvalContext,
-    out_syms: List[str],
-    reduce_syms: List[str],
-    sym_0based: Dict[str, List[int]],
-    out_shape: Tuple[int, ...],
+    out_syms: list[str],
+    reduce_syms: list[str],
+    sym_0based: dict[str, list[int]],
+    out_shape: tuple[int, ...],
     reducer: str,
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """Vectorized fast path for arrayop evaluation.
 
     Handles bodies that are scalar multiples of products of ``index(var,
@@ -1184,14 +1218,14 @@ def _eval_arrayop_vectorized(
         return np.full(out_shape, val, dtype=float) if out_shape else np.float64(val)
 
     # Assign einsum letter labels (output symbols first, then reduction).
-    sym_order: List[str] = list(out_syms) + [s for s in reduce_syms if s not in out_syms]
-    if len(sym_order) > 26:
+    sym_order: list[str] = list(out_syms) + [s for s in reduce_syms if s not in out_syms]
+    if len(sym_order) > _EINSUM_MAX_LABELS:
         return None
-    sym_letter: Dict[str, str] = {s: chr(ord("a") + i) for i, s in enumerate(sym_order)}
+    sym_letter: dict[str, str] = {s: chr(ord("a") + i) for i, s in enumerate(sym_order)}
 
     # Build 0-based-sliced arrays for each index term.
-    sliced: List[np.ndarray] = []
-    term_specs: List[str] = []
+    sliced: list[np.ndarray] = []
+    term_specs: list[str] = []
     effective_coeff = coeff
 
     for var_name, var_syms in index_terms:
@@ -1241,7 +1275,7 @@ def _eval_arrayop_vectorized(
         # Scalar coefficient must be 1 for non-additive reducers to distribute correctly.
         if effective_coeff != 1.0:
             return None
-        all_syms_in_terms: List[str] = []
+        all_syms_in_terms: list[str] = []
         for spec in term_specs:
             for c in spec:
                 if c not in all_syms_in_terms:
@@ -1276,7 +1310,7 @@ def _bind_broadcast_range(
 
 @contextmanager
 def _bound_index_box(
-    ctx: EvalContext, syms: List[str], ranges: List[List[int]]
+    ctx: EvalContext, syms: list[str], ranges: list[list[int]]
 ) -> Iterator[None]:
     """Bind each index symbol to its 1-based ``range`` reshaped to broadcast on
     its own axis of the ``len(syms)``-D box (so a body evaluates over the whole
@@ -1294,8 +1328,8 @@ def _bound_index_box(
 
 
 def _expand_reduce_ranges(
-    resolved: Dict[str, Any], reduce_syms: List[str]
-) -> List[List[int]]:
+    resolved: dict[str, Any], reduce_syms: list[str]
+) -> list[list[int]]:
     """Dense 1-based value list for each contracted range, in ``reduce_syms``
     order (``_expand_range`` of each resolved reduce spec) — the one line every
     scalar / vectorized reduction path repeats to expand its contracted box."""
@@ -1307,8 +1341,8 @@ def _expand_reduce_ranges(
 def _materialize_makearray_vectorized(
     ma: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_shape: Tuple[int, ...],
+    out_syms: list[str],
+    out_shape: tuple[int, ...],
 ) -> np.ndarray:
     """Materialize a ``makearray`` in one pass per region (no per-cell loop).
 
@@ -1329,7 +1363,7 @@ def _materialize_makearray_vectorized(
         for region, val_expr in zip(regions, values):
             if len(region) != ndim:
                 raise NumpyInterpreterError("makearray region ndim mismatch")
-            slicer: List[slice] = []
+            slicer: list[slice] = []
             for axis, (lo, hi) in enumerate(region):
                 lo_i, hi_i = int(lo), int(hi)
                 _bind_broadcast_range(
@@ -1348,10 +1382,10 @@ def _materialize_makearray_vectorized(
 def _materialize_map(
     body: Expr,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-) -> Optional[np.ndarray]:
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+) -> np.ndarray | None:
     """Vectorized fast path for a pure (non-reducing) arrayop map — the shape
     finite-difference / level-set stencils take.
 
@@ -1391,8 +1425,8 @@ def _materialize_map(
 
 
 def _batched_ring_gather(
-    arg: Expr, out_syms: List[str], ctx: EvalContext
-) -> Optional[Tuple[np.ndarray, str]]:
+    arg: Expr, out_syms: list[str], ctx: EvalContext
+) -> tuple[np.ndarray, str] | None:
     """For a per-cell ring gather ``index(P, s)`` return ``(P_array, s)``.
 
     ``P_array`` is the full ``[N, V, 2]`` ring-per-cell array and ``s`` the single
@@ -1413,11 +1447,11 @@ def _batched_ring_gather(
 
 
 def _join_admits_mask(
-    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]],
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-) -> Optional[np.ndarray]:
+    gates: list[tuple[str, str, dict[int, int], dict[int, int]]],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+) -> np.ndarray | None:
     """Dense boolean ``out_shape`` mask of the index tuples the join gates admit.
 
     The vectorized form of :func:`_join_admits` over the whole output box: a cell
@@ -1446,15 +1480,15 @@ def _join_admits_mask(
 def _eval_arrayop_batched_leaf(
     expr: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-    reduce_syms: List[str],
-    raw_ranges: Dict[str, Any],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    raw_ranges: dict[str, Any],
     reducer: str,
     empty_zero: float,
-    filter_expr: Optional[Expr],
-) -> Optional[np.ndarray]:
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
     """Batched fast path for a fused-geometry-leaf pure map (esm-spec §8.6.1).
 
     Recognizes the conservative-regrid narrow phase
@@ -1541,7 +1575,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     output_idx = list(expr.output_idx or [])
     raw_ranges = expr.ranges or {}
 
-    out_syms: List[str] = [s for s in output_idx if isinstance(s, str)]
+    out_syms: list[str] = [s for s in output_idx if isinstance(s, str)]
     for s in out_syms:
         if s not in raw_ranges:
             raise NumpyInterpreterError(
@@ -1553,11 +1587,11 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
     # pass through unchanged, so existing arrayop fixtures are byte-for-byte
     # identical; ragged sets become per-parent dynamic bounds.
-    resolved: Dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
+    resolved: dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
 
     from .flatten import _expand_range  # local import to avoid cycle
 
-    out_ranges_exp: List[List[int]] = []
+    out_ranges_exp: list[list[int]] = []
     for s in out_syms:
         rs = resolved[s]
         if isinstance(rs, _RaggedRange):
@@ -1568,7 +1602,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         out_ranges_exp.append(_expand_range(rs))
     out_shape = tuple(len(r) for r in out_ranges_exp)
 
-    reduce_syms: List[str] = [s for s in raw_ranges if s not in out_syms]
+    reduce_syms: list[str] = [s for s in raw_ranges if s not in out_syms]
     ragged_reduce = any(isinstance(resolved[s], _RaggedRange) for s in reduce_syms)
 
     # M2: a value-equality join (RFC §5.3) and/or a boolean filter predicate
@@ -1680,7 +1714,7 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
 
     # Pre-compute 0-based index lists for the fast path.
-    sym_0based: Dict[str, List[int]] = {}
+    sym_0based: dict[str, list[int]] = {}
     for s, r in zip(out_syms, out_ranges_exp):
         sym_0based[s] = [x - 1 for x in r]
     for s, r in zip(reduce_syms, red_ranges_exp):
@@ -1727,10 +1761,10 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
 
 
 def _iter_output_cells(
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-) -> Iterator[Tuple[Tuple[int, ...], Dict[str, int]]]:
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+) -> Iterator[tuple[tuple[int, ...], dict[str, int]]]:
     """Yield ``(multi_idx, local_binding)`` for every cell of the output box.
 
     ``local_binding`` maps each output index symbol to its 1-based range value at
@@ -1738,7 +1772,7 @@ def _iter_output_cells(
     so the output-cell walk and the index-symbol binding live in one place."""
     it = np.ndindex(*out_shape) if out_shape else [()]
     for multi_idx in it:
-        local_binding: Dict[str, int] = {}
+        local_binding: dict[str, int] = {}
         for s, pos, r in zip(out_syms, multi_idx, out_ranges_exp):
             local_binding[s] = r[pos]
         yield multi_idx, local_binding
@@ -1747,9 +1781,9 @@ def _iter_output_cells(
 def _reduce_over(
     body: Expr,
     ctx: EvalContext,
-    local_binding: Dict[str, int],
-    reduce_syms: List[str],
-    cartesian_red: List[Tuple[int, ...]],
+    local_binding: dict[str, int],
+    reduce_syms: list[str],
+    cartesian_red: list[tuple[int, ...]],
     reducer: str,
     empty_zero: float,
 ) -> float:
@@ -1767,11 +1801,11 @@ def _reduce_over(
 def _eval_arrayop_ragged(
     expr: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-    reduce_syms: List[str],
-    resolved: Dict[str, Any],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
     reducer: str,
     empty_zero: float,
 ) -> np.ndarray:
@@ -1788,7 +1822,7 @@ def _eval_arrayop_ragged(
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)
         parent_binding.update(local_binding)
-        red_ranges: List[List[int]] = []
+        red_ranges: list[list[int]] = []
         for s in reduce_syms:
             rs = resolved[s]
             if isinstance(rs, _RaggedRange):
@@ -1808,16 +1842,16 @@ def _eval_arrayop_ragged(
     return out
 
 
-def _cartesian(lists: List[List[int]]) -> List[Tuple[int, ...]]:
+def _cartesian(lists: list[list[int]]) -> list[tuple[int, ...]]:
     if not lists:
         return [()]
-    result: List[Tuple[int, ...]] = [()]
+    result: list[tuple[int, ...]] = [()]
     for lst in lists:
         result = [prev + (x,) for prev in result for x in lst]
     return result
 
 
-def _reduce_step(op: str, acc: Optional[float], val: float) -> float:
+def _reduce_step(op: str, acc: float | None, val: float) -> float:
     if op == "or":
         # bool_and_or ⊕ (logical OR over 0.0/1.0-valued terms, RFC §5.1).
         if acc is None:
@@ -1851,7 +1885,7 @@ def _reduce_step(op: str, acc: Optional[float], val: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _join_sym_for_key(key: str, raw_ranges: Dict[str, Any], sym_to_set: Dict[str, str]) -> str:
+def _join_sym_for_key(key: str, raw_ranges: dict[str, Any], sym_to_set: dict[str, str]) -> str:
     """Resolve a join-key name to the range symbol it denotes.
 
     A key is either a declared range symbol directly, or the name of an index
@@ -1908,8 +1942,8 @@ def _validated_key_member(m: Any, set_name: str) -> Any:
 
 
 def _key_member_values(
-    sym: str, raw_ranges: Dict[str, Any], positions: List[int], ctx: EvalContext
-) -> List[Any]:
+    sym: str, raw_ranges: dict[str, Any], positions: list[int], ctx: EvalContext
+) -> list[Any]:
     """Key-column values for ``sym`` at each 1-based ``positions`` entry.
 
     A categorical range yields its declared members (validated as exact-equality
@@ -1934,7 +1968,7 @@ def _key_member_values(
     return [int(p) for p in positions]
 
 
-def _encode_join_keys(vals_a: List[Any], vals_b: List[Any]) -> Tuple[List[int], List[int]]:
+def _encode_join_keys(vals_a: list[Any], vals_b: list[Any]) -> tuple[list[int], list[int]]:
     """Bucket two key columns into one canonical order; return equal-iff-equal codes.
 
     Builds the sorted union of distinct key values (integers by value, strings by
@@ -1956,7 +1990,7 @@ def _encode_join_keys(vals_a: List[Any], vals_b: List[Any]) -> Tuple[List[int], 
     if table.size == 0:
         return [], []
 
-    def codes(vals: List[Any]) -> List[int]:
+    def codes(vals: list[Any]) -> list[int]:
         if not vals:
             return []
         return [int(c) for c in np.searchsorted(table, np.array(vals, dtype=object))]
@@ -1966,10 +2000,10 @@ def _encode_join_keys(vals_a: List[Any], vals_b: List[Any]) -> Tuple[List[int], 
 
 def _resolve_join(
     expr: ExprNode,
-    raw_ranges: Dict[str, Any],
-    sym_positions: Dict[str, List[int]],
+    raw_ranges: dict[str, Any],
+    sym_positions: dict[str, list[int]],
     ctx: EvalContext,
-) -> List[Tuple[str, str, Dict[int, int], Dict[int, int]]]:
+) -> list[tuple[str, str, dict[int, int], dict[int, int]]]:
     """Resolve every join clause into coded key-pair gates (RFC §5.3).
 
     Returns a list of ``(symL, symR, codesL, codesR)`` where ``codesX`` maps a
@@ -1983,7 +2017,7 @@ def _resolve_join(
         for s, spec in raw_ranges.items()
         if isinstance(spec, dict) and "from" in spec
     }
-    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]] = []
+    gates: list[tuple[str, str, dict[int, int], dict[int, int]]] = []
     for clause in clauses:
         on = (clause or {}).get("on") or []
         if not on:
@@ -2016,11 +2050,11 @@ def _resolve_join(
 
 def _resolve_join_key_column(
     key: str,
-    raw_ranges: Dict[str, Any],
-    sym_to_set: Dict[str, str],
-    sym_positions: Dict[str, List[int]],
+    raw_ranges: dict[str, Any],
+    sym_to_set: dict[str, str],
+    sym_positions: dict[str, list[int]],
     ctx: EvalContext,
-) -> Tuple[str, List[Any]]:
+) -> tuple[str, list[Any]]:
     """Resolve one join key column to ``(range_symbol, key_values)`` (RFC §5.3).
 
     Two key kinds are supported:
@@ -2074,7 +2108,7 @@ def _resolve_join_key_column(
 
 
 def _join_admits(
-    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]], binding: Dict[str, int]
+    gates: list[tuple[str, str, dict[int, int], dict[int, int]]], binding: dict[str, int]
 ) -> bool:
     """True iff every join pair's key columns are equal under ``binding``."""
     for sym_l, sym_r, codes_l, codes_r in gates:
@@ -2099,7 +2133,7 @@ def _filter_admits(filter_expr: Expr, ctx: EvalContext) -> bool:
 #: (``empty_zero``) doubles as the ufunc ``initial`` AND the value a filtered-out
 #: term is masked to — so a masked term is a genuine no-op under ⊕ (RFC §5.1),
 #: giving an empty admitted set the identity exactly as the scalar path does.
-_REDUCE_UFUNCS: Dict[str, Any] = {
+_REDUCE_UFUNCS: dict[str, Any] = {
     "+": np.add,
     "*": np.multiply,
     "max": np.maximum,
@@ -2108,8 +2142,8 @@ _REDUCE_UFUNCS: Dict[str, Any] = {
 
 
 def _gather_operator_factor(
-    var: str, syms: List[str], ctx: EvalContext, sym_0based: Dict[str, List[int]]
-) -> Optional[np.ndarray]:
+    var: str, syms: list[str], ctx: EvalContext, sym_0based: dict[str, list[int]]
+) -> np.ndarray | None:
     """Gather + slice the array backing an ``index(var, *syms)`` factor for the
     operator path, or ``None`` if it is not a plain per-cell array gather.
 
@@ -2138,16 +2172,16 @@ def _gather_operator_factor(
 def _eval_arrayop_operator_cached(
     expr: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-    reduce_syms: List[str],
-    resolved: Dict[str, Any],
-    raw_ranges: Dict[str, Any],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    raw_ranges: dict[str, Any],
     reducer: str,
     empty_zero: float,
-    filter_expr: Optional[Expr],
-) -> Optional[np.ndarray]:
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
     """Cached constant-geometry OPERATOR fast path (perf idea #3).
 
     Recognizes the conservative-regrid APPLY — a ``sum_product`` (⊕ = ``+``,
@@ -2176,7 +2210,7 @@ def _eval_arrayop_operator_cached(
         return None
 
     all_syms = list(out_syms) + list(reduce_syms)
-    if len(all_syms) > 26:
+    if len(all_syms) > _EINSUM_MAX_LABELS:
         return None
     all_ranges_exp = list(out_ranges_exp) + _expand_reduce_ranges(resolved, reduce_syms)
     combined_shape = tuple(len(r) for r in all_ranges_exp)
@@ -2188,15 +2222,15 @@ def _eval_arrayop_operator_cached(
         return None
     coeff, index_terms = decomp
 
-    sym_0based: Dict[str, List[int]] = {
+    sym_0based: dict[str, list[int]] = {
         s: [v - 1 for v in r] for s, r in zip(all_syms, all_ranges_exp)
     }
     letters = {s: chr(ord("a") + k) for k, s in enumerate(all_syms)}
     combined_spec = "".join(letters[s] for s in all_syms)
     out_spec = "".join(letters[s] for s in out_syms)
 
-    const_terms: List[Tuple[str, List[str]]] = []
-    vary_terms: List[Tuple[str, List[str]]] = []
+    const_terms: list[tuple[str, list[str]]] = []
+    vary_terms: list[tuple[str, list[str]]] = []
     for var, syms in index_terms:
         if not syms and var in ctx.param_values:
             coeff *= ctx.param_values[var]
@@ -2218,8 +2252,8 @@ def _eval_arrayop_operator_cached(
         # the join-admit mask. Every captured factor must be a known-invariant
         # array gather, else this operator would not be safe to reuse.
         try:
-            const_operands: List[np.ndarray] = []
-            const_specs: List[str] = []
+            const_operands: list[np.ndarray] = []
+            const_specs: list[str] = []
             for var, syms in const_terms:
                 sl = _gather_operator_factor(var, syms, ctx, sym_0based)
                 if sl is None:
@@ -2266,16 +2300,16 @@ def _eval_arrayop_operator_cached(
 def _eval_arrayop_reduce_vectorized(
     expr: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-    reduce_syms: List[str],
-    resolved: Dict[str, Any],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
     reducer: str,
     empty_zero: float,
-    filter_expr: Optional[Expr],
-    raw_ranges: Optional[Dict[str, Any]] = None,
-) -> Optional[np.ndarray]:
+    filter_expr: Expr | None,
+    raw_ranges: dict[str, Any] | None = None,
+) -> np.ndarray | None:
     """Vectorized fast path for a (possibly join- and/or filter-gated) reducing
     aggregate.
 
@@ -2337,7 +2371,7 @@ def _eval_arrayop_reduce_vectorized(
     # declared ranges, not the broadcast bindings. A key that is not an axis of
     # this box (``_join_admits_mask`` → None) or a malformed clause declines to
     # the scalar path, which re-resolves and raises the authoritative error.
-    join_mask: Optional[np.ndarray] = None
+    join_mask: np.ndarray | None = None
     if getattr(expr, "join", None):
         if raw_ranges is None:
             return None
@@ -2375,15 +2409,15 @@ def _eval_arrayop_reduce_vectorized(
 def _eval_arrayop_scalar(
     expr: ExprNode,
     ctx: EvalContext,
-    out_syms: List[str],
-    out_ranges_exp: List[List[int]],
-    out_shape: Tuple[int, ...],
-    reduce_syms: List[str],
-    resolved: Dict[str, Any],
-    raw_ranges: Dict[str, Any],
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    raw_ranges: dict[str, Any],
     reducer: str,
     empty_zero: float,
-    filter_expr: Optional[Expr],
+    filter_expr: Expr | None,
 ) -> np.ndarray:
     """Scalar (per-output-cell) evaluation path for an aggregate.
 
@@ -2395,7 +2429,7 @@ def _eval_arrayop_scalar(
     of admitted terms reduces to the semiring identity 0̄ (§5.1).
     """
     red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
-    sym_positions: Dict[str, List[int]] = {}
+    sym_positions: dict[str, list[int]] = {}
     for s, r in zip(out_syms, out_ranges_exp):
         sym_positions[s] = list(r)
     for s, r in zip(reduce_syms, red_ranges_exp):
@@ -2423,13 +2457,13 @@ def _eval_arrayop_scalar(
 def _reduce_over_gated(
     body: Expr,
     ctx: EvalContext,
-    local_binding: Dict[str, int],
-    reduce_syms: List[str],
-    cartesian_red: List[Tuple[int, ...]],
+    local_binding: dict[str, int],
+    reduce_syms: list[str],
+    cartesian_red: list[tuple[int, ...]],
     reducer: str,
     empty_zero: float,
-    gates: List[Tuple[str, str, Dict[int, int], Dict[int, int]]],
-    filter_expr: Optional[Expr],
+    gates: list[tuple[str, str, dict[int, int], dict[int, int]]],
+    filter_expr: Expr | None,
 ) -> float:
     """Reduce ``body`` over the contracted product, gated by join + filter.
 
@@ -2437,7 +2471,7 @@ def _reduce_over_gated(
     fails the inner equi-join (RFC §5.3) or the filter predicate (§7.2). Returns
     the semiring identity ``empty_zero`` (0̄) when no combination is admitted.
     """
-    acc: Optional[float] = None
+    acc: float | None = None
     prev = dict(ctx.locals)
     try:
         ctx.locals.update(local_binding)
@@ -2475,7 +2509,7 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     for region in regions:
         if len(region) != ndim:
             raise NumpyInterpreterError("makearray regions have inconsistent ndim")
-        for d, (lo, hi) in enumerate(region):
+        for d, (_lo, hi) in enumerate(region):
             if hi > shape[d]:
                 shape[d] = int(hi)
 
@@ -2519,7 +2553,7 @@ def _eval_broadcast(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         raise NumpyInterpreterError("broadcast requires at least 1 arg")
     arrs = [_as_array(v) for v in vals]
     max_ndim = max(a.ndim for a in arrs) if arrs else 0
-    aligned: List[np.ndarray] = []
+    aligned: list[np.ndarray] = []
     for a in arrs:
         if a.ndim < max_ndim:
             new_shape = list(a.shape) + [1] * (max_ndim - a.ndim)
@@ -2538,7 +2572,7 @@ def _eval_reshape(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     v = eval_expr(expr.args[0], ctx)
     arr = _as_array(v)
     shape = expr.shape or []
-    concrete_shape: List[int] = []
+    concrete_shape: list[int] = []
     for s in shape:
         if isinstance(s, int):
             concrete_shape.append(s)
@@ -2571,7 +2605,7 @@ def _eval_concat(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     return np.concatenate(arrs, axis=axis)
 
 
-def fold_constant_expr(expr: Expr, bindings: Optional[Dict[str, float]] = None) -> float:
+def fold_constant_expr(expr: Expr, bindings: dict[str, float] | None = None) -> float:
     """Evaluate a scalar AST expression with optional named scalar bindings.
 
     Wraps :func:`eval_expr` with an empty-state ``EvalContext`` so callers can
@@ -2602,7 +2636,7 @@ def fold_constant_expr(expr: Expr, bindings: Optional[Dict[str, float]] = None) 
     return float(result)
 
 
-def build_partition(model: Dict[str, Any]) -> Partition:
+def build_partition(model: dict[str, Any]) -> Partition:
     """Run the build-time cadence-partition pass over a parsed model.
 
     This is the dependency-partition analysis (``CONFORMANCE_SPEC.md`` §5.7, the
@@ -2626,7 +2660,7 @@ def build_partition(model: Dict[str, Any]) -> Partition:
     return _partition_model(model)
 
 
-def evaluate(expr: Expr, bindings: Dict[str, float]) -> float:
+def evaluate(expr: Expr, bindings: dict[str, float]) -> float:
     """Evaluate a scalar AST expression against a dict of float variable bindings.
 
     This is the official ESS Python runner entry point (the public API

@@ -18,9 +18,11 @@ Note: this enumerates *children* only. ``output_idx``, ``ranges``, and
 ``wrt`` bind index symbols for the node's body; callers that resolve
 variable names decide how to treat bound symbols.
 """
+from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from .esm_types import Expr, ExprNode
 
@@ -35,15 +37,13 @@ def iter_children(node: ExprNode) -> Iterator[Expr]:
     """Yield every expression-bearing child of ``node`` in deterministic
     order: ``args``, then ``lower``/``upper``/``expr``/``filter``/``key``,
     then ``values``, then ``table_axes`` entries sorted by axis name."""
-    for a in node.args:
-        yield a
+    yield from node.args
     for field_name in _SINGLE_CHILD_FIELDS:
         child = getattr(node, field_name)
         if child is not None:
             yield child
     if node.values is not None:
-        for v in node.values:
-            yield v
+        yield from node.values
     if node.table_axes is not None:
         for k in sorted(node.table_axes):
             yield node.table_axes[k]

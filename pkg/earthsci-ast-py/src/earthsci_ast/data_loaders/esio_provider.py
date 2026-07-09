@@ -21,12 +21,52 @@ ESS to EarthSciIO and regress those formats, so it stays caller-selected.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
-Window = Tuple[_dt.datetime, _dt.datetime]
+Window = tuple[_dt.datetime, _dt.datetime]
 
 
-def _esio_format(dl: Any) -> str:
+if TYPE_CHECKING:  # structural contract only — no runtime import of earthsciio/ESS.
+    from collections.abc import Mapping, Sequence
+    from typing import Protocol
+
+    class SourceLike(Protocol):
+        """The ESS ``DataLoaderSource`` attribute surface this adapter reads."""
+
+        url_template: str
+        mirrors: Sequence[str]
+
+    class VariableLike(Protocol):
+        """The ESS ``DataLoaderVariable`` attribute surface this adapter reads."""
+
+        file_variable: str | None
+
+    class TemporalLike(Protocol):
+        """The ESS ``DataLoaderTemporal`` attribute surface this adapter reads."""
+
+        start: str | None
+        end: str | None
+        file_period: str | None
+        frequency: str | None
+        time_variable: str | None
+
+    class LoaderLike(Protocol):
+        """The ESS ``DataLoader`` attribute surface this adapter reads."""
+
+        name: str
+        metadata: Mapping[str, Any]
+        source: SourceLike
+        variables: Mapping[str, VariableLike]
+        temporal: TemporalLike | None
+
+    class FieldLike(Protocol):
+        """The ESS ``LoaderField`` attribute surface this adapter reads."""
+
+        name: str
+        loader: LoaderLike
+
+
+def _esio_format(dl: LoaderLike) -> str:
     """Infer the EarthSciIO format-registry key for an ESS DataLoader."""
     meta = getattr(dl, "metadata", None) or {}
     if meta.get("esio_format"):
@@ -52,7 +92,7 @@ def _esio_format(dl: Any) -> str:
     )
 
 
-def _to_esio_temporal(temporal: Any) -> Any:
+def _to_esio_temporal(temporal: TemporalLike | None) -> Any:
     """Convert an ESS ``DataLoaderTemporal`` to an ``earthsciio.LoaderTemporal``
     (``None`` for a CONST loader)."""
     if temporal is None:
@@ -80,7 +120,7 @@ def _to_esio_temporal(temporal: Any) -> Any:
             f"loader temporal has frequency={getattr(temporal, 'frequency', None)!r} "
             f"file_period={getattr(temporal, 'file_period', None)!r}"
         )
-    kwargs = dict(start=_coerce_datetime(start), frequency=freq, file_period=file_period)
+    kwargs = {"start": _coerce_datetime(start), "frequency": freq, "file_period": file_period}
     end = getattr(temporal, "end", None)
     if end:
         kwargs["end"] = _coerce_datetime(end)
@@ -90,7 +130,7 @@ def _to_esio_temporal(temporal: Any) -> Any:
     return esio.LoaderTemporal(**kwargs)
 
 
-def _cds_metadata(dl: Any) -> Optional[dict]:
+def _cds_metadata(dl: LoaderLike) -> dict | None:
     """The loader's ``metadata.cds`` block (a CDS dataset descriptor), or ``None``.
 
     A loader opts into the CDS request path by carrying ``metadata.cds`` with a
@@ -106,16 +146,16 @@ def _cds_metadata(dl: Any) -> Optional[dict]:
     return None
 
 
-def _bbox_from_target(target: Any) -> Tuple[float, float, float, float]:
+def _bbox_from_target(target: Any) -> tuple[float, float, float, float]:
     """``(min_lon, min_lat, max_lon, max_lat)`` of the target grid's lon/lat env."""
     import numpy as np
 
-    lon = np.asarray(getattr(target, "center_lon"))
-    lat = np.asarray(getattr(target, "center_lat"))
+    lon = np.asarray(target.center_lon)
+    lat = np.asarray(target.center_lat)
     return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
 
 
-def _window_bounds(window: Any) -> Tuple[Any, Any]:
+def _window_bounds(window: Window | None) -> tuple[Any, Any]:
     """``(start, end)`` datetimes from a ``simulate`` loader window — a
     ``(start, end)`` tuple/list or an object exposing ``.start``/``.end`` — or
     ``(None, None)`` when absent."""
@@ -126,7 +166,7 @@ def _window_bounds(window: Any) -> Tuple[Any, Any]:
     return getattr(window, "start", None), getattr(window, "end", None)
 
 
-def _to_esio_cds_loader(field: Any, target: Any, window: Any = None) -> Any:
+def _to_esio_cds_loader(field: FieldLike, target: Any, window: Window | None = None) -> Any:
     """Project a ``metadata.cds`` loader onto a CDS-backed ``earthsciio.DataLoader``.
 
     Builds a per-anchor ``cds://<dataset>?<request>`` URL resolver via the esio
@@ -211,7 +251,7 @@ def _to_esio_cds_loader(field: Any, target: Any, window: Any = None) -> Any:
     )
 
 
-def to_esio_loader(field: Any, target: Any = None, window: Any = None) -> Any:
+def to_esio_loader(field: FieldLike, target: Any = None, window: Window | None = None) -> Any:
     """Project an ESS ``LoaderField`` onto an ``earthsciio.DataLoader``.
 
     ``target`` is the simulation's lon/lat target grid; when present it fills the
@@ -255,7 +295,7 @@ def to_esio_loader(field: Any, target: Any = None, window: Any = None) -> Any:
 
 
 def esio_provider_factory(
-    field: Any, window: Optional[Window] = None, *, target: Any = None
+    field: FieldLike, window: Window | None = None, *, target: Any = None
 ) -> Any:
     """A ``provider_factory`` building a real ``earthsciio.Provider`` for ``field``.
 

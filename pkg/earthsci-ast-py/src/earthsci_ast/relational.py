@@ -67,12 +67,14 @@ ensure_ascii=False)`` for strings) so the bytes match ``canonicalize.jl`` /
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Callable
 
 import numpy as np
 
 from .canonicalize import format_canonical_float
+from .errors import EarthSciAstError
 
 __all__ = [
     "FloatKeyError",
@@ -97,7 +99,7 @@ __all__ = [
 # and orderable, also allowed.
 
 
-class FloatKeyError(Exception):
+class FloatKeyError(EarthSciAstError):
     """Raised when a relational key contains a floating-point component.
 
     Violates ``CONFORMANCE_SPEC.md`` §5.5.1 rule 1 ("floats are forbidden in
@@ -142,7 +144,7 @@ def _is_int_scalar(value: Any) -> bool:
 # ── Primitive 3: skolem (canonical-tuple content-addressed key) ─────────────
 
 
-def skolem_edge(a: Any, b: Any) -> Tuple[Any, Any]:
+def skolem_edge(a: Any, b: Any) -> tuple[Any, Any]:
     """Canonical key for an **undirected** pair (a symmetric relation):
     ``(min(a, b), max(a, b))``.
 
@@ -155,7 +157,7 @@ def skolem_edge(a: Any, b: Any) -> Tuple[Any, Any]:
     return (a, b) if a <= b else (b, a)
 
 
-def skolem(components: Sequence[Any], *, symmetric: bool = False) -> Tuple[Any, ...]:
+def skolem(components: Sequence[Any], *, symmetric: bool = False) -> tuple[Any, ...]:
     """Canonical-tuple Skolem key (rule 4).
 
     For a ``symmetric`` relation the components are sorted (generalising
@@ -174,7 +176,7 @@ def skolem(components: Sequence[Any], *, symmetric: bool = False) -> Tuple[Any, 
 # ── Primitive 1: distinct (sort + drop adjacent duplicates) ─────────────────
 
 
-def distinct(rows: Iterable[Any]) -> List[Any]:
+def distinct(rows: Iterable[Any]) -> list[Any]:
     """Set semantics over ``rows``: sort by the §5.5.1 total order, then drop
     **adjacent** duplicates (rule 2).
 
@@ -199,14 +201,14 @@ def distinct(rows: Iterable[Any]) -> List[Any]:
     # adjacent dedup. Equality (``!=``), not the hash, decides duplicates, so the
     # result depends only on the values, never on ``set`` iteration order.
     ordered = sorted(items)
-    out: List[Any] = []
+    out: list[Any] = []
     for item in ordered:
         if not out or out[-1] != item:
             out.append(item)
     return out
 
 
-def _distinct_numpy_int(items: List[Any]) -> "List[Any] | None":
+def _distinct_numpy_int(items: list[Any]) -> list[Any] | None:
     """NumPy fast path for the integer mesh-topology workload (RFC Appendix
     A.4). Returns ``None`` when the rows are not homogeneous integer scalars /
     equal-arity integer tuples, so the caller falls back to the general path.
@@ -248,8 +250,8 @@ class Ranking:
       ``canonical = reported − base``.
     """
 
-    order: List[Any]
-    ids: Dict[Any, int]
+    order: list[Any]
+    ids: dict[Any, int]
     base: int
 
     def __getitem__(self, key: Any) -> int:
@@ -283,7 +285,7 @@ def equijoin(
     *,
     on_left: Callable[[Any], Any] = _identity,
     on_right: Callable[[Any], Any] = _identity,
-) -> List[Tuple[Any, Any]]:
+) -> list[tuple[Any, Any]]:
     """Value-equality equi-join (rule 5): emit every ``(l, r)`` pair where
     ``on_left(l) == on_right(r)``.
 
@@ -299,7 +301,7 @@ def equijoin(
     left_keys = [_assert_key(on_left(left_row)) for left_row in left_rows]
     right_keys = [_assert_key(on_right(r)) for r in right_rows]
 
-    out: List[Tuple[Any, Any]] = []
+    out: list[tuple[Any, Any]] = []
     if (
         left_rows
         and right_rows
@@ -318,7 +320,7 @@ def equijoin(
     else:
         # General path: bucket the right side by key (hash only to bucket — the
         # output is fully re-sorted below, so bucket order is never observed).
-        buckets: Dict[Any, List[Any]] = {}
+        buckets: dict[Any, list[Any]] = {}
         for r, k in zip(right_rows, right_keys):
             buckets.setdefault(k, []).append(r)
         for left_row, k in zip(left_rows, left_keys):
@@ -340,7 +342,7 @@ def group_aggregate(
     key: Callable[[Any], Any],
     value: Callable[[Any], Any],
     op: Callable[[Any, Any], Any],
-) -> List[Tuple[Any, Any]]:
+) -> list[tuple[Any, Any]]:
     """Group-by + semiring aggregate (rule 5).
 
     Bucket ``rows`` by ``key(row)`` (hashing only to bucket), combine the
@@ -356,12 +358,12 @@ def group_aggregate(
     path). Group keys must be non-float (rule 1); values may be floats. Mirrors
     the DuckDB oracle ``SELECT key, ⊕(value) … GROUP BY key ORDER BY key``.
     """
-    buckets: Dict[Any, List[Any]] = {}
+    buckets: dict[Any, list[Any]] = {}
     for row in rows:
         k = _assert_key(key(row))
         buckets.setdefault(k, []).append(value(row))
 
-    out: List[Tuple[Any, Any]] = []
+    out: list[tuple[Any, Any]] = []
     for k in sorted(buckets):
         values = sorted(buckets[k])  # canonical value order ⇒ reproducible float ⊕
         acc = values[0]

@@ -30,7 +30,7 @@ import copy
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .diagnostics import (
     APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
@@ -60,6 +60,7 @@ from .lower_expression_templates import (
     _is_array,
     _is_object,
     _validate_templates,
+    _walk_json,
 )
 
 __all__ = [
@@ -120,7 +121,7 @@ def reject_template_imports_pre_v08(view: Any) -> None:
     if not (major == 0 and minor < 8):
         return
 
-    offences: List[str] = []
+    offences: list[str] = []
     if "expression_templates" in view:
         offences.append("/expression_templates")
     if "metaparameters" in view:
@@ -165,8 +166,8 @@ def _require_int(v: Any, ctx: str) -> int:
     )
 
 
-def _collect_metaparam_decls(raw: Any, origin: str) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _collect_metaparam_decls(raw: Any, origin: str) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     mp = raw.get("metaparameters") if _is_object(raw) else None
     if mp is None:
         return out
@@ -217,11 +218,13 @@ _META_SUBST_SKIP_KEYS = frozenset(
 )
 
 
-def _substitute_metaparams(x: Any, values: Dict[str, int]) -> Any:
+def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
     """Substitute closed metaparameter names — appearing as bare strings, the
     variable-reference surface syntax — with their integer values, everywhere
     except the :data:`_META_SUBST_SKIP_KEYS` structural fields (esm-spec
     §9.7.6: expression-position substitution; no folding here)."""
+    # Bespoke (not on :func:`_walk_json`): REBUILDS the tree, deep-copying the
+    # skip-key subtrees verbatim rather than merely observing nodes.
     if isinstance(x, str):
         return values.get(x, x)
     if _is_array(x):
@@ -238,7 +241,7 @@ def _substitute_metaparams(x: Any, values: Dict[str, int]) -> Any:
     return x
 
 
-def _substitute_metaparams_decl(decl: Any, values: Dict[str, int]) -> Any:
+def _substitute_metaparams_decl(decl: Any, values: dict[str, int]) -> Any:
     """Metaparameter substitution over one ``expression_templates`` entry: the
     template's own ``params`` shadow like-named metaparameters inside its
     ``body`` and ``match`` (a param is the inner binder; substitution must not
@@ -259,7 +262,7 @@ def _checked_int64(v: int, ctx: str) -> int:
     return v
 
 
-def _try_fold(x: Any, ctx: str) -> Optional[int]:
+def _try_fold(x: Any, ctx: str) -> int | None:
     """Fold a metaparameter expression (integer literal, name, or ``{op,
     args}`` over ``+ - * /``) to a concrete integer with exact 64-bit
     arithmetic (esm-spec §9.7.6). Returns ``None`` when the expression still
@@ -324,17 +327,13 @@ def _try_fold(x: Any, ctx: str) -> Optional[int]:
     return acc
 
 
-def _collect_names(out: List[str], x: Any) -> List[str]:
-    if isinstance(x, str):
-        out.append(x)
-    elif _is_array(x):
-        for v in x:
-            _collect_names(out, v)
-    elif _is_object(x):
-        for k, v in x.items():
-            if k == "op":
-                continue
-            _collect_names(out, v)
+#: In a metaparameter expression the only string that is NOT a name reference
+#: is the ``op`` operator label; every other bare string is a name.
+_META_EXPR_SKIP_KEYS = frozenset({"op"})
+
+
+def _collect_names(out: list[str], x: Any) -> list[str]:
+    _walk_json(x, on_str=out.append, skip_keys=_META_EXPR_SKIP_KEYS)
     return out
 
 
@@ -383,7 +382,7 @@ def require_meta_expr(v: Any, ctx: str) -> Any:
     return v
 
 
-def eval_meta_expr(expr: Any, env: Dict[str, int], ctx: str) -> int:
+def eval_meta_expr(expr: Any, env: dict[str, int], ctx: str) -> int:
     """Fold a metaparameter expression to a concrete integer against a CLOSED
     environment ``env`` (name → int) — the importing document's metaparameter
     scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
@@ -411,6 +410,8 @@ def _fold_structural_sites(x: Any, ctx: str) -> None:
     open metaparameter in a not-yet-fully-bound library) are left symbolic for
     a later binding site. Index-set sizes are folded separately by
     :func:`_fold_index_set_sizes`."""
+    # Bespoke (not on :func:`_walk_json`): MUTATES specific op-shaped sites in
+    # place (aggregate ranges / makearray bounds), not a read-only observation.
     if _is_array(x):
         for v in x:
             _fold_structural_sites(v, ctx)
@@ -450,7 +451,7 @@ def _fold_structural_sites(x: Any, ctx: str) -> None:
         _fold_structural_sites(v, ctx)
 
 
-def _fold_index_set_sizes(index_sets: Dict[str, Any], ctx: str, *, strict: bool) -> None:
+def _fold_index_set_sizes(index_sets: dict[str, Any], ctx: str, *, strict: bool) -> None:
     """Fold interval ``size`` metaparameter expressions in an ``index_sets``
     registry. With ``strict=True`` (the root document, after its
     metaparameters closed) any remaining bare name is ``metaparameter_unbound``;
@@ -481,22 +482,18 @@ def _fold_index_set_sizes(index_sets: Dict[str, Any], ctx: str, *, strict: bool)
 # ---------------------------------------------------------------------------
 
 
-def _collect_apply_names(out: List[str], x: Any) -> List[str]:
-    if _is_array(x):
-        for c in x:
-            _collect_apply_names(out, c)
-        return out
-    if _is_object(x):
-        if x.get("op") == APPLY_OP:
-            nm = x.get("name")
+def _collect_apply_names(out: list[str], x: Any) -> list[str]:
+    def _visit(node: dict[str, Any], _path: str) -> None:
+        if node.get("op") == APPLY_OP:
+            nm = node.get("name")
             if nm is not None:
                 out.append(str(nm))
-        for v in x.values():
-            _collect_apply_names(out, v)
+
+    _walk_json(x, on_obj=_visit)
     return out
 
 
-def _inline_applies(node: Any, templates: Dict[str, Any], scope: str) -> Any:
+def _inline_applies(node: Any, templates: dict[str, Any], scope: str) -> Any:
     from .lower_expression_templates import _expand_apply
 
     if _is_array(node):
@@ -512,7 +509,7 @@ def _inline_applies(node: Any, templates: Dict[str, Any], scope: str) -> Any:
     return out
 
 
-def _compose_template_bodies(templates: Dict[str, Any], scope: str) -> None:
+def _compose_template_bodies(templates: dict[str, Any], scope: str) -> None:
     """Registration-time body composition (esm-spec §9.7.3): template bodies
     MAY reference other in-scope MATCH-LESS templates via
     ``apply_expression_template`` nodes. Builds the body-reference graph,
@@ -525,7 +522,7 @@ def _compose_template_bodies(templates: Dict[str, Any], scope: str) -> None:
     consults a ``match`` rule."""
     if not templates:
         return
-    refs: Dict[str, List[str]] = {}
+    refs: dict[str, list[str]] = {}
     for name, decl in templates.items():
         body = decl.get("body") if _is_object(decl) else None
         refs[name] = _collect_apply_names([], body)
@@ -551,10 +548,10 @@ def _compose_template_bodies(templates: Dict[str, Any], scope: str) -> None:
 
     # DFS over the reference graph: cycle detection, chain-depth bound, and a
     # dependencies-first (post-) order for inlining.
-    state: Dict[str, int] = {}  # 1 = on stack, 2 = done
-    depth: Dict[str, int] = {}  # templates on the longest chain from this node
-    order: List[str] = []
-    chain: List[str] = []
+    state: dict[str, int] = {}  # 1 = on stack, 2 = done
+    depth: dict[str, int] = {}  # templates on the longest chain from this node
+    order: list[str] = []
+    chain: list[str] = []
 
     def visit(name: str) -> int:
         st = state.get(name, 0)
@@ -616,13 +613,13 @@ class _TemplateScope:
     __slots__ = ("templates", "index_sets", "metaparams")
 
     def __init__(self) -> None:
-        self.templates: Dict[str, Any] = {}
-        self.index_sets: Dict[str, Any] = {}
-        self.metaparams: Dict[str, Any] = {}
+        self.templates: dict[str, Any] = {}
+        self.index_sets: dict[str, Any] = {}
+        self.metaparams: dict[str, Any] = {}
 
 
 def _merge_named(
-    dst: Dict[str, Any], name: str, decl: Any, code: str, what: str, origin: str
+    dst: dict[str, Any], name: str, decl: Any, code: str, what: str, origin: str
 ) -> None:
     if name in dst:
         # Deep-equal redeclaration (a diamond import) dedups at first
@@ -646,20 +643,20 @@ def _merge_scope(dst: _TemplateScope, src: _TemplateScope, origin: str) -> None:
         _merge_named(dst.metaparams, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin)
 
 
-def _instantiate_scope(scope: _TemplateScope, values: Dict[str, Any], ctx: str) -> None:
+def _instantiate_scope(scope: _TemplateScope, values: dict[str, Any], ctx: str) -> None:
     """Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
     substitute the bound names throughout the exported templates and index sets,
     then fold the structural sites that are now closed. A bound VALUE is a
     metaparameter expression (usually an integer literal, but possibly a symbolic
     ``NX*NY`` over the importer's still-open metaparameters); ``_fold_*`` leaves
     any site still carrying a free name symbolic for the importer's close."""
-    newt: Dict[str, Any] = {}
+    newt: dict[str, Any] = {}
     for n, d in scope.templates.items():
         nd = _substitute_metaparams_decl(d, values)
         _fold_structural_sites(nd, ctx)
         newt[n] = nd
     scope.templates = newt
-    newis: Dict[str, Any] = {}
+    newis: dict[str, Any] = {}
     for n, d in scope.index_sets.items():
         newis[n] = _substitute_metaparams(d, values)
     _fold_index_set_sizes(newis, ctx, strict=False)
@@ -681,8 +678,8 @@ def _is_valid_dotted_name(s: str) -> bool:
     return bool(s) and all(_NAME_SEGMENT_RE.match(seg) for seg in s.split("."))
 
 
-def _name_map(raw: Any, field: str, where: str) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _name_map(raw: Any, field: str, where: str) -> dict[str, str]:
+    out: dict[str, str] = {}
     if raw is None:
         return out
     if not _is_object(raw):
@@ -733,9 +730,16 @@ _RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | frozenset(
     }
 )
 
+#: Object keys whose values a variable-reference collector must NOT descend
+#: into: ``from`` / ``wrt`` / ``dim`` name index sets, ``of`` names bound index
+#: symbols, and the protected structural fields are never variable positions.
+#: Mirrors the positional skips of :func:`_rename_walk` for the reference
+#: inventory of :func:`_collect_ref_names`.
+_REF_NAME_SKIP_KEYS = _RENAME_PROTECTED_KEYS | frozenset({"from", "of"}) | frozenset(_RENAME_AXIS_KEYS)
+
 
 def _rename_walk(
-    x: Any, varmap: Dict[str, str], isetmap: Dict[str, str], tplmap: Dict[str, str]
+    x: Any, varmap: dict[str, str], isetmap: dict[str, str], tplmap: dict[str, str]
 ) -> Any:
     """One transitive-substitution pass over an imported declaration (esm-spec
     §9.7.7): ``varmap`` (renamed open metaparameters + rebound free names)
@@ -757,6 +761,9 @@ def _rename_walk(
     body/registry would use the renamed set while ``where`` still named the
     original, and registration would fail with
     ``template_constraint_unknown_index_set``."""
+    # Bespoke (not on :func:`_walk_json`): REBUILDS the tree with per-field
+    # positional handling (``from`` / ``wrt`` / apply-``name`` / ``where``), a
+    # transform rather than a read-only observation.
     if isinstance(x, str):
         return varmap.get(x, x)
     if _is_array(x):
@@ -764,7 +771,7 @@ def _rename_walk(
     if _is_object(x):
         op = x.get("op")
         is_apply = op is not None and str(op) == APPLY_OP
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in x.items():
             ks = str(k)
             if ks == "from" and isinstance(v, str):
@@ -783,17 +790,17 @@ def _rename_walk(
     return x
 
 
-def _rename_where(whr: Any, isetmap: Dict[str, str]) -> Any:
+def _rename_where(whr: Any, isetmap: dict[str, str]) -> Any:
     """Rewrite a ``where`` match-scoping block (esm-spec §9.6.1) under an
     import-edge index-set rename (esm-spec §9.7.7). Constraint KEYS (param names)
     are copied verbatim — rename never touches template-internal param names —
     and each constraint's ``shape`` entries (index-set names) are mapped through
     ``isetmap``, with any unmapped name left as spelled (the body-reference
     rule)."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for p, cobj in whr.items():
         if _is_object(cobj):
-            cout: Dict[str, Any] = {}
+            cout: dict[str, Any] = {}
             for ck, cv in cobj.items():
                 if str(ck) == "shape" and _is_array(cv):
                     cout[str(ck)] = [
@@ -808,7 +815,7 @@ def _rename_where(whr: Any, isetmap: Dict[str, str]) -> Any:
 
 
 def _rename_decl(
-    decl: Any, varmap: Dict[str, str], isetmap: Dict[str, str], tplmap: Dict[str, str]
+    decl: Any, varmap: dict[str, str], isetmap: dict[str, str], tplmap: dict[str, str]
 ) -> Any:
     """:func:`_rename_walk` over one template declaration with the §9.6.1
     shadowing rule: the template's own ``params`` shadow like-named entries of
@@ -829,25 +836,21 @@ def _collect_bound_syms(out: set, x: Any) -> set:
     """Bound index symbols of a declaration: aggregate ``output_idx`` entries and
     ``ranges`` keys (at any nesting depth). Rebinding one would desynchronize the
     ranges KEYS from their ``expr`` occurrences, so it is rejected outright."""
-    if _is_array(x):
-        for v in x:
-            _collect_bound_syms(out, v)
-        return out
-    if not _is_object(x):
-        return out
-    op = x.get("op")
-    if op is not None and str(op) == "aggregate":
-        oi = x.get("output_idx")
-        if _is_array(oi):
-            for e in oi:
-                if isinstance(e, str):
-                    out.add(str(e))
-        rg = x.get("ranges")
-        if _is_object(rg):
-            for k in rg.keys():
-                out.add(str(k))
-    for v in x.values():
-        _collect_bound_syms(out, v)
+
+    def _visit(node: dict[str, Any], _path: str) -> None:
+        op = node.get("op")
+        if op is not None and str(op) == "aggregate":
+            oi = node.get("output_idx")
+            if _is_array(oi):
+                for e in oi:
+                    if isinstance(e, str):
+                        out.add(str(e))
+            rg = node.get("ranges")
+            if _is_object(rg):
+                for k in rg.keys():
+                    out.add(str(k))
+
+    _walk_json(x, on_obj=_visit)
     return out
 
 
@@ -855,32 +858,18 @@ def _collect_ref_names(out: set, x: Any, shadowed: set) -> set:
     """Every bare string in a variable-reference position of a declaration (the
     positions ``varmap`` would rewrite), minus the per-template ``params`` shadow
     set. Used for the rebind occurs-check and the freshness (collision) guard."""
-    if isinstance(x, str):
-        if x not in shadowed:
-            out.add(x)
-        return out
-    if _is_array(x):
-        for v in x:
-            _collect_ref_names(out, v, shadowed)
-        return out
-    if _is_object(x):
-        for k, v in x.items():
-            ks = str(k)
-            if (
-                ks == "from"
-                or ks in _RENAME_AXIS_KEYS
-                or ks == "of"
-                or ks in _RENAME_PROTECTED_KEYS
-            ):
-                continue
-            _collect_ref_names(out, v, shadowed)
-        return out
+
+    def _add(name: str) -> None:
+        if name not in shadowed:
+            out.add(name)
+
+    _walk_json(x, on_str=_add, skip_keys=_REF_NAME_SKIP_KEYS)
     return out
 
 
 def _apply_edge_renames(
-    scope: "_TemplateScope", entry: Any, origin: str, ref: str
-) -> "_TemplateScope":
+    scope: _TemplateScope, entry: Any, origin: str, ref: str
+) -> _TemplateScope:
     """Apply one import edge's ``prefix`` / ``rename`` / ``rebind`` (esm-spec
     §9.7.7) to the target's SURVIVING export scope — templates after ``only``,
     all index sets, and metaparameters still open after this edge's ``bindings``
@@ -931,7 +920,7 @@ def _apply_edge_renames(
 
     # --- per-namespace final-name uniqueness ---
     for what, m in (("template", tplmap), ("index set", isetmap), ("metaparameter", metamap)):
-        seen: Dict[str, str] = {}
+        seen: dict[str, str] = {}
         for o, n in m.items():
             if n in seen:
                 raise ExpressionTemplateError(
@@ -988,7 +977,7 @@ def _apply_edge_renames(
 
     # --- freshness guard: new bare names must not capture / merge ---
     taken: set = set(free - set(rebind.keys())) | bound | params_all
-    newnames: List[str] = []
+    newnames: list[str] = []
     for o, n in metamap.items():
         if o != n:
             newnames.append(n)
@@ -1007,7 +996,7 @@ def _apply_edge_renames(
         taken.add(t)
 
     # --- apply (identity entries dropped; one simultaneous substitution) ---
-    varmap: Dict[str, str] = {}
+    varmap: dict[str, str] = {}
     for o, n in metamap.items():
         if o != n:
             varmap[o] = n
@@ -1017,12 +1006,12 @@ def _apply_edge_renames(
     iset_changed = {o: n for o, n in isetmap.items() if o != n}
     tpl_changed = {o: n for o, n in tplmap.items() if o != n}
 
-    newt: Dict[str, Any] = {}
+    newt: dict[str, Any] = {}
     for n, d in scope.templates.items():
         newt[tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
     scope.templates = newt
 
-    newi: Dict[str, Any] = {}
+    newi: dict[str, Any] = {}
     for n, d in scope.index_sets.items():
         nd = _rename_walk(d, varmap, iset_changed, tpl_changed)
         of = nd.get("of") if _is_object(nd) else None
@@ -1031,7 +1020,7 @@ def _apply_edge_renames(
         newi[isetmap[n]] = nd
     scope.index_sets = newi
 
-    newm: Dict[str, Any] = {}
+    newm: dict[str, Any] = {}
     for n, d in scope.metaparams.items():
         newm[metamap[n]] = d
     scope.metaparams = newm
@@ -1066,14 +1055,14 @@ def _load_import_raw(ref: str, base_dir: str, origin: str):
             raise ExpressionTemplateError(
                 TEMPLATE_IMPORT_UNRESOLVED,
                 f"{origin}: failed to download template-library ref '{ref}': {e}",
-            )
+            ) from e
         try:
             raw = json.loads(content)
         except ValueError as e:
             raise ExpressionTemplateError(
                 TEMPLATE_IMPORT_UNRESOLVED,
                 f"{origin}: template-library ref '{ref}' is not valid JSON: {e}",
-            )
+            ) from e
         # Relative refs inside a remote library have no resolvable base; they
         # fail as unresolved when encountered.
         return raw, base_dir
@@ -1083,7 +1072,7 @@ def _load_import_raw(ref: str, base_dir: str, origin: str):
             TEMPLATE_IMPORT_UNRESOLVED,
             f"{origin}: template-library file not found: {path} (from ref '{ref}')",
         )
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         content = fh.read()
     try:
         raw = json.loads(content)
@@ -1091,7 +1080,7 @@ def _load_import_raw(ref: str, base_dir: str, origin: str):
         raise ExpressionTemplateError(
             TEMPLATE_IMPORT_UNRESOLVED,
             f"{origin}: template-library ref '{path}' is not valid JSON: {e}",
-        )
+        ) from e
     return raw, os.path.dirname(path)
 
 
@@ -1106,8 +1095,9 @@ def _canonical_ref(ref: str, base_dir: str) -> str:
 def _validate_import_target_schema(raw: Any, ref: str, origin: str) -> None:
     # Lazy import: parse.py imports lower_expression_templates lazily, and
     # template_imports is imported from parse.load — avoid a module cycle.
-    from .parse import _get_schema
     import jsonschema
+
+    from .parse import _get_schema
 
     try:
         jsonschema.validate(raw, _get_schema())
@@ -1115,11 +1105,11 @@ def _validate_import_target_schema(raw: Any, ref: str, origin: str) -> None:
         raise ExpressionTemplateError(
             TEMPLATE_IMPORT_UNRESOLVED,
             f"{origin}: import target '{ref}' failed schema validation: {e.message}",
-        )
+        ) from e
 
 
 def _resolve_import_entry(
-    entry: Any, base_dir: str, stack: List[str], origin: str
+    entry: Any, base_dir: str, stack: list[str], origin: str
 ) -> _TemplateScope:
     """Resolve ONE ``expression_template_imports`` entry (esm-spec §9.7.2):
     load the target (path-scoped cycle detection over canonical refs, as
@@ -1181,7 +1171,7 @@ def _resolve_import_entry(
     # (innermost-first), so the value is carried SYMBOLICALLY into the child and
     # folds when the importing document closes (§9.7.6 "Binding value flow").
     bindings_raw = entry.get("bindings")
-    values: Dict[str, Any] = {}
+    values: dict[str, Any] = {}
     if _is_object(bindings_raw):
         for name, v in bindings_raw.items():
             if name not in scope.metaparams:
@@ -1222,7 +1212,7 @@ def _resolve_import_entry(
     return scope
 
 
-def _process_library(raw: Any, base_dir: str, stack: List[str], origin: str) -> _TemplateScope:
+def _process_library(raw: Any, base_dir: str, stack: list[str], origin: str) -> _TemplateScope:
     """Resolve a template-library document in its OWN scope: its imports
     (depth-first post-order), then its own templates / index sets /
     metaparameters appended in declaration order (esm-spec §9.7.4), then
@@ -1236,7 +1226,7 @@ def _process_library(raw: Any, base_dir: str, stack: List[str], origin: str) -> 
             sub = _resolve_import_entry(entry, base_dir, stack, origin)
             _merge_scope(scope, sub, origin)
 
-    own: Dict[str, Any] = {}
+    own: dict[str, Any] = {}
     tpl = raw.get("expression_templates")
     if _is_object(tpl):
         for n, d in tpl.items():
@@ -1290,51 +1280,20 @@ def _has_import_machinery(raw: Any) -> bool:
     return False
 
 
-def resolve_template_machinery(
-    raw: Any,
-    base_path: str,
-    metaparameters: Optional[Dict[str, int]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Resolve every esm-spec §9.7 construct of the ROOT document ``raw``
-    (relative import refs resolve against ``base_path``): imports recursively
-    with per-edge instantiation, ``index_sets`` merge, metaparameter close
-    (``metaparameters`` is the loader-API binding site 4; already-closed edge
-    bindings win, then API bindings, then defaults) and fold,
-    expression-position substitution, and — for a root library file — §9.7.3
-    body composition.
-
-    Returns a new order-preserving dict tree ready for
-    :func:`~earthsci_ast.lower_expression_templates.lower_expression_templates`
-    with ``expression_template_imports``, ``metaparameters``, and top-level
-    ``expression_templates`` consumed (Option A round-trip: none survives
-    ``parse → emit``), or ``None`` when the document carries no §9.7 machinery
-    (the legacy fast path). Does not mutate the input.
-    """
-
-    api_raw = dict(metaparameters or {})
-    if not _has_import_machinery(raw):
-        if api_raw:
-            names = ", ".join(sorted(str(k) for k in api_raw))
-            raise ExpressionTemplateError(
-                TEMPLATE_IMPORT_UNKNOWN_NAME,
-                f"loader API binds metaparameter(s) {names} but the document "
-                "declares none (esm-spec §9.7.6)",
-            )
-        return None
-
-    root: Dict[str, Any] = copy.deepcopy(raw)
-    stack: List[str] = []
-    base_dir = str(base_path)
-
-    doc_meta = _collect_metaparam_decls(root, "document")
-    doc_isets: Dict[str, Any] = {}
-    if _is_object(root.get("index_sets")):
-        for n, d in root["index_sets"].items():
-            doc_isets[str(n)] = d
-
-    # --- top-level templates + imports (root template-library file) ---
+def _resolve_root_library(
+    root: dict[str, Any],
+    base_dir: str,
+    stack: list[str],
+    doc_meta: dict[str, Any],
+    doc_isets: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """§9.7.4 (root template-library file): resolve the root document's OWN
+    top-level ``expression_templates`` + imports in document scope, merging the
+    imported ``index_sets`` and re-exported metaparameters into ``doc_isets`` /
+    ``doc_meta`` (both mutated in place). Returns ``(is_library, top_templates)``;
+    ``top_templates`` is empty when the root is not a library file."""
     is_library = "expression_templates" in root
-    top_templates: Dict[str, Any] = {}
+    top_templates: dict[str, Any] = {}
     if is_library:
         topscope = _TemplateScope()
         imports = root.get("expression_template_imports")
@@ -1342,7 +1301,7 @@ def resolve_template_machinery(
             for entry in imports:
                 sub = _resolve_import_entry(entry, base_dir, stack, "document")
                 _merge_scope(topscope, sub, "document")
-        own: Dict[str, Any] = {}
+        own: dict[str, Any] = {}
         tpl = root["expression_templates"]
         if _is_object(tpl):
             for n, d in tpl.items():
@@ -1359,8 +1318,21 @@ def resolve_template_machinery(
         for n, d in topscope.metaparams.items():
             _merge_named(doc_meta, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", "document")
         top_templates = topscope.templates
+    return is_library, top_templates
 
-    # --- per-component imports (models / reaction systems, §9.7.2) ---
+
+def _resolve_component_imports(
+    root: dict[str, Any],
+    base_dir: str,
+    stack: list[str],
+    doc_meta: dict[str, Any],
+    doc_isets: dict[str, Any],
+) -> None:
+    """§9.7.2 (per-component imports): resolve each model / reaction-system
+    component's ``expression_template_imports`` in its own scope, fold the
+    effective template sequence into the component's ``expression_templates``
+    block, and merge imported index sets / metaparameters into ``doc_isets`` /
+    ``doc_meta``. ``root`` and the two registries are mutated in place."""
     for compkind in _COMPONENT_KINDS:
         comps = root.get(compkind)
         if not _is_object(comps):
@@ -1411,8 +1383,15 @@ def resolve_template_machinery(
             comp["expression_templates"] = cscope.templates
             del comp["expression_template_imports"]
 
-    # --- close this document's metaparameters (§9.7.6 sites 4-5) ---
-    api: Dict[str, int] = {}
+
+def _close_document_metaparameters(
+    doc_meta: dict[str, Any], api_raw: dict[str, Any]
+) -> dict[str, int]:
+    """§9.7.6 sites 4-5: close the document's metaparameters — already-closed
+    edge bindings won earlier; now loader-API bindings (``api_raw``) win over
+    declared defaults, and a name still open after both is
+    ``metaparameter_unbound``. Returns the closed ``name -> int`` value map."""
+    api: dict[str, int] = {}
     for k, v in api_raw.items():
         api[str(k)] = _require_int(v, f"loader API metaparameter '{k}'")
     for k in sorted(api):
@@ -1422,8 +1401,8 @@ def resolve_template_machinery(
                 f"loader API binds metaparameter '{k}', which the document "
                 "does not declare (esm-spec §9.7.6)",
             )
-    values: Dict[str, int] = {}
-    open_names: List[str] = []
+    values: dict[str, int] = {}
+    open_names: list[str] = []
     for name, decl in doc_meta.items():
         if name in api:
             values[name] = api[name]
@@ -1439,8 +1418,15 @@ def resolve_template_machinery(
             f"metaparameter(s) {', '.join(open_names)} still open after edge "
             "bindings, loader-API bindings, and defaults (esm-spec §9.7.6)",
         )
+    return values
 
-    # --- §9.7.6 name-collision check: no shadowing of visible names ---
+
+def _reject_metaparameter_shadowing(
+    root: dict[str, Any], doc_meta: dict[str, Any], doc_isets: dict[str, Any]
+) -> None:
+    """§9.7.6 name-collision check: a document metaparameter MUST NOT shadow a
+    visible index-set / variable / species / parameter name
+    (``metaparameter_name_conflict``)."""
     if doc_meta:
         visible = set(doc_isets.keys())
         for compkind in _COMPONENT_KINDS:
@@ -1463,7 +1449,17 @@ def resolve_template_machinery(
                     "(esm-spec §9.7.6)",
                 )
 
-    # --- expression-position substitution of the closed values ---
+
+def _substitute_closed_metaparameters(
+    root: dict[str, Any],
+    top_templates: dict[str, Any],
+    doc_isets: dict[str, Any],
+    values: dict[str, int],
+) -> dict[str, Any]:
+    """Expression-position substitution of the closed metaparameter ``values``
+    across every component (template blocks via ``_substitute_metaparams_decl``,
+    all other fields via ``_substitute_metaparams``), the root library templates,
+    and the index-set registry. Returns the (possibly rebuilt) ``doc_isets``."""
     if values:
         for compkind in _COMPONENT_KINDS:
             comps = root.get(compkind)
@@ -1482,8 +1478,16 @@ def resolve_template_machinery(
         for tn in list(top_templates.keys()):
             top_templates[tn] = _substitute_metaparams_decl(top_templates[tn], values)
         doc_isets = {n: _substitute_metaparams(d, values) for n, d in doc_isets.items()}
+    return doc_isets
 
-    # --- fold structural sites on the closed document ---
+
+def _fold_closed_document(
+    root: dict[str, Any], top_templates: dict[str, Any], doc_isets: dict[str, Any]
+) -> None:
+    """Fold the structural integer sites (``aggregate`` ranges, ``makearray``
+    regions) across components + root templates, and the interval ``size``
+    expressions in the index-set registry (strict: a still-open name is
+    ``metaparameter_unbound``). Mutates in place."""
     for compkind in _COMPONENT_KINDS:
         comps = root.get(compkind)
         if not _is_object(comps):
@@ -1495,8 +1499,16 @@ def resolve_template_machinery(
         _fold_structural_sites(td, f"document.expression_templates.{tn}")
     _fold_index_set_sizes(doc_isets, "document", strict=True)
 
-    # --- root library file: compose bodies (validation), then strip; no §9.7
-    #     construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+
+def _finalize_document(
+    root: dict[str, Any],
+    is_library: bool,
+    top_templates: dict[str, Any],
+    doc_isets: dict[str, Any],
+) -> dict[str, Any]:
+    """Root library body composition (validation) + strip: consume every §9.7
+    construct so none survives ``parse → emit`` (Option A round-trip), attach the
+    merged ``index_sets`` registry, and return ``root``."""
     if is_library:
         _compose_template_bodies(top_templates, "document")
         del root["expression_templates"]
@@ -1505,6 +1517,60 @@ def resolve_template_machinery(
     if doc_isets:
         root["index_sets"] = doc_isets
     return root
+
+
+def resolve_template_machinery(
+    raw: Any,
+    base_path: str,
+    metaparameters: dict[str, int] | None = None,
+) -> dict[str, Any] | None:
+    """Resolve every esm-spec §9.7 construct of the ROOT document ``raw``
+    (relative import refs resolve against ``base_path``): imports recursively
+    with per-edge instantiation, ``index_sets`` merge, metaparameter close
+    (``metaparameters`` is the loader-API binding site 4; already-closed edge
+    bindings win, then API bindings, then defaults) and fold,
+    expression-position substitution, and — for a root library file — §9.7.3
+    body composition.
+
+    Returns a new order-preserving dict tree ready for
+    :func:`~earthsci_ast.lower_expression_templates.lower_expression_templates`
+    with ``expression_template_imports``, ``metaparameters``, and top-level
+    ``expression_templates`` consumed (Option A round-trip: none survives
+    ``parse → emit``), or ``None`` when the document carries no §9.7 machinery
+    (the legacy fast path). Does not mutate the input.
+    """
+
+    api_raw = dict(metaparameters or {})
+    if not _has_import_machinery(raw):
+        if api_raw:
+            names = ", ".join(sorted(str(k) for k in api_raw))
+            raise ExpressionTemplateError(
+                TEMPLATE_IMPORT_UNKNOWN_NAME,
+                f"loader API binds metaparameter(s) {names} but the document "
+                "declares none (esm-spec §9.7.6)",
+            )
+        return None
+
+    root: dict[str, Any] = copy.deepcopy(raw)
+    stack: list[str] = []
+    base_dir = str(base_path)
+
+    doc_meta = _collect_metaparam_decls(root, "document")
+    doc_isets: dict[str, Any] = {}
+    if _is_object(root.get("index_sets")):
+        for n, d in root["index_sets"].items():
+            doc_isets[str(n)] = d
+
+    # Innermost-first resolution (esm-spec §9.7.6), one phase per helper. Each
+    # threads the shared registries (root / doc_meta / doc_isets, mutated in
+    # place); the two phases that rebind a registry return the new value.
+    is_library, top_templates = _resolve_root_library(root, base_dir, stack, doc_meta, doc_isets)
+    _resolve_component_imports(root, base_dir, stack, doc_meta, doc_isets)
+    values = _close_document_metaparameters(doc_meta, api_raw)
+    _reject_metaparameter_shadowing(root, doc_meta, doc_isets)
+    doc_isets = _substitute_closed_metaparameters(root, top_templates, doc_isets, values)
+    _fold_closed_document(root, top_templates, doc_isets)
+    return _finalize_document(root, is_library, top_templates, doc_isets)
 
 
 # ===========================================================================
@@ -1540,7 +1606,7 @@ def _has_scope_injection(raw: Any, injected: Any) -> bool:
     return False
 
 
-def _append_component_imports(comp: Dict[str, Any], imports: Any) -> Dict[str, Any]:
+def _append_component_imports(comp: dict[str, Any], imports: Any) -> dict[str, Any]:
     """Append raw §9.7.2 import entries to a component's own
     ``expression_template_imports`` (esm-spec §9.7.10 merge order: the target's
     own imports first, then the injected list). ``comp`` is a mutable dict."""
@@ -1552,7 +1618,7 @@ def _append_component_imports(comp: Dict[str, Any], imports: Any) -> Dict[str, A
     return comp
 
 
-def _apply_subsystem_ref_injection(root: Dict[str, Any], injected: Any) -> Dict[str, Any]:
+def _apply_subsystem_ref_injection(root: dict[str, Any], injected: Any) -> dict[str, Any]:
     """esm-spec §9.7.10 form A: append the subsystem-ref edge's injected §9.7.2
     import entries to the single top-level component's own
     ``expression_template_imports``, so the referenced document is lowered under
@@ -1579,19 +1645,16 @@ def _collect_scoped_owners(out: set, x: Any) -> set:
     """Walk ``x`` and add the owning-system segment of every scoped reference (a
     string ``"System.var"``) to ``out``. Used for ``event`` entries whose system
     references are spread across conditions / affects."""
-    if isinstance(x, str):
-        if "." in x:
-            out.add(x.split(".", 1)[0])
-    elif _is_object(x):
-        for v in x.values():
-            _collect_scoped_owners(out, v)
-    elif _is_array(x):
-        for v in x:
-            _collect_scoped_owners(out, v)
+
+    def _add(s: str) -> None:
+        if "." in s:
+            out.add(s.split(".", 1)[0])
+
+    _walk_json(x, on_str=_add)
     return out
 
 
-def _coupling_referenced_systems(entry: Dict[str, Any]) -> set:
+def _coupling_referenced_systems(entry: dict[str, Any]) -> set:
     """The set of system names one coupling entry references (esm-spec §10.8):
     ``operator_compose``/``couple`` → ``systems``; ``variable_map`` → owning
     systems of ``from``/``to``; ``event`` → owning systems of any scoped
@@ -1616,7 +1679,7 @@ def _coupling_referenced_systems(entry: Dict[str, Any]) -> set:
     return out
 
 
-def _apply_coupling_injections(root: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
     """esm-spec §9.7.10 form B / §10.8: for each ``coupling`` entry carrying an
     ``expression_template_imports`` map ``{ <target>: [imports...] }``, resolve
     each target key to a top-level system and append its imports to that
@@ -1702,7 +1765,7 @@ def _apply_coupling_injections(root: Dict[str, Any]) -> Dict[str, Any]:
     return root
 
 
-def apply_scope_injections(raw: Any, injected: Any = None) -> Optional[Dict[str, Any]]:
+def apply_scope_injections(raw: Any, injected: Any = None) -> dict[str, Any] | None:
     """esm-spec §9.7.10 forms A + B: if ``raw`` needs a scope-directed injection
     (a non-empty subsystem-ref edge list ``injected``, or a coupling entry
     carrying an injection map), return a deep-copied dict tree with the injected
@@ -1714,7 +1777,7 @@ def apply_scope_injections(raw: Any, injected: Any = None) -> Optional[Dict[str,
     injected = injected or []
     if not _has_scope_injection(raw, injected):
         return None
-    root: Dict[str, Any] = copy.deepcopy(raw)
+    root: dict[str, Any] = copy.deepcopy(raw)
     _apply_subsystem_ref_injection(root, injected)
     _apply_coupling_injections(root)
     return root

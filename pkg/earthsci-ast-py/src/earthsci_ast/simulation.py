@@ -17,25 +17,16 @@ integrates the system. The guard rejects only *undiscretized* spatial operators,
 not PDEs. Remaining limitation: limited event support.
 This enables atmospheric chemistry and discretized-PDE simulation in Python.
 """
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Union, Any, Callable
-
-# Optional scipy import - only needed for actual simulation. The guard lives
-# in simulation_common (shared by every pathway); the names are re-exported
-# here so ``from earthsci_ast.simulation import SCIPY_AVAILABLE`` (and
-# ``solve_ivp``) keep working.
-from .simulation_common import (  # noqa: F401
-    DENSE_OUTPUT_MIN_POINTS,
-    SCIPY_AVAILABLE,
-    SimulationResult,
-    solve_ivp,
-)
 
 from .esm_types import (
-    ReactionSystem,
     ContinuousEvent,
     EsmFile,
+    ReactionSystem,
 )
 from .flatten import (
     FlattenedSystem,
@@ -43,29 +34,8 @@ from .flatten import (
     _has_array_op,
     flatten,
 )
-from .sympy_bridge import (
-    SimulationError,
-    _compile_flat_rhs,
-)
-
-# ---------------------------------------------------------------------------
-# Pathway submodules. simulation.py is the facade: it re-exports the full API
-# (public and underscore-private) of the pathway submodules so every name
-# historically importable from ``earthsci_ast.simulation`` keeps working.
-# Import direction is acyclic: the submodules never import this module.
-# ---------------------------------------------------------------------------
-from .simulation_legacy import (  # noqa: F401
-    _apply_discrete_event_effects,
-    _check_discrete_event_condition,
-    _create_event_functions,
-    _evaluate_expression_at_state,
-    _generate_mass_action_odes,
-    simulate_reaction_system,
-    simulate_with_discrete_events,
-)
 from .simulation_array import (  # noqa: F401
     BuildInspection,
-    _NumpyRhsBuild,
     _aggregate_needs_interpreter,
     _apply_equation_to_dy,
     _apply_initial_conditions,
@@ -83,6 +53,7 @@ from .simulation_array import (  # noqa: F401
     _linear_pos,
     _materialize_join_key_buffers,
     _materialize_observeds,
+    _NumpyRhsBuild,
     _order_observed_equations,
     _parse_element_key,
     _rebind_index_syms,
@@ -95,6 +66,36 @@ from .simulation_array import (  # noqa: F401
     _time_varying_observeds,
     _vi_lhs_base,
     evaluate_rhs,
+)
+
+# Optional scipy import - only needed for actual simulation. The guard lives
+# in simulation_common (shared by every pathway); the names are re-exported
+# here so ``from earthsci_ast.simulation import SCIPY_AVAILABLE`` (and
+# ``solve_ivp``) keep working.
+from .simulation_common import (  # noqa: F401
+    DENSE_OUTPUT_MIN_POINTS,
+    SCIPY_AVAILABLE,
+    SimulationResult,
+    _failure_result,
+    _observed_rows,
+    _resolve_override,
+    solve_ivp,
+)
+
+# ---------------------------------------------------------------------------
+# Pathway submodules. simulation.py is the facade: it re-exports the full API
+# (public and underscore-private) of the pathway submodules so every name
+# historically importable from ``earthsci_ast.simulation`` keeps working.
+# Import direction is acyclic: the submodules never import this module.
+# ---------------------------------------------------------------------------
+from .simulation_legacy import (  # noqa: F401
+    _apply_discrete_event_effects,
+    _check_discrete_event_condition,
+    _create_event_functions,
+    _evaluate_expression_at_state,
+    _generate_mass_action_odes,
+    simulate_reaction_system,
+    simulate_with_discrete_events,
 )
 from .simulation_loaders import (  # noqa: F401
     LoaderProvider,
@@ -116,13 +117,17 @@ from .simulation_loaders import (  # noqa: F401
     _simulate_with_discrete_providers,
     _simulate_with_loaders,
 )
+from .sympy_bridge import (
+    SimulationError,
+    _compile_flat_rhs,
+)
 
 
 def _resolve_parameter_values(
     flat: FlattenedSystem,
-    parameter_names: List[str],
-    parameter_overrides: Dict[str, float],
-) -> List[float]:
+    parameter_names: list[str],
+    parameter_overrides: dict[str, float],
+) -> list[float]:
     """Resolve parameter values for a simulate() call.
 
     Caller overrides win (dot-namespaced first, then bare name), then the
@@ -130,26 +135,20 @@ def _resolve_parameter_values(
     aligned with ``parameter_names`` so it can be spliced into the
     lambdified function's argument tuple.
     """
-    values: List[float] = []
+    values: list[float] = []
     for pname in parameter_names:
-        bare = pname.rsplit(".", 1)[-1]
-        if pname in parameter_overrides:
-            value = parameter_overrides[pname]
-        elif bare in parameter_overrides:
-            value = parameter_overrides[bare]
-        else:
-            default = flat.parameters[pname].default
-            value = float(default) if isinstance(default, (int, float)) else 0.0
-        values.append(float(value))
+        values.append(
+            _resolve_override(pname, parameter_overrides, flat.parameters[pname].default)
+        )
     return values
 
 
 # Backward compatibility: provide old function signature as alias
 def simulate_legacy(
     reaction_system: ReactionSystem,
-    initial_conditions: Dict[str, float],
-    time_span: Tuple[float, float],
-    events: Optional[List[ContinuousEvent]] = None,
+    initial_conditions: dict[str, float],
+    time_span: tuple[float, float],
+    events: list[ContinuousEvent] | None = None,
     **solver_options,
 ) -> SimulationResult:
     """Legacy simulate function for backward compatibility."""
@@ -159,19 +158,19 @@ def simulate_legacy(
 
 
 def simulate(
-    file_or_flat: Union[EsmFile, FlattenedSystem],
-    tspan: Tuple[float, float],
-    parameters: Optional[Dict[str, float]] = None,
-    initial_conditions: Optional[Dict[str, float]] = None,
+    file_or_flat: EsmFile | FlattenedSystem,
+    tspan: tuple[float, float],
+    parameters: dict[str, float] | None = None,
+    initial_conditions: dict[str, float] | None = None,
     method: str = "LSODA",
-    file: Optional[EsmFile] = None,
+    file: EsmFile | None = None,
     rtol: float = 1e-10,
     atol: float = 1e-14,
     cse: bool = True,
-    loader_provider: Optional["LoaderProvider"] = None,
-    provider_factory: Optional[Callable] = None,
-    providers: Optional[Dict[str, Any]] = None,
-    inspect: Optional["BuildInspection"] = None,
+    loader_provider: LoaderProvider | None = None,
+    provider_factory: Callable | None = None,
+    providers: dict[str, Any] | None = None,
+    inspect: BuildInspection | None = None,
 ) -> SimulationResult:
     """Simulate an ESM model via the flattened representation (spec §4.7.5).
 
@@ -291,16 +290,7 @@ def simulate(
     initial_conditions = initial_conditions or {}
 
     if not SCIPY_AVAILABLE:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],
-            success=False,
-            message="SciPy is required for simulation but not available.",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result("SciPy is required for simulation but not available.")
 
     # Provider injection for top-level ``data_loaders`` bound through
     # ``variable_map`` / scoped-reference ``ic`` (DESIGN pde_simulation_pipeline
@@ -402,18 +392,7 @@ def simulate(
             t_out = np.linspace(t0_, t1_, 1001)
             if observed_names and observed_vector_func is not None:
                 obs_vals = observed_vector_func(t_out, *param_values)
-                y_out = np.empty((len(observed_names), t_out.size), dtype=float)
-                for i, val in enumerate(obs_vals):
-                    if np.ndim(val) == 0:
-                        y_out[i, :] = float(val)
-                    else:
-                        arr = np.asarray(val, dtype=float)
-                        if arr.size == 1:
-                            y_out[i, :] = float(arr.reshape(-1)[0])
-                        elif arr.size == t_out.size:
-                            y_out[i, :] = arr
-                        else:
-                            y_out[i, :] = float(arr.reshape(-1)[0])
+                y_out = _observed_rows(obs_vals, t_out.size)
             else:
                 y_out = np.empty((0, t_out.size), dtype=float)
             return SimulationResult(
@@ -431,16 +410,11 @@ def simulate(
         # Algebraic-only states get their consistent value computed below from
         # the algebraic body so the t=0 output is faithful regardless of
         # whether the caller supplied a (possibly stale) initial guess.
-        y0_list: List[float] = []
+        y0_list: list[float] = []
         for name in state_names:
-            bare = name.rsplit(".", 1)[-1]
-            if name in initial_conditions:
-                y0_list.append(float(initial_conditions[name]))
-            elif bare in initial_conditions:
-                y0_list.append(float(initial_conditions[bare]))
-            else:
-                default = flat.state_variables[name].default
-                y0_list.append(float(default) if isinstance(default, (int, float)) else 0.0)
+            y0_list.append(
+                _resolve_override(name, initial_conditions, flat.state_variables[name].default)
+            )
         y0 = np.array(y0_list)
 
         # Override y0 for algebraic states so the t=0 sample is consistent.
@@ -475,11 +449,11 @@ def simulate(
                 raise SimulationError("Non-finite derivatives encountered")
             return dydt
 
-        event_functions: List[Callable] = []
+        event_functions: list[Callable] = []
         if flat.continuous_events:
             event_functions = _create_event_functions(flat.continuous_events, symbol_map)
 
-        solver_options: Dict[str, Any] = {
+        solver_options: dict[str, Any] = {
             "method": method,
             "rtol": rtol,
             "atol": atol,
@@ -512,22 +486,11 @@ def simulate(
         # corrected) state trajectory and append them to the result so callers
         # can query observed quantities (e.g. cloud_albedo's R_c and γ) on the
         # same time grid as the states.
-        out_vars: List[str] = list(state_names)
+        out_vars: list[str] = list(state_names)
         if observed_names and y_out.size and observed_vector_func is not None:
             state_arrays = [y_out[i, :] for i in range(len(state_names))]
             obs_results = observed_vector_func(t_out, *state_arrays, *param_values)
-            obs_block = np.empty((len(observed_names), t_out.size), dtype=float)
-            for i, val in enumerate(obs_results):
-                if np.ndim(val) == 0:
-                    obs_block[i, :] = float(val)
-                else:
-                    arr = np.asarray(val, dtype=float)
-                    if arr.size == 1:
-                        obs_block[i, :] = float(arr.reshape(-1)[0])
-                    elif arr.size == t_out.size:
-                        obs_block[i, :] = arr
-                    else:
-                        obs_block[i, :] = float(arr.reshape(-1)[0])
+            obs_block = _observed_rows(obs_results, t_out.size)
             y_out = np.vstack([y_out, obs_block])
             out_vars.extend(observed_names)
 
@@ -547,13 +510,4 @@ def simulate(
         # Spec contract: PDE rejection is a hard error, never a result code.
         raise
     except Exception as e:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],
-            success=False,
-            message=f"Simulation failed: {e}",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result(f"Simulation failed: {e}")

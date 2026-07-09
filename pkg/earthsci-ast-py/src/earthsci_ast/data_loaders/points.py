@@ -12,17 +12,29 @@ import csv
 import datetime as _dt
 import io
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+from typing import Any, Callable
 
+from ..errors import EarthSciAstError
 from ..esm_types import DataLoader, DataLoaderKind
+from ._source_urls import resolve_source_urls
 from .mirror import open_with_fallback
-from .time_resolution import file_anchor_for_time
-from .url_template import expand_with_mirrors
 from .variables import apply_variable_mapping
 
+# Tunables for the default HTTP fetcher (used only when no explicit fetcher is
+# supplied to ``load``).
+_HTTP_TIMEOUT_SECONDS = 30
+try:
+    _PACKAGE_VERSION = _pkg_version("earthsci-ast")
+except PackageNotFoundError:  # pragma: no cover - not installed as a distribution
+    _PACKAGE_VERSION = "0.1"
+_HTTP_USER_AGENT = "earthsci-ast/" + _PACKAGE_VERSION
 
-class PointsLoaderError(RuntimeError):
+
+class PointsLoaderError(EarthSciAstError, RuntimeError):
     """Raised when a points source cannot be loaded or parsed."""
 
 
@@ -30,9 +42,9 @@ class PointsLoaderError(RuntimeError):
 class PointsLoadResult:
     """Result of a single ``PointsLoader.load`` call."""
 
-    urls_tried: List[str]
-    records: List[Dict[str, Any]]
-    variables: Dict[str, List[Any]]
+    urls_tried: list[str]
+    records: list[dict[str, Any]]
+    variables: dict[str, list[Any]]
 
 
 class PointsLoader:
@@ -46,37 +58,17 @@ class PointsLoader:
     def _resolve_urls(
         self,
         *,
-        time: Optional[Union[_dt.datetime, _dt.date, str]],
+        time: _dt.datetime | _dt.date | str | None,
         substitutions: Mapping[str, Any],
-    ) -> List[str]:
-        anchor: Optional[_dt.datetime]
-        if time is not None and self.dl.temporal and self.dl.temporal.file_period:
-            anchor = file_anchor_for_time(
-                time,
-                file_period=self.dl.temporal.file_period,
-                start=self.dl.temporal.start,
-            )
-        elif isinstance(time, (_dt.datetime, _dt.date)):
-            anchor = (
-                time
-                if isinstance(time, _dt.datetime)
-                else _dt.datetime(time.year, time.month, time.day)
-            )
-        else:
-            anchor = None
-        return expand_with_mirrors(
-            self.dl.source.url_template,
-            self.dl.source.mirrors,
-            date=anchor,
-            variables=dict(substitutions),
-        )
+    ) -> list[str]:
+        return resolve_source_urls(self.dl, time=time, substitutions=substitutions)
 
     def load(
         self,
         *,
-        time: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-        fetcher: Optional[Callable[[str], bytes]] = None,
-        parser: Optional[Callable[[bytes], List[Dict[str, Any]]]] = None,
+        time: _dt.datetime | _dt.date | str | None = None,
+        fetcher: Callable[[str], bytes] | None = None,
+        parser: Callable[[bytes], list[dict[str, Any]]] | None = None,
         **substitutions: Any,
     ) -> PointsLoadResult:
         """Fetch records from the first URL that opens.
@@ -102,9 +94,9 @@ class PointsLoader:
 def load_points(
     data_loader: DataLoader,
     *,
-    time: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-    fetcher: Optional[Callable[[str], bytes]] = None,
-    parser: Optional[Callable[[bytes], List[Dict[str, Any]]]] = None,
+    time: _dt.datetime | _dt.date | str | None = None,
+    fetcher: Callable[[str], bytes] | None = None,
+    parser: Callable[[bytes], list[dict[str, Any]]] | None = None,
     **substitutions: Any,
 ) -> PointsLoadResult:
     """Convenience wrapper: instantiate and call ``PointsLoader.load``."""
@@ -117,14 +109,14 @@ def _default_http_fetcher() -> Callable[[str], bytes]:
     from urllib.request import Request, urlopen
 
     def _fetch(url: str) -> bytes:
-        req = Request(url, headers={"User-Agent": "earthsci-ast/0.1"})
-        with urlopen(req, timeout=30) as resp:
+        req = Request(url, headers={"User-Agent": _HTTP_USER_AGENT})
+        with urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
             return resp.read()
 
     return _fetch
 
 
-def _default_parser(body: bytes) -> List[Dict[str, Any]]:
+def _default_parser(body: bytes) -> list[dict[str, Any]]:
     text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else body
     text = text.strip()
     if not text:
@@ -147,10 +139,10 @@ def _default_parser(body: bytes) -> List[Dict[str, Any]]:
     return [dict(row) for row in reader]
 
 
-def _flatten_record(record: Any) -> Dict[str, Any]:
+def _flatten_record(record: Any) -> dict[str, Any]:
     if not isinstance(record, dict):
         return {"value": record}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for key, value in record.items():
         if isinstance(value, dict):
             for inner, inner_val in value.items():
@@ -160,8 +152,8 @@ def _flatten_record(record: Any) -> Dict[str, Any]:
     return out
 
 
-def _records_to_columns(records: Iterable[Mapping[str, Any]]) -> Dict[str, List[Any]]:
-    columns: Dict[str, List[Any]] = {}
+def _records_to_columns(records: Iterable[Mapping[str, Any]]) -> dict[str, list[Any]]:
+    columns: dict[str, list[Any]] = {}
     record_list = list(records)
     for record in record_list:
         for key in record.keys():

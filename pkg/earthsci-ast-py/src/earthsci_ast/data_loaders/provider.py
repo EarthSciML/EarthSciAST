@@ -34,7 +34,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import os
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 try:  # Protocol is stdlib from 3.8; guard keeps the import defensive.
     from typing import Protocol, runtime_checkable
@@ -50,7 +50,7 @@ if TYPE_CHECKING:  # avoid a runtime import cycle with flatten/simulation.
 
 #: A run window ``(start, end)`` of absolute datetimes bounding
 #: :meth:`Provider.refresh_times` (and priming a DISCRETE :meth:`materialize`).
-Window = Tuple[_dt.datetime, _dt.datetime]
+Window = tuple[_dt.datetime, _dt.datetime]
 
 
 @runtime_checkable
@@ -70,7 +70,7 @@ class Provider(Protocol):
     def refresh(self, t: _dt.datetime) -> Any:
         """Return the native arrays for the cadence anchor at time ``t``."""
 
-    def refresh_times(self) -> List[_dt.datetime]:
+    def refresh_times(self) -> list[_dt.datetime]:
         """The cadence anchors (absolute datetimes) over the run window."""
 
 
@@ -92,13 +92,13 @@ class LoadDataProvider:
 
     def __init__(
         self,
-        field: "LoaderField",
-        window: Optional[Window] = None,
+        field: LoaderField,
+        window: Window | None = None,
         *,
-        opener: Optional[Callable[[str], Any]] = None,
-        fetcher: Optional[Callable[[str], bytes]] = None,
+        opener: Callable[[str], Any] | None = None,
+        fetcher: Callable[[str], bytes] | None = None,
         use_cache: bool = False,
-        url_substitutions: Optional[dict] = None,
+        url_substitutions: dict | None = None,
     ) -> None:
         self.field = field
         self.window = window
@@ -132,7 +132,7 @@ class LoadDataProvider:
     def _temporal(self) -> Any:
         return self.field.loader.temporal
 
-    def _epoch(self) -> Optional[_dt.datetime]:
+    def _epoch(self) -> _dt.datetime | None:
         """Absolute instant of simulation-clock 0 for this loader, or ``None``.
 
         Mirrors C1's clock mapping (``temporal.start`` is sim-clock zero), so a
@@ -159,7 +159,7 @@ class LoadDataProvider:
             self.field.loader, time=None, opener=opener, fetcher=fetcher, **self._url_substitutions
         )
 
-    def refresh(self, t: Optional[_dt.datetime]) -> Any:
+    def refresh(self, t: _dt.datetime | None) -> Any:
         """Load the file covering absolute time ``t`` (``None`` ⇒ unanchored)."""
         from .runtime import load_data
 
@@ -168,7 +168,7 @@ class LoadDataProvider:
             self.field.loader, time=t, opener=opener, fetcher=fetcher, **self._url_substitutions
         )
 
-    def refresh_times(self) -> List[_dt.datetime]:
+    def refresh_times(self) -> list[_dt.datetime]:
         """Cadence anchors in the run window — the solver tstops.
 
         Empty for a CONST loader, or when the window/epoch/frequency cannot be
@@ -197,11 +197,61 @@ class LoadDataProvider:
         elapsed = (lower - epoch).total_seconds()
         k = max(0, math.ceil(elapsed / step))
         anchor = epoch + k * delta
-        out: List[_dt.datetime] = []
+        out: list[_dt.datetime] = []
         while anchor < upper:
             out.append(anchor)
             anchor = anchor + delta
         return out
+
+
+#: Fallback native cell size (WGS84 degrees) for a ``{bbox…}`` loader that
+#: declares neither ``url_defaults.resolution_deg`` nor
+#: ``metadata.native_resolution_deg.lon`` — one arc-second (the LANDFIRE /
+#: USGS 3DEP native grid).
+_DEFAULT_RESOLUTION_DEG = 1.0 / 3600.0
+
+#: Clamp on a derived ArcGIS ImageServer output dimension (pixels) when the
+#: loader's ``url_defaults`` does not set ``size_cap``.
+_DEFAULT_IMAGE_SIZE_CAP = 4000
+
+
+def _bbox_image_substitutions(target: Any, meta: dict, defaults: dict) -> dict:
+    """WGS84 request box + output image size for a ``{bbox…}`` template, derived
+    from the ``target`` grid's lon/lat envelope.
+
+    A port of EarthSciData.jl ``_domain_bbox_wgs84`` / ``LANDFIREFileSet``: pad
+    the envelope by one resolution cell, size = ceil(span_deg / resolution_deg)
+    clamped to ``[1, size_cap]``. Resolution defaults to
+    ``metadata.native_resolution_deg.lon`` (then :data:`_DEFAULT_RESOLUTION_DEG`),
+    the cap to :data:`_DEFAULT_IMAGE_SIZE_CAP`. Both placeholder spellings
+    (``bbox_west``/``bbox_west_deg``, ``width``/``image_width``) are emitted so
+    either loader's template fills.
+    """
+    import numpy as np
+
+    lon = np.asarray(target.center_lon)
+    lat = np.asarray(target.center_lat)
+    native = meta.get("native_resolution_deg") or {}
+    res_deg = float(defaults.get("resolution_deg") or native.get("lon") or _DEFAULT_RESOLUTION_DEG)
+    cap = int(defaults.get("size_cap", _DEFAULT_IMAGE_SIZE_CAP))
+    west, east = float(lon.min()) - res_deg, float(lon.max()) + res_deg
+    south, north = float(lat.min()) - res_deg, float(lat.max()) + res_deg
+    width = max(1, min(cap, math.ceil((east - west) / res_deg)))
+    height = max(1, min(cap, math.ceil((north - south) / res_deg)))
+    return {
+        "bbox_west": west,
+        "bbox_west_deg": west,
+        "bbox_south": south,
+        "bbox_south_deg": south,
+        "bbox_east": east,
+        "bbox_east_deg": east,
+        "bbox_north": north,
+        "bbox_north_deg": north,
+        "width": width,
+        "image_width": width,
+        "height": height,
+        "image_height": height,
+    }
 
 
 def _static_url_substitutions(loader: Any, target: Any) -> dict:
@@ -211,13 +261,8 @@ def _static_url_substitutions(loader: Any, target: Any) -> dict:
     Constant fills (``version``/``product`` and the optional ``resolution_deg`` /
     ``size_cap``) come from the loader's structured ``metadata.url_defaults``.
     When the template has a ``{bbox…}`` placeholder and a ``target`` grid is
-    available, the WGS84 request box and output image size are derived from the
-    target's lon/lat envelope — a port of EarthSciData.jl ``_domain_bbox_wgs84``
-    / ``LANDFIREFileSet``: pad the envelope by one resolution cell, size =
-    ceil(span_deg / resolution_deg) clamped to [1, size_cap]. Resolution defaults
-    to ``metadata.native_resolution_deg.lon`` (then 1″). Both placeholder
-    spellings (``bbox_west``/``bbox_west_deg``, ``width``/``image_width``) are
-    emitted so either loader's template fills.
+    available, the WGS84 request box and output image size are appended by
+    :func:`_bbox_image_substitutions`.
     """
     meta = getattr(loader, "metadata", None) or {}
     defaults = meta.get("url_defaults") or {}
@@ -230,40 +275,12 @@ def _static_url_substitutions(loader: Any, target: Any) -> dict:
     url = getattr(getattr(loader, "source", None), "url_template", "") or ""
     if target is None or "{bbox" not in url:
         return subs
-    import math
-
-    import numpy as np
-
-    lon = np.asarray(getattr(target, "center_lon"))
-    lat = np.asarray(getattr(target, "center_lat"))
-    native = meta.get("native_resolution_deg") or {}
-    res_deg = float(defaults.get("resolution_deg") or native.get("lon") or (1.0 / 3600.0))
-    cap = int(defaults.get("size_cap", 4000))
-    west, east = float(lon.min()) - res_deg, float(lon.max()) + res_deg
-    south, north = float(lat.min()) - res_deg, float(lat.max()) + res_deg
-    width = max(1, min(cap, math.ceil((east - west) / res_deg)))
-    height = max(1, min(cap, math.ceil((north - south) / res_deg)))
-    subs.update(
-        {
-            "bbox_west": west,
-            "bbox_west_deg": west,
-            "bbox_south": south,
-            "bbox_south_deg": south,
-            "bbox_east": east,
-            "bbox_east_deg": east,
-            "bbox_north": north,
-            "bbox_north_deg": north,
-            "width": width,
-            "image_width": width,
-            "height": height,
-            "image_height": height,
-        }
-    )
+    subs.update(_bbox_image_substitutions(target, meta, defaults))
     return subs
 
 
 def build_default_provider(
-    field: "LoaderField", window: Optional[Window] = None, *, target: Any = None
+    field: LoaderField, window: Window | None = None, *, target: Any = None
 ) -> Provider:
     """Default :data:`ProviderFactory`: the in-tree :class:`LoadDataProvider`.
 

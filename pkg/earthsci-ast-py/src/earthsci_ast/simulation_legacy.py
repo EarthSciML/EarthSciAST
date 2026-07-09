@@ -9,30 +9,38 @@ handling) — together with the scalar event helpers they are built from.
 :func:`earthsci_ast.simulation.simulate` for continuous events.
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+from __future__ import annotations
+
+from typing import Callable
 
 import numpy as np
 import sympy as sp
-from typing import Callable, Dict, List, Optional, Tuple
 
 from .esm_types import (
-    ReactionSystem,
+    AffectEquation,
     ContinuousEvent,
     DiscreteEvent,
     Expr,
     ExprNode,
-    AffectEquation,
     FunctionalAffect,
+    ReactionSystem,
 )
 from .reactions import lower_reactions_to_equations
+from .simulation_common import (
+    SCIPY_AVAILABLE,
+    SimulationResult,
+    _failure_result,
+    _resolve_override,
+    solve_ivp,
+)
 from .sympy_bridge import (
-    SimulationError,
     _LAMBDIFY_MODULES,
+    SimulationError,
     _expr_to_sympy,
 )
-from .simulation_common import SCIPY_AVAILABLE, SimulationResult, solve_ivp
 
 
-def _generate_mass_action_odes(reaction_system: ReactionSystem) -> Tuple[List[str], List[sp.Expr]]:
+def _generate_mass_action_odes(reaction_system: ReactionSystem) -> tuple[list[str], list[sp.Expr]]:
     """
     Adapter that lowers a reaction system into ``(species_names, sympy_odes)``
     for SciPy's lambdify pipeline.
@@ -49,7 +57,7 @@ def _generate_mass_action_odes(reaction_system: ReactionSystem) -> Tuple[List[st
     """
     species_names = [species.name for species in reaction_system.species]
     symbol_map = {name: sp.Symbol(name) for name in species_names}
-    species_rates: Dict[str, sp.Expr] = {name: sp.Float(0) for name in species_names}
+    species_rates: dict[str, sp.Expr] = {name: sp.Float(0) for name in species_names}
 
     if species_names and reaction_system.reactions:
         equations = lower_reactions_to_equations(reaction_system.reactions, reaction_system.species)
@@ -64,8 +72,8 @@ def _generate_mass_action_odes(reaction_system: ReactionSystem) -> Tuple[List[st
 
 
 def _create_event_functions(
-    events: List[ContinuousEvent], symbol_map: Dict[str, sp.Symbol]
-) -> List[Callable]:
+    events: list[ContinuousEvent], symbol_map: dict[str, sp.Symbol]
+) -> list[Callable]:
     """
     Create event functions for SciPy integration.
 
@@ -95,39 +103,10 @@ def _create_event_functions(
             has_affect_neg = event.affect_neg is not None and len(event.affect_neg) > 0
             has_affect_pos = event.affects is not None and len(event.affects) > 0
 
-            if has_affect_neg and has_affect_pos:
-                # Create separate event functions for positive and negative crossings
-
-                # Positive-going zero crossing (affects)
-                def event_function_pos(
-                    t, y, condition_func=condition_func, var_names=var_names, event=event
-                ):
-                    var_dict = {name: y[i] if i < len(y) else 0 for i, name in enumerate(var_names)}
-                    var_values = [var_dict.get(name, 0) for name in var_names]
-                    return condition_func(*var_values) if var_values else condition_func()
-
-                event_function_pos.terminal = True
-                event_function_pos.direction = 1  # Positive-going zero crossing only
-                event_function_pos.affects = event.affects  # Store affects for application
-                event_function_pos.event_name = event.name
-                event_functions.append(event_function_pos)
-
-                # Negative-going zero crossing (affect_neg)
-                def event_function_neg(
-                    t, y, condition_func=condition_func, var_names=var_names, event=event
-                ):
-                    var_dict = {name: y[i] if i < len(y) else 0 for i, name in enumerate(var_names)}
-                    var_values = [var_dict.get(name, 0) for name in var_names]
-                    return condition_func(*var_values) if var_values else condition_func()
-
-                event_function_neg.terminal = True
-                event_function_neg.direction = -1  # Negative-going zero crossing only
-                event_function_neg.affects = event.affect_neg  # Store affect_neg for application
-                event_function_neg.event_name = event.name
-                event_functions.append(event_function_neg)
-
-            else:
-                # Original behavior for events without affect_neg
+            # One closure factory for every crossing flavour: the event bodies are
+            # identical (evaluate the condition at the current state), differing only
+            # in the SciPy ``direction`` and which ``affects`` list they carry.
+            def _make_event_function(direction, affects, condition_func, var_names, event):
                 def event_function(
                     t, y, condition_func=condition_func, var_names=var_names, event=event
                 ):
@@ -136,16 +115,37 @@ def _create_event_functions(
                     return condition_func(*var_values) if var_values else condition_func()
 
                 event_function.terminal = True
-                event_function.direction = 0  # Detect all zero crossings (original behavior)
-                event_function.affects = event.affects if has_affect_pos else []
+                event_function.direction = direction
+                event_function.affects = affects
                 event_function.event_name = event.name
-                event_functions.append(event_function)
+                return event_function
+
+            if has_affect_neg and has_affect_pos:
+                # Separate event functions for positive- and negative-going crossings.
+                event_functions.append(
+                    _make_event_function(1, event.affects, condition_func, var_names, event)
+                )
+                event_functions.append(
+                    _make_event_function(-1, event.affect_neg, condition_func, var_names, event)
+                )
+            else:
+                # Original behavior for events without affect_neg: detect all
+                # zero crossings (direction 0).
+                event_functions.append(
+                    _make_event_function(
+                        0,
+                        event.affects if has_affect_pos else [],
+                        condition_func,
+                        var_names,
+                        event,
+                    )
+                )
 
     return event_functions
 
 
 def _apply_discrete_event_effects(
-    event: DiscreteEvent, y: np.ndarray, species_names: List[str], symbol_map: Dict[str, sp.Symbol]
+    event: DiscreteEvent, y: np.ndarray, species_names: list[str], symbol_map: dict[str, sp.Symbol]
 ) -> np.ndarray:
     """
     Apply discrete event effects to the current state.
@@ -206,8 +206,8 @@ def _check_discrete_event_condition(
     event: DiscreteEvent,
     t: float,
     y: np.ndarray,
-    species_names: List[str],
-    symbol_map: Dict[str, sp.Symbol],
+    species_names: list[str],
+    symbol_map: dict[str, sp.Symbol],
 ) -> bool:
     """
     Check if a condition-based discrete event should trigger.
@@ -238,7 +238,7 @@ def _check_discrete_event_condition(
 
 
 def _evaluate_expression_at_state(
-    expr: Expr, y: np.ndarray, species_names: List[str], symbol_map: Dict[str, sp.Symbol]
+    expr: Expr, y: np.ndarray, species_names: list[str], symbol_map: dict[str, sp.Symbol]
 ) -> float:
     """
     Evaluate an expression given the current state.
@@ -272,16 +272,15 @@ def _evaluate_expression_at_state(
     if variables:
         eval_func = sp.lambdify(variables, sympy_expr, modules=_LAMBDIFY_MODULES)
         return float(eval_func(*var_values))
-    else:
-        # Constant expression
-        return float(sympy_expr)
+    # Constant expression
+    return float(sympy_expr)
 
 
 def simulate_reaction_system(
     reaction_system: ReactionSystem,
-    initial_conditions: Dict[str, float],
-    time_span: Tuple[float, float],
-    events: Optional[List[ContinuousEvent]] = None,
+    initial_conditions: dict[str, float],
+    time_span: tuple[float, float],
+    events: list[ContinuousEvent] | None = None,
     **solver_options,
 ) -> SimulationResult:
     """
@@ -328,7 +327,7 @@ def simulate_reaction_system(
         }
         y0 = np.array(
             [
-                initial_conditions.get(name, species_defaults.get(name, 0.0))
+                _resolve_override(name, initial_conditions, species_defaults.get(name))
                 for name in species_names
             ]
         )
@@ -358,7 +357,7 @@ def simulate_reaction_system(
                     return dydt
 
                 except Exception as e:
-                    raise SimulationError(f"Error in RHS evaluation: {e}")
+                    raise SimulationError(f"Error in RHS evaluation: {e}") from e
         else:
 
             def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
@@ -406,23 +405,14 @@ def simulate_reaction_system(
         )
 
     except Exception as e:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],  # Empty variable list
-            success=False,
-            message=f"Simulation failed: {e}",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result(f"Simulation failed: {e}")
 
 
 def simulate_with_discrete_events(
     reaction_system: ReactionSystem,
-    initial_conditions: Dict[str, float],
-    time_span: Tuple[float, float],
-    discrete_events: Optional[List[DiscreteEvent]] = None,
+    initial_conditions: dict[str, float],
+    time_span: tuple[float, float],
+    discrete_events: list[DiscreteEvent] | None = None,
     **solver_options,
 ) -> SimulationResult:
     """
@@ -480,7 +470,7 @@ def simulate_with_discrete_events(
         }
         y_current = np.array(
             [
-                initial_conditions.get(name, species_defaults.get(name, 0.0))
+                _resolve_override(name, initial_conditions, species_defaults.get(name))
                 for name in species_names
             ]
         )
@@ -649,13 +639,4 @@ def simulate_with_discrete_events(
         )
 
     except Exception as e:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],
-            success=False,
-            message=f"Discrete event simulation failed: {e}",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result(f"Discrete event simulation failed: {e}")

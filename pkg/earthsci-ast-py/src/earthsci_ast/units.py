@@ -4,9 +4,10 @@ Unit validation and dimensional analysis for ESM Format.
 Provides unit validation functionality using the pint library to ensure
 dimensional consistency across models, reaction systems, and expressions.
 """
+from __future__ import annotations
 
-from typing import Dict, List, Optional, Union, Any
 from dataclasses import dataclass, field
+from typing import Any
 
 try:
     import pint
@@ -39,11 +40,7 @@ except ImportError:
     ureg = None
     UnitsContainer = Any
 
-try:
-    from .esm_types import EsmFile, Model, ReactionSystem, Expr, ExprNode
-except ImportError:
-    # For direct imports when testing
-    from esm_types import EsmFile, Model, ReactionSystem, Expr, ExprNode
+from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 
 @dataclass
@@ -51,10 +48,10 @@ class UnitValidationResult:
     """Result of unit validation check."""
 
     is_valid: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    unit_registry: Dict[str, str] = field(default_factory=dict)  # variable_name -> unit_string
-    dimensional_analysis: Dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    unit_registry: dict[str, str] = field(default_factory=dict)  # variable_name -> unit_string
+    dimensional_analysis: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,9 +59,9 @@ class UnitConversionResult:
     """Result of unit conversion operation."""
 
     success: bool
-    converted_value: Optional[float] = None
-    conversion_factor: Optional[float] = None
-    error_message: Optional[str] = None
+    converted_value: float | None = None
+    conversion_factor: float | None = None
+    error_message: str | None = None
 
 
 class UnitValidator:
@@ -78,7 +75,7 @@ class UnitValidator:
             )
 
         self.ureg = ureg
-        self.known_units: Dict[str, pint.Quantity] = {}
+        self.known_units: dict[str, pint.Quantity] = {}
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -105,9 +102,6 @@ class UnitValidator:
                 result,
             )
 
-        # Check for cross-system unit consistency
-        self._check_cross_system_consistency(esm_file, result)
-
         result.is_valid = len(result.errors) == 0
         return result
 
@@ -132,6 +126,11 @@ class UnitValidator:
         """
         result = UnitValidationResult(is_valid=True)
 
+        # Scope the known-units registry to this component so that a variable
+        # name reused in another model/reaction system cannot collide during
+        # bare-name dimension lookups in _get_expression_dimension.
+        self.known_units = {}
+
         if not model.variables:
             return result
 
@@ -142,7 +141,7 @@ class UnitValidator:
                     unit = self.ureg(var_info.units)
                     result.unit_registry[var_name] = var_info.units
                     self.known_units[var_name] = unit
-                except Exception as e:
+                except pint.PintError as e:
                     result.errors.append(
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
                     )
@@ -176,6 +175,9 @@ class UnitValidator:
         """
         result = UnitValidationResult(is_valid=True)
 
+        # Scope the known-units registry to this component (see validate_model).
+        self.known_units = {}
+
         # Register species units
         if rs.species:
             for species in rs.species:
@@ -184,7 +186,7 @@ class UnitValidator:
                         unit = self.ureg(species.units)
                         result.unit_registry[species.name] = species.units
                         self.known_units[species.name] = unit
-                    except Exception as e:
+                    except pint.PintError as e:
                         result.errors.append(
                             f"Invalid unit '{species.units}' for species '{species.name}': {e}"
                         )
@@ -197,7 +199,7 @@ class UnitValidator:
                         unit = self.ureg(param.units)
                         result.unit_registry[param.name] = param.units
                         self.known_units[param.name] = unit
-                    except Exception as e:
+                    except pint.PintError as e:
                         result.errors.append(
                             f"Invalid unit '{param.units}' for parameter '{param.name}': {e}"
                         )
@@ -235,7 +237,9 @@ class UnitValidator:
                         f"Equation {equation_id}: Dimensional mismatch - "
                         f"LHS has dimension {lhs_dim}, RHS has dimension {rhs_dim}"
                     )
-        except Exception as e:
+        # ValueError is the domain error _get_expr_node_dimension raises for
+        # incompatible +/- operands; PintError covers unit-arithmetic failures.
+        except (pint.PintError, ValueError) as e:
             result.warnings.append(f"Could not validate dimensions for equation {equation_id}: {e}")
 
         result.is_valid = len(result.errors) == 0
@@ -258,7 +262,9 @@ class UnitValidator:
             dimension = self._get_expression_dimension(expr)
             if dimension is not None:
                 result.dimensional_analysis[context] = str(dimension)
-        except Exception as e:
+        # ValueError is the domain error _get_expr_node_dimension raises for
+        # incompatible +/- operands; PintError covers unit-arithmetic failures.
+        except (pint.PintError, ValueError) as e:
             result.errors.append(f"Expression validation failed for {context}: {e}")
 
         result.is_valid = len(result.errors) == 0
@@ -285,28 +291,27 @@ class UnitValidator:
                 converted_value=float(to_quantity.magnitude),
                 conversion_factor=float(to_quantity.magnitude) / value if value != 0 else None,
             )
-        except Exception as e:
+        except pint.PintError as e:
             return UnitConversionResult(success=False, error_message=str(e))
 
-    def _get_expression_dimension(self, expr: Expr) -> Optional[UnitsContainer]:
+    def _get_expression_dimension(self, expr: Expr) -> UnitsContainer | None:
         """Get the dimensional analysis of an expression."""
         if isinstance(expr, (int, float)):
             return self.ureg.dimensionless.dimensionality
 
-        elif isinstance(expr, str):
+        if isinstance(expr, str):
             # Variable lookup
             if expr in self.known_units:
                 return self.known_units[expr].dimensionality
-            else:
-                # Unknown variable - assume dimensionless for now
-                return None
+            # Unknown variable - assume dimensionless for now
+            return None
 
-        elif isinstance(expr, ExprNode):
+        if isinstance(expr, ExprNode):
             return self._get_expr_node_dimension(expr)
 
         return None
 
-    def _get_expr_node_dimension(self, node: ExprNode) -> Optional[UnitsContainer]:
+    def _get_expr_node_dimension(self, node: ExprNode) -> UnitsContainer | None:
         """Get dimension of an expression node (operator with arguments)."""
         if not node.args:
             return None
@@ -328,14 +333,14 @@ class UnitValidator:
                     raise ValueError(f"Incompatible dimensions in {node.op}: {first_dim} vs {dim}")
             return first_dim
 
-        elif node.op == "*":
+        if node.op == "*":
             # Multiplication: multiply dimensions
             result_dim = self.ureg.dimensionless.dimensionality
             for dim in valid_dims:
                 result_dim = result_dim * dim
             return result_dim
 
-        elif node.op == "/":
+        if node.op == "/":
             # Division: divide dimensions
             if len(valid_dims) >= 2:
                 result_dim = valid_dims[0]
@@ -344,7 +349,7 @@ class UnitValidator:
                 return result_dim
             return valid_dims[0] if valid_dims else None
 
-        elif node.op == "^":
+        if node.op == "^":
             # Power: first argument's dimension raised to power
             if len(valid_dims) >= 1:
                 base_dim = valid_dims[0]
@@ -367,8 +372,11 @@ class UnitValidator:
             return True
         except pint.DimensionalityError:
             return False
-        except Exception:
-            # If we can't determine compatibility, assume they're compatible
+        except (pint.PintError, AssertionError):
+            # If we can't determine compatibility, assume they're compatible.
+            # pint leaks a bare AssertionError (not a PintError) when a
+            # dimensionality container carries an offset unit such as
+            # [temperature]; treat that as indeterminate, not a hard failure.
             return True
 
     def _validate_reaction(self, reaction) -> UnitValidationResult:
@@ -393,14 +401,8 @@ class UnitValidator:
         result.is_valid = len(result.errors) == 0
         return result
 
-    def _check_cross_system_consistency(self, esm_file: EsmFile, result: UnitValidationResult):
-        """Check unit consistency between different systems in the ESM file."""
-        # This is where you'd implement checks for variables that appear
-        # in multiple models or are shared between models and reaction systems
-        pass
 
-
-def validate_units(target: Union[EsmFile, Model, ReactionSystem]) -> UnitValidationResult:
+def validate_units(target: EsmFile | Model | ReactionSystem) -> UnitValidationResult:
     """
     Convenience function to validate units of an ESM structure.
 
@@ -414,12 +416,11 @@ def validate_units(target: Union[EsmFile, Model, ReactionSystem]) -> UnitValidat
 
     if isinstance(target, EsmFile):
         return validator.validate_esm_file(target)
-    elif isinstance(target, Model):
+    if isinstance(target, Model):
         return validator.validate_model(target)
-    elif isinstance(target, ReactionSystem):
+    if isinstance(target, ReactionSystem):
         return validator.validate_reaction_system(target)
-    else:
-        raise ValueError(f"Unsupported type for unit validation: {type(target)}")
+    raise ValueError(f"Unsupported type for unit validation: {type(target)}")
 
 
 def convert_units(value: float, from_unit: str, to_unit: str) -> UnitConversionResult:

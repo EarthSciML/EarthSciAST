@@ -20,7 +20,7 @@ from __future__ import annotations
 import operator
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from earthsci_ast.cli._adapter_main import adapter_main
 from earthsci_ast.relational import (
@@ -34,11 +34,11 @@ from earthsci_ast.relational import (
 )
 
 
-def _directed_edges_from_faces(faces: List[List[Any]]) -> List[Tuple[Any, Any]]:
+def _directed_edges_from_faces(faces: list[list[Any]]) -> list[tuple[Any, Any]]:
     """Traverse consecutive vertices of each face (with wraparound) into directed
     edges — the realistic producer step a mesh FAQ performs before skolem
     canonicalisation (mirrors the runner's reference shaping)."""
-    edges: List[Tuple[Any, Any]] = []
+    edges: list[tuple[Any, Any]] = []
     for face in faces:
         n = len(face)
         for i in range(n):
@@ -46,14 +46,14 @@ def _directed_edges_from_faces(faces: List[List[Any]]) -> List[Tuple[Any, Any]]:
     return edges
 
 
-def _compute_fixture(fixture: Dict[str, Any]) -> Dict[str, Any]:
+def _compute_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     """The canonical conformance outputs for a fixture (its `inputs.canonical`
     payload). Kept as the single-payload entry point the Python conformance tests
     drive directly; :func:`main` reuses it for the adversarial variants too."""
     return _compute_payload(fixture, fixture["inputs"]["canonical"])
 
 
-def _compute_payload(fixture: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+def _compute_payload(fixture: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     primitive = fixture["primitive"]
 
     if primitive == "skolem_distinct_rank":
@@ -99,8 +99,8 @@ def _compute_payload(fixture: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
 
 
 def _run_fixture(
-    fixture: Dict[str, Any], _manifest: Dict[str, Any], _manifest_path: Path
-) -> Dict[str, Any]:
+    fixture: dict[str, Any], _manifest: dict[str, Any], _manifest_path: Path
+) -> dict[str, Any]:
     record = _compute_fixture(fixture)
     # Run the adversarial variants through the SAME real producers and emit
     # each — the runner asserts they collapse to the golden, proving order-,
@@ -114,7 +114,7 @@ def _run_fixture(
     return record
 
 
-def main(argv: "List[str] | None" = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     return adapter_main(argv, description=__doc__, run_fixture=_run_fixture)
 
 

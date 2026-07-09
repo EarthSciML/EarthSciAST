@@ -11,7 +11,8 @@ from __future__ import annotations
 import datetime as _dt
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Union
+
+from ..errors import EarthSciAstError
 
 _DURATION_RE = re.compile(
     r"^P"
@@ -27,7 +28,7 @@ _DURATION_RE = re.compile(
 )
 
 
-class TimeResolutionError(ValueError):
+class TimeResolutionError(EarthSciAstError, ValueError):
     """Raised when temporal resolution of a file anchor fails."""
 
 
@@ -67,7 +68,22 @@ def parse_iso_duration(duration: str) -> Duration:
     return Duration(years=years, months=months, days=days, seconds=total_seconds)
 
 
-def _coerce_datetime(value: Union[_dt.datetime, _dt.date, str]) -> _dt.datetime:
+def _normalize_iso_z(value: str) -> str:
+    """Rewrite a trailing ISO-8601 ``Z`` (Zulu / UTC designator) as ``+00:00``.
+
+    ``datetime.datetime.fromisoformat`` did not accept a ``Z`` suffix before
+    Python 3.11; this one-line fixup lets the shared loader time path parse Zulu
+    timestamps on every supported version. Values without a trailing ``Z`` are
+    returned unchanged. Kept here (rather than duplicated in ``url_template``) so
+    the edge case lives in one place; ``url_template._parse_iso_datetime``
+    imports it.
+    """
+    if value.endswith("Z"):
+        return value[:-1] + "+00:00"
+    return value
+
+
+def _coerce_datetime(value: _dt.datetime | _dt.date | str) -> _dt.datetime:
     """Coerce to a **naive UTC** datetime.
 
     The loader cadence / file-resolution code mixes datetimes from several
@@ -82,8 +98,7 @@ def _coerce_datetime(value: Union[_dt.datetime, _dt.date, str]) -> _dt.datetime:
     elif isinstance(value, _dt.date):
         return _dt.datetime(value.year, value.month, value.day)
     elif isinstance(value, str):
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
+        value = _normalize_iso_z(value)
         try:
             dt = _dt.datetime.fromisoformat(value)
         except ValueError as exc:
@@ -150,10 +165,10 @@ def _snap_to_period(target: _dt.datetime, anchor: _dt.datetime, period: Duration
 
 
 def file_anchor_for_time(
-    time: Union[_dt.datetime, _dt.date, str],
+    time: _dt.datetime | _dt.date | str,
     *,
     file_period: str,
-    start: Optional[Union[_dt.datetime, _dt.date, str]] = None,
+    start: _dt.datetime | _dt.date | str | None = None,
 ) -> _dt.datetime:
     """Snap ``time`` back to the start of the file period that contains it.
 
@@ -194,17 +209,17 @@ def file_anchor_for_time(
 
 
 def file_anchors_in_range(
-    start: Union[_dt.datetime, _dt.date, str],
-    end: Union[_dt.datetime, _dt.date, str],
+    start: _dt.datetime | _dt.date | str,
+    end: _dt.datetime | _dt.date | str,
     *,
     file_period: str,
-    anchor: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-) -> List[_dt.datetime]:
+    anchor: _dt.datetime | _dt.date | str | None = None,
+) -> list[_dt.datetime]:
     """List all file anchors in ``[start, end]``, inclusive of both ends."""
     period = parse_iso_duration(file_period)
     first = file_anchor_for_time(start, file_period=file_period, start=anchor)
     end_dt = _coerce_datetime(end)
-    out: List[_dt.datetime] = []
+    out: list[_dt.datetime] = []
     current = first
     while current <= end_dt:
         out.append(current)
@@ -216,11 +231,11 @@ def file_anchors_in_range(
 
 
 def records_for_file(
-    records_per_file: Union[int, str, None],
+    records_per_file: int | str | None,
     *,
-    file_period: Optional[str] = None,
-    frequency: Optional[str] = None,
-) -> Optional[int]:
+    file_period: str | None = None,
+    frequency: str | None = None,
+) -> int | None:
     """Return the integer number of records per file, resolving ``'auto'``.
 
     If ``records_per_file`` is an int, return it. If it's ``'auto'`` and both

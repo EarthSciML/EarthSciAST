@@ -8,16 +8,17 @@ configured opener. Variable remapping and unit conversion still apply.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from ..errors import EarthSciAstError
 from ..esm_types import DataLoader, DataLoaderKind
-from .grid import GridLoaderError, _default_xarray_opener, _ds_to_mapping
+from ._xarray import XarrayLoaderError, _default_xarray_opener, _ds_to_mapping
 from .mirror import open_with_fallback
 from .url_template import expand_with_mirrors
 from .variables import apply_variable_mapping
 
 
-class StaticLoaderError(RuntimeError):
+class StaticLoaderError(EarthSciAstError, RuntimeError):
     """Raised when a static source cannot be loaded."""
 
 
@@ -25,9 +26,9 @@ class StaticLoaderError(RuntimeError):
 class StaticLoadResult:
     """Result of a single ``StaticLoader.load`` call."""
 
-    urls_tried: List[str]
+    urls_tried: list[str]
     dataset: Any
-    variables: Dict[str, Any]
+    variables: dict[str, Any]
 
 
 class StaticLoader:
@@ -41,7 +42,7 @@ class StaticLoader:
     def load(
         self,
         *,
-        opener: Optional[Any] = None,
+        opener: Any | None = None,
         **substitutions: Any,
     ) -> StaticLoadResult:
         urls = expand_with_mirrors(
@@ -54,7 +55,7 @@ class StaticLoader:
             opener = _default_xarray_opener()
         try:
             ds = open_with_fallback(urls, opener)
-        except GridLoaderError as exc:
+        except XarrayLoaderError as exc:
             raise StaticLoaderError(str(exc)) from exc
         raw = _ds_to_mapping(ds)
         remapped = apply_variable_mapping(raw, self.dl.variables, strict=True)
@@ -64,7 +65,7 @@ class StaticLoader:
 def load_static(
     data_loader: DataLoader,
     *,
-    opener: Optional[Any] = None,
+    opener: Any | None = None,
     **substitutions: Any,
 ) -> StaticLoadResult:
     """Convenience wrapper: instantiate and call ``StaticLoader.load``."""

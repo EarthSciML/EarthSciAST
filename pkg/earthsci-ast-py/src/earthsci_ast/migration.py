@@ -7,12 +7,15 @@ domain-level boundary_conditions to model-level boundary_conditions.
 This is the transform behind the ``esm-migrate`` CLI
 (:mod:`earthsci_ast.cli.migrate`).
 """
+from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List
+from typing import Any
+
+from .errors import EarthSciAstError
 
 
-class MigrationError(Exception):
+class MigrationError(EarthSciAstError):
     """Error raised when migration fails."""
 
     def __init__(self, message: str, from_version: str = "", to_version: str = ""):
@@ -34,7 +37,7 @@ class MigrationError(Exception):
 _CLOSED_SHORT_AXES = {"x", "y", "z", "t"}
 
 
-def _axis_to_sides(axis: str, kind: str) -> List[str]:
+def _axis_to_sides(axis: str, kind: str) -> list[str]:
     """Expand a v0.1 ``dimensions`` entry to v0.2 ``side`` strings.
 
     ``x``/``y``/``z``/``t`` use the closed-vocabulary ``<axis>min`` /
@@ -54,9 +57,9 @@ def _axis_to_sides(axis: str, kind: str) -> List[str]:
     return [lo, hi]
 
 
-def _iter_state_variable_names(model: Dict[str, Any]) -> List[str]:
+def _iter_state_variable_names(model: dict[str, Any]) -> list[str]:
     """List state-variable names in a model (skips parameters/observed)."""
-    out: List[str] = []
+    out: list[str] = []
     variables = model.get("variables", {}) or {}
     if isinstance(variables, dict):
         for vname, vdef in variables.items():
@@ -65,7 +68,7 @@ def _iter_state_variable_names(model: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _model_matches_domain(model: Dict[str, Any], domain_name: str) -> bool:
+def _model_matches_domain(model: dict[str, Any], domain_name: str) -> bool:
     """Return True if ``model`` is associated with ``domain_name``.
 
     A model explicitly names its domain via ``model.domain``; models with
@@ -78,16 +81,46 @@ def _model_matches_domain(model: Dict[str, Any], domain_name: str) -> bool:
     return domain_name == "default"
 
 
-def _copy_bc_value_fields(src: Dict[str, Any]) -> Dict[str, Any]:
+def _copy_bc_value_fields(src: dict[str, Any]) -> dict[str, Any]:
     """Copy value/function/robin_* fields from a v0.1 domain BC."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for key in ("value", "function", "robin_alpha", "robin_beta", "robin_gamma"):
         if key in src:
             out[key] = src[key]
     return out
 
 
-def migrate_file_0_1_to_0_2(data: Dict[str, Any]) -> Dict[str, Any]:
+def _emit_model_bc(
+    model_bcs: dict[str, Any],
+    vname: str,
+    side: str,
+    kind: str,
+    value_fields: dict[str, Any],
+) -> None:
+    """Insert one relocated v0.2 BC entry into ``model_bcs``.
+
+    Chooses a non-colliding key of the form ``<vname>_<kind>_<side>`` (author
+    keys are rare but possible) and stores a ``{variable, side, kind, value?,
+    robin_*?}`` entry.
+    """
+    bc_key = f"{vname}_{kind}_{side}"
+    # Avoid overwriting if an author already authored a colliding key
+    # (rare but possible).
+    final_key = bc_key
+    n = 2
+    while final_key in model_bcs:
+        final_key = f"{bc_key}_{n}"
+        n += 1
+    entry: dict[str, Any] = {
+        "variable": vname,
+        "side": side,
+        "kind": kind,
+    }
+    entry.update(value_fields)
+    model_bcs[final_key] = entry
+
+
+def migrate_file_0_1_to_0_2(data: dict[str, Any]) -> dict[str, Any]:
     """Migrate a parsed ``.esm`` file dict from v0.1.x to v0.2.0.
 
     Applies the RFC §16.1 ``spec.migrate_0_1_to_0_2`` convention:
@@ -139,24 +172,12 @@ def migrate_file_0_1_to_0_2(data: Dict[str, Any]) -> Dict[str, Any]:
                     if not isinstance(axis, str):
                         continue
                     for side in _axis_to_sides(axis, kind):
-                        for mname, model in matched_models:
+                        for _mname, model in matched_models:
+                            model_bcs = model.setdefault("boundary_conditions", {})
                             for vname in _iter_state_variable_names(model):
-                                bc_key = f"{vname}_{kind}_{side}"
-                                model_bcs = model.setdefault("boundary_conditions", {})
-                                # Avoid overwriting if an author already
-                                # authored a colliding key (rare but possible).
-                                final_key = bc_key
-                                n = 2
-                                while final_key in model_bcs:
-                                    final_key = f"{bc_key}_{n}"
-                                    n += 1
-                                entry: Dict[str, Any] = {
-                                    "variable": vname,
-                                    "side": side,
-                                    "kind": kind,
-                                }
-                                entry.update(value_fields)
-                                model_bcs[final_key] = entry
+                                _emit_model_bc(
+                                    model_bcs, vname, side, kind, value_fields
+                                )
             # Remove the domain-level list once relocated.
             del domain["boundary_conditions"]
 

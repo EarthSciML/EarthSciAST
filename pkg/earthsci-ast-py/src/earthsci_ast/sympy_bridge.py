@@ -18,9 +18,10 @@ and are re-imported here so existing ``sympy_bridge`` imports keep working.
 ``simulation.py`` imports from this module and handles the SciPy
 ``solve_ivp`` wiring, event handling, and array-op interpreter path.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable
 
 import numpy as np
 import sympy as sp
@@ -39,18 +40,18 @@ from .flatten import FlattenedSystem
 _LAMBDIFY_MODULES = [{"_ess_numeric_abs": np.abs}, "numpy"]
 
 
-def _topo_sort(names: List[str], deps: Dict[str, List[str]], label: str) -> List[str]:
+def _topo_sort(names: list[str], deps: dict[str, list[str]], label: str) -> list[str]:
     """Depth-first topological sort (leaves first) of ``names`` by ``deps``.
 
     Detects cycles (including self-reference) and raises with the offending
     chain so authors can fix the model; ``label`` names the equation class in
     the diagnostic ("algebraic" / "observed").
     """
-    sorted_out: List[str] = []
-    visited: Set[str] = set()
-    in_progress: Set[str] = set()
+    sorted_out: list[str] = []
+    visited: set[str] = set()
+    in_progress: set[str] = set()
 
-    def _visit(name: str, path: List[str]) -> None:
+    def _visit(name: str, path: list[str]) -> None:
         if name in visited:
             return
         if name in in_progress:
@@ -70,16 +71,16 @@ def _topo_sort(names: List[str], deps: Dict[str, List[str]], label: str) -> List
 
 def _flat_to_sympy_rhs(
     flat: FlattenedSystem,
-    fn_callable_map: Optional[Dict[str, Callable]] = None,
-) -> Tuple[
-    List[str],
-    List[str],
-    Dict[str, sp.Symbol],
-    List[sp.Expr],
-    List[str],
-    Dict[str, sp.Expr],
-    List[str],
-    Dict[str, List[str]],
+    fn_callable_map: dict[str, Callable] | None = None,
+) -> tuple[
+    list[str],
+    list[str],
+    dict[str, sp.Symbol],
+    list[sp.Expr],
+    list[str],
+    dict[str, sp.Expr],
+    list[str],
+    dict[str, list[str]],
 ]:
     """Build the SymPy ODE RHS expressions from a FlattenedSystem.
 
@@ -142,7 +143,7 @@ def _flat_to_sympy_rhs(
     state_names = list(flat.state_variables.keys())
     parameter_names = list(flat.parameters.keys())
 
-    symbol_map: Dict[str, sp.Symbol] = {}
+    symbol_map: dict[str, sp.Symbol] = {}
     for name in state_names + parameter_names:
         symbol_map[name] = sp.Symbol(name)
 
@@ -150,8 +151,8 @@ def _flat_to_sympy_rhs(
         fn_callable_map = {}
 
     # Classify equations: differential (D(var, t) = …) vs algebraic (var = …).
-    diff_rhs: Dict[str, sp.Expr] = {}
-    alg_rhs: Dict[str, sp.Expr] = {}
+    diff_rhs: dict[str, sp.Expr] = {}
+    alg_rhs: dict[str, sp.Expr] = {}
     for eq in flat.equations:
         lhs = eq.lhs
         if isinstance(lhs, ExprNode) and lhs.op == "D" and lhs.args:
@@ -177,7 +178,7 @@ def _flat_to_sympy_rhs(
                 # pass and is required for equilibrium models that author
                 # K = f(T) alongside K = product([H+], [OH-]).
                 free_states = []
-                seen_states: Set[str] = set()
+                seen_states: set[str] = set()
                 for s in rhs_sym.free_symbols:
                     nm = str(s)
                     if (
@@ -221,7 +222,7 @@ def _flat_to_sympy_rhs(
     # Topologically sort algebraic vars by their direct dependence on each
     # other. Detect cycles (including self-reference) and raise with the
     # offending chain so authors can fix the model.
-    alg_deps: Dict[str, List[str]] = {}
+    alg_deps: dict[str, list[str]] = {}
     alg_set = set(algebraic_state_names)
     for n in algebraic_state_names:
         free = getattr(alg_rhs[n], "free_symbols", set()) or set()
@@ -237,7 +238,7 @@ def _flat_to_sympy_rhs(
     # original unexpanded form and build per-state lambdified functions that
     # evaluate algebraic states sequentially at runtime (see _compile_flat_rhs).
 
-    rhs_exprs: List[sp.Expr] = []
+    rhs_exprs: list[sp.Expr] = []
     for name in state_names:
         if name in diff_rhs:
             rhs_exprs.append(diff_rhs[name])
@@ -260,13 +261,13 @@ def _flat_to_sympy_rhs(
 
 def _observed_to_sympy_value_exprs(
     flat: FlattenedSystem,
-    state_names: List[str],
-    parameter_names: List[str],
-    symbol_map: Dict[str, sp.Symbol],
-    algebraic_state_names: List[str],
-    algebraic_value_exprs: Dict[str, sp.Expr],
-    fn_callable_map: Optional[Dict[str, Callable]] = None,
-) -> Tuple[List[str], Dict[str, sp.Expr]]:
+    state_names: list[str],
+    parameter_names: list[str],
+    symbol_map: dict[str, sp.Symbol],
+    algebraic_state_names: list[str],
+    algebraic_value_exprs: dict[str, sp.Expr],
+    fn_callable_map: dict[str, Callable] | None = None,
+) -> tuple[list[str], dict[str, sp.Expr]]:
     """Build SymPy value expressions for ``flat.observed_variables``.
 
     Mirrors the algebraic-state pass in :func:`_flat_to_sympy_rhs`: equations
@@ -309,7 +310,7 @@ def _observed_to_sympy_value_exprs(
     if fn_callable_map is None:
         fn_callable_map = {}
 
-    obs_rhs: Dict[str, sp.Expr] = {}
+    obs_rhs: dict[str, sp.Expr] = {}
     for eq in flat.equations:
         lhs = eq.lhs
         if isinstance(lhs, str) and lhs in flat.observed_variables:
@@ -325,7 +326,7 @@ def _observed_to_sympy_value_exprs(
 
     # Topologically sort observed vars by their direct dependence on each
     # other; detect cycles (including self-reference).
-    obs_deps: Dict[str, List[str]] = {}
+    obs_deps: dict[str, list[str]] = {}
     obs_set = set(observed_with_eq)
     for n in observed_with_eq:
         free = getattr(obs_rhs[n], "free_symbols", set()) or set()
@@ -358,14 +359,14 @@ class _CompiledRhs:
     across simulate() calls with different parameter overrides.
     """
 
-    state_names: List[str]
-    parameter_names: List[str]
-    symbol_map: Dict[str, sp.Symbol]
-    algebraic_state_names: List[str]
-    rhs_vector_func: Optional[Callable]
-    algebraic_vector_func: Optional[Callable]
-    observed_names: List[str] = field(default_factory=list)
-    observed_vector_func: Optional[Callable] = None
+    state_names: list[str]
+    parameter_names: list[str]
+    symbol_map: dict[str, sp.Symbol]
+    algebraic_state_names: list[str]
+    rhs_vector_func: Callable | None
+    algebraic_vector_func: Callable | None
+    observed_names: list[str] = field(default_factory=list)
+    observed_vector_func: Callable | None = None
 
 
 def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
@@ -418,7 +419,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     # observed substitution into rhs_exprs / algebraic_value_exprs, fn-call
     # placeholders from observed bodies appear in the differential RHS and
     # must resolve against the same module dict.
-    fn_callable_map: Dict[str, Callable] = {}
+    fn_callable_map: dict[str, Callable] = {}
 
     (
         state_names,
@@ -479,10 +480,10 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     # updating args[alg_idx[n]] in-place so that later states pick up the
     # freshly-computed value of their algebraic dependencies.
     # -------------------------------------------------------------------------
-    alg_idx: Dict[str, int] = {n: state_names.index(n) for n in algebraic_state_names}
+    alg_idx: dict[str, int] = {n: state_names.index(n) for n in algebraic_state_names}
 
     if algebraic_state_names:
-        alg_funcs: Dict[str, Callable] = {}
+        alg_funcs: dict[str, Callable] = {}
         for n in sorted_alg:
             alg_funcs[n] = sp.lambdify(
                 all_args,
@@ -493,11 +494,11 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
 
         def algebraic_vector_func(
             *all_state_and_params: Any,
-            _funcs: Dict[str, Callable] = alg_funcs,
-            _sorted: List[str] = sorted_alg,
-            _idx: Dict[str, int] = alg_idx,
-            _names: List[str] = algebraic_state_names,
-        ) -> List[Any]:
+            _funcs: dict[str, Callable] = alg_funcs,
+            _sorted: list[str] = sorted_alg,
+            _idx: dict[str, int] = alg_idx,
+            _names: list[str] = algebraic_state_names,
+        ) -> list[Any]:
             args = list(all_state_and_params)
             for n in _sorted:
                 args[_idx[n]] = _funcs[n](*args)
@@ -516,9 +517,9 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
             def rhs_vector_func(
                 *all_state_and_params: Any,
                 _core: Callable = rhs_core_func,
-                _funcs: Dict[str, Callable] = alg_funcs,
-                _sorted: List[str] = sorted_alg,
-                _idx: Dict[str, int] = alg_idx,
+                _funcs: dict[str, Callable] = alg_funcs,
+                _sorted: list[str] = sorted_alg,
+                _idx: dict[str, int] = alg_idx,
             ) -> Any:
                 args = list(all_state_and_params)
                 for n in _sorted:
@@ -556,9 +557,9 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
                 t: Any,
                 *all_state_and_params: Any,
                 _core: Callable = obs_core_func,
-                _funcs: Dict[str, Callable] = alg_funcs,
-                _sorted: List[str] = sorted_alg,
-                _idx: Dict[str, int] = alg_idx,
+                _funcs: dict[str, Callable] = alg_funcs,
+                _sorted: list[str] = sorted_alg,
+                _idx: dict[str, int] = alg_idx,
             ) -> Any:
                 args = list(all_state_and_params)
                 for n in _sorted:

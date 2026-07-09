@@ -2,10 +2,11 @@
 Minimal error handling for ESM Format.
 This provides only the essential error handling functionality required by validation.
 """
+from __future__ import annotations
 
-from enum import Enum
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from enum import Enum
+from typing import Any
 
 
 class ErrorCode(Enum):
@@ -62,9 +63,9 @@ class Severity(Enum):
 class ErrorContext:
     """Context information for errors."""
 
-    path: Optional[str] = None
-    component: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
+    path: str | None = None
+    component: str | None = None
+    details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -72,7 +73,7 @@ class FixSuggestion:
     """Suggestion for fixing an error."""
 
     description: str
-    action: Optional[str] = None
+    action: str | None = None
 
 
 @dataclass
@@ -82,8 +83,8 @@ class ESMError:
     code: ErrorCode
     message: str
     severity: Severity
-    context: Optional[ErrorContext] = None
-    fix_suggestion: Optional[FixSuggestion] = None
+    context: ErrorContext | None = None
+    fix_suggestion: FixSuggestion | None = None
 
 
 class ErrorCollector:

@@ -14,10 +14,10 @@ module only imports from ``parse`` lazily inside :func:`_validate_structural`
 (for :class:`~earthsci_ast.parse.SchemaValidationError`), keeping the
 module-import graph acyclic.
 """
+from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # Shared pint unit registry, constructed lazily on first use. Unit parsing is
 # hot (per-variable / per-equation checks) and ``pint.UnitRegistry()`` is
@@ -36,6 +36,32 @@ def _get_unit_registry():
 
         _UREG = pint.UnitRegistry()
     return _UREG
+
+
+# Exception types that mean "cannot verify these units", never "genuinely
+# inconsistent": either pint is unavailable (``ImportError`` from the lazy
+# ``import pint``) or pint could not parse/convert a unit string. The latter is
+# pint's own error hierarchy — ``UndefinedUnitError``, ``DimensionalityError``,
+# ``DefinitionSyntaxError``, ``OffsetUnitCalculusError``, … — all subclasses of
+# ``pint.errors.PintError``. Narrowing the unit-helper ``except`` clauses to
+# this tuple (instead of a blanket ``except Exception``) keeps the permissive
+# fallback for unparseable units while letting a genuine, unexpected bug
+# propagate instead of being silently swallowed as a spurious pass.
+_PINT_UNVERIFIABLE_ERRORS = None
+
+
+def _pint_unverifiable_errors():
+    """Return the tuple of exception types treated as "unit unparseable / pint
+    unavailable" by the unit-consistency helpers (see the note above)."""
+    global _PINT_UNVERIFIABLE_ERRORS
+    if _PINT_UNVERIFIABLE_ERRORS is None:
+        try:
+            import pint
+
+            _PINT_UNVERIFIABLE_ERRORS = (ImportError, pint.errors.PintError)
+        except ImportError:
+            _PINT_UNVERIFIABLE_ERRORS = (ImportError,)
+    return _PINT_UNVERIFIABLE_ERRORS
 
 
 _OPERATOR_ARITY = {
@@ -121,7 +147,7 @@ _UNIT_ALIASES = {
 }
 
 
-def _walk_expression_strings(expr) -> List[str]:
+def _walk_expression_strings(expr) -> list[str]:
     """Recursively collect string args from inside op-expression nodes only."""
     result = []
     if isinstance(expr, dict) and "op" in expr and "args" in expr:
@@ -133,7 +159,7 @@ def _walk_expression_strings(expr) -> List[str]:
     return result
 
 
-def _check_expression_arity(expr, errors: List[str], path: str) -> None:
+def _check_expression_arity(expr, errors: list[str], path: str) -> None:
     """Walk an expression tree and check operator arity."""
     if isinstance(expr, dict) and "op" in expr and "args" in expr:
         op = expr["op"]
@@ -167,11 +193,13 @@ def _units_compatible(u1: str, u2: str) -> bool:
         q1 = ureg(n1) if n1 != "dimensionless" else ureg("dimensionless")
         q2 = ureg(n2) if n2 != "dimensionless" else ureg("dimensionless")
         return q1.dimensionality == q2.dimensionality
-    except Exception:
+    except _pint_unverifiable_errors():
+        # unparseable unit (or pint unavailable): cannot verify, fall back to
+        # a plain string comparison rather than blocking.
         return n1 == n2
 
 
-def _build_symbol_tables(data: Dict[str, Any]) -> Dict[str, Any]:
+def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
     """Build symbol tables for all systems and global symbols in the file."""
     models = {}
     # Top-level models included by reference (schema `models`
@@ -230,7 +258,7 @@ def _build_symbol_tables(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _resolve_scoped_ref(ref: str, tables: Dict[str, Any]) -> tuple:
+def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     """
     Try to resolve a 'System.var' style reference.
     Returns (system_name, var_name, status) where status is one of:
@@ -267,7 +295,7 @@ def _resolve_scoped_ref(ref: str, tables: Dict[str, Any]) -> tuple:
 
 
 def _check_variable_references(
-    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """
     Check variable references in equations.
@@ -338,7 +366,7 @@ def _check_variable_references(
 
 
 def _check_coupling_references(
-    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """Check that coupling 'from' references resolve to valid scoped refs.
     'to' is intentionally lenient since variable_map can introduce new target vars."""
@@ -364,7 +392,7 @@ def _check_coupling_references(
 
 
 def _check_circular_references(
-    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """Detect cycles in cross-system dependencies introduced by equation references."""
     # Build system -> set of systems it depends on
@@ -382,7 +410,7 @@ def _check_circular_references(
 
     # DFS cycle detection
     WHITE, GRAY, BLACK = 0, 1, 2
-    color = {n: WHITE for n in deps}
+    color = dict.fromkeys(deps, WHITE)
 
     def dfs(node, path):
         color[node] = GRAY
@@ -392,7 +420,7 @@ def _check_circular_references(
                 cycle = path[cycle_start:] + [nxt]
                 errors.append(f"circular reference (cycle) detected: {' -> '.join(cycle)}")
                 return True
-            elif color.get(nxt) == WHITE:
+            if color.get(nxt) == WHITE:
                 if dfs(nxt, path + [nxt]):
                     return True
         color[node] = BLACK
@@ -404,7 +432,7 @@ def _check_circular_references(
                 break
 
 
-def _check_data_loader_variables(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_data_loader_variables(data: dict[str, Any], errors: list[str]) -> None:
     """Each variable in data_loader.variables must declare file_variable and units."""
     for dname, d in data.get("data_loaders", {}).items():
         variables = d.get("variables", {})
@@ -423,7 +451,7 @@ def _check_data_loader_variables(data: Dict[str, Any], errors: List[str]) -> Non
                 )
 
 
-def _check_discrete_parameters(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_discrete_parameters(data: dict[str, Any], errors: list[str]) -> None:
     """discrete_parameters list must reference variables of type 'parameter'."""
     for mname, m in data.get("models", {}).items():
         var_types = {n: v.get("type") for n, v in m.get("variables", {}).items()}
@@ -447,7 +475,7 @@ _DURATION_RE = re.compile(
 )
 
 
-def _check_metadata_formats(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_metadata_formats(data: dict[str, Any], errors: list[str]) -> None:
     """Validate ISO 8601 dates, URLs, and DOIs in metadata."""
     md = data.get("metadata", {})
     for field in ("created", "modified"):
@@ -463,7 +491,7 @@ def _check_metadata_formats(data: Dict[str, Any], errors: List[str]) -> None:
             errors.append(f"metadata/references[{ri}]/doi: '{doi}' is not a valid DOI format")
 
 
-def _check_temporal_resolution(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_temporal_resolution(data: dict[str, Any], errors: list[str]) -> None:
     """Validate ISO 8601 duration strings in data_loader.temporal fields."""
     for dname, d in data.get("data_loaders", {}).items():
         temporal = d.get("temporal", {})
@@ -477,7 +505,7 @@ def _check_temporal_resolution(data: Dict[str, Any], errors: List[str]) -> None:
                 )
 
 
-def _collect_var_units(tables: Dict[str, Any]) -> Dict[str, str]:
+def _collect_var_units(tables: dict[str, Any]) -> dict[str, str]:
     """Build {var_name: units} map for plain (unscoped) variable refs."""
     var_units = {}
     for m in tables["models"].values():
@@ -495,7 +523,7 @@ def _collect_var_units(tables: Dict[str, Any]) -> Dict[str, str]:
     return var_units
 
 
-def _infer_expression_units(expr, var_units: Dict[str, str]):
+def _infer_expression_units(expr, var_units: dict[str, str]):
     """
     Best-effort inference of expression units. Returns the unit string,
     None if can't infer, or special tag '<incompatible>' if a unit conflict was found inside.
@@ -539,11 +567,12 @@ def _is_derivative_compatible(lhs_var_units: str, rhs_units: str) -> bool:
         rhs_q = ureg(n_rhs)
         ratio = (rhs_q * ureg("second")) / lhs_q
         return ratio.dimensionless
-    except Exception:
-        return True  # If pint can't parse, don't flag
+    except _pint_unverifiable_errors():
+        # unparseable unit (or pint unavailable): cannot verify, do not block.
+        return True
 
 
-def _is_dimensionless_unit(unit: Optional[str]) -> bool:
+def _is_dimensionless_unit(unit: str | None) -> bool:
     """Return True if a unit string represents a dimensionless quantity."""
     if unit is None:
         return True
@@ -553,13 +582,15 @@ def _is_dimensionless_unit(unit: Optional[str]) -> bool:
     try:
         ureg = _get_unit_registry()
         return ureg(normalized).dimensionless
-    except Exception:
+    except _pint_unverifiable_errors():
+        # unparseable unit (or pint unavailable): cannot verify, treat as
+        # not-dimensionless (do not assert dimensionlessness we can't confirm).
         return False
 
 
 def _model_coordinate_units(
-    data: Dict[str, Any], model: Dict[str, Any]
-) -> Optional[Dict[str, Optional[str]]]:
+    data: dict[str, Any], model: dict[str, Any]
+) -> dict[str, str | None] | None:
     """
     Resolve the enclosing model's domain coordinate units.
 
@@ -577,7 +608,7 @@ def _model_coordinate_units(
     spatial = domain.get("spatial")
     if not isinstance(spatial, dict):
         return None
-    coords: Dict[str, Optional[str]] = {}
+    coords: dict[str, str | None] = {}
     for dim_name, dim_def in spatial.items():
         if isinstance(dim_def, dict):
             coords[dim_name] = dim_def.get("units")
@@ -588,9 +619,9 @@ def _model_coordinate_units(
 
 def _walk_expression_for_spatial_operator_checks(
     expr: Any,
-    coord_units: Optional[Dict[str, Optional[str]]],
+    coord_units: dict[str, str | None] | None,
     path: str,
-    errors: List[str],
+    errors: list[str],
 ) -> None:
     """
     Walk an expression tree and flag grad/div/laplacian whose spatial
@@ -633,9 +664,9 @@ def _walk_expression_for_spatial_operator_checks(
 
 def _walk_expression_for_exponent_checks(
     expr: Any,
-    var_units: Dict[str, str],
+    var_units: dict[str, str],
     path: str,
-    errors: List[str],
+    errors: list[str],
 ) -> None:
     """Walk an expression tree and flag any '^' whose exponent has dimensions."""
     if not isinstance(expr, dict):
@@ -659,7 +690,7 @@ def _walk_expression_for_exponent_checks(
         _walk_expression_for_exponent_checks(expr["expr"], var_units, f"{path}/expr", errors)
 
 
-def _check_default_units_consistency(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_default_units_consistency(data: dict[str, Any], errors: list[str]) -> None:
     """
     Flag variables whose `default_units` disagrees with the declared `units`.
 
@@ -670,7 +701,8 @@ def _check_default_units_consistency(data: Dict[str, Any], errors: List[str]) ->
     """
     try:
         ureg = _get_unit_registry()
-    except Exception:
+    except ImportError:
+        # pint not installed: cannot verify units, do not block.
         return
 
     def units_match(declared: str, provided: str) -> bool:
@@ -678,8 +710,9 @@ def _check_default_units_consistency(data: Dict[str, Any], errors: List[str]) ->
             declared_u = ureg(_normalize_unit(declared)).units
             provided_u = ureg(_normalize_unit(provided)).units
             return declared_u == provided_u
-        except Exception:
-            # If pint can't parse, fall back to string compare on normalized form
+        except _pint_unverifiable_errors():
+            # unparseable unit: cannot verify, fall back to a string compare on
+            # the normalized form rather than blocking.
             return _normalize_unit(declared) == _normalize_unit(provided)
 
     def check_entry(path: str, declared_units, default_value, provided_default_units):
@@ -720,7 +753,7 @@ def _check_default_units_consistency(data: Dict[str, Any], errors: List[str]) ->
             )
 
 
-def _check_conversion_factor_consistency(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]) -> None:
     """
     Flag observed expressions of the form `<numeric> * <var>` (or `<var> * <numeric>`)
     where the declared output units and the source variable's units are
@@ -736,14 +769,16 @@ def _check_conversion_factor_consistency(data: Dict[str, Any], errors: List[str]
     """
     try:
         ureg = _get_unit_registry()
-    except Exception:
+    except ImportError:
+        # pint not installed: cannot verify units, do not block.
         return
 
     def linear_factor(from_unit: str, to_unit: str):
         try:
             q0 = ureg.Quantity(0.0, from_unit).to(to_unit).magnitude
             q1 = ureg.Quantity(1.0, from_unit).to(to_unit).magnitude
-        except Exception:
+        except _pint_unverifiable_errors():
+            # unparseable or inconvertible unit: cannot verify, skip.
             return None
         if abs(q0) > 1e-12:
             return None  # affine (e.g., degC -> K)
@@ -784,7 +819,8 @@ def _check_conversion_factor_consistency(data: Dict[str, Any], errors: List[str]
             try:
                 if ureg(n_src).dimensionality != ureg(n_lhs).dimensionality:
                     continue  # dimensional mismatch — handled by other checks
-            except Exception:
+            except _pint_unverifiable_errors():
+                # unparseable unit: cannot verify, skip.
                 continue
             factor = linear_factor(n_src, n_lhs)
             if factor is None or factor == 0:
@@ -827,7 +863,7 @@ def _expr_references_name(expr: Any, name: str) -> bool:
     return False
 
 
-def _check_physical_constant_units(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> None:
     """
     Flag well-known physical constants declared with dimensionally incompatible units.
 
@@ -872,7 +908,7 @@ def _check_physical_constant_units(data: Dict[str, Any], errors: List[str]) -> N
 
 
 def _check_unit_consistency(
-    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """
     Check unit compatibility in equations.
@@ -952,7 +988,7 @@ def _check_unit_consistency(
                 )
 
 
-def _check_equation_balance(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_equation_balance(data: dict[str, Any], errors: list[str]) -> None:
     """
     Check for clearly broken equation/state-variable patterns.
 
@@ -1004,7 +1040,7 @@ def _check_equation_balance(data: Dict[str, Any], errors: List[str]) -> None:
             )
 
 
-def _check_operator_state_coverage(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_operator_state_coverage(data: dict[str, Any], errors: list[str]) -> None:
     """
     When a file declares operators, every state variable in each model must be
     covered by either an equation (ODE or assignment) or an operator's modifies list.
@@ -1032,7 +1068,7 @@ def _check_operator_state_coverage(data: Dict[str, Any], errors: List[str]) -> N
             )
 
 
-def _check_reaction_systems(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_reaction_systems(data: dict[str, Any], errors: list[str]) -> None:
     """Validate reaction system: substrates/products are declared species, rate refs valid."""
     for rsname, rs in data.get("reaction_systems", {}).items():
         species = set(rs.get("species", {}).keys())
@@ -1085,7 +1121,7 @@ def _check_reaction_systems(data: Dict[str, Any], errors: List[str]) -> None:
 
 
 def _check_event_references(
-    data: Dict[str, Any], tables: Dict[str, Any], errors: List[str]
+    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
     """Check that event affects/conditions reference declared variables."""
     for mname, m in data.get("models", {}).items():
@@ -1103,7 +1139,7 @@ def _check_event_references(
                         )
 
 
-def _check_registered_function_calls(data: Dict[str, Any], errors: List[str]) -> None:
+def _check_registered_function_calls(data: dict[str, Any], errors: list[str]) -> None:
     """Emit missing_registered_function diagnostics for 'call' ops whose
     handler_id does not appear in the top-level registered_functions map
     (esm-spec §4.4 / §9.2). Also checks arg_count against signature when declared.
@@ -1163,7 +1199,7 @@ def _check_registered_function_calls(data: Dict[str, Any], errors: List[str]) ->
     walk(data, "")
 
 
-def _validate_structural(data: Dict[str, Any], file_path=None) -> None:
+def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     """
     Perform post-schema structural validation.
 
@@ -1174,7 +1210,7 @@ def _validate_structural(data: Dict[str, Any], file_path=None) -> None:
     # import graph acyclic.
     from .parse import SchemaValidationError
 
-    errors: List[str] = []
+    errors: list[str] = []
 
     # Operator arity check (walk all expressions)
     def walk_for_arity(obj, path):

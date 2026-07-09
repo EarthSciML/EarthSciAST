@@ -1,6 +1,6 @@
 # Makefile for earthsci-ast Python package
 
-.PHONY: help build clean install install-dev test lint format check upload upload-test all
+.PHONY: help build clean install install-dev test lint format typecheck check upload upload-test all
 
 # Virtual environment directory
 VENV_DIR = venv
@@ -15,8 +15,9 @@ help:
 	@echo "  install       Install package in development mode"
 	@echo "  install-dev   Install package with development dependencies"
 	@echo "  test          Run tests"
-	@echo "  lint          Run linting (flake8)"
-	@echo "  format        Format code with black"
+	@echo "  lint          Run linting (ruff)"
+	@echo "  format        Format code with ruff"
+	@echo "  typecheck     Run static type checking (mypy)"
 	@echo "  check         Check package metadata"
 	@echo "  upload-test   Upload to TestPyPI"
 	@echo "  upload        Upload to PyPI (production)"
@@ -53,11 +54,15 @@ test: $(VENV_DIR)/bin/activate
 
 # Run linting
 lint: $(VENV_DIR)/bin/activate
-	$(PYTHON) -m flake8 src/ tests/
+	$(PYTHON) -m ruff check src/ tests/
 
 # Format code
 format: $(VENV_DIR)/bin/activate
-	$(PYTHON) -m black src/ tests/
+	$(PYTHON) -m ruff format src/ tests/
+
+# Static type checking
+typecheck: $(VENV_DIR)/bin/activate
+	$(PYTHON) -m mypy src/
 
 # Check package metadata
 check: build

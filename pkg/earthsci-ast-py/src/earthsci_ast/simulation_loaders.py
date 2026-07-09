@@ -8,21 +8,17 @@ piecewise-constant forcing segments, refreshing the loader arrays between
 segments (RFC pure-io-data-loaders §4.3).
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+from __future__ import annotations
 
 import datetime as _dt
+from typing import Any, Callable
+
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .flatten import (
     FlattenedSystem,
     LoaderField,
     UnsupportedDimensionalityError,
-)
-from .sympy_bridge import SimulationError
-from .simulation_common import (
-    DENSE_OUTPUT_MIN_POINTS,
-    SimulationResult,
-    solve_ivp,
 )
 from .simulation_array import (
     _build_numpy_rhs,
@@ -30,7 +26,13 @@ from .simulation_array import (
     _element_names,
     _fill_build_inspection,
 )
-
+from .simulation_common import (
+    DENSE_OUTPUT_MIN_POINTS,
+    SimulationResult,
+    _failure_result,
+    solve_ivp,
+)
+from .sympy_bridge import SimulationError
 
 # A loader provider executes one data-loader field at a simulation time and
 # returns its current value as a flat float array. Time is the simulation
@@ -41,7 +43,7 @@ from .simulation_array import (
 LoaderProvider = Callable[[LoaderField, float], "np.ndarray"]
 
 
-def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
+def _provider_sample_field(provider: Any, t: float) -> np.ndarray:
     """Sample a top-level ``providers`` entry at simulation time ``t``.
 
     Accepts four duck-typed shapes so a fixture stub or a real EarthSciIO
@@ -72,20 +74,10 @@ def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
     if hasattr(provider, "provider_sample"):
         return provider.provider_sample(t)
     if hasattr(provider, "materialize") and hasattr(provider, "refresh_times"):
-        nds = provider.materialize()
-        names = (
-            nds.variable_names()
-            if hasattr(nds, "variable_names")
-            else list(getattr(nds, "variables", {}) or {})
-        )
-        if len(names) != 1:
-            raise SimulationError(
-                f"EarthSciIO provider yields {len(names)} data variables "
-                f"{sorted(names)}; bind one provider per consumer variable "
-                "(providers={'Loader.var': provider}) so each sample is a single "
-                "field, or slice the provider upstream"
-            )
-        return nds[names[0]].data
+        # One provider is bound per consumer variable, so exactly one data
+        # variable is expected; the single-variable extraction / error is shared
+        # with the DISCRETE refresh path (:func:`_single_var_array`).
+        return _single_var_array(provider.materialize())
     raise SimulationError(
         "provider must be callable (t)->array, expose sample(t) / "
         "provider_sample(t), or be an EarthSciIO Provider (materialize/"
@@ -93,7 +85,7 @@ def _provider_sample_field(provider: Any, t: float) -> "np.ndarray":
     )
 
 
-def _field_epoch(field: LoaderField) -> Optional[_dt.datetime]:
+def _field_epoch(field: LoaderField) -> _dt.datetime | None:
     """Absolute instant of simulation-clock 0 for ``field`` (C1's clock mapping).
 
     ``temporal.start`` is sim-clock zero, so a provider's ``refresh_times``
@@ -110,7 +102,7 @@ def _field_epoch(field: LoaderField) -> Optional[_dt.datetime]:
     return _coerce_datetime(start)
 
 
-def _sim_clock_epoch(flat: "FlattenedSystem") -> Optional[_dt.datetime]:
+def _sim_clock_epoch(flat: FlattenedSystem) -> _dt.datetime | None:
     """Absolute instant of simulation-clock 0: the run domain's ``reference_time``
     (falling back to its ``temporal.start``), as a naive UTC datetime.
 
@@ -154,7 +146,7 @@ def _coerce_field_values(obj: Any) -> np.ndarray:
     return np.asarray(obj, dtype=float)
 
 
-def _loader_file_variable(field: "LoaderField") -> Optional[str]:
+def _loader_file_variable(field: LoaderField) -> str | None:
     """The reader's on-disk / band key for ``field``, when it differs from ``var``.
 
     EarthSciIO readers emit a ``NativeDataset`` keyed by ``file_variable`` — a
@@ -176,7 +168,7 @@ def _loader_file_variable(field: "LoaderField") -> Optional[str]:
     return None
 
 
-def _extract_loader_var(native: Any, var: str, file_var: Optional[str] = None) -> np.ndarray:
+def _extract_loader_var(native: Any, var: str, file_var: str | None = None) -> np.ndarray:
     """Pull ``var``'s raw values from a provider's native dataset.
 
     Accepts a :class:`~earthsci_ast.data_loaders.grid.GridLoadResult` or an
@@ -204,7 +196,7 @@ def _provider_array(field: LoaderField, native: Any, target: Any) -> np.ndarray:
     return _extract_loader_var(native, field.var, _loader_file_variable(field)).reshape(-1)
 
 
-def _build_loader_target(flat: FlattenedSystem) -> Optional[Any]:
+def _build_loader_target(flat: FlattenedSystem) -> Any | None:
     """Loader target grids are no longer built — always returns ``None``.
 
     The bespoke spatial-grid / regrid machinery was removed in v0.8.0 (loader
@@ -236,8 +228,8 @@ def _factory_accepts_target(factory: Callable) -> bool:
 
 
 def _loader_cadence_boundaries(
-    discrete_fields: List[LoaderField], t0: float, t1: float
-) -> List[float]:
+    discrete_fields: list[LoaderField], t0: float, t1: float
+) -> list[float]:
     """Interior cadence-boundary times in the open interval ``(t0, t1)``.
 
     Each discrete loader refreshes every ``temporal.frequency`` seconds; the
@@ -252,7 +244,7 @@ def _loader_cadence_boundaries(
         parse_iso_duration,
     )
 
-    boundaries: Set[float] = set()
+    boundaries: set[float] = set()
     for f in discrete_fields:
         temporal = f.loader.temporal
         freq = getattr(temporal, "frequency", None) if temporal is not None else None
@@ -289,12 +281,12 @@ def _delta_seconds(later: _dt.datetime, earlier: _dt.datetime) -> float:
 
 
 def _provider_segment_boundaries(
-    discrete_fields: List[LoaderField],
-    providers: Dict[str, Any],
-    epochs: Dict[str, Optional[_dt.datetime]],
+    discrete_fields: list[LoaderField],
+    providers: dict[str, Any],
+    epochs: dict[str, _dt.datetime | None],
     t0: float,
     t1: float,
-) -> List[float]:
+) -> list[float]:
     """Interior cadence boundaries (sim-clock) from providers' refresh_times.
 
     Each discrete provider's :meth:`Provider.refresh_times` gives absolute
@@ -305,11 +297,11 @@ def _provider_segment_boundaries(
     Only strictly-interior boundaries ``t0 < b < t1`` are returned; the seed at
     ``t0`` and the final time ``t1`` are added by the caller.
     """
-    boundaries: Set[float] = set()
+    boundaries: set[float] = set()
     for f in discrete_fields:
         provider = providers.get(f.name)
         epoch = epochs.get(f.name)
-        times: List[Any] = []
+        times: list[Any] = []
         if provider is not None:
             try:
                 times = list(provider.refresh_times())
@@ -329,16 +321,16 @@ def _provider_segment_boundaries(
 
 def _run_cadence_segmented_solve(
     flat: FlattenedSystem,
-    parameters: Dict[str, float],
-    initial_conditions: Dict[str, float],
+    parameters: dict[str, float],
+    initial_conditions: dict[str, float],
     method: str,
     rtol: float,
     atol: float,
     t0: float,
-    seg_ends: List[float],
-    loader_arrays: Dict[str, np.ndarray],
+    seg_ends: list[float],
+    loader_arrays: dict[str, np.ndarray],
     refresh_fn: Callable[[float], None],
-    inspect: Optional[Any] = None,
+    inspect: Any | None = None,
 ) -> SimulationResult:
     """The ONE discrete-cadence segmented solve — both the ``providers=`` seam
     (:func:`_simulate_with_discrete_providers`) and the ``loader_fields`` seam
@@ -359,10 +351,10 @@ def _run_cadence_segmented_solve(
     given, is filled from the seed (t0) build."""
     per_seg_pts = max(11, (DENSE_OUTPUT_MIN_POINTS // len(seg_ends)) + 1)
     t_current = t0
-    y_current: Optional[np.ndarray] = None
-    elem_names: List[str] = []
-    t_chunks: List[np.ndarray] = []
-    y_chunks: List[np.ndarray] = []
+    y_current: np.ndarray | None = None
+    elem_names: list[str] = []
+    t_chunks: list[np.ndarray] = []
+    y_chunks: list[np.ndarray] = []
     nfev = njev = nlu = 0
     last_message = ""
     # Persist the loader-INVARIANT build products (join-key bins + the const regrid
@@ -370,7 +362,7 @@ def _run_cadence_segmented_solve(
     # observeds (the regrid APPLY W·field) change per segment, so the expensive
     # const geometry is materialized once at the seed build and reused, not
     # re-clipped every hour. Seeded on the seg-0 build; read on every later build.
-    static_cache: Dict[str, Any] = {}
+    static_cache: dict[str, Any] = {}
     for seg_idx, seg_end in enumerate(seg_ends):
         # Refresh the discrete forcing to the hour covering this segment start,
         # then REBUILD the RHS so a const-hoisted regrid picks up the slice.
@@ -401,15 +393,9 @@ def _run_cadence_segmented_solve(
         nlu += int(sol.nlu)
         last_message = sol.message
         if not sol.success:
-            return SimulationResult(
-                t=np.array([]),
-                y=np.array([[]]),
-                vars=[],
-                success=False,
-                message=(
-                    f"Simulation failed in cadence segment "
-                    f"[{t_current}, {seg_end}]: {sol.message}"
-                ),
+            return _failure_result(
+                f"Simulation failed in cadence segment "
+                f"[{t_current}, {seg_end}]: {sol.message}",
                 nfev=nfev,
                 njev=njev,
                 nlu=nlu,
@@ -440,14 +426,14 @@ def _run_cadence_segmented_solve(
 
 def _simulate_with_loaders(
     flat: FlattenedSystem,
-    tspan: Tuple[float, float],
-    parameters: Dict[str, float],
-    initial_conditions: Dict[str, float],
+    tspan: tuple[float, float],
+    parameters: dict[str, float],
+    initial_conditions: dict[str, float],
     method: str,
     rtol: float = 1e-10,
     atol: float = 1e-12,
-    loader_provider: Optional[LoaderProvider] = None,
-    provider_factory: Optional[Callable] = None,
+    loader_provider: LoaderProvider | None = None,
+    provider_factory: Callable | None = None,
 ) -> SimulationResult:
     """Integrate a system whose RHS reads data-loader fields (RFC §4.3).
 
@@ -491,7 +477,7 @@ def _simulate_with_loaders(
 
         # The shared registry the RHS reads each step. Mutated in place (never
         # rebound) so every per-step EvalContext sees the current segment's data.
-        loader_arrays: Dict[str, np.ndarray] = {}
+        loader_arrays: dict[str, np.ndarray] = {}
 
         if loader_provider is not None:
             # Legacy seam: a per-call callable, kept for offline stub tests and
@@ -606,16 +592,7 @@ def _simulate_with_loaders(
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],
-            success=False,
-            message=f"Simulation failed: {e}",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result(f"Simulation failed: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -686,7 +663,7 @@ def _single_var_array(nds: Any) -> np.ndarray:
     return np.asarray(nds[names[0]].data, dtype=float)
 
 
-def _provider_epoch(provider: Any, t0: float) -> Optional[_dt.datetime]:
+def _provider_epoch(provider: Any, t0: float) -> _dt.datetime | None:
     """Absolute instant of simulation-clock ``t0`` for a DISCRETE provider.
 
     Sim-clock 0 is the run start; the runner anchors the provider ``window`` start
@@ -712,14 +689,14 @@ def _provider_epoch(provider: Any, t0: float) -> Optional[_dt.datetime]:
 
 def _simulate_with_discrete_providers(
     flat: FlattenedSystem,
-    tspan: Tuple[float, float],
-    parameters: Dict[str, float],
-    initial_conditions: Dict[str, float],
+    tspan: tuple[float, float],
+    parameters: dict[str, float],
+    initial_conditions: dict[str, float],
     method: str,
     rtol: float,
     atol: float,
-    providers: Dict[str, Any],
-    inspect: Optional[Any] = None,
+    providers: dict[str, Any],
+    inspect: Any | None = None,
 ) -> SimulationResult:
     """Cadence-aware ``providers=`` integration: segment on the DISCRETE
     providers' refresh boundaries so a time-varying loader changes in-sim.
@@ -756,7 +733,7 @@ def _simulate_with_discrete_providers(
         # run window (the runner anchors the window start at the ignition hour =
         # the instant of sim-clock t0).
         sim_epoch = _sim_clock_epoch(flat)
-        epochs: Dict[str, Optional[_dt.datetime]] = {
+        epochs: dict[str, _dt.datetime | None] = {
             n: (sim_epoch if sim_epoch is not None else _provider_epoch(providers[n], t0))
             for n in discrete_names
         }
@@ -764,7 +741,7 @@ def _simulate_with_discrete_providers(
         # Interior segment boundaries: the union of the discrete providers'
         # refresh anchors (hourly for ERA5) mapped onto the sim clock; only
         # strictly-interior (t0, t1) anchors split the integration.
-        boundaries: Set[float] = set()
+        boundaries: set[float] = set()
         for n in discrete_names:
             epoch = epochs[n]
             if epoch is None:
@@ -781,7 +758,7 @@ def _simulate_with_discrete_providers(
 
         # Shared loader-array registry. CONST providers: materialized ONCE.
         # DISCRETE providers: seeded / refreshed by _refresh_discrete per segment.
-        loader_arrays: Dict[str, np.ndarray] = {}
+        loader_arrays: dict[str, np.ndarray] = {}
         for n in const_names:
             loader_arrays[n] = np.asarray(_provider_sample_field(providers[n], t0), dtype=float)
 
@@ -820,13 +797,4 @@ def _simulate_with_discrete_providers(
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
-        return SimulationResult(
-            t=np.array([]),
-            y=np.array([[]]),
-            vars=[],
-            success=False,
-            message=f"Simulation failed: {e}",
-            nfev=0,
-            njev=0,
-            nlu=0,
-        )
+        return _failure_result(f"Simulation failed: {e}")

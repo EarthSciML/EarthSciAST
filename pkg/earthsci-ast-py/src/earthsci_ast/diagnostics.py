@@ -17,6 +17,8 @@ it without creating import cycles.
 # ``ExpressionTemplateError`` from ``lower_expression_templates.py``.
 # ---------------------------------------------------------------------------
 
+from __future__ import annotations
+
 APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION = "apply_expression_template_invalid_declaration"
 APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template"
 APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch"

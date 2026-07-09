@@ -93,3 +93,37 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+# I (isort), UP (pyupgrade), B (bugbear), C4 (comprehensions), RET (return),
+# W (pycodestyle warnings) on top of the E/F correctness defaults. The typing
+# modernization (UP006/UP045) is safe because every module carries
+# `from __future__ import annotations`.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "C4", "RET", "W"]
+ignore = [
+    "E501",   # line length is left to the formatter, not enforced as an error
+    "B008",   # function call in argument default (used deliberately in a few APIs)
+]
+
+[tool.ruff.lint.isort]
+# Every module carries `from __future__ import annotations` so the whole package
+# can use PEP 585/604 typing (list[int], X | None) while still importing on 3.9.
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favor readability over lint purity; the package __init__ is a curated
+# re-export surface where unused-import / ordering rules do not apply.
+"tests/*" = ["B", "E7"]
+# __init__ interleaves a conditional (scipy-optional) import block with the
+# re-export list, so E402 (import-not-at-top) is expected here.
+"src/earthsci_ast/__init__.py" = ["F401", "I001", "E402"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+warn_unused_ignores = true

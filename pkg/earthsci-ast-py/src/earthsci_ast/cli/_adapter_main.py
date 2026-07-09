@@ -25,18 +25,18 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 #: Per-fixture handler: ``(fixture, manifest, manifest_path) -> record``.
 #: ``manifest`` and ``manifest_path`` carry the run-wide context some adapters
 #: need (integrator pins, manifest-relative fixture paths).
-FixtureHandler = Callable[[Dict[str, Any], Dict[str, Any], Path], Dict[str, Any]]
+FixtureHandler = Callable[[dict[str, Any], dict[str, Any], Path], dict[str, Any]]
 
 
 def adapter_main(
-    argv: "Optional[List[str]]",
+    argv: list[str] | None,
     *,
-    description: Optional[str],
+    description: str | None,
     run_fixture: FixtureHandler,
 ) -> int:
     """Parse ``--manifest``/``--output``, run ``run_fixture`` over every
@@ -51,7 +51,7 @@ def adapter_main(
 
     manifest = json.loads(args.manifest.read_text())
 
-    fixtures: Dict[str, Any] = {}
+    fixtures: dict[str, Any] = {}
     for fixture in manifest["fixtures"]:
         try:
             fixtures[fixture["id"]] = run_fixture(fixture, manifest, args.manifest)

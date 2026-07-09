@@ -235,6 +235,46 @@ def test_enums_lowered_to_const():
     assert expr.args[2].value == 3  # deciduous_forest
 
 
+def test_enums_lowered_in_bound_filter_and_key():
+    """Regression: ``enum`` ops hidden in an integral bound, an aggregate
+    ``filter`` predicate, or a skolem ``key`` must also lower to ``const`` —
+    previously ``_lower_expr`` skipped these canonical child slots."""
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.registered_functions import _lower_expr
+
+    enums = {"Season": {"summer": 2, "winter": 4}}
+
+    integral = ExprNode(
+        op="integral",
+        args=[],
+        lower=ExprNode(op="enum", args=["Season", "summer"]),
+        upper=ExprNode(op="const", args=[], value=10),
+        expr=ExprNode(op="const", args=[], value=1),
+    )
+    out = _lower_expr(integral, enums)
+    assert out.lower.op == "const" and out.lower.value == 2
+
+    agg = ExprNode(
+        op="sum",
+        args=[],
+        filter=ExprNode(op="enum", args=["Season", "winter"]),
+        expr=ExprNode(op="const", args=[], value=1),
+    )
+    out = _lower_expr(agg, enums)
+    assert out.filter.op == "const" and out.filter.value == 4
+
+    skolem = ExprNode(op="skolem", args=[], key=ExprNode(op="enum", args=["Season", "summer"]))
+    out = _lower_expr(skolem, enums)
+    assert out.key.op == "const" and out.key.value == 2
+
+    # Identity preserved when no child changes.
+    plain = ExprNode(
+        op="add",
+        args=[ExprNode(op="const", args=[], value=1), ExprNode(op="const", args=[], value=2)],
+    )
+    assert _lower_expr(plain, enums) is plain
+
+
 def test_julian_day_ulp_close():
     """``datetime.julian_day`` agreement with the noon-UTC reference."""
     # Unix epoch midnight UTC = JD 2440587.5 (esm-spec §9.2.1 worked example).

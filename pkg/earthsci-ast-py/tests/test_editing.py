@@ -110,12 +110,12 @@ def test_module_level_helpers_match_editor():
     model = _make_model()
 
     r_add = add_variable_to_model(
-        model, "mass", ModelVariable(type="parameter", default=1.0), validate=False
+        model, "mass", ModelVariable(type="parameter", default=1.0), validate_after_edit=False
     )
     assert r_add.success and "mass" in r_add.modified_object.variables
 
-    r_rename = rename_variable_in_model(model, "x", "position", validate=False)
+    r_rename = rename_variable_in_model(model, "x", "position", validate_after_edit=False)
     assert r_rename.success and "position" in r_rename.modified_object.variables
 
-    r_remove = remove_variable_from_model(model, "k", validate=False)
+    r_remove = remove_variable_from_model(model, "k", validate_after_edit=False)
     assert r_remove.success and "k" not in r_remove.modified_object.variables

@@ -30,8 +30,10 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Union
 from urllib.parse import urlsplit
+
+from ..errors import EarthSciAstError
 
 #: Environment variable naming the cache root. Honored by every helper here.
 DATADIR_ENV = "EARTHSCIDATADIR"
@@ -47,7 +49,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 PathLike = Union[str, "os.PathLike[str]"]
 
 
-class CacheMiss(OSError):
+class CacheMiss(EarthSciAstError, OSError):
     """A URL was absent from the local cache and fetching was disabled.
 
     Subclasses :class:`OSError` on purpose: the loaders open through
@@ -63,7 +65,7 @@ class CacheMiss(OSError):
         super().__init__(f"offline cache miss for {url!r} (expected at {path})")
 
 
-def resolve_data_dir(data_dir: Optional[PathLike] = None) -> Path:
+def resolve_data_dir(data_dir: PathLike | None = None) -> Path:
     """Resolve the cache root: explicit ``data_dir`` > ``EARTHSCIDATADIR`` > temp.
 
     The temp-dir fallback (rather than ``$HOME``) keeps the default off
@@ -77,7 +79,7 @@ def resolve_data_dir(data_dir: Optional[PathLike] = None) -> Path:
     return Path(tempfile.gettempdir()) / DEFAULT_CACHE_DIRNAME
 
 
-def _offline_enabled(offline: Optional[bool]) -> bool:
+def _offline_enabled(offline: bool | None) -> bool:
     if offline is not None:
         return offline
     return os.environ.get(OFFLINE_ENV, "").strip().lower() in _TRUTHY
@@ -98,7 +100,7 @@ def _url_suffix(url: str) -> str:
 def cache_path_for_url(
     url: str,
     *,
-    data_dir: Optional[PathLike] = None,
+    data_dir: PathLike | None = None,
     keep_suffix: bool = True,
 ) -> Path:
     """Content-addressed cache path for ``url``: ``<root>/<aa>/<sha256><suffix>``.
@@ -155,10 +157,10 @@ def _default_bytes_fetcher() -> Callable[[str], bytes]:
 
 def cached_opener(
     *,
-    opener: Optional[Callable[[str], Any]] = None,
-    fetcher: Optional[Callable[[str], bytes]] = None,
-    data_dir: Optional[PathLike] = None,
-    offline: Optional[bool] = None,
+    opener: Callable[[str], Any] | None = None,
+    fetcher: Callable[[str], bytes] | None = None,
+    data_dir: PathLike | None = None,
+    offline: bool | None = None,
 ) -> Callable[[str], Any]:
     """Wrap a dataset ``opener`` with the EARTHSCIDATADIR content-addressed cache.
 
@@ -203,9 +205,9 @@ def cached_opener(
 
 def cached_fetcher(
     *,
-    fetcher: Optional[Callable[[str], bytes]] = None,
-    data_dir: Optional[PathLike] = None,
-    offline: Optional[bool] = None,
+    fetcher: Callable[[str], bytes] | None = None,
+    data_dir: PathLike | None = None,
+    offline: bool | None = None,
 ) -> Callable[[str], bytes]:
     """Wrap a bytes ``fetcher`` (points seam) with the same content-addressed cache.
 

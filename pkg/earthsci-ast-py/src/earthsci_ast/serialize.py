@@ -4,59 +4,60 @@ ESM Format serialization module.
 This module provides functions to serialize ESM format objects to JSON,
 with optional file writing capability.
 """
+from __future__ import annotations
 
 import json
 import math
 from pathlib import Path
-from typing import Union, Dict, Any, Optional
+from typing import Any
 
 from .esm_types import (
-    EsmFile,
-    Metadata,
-    Model,
-    ReactionSystem,
-    ModelVariable,
-    Equation,
-    Species,
-    Parameter,
-    Reaction,
-    ExprNode,
-    Expr,
+    Assertion,
+    CallbackCoupling,
     ContinuousEvent,
-    DiscreteEvent,
-    DiscreteEventTrigger,
-    FunctionalAffect,
+    CouplingCouple,
+    CouplingEntry,
     DataLoader,
     DataLoaderDeterminism,
     DataLoaderSource,
     DataLoaderTemporal,
     DataLoaderVariable,
-    Operator,
-    CouplingEntry,
+    DiscreteEvent,
+    DiscreteEventTrigger,
     Domain,
-    OperatorComposeCoupling,
-    CouplingCouple,
-    VariableMapCoupling,
-    OperatorApplyCoupling,
-    CallbackCoupling,
+    Equation,
+    EsmFile,
     EventCoupling,
-    Reference,
-    Tolerance,
-    TimeSpan,
-    Assertion,
-    Test,
-    PlotAxis,
-    PlotValue,
-    PlotSeries,
-    Plot,
-    SweepRange,
-    SweepDimension,
-    ParameterSweep,
     Example,
+    Expr,
+    ExprNode,
+    FunctionalAffect,
+    Metadata,
+    Model,
+    ModelVariable,
+    Operator,
+    OperatorApplyCoupling,
+    OperatorComposeCoupling,
+    Parameter,
+    ParameterSweep,
+    Plot,
+    PlotAxis,
+    PlotSeries,
+    PlotValue,
+    Reaction,
+    ReactionSystem,
+    Reference,
+    Species,
+    SweepDimension,
+    SweepRange,
+    Test,
+    TimeSpan,
+    Tolerance,
+    VariableMapCoupling,
 )
 
 
-def _emit_stoich(coeff: Union[int, float]) -> Union[int, float]:
+def _emit_stoich(coeff: int | float) -> int | float:
     """Emit a stoichiometric coefficient preserving integer-vs-float distinction.
 
     Integer values (either `int` or integer-valued `float`) are emitted as `int`
@@ -72,11 +73,11 @@ def _emit_stoich(coeff: Union[int, float]) -> Union[int, float]:
     return float(coeff)
 
 
-def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
+def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
     """Serialize an expression to JSON-compatible format."""
     if isinstance(expr, (int, float, str)):
         return expr
-    elif isinstance(expr, ExprNode):
+    if isinstance(expr, ExprNode):
         result = {"op": expr.op, "args": [_serialize_expression(arg) for arg in expr.args]}
         if expr.wrt is not None:
             result["wrt"] = expr.wrt
@@ -138,11 +139,10 @@ def _serialize_expression(expr: Expr) -> Union[int, float, str, Dict[str, Any]]:
         if expr.output is not None:
             result["output"] = expr.output
         return result
-    else:
-        raise ValueError(f"Invalid expression type: {type(expr)}")
+    raise ValueError(f"Invalid expression type: {type(expr)}")
 
 
-def _serialize_equation(equation: Equation) -> Dict[str, Any]:
+def _serialize_equation(equation: Equation) -> dict[str, Any]:
     """Serialize an equation to JSON-compatible format."""
     result = {
         "lhs": _serialize_expression(equation.lhs),
@@ -153,7 +153,7 @@ def _serialize_equation(equation: Equation) -> Dict[str, Any]:
     return result
 
 
-def _serialize_affect_equation(affect) -> Dict[str, Any]:
+def _serialize_affect_equation(affect) -> dict[str, Any]:
     """Serialize an affect equation or functional affect to JSON-compatible format."""
     if isinstance(affect, FunctionalAffect):
         result = {"handler_id": affect.handler_id}
@@ -169,7 +169,7 @@ def _serialize_affect_equation(affect) -> Dict[str, Any]:
     return {"lhs": affect.lhs, "rhs": _serialize_expression(affect.rhs)}
 
 
-def _serialize_model_variable(variable: ModelVariable) -> Dict[str, Any]:
+def _serialize_model_variable(variable: ModelVariable) -> dict[str, Any]:
     """Serialize a model variable to JSON-compatible format."""
     result = {"type": variable.type}
     if variable.units is not None:
@@ -193,7 +193,7 @@ def _serialize_model_variable(variable: ModelVariable) -> Dict[str, Any]:
     return result
 
 
-def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> Dict[str, Any]:
+def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> dict[str, Any]:
     """Serialize a discrete event trigger to JSON-compatible format."""
     result = {"type": trigger.type}
 
@@ -207,7 +207,7 @@ def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> Dict[str
     return result
 
 
-def _split_affects(affects) -> "tuple":
+def _split_affects(affects) -> tuple:
     """Split an event's affects into (symbolic equations, functional affect).
 
     Parsing folds a schema ``functional_affect`` into the event's ``affects``
@@ -219,7 +219,7 @@ def _split_affects(affects) -> "tuple":
     return equations, (functional[0] if functional else None)
 
 
-def _serialize_continuous_event(event: ContinuousEvent) -> Dict[str, Any]:
+def _serialize_continuous_event(event: ContinuousEvent) -> dict[str, Any]:
     """Serialize a continuous event to JSON-compatible format."""
     equations, functional = _split_affects(event.affects)
     result = {
@@ -246,7 +246,7 @@ def _serialize_continuous_event(event: ContinuousEvent) -> Dict[str, Any]:
     return result
 
 
-def _serialize_discrete_event(event: DiscreteEvent) -> Dict[str, Any]:
+def _serialize_discrete_event(event: DiscreteEvent) -> dict[str, Any]:
     """Serialize a discrete event to JSON-compatible format."""
     equations, functional = _split_affects(event.affects)
     result = {
@@ -270,8 +270,8 @@ def _serialize_discrete_event(event: DiscreteEvent) -> Dict[str, Any]:
     return result
 
 
-def _serialize_tolerance(t: Tolerance) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+def _serialize_tolerance(t: Tolerance) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     if t.abs is not None:
         result["abs"] = t.abs
     if t.rel is not None:
@@ -279,12 +279,12 @@ def _serialize_tolerance(t: Tolerance) -> Dict[str, Any]:
     return result
 
 
-def _serialize_time_span(ts: TimeSpan) -> Dict[str, Any]:
+def _serialize_time_span(ts: TimeSpan) -> dict[str, Any]:
     return {"start": ts.start, "end": ts.end}
 
 
-def _serialize_assertion(a: Assertion) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def _serialize_assertion(a: Assertion) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "variable": a.variable,
         "time": a.time,
         "expected": a.expected,
@@ -305,8 +305,8 @@ def _serialize_assertion(a: Assertion) -> Dict[str, Any]:
     return result
 
 
-def _serialize_test(t: Test) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"id": t.id}
+def _serialize_test(t: Test) -> dict[str, Any]:
+    result: dict[str, Any] = {"id": t.id}
     if t.description is not None:
         result["description"] = t.description
     if t.initial_conditions:
@@ -327,15 +327,15 @@ def _serialize_test(t: Test) -> Dict[str, Any]:
     return result
 
 
-def _serialize_plot_axis(axis: PlotAxis) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"variable": axis.variable}
+def _serialize_plot_axis(axis: PlotAxis) -> dict[str, Any]:
+    result: dict[str, Any] = {"variable": axis.variable}
     if axis.label is not None:
         result["label"] = axis.label
     return result
 
 
-def _serialize_plot_value(v: PlotValue) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"variable": v.variable}
+def _serialize_plot_value(v: PlotValue) -> dict[str, Any]:
+    result: dict[str, Any] = {"variable": v.variable}
     if v.at_time is not None:
         result["at_time"] = v.at_time
     if v.reduce is not None:
@@ -343,12 +343,12 @@ def _serialize_plot_value(v: PlotValue) -> Dict[str, Any]:
     return result
 
 
-def _serialize_plot_series(s: PlotSeries) -> Dict[str, Any]:
+def _serialize_plot_series(s: PlotSeries) -> dict[str, Any]:
     return {"name": s.name, "variable": s.variable}
 
 
-def _serialize_plot(p: Plot) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def _serialize_plot(p: Plot) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "id": p.id,
         "type": p.type,
     }
@@ -363,15 +363,15 @@ def _serialize_plot(p: Plot) -> Dict[str, Any]:
     return result
 
 
-def _serialize_sweep_range(r: SweepRange) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"start": r.start, "stop": r.stop, "count": r.count}
+def _serialize_sweep_range(r: SweepRange) -> dict[str, Any]:
+    result: dict[str, Any] = {"start": r.start, "stop": r.stop, "count": r.count}
     if r.scale is not None:
         result["scale"] = r.scale
     return result
 
 
-def _serialize_sweep_dimension(d: SweepDimension) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"parameter": d.parameter}
+def _serialize_sweep_dimension(d: SweepDimension) -> dict[str, Any]:
+    result: dict[str, Any] = {"parameter": d.parameter}
     if d.values is not None:
         result["values"] = list(d.values)
     if d.range is not None:
@@ -379,15 +379,15 @@ def _serialize_sweep_dimension(d: SweepDimension) -> Dict[str, Any]:
     return result
 
 
-def _serialize_parameter_sweep(ps: ParameterSweep) -> Dict[str, Any]:
+def _serialize_parameter_sweep(ps: ParameterSweep) -> dict[str, Any]:
     return {
         "type": ps.type,
         "dimensions": [_serialize_sweep_dimension(d) for d in ps.dimensions],
     }
 
 
-def _serialize_example(e: Example) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"id": e.id}
+def _serialize_example(e: Example) -> dict[str, Any]:
+    result: dict[str, Any] = {"id": e.id}
     if e.description is not None:
         result["description"] = e.description
     if e.initial_state is not None:
@@ -410,7 +410,7 @@ def _serialize_example(e: Example) -> Dict[str, Any]:
     return result
 
 
-def _serialize_model(model: Model) -> Dict[str, Any]:
+def _serialize_model(model: Model) -> dict[str, Any]:
     """Serialize a model to JSON-compatible format."""
     result = {}
 
@@ -446,7 +446,7 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
             _serialize_equation(eq) for eq in model.initialization_equations
         ]
     if model.guesses:
-        guesses_out: Dict[str, Any] = {}
+        guesses_out: dict[str, Any] = {}
         for var_name, seed in model.guesses.items():
             if isinstance(seed, (int, float)) and not isinstance(seed, bool):
                 guesses_out[var_name] = seed
@@ -476,7 +476,7 @@ def _serialize_model(model: Model) -> Dict[str, Any]:
     return result
 
 
-def _serialize_subsystem(sub: Any) -> Dict[str, Any]:
+def _serialize_subsystem(sub: Any) -> dict[str, Any]:
     """Serialize one entry of a ``subsystems`` map: an inline Model /
     ReactionSystem / DataLoader, or an unresolved ``{ref, bindings?}`` dict
     carried verbatim (deep-copied)."""
@@ -491,7 +491,7 @@ def _serialize_subsystem(sub: Any) -> Dict[str, Any]:
     raise ValueError(f"Invalid subsystem type: {type(sub)}")
 
 
-def _serialize_species(species: Species) -> Dict[str, Any]:
+def _serialize_species(species: Species) -> dict[str, Any]:
     """Serialize a species to JSON-compatible format."""
     result = {}
     if species.units is not None:
@@ -507,7 +507,7 @@ def _serialize_species(species: Species) -> Dict[str, Any]:
     return result
 
 
-def _serialize_parameter(parameter: Parameter) -> Dict[str, Any]:
+def _serialize_parameter(parameter: Parameter) -> dict[str, Any]:
     """Serialize a parameter to JSON-compatible format."""
     result = {}
     if parameter.units is not None:
@@ -521,7 +521,7 @@ def _serialize_parameter(parameter: Parameter) -> Dict[str, Any]:
     return result
 
 
-def _serialize_reaction(reaction: Reaction) -> Dict[str, Any]:
+def _serialize_reaction(reaction: Reaction) -> dict[str, Any]:
     """Serialize a reaction to JSON-compatible format."""
     result = {"id": reaction.id if reaction.id is not None else reaction.name}
 
@@ -555,7 +555,7 @@ def _serialize_reaction(reaction: Reaction) -> Dict[str, Any]:
     return result
 
 
-def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
+def _serialize_reaction_system(rs: ReactionSystem) -> dict[str, Any]:
     """Serialize a reaction system to JSON-compatible format."""
     result = {}
 
@@ -608,7 +608,7 @@ def _serialize_reaction_system(rs: ReactionSystem) -> Dict[str, Any]:
     return result
 
 
-def _serialize_reference(reference: Reference) -> Dict[str, Any]:
+def _serialize_reference(reference: Reference) -> dict[str, Any]:
     """Serialize a reference to JSON-compatible format."""
     result = {}
     if reference.title:
@@ -620,7 +620,7 @@ def _serialize_reference(reference: Reference) -> Dict[str, Any]:
     return result
 
 
-def _serialize_metadata(metadata: Metadata) -> Dict[str, Any]:
+def _serialize_metadata(metadata: Metadata) -> dict[str, Any]:
     """Serialize metadata to JSON-compatible format."""
     result = {"name": metadata.title}
 
@@ -640,7 +640,7 @@ def _serialize_metadata(metadata: Metadata) -> Dict[str, Any]:
     return result
 
 
-def _serialize_domain(domain: Domain) -> Dict[str, Any]:
+def _serialize_domain(domain: Domain) -> dict[str, Any]:
     """Serialize a domain to JSON-compatible format."""
     result = {}
 
@@ -649,7 +649,7 @@ def _serialize_domain(domain: Domain) -> Dict[str, Any]:
 
     # Serialize temporal domain
     if domain.temporal:
-        temporal_data: Dict[str, Any] = {}
+        temporal_data: dict[str, Any] = {}
         if domain.temporal.start is not None:
             temporal_data["start"] = domain.temporal.start
         if domain.temporal.end is not None:
@@ -664,15 +664,15 @@ def _serialize_domain(domain: Domain) -> Dict[str, Any]:
     return result
 
 
-def _serialize_data_loader_source(source: DataLoaderSource) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"url_template": source.url_template}
+def _serialize_data_loader_source(source: DataLoaderSource) -> dict[str, Any]:
+    result: dict[str, Any] = {"url_template": source.url_template}
     if source.mirrors:
         result["mirrors"] = list(source.mirrors)
     return result
 
 
-def _serialize_data_loader_temporal(temporal: DataLoaderTemporal) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+def _serialize_data_loader_temporal(temporal: DataLoaderTemporal) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     if temporal.start is not None:
         result["start"] = temporal.start
     if temporal.end is not None:
@@ -688,8 +688,8 @@ def _serialize_data_loader_temporal(temporal: DataLoaderTemporal) -> Dict[str, A
     return result
 
 
-def _serialize_data_loader_variable(variable: DataLoaderVariable) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def _serialize_data_loader_variable(variable: DataLoaderVariable) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "file_variable": variable.file_variable,
         "units": variable.units,
     }
@@ -705,9 +705,9 @@ def _serialize_data_loader_variable(variable: DataLoaderVariable) -> Dict[str, A
     return result
 
 
-def _serialize_data_loader_determinism(det: DataLoaderDeterminism) -> Dict[str, Any]:
+def _serialize_data_loader_determinism(det: DataLoaderDeterminism) -> dict[str, Any]:
     """Serialize a determinism block (esm-spec §8.9.2)."""
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     if det.endian is not None:
         result["endian"] = det.endian
     if det.float_format is not None:
@@ -717,9 +717,9 @@ def _serialize_data_loader_determinism(det: DataLoaderDeterminism) -> Dict[str, 
     return result
 
 
-def _serialize_data_loader(loader: DataLoader) -> Dict[str, Any]:
+def _serialize_data_loader(loader: DataLoader) -> dict[str, Any]:
     """Serialize a data loader to JSON-compatible format."""
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "kind": loader.kind.value,
         "source": _serialize_data_loader_source(loader.source),
         "variables": {
@@ -742,7 +742,7 @@ def _serialize_data_loader(loader: DataLoader) -> Dict[str, Any]:
     return result
 
 
-def _serialize_operator(operator: Operator) -> Dict[str, Any]:
+def _serialize_operator(operator: Operator) -> dict[str, Any]:
     """Serialize an operator to JSON-compatible format."""
     result = {}
 
@@ -768,15 +768,15 @@ def _serialize_operator(operator: Operator) -> Dict[str, Any]:
     return result
 
 
-def _serialize_registered_function(rf) -> Dict[str, Any]:
+def _serialize_registered_function(rf) -> dict[str, Any]:
     """Serialize a RegisteredFunction entry (esm-spec §9.2)."""
-    sig: Dict[str, Any] = {"arg_count": rf.signature.arg_count}
+    sig: dict[str, Any] = {"arg_count": rf.signature.arg_count}
     if rf.signature.arg_types is not None:
         sig["arg_types"] = list(rf.signature.arg_types)
     if rf.signature.return_type is not None:
         sig["return_type"] = rf.signature.return_type
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "id": rf.id,
         "signature": sig,
     }
@@ -793,7 +793,7 @@ def _serialize_registered_function(rf) -> Dict[str, Any]:
     return result
 
 
-def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
+def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
     """Serialize a coupling entry to JSON-compatible format."""
     result = {}
 
@@ -884,7 +884,7 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> Dict[str, Any]:
     return result
 
 
-def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
+def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     """Serialize an ESM file to JSON-compatible format."""
     result = {"esm": esm_file.version, "metadata": _serialize_metadata(esm_file.metadata)}
 
@@ -952,7 +952,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
 
         ft_out = {}
         for ft_name, ft in esm_file.function_tables.items():
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "axes": [
                     {
                         "name": a.name,
@@ -1009,7 +1009,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> Dict[str, Any]:
     return result
 
 
-def save(esm_file: EsmFile, path: Optional[Union[str, Path]] = None) -> str:
+def save(esm_file: EsmFile, path: str | Path | None = None) -> str:
     """
     Serialize an ESM file to JSON string, optionally writing to file.
 

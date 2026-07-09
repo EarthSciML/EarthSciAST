@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import Any, List
+from typing import Any
 
+from .errors import EarthSciAstError
 from .esm_types import Expr, ExprNode
 
 
-class CanonicalizeError(Exception):
+class CanonicalizeError(EarthSciAstError):
     """Base class for canonicalization errors (RFC §5.4.6 / §5.4.7)."""
 
     code: str = ""
@@ -66,7 +67,7 @@ def canonical_json(expr: Expr) -> str:
 
 
 def _canon_op(node: ExprNode) -> Expr:
-    new_args: List[Expr] = [canonicalize(a) for a in node.args]
+    new_args: list[Expr] = [canonicalize(a) for a in node.args]
     work = replace(node, args=new_args)
     if work.op == "+":
         return _canon_add(work)
@@ -160,8 +161,8 @@ def _canon_neg_value(arg: Expr) -> Expr:
     return ExprNode(op="neg", args=[arg])
 
 
-def _flatten_same_op(args: List[Expr], op: str) -> List[Expr]:
-    out: List[Expr] = []
+def _flatten_same_op(args: list[Expr], op: str) -> list[Expr]:
+    out: list[Expr] = []
     for a in args:
         if isinstance(a, ExprNode) and a.op == op:
             out.extend(a.args)
@@ -170,8 +171,8 @@ def _flatten_same_op(args: List[Expr], op: str) -> List[Expr]:
     return out
 
 
-def _partition_identity(args: List[Expr], identity: int):
-    others: List[Expr] = []
+def _partition_identity(args: list[Expr], identity: int):
+    others: list[Expr] = []
     had_int = False
     had_float = False
     for a in args:
@@ -188,7 +189,7 @@ def _partition_identity(args: List[Expr], identity: int):
     return others, had_int, had_float
 
 
-def _all_float_literals(args: List[Expr]) -> bool:
+def _all_float_literals(args: list[Expr]) -> bool:
     return bool(args) and all(isinstance(a, float) for a in args)
 
 
@@ -224,7 +225,7 @@ def _numeric_key(e: Expr) -> float:
     return 0.0
 
 
-def _sort_args(args: List[Expr]) -> None:
+def _sort_args(args: list[Expr]) -> None:
     # Memoize canonical JSON for non-leaf nodes (§5.4.9).
     cache: dict[int, str] = {}
 

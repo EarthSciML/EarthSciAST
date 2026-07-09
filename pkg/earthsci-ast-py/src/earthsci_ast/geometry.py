@@ -41,13 +41,14 @@ Manifolds (``CONFORMANCE_SPEC.md`` §5.8.4 — bindings compare only same-manifo
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Tuple
 
 import numpy as np
 
+from .errors import EarthSciAstError
+
 # Manifolds the geometry kernel understands (matches the closed schema enum on
 # the ``intersect_polygon`` op — esm-schema.json; additive in ess-my4.4.2).
-MANIFOLDS: Tuple[str, ...] = ("planar", "spherical", "geodesic")
+MANIFOLDS: tuple[str, ...] = ("planar", "spherical", "geodesic")
 
 # B.5 / §5.8.2 sliver floor: ``atol ≈ 1e-15·R²``. Near-tangent overlaps are the
 # regime where two clippers legitimately disagree on whether a tiny intersection
@@ -55,7 +56,7 @@ MANIFOLDS: Tuple[str, ...] = ("planar", "spherical", "geodesic")
 SLIVER_ATOL_FACTOR: float = 1e-15
 
 
-class GeometryError(Exception):
+class GeometryError(EarthSciAstError):
     """A polygon-clip / area evaluation failed (bad operand, degenerate input)."""
 
 
@@ -299,7 +300,7 @@ def _shoelace_packed_area(packed: np.ndarray, length: np.ndarray) -> np.ndarray:
 
 def _sh_clip_step(
     packed: np.ndarray, length: np.ndarray, a: np.ndarray, b: np.ndarray, cmax: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """One Sutherland–Hodgman half-plane clip over the whole batch.
 
     Clips each packed subject polygon (``[K, C, 2]`` valid in ``0..length-1``)
@@ -409,7 +410,7 @@ def _area_batch_planar(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def intersect_polygon_area_batch(
     poly_a: np.ndarray, poly_b: np.ndarray, manifold: str
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """Batched ``polygon_intersection_area``: overlap areas of ``K`` ring pairs.
 
     ``poly_a`` / ``poly_b`` are ``[K, Va, 2]`` / ``[K, Vb, 2]`` lon-lat ring
@@ -632,7 +633,7 @@ def densify_parallel_edges(
         )
     r = _as_ring(ring, who="ring")
     n = r.shape[0]
-    out: List[np.ndarray] = []
+    out: list[np.ndarray] = []
     for i in range(n):
         a = r[i]
         b = r[(i + 1) % n]
@@ -670,7 +671,7 @@ def _signed_area(ring: np.ndarray) -> float:
     return 0.5 * acc
 
 
-def _lonlat_to_unit(lon_deg: float, lat_deg: float) -> Tuple[float, float, float]:
+def _lonlat_to_unit(lon_deg: float, lat_deg: float) -> tuple[float, float, float]:
     """Lon-lat (degrees) → unit vector on the sphere."""
     lon = math.radians(lon_deg)
     lat = math.radians(lat_deg)
@@ -679,9 +680,9 @@ def _lonlat_to_unit(lon_deg: float, lat_deg: float) -> Tuple[float, float, float
 
 
 def _spherical_triangle_excess(
-    a: Tuple[float, float, float],
-    b: Tuple[float, float, float],
-    c: Tuple[float, float, float],
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+    c: tuple[float, float, float],
 ) -> float:
     """Signed solid angle (spherical excess) of triangle ``a,b,c`` on the unit sphere.
 
@@ -754,7 +755,7 @@ def area_tolerance_ok(
     area_ref: float,
     rtol: float,
     radius: float = 1.0,
-    atol: Optional[float] = None,
+    atol: float | None = None,
 ) -> bool:
     """Combined rel+abs area-agreement gate with a sliver floor (B.5 / §5.8.2).
 

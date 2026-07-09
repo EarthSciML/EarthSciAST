@@ -7,10 +7,13 @@ dense-output point budget — so the pathway submodules
 :mod:`.simulation_legacy`) can share them without importing each other.
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
-from typing import List, Optional
-from dataclasses import dataclass
 
 # Optional scipy import - only needed for actual simulation
 try:
@@ -36,15 +39,15 @@ class SimulationResult:
 
     t: np.ndarray
     y: np.ndarray
-    vars: List[str]  # Variable names corresponding to y rows
+    vars: list[str]  # Variable names corresponding to y rows
     success: bool
     message: str
     nfev: int
     njev: int
     nlu: int
-    events: Optional[List[np.ndarray]] = None
+    events: list[np.ndarray] | None = None
 
-    def plot(self, variables: Optional[List[str]] = None, **kwargs):
+    def plot(self, variables: list[str] | None = None, **kwargs):
         """
         Plot simulation results using matplotlib.
 
@@ -54,10 +57,10 @@ class SimulationResult:
         """
         try:
             import matplotlib.pyplot as plt
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "matplotlib is required for plotting. Install with: pip install matplotlib"
-            )
+            ) from exc
 
         if not self.success:
             raise RuntimeError(f"Cannot plot failed simulation: {self.message}")
@@ -74,7 +77,10 @@ class SimulationResult:
                     plot_vars.append(var)
                     plot_indices.append(self.vars.index(var))
                 else:
-                    print(f"Warning: Variable '{var}' not found in simulation results")
+                    warnings.warn(
+                        f"Variable '{var}' not found in simulation results",
+                        UserWarning, stacklevel=2,
+                    )
 
         if not plot_vars:
             raise ValueError("No valid variables to plot")
@@ -106,3 +112,69 @@ class SimulationResult:
             plt.show()
 
         return fig, ax
+
+
+def _failure_result(
+    message: str,
+    nfev: int = 0,
+    njev: int = 0,
+    nlu: int = 0,
+) -> SimulationResult:
+    """Build the uniform failure :class:`SimulationResult` (empty trajectory).
+
+    Every simulation pathway reports a failure with the same shape: empty ``t``
+    and ``y`` (``[[]]``), no variables, ``success=False`` and the given
+    ``message``. ``nfev`` / ``njev`` / ``nlu`` default to 0 (nothing ran); the
+    cadence-segmented loader path passes its accumulated solver counts so a
+    failure mid-run still reports the work already done.
+    """
+    return SimulationResult(
+        t=np.array([]),
+        y=np.array([[]]),
+        vars=[],
+        success=False,
+        message=message,
+        nfev=nfev,
+        njev=njev,
+        nlu=nlu,
+    )
+
+
+def _observed_rows(vals, n: int) -> np.ndarray:
+    """Materialize observed-body outputs into a ``(len(vals), n)`` float matrix.
+
+    Each observed value is broadcast onto the ``n``-point time grid: a scalar
+    (``ndim == 0``) or a size-1 array fills the whole row with its single value;
+    a full-length array (``size == n``) is copied verbatim; any other size falls
+    back to its first element broadcast across the row.
+    """
+    block = np.empty((len(vals), n), dtype=float)
+    for i, val in enumerate(vals):
+        if np.ndim(val) == 0:
+            block[i, :] = float(val)
+        else:
+            arr = np.asarray(val, dtype=float)
+            if arr.size == 1:
+                block[i, :] = float(arr.reshape(-1)[0])
+            elif arr.size == n:
+                block[i, :] = arr
+            else:
+                block[i, :] = float(arr.reshape(-1)[0])
+    return block
+
+
+def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> float:
+    """Resolve a parameter / initial-condition value against caller overrides.
+
+    Precedence: a caller override wins — the dot-namespaced ``name`` first, then
+    its bare trailing segment — otherwise the declared ``default`` when numeric,
+    otherwise ``0.0``. Always returned as ``float``.
+    """
+    bare = name.rsplit(".", 1)[-1]
+    if name in overrides:
+        value = overrides[name]
+    elif bare in overrides:
+        value = overrides[bare]
+    else:
+        value = float(default) if isinstance(default, (int, float)) else 0.0
+    return float(value)

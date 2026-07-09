@@ -1,22 +1,23 @@
 """
 Expression substitution and variable replacement functions.
 """
+from __future__ import annotations
 
 from dataclasses import replace
-from typing import Dict, List
+
 from .esm_types import (
+    CouplingType,
+    Equation,
+    EsmFile,
     Expr,
     ExprNode,
     Model,
-    Equation,
-    EsmFile,
-    CouplingType,
     OperatorComposeCoupling,
 )
 from .expr_walk import any_child, map_children
 
 
-def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
+def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
     """
     Recursively substitute variables in an expression with their bindings.
 
@@ -32,10 +33,10 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
     if isinstance(expr, str):
         # String is a variable name - substitute if binding exists
         return bindings.get(expr, expr)
-    elif isinstance(expr, (int, float)):
+    if isinstance(expr, (int, float)):
         # Numbers are unchanged
         return expr
-    elif isinstance(expr, ExprNode):
+    if isinstance(expr, ExprNode):
         # Recursively substitute in every child expression via the canonical
         # walker: ``args``, aggregate body/``filter``/``key``, integral
         # ``lower``/``upper``, ``makearray`` values, and ``table_lookup`` axes
@@ -47,7 +48,7 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
         # its ``value`` and the discretized document failed schema validation
         # with an empty ``{"op": "const", "args": []}`` node.
         return map_children(expr, lambda child: substitute(child, bindings))
-    elif isinstance(expr, dict):
+    if isinstance(expr, dict):
         # Handle dict-form expression nodes (e.g. {"op": "+", "args": ["x", "y"]}).
         # Copy ALL keys verbatim — hand-listing keys silently dropped
         # expr/values/filter/key/name/value/... — recursing only into the
@@ -66,12 +67,11 @@ def substitute(expr: Expr, bindings: Dict[str, Expr]) -> Expr:
             return result
         # For other dicts, return unchanged
         return expr
-    else:
-        # Unknown type, return unchanged
-        return expr
+    # Unknown type, return unchanged
+    return expr
 
 
-def substitute_in_model(model, bindings: Dict[str, Expr]):
+def substitute_in_model(model, bindings: dict[str, Expr]):
     """
     Apply substitutions to all expressions in a model.
 
@@ -120,7 +120,7 @@ def substitute_in_model(model, bindings: Dict[str, Expr]):
     )
 
 
-def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
+def substitute_in_reaction_system(system, bindings: dict[str, Expr]):
     """
     Apply substitutions to all expressions in a reaction system.
 
@@ -138,7 +138,7 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
         result = copy.deepcopy(system)
         # Substitute in parameters
         if "parameters" in result:
-            for param_name, param_data in result["parameters"].items():
+            for _param_name, param_data in result["parameters"].items():
                 if "default" in param_data:
                     param_data["default"] = substitute(param_data["default"], bindings)
         # Substitute in reactions
@@ -190,7 +190,7 @@ def substitute_in_reaction_system(system, bindings: Dict[str, Expr]):
     )
 
 
-def expand_var_placeholders(expr: Expr, variable_names: List[str]) -> List[Expr]:
+def expand_var_placeholders(expr: Expr, variable_names: list[str]) -> list[Expr]:
     """
     Expand _var placeholders in an expression to create multiple expressions,
     one for each variable name in the list.
@@ -212,7 +212,7 @@ def expand_var_placeholders(expr: Expr, variable_names: List[str]) -> List[Expr]
     return expanded_expressions
 
 
-def expand_equation_placeholders(equation: Equation, variable_names: List[str]) -> List[Equation]:
+def expand_equation_placeholders(equation: Equation, variable_names: list[str]) -> list[Equation]:
     """
     Expand _var placeholders in an equation to create multiple equations,
     one for each variable name in the list.
@@ -248,18 +248,17 @@ def has_var_placeholder(expr: Expr) -> bool:
     """
     if isinstance(expr, str):
         return expr == "_var"
-    elif isinstance(expr, ExprNode):
+    if isinstance(expr, ExprNode):
         # Check recursively in every child expression — including aggregate
         # bodies, filter predicates, integral bounds, makearray values, and
         # table_lookup axes, where a ``_var`` hidden from the old args-only
         # walk escaped flatten's operator_compose expansion.
         return any_child(expr, has_var_placeholder)
-    else:
-        # Numbers and other types don't contain placeholders
-        return False
+    # Numbers and other types don't contain placeholders
+    return False
 
 
-def get_state_variables(model: Model) -> List[str]:
+def get_state_variables(model: Model) -> list[str]:
     """
     Extract state variable names from a model.
 
@@ -276,7 +275,7 @@ def get_state_variables(model: Model) -> List[str]:
     return state_variables
 
 
-def expand_model_placeholders(model: Model, state_variables: List[str]) -> Model:
+def expand_model_placeholders(model: Model, state_variables: list[str]) -> Model:
     """
     Expand _var placeholders in a model's equations using the provided state variables.
 

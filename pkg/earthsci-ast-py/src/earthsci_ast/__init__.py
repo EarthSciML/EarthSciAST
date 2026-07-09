@@ -2,8 +2,15 @@
 ESM Format - Earth System Model Serialization Format
 
 A Python package for handling Earth System Model serialization and mathematical expressions.
-This is the core implementation following the ESM Library Specification v0.1.0.
+This is the core implementation of the ESM Library Specification (see ``esm-spec.md``);
+the supported format version is tracked by ``earthsci_ast.parse._CURRENT_VERSION``.
 """
+from __future__ import annotations
+
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+# Base exception
+from .errors import EarthSciAstError
 
 # Core data types
 from .esm_types import (
@@ -291,7 +298,13 @@ from .data_loaders import (
     resolve_files,
 )
 
-__version__ = "0.1.0"
+# Single source of truth: the installed distribution metadata (pyproject.toml).
+# Falls back gracefully when the package is imported from a source tree that
+# was never installed (e.g. `PYTHONPATH=src`).
+try:
+    __version__ = _pkg_version("earthsci-ast")
+except PackageNotFoundError:  # pragma: no cover - source-tree import
+    __version__ = "0.0.0+unknown"
 
 # Streamlined public API - only Core + Analysis + Simulation tier functionality
 __all__ = [
@@ -338,6 +351,7 @@ __all__ = [
     "MAX_TEMPLATE_EXPANSION_DEPTH",
     "reject_template_imports_pre_v08",
     "resolve_template_machinery",
+    "EarthSciAstError",
     # Validation
     "validate",
     "ValidationResult",

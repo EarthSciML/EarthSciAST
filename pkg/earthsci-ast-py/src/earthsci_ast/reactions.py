@@ -6,26 +6,26 @@ This module provides functions to:
 2. Compute stoichiometric matrices for reaction networks
 3. Handle substrate and product matrices separately
 """
+from __future__ import annotations
 
 import numpy as np
-from typing import Dict, List
 
 from .esm_types import (
-    ReactionSystem,
-    Reaction,
-    Species,
-    Model,
-    ModelVariable,
     Equation,
     Expr,
     ExprNode,
+    Model,
+    ModelVariable,
+    Reaction,
+    ReactionSystem,
+    Species,
 )
 
 
 def lower_reactions_to_equations(
-    reactions: List[Reaction],
-    species: List[Species],
-) -> List[Equation]:
+    reactions: list[Reaction],
+    species: list[Species],
+) -> list[Equation]:
     """
     Lower a list of reactions into ODE equations using mass-action kinetics.
 
@@ -54,7 +54,7 @@ def lower_reactions_to_equations(
             reactant that isn't in the species list.
     """
     species_names = [s.name for s in species]
-    species_rates: Dict[str, Expr] = {name: 0 for name in species_names}
+    species_rates: dict[str, Expr] = dict.fromkeys(species_names, 0)
 
     for reaction in reactions:
         if reaction.rate_constant is None:
@@ -89,7 +89,7 @@ def lower_reactions_to_equations(
                     species_rates[species_name], contribution
                 )
 
-    equations: List[Equation] = []
+    equations: list[Equation] = []
     for species_name in species_names:
         if species_rates[species_name] != 0:
             lhs = ExprNode(op="D", args=[species_name], wrt="t")
@@ -122,7 +122,7 @@ def derive_odes(system: ReactionSystem) -> Model:
     if not system.reactions:
         raise ValueError("ReactionSystem must contain at least one reaction")
 
-    variables: Dict[str, ModelVariable] = {}
+    variables: dict[str, ModelVariable] = {}
 
     for species in system.species:
         variables[species.name] = ModelVariable(

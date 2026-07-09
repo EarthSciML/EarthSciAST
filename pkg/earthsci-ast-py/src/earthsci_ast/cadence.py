@@ -88,9 +88,11 @@ The Python producer is :mod:`earthsci_ast.cli.cadence_adapter`; the golden is
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any
 
+from .errors import EarthSciAstError
 from .relational import FloatKeyError, distinct, rank, skolem, skolem_edge
 
 __all__ = [
@@ -132,7 +134,7 @@ _CLASS_RANK = {name: i for i, name in enumerate(CLASS_ORDER)}
 RELATIONAL_OPS = frozenset({"distinct", "join", "skolem", "rank", "argmin", "argmax"})
 
 
-class CadenceError(Exception):
+class CadenceError(EarthSciAstError):
     """A cadence-partition contract violation in a model or producer output."""
 
 
@@ -209,31 +211,51 @@ def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
     ``dim``, ``var`` are index/metadata declarations (const), not value inputs,
     so they are intentionally excluded — this is what makes the gather rule fall
     out of a plain ``max`` over children."""
-    for a in node.get("args", []) or []:
-        yield a
+    yield from node.get("args", []) or []
     for field_name in ("expr", "key", "filter", "lower", "upper"):
         if field_name in node:
             yield node[field_name]
 
 
-def classify(node: Any, model: Mapping[str, Any]) -> str:
+def classify(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None) -> str:
     """Derive a node's cadence class. For a leaf, seed it. For an operator node,
     ``class = max`` over child classes — which, for a gather ``index(A, e…)``, is
     ``max(class(A), class(e…))``: the index expressions are classed
-    **independently** of the array, so a stencil splits (§5.7 gather rule)."""
+    **independently** of the array, so a stencil splits (§5.7 gather rule).
+
+    ``_cache`` memoises the derived class keyed on node identity (``id(node)``)
+    for the duration of one top-level pass, so each node is classified once
+    instead of re-recursing its subtree at every visiting caller. A fresh cache
+    is minted per top-level call (``_cache is None``), so the SAME node object
+    classified under different ``model``\\s stays correct; callers that span
+    several helpers over one model (e.g. :func:`partition`) thread one cache
+    through. ``id(node)`` reuse is safe here because the AST is held alive by the
+    model for the cache's (single-pass) lifetime."""
     if not isinstance(node, Mapping):
         return seed_leaf(node, model)
-    child_classes = [classify(c, model) for c in child_exprs(node)]
-    return cadence_join(*child_classes)
+    if _cache is None:
+        _cache = {}
+    key = id(node)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    child_classes = [classify(c, model, _cache) for c in child_exprs(node)]
+    result = cadence_join(*child_classes)
+    _cache[key] = result
+    return result
 
 
-def check_expect_cadence(node: Any, model: Mapping[str, Any], problems: List[str]) -> None:
+def check_expect_cadence(
+    node: Any, model: Mapping[str, Any], problems: list[str], _cache: dict[int, str] | None = None
+) -> None:
     """Walk the tree; wherever a node carries ``expect_cadence``, assert the
     derived class agrees (§5.7 guard 3 — the author assertion)."""
     if not isinstance(node, Mapping):
         return
+    if _cache is None:
+        _cache = {}
     if "expect_cadence" in node:
-        derived = classify(node, model)
+        derived = classify(node, model, _cache)
         want = node["expect_cadence"]
         if derived != want:
             problems.append(
@@ -241,19 +263,23 @@ def check_expect_cadence(node: Any, model: Mapping[str, Any], problems: List[str
                 f"declared {want!r} but derived {derived!r}"
             )
     for c in child_exprs(node):
-        check_expect_cadence(c, model, problems)
+        check_expect_cadence(c, model, problems, _cache)
 
 
-def tally_classes(node: Any, model: Mapping[str, Any], counts: Dict[str, int]) -> None:
+def tally_classes(
+    node: Any, model: Mapping[str, Any], counts: dict[str, int], _cache: dict[int, str] | None = None
+) -> None:
     """Count **annotated** nodes (those carrying ``expect_cadence``) by derived
     class — the golden ``class_summary``."""
     if not isinstance(node, Mapping):
         return
+    if _cache is None:
+        _cache = {}
     if "expect_cadence" in node:
-        cls = classify(node, model)
+        cls = classify(node, model, _cache)
         counts[cls] = counts.get(cls, 0) + 1
     for c in child_exprs(node):
-        tally_classes(c, model, counts)
+        tally_classes(c, model, counts, _cache)
 
 
 # === The frontier cut and materialization points ===========================
@@ -273,12 +299,12 @@ class MaterializationPoint:
 
     threshold: str
     kind: str
-    label: Optional[str] = None
-    op: Optional[str] = None
-    produces: Optional[str] = None
+    label: str | None = None
+    op: str | None = None
+    produces: str | None = None
 
-    def as_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"threshold": self.threshold, "kind": self.kind}
+    def as_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"threshold": self.threshold, "kind": self.kind}
         if self.label is not None:
             out["label"] = self.label
         if self.op is not None:
@@ -289,7 +315,10 @@ class MaterializationPoint:
 
 
 def materialization_frontier(
-    node: Mapping[str, Any], model: Mapping[str, Any], out: List[MaterializationPoint]
+    node: Mapping[str, Any],
+    model: Mapping[str, Any],
+    out: list[MaterializationPoint],
+    _cache: dict[int, str] | None = None,
 ) -> None:
     """Derive the expr-edge materialization frontier inside a kept (continuous)
     tree: a DICT child whose class is strictly lower than its parent's is a
@@ -298,48 +327,56 @@ def materialization_frontier(
     boundary node and do **not** recurse into it (its descendants are inside the
     buffer). A bare scalar-constant *leaf* is not a buffer, so scalar inlining is
     correctly excluded (only ``Mapping`` children are considered)."""
-    parent = classify(node, model)
+    if _cache is None:
+        _cache = {}
+    parent = classify(node, model, _cache)
     for c in child_exprs(node):
         if not isinstance(c, Mapping):
             continue
-        cc = classify(c, model)
+        cc = classify(c, model, _cache)
         if _CLASS_RANK[cc] < _CLASS_RANK[parent]:
             out.append(
                 MaterializationPoint(threshold=f"{cc}->{parent}", kind="expr_edge", op=c.get("op"))
             )
         else:
-            materialization_frontier(c, model, out)
+            materialization_frontier(c, model, out, _cache)
 
 
-def has_continuous(node: Any, model: Mapping[str, Any]) -> bool:
+def has_continuous(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None) -> bool:
     """True if any node in the tree classifies ``continuous`` (the per-step hot
     tree is non-empty)."""
     if isinstance(node, Mapping):
-        if classify(node, model) == "continuous":
+        if _cache is None:
+            _cache = {}
+        if classify(node, model, _cache) == "continuous":
             return True
-        return any(has_continuous(c, model) for c in child_exprs(node))
+        return any(has_continuous(c, model, _cache) for c in child_exprs(node))
     return seed_leaf(node, model) == "continuous"
 
 
 # === The guards =============================================================
 
 
-def assert_no_continuous_relational(node: Any, model: Mapping[str, Any]) -> None:
+def assert_no_continuous_relational(
+    node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None
+) -> None:
     """§5.7 guard 2: a ``distinct`` / ``join`` / ``skolem`` / ``rank`` node (or a
     ``distinct`` aggregate) that classifies ``continuous`` is rejected —
     state-dependent topology may not run on the hot path in v1."""
     if not isinstance(node, Mapping):
         return
+    if _cache is None:
+        _cache = {}
     op = node.get("op")
     is_relational = op in RELATIONAL_OPS or (op == "aggregate" and node.get("distinct"))
-    if is_relational and classify(node, model) == "continuous":
+    if is_relational and classify(node, model, _cache) == "continuous":
         raise CadenceError(
             f"relational/value-invention node op={op!r} classifies CONTINUOUS — "
             "it may not run on the hot path (§5.7 guard 2). A state-dependent "
             "distinct/join/skolem/rank is out of scope for v1."
         )
     for c in child_exprs(node):
-        assert_no_continuous_relational(c, model)
+        assert_no_continuous_relational(c, model, _cache)
 
 
 def assert_acyclic_index_sets(model: Mapping[str, Any]) -> None:
@@ -348,7 +385,7 @@ def assert_acyclic_index_sets(model: Mapping[str, Any]) -> None:
     references index sets (via ``ranges {from}``); a cycle in those edges is an
     implicit/iterative solve, out of scope. Reject naming the cycle."""
     index_sets = model.get("index_sets", {}) or {}
-    node_reads: Dict[str, set] = {}
+    node_reads: dict[str, set] = {}
 
     def collect(node: Any) -> None:
         if not isinstance(node, Mapping):
@@ -374,9 +411,9 @@ def assert_acyclic_index_sets(model: Mapping[str, Any]) -> None:
     }
 
     WHITE, GRAY, BLACK = 0, 1, 2
-    color: Dict[str, int] = {}
+    color: dict[str, int] = {}
 
-    def visit(name: str, stack: List[str]) -> None:
+    def visit(name: str, stack: list[str]) -> None:
         color[name] = GRAY
         stack.append(name)
         node_id = set_to_node.get(name)
@@ -411,13 +448,13 @@ def canonical_serialize(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def fold_to_zero_based(arr: Sequence[Sequence[int]]) -> List[List[int]]:
+def fold_to_zero_based(arr: Sequence[Sequence[int]]) -> list[list[int]]:
     """Fold a 1-based neighbour-index table into the 0-based buffer the hot path
     reads as a constant (``index(nbr, i, k)`` topology gather)."""
     return [[x - 1 for x in row] for row in arr]
 
 
-def fold_identity(arr: Sequence[Sequence[int]]) -> List[List[int]]:
+def fold_identity(arr: Sequence[Sequence[int]]) -> list[list[int]]:
     """Fold an already-canonical coefficient table — identity, but materialised
     as the per-edge buffer baked into the artifact."""
     return [list(row) for row in arr]
@@ -443,7 +480,7 @@ def _edge_keys(face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]
 
 def fold_edge_enumeration(
     face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]], mode: str
-) -> List[List[int]]:
+) -> list[list[int]]:
     """Enumerate the unique edges from the (lo, hi) endpoint tables through the
     build-time relational engine: ``skolem`` canonicalises each pair, ``distinct``
     sorts by the §5.5 total order and drops adjacent duplicates. Identical to the
@@ -454,7 +491,7 @@ def fold_edge_enumeration(
 
 def fold_rank(
     face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]], mode: str
-) -> List[int]:
+) -> list[int]:
     """Dense 0-based ids over the deduped edge set via the relational engine's
     ``rank`` (Python's native 0-based numbering, §5.5.1 rule 3)."""
     keys = _edge_keys(face_lo, face_hi, mode)
@@ -462,7 +499,7 @@ def fold_rank(
     return [ranking.ids[t] for t in ranking.order]
 
 
-def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any]) -> List[Any]:
+def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any]) -> list[Any]:
     """Dispatch a CONST-fold kernel by its declared ``fold`` kind, over the
     document-literal ``inputs``."""
     kind = spec.get("fold")
@@ -482,7 +519,7 @@ def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any])
 # === The pass ===============================================================
 
 
-def model_from_doc(doc: Mapping[str, Any], model_name: str) -> Dict[str, Any]:
+def model_from_doc(doc: Mapping[str, Any], model_name: str) -> dict[str, Any]:
     """Extract the named model from a parsed ``.esm`` document, attaching the
     document's top-level ``data_loaders`` so the loader-seeded cadence refinement
     (§5.7.2) can resolve a ``discrete`` variable's ``data_ingest`` source loader,
@@ -516,7 +553,7 @@ def model_rhs_nodes(model: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
             yield rhs
 
 
-def _lhs_target(lhs: Any) -> Optional[str]:
+def _lhs_target(lhs: Any) -> str | None:
     """The variable an equation assigns: ``index(var, …)`` → ``var``; a bare name
     → itself. Used to label an output-buffer materialization point."""
     if isinstance(lhs, str):
@@ -531,7 +568,7 @@ def _lhs_target(lhs: Any) -> Optional[str]:
     return None
 
 
-def _produced_index_set(node_id: Optional[str], index_sets: Mapping[str, Any]) -> Optional[str]:
+def _produced_index_set(node_id: str | None, index_sets: Mapping[str, Any]) -> str | None:
     """The derived index set this node materialises (``edges.from_faq == id``)."""
     if not node_id:
         return None
@@ -553,13 +590,13 @@ class Partition:
     - ``event_handler_empty`` — nothing materialises at the ``discrete`` cadence.
     """
 
-    class_summary: Dict[str, int]
-    materialization_points: List[MaterializationPoint] = field(default_factory=list)
+    class_summary: dict[str, int]
+    materialization_points: list[MaterializationPoint] = field(default_factory=list)
     hot_tree_empty: bool = True
     event_handler_empty: bool = True
 
     @property
-    def thresholds(self) -> List[str]:
+    def thresholds(self) -> list[str]:
         """The materialization threshold multiset (sorted) — the conformance key."""
         return sorted(mp.threshold for mp in self.materialization_points)
 
@@ -580,10 +617,17 @@ def partition(model: Mapping[str, Any]) -> Partition:
     # Guard 1: the ≤DISCRETE index-set sub-DAG is acyclic.
     assert_acyclic_index_sets(model)
 
-    counts: Dict[str, int] = {name: 0 for name in CLASS_ORDER}
-    points: List[MaterializationPoint] = []
-    problems: List[str] = []
+    counts: dict[str, int] = dict.fromkeys(CLASS_ORDER, 0)
+    points: list[MaterializationPoint] = []
+    problems: list[str] = []
     hot_empty = True
+
+    # One classify memo for the whole run: every RHS tree above resolves against
+    # the same ``model``, and the trees are kept alive by it for this pass, so a
+    # single ``id(node)``-keyed cache classifies each node once across all the
+    # per-equation walks below (guards, class summary, frontier). Fresh per call
+    # so it can never leak across models/passes.
+    cache: dict[int, str] = {}
 
     for eq in model.get("equations", []) or []:
         rhs = eq.get("rhs")
@@ -591,15 +635,15 @@ def partition(model: Mapping[str, Any]) -> Partition:
             continue
 
         # Guards 2 & 3, plus the class summary, walk the RHS tree.
-        assert_no_continuous_relational(rhs, model)
-        check_expect_cadence(rhs, model, problems)
-        tally_classes(rhs, model, counts)
+        assert_no_continuous_relational(rhs, model, cache)
+        check_expect_cadence(rhs, model, problems, cache)
+        tally_classes(rhs, model, counts, cache)
 
-        rhs_class = classify(rhs, model)
+        rhs_class = classify(rhs, model, cache)
         if rhs_class == "continuous":
             hot_empty = False
             # Internal frontier cuts inside the kept hot tree.
-            materialization_frontier(rhs, model, points)
+            materialization_frontier(rhs, model, points, cache)
         else:
             # The whole output folds out of the hot path → an output buffer
             # (``const``/``discrete`` → artifact). This is the observed-variable

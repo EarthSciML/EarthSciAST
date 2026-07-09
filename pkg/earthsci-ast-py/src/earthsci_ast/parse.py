@@ -4,13 +4,14 @@ ESM Format parsing module.
 This module provides functions to parse JSON data into ESM format objects,
 with schema validation using the bundled esm-schema.json file.
 """
+from __future__ import annotations
 
 import copy
 import json
 import os
 import re
 from pathlib import Path
-from typing import Union, Dict, Any, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     # Python 3.9+
@@ -35,79 +36,80 @@ import jsonschema
 from jsonschema import validate
 
 from .diagnostics import SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY
+from .errors import EarthSciAstError
 from .esm_types import (
-    EsmFile,
-    Metadata,
-    Model,
-    ReactionSystem,
-    ModelVariable,
-    Equation,
-    Species,
-    Parameter,
-    Reaction,
-    ExprNode,
-    Expr,
     AffectEquation,
+    Assertion,
+    CallbackCoupling,
+    Connector,
+    ConnectorEquation,
     ContinuousEvent,
-    DiscreteEvent,
-    DiscreteEventTrigger,
-    FunctionalAffect,
+    CouplingCouple,
+    CouplingEntry,
+    CouplingType,
     DataLoader,
+    DataLoaderDeterminism,
     DataLoaderKind,
     DataLoaderSource,
     DataLoaderTemporal,
     DataLoaderVariable,
-    DataLoaderDeterminism,
-    Operator,
-    CouplingEntry,
-    CouplingType,
-    ConnectorEquation,
-    Connector,
+    DiscreteEvent,
+    DiscreteEventTrigger,
     Domain,
-    OperatorComposeCoupling,
-    CouplingCouple,
-    VariableMapCoupling,
-    OperatorApplyCoupling,
-    CallbackCoupling,
+    Equation,
+    EsmFile,
     EventCoupling,
-    Reference,
-    TemporalDomain,
-    Tolerance,
-    TimeSpan,
-    Assertion,
-    Test,
-    PlotAxis,
-    PlotValue,
-    PlotSeries,
-    Plot,
-    SweepRange,
-    SweepDimension,
-    ParameterSweep,
     Example,
+    Expr,
+    ExprNode,
+    FunctionalAffect,
     FunctionTable,
     FunctionTableAxis,
+    Metadata,
+    Model,
+    ModelVariable,
+    Operator,
+    OperatorApplyCoupling,
+    OperatorComposeCoupling,
+    Parameter,
+    ParameterSweep,
+    Plot,
+    PlotAxis,
+    PlotSeries,
+    PlotValue,
+    Reaction,
+    ReactionSystem,
+    Reference,
+    Species,
+    SweepDimension,
+    SweepRange,
+    TemporalDomain,
+    Test,
+    TimeSpan,
+    Tolerance,
+    VariableMapCoupling,
 )
 
 
-class SchemaValidationError(Exception):
+class SchemaValidationError(EarthSciAstError):
     """Exception raised when schema validation fails."""
 
     pass
 
 
-class UnsupportedVersionError(Exception):
+class UnsupportedVersionError(EarthSciAstError):
     """Exception raised when ESM version is not supported."""
 
     pass
 
 
-class CircularReferenceError(Exception):
+class CircularReferenceError(EarthSciAstError):
     """Exception raised when circular subsystem references are detected."""
 
     pass
 
 
-class SubsystemRefError(Exception):
+class SubsystemRefError(EarthSciAstError):
     """Exception raised when a subsystem reference cannot be resolved."""
 
     pass
@@ -152,7 +154,7 @@ def _check_version_compatibility(version_string: str) -> None:
         )
 
 
-def _get_schema() -> Dict[str, Any]:
+def _get_schema() -> dict[str, Any]:
     """Load the bundled ESM schema."""
     if _RESOURCES_AVAILABLE:
         try:
@@ -172,15 +174,15 @@ def _get_schema() -> Dict[str, Any]:
     if not schema_path.exists():
         raise FileNotFoundError(f"ESM schema not found at {schema_path}")
 
-    with open(schema_path, "r") as f:
+    with open(schema_path) as f:
         return json.load(f)
 
 
-def _parse_expression(expr_data: Union[int, float, str, Dict[str, Any]]) -> Expr:
+def _parse_expression(expr_data: int | float | str | dict[str, Any]) -> Expr:
     """Parse an expression from JSON data."""
     if isinstance(expr_data, (int, float, str)):
         return expr_data
-    elif isinstance(expr_data, dict):
+    if isinstance(expr_data, dict):
         # Parse ExprNode
         op = expr_data["op"]
         args = [_parse_expression(arg) for arg in expr_data["args"]]
@@ -286,11 +288,10 @@ def _parse_expression(expr_data: Union[int, float, str, Dict[str, Any]]) -> Expr
             table_axes=table_axes,
             output=output,
         )
-    else:
-        raise ValueError(f"Invalid expression data: {expr_data}")
+    raise ValueError(f"Invalid expression data: {expr_data}")
 
 
-def _parse_equation(eq_data: Dict[str, Any]) -> Equation:
+def _parse_equation(eq_data: dict[str, Any]) -> Equation:
     """Parse an equation from JSON data."""
     lhs = _parse_expression(eq_data["lhs"])
     rhs = _parse_expression(eq_data["rhs"])
@@ -298,14 +299,14 @@ def _parse_equation(eq_data: Dict[str, Any]) -> Equation:
     return Equation(lhs=lhs, rhs=rhs, _comment=comment)
 
 
-def _parse_affect_equation(affect_data: Dict[str, Any]) -> AffectEquation:
+def _parse_affect_equation(affect_data: dict[str, Any]) -> AffectEquation:
     """Parse an affect equation from JSON data."""
     lhs = affect_data["lhs"]  # string
     rhs = _parse_expression(affect_data["rhs"])
     return AffectEquation(lhs=lhs, rhs=rhs)
 
 
-def _parse_functional_affect(functional_affect_data: Dict[str, Any]) -> FunctionalAffect:
+def _parse_functional_affect(functional_affect_data: dict[str, Any]) -> FunctionalAffect:
     """Parse a functional affect from JSON data."""
     handler_id = functional_affect_data["handler_id"]
     read_vars = functional_affect_data.get("read_vars", [])
@@ -333,7 +334,7 @@ def _parse_affect(affect: Any):
     return _parse_affect_equation(affect)
 
 
-def _parse_model_variable(var_data: Dict[str, Any]) -> ModelVariable:
+def _parse_model_variable(var_data: dict[str, Any]) -> ModelVariable:
     """Parse a model variable from JSON data."""
     var_type = var_data["type"]
     units = var_data.get("units")
@@ -365,24 +366,23 @@ def _parse_model_variable(var_data: Dict[str, Any]) -> ModelVariable:
     )
 
 
-def _parse_discrete_event_trigger(trigger_data: Dict[str, Any]) -> DiscreteEventTrigger:
+def _parse_discrete_event_trigger(trigger_data: dict[str, Any]) -> DiscreteEventTrigger:
     """Parse a discrete event trigger from JSON data."""
     trigger_type = trigger_data["type"]
 
     if trigger_type == "condition":
         expression = _parse_expression(trigger_data["expression"])
         return DiscreteEventTrigger(type=trigger_type, value=expression)
-    elif trigger_type == "periodic":
+    if trigger_type == "periodic":
         interval = trigger_data["interval"]
         return DiscreteEventTrigger(type=trigger_type, value=interval)
-    elif trigger_type == "preset_times":
+    if trigger_type == "preset_times":
         times = trigger_data["times"]
         return DiscreteEventTrigger(type=trigger_type, value=times)
-    else:
-        raise ValueError(f"Unknown trigger type: {trigger_type}")
+    raise ValueError(f"Unknown trigger type: {trigger_type}")
 
 
-def _parse_continuous_event(event_data: Dict[str, Any]) -> ContinuousEvent:
+def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
     """Parse a continuous event from JSON data."""
     name = event_data.get("name", "")
     conditions = [_parse_expression(cond) for cond in event_data["conditions"]]
@@ -420,7 +420,7 @@ def _parse_continuous_event(event_data: Dict[str, Any]) -> ContinuousEvent:
     )
 
 
-def _parse_discrete_event(event_data: Dict[str, Any]) -> DiscreteEvent:
+def _parse_discrete_event(event_data: dict[str, Any]) -> DiscreteEvent:
     """Parse a discrete event from JSON data."""
     name = event_data.get("name", "")
     trigger = _parse_discrete_event_trigger(event_data["trigger"])
@@ -448,15 +448,15 @@ def _parse_discrete_event(event_data: Dict[str, Any]) -> DiscreteEvent:
     )
 
 
-def _parse_tolerance(data: Dict[str, Any]) -> Tolerance:
+def _parse_tolerance(data: dict[str, Any]) -> Tolerance:
     return Tolerance(abs=data.get("abs"), rel=data.get("rel"))
 
 
-def _parse_time_span(data: Dict[str, Any]) -> TimeSpan:
+def _parse_time_span(data: dict[str, Any]) -> TimeSpan:
     return TimeSpan(start=float(data["start"]), end=float(data["end"]))
 
 
-def _parse_assertion(data: Dict[str, Any]) -> Assertion:
+def _parse_assertion(data: dict[str, Any]) -> Assertion:
     tol = _parse_tolerance(data["tolerance"]) if "tolerance" in data else None
     coords = None
     if data.get("coords") is not None:
@@ -483,7 +483,7 @@ def _parse_assertion(data: Dict[str, Any]) -> Assertion:
     )
 
 
-def _parse_test(data: Dict[str, Any]) -> Test:
+def _parse_test(data: dict[str, Any]) -> Test:
     return Test(
         id=data["id"],
         time_span=_parse_time_span(data["time_span"]),
@@ -502,11 +502,11 @@ def _parse_test(data: Dict[str, Any]) -> Test:
     )
 
 
-def _parse_plot_axis(data: Dict[str, Any]) -> PlotAxis:
+def _parse_plot_axis(data: dict[str, Any]) -> PlotAxis:
     return PlotAxis(variable=data["variable"], label=data.get("label"))
 
 
-def _parse_plot_value(data: Dict[str, Any]) -> PlotValue:
+def _parse_plot_value(data: dict[str, Any]) -> PlotValue:
     return PlotValue(
         variable=data["variable"],
         at_time=data.get("at_time"),
@@ -514,11 +514,11 @@ def _parse_plot_value(data: Dict[str, Any]) -> PlotValue:
     )
 
 
-def _parse_plot_series(data: Dict[str, Any]) -> PlotSeries:
+def _parse_plot_series(data: dict[str, Any]) -> PlotSeries:
     return PlotSeries(name=data["name"], variable=data["variable"])
 
 
-def _parse_plot(data: Dict[str, Any]) -> Plot:
+def _parse_plot(data: dict[str, Any]) -> Plot:
     raw_y = data["y"]
     explicit_series = [_parse_plot_series(s) for s in data.get("series", [])]
     if isinstance(raw_y, list):
@@ -542,7 +542,7 @@ def _parse_plot(data: Dict[str, Any]) -> Plot:
     )
 
 
-def _parse_sweep_range(data: Dict[str, Any]) -> SweepRange:
+def _parse_sweep_range(data: dict[str, Any]) -> SweepRange:
     return SweepRange(
         start=float(data["start"]),
         stop=float(data["stop"]),
@@ -551,7 +551,7 @@ def _parse_sweep_range(data: Dict[str, Any]) -> SweepRange:
     )
 
 
-def _parse_sweep_dimension(data: Dict[str, Any]) -> SweepDimension:
+def _parse_sweep_dimension(data: dict[str, Any]) -> SweepDimension:
     return SweepDimension(
         parameter=data["parameter"],
         values=list(data["values"]) if "values" in data else None,
@@ -559,14 +559,14 @@ def _parse_sweep_dimension(data: Dict[str, Any]) -> SweepDimension:
     )
 
 
-def _parse_parameter_sweep(data: Dict[str, Any]) -> ParameterSweep:
+def _parse_parameter_sweep(data: dict[str, Any]) -> ParameterSweep:
     return ParameterSweep(
         type=data["type"],
         dimensions=[_parse_sweep_dimension(d) for d in data.get("dimensions", [])],
     )
 
 
-def _parse_example(data: Dict[str, Any]) -> Example:
+def _parse_example(data: dict[str, Any]) -> Example:
     # ``initial_state`` is a plain scalar-override map {var: number} (v0.8.0);
     # initial fields themselves are declared with `ic` op equations in the model.
     initial_state = None
@@ -592,7 +592,7 @@ def _parse_example(data: Dict[str, Any]) -> Example:
     )
 
 
-def _parse_model(model_data: Dict[str, Any]) -> Model:
+def _parse_model(model_data: dict[str, Any]) -> Model:
     """Parse a model from JSON data."""
     # Extract variables
     variables = {}
@@ -609,7 +609,7 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     # Extract subsystems. Each entry is either a parsed Model, a parsed
     # data loader (RFC pure-io-data-loaders §4.3), or a raw dict carrying a
     # "ref" field to be resolved later by resolve_subsystem_refs.
-    subsystems: Dict[str, Any] = {}
+    subsystems: dict[str, Any] = {}
     if "subsystems" in model_data:
         for sub_name, sub_data in model_data["subsystems"].items():
             if isinstance(sub_data, dict) and "ref" in sub_data:
@@ -647,7 +647,7 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
             _parse_equation(eq) for eq in model_data["initialization_equations"]
         ]
     if "guesses" in model_data and model_data["guesses"] is not None:
-        guesses: Dict[str, Any] = {}
+        guesses: dict[str, Any] = {}
         for var_name, seed in model_data["guesses"].items():
             if isinstance(seed, (int, float)) and not isinstance(seed, bool):
                 guesses[var_name] = float(seed)
@@ -670,7 +670,7 @@ def _parse_model(model_data: Dict[str, Any]) -> Model:
     return model
 
 
-def _parse_species(species_data: Dict[str, Any]) -> Species:
+def _parse_species(species_data: dict[str, Any]) -> Species:
     """Parse a species from JSON data."""
     return Species(
         name="",  # Name comes from the key
@@ -682,7 +682,7 @@ def _parse_species(species_data: Dict[str, Any]) -> Species:
     )
 
 
-def _parse_parameter(param_data: Dict[str, Any]) -> Parameter:
+def _parse_parameter(param_data: dict[str, Any]) -> Parameter:
     """Parse a parameter from JSON data."""
     # ``default`` is optional (e.g. grid extent counts resolved from the source
     # at load time). Preserve its absence as ``None`` so a parse/re-emit cycle
@@ -698,7 +698,7 @@ def _parse_parameter(param_data: Dict[str, Any]) -> Parameter:
     )
 
 
-def _parse_stoichiometry(entries: Any) -> Dict[str, Any]:
+def _parse_stoichiometry(entries: Any) -> dict[str, Any]:
     """Build a ``{species: stoichiometry}`` map from substrate/product entries.
 
     Preserves `int` vs `float` coefficients so a parse/re-emit cycle stays
@@ -708,7 +708,7 @@ def _parse_stoichiometry(entries: Any) -> Dict[str, Any]:
     return {e["species"]: e["stoichiometry"] for e in entries or []}
 
 
-def _parse_reaction(reaction_data: Dict[str, Any]) -> Reaction:
+def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
     """Parse a reaction from JSON data."""
     rxn_id = reaction_data.get("id")
     name = reaction_data.get("name", rxn_id)
@@ -727,7 +727,7 @@ def _parse_reaction(reaction_data: Dict[str, Any]) -> Reaction:
     )
 
 
-def _parse_reaction_system(rs_data: Dict[str, Any]) -> ReactionSystem:
+def _parse_reaction_system(rs_data: dict[str, Any]) -> ReactionSystem:
     """Parse a reaction system from JSON data."""
     # Parse species
     species = []
@@ -759,7 +759,7 @@ def _parse_reaction_system(rs_data: Dict[str, Any]) -> ReactionSystem:
 
     # Extract subsystems. Each entry is either a parsed ReactionSystem or a raw
     # dict with a "ref" field to be resolved later by resolve_subsystem_refs.
-    subsystems: Dict[str, Any] = {}
+    subsystems: dict[str, Any] = {}
     if "subsystems" in rs_data:
         for sub_name, sub_data in rs_data["subsystems"].items():
             if isinstance(sub_data, dict) and "ref" in sub_data:
@@ -794,7 +794,7 @@ def _parse_reaction_system(rs_data: Dict[str, Any]) -> ReactionSystem:
     return rs
 
 
-def _parse_reference(ref_data: Dict[str, Any]) -> Reference:
+def _parse_reference(ref_data: dict[str, Any]) -> Reference:
     """Parse a reference from JSON data."""
     return Reference(
         title=ref_data.get("citation", ""),
@@ -806,7 +806,7 @@ def _parse_reference(ref_data: Dict[str, Any]) -> Reference:
     )
 
 
-def _parse_metadata(metadata_data: Dict[str, Any]) -> Metadata:
+def _parse_metadata(metadata_data: dict[str, Any]) -> Metadata:
     """Parse metadata from JSON data."""
     references = []
     if "references" in metadata_data:
@@ -825,14 +825,14 @@ def _parse_metadata(metadata_data: Dict[str, Any]) -> Metadata:
     )
 
 
-def _parse_data_loader_source(src_data: Dict[str, Any]) -> DataLoaderSource:
+def _parse_data_loader_source(src_data: dict[str, Any]) -> DataLoaderSource:
     return DataLoaderSource(
         url_template=src_data["url_template"],
         mirrors=list(src_data.get("mirrors", [])),
     )
 
 
-def _parse_data_loader_temporal(tmp_data: Dict[str, Any]) -> DataLoaderTemporal:
+def _parse_data_loader_temporal(tmp_data: dict[str, Any]) -> DataLoaderTemporal:
     return DataLoaderTemporal(
         start=tmp_data.get("start"),
         end=tmp_data.get("end"),
@@ -843,7 +843,7 @@ def _parse_data_loader_temporal(tmp_data: Dict[str, Any]) -> DataLoaderTemporal:
     )
 
 
-def _parse_data_loader_variable(var_data: Dict[str, Any]) -> DataLoaderVariable:
+def _parse_data_loader_variable(var_data: dict[str, Any]) -> DataLoaderVariable:
     unit_conversion = var_data.get("unit_conversion")
     if isinstance(unit_conversion, dict):
         unit_conversion = _parse_expression(unit_conversion)
@@ -859,7 +859,7 @@ def _parse_data_loader_variable(var_data: Dict[str, Any]) -> DataLoaderVariable:
     )
 
 
-def _parse_data_loader_determinism(det_data: Dict[str, Any]) -> DataLoaderDeterminism:
+def _parse_data_loader_determinism(det_data: dict[str, Any]) -> DataLoaderDeterminism:
     """Parse a determinism block from JSON data (esm-spec §8.9.2)."""
     return DataLoaderDeterminism(
         endian=det_data.get("endian"),
@@ -868,7 +868,7 @@ def _parse_data_loader_determinism(det_data: Dict[str, Any]) -> DataLoaderDeterm
     )
 
 
-def _parse_data_loader(loader_data: Dict[str, Any]) -> DataLoader:
+def _parse_data_loader(loader_data: dict[str, Any]) -> DataLoader:
     """Parse a data loader from JSON data."""
     kind = DataLoaderKind(loader_data["kind"])
     source = _parse_data_loader_source(loader_data["source"])
@@ -903,7 +903,7 @@ def _parse_data_loader(loader_data: Dict[str, Any]) -> DataLoader:
     )
 
 
-def _parse_operator(operator_data: Dict[str, Any]) -> Operator:
+def _parse_operator(operator_data: dict[str, Any]) -> Operator:
     """Parse an operator from JSON data."""
     # Use schema fields directly
     operator_id = operator_data.get("operator_id", "")
@@ -925,7 +925,7 @@ def _parse_operator(operator_data: Dict[str, Any]) -> Operator:
     )
 
 
-def _parse_registered_function(rf_data: Dict[str, Any]) -> "RegisteredFunction":
+def _parse_registered_function(rf_data: dict[str, Any]) -> RegisteredFunction:
     """Parse a registered_functions entry from JSON data (esm-spec §9.2)."""
     from .esm_types import RegisteredFunction, RegisteredFunctionSignature
 
@@ -951,7 +951,7 @@ def _parse_registered_function(rf_data: Dict[str, Any]) -> "RegisteredFunction":
     )
 
 
-def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
+def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
     """Parse a coupling entry from JSON data."""
     # Get coupling type from schema
     schema_type = coupling_data["type"]
@@ -981,7 +981,7 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             lifting=coupling_data.get("lifting"),
         )
 
-    elif coupling_type == CouplingType.COUPLE:
+    if coupling_type == CouplingType.COUPLE:
         # Parse connector if present
         connector = None
         if "connector" in coupling_data:
@@ -1003,7 +1003,7 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             description=description, systems=coupling_data.get("systems", []), connector=connector
         )
 
-    elif coupling_type == CouplingType.VARIABLE_MAP:
+    if coupling_type == CouplingType.VARIABLE_MAP:
         # `transform` is EITHER one of the legacy enum strings OR an
         # ExpressionNode object (in-progress-0.8.0 widening). The expression
         # form computes the mapped value itself, so it admits no separate
@@ -1026,19 +1026,19 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             factor=coupling_data.get("factor"),
         )
 
-    elif coupling_type == CouplingType.OPERATOR_APPLY:
+    if coupling_type == CouplingType.OPERATOR_APPLY:
         return OperatorApplyCoupling(
             description=description, operator=coupling_data.get("operator")
         )
 
-    elif coupling_type == CouplingType.CALLBACK:
+    if coupling_type == CouplingType.CALLBACK:
         return CallbackCoupling(
             description=description,
             callback_id=coupling_data.get("callback_id"),
             config=coupling_data.get("config", {}),
         )
 
-    elif coupling_type == CouplingType.EVENT:
+    if coupling_type == CouplingType.EVENT:
         # Parse conditions
         conditions = []
         if "conditions" in coupling_data:
@@ -1076,11 +1076,10 @@ def _parse_coupling_entry(coupling_data: Dict[str, Any]) -> CouplingEntry:
             reinitialize=coupling_data.get("reinitialize"),
         )
 
-    else:
-        raise ValueError(f"Unknown coupling type: {coupling_type}")
+    raise ValueError(f"Unknown coupling type: {coupling_type}")
 
 
-def _parse_domain(domain_data: Dict[str, Any]) -> Domain:
+def _parse_domain(domain_data: dict[str, Any]) -> Domain:
     """Parse domain configuration from JSON data."""
     domain = Domain()
 
@@ -1134,7 +1133,7 @@ def _validate_domain(domain: Domain) -> None:
         )
 
 
-def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
+def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     """Parse ESM data from validated JSON."""
     # Parse metadata
     metadata = _parse_metadata(data["metadata"])
@@ -1176,12 +1175,12 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
     # model — a sibling of ``models`` / ``domain`` — not a per-Model field.
     # Carried through verbatim as IndexSet dicts; the schema validates shape and
     # the aggregate evaluator resolves {"from": <name>} references.
-    index_sets: Dict[str, Any] = {}
+    index_sets: dict[str, Any] = {}
     if "index_sets" in data and data["index_sets"] is not None:
         index_sets = dict(data["index_sets"])
 
     # Parse data loaders
-    data_loaders: Dict[str, DataLoader] = {}
+    data_loaders: dict[str, DataLoader] = {}
     if "data_loaders" in data:
         for loader_name, loader_data in data["data_loaders"].items():
             loader = _parse_data_loader(loader_data)
@@ -1204,7 +1203,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
 
     # Parse top-level enums block (esm-spec §9.3). Values are validated to be
     # positive integers by the schema; unique-within-enum is also enforced.
-    enums: Dict[str, Dict[str, int]] = {}
+    enums: dict[str, dict[str, int]] = {}
     if "enums" in data and data["enums"] is not None:
         for enum_name, mapping in data["enums"].items():
             if not isinstance(mapping, dict):
@@ -1212,8 +1211,8 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
                     f"enums/{enum_name}: must be an object mapping symbol names "
                     f"to positive integers (esm-spec §9.3)"
                 )
-            seen_values: Dict[int, str] = {}
-            decoded: Dict[str, int] = {}
+            seen_values: dict[int, str] = {}
+            decoded: dict[str, int] = {}
             for sym, val in mapping.items():
                 if not isinstance(val, int) or isinstance(val, bool) or val < 1:
                     raise ValueError(
@@ -1238,7 +1237,7 @@ def _parse_esm_data(data: Dict[str, Any]) -> EsmFile:
     # Parse function_tables (esm-spec §9.5, v0.4.0). Each entry is a
     # FunctionTable carrying named axes plus literal nested-array data,
     # referenced by table_lookup AST nodes.
-    function_tables: Dict[str, FunctionTable] = {}
+    function_tables: dict[str, FunctionTable] = {}
     if "function_tables" in data and data["function_tables"] is not None:
         ft_map = data["function_tables"]
         if not isinstance(ft_map, dict):
@@ -1332,14 +1331,14 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     """
     ref = _expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
     if ref.startswith("http://") or ref.startswith("https://"):
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         try:
             with urllib.request.urlopen(ref) as response:
                 return response.read().decode("utf-8")
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
-            raise SubsystemRefError(f"Failed to fetch subsystem ref URL '{ref}': {e}")
+            raise SubsystemRefError(f"Failed to fetch subsystem ref URL '{ref}': {e}") from e
     else:
         resolved = os.path.normpath(os.path.join(base_path, ref))
         if not os.path.exists(resolved):
@@ -1347,11 +1346,11 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
                 f"Subsystem ref file not found: '{resolved}' "
                 f"(resolved from '{ref}' relative to '{base_path}')"
             )
-        with open(resolved, "r") as f:
+        with open(resolved) as f:
             return f.read()
 
 
-def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, Any]:
+def _subsystem_ref_bindings(sub_value: dict[str, Any], where: str) -> dict[str, Any]:
     """Extract the optional metaparameter ``bindings`` of a §4.7 subsystem
     ref (esm-spec §9.7.6 binding site 3). A value may be a *metaparameter
     expression* — an integer literal, a name in the MOUNTING document's
@@ -1361,7 +1360,7 @@ def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, 
     referenced document's metaparameters."""
     from .template_imports import require_meta_expr
 
-    bindings: Dict[str, Any] = {}
+    bindings: dict[str, Any] = {}
     raw = sub_value.get("bindings")
     if isinstance(raw, dict):
         for bk, bv in raw.items():
@@ -1369,7 +1368,7 @@ def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, 
     return bindings
 
 
-def _subsystem_ref_injected_imports(sub_value: Dict[str, Any]) -> List[Any]:
+def _subsystem_ref_injected_imports(sub_value: dict[str, Any]) -> list[Any]:
     """The optional ``expression_template_imports`` of a §4.7 subsystem-ref edge
     (esm-spec §9.7.10 form A): raw §9.7.2 import entries the mounting document
     injects into the REFERENCED component's own template scope. Returned as a
@@ -1382,9 +1381,9 @@ def _subsystem_ref_injected_imports(sub_value: Dict[str, Any]) -> List[Any]:
 
 
 def _absolutize_injected_imports(
-    injected_imports: Optional[List[Any]],
+    injected_imports: list[Any] | None,
     mount_base: str,
-) -> List[Any]:
+) -> list[Any]:
     """Rewrite each §9.7.10 form-A injected import entry's relative ``ref`` to an
     absolute path anchored at the MOUNTING document's directory (``mount_base``).
 
@@ -1402,7 +1401,7 @@ def _absolutize_injected_imports(
     on the entry (``bindings`` / ``only`` / ``as``) is preserved."""
     if not injected_imports:
         return []
-    out: List[Any] = []
+    out: list[Any] = []
     for entry in injected_imports:
         e = copy.deepcopy(entry)
         if isinstance(e, dict):
@@ -1421,11 +1420,11 @@ def _absolutize_injected_imports(
 def _load_ref_data(
     ref_str: str,
     base_path: str,
-    bindings: Dict[str, Any],
+    bindings: dict[str, Any],
     kind: str,
-    injected_imports: Optional[List[Any]] = None,
-    loader_metaparameters: Optional[Dict[str, int]] = None,
-    parent_metaparameters: Optional[Dict[str, int]] = None,
+    injected_imports: list[Any] | None = None,
+    loader_metaparameters: dict[str, int] | None = None,
+    parent_metaparameters: dict[str, int] | None = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1495,7 +1494,9 @@ def _load_ref_data(
     try:
         validate(ref_data, schema)
     except jsonschema.ValidationError as e:
-        raise SubsystemRefError(f"Schema validation failed for {kind} ref '{ref_str}': {e.message}")
+        raise SubsystemRefError(
+            f"Schema validation failed for {kind} ref '{ref_str}': {e.message}"
+        ) from e
 
     # esm-spec §9.7.10 form A: fold the ref edge's injected imports into the
     # referenced document's single component's own `expression_template_imports`
@@ -1514,7 +1515,7 @@ def _load_ref_data(
     # edge bindings still inherits the loader's grid instead of falling to its
     # own defaults. Names the leaf does not declare are never forwarded.
     leaf_decls = set((ref_data.get("metaparameters") or {}).keys())
-    effective_bindings: Dict[str, int] = {
+    effective_bindings: dict[str, int] = {
         k: v for k, v in (loader_metaparameters or {}).items() if k in leaf_decls
     }
     # Fold each edge binding VALUE (a metaparameter expression, esm-spec §9.7.6)
@@ -1576,8 +1577,8 @@ def _index_set_show(s: Any) -> str:
 
 
 def _merge_subsystem_index_sets(
-    registry: Dict[str, Any],
-    loaded_index_sets: Dict[str, Any],
+    registry: dict[str, Any],
+    loaded_index_sets: dict[str, Any],
     ref: str,
 ) -> None:
     """Merge a referenced subsystem file's top-level ``index_sets`` into the
@@ -1613,7 +1614,7 @@ def _resolve_model_subsystems(
     model: Model,
     base_path: str,
     seen_refs: set,
-    registry: Dict[str, Any],
+    registry: dict[str, Any],
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -1629,7 +1630,7 @@ def _resolve_model_subsystems(
     if not model.subsystems:
         return
 
-    resolved_subsystems: Dict[str, Any] = {}
+    resolved_subsystems: dict[str, Any] = {}
     for sub_name, sub_value in model.subsystems.items():
         # During parsing, a ref object comes through as a dict with a "ref" key
         # before being coerced to a Model.
@@ -1710,7 +1711,7 @@ def _resolve_reaction_system_subsystems(
     if not rs.subsystems:
         return
 
-    resolved_subsystems: Dict[str, Any] = {}
+    resolved_subsystems: dict[str, Any] = {}
     for sub_name, sub_value in rs.subsystems.items():
         if isinstance(sub_value, dict) and "ref" in sub_value:
             ref_str = sub_value["ref"]
@@ -1795,8 +1796,8 @@ def resolve_subsystem_refs(esm_file: EsmFile, base_path: str) -> None:
 def resolve_model_refs(
     esm_file: EsmFile,
     base_path: str,
-    loader_metaparameters: Optional[Dict[str, int]] = None,
-    parent_metaparameters: Optional[Dict[str, int]] = None,
+    loader_metaparameters: dict[str, int] | None = None,
+    parent_metaparameters: dict[str, int] | None = None,
 ) -> None:
     """Resolve all top-level model references in an ESM file.
 
@@ -1840,7 +1841,7 @@ def resolve_model_refs(
     if not isinstance(registry, dict):
         registry = {}
         esm_file.index_sets = registry
-    resolved_models: Dict[str, Any] = {}
+    resolved_models: dict[str, Any] = {}
     for model_name, model_value in esm_file.models.items():
         # An already-parsed Model (inline definition) passes through unchanged.
         if not (isinstance(model_value, dict) and "ref" in model_value):
@@ -1913,10 +1914,10 @@ from .structural_checks import (  # noqa: E402
 
 
 def load(
-    path_or_string: Union[str, Path, dict],
+    path_or_string: str | Path | dict,
     *,
-    metaparameters: Optional[Dict[str, int]] = None,
-    base_path: Optional[str] = None,
+    metaparameters: dict[str, int] | None = None,
+    base_path: str | None = None,
 ) -> EsmFile:
     """
     Load an ESM file from a file path, JSON string, or dict.
@@ -1953,7 +1954,7 @@ def load(
         file_path = Path(path_or_string)
         if base_path is None:
             resolved_base = str(file_path.parent.resolve())
-        with open(path_or_string, "r") as f:
+        with open(path_or_string) as f:
             data = json.load(f)
     else:
         # It's a JSON string
@@ -1969,8 +1970,8 @@ def load(
     # Surfaced before schema validation so the user sees the version hint
     # instead of a generic schema error.
     from .lower_expression_templates import (
-        reject_expression_templates_pre_v04,
         lower_expression_templates,
+        reject_expression_templates_pre_v04,
     )
     from .template_imports import (
         apply_scope_injections,
@@ -2011,7 +2012,7 @@ def load(
     # defaults overlaid with the loader-API bindings) BEFORE resolution consumes
     # the `metaparameters` block. This is the scope against which a §4.7 mount
     # edge's binding EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6).
-    root_meta_env: Dict[str, int] = {}
+    root_meta_env: dict[str, int] = {}
     _root_meta_decls = data.get("metaparameters")
     if isinstance(_root_meta_decls, dict):
         for _mn, _md in _root_meta_decls.items():

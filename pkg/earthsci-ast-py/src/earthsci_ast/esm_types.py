@@ -1,11 +1,11 @@
 """
 Type definitions for ESM Format using dataclasses.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union, List, Dict, Any, Optional, Literal, Tuple
 from enum import Enum
-
+from typing import Any, Literal, Union
 
 # ========================================
 # 1. Expression Types
@@ -17,88 +17,88 @@ class ExprNode:
     """A node in an expression tree."""
 
     op: str
-    args: List["Expr"] = field(default_factory=list)
-    wrt: Optional[str] = None  # with respect to (for derivatives)
-    dim: Optional[str] = None  # dimension information
-    var: Optional[str] = None  # integration variable name (for integral operator, JSON key "var")
-    lower: Optional["Expr"] = None  # lower integration bound (for integral operator)
-    upper: Optional["Expr"] = None  # upper integration bound (for integral operator)
+    args: list[Expr] = field(default_factory=list)
+    wrt: str | None = None  # with respect to (for derivatives)
+    dim: str | None = None  # dimension information
+    var: str | None = None  # integration variable name (for integral operator, JSON key "var")
+    lower: Expr | None = None  # lower integration bound (for integral operator)
+    upper: Expr | None = None  # upper integration bound (for integral operator)
 
     # Aggregate extensions (schema §ExpressionNode). None unless the op uses them.
     # The canonical Functional Aggregate Query op tag is "aggregate".
-    output_idx: Optional[List[Union[str, int]]] = None
-    expr: Optional["Expr"] = None
-    reduce: Optional[str] = None  # default "+"; names only the semiring ⊕ operator
+    output_idx: list[str | int] | None = None
+    expr: Expr | None = None
+    reduce: str | None = None  # default "+"; names only the semiring ⊕ operator
     # Named semiring (⊕, ⊗) parameterizing the reduction (RFC §5.1). When present
     # it supersedes ``reduce``; absent ⇒ "sum_product" (today's semantics).
-    semiring: Optional[str] = None
+    semiring: str | None = None
     # Each range value is EITHER a dense integer tuple ([start, stop] or
     # [start, step, stop]) OR an index-set reference {"from": <name>, "of": [...]}
     # resolved against the document ``index_sets`` registry (RFC §5.2).
-    ranges: Optional[Dict[str, Union[List[int], Dict[str, Any]]]] = None
+    ranges: dict[str, list[int] | dict[str, Any]] | None = None
     # Value-equality joins (RFC §5.3): an array of join clauses, each
     # ``{"on": [[left, right], ...]}`` naming key-column pairs. An inner
     # equi-join — a ⊗-product term is contributed only for index combinations
     # whose key columns are equal on every listed pair; an unmatched
     # combination contributes the additive identity 0̄. None ⇒ positional
     # einsum (factors combine by shared index name), exactly as today.
-    join: Optional[List[Dict[str, Any]]] = None
+    join: list[dict[str, Any]] | None = None
     # Boolean predicate restricting which index combinations contribute a
     # ⊗-product term (RFC §5.3 / §7.2). Combinations for which it is false
     # contribute 0̄. None ⇒ no filter.
-    filter: Optional["Expr"] = None
+    filter: Expr | None = None
     # Set semantics for an index-set-producing aggregate (RFC §5.5). Parsed for
     # schema completeness; data-derived index-set materialization is not part of
     # the M2 join work.
-    distinct: Optional[bool] = None
+    distinct: bool | None = None
     # Skolem-term expression for an index-set-producing aggregate (RFC §5.5).
-    key: Optional["Expr"] = None
+    key: Expr | None = None
     # makearray:
-    regions: Optional[List[List[List[int]]]] = None
-    values: Optional[List["Expr"]] = None
+    regions: list[list[list[int]]] | None = None
+    values: list[Expr] | None = None
     # reshape:
-    shape: Optional[List[Union[int, str]]] = None
+    shape: list[int | str] | None = None
     # transpose:
-    perm: Optional[List[int]] = None
+    perm: list[int] | None = None
     # concat:
-    axis: Optional[int] = None
+    axis: int | None = None
     # broadcast:
-    fn: Optional[str] = None
+    fn: str | None = None
     # Node addressing (RFC §6.1): a node-local id by which a `kind:"derived"`
     # index set names its producer via `from_faq`. Carried on an
     # `intersect_polygon` leaf so its data-dependent clip ring is exposed as a
     # derived index set the `polygon_area` FAQ ranges over (RFC §8.1).
-    id: Optional[str] = None
+    id: str | None = None
     # Geometry interpretation for the `intersect_polygon` leaf — "planar" |
     # "spherical" | "geodesic" (RFC §8.1 / Appendix B; CONFORMANCE_SPEC.md
     # §5.8.4). REQUIRED on every intersect_polygon node, no default; matched
     # EXACTLY across bindings (two bindings compare only same-manifold).
     # Meaningful only for intersect_polygon; ignored on any other op.
-    manifold: Optional[str] = None
+    manifold: str | None = None
     # call (registered function invocation, see esm-spec §4.4 / §9.2):
-    handler_id: Optional[str] = None
+    handler_id: str | None = None
     # fn (closed function registry — esm-spec §9.2): the dotted module path of
     # a function in the spec-defined closed set (e.g. "datetime.year",
     # "interp.searchsorted").
-    name: Optional[str] = None
+    name: str | None = None
     # const (inline literal): the carried value. Any JSON number or nested
     # array thereof. Used to thread const-array tables through the AST without
     # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
-    value: Optional[Any] = None
+    value: Any | None = None
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
-    table: Optional[str] = None
+    table: str | None = None
     # table_lookup: per-axis input-coordinate expression map. Keys MUST match
     # the axis names declared on the referenced FunctionTable; values are
     # arbitrary scalar Expressions (number, variable reference, or AST node).
     # Stored under the JSON key ``axes`` on the wire.
-    table_axes: Optional[Dict[str, "Expr"]] = None
+    table_axes: dict[str, Expr] | None = None
     # table_lookup: which output of a multi-output table to return. Either a
     # non-negative integer (0-based index into the leading data dimension) or
     # a string (an entry of the table's outputs list). Single-output tables
     # MAY omit this (defaults to 0 at lowering time).
-    output: Optional[Union[int, str]] = None
+    output: int | str | None = None
 
 
 # Recursive type definition for expressions
@@ -106,7 +106,7 @@ Expr = Union[int, float, str, ExprNode]
 
 
 # The canonical Functional Aggregate Query op tag.
-AGGREGATE_OPS: Tuple[str, ...] = ("aggregate",)
+AGGREGATE_OPS: tuple[str, ...] = ("aggregate",)
 
 
 def is_aggregate_op(op: Any) -> bool:
@@ -147,7 +147,7 @@ class Equation:
 
     lhs: Expr
     rhs: Expr
-    _comment: Optional[str] = None
+    _comment: str | None = None
 
 
 @dataclass
@@ -174,22 +174,22 @@ class ModelVariable:
     """
 
     type: Literal["state", "parameter", "observed", "brownian"]
-    units: Optional[str] = None
-    default: Optional[Any] = None
-    default_units: Optional[str] = None
-    description: Optional[str] = None
-    expression: Optional[Expr] = None
+    units: str | None = None
+    default: Any | None = None
+    default_units: str | None = None
+    description: str | None = None
+    expression: Expr | None = None
     # Arrayed-variable shape: ordered index-set names drawn from the
     # document-scoped ``index_sets`` registry (RFC semiring-faq-unified-ir §5.2).
     # None means scalar.
-    shape: Optional[List[str]] = None
+    shape: list[str] | None = None
     # Staggered-grid location tag (e.g. "cell_center", "edge_normal",
     # "vertex"). None means no explicit staggering. See RFC §10.2.
-    location: Optional[str] = None
+    location: str | None = None
     # Brownian-only: kind of stochastic process. Currently only "wiener".
-    noise_kind: Optional[str] = None
+    noise_kind: str | None = None
     # Brownian-only: opaque tag grouping correlated noise sources.
-    correlation_group: Optional[str] = None
+    correlation_group: str | None = None
 
 
 @dataclass
@@ -197,31 +197,31 @@ class Model:
     """A mathematical model containing variables and equations."""
 
     name: str
-    variables: Dict[str, ModelVariable] = field(default_factory=dict)
-    equations: List[Equation] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variables: dict[str, ModelVariable] = field(default_factory=dict)
+    equations: list[Equation] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     # A subsystem is a child Model or a pure-I/O DataLoader (RFC
     # pure-io-data-loaders §4.3); ref subsystems are raw {"ref": ...} dicts
     # until resolve_subsystem_refs replaces them in place.
-    subsystems: Dict[str, Union["Model", "DataLoader"]] = field(default_factory=dict)
+    subsystems: dict[str, Model | DataLoader] = field(default_factory=dict)
     # Boundary conditions are not a declared model concern: there is no `bc` op
     # and no `boundary_conditions` field. BCs are baked into the discretization
     # rewrite rules' `makearray` bodies (esm-spec §9.6.8); nothing to store here.
     # Model-level default numerical tolerance for inline tests (esm-spec §6.6).
-    tolerance: Optional["Tolerance"] = None
+    tolerance: Tolerance | None = None
     # Inline validation tests (esm-spec §6.6).
-    tests: List["Test"] = field(default_factory=list)
+    tests: list[Test] = field(default_factory=list)
     # Inline illustrative examples (esm-spec §6.7).
-    examples: List["Example"] = field(default_factory=list)
+    examples: list[Example] = field(default_factory=list)
     # Initialization-only equations (hold at t=0) and solver guesses (gt-ebuq).
-    initialization_equations: List[Equation] = field(default_factory=list)
-    guesses: Dict[str, Union[float, "Expr"]] = field(default_factory=dict)
+    initialization_equations: list[Equation] = field(default_factory=list)
+    guesses: dict[str, float | Expr] = field(default_factory=dict)
     # MTK system-kind discriminator: "ode" (default), "nonlinear", "sde", "pde".
-    system_kind: Optional[str] = None
+    system_kind: str | None = None
     # Events owned by this model (schema nests events inside components; the
     # flat EsmFile.events view aggregates these same objects for consumers).
-    continuous_events: List["ContinuousEvent"] = field(default_factory=list)
-    discrete_events: List["DiscreteEvent"] = field(default_factory=list)
+    continuous_events: list[ContinuousEvent] = field(default_factory=list)
+    discrete_events: list[DiscreteEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -229,12 +229,12 @@ class Species:
     """A chemical species in a reaction system."""
 
     name: str
-    units: Optional[str] = None
-    default: Optional[float] = None
-    default_units: Optional[str] = None
-    description: Optional[str] = None
-    formula: Optional[str] = None  # Chemical formula
-    constant: Optional[bool] = None  # Reservoir species (held-fixed, no ODE)
+    units: str | None = None
+    default: float | None = None
+    default_units: str | None = None
+    description: str | None = None
+    formula: str | None = None  # Chemical formula
+    constant: bool | None = None  # Reservoir species (held-fixed, no ODE)
 
 
 @dataclass
@@ -242,11 +242,11 @@ class Parameter:
     """A parameter for reaction systems."""
 
     name: str
-    value: Union[float, Expr]
-    units: Optional[str] = None
-    default_units: Optional[str] = None
-    description: Optional[str] = None
-    uncertainty: Optional[float] = None
+    value: float | Expr
+    units: str | None = None
+    default_units: str | None = None
+    description: str | None = None
+    uncertainty: float | None = None
 
 
 @dataclass
@@ -254,15 +254,15 @@ class Reaction:
     """A chemical reaction."""
 
     name: str
-    id: Optional[str] = None
+    id: str | None = None
     # species -> coefficient. Values may be `int` or `float`: v0.2.x permits
     # fractional stoichiometries (e.g. `0.87 CH2O`). Parser preserves the
     # original JSON numeric type; serializer emits `int` for integer-valued
     # coefficients to keep integer fixtures byte-identical across round-trips.
-    reactants: Dict[str, Union[int, float]] = field(default_factory=dict)
-    products: Dict[str, Union[int, float]] = field(default_factory=dict)
-    rate_constant: Optional[Union[float, Expr]] = None
-    conditions: Dict[str, Any] = field(default_factory=dict)
+    reactants: dict[str, int | float] = field(default_factory=dict)
+    products: dict[str, int | float] = field(default_factory=dict)
+    rate_constant: float | Expr | None = None
+    conditions: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -270,21 +270,21 @@ class ReactionSystem:
     """A system of chemical reactions."""
 
     name: str
-    species: List[Species] = field(default_factory=list)
-    parameters: List[Parameter] = field(default_factory=list)
-    reactions: List[Reaction] = field(default_factory=list)
-    constraint_equations: List[Equation] = field(default_factory=list)
-    subsystems: Dict[str, "ReactionSystem"] = field(default_factory=dict)
+    species: list[Species] = field(default_factory=list)
+    parameters: list[Parameter] = field(default_factory=list)
+    reactions: list[Reaction] = field(default_factory=list)
+    constraint_equations: list[Equation] = field(default_factory=list)
+    subsystems: dict[str, ReactionSystem] = field(default_factory=dict)
     # Component-level default numerical tolerance for inline tests (esm-spec §6.6).
-    tolerance: Optional["Tolerance"] = None
+    tolerance: Tolerance | None = None
     # Inline validation tests (esm-spec §6.6).
-    tests: List["Test"] = field(default_factory=list)
+    tests: list[Test] = field(default_factory=list)
     # Inline illustrative examples (esm-spec §6.7).
-    examples: List["Example"] = field(default_factory=list)
+    examples: list[Example] = field(default_factory=list)
     # Events owned by this reaction system (schema nests events inside
     # components; the flat EsmFile.events view aggregates these same objects).
-    continuous_events: List["ContinuousEvent"] = field(default_factory=list)
-    discrete_events: List["DiscreteEvent"] = field(default_factory=list)
+    continuous_events: list[ContinuousEvent] = field(default_factory=list)
+    discrete_events: list[DiscreteEvent] = field(default_factory=list)
 
 
 # ========================================
@@ -297,8 +297,8 @@ class Tolerance:
     """Numerical comparison tolerance. abs and/or rel may be set; an assertion
     passes when any set bound is satisfied."""
 
-    abs: Optional[float] = None
-    rel: Optional[float] = None
+    abs: float | None = None
+    rel: float | None = None
 
 
 @dataclass
@@ -330,10 +330,10 @@ class Assertion:
     variable: str
     time: float
     expected: float
-    tolerance: Optional[Tolerance] = None
-    coords: Optional[Dict[str, float]] = None
-    reduce: Optional[str] = None
-    reference: Optional[Any] = None
+    tolerance: Tolerance | None = None
+    coords: dict[str, float] | None = None
+    reduce: str | None = None
+    reference: Any | None = None
 
 
 @dataclass
@@ -342,18 +342,18 @@ class Test:
 
     id: str
     time_span: TimeSpan
-    assertions: List[Assertion] = field(default_factory=list)
-    description: Optional[str] = None
-    initial_conditions: Dict[str, float] = field(default_factory=dict)
-    parameter_overrides: Dict[str, float] = field(default_factory=dict)
-    tolerance: Optional[Tolerance] = None
+    assertions: list[Assertion] = field(default_factory=list)
+    description: str | None = None
+    initial_conditions: dict[str, float] = field(default_factory=dict)
+    parameter_overrides: dict[str, float] = field(default_factory=dict)
+    tolerance: Tolerance | None = None
     # Raw §9.7.2 import entries injected into the ENCLOSING component's scope
     # for THIS test's run only (esm-spec §9.7.10 form C / §6.6.6): the
     # discretization a discretization-agnostic PDE leaf is lowered under in the
     # per-test ephemeral build. Authored per-run config — a peer of
     # `parameter_overrides` — so unlike a component's own imports it DOES
     # survive `parse → emit`. Empty for a non-PDE / agnostic-free test.
-    expression_template_imports: List[Any] = field(default_factory=list)
+    expression_template_imports: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -361,7 +361,7 @@ class PlotAxis:
     """Axis specification for a plot."""
 
     variable: str
-    label: Optional[str] = None
+    label: str | None = None
 
 
 @dataclass
@@ -369,8 +369,8 @@ class PlotValue:
     """Scalar value derived from a trajectory (e.g., for heatmap color)."""
 
     variable: str
-    at_time: Optional[float] = None
-    reduce: Optional[str] = None  # "max" | "min" | "mean" | "integral" | "final"
+    at_time: float | None = None
+    reduce: str | None = None  # "max" | "min" | "mean" | "integral" | "final"
 
 
 @dataclass
@@ -389,9 +389,9 @@ class Plot:
     type: str  # "line" | "scatter" | "heatmap"
     x: PlotAxis
     y: PlotAxis
-    description: Optional[str] = None
-    value: Optional[PlotValue] = None
-    series: List[PlotSeries] = field(default_factory=list)
+    description: str | None = None
+    value: PlotValue | None = None
+    series: list[PlotSeries] = field(default_factory=list)
 
 
 @dataclass
@@ -401,7 +401,7 @@ class SweepRange:
     start: float
     stop: float
     count: int
-    scale: Optional[str] = None  # "linear" | "log"
+    scale: str | None = None  # "linear" | "log"
 
 
 @dataclass
@@ -409,8 +409,8 @@ class SweepDimension:
     """One axis of a parameter sweep; exactly one of values or range is set."""
 
     parameter: str
-    values: Optional[List[float]] = None
-    range: Optional[SweepRange] = None
+    values: list[float] | None = None
+    range: SweepRange | None = None
 
 
 @dataclass
@@ -418,7 +418,7 @@ class ParameterSweep:
     """Parameter sweep specification (currently only Cartesian)."""
 
     type: str  # "cartesian"
-    dimensions: List[SweepDimension] = field(default_factory=list)
+    dimensions: list[SweepDimension] = field(default_factory=list)
 
 
 @dataclass
@@ -427,18 +427,18 @@ class Example:
 
     id: str
     time_span: TimeSpan
-    description: Optional[str] = None
+    description: str | None = None
     # Scalar initial-value overrides for this example run, keyed by state-variable
     # name. A component's initial fields are declared with `ic` op equations in the
     # model (esm-spec §11.4); this map overrides their scalar values for this run.
-    initial_state: Optional[Dict[str, float]] = None
-    parameters: Dict[str, float] = field(default_factory=dict)
-    parameter_sweep: Optional[ParameterSweep] = None
-    plots: List[Plot] = field(default_factory=list)
+    initial_state: dict[str, float] | None = None
+    parameters: dict[str, float] = field(default_factory=dict)
+    parameter_sweep: ParameterSweep | None = None
+    plots: list[Plot] = field(default_factory=list)
     # esm-spec §9.7.10 form C: raw §9.7.2 import entries naming the
     # discretization this example runs under. Retained (not consumed at load)
     # so the field survives round-trip, mirroring Test.expression_template_imports.
-    expression_template_imports: List[Any] = field(default_factory=list)
+    expression_template_imports: list[Any] = field(default_factory=list)
 
 
 # ========================================
@@ -451,10 +451,10 @@ class FunctionalAffect:
     """A functional effect applied during an event."""
 
     handler_id: str
-    read_vars: List[str] = field(default_factory=list)
-    read_params: List[str] = field(default_factory=list)
-    modified_params: List[str] = field(default_factory=list)
-    config: Dict[str, Any] = field(default_factory=dict)
+    read_vars: list[str] = field(default_factory=list)
+    read_params: list[str] = field(default_factory=list)
+    modified_params: list[str] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -462,17 +462,17 @@ class ContinuousEvent:
     """An event that occurs when a condition becomes true during continuous evolution."""
 
     name: str
-    conditions: List[Expr] = field(default_factory=list)  # Changed from single condition to array
-    affects: List[Union[AffectEquation, FunctionalAffect]] = field(default_factory=list)
-    affect_neg: Optional[List[Union[AffectEquation, FunctionalAffect]]] = (
+    conditions: list[Expr] = field(default_factory=list)  # Changed from single condition to array
+    affects: list[AffectEquation | FunctionalAffect] = field(default_factory=list)
+    affect_neg: list[AffectEquation | FunctionalAffect] | None = (
         None  # Added: affects for negative-going zero crossings
     )
-    root_find: Optional[Literal["left", "right", "all"]] = (
+    root_find: Literal["left", "right", "all"] | None = (
         "left"  # Added: root-finding direction with default
     )
     reinitialize: bool = False  # Added: whether to reinitialize after event
     priority: int = 0
-    description: Optional[str] = None  # Added: optional description
+    description: str | None = None  # Added: optional description
 
 
 @dataclass
@@ -480,7 +480,7 @@ class DiscreteEventTrigger:
     """Trigger condition for a discrete event."""
 
     type: Literal["condition", "periodic", "preset_times"]
-    value: Union[float, Expr, str]  # time value, condition expression, or external identifier
+    value: float | Expr | str  # time value, condition expression, or external identifier
 
 
 @dataclass
@@ -489,12 +489,12 @@ class DiscreteEvent:
 
     name: str
     trigger: DiscreteEventTrigger
-    affects: List[Union[AffectEquation, FunctionalAffect]] = field(default_factory=list)
+    affects: list[AffectEquation | FunctionalAffect] = field(default_factory=list)
     priority: int = 0
     # Parameters this event may modify (implicitly discrete parameters).
-    discrete_parameters: List[str] = field(default_factory=list)
+    discrete_parameters: list[str] = field(default_factory=list)
     reinitialize: bool = False
-    description: Optional[str] = None
+    description: str | None = None
 
 
 # ========================================
@@ -514,9 +514,9 @@ class DataLoaderKind(Enum):
 class DataLoaderDeterminism:
     """Reproducibility contract a loader advertises to bindings (esm-spec §8.9.2)."""
 
-    endian: Optional[str] = None  # "little" | "big"
-    float_format: Optional[str] = None  # "ieee754_single" | "ieee754_double"
-    integer_width: Optional[int] = None  # 32 | 64
+    endian: str | None = None  # "little" | "big"
+    float_format: str | None = None  # "ieee754_single" | "ieee754_double"
+    integer_width: int | None = None  # 32 | 64
 
 
 @dataclass
@@ -524,19 +524,19 @@ class DataLoaderSource:
     """File discovery configuration for a data loader."""
 
     url_template: str
-    mirrors: List[str] = field(default_factory=list)
+    mirrors: list[str] = field(default_factory=list)
 
 
 @dataclass
 class DataLoaderTemporal:
     """Temporal coverage and record layout for a data source."""
 
-    start: Optional[str] = None
-    end: Optional[str] = None
-    file_period: Optional[str] = None
-    frequency: Optional[str] = None
-    records_per_file: Optional[Union[int, str]] = None
-    time_variable: Optional[str] = None
+    start: str | None = None
+    end: str | None = None
+    file_period: str | None = None
+    frequency: str | None = None
+    records_per_file: int | str | None = None
+    time_variable: str | None = None
 
 
 @dataclass
@@ -545,9 +545,9 @@ class DataLoaderVariable:
 
     file_variable: str
     units: str
-    unit_conversion: Optional[Union[float, int, "Expr"]] = None
-    description: Optional[str] = None
-    reference: Optional["Reference"] = None
+    unit_conversion: float | int | Expr | None = None
+    description: str | None = None
+    reference: Reference | None = None
 
 
 @dataclass
@@ -565,11 +565,11 @@ class DataLoader:
     name: str
     kind: DataLoaderKind
     source: DataLoaderSource
-    variables: Dict[str, DataLoaderVariable] = field(default_factory=dict)
-    temporal: Optional[DataLoaderTemporal] = None
-    determinism: Optional[DataLoaderDeterminism] = None
-    reference: Optional["Reference"] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variables: dict[str, DataLoaderVariable] = field(default_factory=dict)
+    temporal: DataLoaderTemporal | None = None
+    determinism: DataLoaderDeterminism | None = None
+    reference: Reference | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -577,11 +577,11 @@ class Operator:
     """A registered runtime operator (e.g., dry deposition, wet scavenging)."""
 
     operator_id: str
-    needed_vars: List[str]
-    modifies: Optional[List[str]] = None
-    reference: Optional["Reference"] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    description: Optional[str] = None
+    needed_vars: list[str]
+    modifies: list[str] | None = None
+    reference: Reference | None = None
+    config: dict[str, Any] = field(default_factory=dict)
+    description: str | None = None
 
 
 @dataclass
@@ -589,8 +589,8 @@ class RegisteredFunctionSignature:
     """Calling convention for a RegisteredFunction (see esm-spec §9.2)."""
 
     arg_count: int
-    arg_types: Optional[List[str]] = None
-    return_type: Optional[str] = None
+    arg_types: list[str] | None = None
+    return_type: str | None = None
 
 
 @dataclass
@@ -599,11 +599,11 @@ class RegisteredFunction:
 
     id: str
     signature: RegisteredFunctionSignature
-    units: Optional[str] = None
-    arg_units: Optional[List[Optional[str]]] = None
-    description: Optional[str] = None
-    references: List["Reference"] = field(default_factory=list)
-    config: Dict[str, Any] = field(default_factory=dict)
+    units: str | None = None
+    arg_units: list[str | None] | None = None
+    description: str | None = None
+    references: list[Reference] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 class CouplingType(Enum):
@@ -624,14 +624,14 @@ class ConnectorEquation:
     from_var: str
     to_var: str
     transform: str
-    expression: Optional[Expr] = None
+    expression: Expr | None = None
 
 
 @dataclass
 class Connector:
     """Connector system with equations."""
 
-    equations: List[ConnectorEquation] = field(default_factory=list)
+    equations: list[ConnectorEquation] = field(default_factory=list)
 
 
 # Base class for all coupling entries
@@ -640,7 +640,7 @@ class BaseCouplingEntry:
     """Base class for all coupling entry types."""
 
     coupling_type: CouplingType
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
@@ -648,12 +648,12 @@ class OperatorComposeCoupling(BaseCouplingEntry):
     """Coupling entry for operator_compose type."""
 
     coupling_type: CouplingType = field(default=CouplingType.OPERATOR_COMPOSE, init=False)
-    systems: List[str] = field(default_factory=list)
-    translate: Dict[str, Any] = field(default_factory=dict)
+    systems: list[str] = field(default_factory=list)
+    translate: dict[str, Any] = field(default_factory=dict)
     # Spatial-lift strategy (esm-spec §10.5). ``"pointwise"`` requests the
     # flattener array-ify each merged reaction+operator state ODE onto the grid
     # (per-cell reaction evaluation). None ⇒ no lift (0-D / already-array system).
-    lifting: Optional[str] = None
+    lifting: str | None = None
 
 
 @dataclass
@@ -661,8 +661,8 @@ class CouplingCouple(BaseCouplingEntry):
     """Coupling entry for couple type."""
 
     coupling_type: CouplingType = field(default=CouplingType.COUPLE, init=False)
-    systems: List[str] = field(default_factory=list)
-    connector: Optional[Connector] = None
+    systems: list[str] = field(default_factory=list)
+    connector: Connector | None = None
 
 
 @dataclass
@@ -670,16 +670,16 @@ class VariableMapCoupling(BaseCouplingEntry):
     """Coupling entry for variable_map type."""
 
     coupling_type: CouplingType = field(default=CouplingType.VARIABLE_MAP, init=False)
-    from_var: Optional[str] = None
-    to_var: Optional[str] = None
+    from_var: str | None = None
+    to_var: str | None = None
     # EITHER one of the legacy enum strings ("param_to_var", "identity",
     # "additive", "multiplicative", "conversion_factor") OR an ExpressionNode
     # (in-progress-0.8.0 widening; operator-node object only on the wire).
     # An expression transform must reference the entry's `from` variable and
     # takes no `factor`; every variable reference inside it is already a
     # fully-scoped reference into the flattened coupled system.
-    transform: Optional[Union[str, Expr]] = None
-    factor: Optional[float] = None
+    transform: str | Expr | None = None
+    factor: float | None = None
 
 
 @dataclass
@@ -687,7 +687,7 @@ class OperatorApplyCoupling(BaseCouplingEntry):
     """Coupling entry for operator_apply type."""
 
     coupling_type: CouplingType = field(default=CouplingType.OPERATOR_APPLY, init=False)
-    operator: Optional[str] = None
+    operator: str | None = None
 
 
 @dataclass
@@ -695,8 +695,8 @@ class CallbackCoupling(BaseCouplingEntry):
     """Coupling entry for callback type."""
 
     coupling_type: CouplingType = field(default=CouplingType.CALLBACK, init=False)
-    callback_id: Optional[str] = None
-    config: Dict[str, Any] = field(default_factory=dict)
+    callback_id: str | None = None
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -704,14 +704,14 @@ class EventCoupling(BaseCouplingEntry):
     """Coupling entry for event type."""
 
     coupling_type: CouplingType = field(default=CouplingType.EVENT, init=False)
-    event_type: Optional[str] = None
-    conditions: List[Expr] = field(default_factory=list)
-    trigger: Optional["DiscreteEventTrigger"] = None
-    affects: List["AffectEquation"] = field(default_factory=list)
-    affect_neg: List["AffectEquation"] = field(default_factory=list)
-    discrete_parameters: List[str] = field(default_factory=list)
-    root_find: Optional[str] = None
-    reinitialize: Optional[bool] = None
+    event_type: str | None = None
+    conditions: list[Expr] = field(default_factory=list)
+    trigger: DiscreteEventTrigger | None = None
+    affects: list[AffectEquation] = field(default_factory=list)
+    affect_neg: list[AffectEquation] = field(default_factory=list)
+    discrete_parameters: list[str] = field(default_factory=list)
+    root_find: str | None = None
+    reinitialize: bool | None = None
 
 
 # Discriminated union of all coupling entry types
@@ -734,9 +734,9 @@ CouplingEntry = Union[
 class TemporalDomain:
     """Temporal domain specification."""
 
-    start: Optional[str] = None  # ISO datetime string
-    end: Optional[str] = None  # ISO datetime string
-    reference_time: Optional[str] = None  # ISO datetime string
+    start: str | None = None  # ISO datetime string
+    end: str | None = None  # ISO datetime string
+    reference_time: str | None = None  # ISO datetime string
 
 
 # Initial conditions are no longer a domain-level concept. As of v0.8.0 a
@@ -761,14 +761,14 @@ class Domain:
     in the format (they are baked into discretization rewrite rules, §9.6.8).
     """
 
-    name: Optional[str] = None
-    independent_variable: Optional[str] = None
-    temporal: Optional[TemporalDomain] = None
+    name: str | None = None
+    independent_variable: str | None = None
+    temporal: TemporalDomain | None = None
 
     # Legacy support for backwards compatibility
-    dimensions: Optional[Dict[str, Any]] = None
-    coordinates: Dict[str, List[float]] = field(default_factory=dict)
-    boundaries: Dict[str, Any] = field(default_factory=dict)
+    dimensions: dict[str, Any] | None = None
+    coordinates: dict[str, list[float]] = field(default_factory=dict)
+    boundaries: dict[str, Any] = field(default_factory=dict)
 
 
 # ========================================
@@ -781,11 +781,11 @@ class Reference:
     """Bibliographic reference."""
 
     title: str
-    authors: List[str] = field(default_factory=list)
-    journal: Optional[str] = None
-    year: Optional[int] = None
-    doi: Optional[str] = None
-    url: Optional[str] = None
+    authors: list[str] = field(default_factory=list)
+    journal: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    url: str | None = None
 
 
 @dataclass
@@ -793,14 +793,14 @@ class Metadata:
     """Metadata about the model or dataset."""
 
     title: str
-    description: Optional[str] = None
-    authors: List[str] = field(default_factory=list)
-    created: Optional[str] = None  # ISO datetime string
-    modified: Optional[str] = None  # ISO datetime string
+    description: str | None = None
+    authors: list[str] = field(default_factory=list)
+    created: str | None = None  # ISO datetime string
+    modified: str | None = None  # ISO datetime string
     version: str = "1.0"
-    references: List[Reference] = field(default_factory=list)
-    keywords: List[str] = field(default_factory=list)
-    custom: Dict[str, Any] = field(default_factory=dict)
+    references: list[Reference] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
+    custom: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -819,8 +819,8 @@ class FunctionTableAxis:
     """
 
     name: str
-    values: List[float]
-    units: Optional[str] = None
+    values: list[float]
+    units: str | None = None
 
 
 @dataclass
@@ -835,14 +835,14 @@ class FunctionTable:
     ``outputs`` is non-empty; ``[len(axes[0].values), ...]`` otherwise.
     """
 
-    axes: List[FunctionTableAxis]
+    axes: list[FunctionTableAxis]
     data: Any  # Nested-array literal of finite numbers
-    description: Optional[str] = None
-    interpolation: Optional[str] = None  # 'linear' | 'bilinear' | 'nearest'
-    out_of_bounds: Optional[str] = None  # 'clamp' | 'error'
-    outputs: Optional[List[str]] = None
-    shape: Optional[List[int]] = None
-    schema_version: Optional[str] = None
+    description: str | None = None
+    interpolation: str | None = None  # 'linear' | 'bilinear' | 'nearest'
+    out_of_bounds: str | None = None  # 'clamp' | 'error'
+    outputs: list[str] | None = None
+    shape: list[int] | None = None
+    schema_version: str | None = None
 
 
 @dataclass
@@ -851,32 +851,32 @@ class EsmFile:
 
     version: str
     metadata: Metadata
-    models: Dict[str, Model] = field(default_factory=dict)
-    reaction_systems: Dict[str, ReactionSystem] = field(default_factory=dict)
-    events: List[Union[ContinuousEvent, DiscreteEvent]] = field(default_factory=list)
-    data_loaders: Dict[str, DataLoader] = field(default_factory=dict)
-    operators: List[Operator] = field(default_factory=list)
-    registered_functions: Dict[str, RegisteredFunction] = field(default_factory=dict)
-    coupling: List[CouplingEntry] = field(default_factory=list)
+    models: dict[str, Model] = field(default_factory=dict)
+    reaction_systems: dict[str, ReactionSystem] = field(default_factory=dict)
+    events: list[ContinuousEvent | DiscreteEvent] = field(default_factory=list)
+    data_loaders: dict[str, DataLoader] = field(default_factory=dict)
+    operators: list[Operator] = field(default_factory=list)
+    registered_functions: dict[str, RegisteredFunction] = field(default_factory=dict)
+    coupling: list[CouplingEntry] = field(default_factory=list)
     # File-local enum mappings for the `enum` AST op (esm-spec §9.3). Keyed by
     # enum name; each value maps symbolic names to positive integers. Resolved
     # at load time by `lower_enums` before expression evaluation.
-    enums: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    enums: dict[str, dict[str, int]] = field(default_factory=dict)
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Keyed
     # by table id; each value is a FunctionTable referenced by table_lookup
     # AST nodes.
-    function_tables: Dict[str, FunctionTable] = field(default_factory=dict)
+    function_tables: dict[str, FunctionTable] = field(default_factory=dict)
     # A single shared spatiotemporal domain (v0.8.0). Spatiality of individual
     # variables is expressed via their ``shape``; there is one domain per file,
     # not a map of named domains.
-    domain: Optional[Domain] = None
+    domain: Domain | None = None
     # Document-scoped registry of named index sets (RFC semiring-faq-unified-ir
     # §5.2), keyed by name — the single, document-level declaration site for
     # every iteration domain shared by all models in the file. Each entry is an
     # IndexSet dict: interval / categorical / derived / ragged. Referenced from
     # aggregate range specs of the form {"from": <name>} and from variable
     # ``shape`` lists. Moved here from ``Model`` in v0.8.0.
-    index_sets: Dict[str, Any] = field(default_factory=dict)
+    index_sets: dict[str, Any] = field(default_factory=dict)
 
     @property
     def esm(self) -> str:

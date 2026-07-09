@@ -6,11 +6,12 @@ from ESM files in multiple target languages:
 - Julia: compatible with ModelingToolkit, Catalyst, EarthSciMLBase, and OrdinaryDiffEq
 - Python: compatible with SymPy, earthsci_ast, and SciPy
 """
+from __future__ import annotations
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 
-def to_julia_code(file: Dict[str, Any]) -> str:
+def to_julia_code(file: dict[str, Any]) -> str:
     """
     Generate a self-contained Julia script from an ESM file.
 
@@ -85,7 +86,7 @@ def to_julia_code(file: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def to_python_code(file: Dict[str, Any]) -> str:
+def to_python_code(file: dict[str, Any]) -> str:
     """
     Generate a self-contained Python script from an ESM file.
 
@@ -157,7 +158,7 @@ def to_python_code(file: Dict[str, Any]) -> str:
 # Helper functions for Julia code generation
 
 
-def _generate_model_code(name: str, model: Dict[str, Any]) -> List[str]:
+def _generate_model_code(name: str, model: dict[str, Any]) -> list[str]:
     lines = []
 
     lines.append(f"# Model: {name}")
@@ -198,7 +199,7 @@ def _generate_model_code(name: str, model: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_reaction_system_code(name: str, reaction_system: Dict[str, Any]) -> List[str]:
+def _generate_reaction_system_code(name: str, reaction_system: dict[str, Any]) -> list[str]:
     lines = []
 
     lines.append(f"# Reaction System: {name}")
@@ -237,7 +238,7 @@ def _generate_reaction_system_code(name: str, reaction_system: Dict[str, Any]) -
     return lines
 
 
-def _generate_event_code(name: str, event: Dict[str, Any]) -> List[str]:
+def _generate_event_code(name: str, event: dict[str, Any]) -> list[str]:
     lines = []
 
     if "condition" in event:  # Continuous event
@@ -254,7 +255,7 @@ def _generate_event_code(name: str, event: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_coupling_comment(coupling: Dict[str, Any]) -> List[str]:
+def _generate_coupling_comment(coupling: dict[str, Any]) -> list[str]:
     lines = []
     lines.append(f"# Coupling: {coupling.get('type', 'unknown')}")
     if coupling.get("from"):
@@ -264,7 +265,7 @@ def _generate_coupling_comment(coupling: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_domain_comment(domain: Dict[str, Any]) -> List[str]:
+def _generate_domain_comment(domain: dict[str, Any]) -> list[str]:
     lines = []
     lines.append("# Domain")
     if domain.get("spatial", {}).get("coordinates"):
@@ -273,7 +274,7 @@ def _generate_domain_comment(domain: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_data_loader_comment(name: str, data_loader: Dict[str, Any]) -> List[str]:
+def _generate_data_loader_comment(name: str, data_loader: dict[str, Any]) -> list[str]:
     lines = []
     lines.append(f"# Data loader: {name}")
     source = data_loader.get("source")
@@ -285,7 +286,7 @@ def _generate_data_loader_comment(name: str, data_loader: Dict[str, Any]) -> Lis
     return lines
 
 
-def _format_variable_declaration(var_name: str, variable: Dict[str, Any]) -> str:
+def _format_variable_declaration(var_name: str, variable: dict[str, Any]) -> str:
     decl = var_name
 
     # Add default value and units if present
@@ -306,7 +307,7 @@ def _format_variable_declaration(var_name: str, variable: Dict[str, Any]) -> str
     return decl
 
 
-def _format_species_declaration(spec_name: str, species: Dict[str, Any]) -> str:
+def _format_species_declaration(spec_name: str, species: dict[str, Any]) -> str:
     decl = spec_name
 
     if species.get("initial_value") is not None:
@@ -319,13 +320,13 @@ def _format_species_declaration(spec_name: str, species: Dict[str, Any]) -> str:
     return decl
 
 
-def _format_equation(equation: Dict[str, Any]) -> str:
+def _format_equation(equation: dict[str, Any]) -> str:
     lhs = _format_expression(equation["lhs"])
     rhs = _format_expression(equation["rhs"])
     return f"{lhs} ~ {rhs}"
 
 
-def _format_reaction(reaction: Dict[str, Any]) -> str:
+def _format_reaction(reaction: dict[str, Any]) -> str:
     rate = _format_expression(reaction.get("rate", 1.0))
 
     # Format reactants
@@ -353,88 +354,84 @@ def _format_reaction(reaction: Dict[str, Any]) -> str:
     return f"Reaction({rate}, [{reactants}], [{products}])"
 
 
-def _format_expression(expr: Union[str, int, float, Dict[str, Any]]) -> str:
+def _format_expression(expr: str | int | float | dict[str, Any]) -> str:
     if isinstance(expr, (int, float)):
         return str(expr)
-    elif isinstance(expr, str):
+    if isinstance(expr, str):
         return expr
-    elif isinstance(expr, dict) and "op" in expr:
+    if isinstance(expr, dict) and "op" in expr:
         return _format_expression_node(expr)
-    else:
-        return str(expr)
+    return str(expr)
 
 
-def _format_expression_node(node: Dict[str, Any]) -> str:
+def _format_expression_node(node: dict[str, Any]) -> str:
     op = node["op"]
     args = node.get("args", [])
 
     # Apply expression mappings for Julia
     if op == "+":
         return " + ".join(_format_expression(arg) for arg in args)
-    elif op == "*":
+    if op == "*":
         return " * ".join(_format_expression(arg) for arg in args)
-    elif op == "D":
+    if op == "D":
         # D(x,t) → D(x) (remove time parameter)
         if args:
             return f"D({_format_expression(args[0])})"
         return "D()"
-    elif op == "exp":
+    if op == "exp":
         return f"exp({', '.join(_format_expression(arg) for arg in args)})"
-    elif op == "ifelse":
+    if op == "ifelse":
         return f"ifelse({', '.join(_format_expression(arg) for arg in args)})"
-    elif op == "Pre":
+    if op == "Pre":
         return f"Pre({', '.join(_format_expression(arg) for arg in args)})"
-    elif op == "^":
+    if op == "^":
         return " ^ ".join(_format_expression(arg) for arg in args)
-    elif op == "grad":
+    if op == "grad":
         # grad(x,y) → Differential(y)(x)
         if len(args) >= 2:
             return f"Differential({_format_expression(args[1])})({_format_expression(args[0])})"
-        elif len(args) == 1:
+        if len(args) == 1:
             return f"Differential(x)({_format_expression(args[0])})"
         return "Differential(x)()"
-    elif op == "-":
+    if op == "-":
         if len(args) == 1:
             return f"-{_format_expression(args[0])}"
-        else:
-            return " - ".join(_format_expression(arg) for arg in args)
-    elif op == "/":
+        return " - ".join(_format_expression(arg) for arg in args)
+    if op == "/":
         return " / ".join(_format_expression(arg) for arg in args)
-    elif op in ["<", ">", "<=", ">=", "==", "!="]:
+    if op in ["<", ">", "<=", ">=", "==", "!="]:
         return f" {op} ".join(_format_expression(arg) for arg in args)
-    elif op == "and":
+    if op == "and":
         return " && ".join(_format_expression(arg) for arg in args)
-    elif op == "or":
+    if op == "or":
         return " || ".join(_format_expression(arg) for arg in args)
-    elif op == "not":
+    if op == "not":
         return f"!({_format_expression(args[0])})" if args else "!()"
-    else:
-        # For other operators, use function call syntax
-        return f"{op}({', '.join(_format_expression(arg) for arg in args)})"
+    # For other operators, use function call syntax
+    return f"{op}({', '.join(_format_expression(arg) for arg in args)})"
 
 
 def _format_affect(affect) -> str:
     if isinstance(affect, list):
         return f"[{', '.join(_format_affect_equation(a) for a in affect)}]"
-    elif affect and isinstance(affect, dict):
+    if affect and isinstance(affect, dict):
         return _format_affect_equation(affect)
-    else:
-        return "nothing"
+    return "nothing"
 
 
-def _format_affect_equation(affect: Dict[str, Any]) -> str:
+def _format_affect_equation(affect: dict[str, Any]) -> str:
     if affect.get("lhs") and affect.get("rhs"):
         return f"{_format_expression(affect['lhs'])} ~ {_format_expression(affect['rhs'])}"
     return "nothing"
 
 
-def _format_discrete_trigger(trigger: Dict[str, Any]) -> str:
+def _format_discrete_trigger(trigger: dict[str, Any]) -> str:
     if trigger.get("condition"):
         return _format_expression(trigger["condition"])
     return "true"
 
 
-def _extract_parameter_names(expr: Union[str, int, float, Dict[str, Any]]) -> set:
+def _extract_parameter_names(expr: str | int | float | dict[str, Any]) -> set:
     params = set()
 
     if isinstance(expr, str):
@@ -452,7 +449,7 @@ def _extract_parameter_names(expr: Union[str, int, float, Dict[str, Any]]) -> se
 # Helper functions for Python code generation
 
 
-def _generate_python_model_code(name: str, model: Dict[str, Any]) -> List[str]:
+def _generate_python_model_code(name: str, model: dict[str, Any]) -> list[str]:
     lines = []
 
     lines.append(f"# Model: {name}")
@@ -508,7 +505,7 @@ def _generate_python_model_code(name: str, model: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_python_reaction_system_code(name: str, reaction_system: Dict[str, Any]) -> List[str]:
+def _generate_python_reaction_system_code(name: str, reaction_system: dict[str, Any]) -> list[str]:
     lines = []
 
     lines.append(f"# Reaction System: {name}")
@@ -516,7 +513,7 @@ def _generate_python_reaction_system_code(name: str, reaction_system: Dict[str, 
     # Generate species symbols
     if reaction_system.get("species"):
         lines.append("# Species")
-        for spec_name, species in reaction_system["species"].items():
+        for spec_name, _species in reaction_system["species"].items():
             lines.append(f"{spec_name} = sp.Symbol('{spec_name}')")
         lines.append("")
 
@@ -552,7 +549,7 @@ def _generate_python_reaction_system_code(name: str, reaction_system: Dict[str, 
     return lines
 
 
-def _generate_python_coupling_comment(coupling: Dict[str, Any]) -> List[str]:
+def _generate_python_coupling_comment(coupling: dict[str, Any]) -> list[str]:
     lines = []
     lines.append(f"# Coupling: {coupling.get('type', 'unknown')}")
     if coupling.get("from"):
@@ -562,7 +559,7 @@ def _generate_python_coupling_comment(coupling: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _generate_python_domain_comment(domain: Dict[str, Any]) -> List[str]:
+def _generate_python_domain_comment(domain: dict[str, Any]) -> list[str]:
     lines = []
     lines.append("# Domain")
     if domain.get("spatial", {}).get("coordinates"):
@@ -571,35 +568,34 @@ def _generate_python_domain_comment(domain: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _format_python_expression(expr: Union[str, int, float, Dict[str, Any]]) -> str:
+def _format_python_expression(expr: str | int | float | dict[str, Any]) -> str:
     if isinstance(expr, (int, float)):
         return str(expr)
-    elif isinstance(expr, str):
+    if isinstance(expr, str):
         return expr
-    elif isinstance(expr, dict) and "op" in expr:
+    if isinstance(expr, dict) and "op" in expr:
         return _format_python_expression_node(expr)
-    else:
-        return str(expr)
+    return str(expr)
 
 
-def _format_python_expression_node(node: Dict[str, Any]) -> str:
+def _format_python_expression_node(node: dict[str, Any]) -> str:
     op = node["op"]
     args = node.get("args", [])
 
     # Apply expression mappings for Python
     if op == "+":
         return " + ".join(_format_python_expression(arg) for arg in args)
-    elif op == "*":
+    if op == "*":
         return " * ".join(_format_python_expression(arg) for arg in args)
-    elif op == "D":
+    if op == "D":
         # D(x,t) → Derivative(x(t), t)
         if args:
             var_name = _format_python_expression(args[0])
             return f"sp.Derivative({var_name}(t), t)"
         return "sp.Derivative()"
-    elif op == "exp":
+    if op == "exp":
         return f"sp.exp({', '.join(_format_python_expression(arg) for arg in args)})"
-    elif op == "ifelse":
+    if op == "ifelse":
         # ifelse(condition, true_val, false_val) → sp.Piecewise((true_val, condition), (false_val, True))
         if len(args) >= 3:
             condition = _format_python_expression(args[0])
@@ -607,40 +603,38 @@ def _format_python_expression_node(node: Dict[str, Any]) -> str:
             false_val = _format_python_expression(args[2])
             return f"sp.Piecewise(({true_val}, {condition}), ({false_val}, True))"
         return "sp.Piecewise((0, True))"
-    elif op == "Pre":
+    if op == "Pre":
         return f"sp.Function('Pre')({', '.join(_format_python_expression(arg) for arg in args)})"
-    elif op == "^":
+    if op == "^":
         return " ** ".join(_format_python_expression(arg) for arg in args)
-    elif op == "grad":
+    if op == "grad":
         # grad(x,y) → sp.Derivative(x, y)
         if len(args) >= 2:
             func = _format_python_expression(args[0])
             var = _format_python_expression(args[1])
             return f"sp.Derivative({func}, {var})"
-        elif len(args) == 1:
+        if len(args) == 1:
             return f"sp.Derivative({_format_python_expression(args[0])}, x)"
         return "sp.Derivative()"
-    elif op == "-":
+    if op == "-":
         if len(args) == 1:
             return f"-{_format_python_expression(args[0])}"
-        else:
-            return " - ".join(_format_python_expression(arg) for arg in args)
-    elif op == "/":
+        return " - ".join(_format_python_expression(arg) for arg in args)
+    if op == "/":
         return " / ".join(_format_python_expression(arg) for arg in args)
-    elif op in ["<", ">", "<=", ">=", "==", "!="]:
+    if op in ["<", ">", "<=", ">=", "==", "!="]:
         return f" {op} ".join(_format_python_expression(arg) for arg in args)
-    elif op == "and":
+    if op == "and":
         return " & ".join(_format_python_expression(arg) for arg in args)
-    elif op == "or":
+    if op == "or":
         return " | ".join(_format_python_expression(arg) for arg in args)
-    elif op == "not":
+    if op == "not":
         return f"~({_format_python_expression(args[0])})" if args else "~()"
-    else:
-        # For other operators, use function call syntax
-        return f"{op}({', '.join(_format_python_expression(arg) for arg in args)})"
+    # For other operators, use function call syntax
+    return f"{op}({', '.join(_format_python_expression(arg) for arg in args)})"
 
 
-def _has_derivative_in_expression(expr: Union[str, int, float, Dict[str, Any]]) -> bool:
+def _has_derivative_in_expression(expr: str | int | float | dict[str, Any]) -> bool:
     if isinstance(expr, dict) and "op" in expr:
         if expr["op"] == "D":
             return True

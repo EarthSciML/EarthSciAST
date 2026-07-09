@@ -17,18 +17,19 @@ import argparse
 import difflib
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from ..migration import MigrationError, migrate_file_0_1_to_0_2
 
 
-def _load(path: Path) -> Dict[str, Any]:
+def _load(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as fp:
         return json.load(fp)
 
 
-def _dump(data: Dict[str, Any]) -> str:
+def _dump(data: dict[str, Any]) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -39,7 +40,7 @@ def _parse_version(s: str) -> tuple[int, int, int]:
     return (int(parts[0]), int(parts[1]), int(parts[2]))
 
 
-def _run_migration(data: Dict[str, Any], from_v: str, to_v: str) -> Dict[str, Any]:
+def _run_migration(data: dict[str, Any], from_v: str, to_v: str) -> dict[str, Any]:
     """Dispatch to the correct migration path based on (from, to)."""
     fv = _parse_version(from_v)
     tv = _parse_version(to_v)
@@ -95,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -120,7 +121,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     migrated_text = _dump(migrated)
 
     if args.dry_run:
-        diff: List[str] = list(
+        diff: list[str] = list(
             difflib.unified_diff(
                 original_text.splitlines(keepends=True),
                 migrated_text.splitlines(keepends=True),

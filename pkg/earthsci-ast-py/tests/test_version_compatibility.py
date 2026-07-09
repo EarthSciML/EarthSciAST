@@ -8,6 +8,13 @@ of the ESM Libraries Specification.
 import pytest
 from conftest import FIXTURES_ROOT, load_fixture as _load_fixture
 from earthsci_ast import load, __version__ as VERSION
+from earthsci_ast.parse import _CURRENT_VERSION
+
+# The package version (__version__, from distribution metadata) is kept in
+# lockstep with the supported ESM format version (parse._CURRENT_VERSION).
+# Derive the expectation from the latter so this test never re-hardcodes a
+# literal that goes stale on the next version bump.
+_EXPECTED_VERSION = ".".join(str(v) for v in _CURRENT_VERSION)
 from earthsci_ast.parse import SchemaValidationError, UnsupportedVersionError
 
 # Path to version compatibility test fixtures
@@ -186,7 +193,7 @@ class TestLibraryVersionInfo:
 
     def test_current_library_version(self):
         """Should expose current library version."""
-        assert VERSION == "0.1.0"
+        assert VERSION == _EXPECTED_VERSION
 
     def test_compatibility_info(self):
         """Should provide version compatibility information."""
@@ -202,7 +209,7 @@ class TestLibraryVersionInfo:
 
         info = get_compatibility_info()
         assert info["supported_major_version"] == 0
-        assert info["current_version"] == "0.1.0"
+        assert info["current_version"] == _EXPECTED_VERSION
 
 
 if __name__ == "__main__":

@@ -30,7 +30,6 @@ This is the Python sibling of ``pkg/earthsci-ast-rs/src/area_faq.rs``
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 import numpy as np
 
@@ -71,7 +70,7 @@ def _shoelace_area_faq() -> ExprNode:
 _DEG2RAD = math.pi / 180.0
 
 
-def _clip_unit_vec(idx: object) -> Tuple[ExprNode, ExprNode, ExprNode]:
+def _clip_unit_vec(idx: object) -> tuple[ExprNode, ExprNode, ExprNode]:
     """AST for the unit 3-vector of clip-ring vertex ``idx`` (lon = col 1, lat =
     col 2, degrees): ``(cosφ·cosλ, cosφ·sinλ, sinφ)`` — the same lon-lat→sphere map
     the oracle :func:`geometry._lonlat_to_unit` uses, built from the ``sin`` / ``cos``
@@ -90,7 +89,7 @@ def _clip_unit_vec(idx: object) -> Tuple[ExprNode, ExprNode, ExprNode]:
     )
 
 
-def _dot3(u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]) -> ExprNode:
+def _dot3(u: tuple[ExprNode, ...], v: tuple[ExprNode, ...]) -> ExprNode:
     """AST for the 3-vector dot product ``u·v``."""
     return ExprNode(
         op="+",
@@ -103,8 +102,8 @@ def _dot3(u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]) -> ExprNode:
 
 
 def _cross3(
-    u: Tuple[ExprNode, ...], v: Tuple[ExprNode, ...]
-) -> Tuple[ExprNode, ExprNode, ExprNode]:
+    u: tuple[ExprNode, ...], v: tuple[ExprNode, ...]
+) -> tuple[ExprNode, ExprNode, ExprNode]:
     """AST for the 3-vector cross product ``u×v``."""
     return (
         ExprNode(
@@ -120,7 +119,7 @@ def _cross3(
 
 
 def _spherical_excess(
-    a: Tuple[ExprNode, ...], b: Tuple[ExprNode, ...], c: Tuple[ExprNode, ...]
+    a: tuple[ExprNode, ...], b: tuple[ExprNode, ...], c: tuple[ExprNode, ...]
 ) -> ExprNode:
     """AST for the Van Oosterom–Strackee signed solid angle of triangle ``a,b,c``:
     ``2·atan2(a·(b×c), 1 + a·b + b·c + c·a)`` (the per-triangle term of the

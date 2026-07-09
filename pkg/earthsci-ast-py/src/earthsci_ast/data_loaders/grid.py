@@ -7,17 +7,22 @@ netCDF) and applies variable name remapping + unit conversion.
 from __future__ import annotations
 
 import datetime as _dt
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any
 
 from ..esm_types import DataLoader, DataLoaderKind
+from ._source_urls import resolve_source_urls
+from ._xarray import (  # re-export: cache.py imports _default_xarray_opener from here
+    XarrayLoaderError,
+    _default_xarray_opener,
+    _ds_to_mapping,
+)
 from .mirror import open_with_fallback
-from .time_resolution import file_anchor_for_time
-from .url_template import expand_with_mirrors
 from .variables import apply_variable_mapping
 
 
-class GridLoaderError(RuntimeError):
+class GridLoaderError(XarrayLoaderError):
     """Raised when grid data cannot be loaded."""
 
 
@@ -30,9 +35,9 @@ class GridLoadResult:
     xarray is unavailable).
     """
 
-    urls_tried: List[str]
+    urls_tried: list[str]
     dataset: Any
-    variables: Dict[str, Any]
+    variables: dict[str, Any]
 
 
 class GridLoader:
@@ -46,36 +51,16 @@ class GridLoader:
     def _resolve_urls(
         self,
         *,
-        time: Optional[Union[_dt.datetime, _dt.date, str]],
+        time: _dt.datetime | _dt.date | str | None,
         substitutions: Mapping[str, Any],
-    ) -> List[str]:
-        anchor: Optional[_dt.datetime]
-        if time is not None and self.dl.temporal and self.dl.temporal.file_period:
-            anchor = file_anchor_for_time(
-                time,
-                file_period=self.dl.temporal.file_period,
-                start=self.dl.temporal.start,
-            )
-        elif isinstance(time, (_dt.datetime, _dt.date)):
-            anchor = (
-                time
-                if isinstance(time, _dt.datetime)
-                else _dt.datetime(time.year, time.month, time.day)
-            )
-        else:
-            anchor = None
-        return expand_with_mirrors(
-            self.dl.source.url_template,
-            self.dl.source.mirrors,
-            date=anchor,
-            variables=dict(substitutions),
-        )
+    ) -> list[str]:
+        return resolve_source_urls(self.dl, time=time, substitutions=substitutions)
 
     def load(
         self,
         *,
-        time: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-        opener: Optional[Any] = None,
+        time: _dt.datetime | _dt.date | str | None = None,
+        opener: Any | None = None,
         **substitutions: Any,
     ) -> GridLoadResult:
         """Open and decode a grid file.
@@ -103,8 +88,8 @@ class GridLoader:
 def load_grid(
     data_loader: DataLoader,
     *,
-    time: Optional[Union[_dt.datetime, _dt.date, str]] = None,
-    opener: Optional[Any] = None,
+    time: _dt.datetime | _dt.date | str | None = None,
+    opener: Any | None = None,
     **substitutions: Any,
 ) -> GridLoadResult:
     """Convenience wrapper: instantiate a GridLoader and call ``load``."""
@@ -112,29 +97,4 @@ def load_grid(
         time=time,
         opener=opener,
         **substitutions,
-    )
-
-
-def _default_xarray_opener():
-    try:
-        import xarray as xr
-    except ImportError as exc:
-        raise GridLoaderError(
-            "grid loader default opener requires xarray; install xarray "
-            "or pass an explicit `opener`"
-        ) from exc
-
-    def _open(url: str):
-        return xr.open_dataset(url)
-
-    return _open
-
-
-def _ds_to_mapping(ds: Any) -> Mapping[str, Any]:
-    if hasattr(ds, "data_vars"):
-        return {name: ds[name] for name in ds.data_vars}
-    if isinstance(ds, Mapping):
-        return ds
-    raise GridLoaderError(
-        f"opener must return an xarray.Dataset or mapping; got {type(ds).__name__}"
     )

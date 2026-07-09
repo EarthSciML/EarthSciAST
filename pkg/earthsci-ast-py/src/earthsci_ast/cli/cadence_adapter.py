@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from earthsci_ast.cadence import (
     canonical_serialize,
@@ -34,7 +34,7 @@ from earthsci_ast.cadence import (
 from earthsci_ast.cli._adapter_main import adapter_main
 
 
-def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> Dict[str, Any]:
+def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict[str, Any]:
     # model_from_doc attaches the document's top-level `data_loaders` so the
     # loader-seeded cadence refinement (§5.7.2) can resolve a discrete variable's
     # data_ingest source loader.
@@ -42,7 +42,7 @@ def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> Dict[str,
     return model_from_doc(doc, model_name)
 
 
-def _compute_fixture(fixture: Dict[str, Any], repo_root: Path) -> Dict[str, Any]:
+def _compute_fixture(fixture: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     """Run the Python partition pass over one manifest fixture and produce its
     conformance record (class summary / materialization thresholds / folded
     buffers)."""
@@ -51,11 +51,11 @@ def _compute_fixture(fixture: Dict[str, Any], repo_root: Path) -> Dict[str, Any]
 
     const_fold = fixture.get("const_fold") or {}
     inputs = const_fold.get("inputs", {})
-    buffers: Dict[str, str] = {}
+    buffers: dict[str, str] = {}
     for label, spec in (const_fold.get("expected") or {}).items():
         buffers[label] = canonical_serialize(compute_fold(label, spec, inputs))
 
-    materialization_points: List[Dict[str, Any]] = [
+    materialization_points: list[dict[str, Any]] = [
         {"threshold": mp.threshold} for mp in result.materialization_points
     ]
 
@@ -69,8 +69,8 @@ def _compute_fixture(fixture: Dict[str, Any], repo_root: Path) -> Dict[str, Any]
 
 
 def _run_fixture(
-    fixture: Dict[str, Any], _manifest: Dict[str, Any], manifest_path: Path
-) -> Dict[str, Any]:
+    fixture: dict[str, Any], _manifest: dict[str, Any], manifest_path: Path
+) -> dict[str, Any]:
     # Fixtures are repo-root-relative; resolve them relative to the manifest's
     # repo root (tests/conformance/cadence/manifest.json → parents[3]) so the
     # adapter works regardless of the invoking cwd.
@@ -78,7 +78,7 @@ def _run_fixture(
     return _compute_fixture(fixture, repo_root)
 
 
-def main(argv: "List[str] | None" = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     return adapter_main(argv, description=__doc__, run_fixture=_run_fixture)
 
 

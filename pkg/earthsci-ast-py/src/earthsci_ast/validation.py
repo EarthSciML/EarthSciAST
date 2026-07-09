@@ -4,25 +4,26 @@ ESM Format validation module.
 This module provides a standardized validation interface for cross-language
 conformance testing, returning structured validation results.
 """
+from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Dict, Any, Set
 import math
 import traceback
+from dataclasses import dataclass
+from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 
-from .parse import load, SchemaValidationError
 from .error_handling import (
-    ESMErrorFactory,
-    ErrorCollector,
-    ESMError,
     ErrorCode,
-    Severity,
+    ErrorCollector,
     ErrorContext,
+    ESMError,
+    ESMErrorFactory,
     FixSuggestion,
+    Severity,
 )
 from .esm_types import EsmFile
+from .parse import SchemaValidationError, load
 
 
 @dataclass
@@ -32,7 +33,7 @@ class ValidationError:
     path: str
     message: str
     code: str = ""
-    details: Dict[str, Any] = None
+    details: dict[str, Any] = None
 
     def __post_init__(self):
         if self.details is None:
@@ -47,7 +48,7 @@ class UnitWarning:
     message: str
     lhs_units: str = ""
     rhs_units: str = ""
-    details: Dict[str, Any] = None
+    details: dict[str, Any] = None
 
     def __post_init__(self):
         if self.details is None:
@@ -59,9 +60,9 @@ class ValidationResult:
     """Represents the result of validation."""
 
     is_valid: bool
-    schema_errors: List[ValidationError]
-    structural_errors: List[ValidationError]
-    unit_warnings: List[UnitWarning] = None
+    schema_errors: list[ValidationError]
+    structural_errors: list[ValidationError]
+    unit_warnings: list[UnitWarning] = None
 
     def __post_init__(self):
         if self.unit_warnings is None:
@@ -274,7 +275,7 @@ def _is_initial_condition_equation(equation) -> bool:
 
 def _validate_equation_balance_enhanced(esm_file: EsmFile, error_collector: ErrorCollector) -> None:
     """Enhanced equation-unknown balance validation with detailed suggestions."""
-    for i, model in enumerate(esm_file.models.values()):
+    for _i, model in enumerate(esm_file.models.values()):
         # Count state variables (unknowns)
         state_vars = [name for name, var in model.variables.items() if var.type == "state"]
         num_unknowns = len(state_vars)
@@ -329,8 +330,75 @@ def _validate_reference_integrity_enhanced(
                 error_collector.add_error(error)
 
 
+def _validate_stoich(
+    species_stoich: dict[str, Any],
+    species_names: set[str],
+    rs_name: str,
+    reaction_path: str,
+    side_key: str,
+    label: str,
+    structural_errors: list[ValidationError],
+) -> None:
+    """
+    Validate one side (reactants or products) of a reaction: each species must
+    be declared and its stoichiometry must be a finite, positive number.
+
+    Shared by the reactant and product checks in
+    :func:`_validate_reaction_consistency`. ``side_key`` is the path segment
+    (``"reactants"`` / ``"products"``) and ``label`` is the human-readable side
+    name (``"Reactant"`` / ``"Product"``) used in the error messages. The
+    emitted errors are identical to the previously inlined per-side checks.
+    """
+    for species_name, stoich in species_stoich.items():
+        if species_name not in species_names:
+            structural_errors.append(
+                ValidationError(
+                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    message=f"{label} species '{species_name}' not declared in reaction system '{rs_name}'",
+                    code=ErrorCode.UNDECLARED_SPECIES.value,
+                    details={
+                        "species": species_name,
+                        "reaction_system": rs_name,
+                        "available_species": list(species_names),
+                    },
+                )
+            )
+
+        if not isinstance(stoich, (int, float)) or isinstance(stoich, bool):
+            structural_errors.append(
+                ValidationError(
+                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    message=f"{label} stoichiometry must be a number, got {type(stoich).__name__}",
+                    code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
+                    details={
+                        "species": species_name,
+                        "stoichiometry": stoich,
+                        "stoichiometry_type": type(stoich).__name__,
+                    },
+                )
+            )
+        elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
+            structural_errors.append(
+                ValidationError(
+                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    message=f"{label} stoichiometry must be finite, got {stoich}",
+                    code=ErrorCode.INVALID_STOICHIOMETRY.value,
+                    details={"species": species_name, "stoichiometry": stoich},
+                )
+            )
+        elif stoich <= 0:
+            structural_errors.append(
+                ValidationError(
+                    path=f"{reaction_path}/{side_key}/{species_name}",
+                    message=f"{label} stoichiometry must be positive, got {stoich}",
+                    code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
+                    details={"species": species_name, "stoichiometry": stoich},
+                )
+            )
+
+
 def _validate_reaction_consistency(
-    esm_file: EsmFile, structural_errors: List[ValidationError]
+    esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
     """
     Validate reaction consistency in reaction systems.
@@ -341,7 +409,7 @@ def _validate_reaction_consistency(
     - No reaction has both substrates: null and products: null
     - Rate expressions only reference declared parameters/species
     """
-    for rs_idx, (rs_name, rs) in enumerate(esm_file.reaction_systems.items()):
+    for rs_idx, (_rs_name, rs) in enumerate(esm_file.reaction_systems.items()):
         rs_path = f"/reaction_systems/{rs_idx}"
 
         # Build set of declared species and parameters
@@ -363,100 +431,26 @@ def _validate_reaction_consistency(
                 )
 
             # Validate reactant species exist and have positive stoichiometry
-            for species_name, stoich in reaction.reactants.items():
-                if species_name not in species_names:
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/reactants/{species_name}",
-                            message=f"Reactant species '{species_name}' not declared in reaction system '{rs.name}'",
-                            code=ErrorCode.UNDECLARED_SPECIES.value,
-                            details={
-                                "species": species_name,
-                                "reaction_system": rs.name,
-                                "available_species": list(species_names),
-                            },
-                        )
-                    )
-
-                if not isinstance(stoich, (int, float)) or isinstance(stoich, bool):
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/reactants/{species_name}",
-                            message=f"Reactant stoichiometry must be a number, got {type(stoich).__name__}",
-                            code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
-                            details={
-                                "species": species_name,
-                                "stoichiometry": stoich,
-                                "stoichiometry_type": type(stoich).__name__,
-                            },
-                        )
-                    )
-                elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/reactants/{species_name}",
-                            message=f"Reactant stoichiometry must be finite, got {stoich}",
-                            code=ErrorCode.INVALID_STOICHIOMETRY.value,
-                            details={"species": species_name, "stoichiometry": stoich},
-                        )
-                    )
-                elif stoich <= 0:
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/reactants/{species_name}",
-                            message=f"Reactant stoichiometry must be positive, got {stoich}",
-                            code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
-                            details={"species": species_name, "stoichiometry": stoich},
-                        )
-                    )
+            _validate_stoich(
+                reaction.reactants,
+                species_names,
+                rs.name,
+                reaction_path,
+                "reactants",
+                "Reactant",
+                structural_errors,
+            )
 
             # Validate product species exist and have positive stoichiometry
-            for species_name, stoich in reaction.products.items():
-                if species_name not in species_names:
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/products/{species_name}",
-                            message=f"Product species '{species_name}' not declared in reaction system '{rs.name}'",
-                            code=ErrorCode.UNDECLARED_SPECIES.value,
-                            details={
-                                "species": species_name,
-                                "reaction_system": rs.name,
-                                "available_species": list(species_names),
-                            },
-                        )
-                    )
-
-                if not isinstance(stoich, (int, float)) or isinstance(stoich, bool):
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/products/{species_name}",
-                            message=f"Product stoichiometry must be a number, got {type(stoich).__name__}",
-                            code=ErrorCode.INVALID_STOICHIOMETRY_TYPE.value,
-                            details={
-                                "species": species_name,
-                                "stoichiometry": stoich,
-                                "stoichiometry_type": type(stoich).__name__,
-                            },
-                        )
-                    )
-                elif isinstance(stoich, float) and (math.isnan(stoich) or math.isinf(stoich)):
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/products/{species_name}",
-                            message=f"Product stoichiometry must be finite, got {stoich}",
-                            code=ErrorCode.INVALID_STOICHIOMETRY.value,
-                            details={"species": species_name, "stoichiometry": stoich},
-                        )
-                    )
-                elif stoich <= 0:
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{reaction_path}/products/{species_name}",
-                            message=f"Product stoichiometry must be positive, got {stoich}",
-                            code=ErrorCode.NEGATIVE_STOICHIOMETRY.value,
-                            details={"species": species_name, "stoichiometry": stoich},
-                        )
-                    )
+            _validate_stoich(
+                reaction.products,
+                species_names,
+                rs.name,
+                reaction_path,
+                "products",
+                "Product",
+                structural_errors,
+            )
 
             # Validate rate constant references (full expression parsing)
             if hasattr(reaction, "rate_constant") and reaction.rate_constant is not None:
@@ -471,7 +465,7 @@ def _validate_reaction_consistency(
 
 
 def _validate_reaction_system_ics(
-    esm_file: EsmFile, structural_errors: List[ValidationError]
+    esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
     """Reject ``ic``-op equations placed inside a reaction system's
     ``constraint_equations`` (spec §11.4.1).
@@ -512,11 +506,11 @@ def _validate_reaction_system_ics(
 
 def _validate_rate_expression(
     rate_expr,
-    param_names: Set[str],
-    species_names: Set[str],
+    param_names: set[str],
+    species_names: set[str],
     reaction_system_name: str,
     reaction_path: str,
-    structural_errors: List[ValidationError],
+    structural_errors: list[ValidationError],
 ) -> None:
     """
     Validate that a rate expression only references declared parameters and species.
@@ -590,7 +584,7 @@ def _validate_rate_expression(
 
 
 def _validate_reaction_rate_dimensions(
-    esm_file: EsmFile, structural_errors: List[ValidationError]
+    esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
     """
     Mass-action dimensional check for reaction rates (spec §7.4).
@@ -609,7 +603,7 @@ def _validate_reaction_rate_dimensions(
         import pint
     except ImportError:
         return
-    from .structural_checks import _normalize_unit, _BUILTIN_SYMBOLS
+    from .structural_checks import _BUILTIN_SYMBOLS, _normalize_unit
 
     ureg = pint.UnitRegistry()
     time_dim = ureg("second").dimensionality
@@ -772,8 +766,87 @@ def _power_factor(s: str, n: int) -> str:
     return f"{s}^{n}"
 
 
+def _validate_functional_affect(
+    affect,
+    affect_path: str,
+    all_variables: set[str],
+    all_parameters: set[str],
+    all_operators: set[str],
+    param_label: str,
+    structural_errors: list[ValidationError],
+) -> None:
+    """
+    Validate a ``FunctionalAffect``'s ``handler_id``, ``read_vars``,
+    ``read_params``, and ``modified_params`` references.
+
+    Shared by the ``affects`` and ``affect_neg`` branches of
+    :func:`_validate_event_consistency`. ``param_label`` distinguishes the
+    read/modified-parameter error messages (``"Functional affect"`` for
+    ``affects`` vs ``"Affect_neg functional affect"`` for ``affect_neg``); the
+    emitted errors are otherwise identical to the previously inlined checks.
+    """
+    # Validate handler_id exists as an operator
+    if affect.handler_id not in all_operators:
+        structural_errors.append(
+            ValidationError(
+                path=f"{affect_path}/handler_id",
+                message=f"Operator '{affect.handler_id}' is not defined",
+                code=ErrorCode.UNDEFINED_OPERATOR.value,
+                details={
+                    "operator": affect.handler_id,
+                    "available_operators": sorted(all_operators),
+                },
+            )
+        )
+
+    # Validate read_vars exist
+    for var_idx, read_var in enumerate(affect.read_vars):
+        if read_var not in all_variables:
+            structural_errors.append(
+                ValidationError(
+                    path=f"{affect_path}/read_vars/{var_idx}",
+                    message=f"Variable '{read_var}' in event affects/conditions is not declared",
+                    code=ErrorCode.EVENT_VAR_UNDECLARED.value,
+                    details={
+                        "variable": read_var,
+                        "available_variables": sorted(all_variables),
+                    },
+                )
+            )
+
+    # Validate read_params exist
+    for param_idx, read_param in enumerate(affect.read_params):
+        if read_param not in all_parameters:
+            structural_errors.append(
+                ValidationError(
+                    path=f"{affect_path}/read_params/{param_idx}",
+                    message=f"{param_label} read parameter '{read_param}' not declared",
+                    code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
+                    details={
+                        "parameter": read_param,
+                        "available_parameters": sorted(all_parameters),
+                    },
+                )
+            )
+
+    # Validate modified_params exist
+    for param_idx, mod_param in enumerate(affect.modified_params):
+        if mod_param not in all_parameters:
+            structural_errors.append(
+                ValidationError(
+                    path=f"{affect_path}/modified_params/{param_idx}",
+                    message=f"{param_label} modified parameter '{mod_param}' not declared",
+                    code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
+                    details={
+                        "parameter": mod_param,
+                        "available_parameters": sorted(all_parameters),
+                    },
+                )
+            )
+
+
 def _validate_event_consistency(
-    esm_file: EsmFile, structural_errors: List[ValidationError]
+    esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
     """
     Validate event consistency.
@@ -830,69 +903,20 @@ def _validate_event_consistency(
                             code=ErrorCode.EVENT_VAR_UNDECLARED.value,
                             details={
                                 "variable": affect.lhs,
-                                "available_variables": sorted(list(all_variables)),
+                                "available_variables": sorted(all_variables),
                             },
                         )
                     )
             elif hasattr(affect, "handler_id"):  # FunctionalAffect
-                # Validate handler_id exists as an operator
-                if affect.handler_id not in all_operators:
-                    structural_errors.append(
-                        ValidationError(
-                            path=f"{affect_path}/handler_id",
-                            message=f"Operator '{affect.handler_id}' is not defined",
-                            code=ErrorCode.UNDEFINED_OPERATOR.value,
-                            details={
-                                "operator": affect.handler_id,
-                                "available_operators": sorted(list(all_operators)),
-                            },
-                        )
-                    )
-
-                # Validate read_vars exist
-                for var_idx, read_var in enumerate(affect.read_vars):
-                    if read_var not in all_variables:
-                        structural_errors.append(
-                            ValidationError(
-                                path=f"{affect_path}/read_vars/{var_idx}",
-                                message=f"Variable '{read_var}' in event affects/conditions is not declared",
-                                code=ErrorCode.EVENT_VAR_UNDECLARED.value,
-                                details={
-                                    "variable": read_var,
-                                    "available_variables": sorted(list(all_variables)),
-                                },
-                            )
-                        )
-
-                # Validate read_params exist
-                for param_idx, read_param in enumerate(affect.read_params):
-                    if read_param not in all_parameters:
-                        structural_errors.append(
-                            ValidationError(
-                                path=f"{affect_path}/read_params/{param_idx}",
-                                message=f"Functional affect read parameter '{read_param}' not declared",
-                                code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
-                                details={
-                                    "parameter": read_param,
-                                    "available_parameters": sorted(list(all_parameters)),
-                                },
-                            )
-                        )
-
-                # Validate modified_params exist
-                for param_idx, mod_param in enumerate(affect.modified_params):
-                    if mod_param not in all_parameters:
-                        structural_errors.append(
-                            ValidationError(
-                                path=f"{affect_path}/modified_params/{param_idx}",
-                                message=f"Functional affect modified parameter '{mod_param}' not declared",
-                                code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
-                                details={
-                                    "parameter": mod_param,
-                                    "available_parameters": sorted(list(all_parameters)),
-                                },
-                            )
-                        )
+                _validate_functional_affect(
+                    affect,
+                    affect_path,
+                    all_variables,
+                    all_parameters,
+                    all_operators,
+                    "Functional affect",
+                    structural_errors,
+                )
 
         # Validate affect_neg (direction-dependent affects) if present
         if hasattr(event, "affect_neg") and event.affect_neg is not None:
@@ -908,67 +932,21 @@ def _validate_event_consistency(
                                 code=ErrorCode.EVENT_VAR_UNDECLARED.value,
                                 details={
                                     "variable": affect.lhs,
-                                    "available_variables": sorted(list(all_variables)),
+                                    "available_variables": sorted(all_variables),
                                 },
                             )
                         )
                 elif hasattr(affect, "handler_id"):  # FunctionalAffect
                     # Same validation as regular affects
-                    if affect.handler_id not in all_operators:
-                        structural_errors.append(
-                            ValidationError(
-                                path=f"{affect_path}/handler_id",
-                                message=f"Operator '{affect.handler_id}' is not defined",
-                                code=ErrorCode.UNDEFINED_OPERATOR.value,
-                                details={
-                                    "operator": affect.handler_id,
-                                    "available_operators": sorted(list(all_operators)),
-                                },
-                            )
-                        )
-
-                    # Validate read_vars, read_params, modified_params for affect_neg functional affects
-                    for var_idx, read_var in enumerate(affect.read_vars):
-                        if read_var not in all_variables:
-                            structural_errors.append(
-                                ValidationError(
-                                    path=f"{affect_path}/read_vars/{var_idx}",
-                                    message=f"Variable '{read_var}' in event affects/conditions is not declared",
-                                    code=ErrorCode.EVENT_VAR_UNDECLARED.value,
-                                    details={
-                                        "variable": read_var,
-                                        "available_variables": sorted(list(all_variables)),
-                                    },
-                                )
-                            )
-
-                    for param_idx, read_param in enumerate(affect.read_params):
-                        if read_param not in all_parameters:
-                            structural_errors.append(
-                                ValidationError(
-                                    path=f"{affect_path}/read_params/{param_idx}",
-                                    message=f"Affect_neg functional affect read parameter '{read_param}' not declared",
-                                    code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
-                                    details={
-                                        "parameter": read_param,
-                                        "available_parameters": sorted(list(all_parameters)),
-                                    },
-                                )
-                            )
-
-                    for param_idx, mod_param in enumerate(affect.modified_params):
-                        if mod_param not in all_parameters:
-                            structural_errors.append(
-                                ValidationError(
-                                    path=f"{affect_path}/modified_params/{param_idx}",
-                                    message=f"Affect_neg functional affect modified parameter '{mod_param}' not declared",
-                                    code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
-                                    details={
-                                        "parameter": mod_param,
-                                        "available_parameters": sorted(list(all_parameters)),
-                                    },
-                                )
-                            )
+                    _validate_functional_affect(
+                        affect,
+                        affect_path,
+                        all_variables,
+                        all_parameters,
+                        all_operators,
+                        "Affect_neg functional affect",
+                        structural_errors,
+                    )
 
     # Validate discrete_parameters in coupling entries
     for coupling_idx, coupling in enumerate(esm_file.coupling):
@@ -987,13 +965,13 @@ def _validate_event_consistency(
                             code=ErrorCode.INVALID_DISCRETE_PARAM.value,
                             details={
                                 "parameter": discrete_param,
-                                "available_parameters": sorted(list(all_parameters)),
+                                "available_parameters": sorted(all_parameters),
                             },
                         )
                     )
 
 
-def _validate_units(esm_file: EsmFile, unit_warnings: List[UnitWarning]) -> None:
+def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:
     """
     Validate dimensional consistency (warnings only).
 

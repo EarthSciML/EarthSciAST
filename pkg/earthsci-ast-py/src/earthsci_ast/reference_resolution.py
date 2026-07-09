@@ -36,7 +36,8 @@ bottom-up evaluation order.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+
+from .errors import EarthSciAstError
 
 __all__ = [
     "ReferenceResolutionError",
@@ -63,7 +64,7 @@ E_REF_UNRESOLVED_JOIN_FACTOR = "E_REF_UNRESOLVED_JOIN_FACTOR"
 E_REF_CYCLE = "E_REF_CYCLE"
 
 
-class ReferenceResolutionError(Exception):
+class ReferenceResolutionError(EarthSciAstError):
     """A reference could not be resolved, or the reference graph has a cycle.
 
     Carries a stable ``code`` (one of the ``E_REF_*`` constants) so callers and
@@ -71,7 +72,7 @@ class ReferenceResolutionError(Exception):
     human-readable ``message``. For a cycle, ``cycle`` holds the offending path.
     """
 
-    def __init__(self, code: str, message: str, cycle: Optional[List[str]] = None):
+    def __init__(self, code: str, message: str, cycle: list[str] | None = None):
         super().__init__(f"ReferenceResolutionError({code}): {message}")
         self.code = code
         self.message = message
@@ -114,9 +115,9 @@ class ReferenceVertex:
     key: str
     kind: str
     name: str
-    op: Optional[str] = None
-    node_id: Optional[str] = None
-    path: Optional[str] = None
+    op: str | None = None
+    node_id: str | None = None
+    path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,11 +140,11 @@ class ReferenceGraph:
     """
 
     model: str = ""
-    vertices: Dict[str, ReferenceVertex] = field(default_factory=dict)
-    edges: List[ReferenceEdge] = field(default_factory=list)
+    vertices: dict[str, ReferenceVertex] = field(default_factory=dict)
+    edges: list[ReferenceEdge] = field(default_factory=list)
     # adjacency: vertex key -> ordered list of dependency keys (out-neighbours)
-    _out: Dict[str, List[str]] = field(default_factory=dict)
-    _in: Dict[str, List[str]] = field(default_factory=dict)
+    _out: dict[str, list[str]] = field(default_factory=dict)
+    _in: dict[str, list[str]] = field(default_factory=dict)
 
     # -- construction --------------------------------------------------------
 
@@ -160,33 +161,33 @@ class ReferenceGraph:
 
     # -- queries (the partition-pass surface) --------------------------------
 
-    def dependencies(self, key: str) -> List[str]:
+    def dependencies(self, key: str) -> list[str]:
         """Vertices ``key`` references / depends on (its out-neighbours)."""
         return list(self._out.get(key, []))
 
-    def dependents(self, key: str) -> List[str]:
+    def dependents(self, key: str) -> list[str]:
         """Vertices that reference / depend on ``key`` (its in-neighbours)."""
         return list(self._in.get(key, []))
 
-    def edges_of_kind(self, kind: str) -> List[ReferenceEdge]:
+    def edges_of_kind(self, kind: str) -> list[ReferenceEdge]:
         return [e for e in self.edges if e.kind == kind]
 
-    def detect_cycle(self) -> Optional[List[str]]:
+    def detect_cycle(self) -> list[str] | None:
         """Return a reference cycle as a vertex-key path, or ``None`` if acyclic.
 
         Three-colour DFS over the dependency edges. The returned path is
         ``[v, …, v]`` (the repeated vertex closes the cycle).
         """
         WHITE, GREY, BLACK = 0, 1, 2
-        colour: Dict[str, int] = {k: WHITE for k in self.vertices}
+        colour: dict[str, int] = dict.fromkeys(self.vertices, WHITE)
 
         # deterministic traversal: sorted keys, sorted neighbours.
         order = sorted(self.vertices)
 
-        def visit(start: str) -> Optional[List[str]]:
+        def visit(start: str) -> list[str] | None:
             # explicit stack of (vertex, iterator-index) with a path for reporting
-            stack: List[Tuple[str, int]] = [(start, 0)]
-            path: List[str] = [start]
+            stack: list[tuple[str, int]] = [(start, 0)]
+            path: list[str] = [start]
             colour[start] = GREY
             while stack:
                 node, i = stack[-1]
@@ -215,7 +216,7 @@ class ReferenceGraph:
                     return cyc
         return None
 
-    def topological_order(self) -> List[str]:
+    def topological_order(self) -> list[str]:
         """Bottom-up order (dependencies before dependents).
 
         Raises :class:`ReferenceResolutionError` (``E_REF_CYCLE``) if the graph
@@ -231,7 +232,7 @@ class ReferenceGraph:
             )
         # Kahn over the dependency DAG, emitting a dependency before its
         # dependents. A vertex is ready once all its out-neighbours are emitted.
-        emitted: List[str] = []
+        emitted: list[str] = []
         done = set()
         remaining = {k: set(self._out.get(k, [])) for k in self.vertices}
         # deterministic: repeatedly emit the smallest key whose deps are all done
@@ -273,7 +274,7 @@ def _is_node(value) -> bool:
 def build_reference_graph(
     model: dict,
     model_name: str = "",
-    index_sets: Optional[dict] = None,
+    index_sets: dict | None = None,
 ) -> ReferenceGraph:
     """Resolve the reference edges of one ``model`` dict into a graph.
 
@@ -307,13 +308,13 @@ def build_reference_graph(
     # Pass 2 — walk every expression node; assign a stable address, register
     # aggregate / id-bearing nodes, and add the within-node reference edges
     # (ranges[*].from, join.on). Also build id -> address for from_faq.
-    id_to_addr: Dict[str, str] = {}
+    id_to_addr: dict[str, str] = {}
 
     def addr_of(node: dict, path: str) -> str:
         nid = node.get("id")
         return nid if isinstance(nid, str) and nid else path
 
-    def register_node(node: dict, path: str) -> Optional[str]:
+    def register_node(node: dict, path: str) -> str | None:
         op = node.get("op")
         nid = node.get("id")
         nid = nid if isinstance(nid, str) and nid else None
@@ -392,7 +393,7 @@ def build_reference_graph(
 
     # Two-step walk: register all nodes first (so every id is known before any
     # reference is resolved), then resolve within-node refs.
-    pending: List[Tuple[dict, str, str]] = []  # (node, key, path)
+    pending: list[tuple[dict, str, str]] = []  # (node, key, path)
 
     def walk(value, path: str) -> None:
         if isinstance(value, dict):
@@ -430,14 +431,14 @@ def build_reference_graph(
     return graph
 
 
-def resolve_references(document: dict) -> Dict[str, ReferenceGraph]:
+def resolve_references(document: dict) -> dict[str, ReferenceGraph]:
     """Resolve reference edges for every model in ``document``.
 
     Returns a ``{model_name: ReferenceGraph}`` map. Raises
     :class:`ReferenceResolutionError` on any unresolved reference *or* reference
     cycle (each model's graph is checked acyclic eagerly here).
     """
-    out: Dict[str, ReferenceGraph] = {}
+    out: dict[str, ReferenceGraph] = {}
     models = document.get("models") or {}
     if not isinstance(models, dict):
         return out

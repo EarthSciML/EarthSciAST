@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 
@@ -45,7 +45,7 @@ class _StubLoaderProvider:
     def __init__(self, field: Any) -> None:
         self.field = np.asarray(field, dtype=float)
 
-    def sample(self, t: float) -> "np.ndarray":  # noqa: ARG002 - const provider
+    def sample(self, t: float) -> np.ndarray:  # noqa: ARG002 - const provider
         return self.field
 
 
@@ -53,22 +53,22 @@ def _time_key(t: float) -> str:
     return f"{float(t):g}"
 
 
-def _sample_trajectory(result, out_times) -> Dict[str, Dict[str, float]]:
+def _sample_trajectory(result, out_times) -> dict[str, dict[str, float]]:
     """Interpolate every state element of a SimulationResult at each output
     time, keyed by bare element name."""
-    traj: Dict[str, Dict[str, float]] = {}
+    traj: dict[str, dict[str, float]] = {}
     for t in out_times:
-        col: Dict[str, float] = {}
+        col: dict[str, float] = {}
         for row, name in enumerate(result.vars):
             col[_bare(name)] = float(np.interp(float(t), result.t, result.y[row]))
         traj[_time_key(t)] = col
     return traj
 
 
-def run_fixture(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
+def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     esm = et.load(str(base / fixture["path"]))
 
-    rhs: Dict[str, Dict[str, float]] = {}
+    rhs: dict[str, dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
         raw = evaluate_rhs(esm, dict(probe["state"]), t=float(probe.get("t", 0.0)))
         rhs[probe["id"]] = {_bare(k): float(v) for k, v in raw.items()}
@@ -87,7 +87,7 @@ def run_fixture(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     return {"rhs": rhs, "trajectory": traj}
 
 
-def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
+def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     """Full-pipeline path (DESIGN pde_simulation_pipeline §7): load the fixture,
     install a static stub provider serving the manifest ``inputs`` (keyed
     ``<Loader>.<var>``), run the whole lowering pipeline (reaction-gen → template
@@ -112,7 +112,7 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
     # The probe state supplies every element as an explicit initial condition
     # (applied AFTER the scoped-`ic` fold, so it is the evaluated state); the
     # loaded wind/inflow forcing reaches the stencil through loader_arrays.
-    rhs: Dict[str, Dict[str, float]] = {}
+    rhs: dict[str, dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
         build = _build_numpy_rhs(flat, {}, dict(probe["state"]), loader_arrays=loaded_arrays)
         dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
@@ -135,8 +135,8 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> Dict[str, Any]:
 
 
 def _run_fixture(
-    fixture: Dict[str, Any], manifest: Dict[str, Any], manifest_path: Path
-) -> Dict[str, Any]:
+    fixture: dict[str, Any], manifest: dict[str, Any], manifest_path: Path
+) -> dict[str, Any]:
     integ = manifest.get("integrators", {}).get("python", {})
     base = manifest_path.parent
     runner = run_fixture_full if fixture.get("pipeline") == "full" else run_fixture

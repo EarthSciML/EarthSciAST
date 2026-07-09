@@ -57,8 +57,9 @@ import json
 import math
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 
@@ -69,6 +70,15 @@ from .simulation import BuildInspection, _eval_buildtime_field, simulate
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
 # nor the model declares one (same constant as the Julia run_tests reference).
 _DEFAULT_REL_TOL = 1e-6
+
+# Default scipy ``solve_ivp`` accuracy for the PDE simulation pathway (the
+# solver tolerances the inline-test runs pin unless a caller overrides them).
+_DEFAULT_SOLVER_RTOL = 1e-10
+_DEFAULT_SOLVER_ATOL = 1e-12
+
+# Relative slack for matching a requested ``saveat`` time to the solver's dense
+# output grid (``_SAVEAT_MATCH_TOL · max(1, |t|)``); span endpoints always fit.
+_SAVEAT_MATCH_TOL = 1e-9
 
 _CELL_NAME_RE = re.compile(r"^(.+)\[([0-9,]+)\]$")
 
@@ -85,9 +95,9 @@ class PdeAssertionResult:
     assertion_idx: int
     variable: str
     time: float
-    reduce: Optional[str]
+    reduce: str | None
     expected: float
-    actual: Optional[float]
+    actual: float | None
     rtol: float
     atol: float
     passed: bool
@@ -97,9 +107,9 @@ class PdeAssertionResult:
 def evaluate_cellwise(
     expr: Expr,
     cells: Sequence[Sequence[int]],
-    index_sets: Optional[Dict[str, Any]] = None,
-    params: Optional[Dict[str, float]] = None,
-) -> List[float]:
+    index_sets: dict[str, Any] | None = None,
+    params: dict[str, float] | None = None,
+) -> list[float]:
     """Evaluate an array-valued expression (elementwise ops over
     array-producing ``aggregate``/``makearray`` nodes — e.g. a grid-geometry
     template expanded by a §9.7 import, or a §6.6.5 analytic ``reference``)
@@ -118,7 +128,7 @@ def evaluate_cellwise(
     if np.ndim(value) == 0:
         return [float(value)] * len(cells)
     arr = np.asarray(value, dtype=float)
-    out: List[float] = []
+    out: list[float] = []
     for cell in cells:
         if len(cell) != arr.ndim:
             raise ValueError(
@@ -132,7 +142,7 @@ def evaluate_cellwise(
 def field_reduce(
     kind: str,
     actual: Sequence[float],
-    reference: Optional[Sequence[float]] = None,
+    reference: Sequence[float] | None = None,
 ) -> float:
     """Collapse a spatial field to the scalar a §6.6.5 ``reduce`` assertion
     compares (esm-spec §6.6.5); semantics identical to the Julia reference:
@@ -176,17 +186,17 @@ def field_reduce(
 
 
 def state_cells(
-    var_map: Dict[str, int],
+    var_map: dict[str, int],
     variable: str,
     model: str,
-) -> List[Tuple[List[int], int]]:
+) -> list[tuple[list[int], int]]:
     """Collect the (cell-index-tuple, flat-slot) pairs of one array state from
     a ``var_map`` (element name → row/slot). Flattening may prefix element
     names with the owning model (``"Heat.u[3]"``); a name matches when its
     element stem equals ``variable`` bare, or ``model.variable`` qualified.
     Sorted by cell tuple so callers get a deterministic pairing (identical to
     the Julia reference's ``_state_cells``)."""
-    out: List[Tuple[List[int], int]] = []
+    out: list[tuple[list[int], int]] = []
     qualified = f"{model}.{variable}"
     for name, slot in var_map.items():
         m = _CELL_NAME_RE.match(str(name))
@@ -201,7 +211,7 @@ def state_cells(
     return out
 
 
-def _param_scope_with_aliases(params: Optional[Dict[str, float]]) -> Dict[str, float]:
+def _param_scope_with_aliases(params: dict[str, float] | None) -> dict[str, float]:
     """Build-time scalar-parameter scope for §6.6.5 cellwise references, with
     bare aliases. :attr:`BuildInspection.params` is keyed by the FLATTENED
     parameter name (``"M.k"``) — matching a resolved observed expression, which
@@ -213,8 +223,8 @@ def _param_scope_with_aliases(params: Optional[Dict[str, float]]) -> Dict[str, f
     Mirrors the Julia ``_param_scope_with_aliases``."""
     if not params:
         return {}
-    out: Dict[str, float] = {str(k): float(v) for k, v in params.items()}
-    counts: Dict[str, int] = {}
+    out: dict[str, float] = {str(k): float(v) for k, v in params.items()}
+    counts: dict[str, int] = {}
     for k in params:
         bare = str(k).rsplit(".", 1)[-1]
         counts[bare] = counts.get(bare, 0) + 1
@@ -227,10 +237,10 @@ def _param_scope_with_aliases(params: Optional[Dict[str, float]]) -> Dict[str, f
 
 
 def _inspection_field(
-    insp: Optional[BuildInspection],
+    insp: BuildInspection | None,
     model: str,
     variable: str,
-) -> Optional["np.ndarray"]:
+) -> np.ndarray | None:
     """The state-free ARRAY OBSERVED field named by a §6.6.5 assertion, read
     from the build inspection's setup arrays — the observed-assertion form:
     the asserted ``variable`` is an array observed (the MPAS rule output
@@ -254,7 +264,7 @@ def _inspection_field(
     return None
 
 
-def _scalar_slot(var_map: Dict[str, int], variable: str, model: str) -> Optional[int]:
+def _scalar_slot(var_map: dict[str, int], variable: str, model: str) -> int | None:
     """Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
     (preferred) or bare name.
 
@@ -279,7 +289,7 @@ def _scalar_slot(var_map: Dict[str, int], variable: str, model: str) -> Optional
     return None
 
 
-def _variable_shape(file: EsmFile, mname: str, variable: str) -> List[str]:
+def _variable_shape(file: EsmFile, mname: str, variable: str) -> list[str]:
     """The asserted variable's declared spatial shape (ordered index-set
     names). Raises when the variable is missing or scalar — a ``coords``
     assertion is ill-formed on a 0-D variable per esm-spec §6.6.5. Identical
@@ -296,10 +306,10 @@ def _variable_shape(file: EsmFile, mname: str, variable: str) -> List[str]:
 
 
 def _coords_cell(
-    coords: Dict[str, float],
-    shape: List[str],
-    index_sets: Optional[Dict[str, Any]],
-) -> List[int]:
+    coords: dict[str, float],
+    shape: list[str],
+    index_sets: dict[str, Any] | None,
+) -> list[int]:
     """Resolve a §6.6.5 ``coords`` map to a concrete 1-based cell tuple over
     ``shape`` (the field's ordered index-set names), per the pinned
     cross-binding convention: coords values are positions in INDEX space
@@ -314,7 +324,7 @@ def _coords_cell(
                 f"`coords` names unknown dimension '{k}' (field dimensions: {', '.join(shape)})"
             )
     index_sets = index_sets or {}
-    cell: List[int] = []
+    cell: list[int] = []
     for s in shape:
         entry = index_sets.get(s)
         size = (
@@ -347,7 +357,7 @@ def _coords_cell(
     return cell
 
 
-def _nested_at(data: Any, cell: List[int], exts: List[int]) -> float:
+def _nested_at(data: Any, cell: list[int], exts: list[int]) -> float:
     """Walk a row-major nested JSON array to the value at 1-based ``cell``,
     validating each level's extent against ``exts`` (the field's
     per-dimension extents). The full Cartesian cell sweep visits every node,
@@ -374,10 +384,10 @@ def _nested_at(data: Any, cell: List[int], exts: List[int]) -> float:
 
 
 def _from_file_reference(
-    ref: Dict[str, Any],
+    ref: dict[str, Any],
     base_dir: str,
-    cell_tuples: List[List[int]],
-) -> List[float]:
+    cell_tuples: list[list[int]],
+) -> list[float]:
     """Load a ``{type: "from_file", path, format?}`` reference (esm-spec
     §6.6.5) as the per-cell reference field over ``cell_tuples``, per the
     pinned cross-binding convention: ``path`` resolves relative to
@@ -398,7 +408,7 @@ def _from_file_reference(
     resolved = p if os.path.isabs(p) else os.path.join(str(base_dir), p)
     if not os.path.isfile(resolved):
         raise RuntimeError(f"from_file reference file not found: {resolved}")
-    with open(resolved, "r", encoding="utf-8") as fh:
+    with open(resolved, encoding="utf-8") as fh:
         data = json.load(fh)
     if not cell_tuples:
         raise RuntimeError("from_file reference: field has no cells")
@@ -413,22 +423,22 @@ class SimulatedStates:
     the flat state vector at ``times[k]``; ``var_map`` maps each element name
     (``"Heat.u[3]"``) to its row in that vector."""
 
-    times: List[float]
-    states: List[np.ndarray]
-    var_map: Dict[str, int]
+    times: list[float]
+    states: list[np.ndarray]
+    var_map: dict[str, int]
 
 
 def simulate_states(
     file: EsmFile,
-    tspan: Tuple[float, float],
+    tspan: tuple[float, float],
     *,
     method: str = "RK45",
-    rtol: float = 1e-10,
-    atol: float = 1e-12,
+    rtol: float = _DEFAULT_SOLVER_RTOL,
+    atol: float = _DEFAULT_SOLVER_ATOL,
     saveat: Sequence[float],
-    parameters: Optional[Dict[str, float]] = None,
-    initial_conditions: Optional[Dict[str, float]] = None,
-    inspect: Optional[BuildInspection] = None,
+    parameters: dict[str, float] | None = None,
+    initial_conditions: dict[str, float] | None = None,
+    inspect: BuildInspection | None = None,
 ) -> SimulatedStates:
     """Run the official :func:`earthsci_ast.simulation.simulate` pathway
     and sample the trajectory at each time of ``saveat`` (which must lie on
@@ -453,11 +463,11 @@ def simulate_states(
     if not result.success:
         raise RuntimeError(f"simulate failed: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
-    times: List[float] = []
-    states: List[np.ndarray] = []
+    times: list[float] = []
+    states: list[np.ndarray] = []
     for t in saveat:
         ti = int(np.argmin(np.abs(result.t - float(t))))
-        if abs(float(result.t[ti]) - float(t)) > 1e-9 * max(1.0, abs(float(t))):
+        if abs(float(result.t[ti]) - float(t)) > _SAVEAT_MATCH_TOL * max(1.0, abs(float(t))):
             raise RuntimeError(f"no saved state at t={t} (nearest {float(result.t[ti])})")
         times.append(float(result.t[ti]))
         states.append(np.asarray(result.y[:, ti], dtype=float))
@@ -465,10 +475,10 @@ def simulate_states(
 
 
 def _resolve_tolerance(
-    model_tol: Optional[Tolerance],
-    test_tol: Optional[Tolerance],
-    assertion_tol: Optional[Tolerance],
-) -> Tuple[float, float]:
+    model_tol: Tolerance | None,
+    test_tol: Tolerance | None,
+    assertion_tol: Tolerance | None,
+) -> tuple[float, float]:
     """esm-spec §6.6.4 precedence: assertion > test > model > default
     ``rel=1e-6`` (identical to the Julia run_tests reference)."""
     for candidate in (assertion_tol, test_tol, model_tol):
@@ -492,9 +502,9 @@ def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -
 
 def _ephemeral_injected_file(
     file: EsmFile,
-    source_path: Optional[str],
+    source_path: str | None,
     mname: str,
-    imports: List[Any],
+    imports: list[Any],
     base_dir: str,
 ) -> EsmFile:
     """esm-spec §9.7.10 form C: build a throwaway :class:`EsmFile` in which
@@ -512,7 +522,7 @@ def _ephemeral_injected_file(
     from .serialize import _serialize_esm_file
 
     if source_path is not None:
-        with open(source_path, "r", encoding="utf-8") as fh:
+        with open(source_path, encoding="utf-8") as fh:
             raw = json.load(fh)
     else:
         raw = _serialize_esm_file(file)
@@ -537,17 +547,146 @@ def _ephemeral_injected_file(
     return load(json.dumps(raw), base_path=str(base_dir))
 
 
+def _result(
+    mname: Any,
+    test: Any,
+    idx: int,
+    assertion: Any,
+    a_rtol: float,
+    a_atol: float,
+    actual: float | None,
+    passed: bool,
+    message: str,
+) -> PdeAssertionResult:
+    """Build one :class:`PdeAssertionResult`, filling the assertion-identity
+    fields (model / test / index / variable / time / reduce / expected) from
+    the ``test`` + ``assertion`` and taking the outcome fields verbatim. The
+    three result sites of :func:`run_pde_tests` share this shape."""
+    return PdeAssertionResult(
+        str(mname),
+        test.id,
+        idx,
+        assertion.variable,
+        assertion.time,
+        assertion.reduce,
+        assertion.expected,
+        actual,
+        a_rtol,
+        a_atol,
+        passed,
+        message,
+    )
+
+
+def _evaluate_assertion(
+    assertion: Any,
+    sim: SimulatedStates,
+    times: list[float],
+    mname: Any,
+    eval_file: EsmFile,
+    insp: BuildInspection,
+    resolved_base: str,
+) -> tuple[float | None, str]:
+    """Evaluate one §6.6.5 assertion against an already-run simulation,
+    returning ``(actual, message)`` — the computed sample / reduction value
+    (``None`` on failure) and any error text. Point-samples per ``coords``,
+    collapses per ``reduce`` (evaluating an analytic or ``from_file``
+    ``reference`` for the error norms), or reads a scalar state when the
+    assertion has neither. The per-assertion body of :func:`run_pde_tests`."""
+    a = assertion
+    actual: float | None = None
+    msg = ""
+    try:
+        ti = times.index(float(a.time))
+        state = sim.states[ti]
+        if a.coords is not None and a.reduce is not None:
+            raise RuntimeError("`coords` and `reduce` are mutually exclusive")
+        if a.coords is None and a.reduce is None:
+            slot = _scalar_slot(sim.var_map, a.variable, str(mname))
+            if slot is None:
+                raise RuntimeError(f"scalar state '{a.variable}' not found")
+            actual = float(state[slot])
+        else:
+            # `coords` validation runs BEFORE field
+            # materialization so a coords assertion on a scalar
+            # variable fails with the §6.6.5 coords-specific
+            # message (identical to the Julia reference).
+            coords_target: list[int] | None = None
+            if a.coords is not None:
+                shape = _variable_shape(eval_file, str(mname), str(a.variable))
+                coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
+            cells = state_cells(sim.var_map, a.variable, str(mname))
+            if cells:
+                cell_tuples = [c for c, _ in cells]
+                field = [float(state[slot]) for _, slot in cells]
+            else:
+                # §6.6.5 observed-assertion form: the asserted
+                # variable is a state-free ARRAY OBSERVED whose
+                # field the build inspection materialized (the
+                # MPAS rule output div_flux max/min).
+                obs = _inspection_field(insp, str(mname), a.variable)
+                if obs is None:
+                    raise RuntimeError(
+                        f"array state '{a.variable}' has no cells "
+                        f"in var_map, and no state-free array "
+                        f"observed of that name is exposed by the "
+                        f"build inspection"
+                    )
+                idxs = list(np.ndindex(*obs.shape))
+                cell_tuples = [[int(i) + 1 for i in idx] for idx in idxs]
+                field = [float(obs[idx]) for idx in idxs]
+            if coords_target is not None:
+                try:
+                    pos = cell_tuples.index(coords_target)
+                except ValueError:
+                    raise RuntimeError(
+                        f"no grid sample at cell "
+                        f"[{','.join(str(c) for c in coords_target)}]"
+                        f" of '{a.variable}'"
+                    ) from None
+                actual = float(field[pos])
+            else:
+                ref = None
+                if a.reference is not None:
+                    if (
+                        isinstance(a.reference, dict)
+                        and a.reference.get("type") == "from_file"
+                    ):
+                        ref = _from_file_reference(
+                            a.reference, resolved_base, cell_tuples
+                        )
+                    elif isinstance(a.reference, (ExprNode, int, float, str)):
+                        # Model parameters (load-time constants) are
+                        # in scope for a §6.6.5 analytic reference;
+                        # state is not. `insp.params` carries the
+                        # build's resolved scalar params.
+                        ref = evaluate_cellwise(
+                            a.reference,
+                            cell_tuples,
+                            index_sets=eval_file.index_sets,
+                            params=_param_scope_with_aliases(insp.params),
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"unsupported `reference` shape {type(a.reference)}"
+                        )
+                actual = field_reduce(a.reduce, field, reference=ref)
+    except Exception as err:  # noqa: BLE001 — recorded per assertion
+        msg = f"assertion evaluation failed: {err}"
+    return actual, msg
+
+
 def run_pde_tests(
-    input: Union[str, EsmFile],
+    pde_input: str | EsmFile,
     *,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     method: str = "RK45",
-    rtol: float = 1e-10,
-    atol: float = 1e-12,
-    base_dir: Optional[str] = None,
-) -> List[PdeAssertionResult]:
+    rtol: float = _DEFAULT_SOLVER_RTOL,
+    atol: float = _DEFAULT_SOLVER_ATOL,
+    base_dir: str | None = None,
+) -> list[PdeAssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
-    assertions) of the selected model(s) of ``input`` (a path or a loaded
+    assertions) of the selected model(s) of ``pde_input`` (a path or a loaded
     :class:`EsmFile`) through the official NumPy simulation pathway, and
     return one :class:`PdeAssertionResult` per assertion — carrying the ACTUAL
     reduction value alongside pass/fail, so conformance harnesses can record
@@ -564,21 +703,21 @@ def run_pde_tests(
     :func:`evaluate_cellwise`, or a ``{type: "from_file", path, format?}``
     JSON snapshot resolved against ``base_dir``). An assertion with neither
     ``coords`` nor ``reduce`` samples a scalar state. ``base_dir`` defaults
-    to the .esm file's directory when ``input`` is a path, else the working
+    to the .esm file's directory when ``pde_input`` is a path, else the working
     directory. Mirrors the Julia binding's ``run_pde_tests`` 1:1 (tolerances
     per §6.6.4; the pass predicate is Julia ``isapprox``)."""
-    file = load(input) if isinstance(input, str) else input
+    file = load(pde_input) if isinstance(pde_input, str) else pde_input
     if not isinstance(file, EsmFile):
-        raise TypeError(f"run_pde_tests expects a path or EsmFile, got {type(input)}")
+        raise TypeError(f"run_pde_tests expects a path or EsmFile, got {type(pde_input)}")
     if base_dir is not None:
         resolved_base = str(base_dir)
-    elif isinstance(input, str) and os.path.isfile(input):
+    elif isinstance(pde_input, str) and os.path.isfile(pde_input):
         # `load` accepts a path or raw JSON text; only a real path anchors
         # from_file references at the .esm file's directory.
-        resolved_base = os.path.dirname(os.path.abspath(input))
+        resolved_base = os.path.dirname(os.path.abspath(pde_input))
     else:
         resolved_base = os.getcwd()
-    results: List[PdeAssertionResult] = []
+    results: list[PdeAssertionResult] = []
     for mname, model in (file.models or {}).items():
         if model_name is not None and str(mname) != str(model_name):
             continue
@@ -586,18 +725,22 @@ def run_pde_tests(
             continue
         for t in model.tests:
             times = sorted({float(a.time) for a in t.assertions})
-            sim: Optional[SimulatedStates] = None
+            sim: SimulatedStates | None = None
             sim_err = ""
             # esm-spec §9.7.10 form C: a test that injects a discretization runs
             # against an EPHEMERAL instance of this component with the test's
             # imports appended to its scope and its rewrite-targets lowered; the
             # persisted `file` is untouched. A test with no injection runs
             # against the file as loaded.
-            run_file: Optional[EsmFile] = file
+            run_file: EsmFile | None = file
             run_model = model
             if t.expression_template_imports:
                 try:
-                    src = input if (isinstance(input, str) and os.path.isfile(input)) else None
+                    src = (
+                        pde_input
+                        if (isinstance(pde_input, str) and os.path.isfile(pde_input))
+                        else None
+                    )
                     run_file = _ephemeral_injected_file(
                         file, src, str(mname), t.expression_template_imports, resolved_base
                     )
@@ -633,117 +776,15 @@ def run_pde_tests(
                 a_rtol, a_atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
                 if sim is None:
                     results.append(
-                        PdeAssertionResult(
-                            str(mname),
-                            t.id,
-                            i,
-                            a.variable,
-                            a.time,
-                            a.reduce,
-                            a.expected,
-                            None,
-                            a_rtol,
-                            a_atol,
-                            False,
-                            sim_err,
-                        )
+                        _result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err)
                     )
                     continue
-                actual: Optional[float] = None
-                msg = ""
-                try:
-                    ti = times.index(float(a.time))
-                    state = sim.states[ti]
-                    if a.coords is not None and a.reduce is not None:
-                        raise RuntimeError("`coords` and `reduce` are mutually exclusive")
-                    if a.coords is None and a.reduce is None:
-                        slot = _scalar_slot(sim.var_map, a.variable, str(mname))
-                        if slot is None:
-                            raise RuntimeError(f"scalar state '{a.variable}' not found")
-                        actual = float(state[slot])
-                    else:
-                        # `coords` validation runs BEFORE field
-                        # materialization so a coords assertion on a scalar
-                        # variable fails with the §6.6.5 coords-specific
-                        # message (identical to the Julia reference).
-                        coords_target: Optional[List[int]] = None
-                        if a.coords is not None:
-                            shape = _variable_shape(eval_file, str(mname), str(a.variable))
-                            coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
-                        cells = state_cells(sim.var_map, a.variable, str(mname))
-                        if cells:
-                            cell_tuples = [c for c, _ in cells]
-                            field = [float(state[slot]) for _, slot in cells]
-                        else:
-                            # §6.6.5 observed-assertion form: the asserted
-                            # variable is a state-free ARRAY OBSERVED whose
-                            # field the build inspection materialized (the
-                            # MPAS rule output div_flux max/min).
-                            obs = _inspection_field(insp, str(mname), a.variable)
-                            if obs is None:
-                                raise RuntimeError(
-                                    f"array state '{a.variable}' has no cells "
-                                    f"in var_map, and no state-free array "
-                                    f"observed of that name is exposed by the "
-                                    f"build inspection"
-                                )
-                            idxs = list(np.ndindex(*obs.shape))
-                            cell_tuples = [[int(i) + 1 for i in idx] for idx in idxs]
-                            field = [float(obs[idx]) for idx in idxs]
-                        if coords_target is not None:
-                            try:
-                                pos = cell_tuples.index(coords_target)
-                            except ValueError:
-                                raise RuntimeError(
-                                    f"no grid sample at cell "
-                                    f"[{','.join(str(c) for c in coords_target)}]"
-                                    f" of '{a.variable}'"
-                                ) from None
-                            actual = float(field[pos])
-                        else:
-                            ref = None
-                            if a.reference is not None:
-                                if (
-                                    isinstance(a.reference, dict)
-                                    and a.reference.get("type") == "from_file"
-                                ):
-                                    ref = _from_file_reference(
-                                        a.reference, resolved_base, cell_tuples
-                                    )
-                                elif isinstance(a.reference, (ExprNode, int, float, str)):
-                                    # Model parameters (load-time constants) are
-                                    # in scope for a §6.6.5 analytic reference;
-                                    # state is not. `insp.params` carries the
-                                    # build's resolved scalar params.
-                                    ref = evaluate_cellwise(
-                                        a.reference,
-                                        cell_tuples,
-                                        index_sets=eval_file.index_sets,
-                                        params=_param_scope_with_aliases(insp.params),
-                                    )
-                                else:
-                                    raise RuntimeError(
-                                        f"unsupported `reference` shape {type(a.reference)}"
-                                    )
-                            actual = field_reduce(a.reduce, field, reference=ref)
-                except Exception as err:  # noqa: BLE001 — recorded per assertion
-                    msg = f"assertion evaluation failed: {err}"
+                actual, msg = _evaluate_assertion(
+                    a, sim, times, mname, eval_file, insp, resolved_base
+                )
                 if actual is None:
                     results.append(
-                        PdeAssertionResult(
-                            str(mname),
-                            t.id,
-                            i,
-                            a.variable,
-                            a.time,
-                            a.reduce,
-                            a.expected,
-                            None,
-                            a_rtol,
-                            a_atol,
-                            False,
-                            msg,
-                        )
+                        _result(mname, t, i, a, a_rtol, a_atol, None, False, msg)
                     )
                 else:
                     ok = _check_assertion(actual, a.expected, a_rtol, a_atol)
@@ -752,20 +793,7 @@ def run_pde_tests(
                             f"actual={actual} expected={a.expected} (rtol={a_rtol}, atol={a_atol})"
                         )
                     results.append(
-                        PdeAssertionResult(
-                            str(mname),
-                            t.id,
-                            i,
-                            a.variable,
-                            a.time,
-                            a.reduce,
-                            a.expected,
-                            actual,
-                            a_rtol,
-                            a_atol,
-                            ok,
-                            msg,
-                        )
+                        _result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg)
                     )
     return results
 

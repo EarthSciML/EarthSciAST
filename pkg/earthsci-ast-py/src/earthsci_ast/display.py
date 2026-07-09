@@ -7,16 +7,11 @@ Implements output formats:
 
 Based on ESM Format Specification Section 6.1
 """
+from __future__ import annotations
 
 import re
-from typing import Union
 
-try:
-    from .esm_types import Expr, ExprNode, Equation, Model, ReactionSystem, EsmFile
-except ImportError:
-    # For direct imports when testing
-    from types import Expr, ExprNode, Equation, Model, ReactionSystem, EsmFile
-
+from .esm_types import Equation, EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 # Greek letter to LaTeX mapping
 GREEK_LATEX = {
@@ -378,21 +373,19 @@ def _format_chemical_subscripts(variable: str, format_type: str) -> str:
                 chemical = variable[elem_start:]
                 formatted_chemical = _latex_subscript_digits(chemical)
                 return f"{prefix}_{{\\mathrm{{{formatted_chemical}}}}}"
-            else:
-                # Pure chemical formula
-                formatted = _latex_subscript_digits(variable)
-                return f"\\mathrm{{{formatted}}}"
-        else:
-            # Standalone named Greek letter → LaTeX command (e.g. "phi" → "\phi").
-            if variable in NAMED_GREEK_LATEX:
-                return NAMED_GREEK_LATEX[variable]
-            # Single character → italic, no wrapping.
-            if len(variable) == 1:
-                return variable
-            # Multi-character non-chemical name → upright \mathrm, escaping
-            # LaTeX-special underscores (mirrors pretty-print.ts).
-            escaped = variable.replace("_", "\\_")
-            return f"\\mathrm{{{escaped}}}"
+            # Pure chemical formula
+            formatted = _latex_subscript_digits(variable)
+            return f"\\mathrm{{{formatted}}}"
+        # Standalone named Greek letter → LaTeX command (e.g. "phi" → "\phi").
+        if variable in NAMED_GREEK_LATEX:
+            return NAMED_GREEK_LATEX[variable]
+        # Single character → italic, no wrapping.
+        if len(variable) == 1:
+            return variable
+        # Multi-character non-chemical name → upright \mathrm, escaping
+        # LaTeX-special underscores (mirrors pretty-print.ts).
+        escaped = variable.replace("_", "\\_")
+        return f"\\mathrm{{{escaped}}}"
 
     if format_type == "ascii":
         # For ASCII, just return as-is (no special formatting for chemical subscripts)
@@ -441,30 +434,54 @@ def _format_chemical_subscripts(variable: str, format_type: str) -> str:
     return result
 
 
-def _format_number(num: Union[int, float], format_type: str) -> str:
+# Integers with magnitude below this are printed as plain decimals; larger ones
+# fall through to scientific notation.
+_INT_DECIMAL_THRESHOLD = 1e6
+# Upper bound (exclusive) of the plain-decimal band for floats; above it uses
+# scientific notation.
+_LARGE_NUMBER_THRESHOLD = 1e5
+# Lower bound (inclusive) of the plain-decimal band for floats; below it uses
+# scientific notation.
+_SMALL_NUMBER_THRESHOLD = 1e-4
+# Precision format for plain-decimal floats (trailing zeros stripped afterward).
+_DECIMAL_FLOAT_FORMAT = "%.12g"
+# Precision format for scientific-notation numbers.
+_SCIENTIFIC_FORMAT = "%.6e"
+
+
+def _format_number(num: int | float, format_type: str) -> str:
     """Format a number in scientific notation with appropriate formatting."""
-    if isinstance(num, int) and abs(num) < 1e6:
+    if isinstance(num, int) and abs(num) < _INT_DECIMAL_THRESHOLD:
         s = str(num)
         if format_type == "unicode":
             s = s.replace("-", "−")
         return s
 
-    if isinstance(num, float) and abs(num) >= 1e-4 and abs(num) < 1e5 and num.is_integer():
+    if (
+        isinstance(num, float)
+        and abs(num) >= _SMALL_NUMBER_THRESHOLD
+        and abs(num) < _LARGE_NUMBER_THRESHOLD
+        and num.is_integer()
+    ):
         s = str(int(num))
         if format_type == "unicode":
             s = s.replace("-", "−")
         return s
 
     # For regular-sized floats, return as-is without scientific notation
-    if isinstance(num, float) and abs(num) >= 1e-4 and abs(num) < 1e5:
+    if (
+        isinstance(num, float)
+        and abs(num) >= _SMALL_NUMBER_THRESHOLD
+        and abs(num) < _LARGE_NUMBER_THRESHOLD
+    ):
         # Use reasonable precision for display
-        s = f"{num:.12g}".rstrip("0").rstrip(".")
+        s = (_DECIMAL_FLOAT_FORMAT % num).rstrip("0").rstrip(".")
         if format_type == "unicode":
             s = s.replace("-", "−")
         return s
 
     # Use scientific notation for very large or very small numbers
-    str_repr = f"{num:.6e}"
+    str_repr = _SCIENTIFIC_FORMAT % num
     if "e" not in str_repr:
         return str_repr
 
@@ -481,12 +498,11 @@ def _format_number(num: Union[int, float], format_type: str) -> str:
 
     if format_type == "unicode":
         return f"{mantissa}×10{_to_superscript(str(exp))}"
-    elif format_type == "latex":
+    if format_type == "latex":
         return f"{mantissa} \\times 10^{{{exp}}}"
-    elif format_type == "ascii":
+    if format_type == "ascii":
         return f"{mantissa}*10^{exp}"
-    else:
-        return str_repr  # Plain scientific notation
+    return str_repr  # Plain scientific notation
 
 
 def _get_operator_precedence(op: str) -> int:
@@ -551,7 +567,63 @@ def _needs_parentheses(parent: ExprNode, child: Expr, is_right_operand: bool = F
     return False
 
 
-def to_unicode(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> str:
+def _format(target: Expr | Equation | Model | ReactionSystem | EsmFile, format_type: str) -> str:
+    """
+    Shared dispatch backing to_unicode/to_latex/to_ascii.
+
+    ``format_type`` is one of "unicode", "latex", or "ascii" and is threaded
+    down to the leaf formatters. Container summaries (EsmFile/Model/
+    ReactionSystem) have no dedicated LaTeX form, so they are rendered as plain
+    text ("ascii") whenever ``format_type`` is not "unicode".
+    """
+    if target is None:
+        return "None"
+
+    if isinstance(target, (int, float)):
+        return _format_number(target, format_type)
+
+    if isinstance(target, str):
+        return _format_chemical_subscripts(target, format_type)
+
+    if isinstance(target, ExprNode):
+        return _format_expression_node(target, format_type)
+
+    if isinstance(target, dict) and "op" in target:
+        # Structural / array-query ops carry defining data in non-`args` fields
+        # (value, table, axes, output_idx, …) that the ExprNode conversion below
+        # would drop, so render them directly from the dict first.
+        structural = _format_structural_op(target, format_type)
+        if structural is not None:
+            return structural
+        # Handle dictionary-style expressions for compatibility
+        args = target.get("args") or []
+        node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
+        return _format_expression_node(node, format_type)
+
+    if isinstance(target, dict):
+        # Handle malformed dict expressions gracefully
+        return str(target)
+
+    if isinstance(target, Equation):
+        return f"{_format(target.lhs, format_type)} = {_format(target.rhs, format_type)}"
+
+    # Container summaries are rendered as plain text for both LaTeX and ASCII.
+    summary_format = "unicode" if format_type == "unicode" else "ascii"
+
+    if isinstance(target, EsmFile):
+        return _format_esm_file_summary(target, summary_format)
+
+    if isinstance(target, Model):
+        return _format_model_summary(target, summary_format)
+
+    if isinstance(target, ReactionSystem):
+        return _format_reaction_system_summary(target, summary_format)
+
+    label = {"unicode": "Unicode", "latex": "LaTeX", "ascii": "ASCII"}[format_type]
+    raise ValueError(f"Unsupported type for {label} formatting: {type(target)}")
+
+
+def to_unicode(target: Expr | Equation | Model | ReactionSystem | EsmFile) -> str:
     """
     Format target as Unicode mathematical notation with chemical subscripts.
 
@@ -561,50 +633,10 @@ def to_unicode(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) ->
     Returns:
         Unicode string representation
     """
-    if target is None:
-        return "None"
-
-    if isinstance(target, (int, float)):
-        return _format_number(target, "unicode")
-
-    if isinstance(target, str):
-        return _format_chemical_subscripts(target, "unicode")
-
-    if isinstance(target, ExprNode):
-        return _format_expression_node(target, "unicode")
-
-    if isinstance(target, dict) and "op" in target:
-        # Structural / array-query ops carry defining data in non-`args` fields
-        # (value, table, axes, output_idx, …) that the ExprNode conversion below
-        # would drop, so render them directly from the dict first.
-        structural = _format_structural_op(target, "unicode")
-        if structural is not None:
-            return structural
-        # Handle dictionary-style expressions for compatibility
-        args = target.get("args") or []
-        node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
-        return _format_expression_node(node, "unicode")
-
-    if isinstance(target, dict):
-        # Handle malformed dict expressions gracefully
-        return str(target)
-
-    if isinstance(target, Equation):
-        return f"{to_unicode(target.lhs)} = {to_unicode(target.rhs)}"
-
-    if isinstance(target, EsmFile):
-        return _format_esm_file_summary(target, "unicode")
-
-    if isinstance(target, Model):
-        return _format_model_summary(target, "unicode")
-
-    if isinstance(target, ReactionSystem):
-        return _format_reaction_system_summary(target, "unicode")
-
-    raise ValueError(f"Unsupported type for Unicode formatting: {type(target)}")
+    return _format(target, "unicode")
 
 
-def to_latex(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> str:
+def to_latex(target: Expr | Equation | Model | ReactionSystem | EsmFile) -> str:
     """
     Format target as LaTeX mathematical notation.
 
@@ -614,53 +646,10 @@ def to_latex(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> s
     Returns:
         LaTeX string representation
     """
-    if target is None:
-        return "None"
-
-    if isinstance(target, (int, float)):
-        return _format_number(target, "latex")
-
-    if isinstance(target, str):
-        return _format_chemical_subscripts(target, "latex")
-
-    if isinstance(target, ExprNode):
-        return _format_expression_node(target, "latex")
-
-    if isinstance(target, dict) and "op" in target:
-        # Structural / array-query ops carry defining data in non-`args` fields
-        # (value, table, axes, output_idx, …) that the ExprNode conversion below
-        # would drop, so render them directly from the dict first.
-        structural = _format_structural_op(target, "latex")
-        if structural is not None:
-            return structural
-        # Handle dictionary-style expressions for compatibility
-        args = target.get("args") or []
-        node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
-        return _format_expression_node(node, "latex")
-
-    if isinstance(target, dict):
-        # Handle malformed dict expressions gracefully
-        return str(target)
-
-    if isinstance(target, Equation):
-        return f"{to_latex(target.lhs)} = {to_latex(target.rhs)}"
-
-    if isinstance(target, EsmFile):
-        # ESM files not typically formatted as LaTeX, return plain text
-        return _format_esm_file_summary(target, "ascii")
-
-    if isinstance(target, Model):
-        # Models not typically formatted as LaTeX, return plain text
-        return _format_model_summary(target, "ascii")
-
-    if isinstance(target, ReactionSystem):
-        # Reaction systems not typically formatted as LaTeX, return plain text
-        return _format_reaction_system_summary(target, "ascii")
-
-    raise ValueError(f"Unsupported type for LaTeX formatting: {type(target)}")
+    return _format(target, "latex")
 
 
-def to_ascii(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> str:
+def to_ascii(target: Expr | Equation | Model | ReactionSystem | EsmFile) -> str:
     """
     Format target as plain ASCII mathematical notation.
 
@@ -670,47 +659,7 @@ def to_ascii(target: Union[Expr, Equation, Model, ReactionSystem, EsmFile]) -> s
     Returns:
         Plain ASCII string representation (no Unicode symbols)
     """
-    if target is None:
-        return "None"
-
-    if isinstance(target, (int, float)):
-        return _format_number(target, "ascii")
-
-    if isinstance(target, str):
-        return _format_chemical_subscripts(target, "ascii")
-
-    if isinstance(target, ExprNode):
-        return _format_expression_node(target, "ascii")
-
-    if isinstance(target, dict) and "op" in target:
-        # Structural / array-query ops carry defining data in non-`args` fields
-        # (value, table, axes, output_idx, …) that the ExprNode conversion below
-        # would drop, so render them directly from the dict first.
-        structural = _format_structural_op(target, "ascii")
-        if structural is not None:
-            return structural
-        # Handle dictionary-style expressions for compatibility
-        args = target.get("args") or []
-        node = ExprNode(op=target["op"], args=args, wrt=target.get("wrt"), dim=target.get("dim"))
-        return _format_expression_node(node, "ascii")
-
-    if isinstance(target, dict):
-        # Handle malformed dict expressions gracefully
-        return str(target)
-
-    if isinstance(target, Equation):
-        return f"{to_ascii(target.lhs)} = {to_ascii(target.rhs)}"
-
-    if isinstance(target, EsmFile):
-        return _format_esm_file_summary(target, "ascii")
-
-    if isinstance(target, Model):
-        return _format_model_summary(target, "ascii")
-
-    if isinstance(target, ReactionSystem):
-        return _format_reaction_system_summary(target, "ascii")
-
-    raise ValueError(f"Unsupported type for ASCII formatting: {type(target)}")
+    return _format(target, "ascii")
 
 
 def _node_field(node, key, default=None):
@@ -725,12 +674,12 @@ def _is_op_node(expr) -> bool:
     return isinstance(expr, ExprNode) or (isinstance(expr, dict) and "op" in expr)
 
 
-def _render_expr(expr: "Expr", format_type: str) -> str:
+def _render_expr(expr: Expr, format_type: str) -> str:
     """Render a sub-expression in the requested text format."""
     return {"unicode": to_unicode, "latex": to_latex, "ascii": to_ascii}[format_type](expr)
 
 
-def _wrap_if_op(expr: "Expr", format_type: str) -> str:
+def _wrap_if_op(expr: Expr, format_type: str) -> str:
     """Parenthesize a sub-expression only when it is an operator node."""
     s = _render_expr(expr, format_type)
     if _is_op_node(expr):
@@ -1084,90 +1033,82 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"{format_arg(left)}{sep}{_fmt(neg_inner)}"
             return f"{format_arg(left)} + {format_arg(right, True)}"
 
-        elif op == "-":
+        if op == "-":
             sep = " − " if format_type == "unicode" else " - "
             return f"{format_arg(left)}{sep}{format_arg(right, True)}"
 
-        elif op == "*":
+        if op == "*":
             if format_type == "unicode":
                 return f"{format_arg(left)}·{format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\cdot {format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} * {format_arg(right, True)}"
+            return f"{format_arg(left)} * {format_arg(right, True)}"
 
-        elif op == "/":
+        if op == "/":
             if format_type == "latex":
                 return f"\\frac{{{to_latex(left)}}}{{{to_latex(right)}}}"
-            elif format_type == "unicode":
+            if format_type == "unicode":
                 return f"{format_arg(left)}/{format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} / {format_arg(right, True)}"
+            return f"{format_arg(left)} / {format_arg(right, True)}"
 
-        elif op == "^":
+        if op == "^":
             if format_type == "latex":
                 return f"{format_arg(left)}^{{{to_latex(right)}}}"
             if format_type == "unicode" and isinstance(right, int):
                 return f"{format_arg(left)}{_to_superscript(str(right))}"
             return f"{format_arg(left)}^{format_arg(right, True)}"
 
-        elif op in ("=", "=="):
+        if op in ("=", "=="):
             if format_type == "unicode":
                 return f"{format_arg(left)} = {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} = {format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} == {format_arg(right, True)}"
+            return f"{format_arg(left)} == {format_arg(right, True)}"
 
-        elif op == "!=":
+        if op == "!=":
             if format_type == "unicode":
                 return f"{format_arg(left)} ≠ {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\neq {format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} != {format_arg(right, True)}"
+            return f"{format_arg(left)} != {format_arg(right, True)}"
 
-        elif op in ("<", ">"):
+        if op in ("<", ">"):
             return f"{format_arg(left)} {op} {format_arg(right, True)}"
 
-        elif op == ">=":
+        if op == ">=":
             if format_type == "unicode":
                 return f"{format_arg(left)} ≥ {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\geq {format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} >= {format_arg(right, True)}"
+            return f"{format_arg(left)} >= {format_arg(right, True)}"
 
-        elif op == "<=":
+        if op == "<=":
             if format_type == "unicode":
                 return f"{format_arg(left)} ≤ {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\leq {format_arg(right, True)}"
-            else:
-                return f"{format_arg(left)} <= {format_arg(right, True)}"
+            return f"{format_arg(left)} <= {format_arg(right, True)}"
 
-        elif op == "and":
+        if op == "and":
             if format_type == "unicode":
                 return f"{format_arg(left)} ∧ {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\land {format_arg(right, True)}"
-            else:
-                return f"({format_arg(left)}) && ({format_arg(right)})"
+            return f"({format_arg(left)}) && ({format_arg(right)})"
 
-        elif op == "or":
+        if op == "or":
             if format_type == "unicode":
                 return f"{format_arg(left)} ∨ {format_arg(right, True)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"{format_arg(left)} \\lor {format_arg(right, True)}"
-            else:
-                return f"({format_arg(left)}) || ({format_arg(right)})"
+            return f"({format_arg(left)}) || ({format_arg(right)})"
 
-        elif op in ("min", "max"):
+        if op in ("min", "max"):
             if format_type == "latex":
                 return f"\\{op}({to_latex(left)}, {to_latex(right)})"
             return f"{op}({format_arg(left)}, {format_arg(right)})"
 
-        elif op == "atan2":
+        if op == "atan2":
             if format_type == "latex":
                 return f"\\mathrm{{atan2}}({to_latex(left)}, {to_latex(right)})"
             return f"atan2({_fmt(left)}, {_fmt(right)})"
@@ -1182,113 +1123,104 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 return f"−{format_arg(arg)}"
             return f"-{format_arg(arg)}"
 
-        elif op == "not":
+        if op == "not":
             if format_type == "unicode":
                 return f"¬{format_arg(arg)}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\neg {format_arg(arg)}"
-            else:
-                return f"!({format_arg(arg)})"
+            return f"!({format_arg(arg)})"
 
         # Standard trig
-        elif op in ("sin", "cos", "tan"):
+        if op in ("sin", "cos", "tan"):
             if format_type == "latex":
                 return _latex_func(op, to_latex(arg))
             return f"{op}({fa})"
 
         # Inverse trig
-        elif op in ("asin", "acos", "atan"):
+        if op in ("asin", "acos", "atan"):
             base = op[1:]  # sin, cos, tan
             if format_type == "unicode":
                 return f"arc{base}({fa})"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\arc{base}({to_latex(arg)})"
-            else:
-                return f"{op}({fa})"
+            return f"{op}({fa})"
 
         # Hyperbolic
-        elif op in ("sinh", "cosh", "tanh"):
+        if op in ("sinh", "cosh", "tanh"):
             if format_type == "latex":
                 return _latex_func(op, to_latex(arg))
             return f"{op}({fa})"
 
         # Inverse hyperbolic
-        elif op in ("asinh", "acosh", "atanh"):
+        if op in ("asinh", "acosh", "atanh"):
             base = op[1:]  # sinh, cosh, tanh
             if format_type == "unicode":
                 return f"{base}⁻¹({fa})"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\{base}^{{-1}}({to_latex(arg)})"
-            else:
-                return f"{op}({fa})"
+            return f"{op}({fa})"
 
-        elif op == "exp":
+        if op == "exp":
             if format_type == "latex":
                 return _latex_func("exp", to_latex(arg))
             return f"exp({fa})"
 
-        elif op == "log":
+        if op == "log":
             if format_type == "unicode":
                 return f"ln({fa})"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return _latex_func("ln", to_latex(arg))
-            else:
-                return f"log({fa})"
+            return f"log({fa})"
 
-        elif op == "log10":
+        if op == "log10":
             if format_type == "unicode":
                 return f"log₁₀({fa})"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\log_{{10}}({to_latex(arg)})"
-            else:
-                return f"log10({fa})"
+            return f"log10({fa})"
 
-        elif op == "sqrt":
+        if op == "sqrt":
             if format_type == "unicode":
                 return f"√{fa}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\sqrt{{{to_latex(arg)}}}"
-            else:
-                return f"sqrt({fa})"
+            return f"sqrt({fa})"
 
-        elif op == "abs":
+        if op == "abs":
             if format_type == "ascii":
                 return f"abs({fa})"
             return f"|{fa}|"
 
-        elif op == "floor":
+        if op == "floor":
             if format_type == "unicode":
                 return f"⌊{fa}⌋"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\lfloor {to_latex(arg)} \\rfloor"
-            else:
-                return f"floor({fa})"
+            return f"floor({fa})"
 
-        elif op == "ceil":
+        if op == "ceil":
             if format_type == "unicode":
                 return f"⌈{fa}⌉"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\lceil {to_latex(arg)} \\rceil"
-            else:
-                return f"ceil({fa})"
+            return f"ceil({fa})"
 
-        elif op == "D":
+        if op == "D":
             wrt_var = wrt or "t"
             if format_type == "unicode":
                 return f"∂{to_unicode(arg)}/∂{wrt_var}"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\frac{{\\partial {to_latex(arg)}}}{{\\partial {wrt_var}}}"
-            else:
-                return f"D({fa})/D{wrt_var}"
+            return f"D({fa})/D{wrt_var}"
 
-        elif op == "sign":
+        if op == "sign":
             if format_type == "unicode":
                 return f"sgn({fa})"
-            elif format_type == "latex":
+            if format_type == "latex":
                 return f"\\mathrm{{sgn}}({to_latex(arg)})"
             return f"sign({fa})"
 
-        elif op == "Pre":
+        if op == "Pre":
             if format_type == "latex":
                 return f"\\mathrm{{Pre}}({to_latex(arg)})"
             return f"Pre({fa})"
@@ -1330,7 +1262,7 @@ def _format_model_summary(model: Model, format_type: str) -> str:
     # Count variables by type according to spec Section 6.3
     type_counts = {"state": 0, "parameter": 0, "observed": 0}
 
-    for var_name, var_info in model.variables.items():
+    for _var_name, var_info in model.variables.items():
         var_type = getattr(var_info, "type", "unknown")
         if var_type in type_counts:
             type_counts[var_type] += 1

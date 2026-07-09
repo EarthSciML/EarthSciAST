@@ -9,19 +9,21 @@ against the raw values.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from numbers import Real
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
+from ..errors import EarthSciAstError
 from ..esm_types import DataLoaderVariable, ExprNode
 from ..expression import free_variables
 from ..numpy_interpreter import fold_constant_expr
 
 
-class UnitConversionError(ValueError):
+class UnitConversionError(EarthSciAstError, ValueError):
     """Raised when unit_conversion cannot be applied."""
 
 
-def _scale_factor(conversion: Any, *, variable_name: str) -> Optional[float]:
+def _scale_factor(conversion: Any, *, variable_name: str) -> float | None:
     """Return a constant scale if the conversion reduces to ``k * x``."""
     if conversion is None:
         return 1.0
@@ -95,7 +97,7 @@ def apply_variable_mapping(
     variables: Mapping[str, DataLoaderVariable],
     *,
     strict: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rename ``raw`` keys from ``file_variable`` to schema name + convert units.
 
     ``raw`` is a mapping keyed by the file-side variable names (e.g., the keys
@@ -103,7 +105,7 @@ def apply_variable_mapping(
     schema-side names with unit conversions applied. If ``strict`` and a
     required ``file_variable`` is missing from ``raw``, raises ``KeyError``.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for schema_name, spec in variables.items():
         file_name = spec.file_variable
         if file_name not in raw:

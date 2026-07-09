@@ -42,9 +42,10 @@ with the spec reference computation.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Sequence, Union
+from typing import Any
 
 from .diagnostics import (
     CLOSED_FUNCTION_ARITY,
@@ -59,15 +60,16 @@ from .diagnostics import (
     UNKNOWN_ENUM,
     UNKNOWN_ENUM_SYMBOL,
 )
-from .esm_types import DataLoader, EsmFile, ExprNode, Equation, Model, ReactionSystem
-
+from .errors import EarthSciAstError
+from .esm_types import DataLoader, Equation, EsmFile, ExprNode, Model, ReactionSystem
+from .expr_walk import iter_children, map_children
 
 # ============================================================
 # Errors
 # ============================================================
 
 
-class ClosedFunctionError(Exception):
+class ClosedFunctionError(EarthSciAstError):
     """Raised when the closed function registry contract is violated.
 
     The ``code`` attribute carries one of the stable diagnostic codes pinned
@@ -120,7 +122,7 @@ _CLOSED_FUNCTION_NAMES: frozenset = frozenset(
 # raw Python list before calling :func:`evaluate_closed_function`. Any closed
 # function whose ``name`` is not a key here has all-dynamic arguments
 # (e.g. ``datetime.*`` takes a single scalar ``t_utc``).
-INTERP_CONST_ARG_POSITIONS: Dict[str, tuple] = {
+INTERP_CONST_ARG_POSITIONS: dict[str, tuple] = {
     "interp.searchsorted": (1,),
     "interp.linear": (0, 1),
     "interp.bilinear": (0, 1, 2),
@@ -274,7 +276,7 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     return _check_int32(name, n + 1)
 
 
-def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> List[float]:
+def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> list[float]:
     """Validate a 1-D interpolation axis and return it as a list of floats.
 
     Spec §9.2 ``interp.*`` subsection requires axes be strictly increasing
@@ -292,7 +294,7 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> Li
             INTERP_AXIS_TOO_SHORT,
             f"{name}: {axis_label} has {n} entries; need ≥ 2 to define a cell",
         )
-    out: List[float] = []
+    out: list[float] = []
     prev = float("-inf")
     for i, raw in enumerate(axis):
         v = float(raw)
@@ -378,7 +380,7 @@ def _interp_bilinear(
             INTERP_AXIS_LENGTH_MISMATCH,
             f"{name}: outer len(table)={len(table)} != len(axis_x)={nx}",
         )
-    table_rows: List[List[float]] = []
+    table_rows: list[list[float]] = []
     for i, row in enumerate(table):
         if not isinstance(row, (list, tuple)):
             raise ClosedFunctionError(
@@ -422,7 +424,7 @@ def _interp_bilinear(
 # ============================================================
 
 
-def evaluate_closed_function(name: str, args: Sequence[Any]) -> Union[int, float]:
+def evaluate_closed_function(name: str, args: Sequence[Any]) -> int | float:
     """Dispatch a closed function call.
 
     ``name`` is the dotted-module spec name (e.g. ``"datetime.julian_day"``);
@@ -491,7 +493,7 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> Union[int, float
 # ============================================================
 
 
-def extract_const_array(node: Any) -> List[Any]:
+def extract_const_array(node: Any) -> list[Any]:
     """Extract a const-op array argument as a (possibly nested) Python list.
 
     The ``interp.*`` closed functions take inline ``const`` arrays for their
@@ -533,7 +535,7 @@ def lower_enums(file: EsmFile) -> EsmFile:
 
     Mutates ``file`` in place; returns the file for convenience.
     """
-    enums: Dict[str, Dict[str, int]] = file.enums or {}
+    enums: dict[str, dict[str, int]] = file.enums or {}
     for model in file.models.values():
         _lower_model(model, enums)
     for rs in file.reaction_systems.values():
@@ -541,13 +543,13 @@ def lower_enums(file: EsmFile) -> EsmFile:
     return file
 
 
-def _lower_model(model: Model, enums: Dict[str, Dict[str, int]]) -> None:
+def _lower_model(model: Model, enums: dict[str, dict[str, int]]) -> None:
     for vname, var in list(model.variables.items()):
         if var.expression is not None:
             new_expr = _lower_expr(var.expression, enums)
             if new_expr is not var.expression:
                 model.variables[vname] = replace(var, expression=new_expr)
-    new_eqs: List[Equation] = []
+    new_eqs: list[Equation] = []
     for eq in model.equations:
         new_eqs.append(
             Equation(
@@ -557,7 +559,7 @@ def _lower_model(model: Model, enums: Dict[str, Dict[str, int]]) -> None:
             )
         )
     model.equations[:] = new_eqs
-    new_init: List[Equation] = []
+    new_init: list[Equation] = []
     for eq in model.initialization_equations:
         new_init.append(
             Equation(
@@ -574,7 +576,7 @@ def _lower_model(model: Model, enums: Dict[str, Dict[str, int]]) -> None:
         _lower_model(sub, enums)
 
 
-def _lower_reaction_system(rs: ReactionSystem, enums: Dict[str, Dict[str, int]]) -> None:
+def _lower_reaction_system(rs: ReactionSystem, enums: dict[str, dict[str, int]]) -> None:
     for r in rs.reactions:
         if r.rate_constant is not None:
             r.rate_constant = _lower_expr(r.rate_constant, enums)
@@ -582,7 +584,7 @@ def _lower_reaction_system(rs: ReactionSystem, enums: Dict[str, Dict[str, int]])
         _lower_reaction_system(sub, enums)
 
 
-def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
+def _lower_expr(node: Any, enums: dict[str, dict[str, int]]) -> Any:
     if not isinstance(node, ExprNode):
         return node
     if node.op == "enum":
@@ -603,31 +605,12 @@ def _lower_expr(node: Any, enums: Dict[str, Dict[str, int]]) -> Any:
                 f"under enum `{enum_name}`"
             )
         return ExprNode(op="const", args=[], value=mapping[symbol_name])
-    # Recurse — rebuild only if a child changed.
-    new_args = [_lower_expr(a, enums) for a in node.args]
-    body = _lower_expr(node.expr, enums) if node.expr is not None else None
-    new_values = [_lower_expr(v, enums) for v in node.values] if node.values is not None else None
-    # Recurse into table_lookup.axes (per-axis input expression map).
-    new_table_axes = (
-        {k: _lower_expr(v, enums) for k, v in node.table_axes.items()}
-        if node.table_axes is not None
-        else None
-    )
-    changed = (
-        any(a is not b for a, b in zip(new_args, node.args))
-        or body is not node.expr
-        or (new_values is not None and any(a is not b for a, b in zip(new_values, node.values)))
-        or (
-            new_table_axes is not None
-            and any(new_table_axes[k] is not v for k, v in node.table_axes.items())
-        )
-    )
-    if not changed:
+    # Recurse through the FULL canonical child set (args, lower, upper, expr,
+    # filter, key, values, table_axes) via expr_walk.map_children so this can
+    # never again drift from the canonical child slots and silently skip an
+    # `enum` hidden in an integral bound, aggregate filter, or skolem key.
+    # Rebuild only when a child actually changed, preserving node identity.
+    rebuilt = map_children(node, lambda c: _lower_expr(c, enums))
+    if all(a is b for a, b in zip(iter_children(node), iter_children(rebuilt))):
         return node
-    return replace(
-        node,
-        args=new_args,
-        expr=body,
-        values=new_values,
-        table_axes=new_table_axes,
-    )
+    return rebuilt

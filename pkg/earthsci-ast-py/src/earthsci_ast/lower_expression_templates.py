@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .diagnostics import (
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
@@ -56,6 +56,7 @@ from .diagnostics import (
     REWRITE_RULE_NONTERMINATING,
     TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
 )
+from .errors import EarthSciAstError
 
 APPLY_OP = "apply_expression_template"
 
@@ -69,7 +70,7 @@ _GEOMETRY_MANIFOLD_OPS = ("intersect_polygon", "polygon_intersection_area")
 _GEOMETRY_MANIFOLD_VALUES = ("planar", "spherical", "geodesic")
 
 
-class ExpressionTemplateError(Exception):
+class ExpressionTemplateError(EarthSciAstError):
     """Raised when expression-template expansion fails.
 
     The ``code`` attribute carries one of the stable diagnostic codes:
@@ -118,23 +119,62 @@ def _is_array(v: Any) -> bool:
     return isinstance(v, list)
 
 
+def _walk_json(
+    node: Any,
+    *,
+    on_str: Callable[[str], None] | None = None,
+    on_obj: Callable[[dict, str], None] | None = None,
+    skip_keys: frozenset[str] | None = None,
+    path: str = "",
+) -> None:
+    """Shared depth-first PRE-ORDER visitor over a JSON value — the single
+    recursion skeleton behind the read-only tree-walkers in this module and in
+    :mod:`earthsci_ast.template_imports`.
+
+    For each string it calls ``on_str(value)``; for each dict it calls
+    ``on_obj(node, path)`` BEFORE descending, then recurses into list elements
+    (``"{path}/{index}"``) and dict VALUES (``"{path}/{key}"``), skipping any
+    key in ``skip_keys``. ``path`` is a JSON-pointer-style location for the
+    diagnostics that report one (collectors that don't need it omit ``on_obj``
+    or ignore its second argument). Purely observational — it never rebuilds or
+    mutates the tree, so transforming passes (:func:`_substitute`, the
+    ``_rename_walk`` / ``_substitute_metaparams`` families) stay bespoke.
+    """
+    if isinstance(node, str):
+        if on_str is not None:
+            on_str(node)
+        return
+    if _is_array(node):
+        for i, child in enumerate(node):
+            _walk_json(
+                child, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{i}"
+            )
+        return
+    if _is_object(node):
+        if on_obj is not None:
+            on_obj(node, path)
+        for k, v in node.items():
+            if skip_keys is not None and k in skip_keys:
+                continue
+            _walk_json(
+                v, on_str=on_str, on_obj=on_obj, skip_keys=skip_keys, path=f"{path}/{k}"
+            )
+
+
 def _assert_no_nested_apply(body: Any, template_name: str, path: str) -> None:
     """Reject ``apply_expression_template`` nodes inside a ``match`` pattern
     (esm-spec §9.7.3: match patterns MUST NOT reference templates)."""
-    if _is_array(body):
-        for i, child in enumerate(body):
-            _assert_no_nested_apply(child, template_name, f"{path}/{i}")
-        return
-    if _is_object(body):
-        if body.get("op") == APPLY_OP:
+
+    def _check(node: dict, p: str) -> None:
+        if node.get("op") == APPLY_OP:
             raise ExpressionTemplateError(
                 APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 f"expression_templates.{template_name}: `match` contains an "
-                f"'apply_expression_template' node at {path}; match patterns "
+                f"'apply_expression_template' node at {p}; match patterns "
                 "MUST NOT reference templates (esm-spec §9.7.3)",
             )
-        for k, v in body.items():
-            _assert_no_nested_apply(v, template_name, f"{path}/{k}")
+
+    _walk_json(body, on_obj=_check, path=path)
 
 
 def _validate_templates(templates: dict, scope: str) -> None:
@@ -263,6 +303,8 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
     bound from ``bindings``) and auto-applied ``match``-rule bodies (metavars
     bound by structural matching).
     """
+    # Bespoke (not on :func:`_walk_json`): this REBUILDS the tree with copies
+    # spliced in rather than merely observing it, so it stays a dedicated pass.
     if isinstance(body, str):
         if body in bindings:
             return copy.deepcopy(bindings[body])
@@ -279,7 +321,7 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
 # docs/content/rfcs/match-pattern-scoping-constraints.md
 
 
-def _component_shape_env(comp: dict) -> "dict[str, list]":
+def _component_shape_env(comp: dict) -> dict[str, list]:
     """The static shape environment of one component: every declared variable
     name mapped to its declared ``shape`` (ordered index-set names). This is the
     ONLY information a ``where`` constraint may consult (esm-spec §9.6.1) —
@@ -305,7 +347,7 @@ def _component_shape_env(comp: dict) -> "dict[str, list]":
 
 
 def _where_satisfied(
-    where_c: "dict[str, list] | None", bindings: dict, shape_env: "dict[str, list]"
+    where_c: dict[str, list] | None, bindings: dict, shape_env: dict[str, list]
 ) -> bool:
     """Evaluate a registered ``where`` constraint map (param -> required shape)
     against the bindings produced by a successful structural match (esm-spec
@@ -333,7 +375,7 @@ def _where_satisfied(
 
 def _registered_where(
     decl: dict, iset_names: set, scope: str, tname: str
-) -> "dict[str, list] | None":
+) -> dict[str, list] | None:
     """Normalize a template's ``where`` block into the registered constraint map
     (param -> required shape list), checking every referenced index-set name
     against the CONSUMING document's merged ``index_sets`` registry
@@ -384,7 +426,7 @@ class MatchRule:
         body: Any,
         priority: int,
         decl_index: int,
-        where_c: "dict[str, list] | None" = None,
+        where_c: dict[str, list] | None = None,
     ) -> None:
         self.name = name
         self.pattern = pattern
@@ -532,7 +574,7 @@ def _expand_apply(node: dict, templates: dict, scope: str) -> Any:
     # It is NOT re-scanned within this pass; any apply / match ops it introduces
     # (including inside the substituted bindings) are rewritten in subsequent
     # passes, up to the bounded fixpoint.
-    resolved = {k: v for k, v in bindings.items()}
+    resolved = dict(bindings.items())
     return _substitute(decl["body"], resolved)
 
 
@@ -549,7 +591,7 @@ def _rewrite_pass(
     sorted_rules: list,
     scope: str,
     last: list,
-    shape_env: "dict[str, list]",
+    shape_env: dict[str, list],
 ) -> tuple:
     """One pre-order (outermost-first) rewrite pass over ``node`` (esm-spec
     §9.6.3). At each object node the engine first tries to fire a rule AT the
@@ -607,7 +649,7 @@ def _rewrite_to_fixpoint(
     templates: dict,
     sorted_rules: list,
     scope: str,
-    shape_env: "dict[str, list] | None" = None,
+    shape_env: dict[str, list] | None = None,
 ) -> Any:
     """Drive :func:`_rewrite_pass` to a fixpoint (esm-spec §9.6.3): repeat
     pre-order passes until a pass performs zero rewrites, or reject the file with
@@ -637,18 +679,11 @@ def _rewrite_to_fixpoint(
 def _find_apply_paths(view: Any, path: str = "") -> list[str]:
     hits: list[str] = []
 
-    def visit(v: Any, p: str) -> None:
-        if _is_array(v):
-            for i, child in enumerate(v):
-                visit(child, f"{p}/{i}")
-            return
-        if _is_object(v):
-            if v.get("op") == APPLY_OP:
-                hits.append(p)
-            for k, child in v.items():
-                visit(child, f"{p}/{k}")
+    def _visit(node: dict, p: str) -> None:
+        if node.get("op") == APPLY_OP:
+            hits.append(p)
 
-    visit(view, path)
+    _walk_json(view, on_obj=_visit, path=path)
     return hits
 
 
@@ -780,6 +815,12 @@ def _rewrite_coupling_transforms(
         )
 
 
+#: The two post-expansion validators skip ``expression_templates`` blocks:
+#: those hold pre-substitution trees where a param may legally occupy a scalar
+#: field (manifold, makearray bound); enforcement is on the expanded form only.
+_EXPR_TEMPLATES_SKIP = frozenset({"expression_templates"})
+
+
 def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
     """Post-expansion validator (esm-spec §9.6.4): every ``intersect_polygon``
     / ``polygon_intersection_area`` node OUTSIDE an ``expression_templates``
@@ -794,30 +835,22 @@ def _validate_geometry_manifolds(tree: Any, path: str = "") -> None:
     literal). Raises :class:`ExpressionTemplateError` with code
     ``geometry_manifold_invalid``.
     """
-    if _is_array(tree):
-        for i, child in enumerate(tree):
-            _validate_geometry_manifolds(child, f"{path}/{i}")
-        return
-    if not _is_object(tree):
-        return
-    if tree.get("op") in _GEOMETRY_MANIFOLD_OPS and "manifold" in tree:
-        m = tree["manifold"]
-        if not (isinstance(m, str) and m in _GEOMETRY_MANIFOLD_VALUES):
-            raise ExpressionTemplateError(
-                GEOMETRY_MANIFOLD_INVALID,
-                f"{path}: `{tree.get('op')}` carries manifold {m!r}, not a "
-                "member of the closed set {planar, spherical, geodesic}. The "
-                "manifold enum is enforced on the expanded form (esm-spec "
-                "§9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter "
-                "substituted into this scalar field must be bound to one of "
-                "the closed-set literals.",
-            )
-    for k, v in tree.items():
-        if k == "expression_templates":
-            # Pre-substitution template trees; params may legally occupy the
-            # manifold position there (esm-spec §9.6.1).
-            continue
-        _validate_geometry_manifolds(v, f"{path}/{k}")
+
+    def _check(node: dict, p: str) -> None:
+        if node.get("op") in _GEOMETRY_MANIFOLD_OPS and "manifold" in node:
+            m = node["manifold"]
+            if not (isinstance(m, str) and m in _GEOMETRY_MANIFOLD_VALUES):
+                raise ExpressionTemplateError(
+                    GEOMETRY_MANIFOLD_INVALID,
+                    f"{p}: `{node.get('op')}` carries manifold {m!r}, not a "
+                    "member of the closed set {planar, spherical, geodesic}. The "
+                    "manifold enum is enforced on the expanded form (esm-spec "
+                    "§9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter "
+                    "substituted into this scalar field must be bound to one of "
+                    "the closed-set literals.",
+                )
+
+    _walk_json(tree, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path)
 
 
 def _validate_makearray_regions(x: Any, path: str = "") -> None:
@@ -832,47 +865,41 @@ def _validate_makearray_regions(x: Any, path: str = "") -> None:
     folding to ``[2, 0]``), and silently treating it as empty would hide the
     defect. Template bodies are skipped — pre-substitution bounds may legally
     carry metaparameter names; only concrete integer pairs are checked."""
-    if _is_array(x):
-        for i, child in enumerate(x):
-            _validate_makearray_regions(child, f"{path}/{i}")
-        return
-    if not _is_object(x):
-        return
-    if x.get("op") == "makearray":
-        regions = x.get("regions")
-        if _is_array(regions):
-            for ri, region in enumerate(regions):
-                if not _is_array(region):
+
+    def _check(node: dict, p: str) -> None:
+        if node.get("op") != "makearray":
+            return
+        regions = node.get("regions")
+        if not _is_array(regions):
+            return
+        for ri, region in enumerate(regions):
+            if not _is_array(region):
+                continue
+            for di, bounds in enumerate(region):
+                if not (_is_array(bounds) and len(bounds) == 2):
                     continue
-                for di, bounds in enumerate(region):
-                    if not (_is_array(bounds) and len(bounds) == 2):
-                        continue
-                    lo, hi = bounds[0], bounds[1]
-                    if not (
-                        isinstance(lo, int)
-                        and not isinstance(lo, bool)
-                        and isinstance(hi, int)
-                        and not isinstance(hi, bool)
-                    ):
-                        continue
-                    if hi < lo - 1:
-                        raise ExpressionTemplateError(
-                            MAKEARRAY_REGION_INVERTED,
-                            f"{path}: makearray regions[{ri}] dimension {di} "
-                            f"bound pair [{lo}, {hi}] is inverted (stop < "
-                            "start - 1). An empty bound is spelled "
-                            "[start, start-1] and contributes no elements "
-                            "(esm-spec §4.3.2); a further-inverted pair is an "
-                            "authoring error — e.g. an interior stencil region "
-                            "[2, N-1] instantiated at N below the scheme's "
-                            "minimum extent (§9.6.8).",
-                        )
-    for k, v in x.items():
-        if k == "expression_templates":
-            # Pre-substitution trees; bounds may carry metaparameter names or
-            # fold later (esm-spec §9.7.6).
-            continue
-        _validate_makearray_regions(v, f"{path}/{k}")
+                lo, hi = bounds[0], bounds[1]
+                if not (
+                    isinstance(lo, int)
+                    and not isinstance(lo, bool)
+                    and isinstance(hi, int)
+                    and not isinstance(hi, bool)
+                ):
+                    continue
+                if hi < lo - 1:
+                    raise ExpressionTemplateError(
+                        MAKEARRAY_REGION_INVERTED,
+                        f"{p}: makearray regions[{ri}] dimension {di} "
+                        f"bound pair [{lo}, {hi}] is inverted (stop < "
+                        "start - 1). An empty bound is spelled "
+                        "[start, start-1] and contributes no elements "
+                        "(esm-spec §4.3.2); a further-inverted pair is an "
+                        "authoring error — e.g. an interior stencil region "
+                        "[2, N-1] instantiated at N below the scheme's "
+                        "minimum extent (§9.6.8).",
+                    )
+
+    _walk_json(x, on_obj=_check, skip_keys=_EXPR_TEMPLATES_SKIP, path=path)
 
 
 def lower_expression_templates(file: dict) -> dict:

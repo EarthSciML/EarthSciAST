@@ -27,16 +27,17 @@ Skolem tuple in §5.5.1 sorted total order.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any
 
 import numpy as np
 
-from . import cadence
-from . import relational
+from . import cadence, relational
+from .errors import EarthSciAstError
 
 
-class ValueInventionError(Exception):
+class ValueInventionError(EarthSciAstError):
     """A value-invention build-time materialisation error (the Python analog of
     Julia's ``TreeWalkError`` value-invention codes)."""
 
@@ -94,7 +95,7 @@ def _vi_node_kind(node: Any) -> str:
     return "none"
 
 
-def _vi_lhs_base(lhs: Any) -> Optional[str]:
+def _vi_lhs_base(lhs: Any) -> str | None:
     """Base variable name written by a raw LHS node: ``name``,
     ``{op:index,args:[name,…]}`` or ``{op:D,args:[name,…]}``. ``None`` if
     unrecognised."""
@@ -109,10 +110,10 @@ def _vi_lhs_base(lhs: Any) -> Optional[str]:
     return None
 
 
-def _vi_model_assignments(model_json: Mapping[str, Any]) -> List[Tuple[Any, Any]]:
+def _vi_model_assignments(model_json: Mapping[str, Any]) -> list[tuple[Any, Any]]:
     """Every (lhs, rhs) value-expression pair in a raw model: the equation list
     plus the ``expression`` of each observed variable."""
-    out: List[Tuple[Any, Any]] = []
+    out: list[tuple[Any, Any]] = []
     for eq in model_json.get("equations", []) or []:
         out.append((eq.get("lhs"), eq.get("rhs")))
     for vname, v in (model_json.get("variables", {}) or {}).items():
@@ -126,15 +127,15 @@ def _vi_model_assignments(model_json: Mapping[str, Any]) -> List[Tuple[Any, Any]
 @dataclass
 class _Detection:
     has_vi: bool
-    vi_var_names: Set[str]
-    maps: List[Tuple[str, Any]]
-    producers: List[Tuple[str, Any]]
+    vi_var_names: set[str]
+    maps: list[tuple[str, Any]]
+    producers: list[tuple[str, Any]]
     # The grouped/derived chain in materialisation (fixpoint discovery) order:
     # ``(lhs_base, node, "grouped" | "derived")``.
-    chain: List[Tuple[str, Any, str]]
+    chain: list[tuple[str, Any, str]]
 
 
-def _vi_index_targets(node: Any, out: Set[str]) -> Set[str]:
+def _vi_index_targets(node: Any, out: set[str]) -> set[str]:
     """Every ``index`` target name (the array a value reads from) reachable in a
     subtree: ``{op:"index", args:[NAME, …]}`` → NAME."""
     if isinstance(node, Mapping):
@@ -150,7 +151,7 @@ def _vi_index_targets(node: Any, out: Set[str]) -> Set[str]:
     return out
 
 
-def _vi_grouped_key(node: Any, vi_var_names: Set[str]) -> Optional[str]:
+def _vi_grouped_key(node: Any, vi_var_names: set[str]) -> str | None:
     """The group KEY of a GROUPED reduction, or ``None``. The SCVT group-by
     signature is precise (mirror of Julia ``_vi_grouped_key``): a single-output-
     index ``aggregate`` whose ``join.on`` pairs the OUTPUT index symbol with a
@@ -179,7 +180,7 @@ def _vi_grouped_key(node: Any, vi_var_names: Set[str]) -> Optional[str]:
     return None
 
 
-def _vi_is_derived(node: Any, vi_var_names: Set[str]) -> bool:
+def _vi_is_derived(node: Any, vi_var_names: set[str]) -> bool:
     """True iff ``node`` is an elementwise DERIVED buffer over known VI buffers
     (mirror of Julia ``_vi_is_derived``): a single-output-index ``aggregate`` with
     NO join and NO contraction whose body reads an upstream VI buffer."""
@@ -203,10 +204,10 @@ def _vi_detect(model_json: Mapping[str, Any]) -> _Detection:
     downstream grouped chain), all excluded from the ODE as the geometry clip-ring
     vars are; ``maps`` / ``producers`` are ``(lhs_base, node)`` pairs to
     materialise; ``chain`` is the grouped/derived SCVT centroid buffers."""
-    vi_var_names: Set[str] = set()
-    maps: List[Tuple[str, Any]] = []
-    producers: List[Tuple[str, Any]] = []
-    candidates: List[Tuple[str, Any]] = []  # plain numeric aggregates — grouped/derived?
+    vi_var_names: set[str] = set()
+    maps: list[tuple[str, Any]] = []
+    producers: list[tuple[str, Any]] = []
+    candidates: list[tuple[str, Any]] = []  # plain numeric aggregates — grouped/derived?
     for lhs, rhs in _vi_model_assignments(model_json):
         base = _vi_lhs_base(lhs)
         if base is None:
@@ -225,11 +226,11 @@ def _vi_detect(model_json: Mapping[str, Any]) -> _Detection:
     # buffer in the SCVT centroid shape is itself a build-time buffer. The
     # signatures are narrow (see the helpers) so ordinary model aggregates —
     # including the regridder's bin-to-bin gather — are left on the simulate path.
-    chain: List[Tuple[str, Any, str]] = []
+    chain: list[tuple[str, Any, str]] = []
     changed = True
     while changed:
         changed = False
-        rest: List[Tuple[str, Any]] = []
+        rest: list[tuple[str, Any]] = []
         for base, node in candidates:
             if _vi_grouped_key(node, vi_var_names) is not None:
                 vi_var_names.add(base)
@@ -255,17 +256,17 @@ def _vi_detect(model_json: Mapping[str, Any]) -> _Detection:
 
 @dataclass
 class _ViCtx:
-    const_arrays: Dict[str, np.ndarray]
-    params: Dict[str, float]
-    index_sets: Dict[str, Any]
-    variables: Dict[str, Any]
+    const_arrays: dict[str, np.ndarray]
+    params: dict[str, float]
+    index_sets: dict[str, Any]
+    variables: dict[str, Any]
     # Per-const-array boundary policy (ess-gj4): array name → per-dimension policy
     # strings (each one of "periodic" | "clamp" | "error"). An array absent from
     # this map keeps the strict default ("error" in every dim), so genuine
     # out-of-bounds bugs in connectivity / stencil-weight factors stay caught.
-    const_array_boundaries: Dict[str, List[str]] = field(default_factory=dict)
+    const_array_boundaries: dict[str, list[str]] = field(default_factory=dict)
     # materialised map var → {output-index value → key value}
-    maps: Dict[str, Dict[Any, Any]] = field(default_factory=dict)
+    maps: dict[str, dict[Any, Any]] = field(default_factory=dict)
 
 
 def _vi_key_int(x: Any) -> int:
@@ -302,7 +303,7 @@ def _vi_param(ctx: _ViCtx, name: str) -> float:
     )
 
 
-def _vi_eval(node: Any, ctx: _ViCtx, bindings: Dict[str, Any]) -> Any:
+def _vi_eval(node: Any, ctx: _ViCtx, bindings: dict[str, Any]) -> Any:
     """Evaluate a raw value-invention sub-expression. Returns an int / float /
     bool / str tag / tuple key, depending on the op."""
     if isinstance(node, bool):
@@ -406,7 +407,7 @@ def _resolve_const_index(ctx: _ViCtx, name: str, d: int, i: int, n: int) -> int:
     raise ValueInventionError(f"const array '{name}' index {i} out of range 1..{n} in dim {d}")
 
 
-def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -> float:
+def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -> float:
     """``index(factor, i, …)``: gather from a const-array factor (1-based). The
     factor is build-time data supplied in ``const_arrays``. A name that resolves
     to an already-materialised value-invention buffer (an arg-witness assignment
@@ -445,7 +446,7 @@ def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) ->
     return arr[tuple(zero_idx)]
 
 
-def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -> Any:
+def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -> Any:
     """``skolem(tag?, c1, c2, …)`` → the canonical key tuple. A leading STRING
     literal is the relation tag (the relation name) and is NOT part of the
     emitted key — this is what makes the materialised set byte-identical to the
@@ -466,11 +467,11 @@ def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -
 # --------------------------------------------------------------------------- #
 
 
-def _vi_order_syms(ranges: Mapping[str, Any]) -> List[str]:
+def _vi_order_syms(ranges: Mapping[str, Any]) -> list[str]:
     """Order range symbols so a ragged range's ``of`` parents precede it (a stable
     topological order over the per-symbol ``of`` dependency)."""
     syms = list(ranges.keys())
-    ordered: List[str] = []
+    ordered: list[str] = []
     remaining = list(syms)
     while remaining:
         progressed = False
@@ -515,7 +516,7 @@ def _vi_keyed_factor(ctx: _ViCtx, name: str) -> np.ndarray:
     )
 
 
-def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]) -> List[Any]:
+def _vi_range_values(spec: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -> list[Any]:
     """The element values a range symbol binds to. interval/categorical → 1-based
     positions; ragged → the MEMBER values gathered from the set's ``values``
     factor sliced by its ``offsets`` factor (so a range symbol over
@@ -545,7 +546,7 @@ def _vi_enumerate(ranges: Mapping[str, Any], ctx: _ViCtx, cb) -> None:
     """Enumerate every full binding of an aggregate's ``ranges``, calling
     ``cb(bindings)`` at each leaf (bindings is reused — copy if retained)."""
     syms = _vi_order_syms(ranges)
-    bindings: Dict[str, Any] = {}
+    bindings: dict[str, Any] = {}
 
     def rec(k: int) -> None:
         if k >= len(syms):
@@ -587,7 +588,7 @@ def _vi_join_index_sym(vname: str, producer_ranges: Mapping[str, Any], ctx: _ViC
 
 
 def _vi_join_ok(
-    join: Sequence[Any], producer_ranges: Mapping[str, Any], ctx: _ViCtx, bindings: Dict[str, Any]
+    join: Sequence[Any], producer_ranges: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]
 ) -> bool:
     """True iff every ``join.on`` key-column pair compares equal at this binding
     (the value-equality equi-join gate, §5.3); each key is a materialised map
@@ -607,7 +608,7 @@ def _vi_join_ok(
 def _vi_argreduce(
     node: Mapping[str, Any],
     ctx: _ViCtx,
-    outer_bindings: Dict[str, Any],
+    outer_bindings: dict[str, Any],
     outer_ranges: Mapping[str, Any],
 ) -> int:
     """Arg-witness reducer (RFC §5.7 rule 6). Over the inner contracted ``ranges``
@@ -643,11 +644,11 @@ def _vi_argreduce(
     join = node.get("join")
     # Combined ranges so a ``join`` column over an OUTER-indexed map buffer (the
     # point's bin) resolves alongside the inner candidate's bin (§5.3 equi-join).
-    combined: Dict[str, Any] = {**outer_ranges, **inner_ranges}
+    combined: dict[str, Any] = {**outer_ranges, **inner_ranges}
     syms = _vi_order_syms(inner_ranges)
-    bindings: Dict[str, Any] = dict(outer_bindings)
+    bindings: dict[str, Any] = dict(outer_bindings)
     is_max = op == "argmax"
-    best: Optional[Tuple[float, int]] = None
+    best: tuple[float, int] | None = None
 
     def consider() -> None:
         nonlocal best
@@ -689,7 +690,7 @@ def _vi_argreduce(
     return best[1]
 
 
-def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dict[Any, Any]:
+def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> dict[Any, Any]:
     """Materialise a per-element value-invention map var → {output-index → value}."""
     output_idx = node.get("output_idx") or []
     if len(output_idx) != 1:
@@ -701,10 +702,10 @@ def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dic
         raise ValueInventionError(f"value-invention map {vname!r} has no `expr` body")
     outer_ranges = node.get("ranges") or {}
     is_arg = isinstance(body, Mapping) and body.get("op") in _VI_ARGWITNESS_OPS
-    out: Dict[Any, Any] = {}
+    out: dict[Any, Any] = {}
     sym = str(output_idx[0])
 
-    def visit(bindings: Dict[str, Any]) -> None:
+    def visit(bindings: dict[str, Any]) -> None:
         # An arg-witness body runs the inner reduction (with the outer point bound)
         # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.
         out[bindings[sym]] = (
@@ -718,7 +719,7 @@ def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dic
     return out
 
 
-def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> List[Any]:
+def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
     """Materialise an index-set-producing aggregate → the distinct member set
     (§5.5 sorted total order, via the relational engine). Returns the member
     list."""
@@ -728,9 +729,9 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> List[Any]:
     ranges = node.get("ranges") or {}
     filt = node.get("filter")
     join = node.get("join")
-    members: List[Any] = []
+    members: list[Any] = []
 
-    def visit(bindings: Dict[str, Any]) -> None:
+    def visit(bindings: dict[str, Any]) -> None:
         if filt is not None:
             fv = _vi_eval(filt, ctx, bindings)
             if not (
@@ -791,7 +792,7 @@ def _vi_oplus(node: Mapping[str, Any]):
 
 
 def _vi_assert_buildtime(
-    ctx: _ViCtx, vname: str, node: Mapping[str, Any], vi_var_names: Set[str]
+    ctx: _ViCtx, vname: str, node: Mapping[str, Any], vi_var_names: set[str]
 ) -> None:
     """§5.7 guard 2 for grouped / derived buffers: a build-time reduction may read
     only build-time data — const-array factors and already-materialised VI
@@ -810,7 +811,7 @@ def _vi_assert_buildtime(
             )
 
 
-def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dict[Any, Any]:
+def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> dict[Any, Any]:
     """Materialise a GROUPED semiring aggregate keyed on a value-invention buffer
     → ``{output-index → value}``. For each output ``g``, fold (with the semiring
     ⊕) the body over the contracted points whose group KEY (``assign[p]``) equals
@@ -839,7 +840,7 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
         )
     # The group KEY buffer: the join column paired with the output index that names
     # a materialised VI buffer (`assign`).
-    keyvar: Optional[str] = None
+    keyvar: str | None = None
     for clause in join:
         if not isinstance(clause, Mapping):
             continue
@@ -858,23 +859,23 @@ def _vi_materialize_grouped(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
     keysym = _vi_join_index_sym(keyvar, ranges, ctx)
     op, zerobar = _vi_oplus(node)
     contract = {s: spec for s, spec in ranges.items() if s != gsym}
-    rows: List[Tuple[int, float]] = []
+    rows: list[tuple[int, float]] = []
 
-    def visit(bindings: Dict[str, Any]) -> None:
+    def visit(bindings: dict[str, Any]) -> None:
         k = _vi_key_int(ctx.maps[keyvar][bindings[keysym]])
         rows.append((k, float(_vi_eval(body, ctx, bindings))))
 
     _vi_enumerate(contract, ctx, visit)
     agg = dict(relational.group_aggregate(rows, key=lambda r: r[0], value=lambda r: r[1], op=op))
     # Densify over the output index set; a generator with no assigned point is 0̄.
-    out: Dict[Any, Any] = {}
+    out: dict[Any, Any] = {}
     for g in _vi_range_values(ranges[gsym], ctx, {}):
         out[g] = float(agg.get(g, zerobar))
     ctx.maps[vname] = out
     return out
 
 
-def _vi_materialize_derived(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> Dict[Any, Any]:
+def _vi_materialize_derived(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> dict[Any, Any]:
     """Materialise a DERIVED elementwise buffer (``centroid[g] = num[g]/den[g]``)
     → ``{output-index → value}``. A per-output map whose body reads upstream
     materialised buffers (resolved by :func:`_vi_index` from ``ctx.maps``)."""
@@ -889,9 +890,9 @@ def _vi_materialize_derived(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
     body = node.get("expr")
     if body is None:
         raise ValueInventionError(f"derived value-invention aggregate {vname!r} has no `expr` body")
-    out: Dict[Any, Any] = {}
+    out: dict[Any, Any] = {}
 
-    def visit(bindings: Dict[str, Any]) -> None:
+    def visit(bindings: dict[str, Any]) -> None:
         out[bindings[gsym]] = float(_vi_eval(body, ctx, bindings))
 
     _vi_enumerate(ranges, ctx, visit)
@@ -900,7 +901,7 @@ def _vi_materialize_derived(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) ->
 
 
 def _vi_classification_model(
-    model_json: Mapping[str, Any], maps: Sequence[Tuple[str, Any]]
+    model_json: Mapping[str, Any], maps: Sequence[tuple[str, Any]]
 ) -> Mapping[str, Any]:
     """A model copy whose value-invention MAP vars are re-typed to their body's
     cadence class (``const``→parameter, ``discrete``→discrete), so a producer
@@ -953,18 +954,18 @@ class ValueInventionResult:
     - ``vi_var_names`` — value-invention LHS vars to drop from the ODE.
     """
 
-    extents: Dict[str, int] = field(default_factory=dict)
-    members: Dict[str, List[Any]] = field(default_factory=dict)
-    assignments: Dict[str, List[int]] = field(default_factory=dict)
-    groups: Dict[str, List[float]] = field(default_factory=dict)
-    vi_var_names: Set[str] = field(default_factory=set)
+    extents: dict[str, int] = field(default_factory=dict)
+    members: dict[str, list[Any]] = field(default_factory=dict)
+    assignments: dict[str, list[int]] = field(default_factory=dict)
+    groups: dict[str, list[float]] = field(default_factory=dict)
+    vi_var_names: set[str] = field(default_factory=set)
 
 
 def materialize_value_invention(
     model_json: Mapping[str, Any],
-    const_arrays: Optional[Mapping[str, Any]] = None,
-    params: Optional[Mapping[str, Any]] = None,
-    const_array_boundaries: Optional[Mapping[str, Sequence[str]]] = None,
+    const_arrays: Mapping[str, Any] | None = None,
+    params: Mapping[str, Any] | None = None,
+    const_array_boundaries: Mapping[str, Sequence[str]] | None = None,
 ) -> ValueInventionResult:
     """Run the build-time value-invention engine over a raw model document.
 
@@ -1055,7 +1056,7 @@ def materialize_value_invention(
 
     # ``from_faq`` id → derived index-set name (so we only materialise producers a
     # derived set actually names; geometry producers are handled elsewhere).
-    faq_to_set: Dict[str, str] = {}
+    faq_to_set: dict[str, str] = {}
     for sname, iset in ctx.index_sets.items():
         if not isinstance(iset, Mapping) or iset.get("kind") != "derived":
             continue
