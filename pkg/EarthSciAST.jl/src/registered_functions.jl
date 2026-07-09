@@ -685,48 +685,12 @@ function _lower_expr_enums(e::OpExpr,
         end
         return OpExpr("const", Expr[]; value=mapping[symbol_name])
     end
-    # Recurse — rebuild the op with lowered arguments.
-    new_args = Vector{Expr}(undef, length(e.args))
-    changed = false
-    for (i, a) in enumerate(e.args)
-        new_args[i] = _lower_expr_enums(a, enums)
-        if !(new_args[i] === a)
-            changed = true
-        end
-    end
-    new_body = e.expr_body === nothing ? nothing : _lower_expr_enums(e.expr_body, enums)
-    body_changed = !(new_body === e.expr_body)
-    new_values = e.values
-    values_changed = false
-    if e.values !== nothing
-        new_values = Vector{Expr}(undef, length(e.values))
-        for (i, v) in enumerate(e.values)
-            new_values[i] = _lower_expr_enums(v, enums)
-            if !(new_values[i] === v)
-                values_changed = true
-            end
-        end
-    end
-    # Recurse into table_lookup.axes (per-axis input expression map).
-    new_table_axes = e.table_axes
-    table_axes_changed = false
-    if e.table_axes !== nothing
-        new_table_axes = Dict{String,Expr}()
-        for (k, v) in e.table_axes
-            new_v = _lower_expr_enums(v, enums)
-            new_table_axes[k] = new_v
-            if !(new_v === v)
-                table_axes_changed = true
-            end
-        end
-    end
-    if !changed && !body_changed && !values_changed && !table_axes_changed
-        return e
-    end
-    return OpExpr(e.op, new_args;
-        wrt=e.wrt, dim=e.dim, output_idx=e.output_idx,
-        expr_body=new_body, reduce=e.reduce, ranges=e.ranges,
-        regions=e.regions, values=new_values, shape=e.shape,
-        perm=e.perm, axis=e.axis, fn=e.fn, name=e.name, value=e.value,
-        table=e.table, table_axes=new_table_axes, output=e.output)
+    # Recurse into EVERY expression-bearing field via the shared field-preserving
+    # rewrite (`map_children`), so an `enum` nested in an integral bound, a
+    # filter/key predicate, a makearray value, a table axis, or a dense `ranges`
+    # bound is also lowered — and no `OpExpr` field is silently dropped on the
+    # rebuild (the previous hand-listed ~17-keyword `OpExpr(...)` reconstruction
+    # dropped `int_var`/`semiring`/`join`/`filter`/`id`/… whenever any child
+    # changed, and never recursed `lower`/`upper`/`filter`/`key`/`ranges`).
+    return map_children(x -> _lower_expr_enums(x, enums), e)
 end
