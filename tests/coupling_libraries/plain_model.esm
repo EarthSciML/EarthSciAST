@@ -1,0 +1,17 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "PlainModelNotALibrary",
+    "description": "A perfectly valid, ordinary model document (no coupling_roles). Used as the target of import_not_library.esm: a coupling_import ref pointing here is coupling_import_not_library (esm-spec 10.11)."
+  },
+  "models": {
+    "SomeModel": {
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

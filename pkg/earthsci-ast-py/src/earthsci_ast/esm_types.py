@@ -615,6 +615,10 @@ class CouplingType(Enum):
     OPERATOR_APPLY = "operator_apply"
     CALLBACK = "callback"
     EVENT = "event"
+    # A `coupling_import` entry references a coupling-library file and binds its
+    # declared roles to assembly components (esm-spec §10.10). It carries no
+    # wiring of its own; at flatten it expands into concrete edges.
+    COUPLING_IMPORT = "coupling_import"
 
 
 @dataclass
@@ -714,6 +718,24 @@ class EventCoupling(BaseCouplingEntry):
     reinitialize: bool | None = None
 
 
+@dataclass
+class CouplingImport(BaseCouplingEntry):
+    """Coupling entry that imports a coupling-library file (esm-spec §10.10).
+
+    ``ref`` is a §4.7 reference to a coupling-library file (a document with a
+    top-level ``coupling_roles`` map); ``bind`` maps every declared role name to
+    an assembly component (a top-level models/reaction_systems/data_loaders key
+    or a dotted ``Parent.Child`` subsystem path). The entry declares no wiring of
+    its own — at flatten (:mod:`earthsci_ast.coupling_imports`) it expands into
+    concrete edges spliced in its position, while the source entry is preserved
+    for round-trip.
+    """
+
+    coupling_type: CouplingType = field(default=CouplingType.COUPLING_IMPORT, init=False)
+    ref: Optional[str] = None
+    bind: Dict[str, str] = field(default_factory=dict)
+
+
 # Discriminated union of all coupling entry types
 CouplingEntry = Union[
     OperatorComposeCoupling,
@@ -722,6 +744,7 @@ CouplingEntry = Union[
     OperatorApplyCoupling,
     CallbackCoupling,
     EventCoupling,
+    CouplingImport,
 ]
 
 

@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "subsystem_ref_to_library",
+    "description": "Cross-kind rejection: a 4.7 subsystem `ref` targets the coupling-library file rothermel_fuel.esm. Coupling libraries are includable ONLY via a coupling_import entry, never mounted as a subsystem (esm-spec 10.9). Surfaces from resolveSubsystemRefs. Expected: subsystem_ref_is_coupling_library."
+  },
+  "models": {
+    "Assembly": {
+      "variables": {
+        "y": { "type": "state", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["y"], "wrt": "t" }, "rhs": { "op": "-", "args": ["y"] } }
+      ],
+      "subsystems": {
+        "Wiring": { "ref": "./rothermel_fuel.esm" }
+      }
+    }
+  }
+}

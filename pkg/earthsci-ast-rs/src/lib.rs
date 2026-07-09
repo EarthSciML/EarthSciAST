@@ -41,6 +41,7 @@ pub mod aggregate;
 pub mod cadence;
 pub mod canonicalize;
 pub mod coupling;
+pub mod coupling_imports;
 pub mod dae;
 pub mod diagnostic;
 pub mod display;
@@ -111,6 +112,9 @@ pub use cadence::{
     partition_model,
 };
 pub use canonicalize::{CanonicalizeError, canonical_json, canonicalize, format_canonical_float};
+pub use coupling_imports::{
+    CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,
+};
 pub use dae::{DaeError, DiscretizeOptions, apply_dae_contract, default_dae_support, discretize};
 pub use display::{to_ascii, to_latex, to_unicode};
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,7 +122,7 @@ pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
 pub use flatten::{
     DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem, flatten,
-    flatten_model,
+    flatten_model, flatten_with_options,
 };
 pub use geometry::{
     GeometryError, Manifold, SLIVER_ATOL_FACTOR, area_tolerance_ok, intersect_polygon,
@@ -156,7 +160,7 @@ pub use template_imports::{
     resolve_template_machinery,
 };
 pub use types::{
-    AffectEquation, AutoRecords, ContinuousEvent, CouplingEntry, DaeInfo, DataLoader,
+    AffectEquation, AutoRecords, ContinuousEvent, CouplingEntry, CouplingRole, DaeInfo, DataLoader,
     DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource,
     DataLoaderTemporal, DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,

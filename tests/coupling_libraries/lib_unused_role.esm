@@ -1,0 +1,16 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryUnusedRole",
+    "description": "INVALID coupling library: role 'Extra' is declared but referenced by no edge (esm-spec 10.9 - a declared role must appear at some 10.10.2 occurrence site). Expected: coupling_role_unused."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" },
+    "Extra": { "description": "declared but never wired" }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.w_0", "to": "Spread.w0", "transform": "param_to_var" }
+  ]
+}

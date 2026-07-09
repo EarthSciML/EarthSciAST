@@ -33,7 +33,6 @@ fn test_undefined_variable_in_model() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
@@ -56,6 +55,7 @@ fn test_undefined_variable_in_model() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -133,7 +133,6 @@ fn test_equation_count_mismatch() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
@@ -162,6 +161,7 @@ fn test_equation_count_mismatch() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -239,7 +239,6 @@ fn test_undefined_species_in_reaction() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -253,6 +252,7 @@ fn test_undefined_species_in_reaction() {
     reaction_systems.insert("test".to_string(), rs);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -348,7 +348,6 @@ fn test_valid_file_passes() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Valid Model".to_string()),
@@ -368,6 +367,7 @@ fn test_valid_file_passes() {
     models.insert("valid".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),

@@ -102,7 +102,6 @@ export function deriveODEs(system: ReactionSystem): Model {
   return {
     variables,
     equations,
-    coupletype: system.coupletype,
     reference: system.reference,
   }
 }

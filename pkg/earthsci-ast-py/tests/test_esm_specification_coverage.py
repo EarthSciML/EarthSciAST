@@ -720,7 +720,6 @@ class TestSection06Models:
             "metadata": {"name": "Test"},
             "models": {
                 "CompleteModel": {
-                    "coupletype": "TestCoupler",
                     "reference": {
                         "doi": "10.1234/test-doi",
                         "citation": "Test et al., 2024",
@@ -862,7 +861,6 @@ class TestSection07ReactionSystems:
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "SuperFastReactions": {
-                    "coupletype": "SuperFastCoupler",
                     "reference": {
                         "doi": "10.5194/acp-8-6365-2008",
                         "citation": "Cameron-Smith et al., 2008",
@@ -1486,7 +1484,6 @@ class TestSection13CompleteExamples:
             },
             "reaction_systems": {
                 "SimpleOzone": {
-                    "coupletype": "SimpleOzoneCoupler",
                     "reference": {"notes": "Minimal O3-NOx photochemical cycle"},
                     "species": {
                         "O3": {"units": "mol/mol", "default": 40e-9, "description": "Ozone"},

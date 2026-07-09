@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "coupletype_model",
+    "description": "coupletype removal (RFC 5/11): a Model still carrying the deleted `coupletype` field. Model is additionalProperties:false, so a straggler document fails schema validation loudly (unknown property) - the intended clean-break behavior. Expected: schema validation error."
+  },
+  "models": {
+    "FireModel": {
+      "coupletype": "FuelCoupler",
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

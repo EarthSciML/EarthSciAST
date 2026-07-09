@@ -1121,19 +1121,21 @@ def _apply_couplings(
     esm_file: EsmFile,
     components: OrderedDict[str, _ComponentSystem],
     metadata: FlattenMetadata,
+    coupling_entries: list[CouplingEntry],
 ) -> None:
     """Apply the file's coupling entries to ``components`` in place.
 
-    Coupling entries are walked in array order. ``operator_compose`` runs first
-    so its placeholder-expansion / merge happens before any ``variable_map``
-    substitution rewrites the dependent variable names out from under us.
-    Provenance (operator applies, callbacks, coupling-rule descriptions) is
-    recorded into ``metadata``.
+    ``coupling_entries`` is the effective coupling list AFTER ``coupling_import``
+    expansion (esm-spec §10.10.3) — walked in array order. ``operator_compose``
+    runs first so its placeholder-expansion / merge happens before any
+    ``variable_map`` substitution rewrites the dependent variable names out from
+    under us. Provenance (operator applies, callbacks, coupling-rule
+    descriptions) is recorded into ``metadata``.
     """
     operator_compose_entries: list[OperatorComposeCoupling] = []
     couple_entries: list[CouplingCouple] = []
     var_map_entries: list[VariableMapCoupling] = []
-    for entry in esm_file.coupling:
+    for entry in coupling_entries:
         if isinstance(entry, OperatorComposeCoupling):
             operator_compose_entries.append(entry)
         elif isinstance(entry, CouplingCouple):
@@ -1294,12 +1296,18 @@ def _derive_independent_vars(flat: FlattenedSystem) -> None:
     flat.independent_variables = independent
 
 
-def flatten(esm_file: EsmFile) -> FlattenedSystem:
+def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> FlattenedSystem:
     """Flatten a coupled multi-system EsmFile per spec §4.7.5.
 
     The result is the canonical intermediate representation: dot-namespaced
     variables, equations as Expr trees, coupling rules resolved into the
     equation set, and metadata recording what happened.
+
+    ``base_path`` / ``load_ref`` are only consulted when the file carries a
+    ``coupling_import`` coupling entry (esm-spec §10.10): each such entry loads
+    the referenced coupling-library file (via ``load_ref(ref, base_path)``,
+    defaulting to a disk reader relative to ``base_path``) and expands into
+    concrete edges spliced in its position, before the coupling-rule step.
 
     Raises
     ------
@@ -1308,16 +1316,26 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
     ConflictingDerivativeError
         If two source systems define non-additive equations for the same
         dependent variable.
+    ExpressionTemplateError
+        For any esm-spec §10.11 coupling-import / coupling-library diagnostic.
     """
     if not esm_file.models and not esm_file.reaction_systems:
         raise ValueError("Cannot flatten an EsmFile with no models or reaction systems")
+
+    # Expand `coupling_import` entries (esm-spec §10.10.3) into concrete edges
+    # BEFORE any coupling processing. A file with no coupling_import entries
+    # yields its `coupling` list verbatim and needs no options.
+    from .coupling_imports import expand_coupling_imports
+
+    coupling_entries = expand_coupling_imports(esm_file, base_path=base_path, load_ref=load_ref)
 
     # Step 1: collect every component system into a per-system bag of variables.
     components, source_systems = _collect_components(esm_file)
     metadata = FlattenMetadata(source_systems=list(source_systems))
 
-    # Step 2: resolve coupling entries into the per-component equation sets.
-    _apply_couplings(esm_file, components, metadata)
+    # Step 2: resolve coupling entries into the per-component equation sets. The
+    # expanded coupling list (post coupling_import) drives the coupling walk.
+    _apply_couplings(esm_file, components, metadata, coupling_entries)
 
     # Step 3: assemble the final FlattenedSystem from the per-component pieces.
     flat = _assemble_system(esm_file, components, metadata)
@@ -1325,8 +1343,8 @@ def flatten(esm_file: EsmFile) -> FlattenedSystem:
     # Step 4: collect and namespace events.
     _namespace_events(esm_file, flat)
 
-    # Step 4b: pointwise spatial lift (esm-spec §10.5).
-    _apply_pointwise_lift(flat, esm_file.coupling)
+    # Step 4b: pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
+    _apply_pointwise_lift(flat, coupling_entries)
 
     # Step 5: domain pass-through.
     _apply_domain(esm_file, flat)

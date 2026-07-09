@@ -16,7 +16,6 @@
   },
   "models": {
     "AtmosphericChemistry": {
-      "coupletype": "ChemistryCoupler",
       "reference": {
         "notes": "Primary atmospheric chemistry system for coupling tests"
       },
@@ -283,7 +282,6 @@
       ]
     },
     "SurfaceExchange": {
-      "coupletype": "SurfaceExchangeCoupler",
       "reference": {
         "notes": "Surface deposition model for couple coupling"
       },

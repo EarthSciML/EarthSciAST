@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryEdgeTemplateImports",
+    "description": "INVALID coupling library: a library edge carries an `expression_template_imports` map. That is a pre-fixpoint injection consumed BEFORE flattening, but a coupling_import expands AT flatten - it could never reach the engine that consumes it (esm-spec 10.9). Expected: coupling_library_illegal_payload."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Fuel.sigma",
+      "to": "Spread.sigma",
+      "transform": "param_to_var",
+      "expression_template_imports": { "Spread": [{ "ref": "./some_templates.esm" }] }
+    }
+  ]
+}

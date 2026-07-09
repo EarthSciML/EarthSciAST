@@ -46,6 +46,11 @@ export const schema: AnySchemaObject = {
       "required": [
         "expression_templates"
       ]
+    },
+    {
+      "required": [
+        "coupling_roles"
+      ]
     }
   ],
   "properties": {
@@ -133,6 +138,19 @@ export const schema: AnySchemaObject = {
     },
     "metaparameters": {
       "$ref": "#/$defs/Metaparameters"
+    },
+    "coupling_roles": {
+      "type": "object",
+      "description": "Coupling-library formal component roles (esm-spec §10.9). Present only in a coupling-library file, which pairs it with a role-scoped `coupling` array and declares no models/reaction_systems/data_loaders/domain/index_sets/metaparameters/expression_templates (enforced by the resolver as `coupling_library_illegal_payload`). Presence of this key is the sole positive identifier of the coupling-library file kind. Each entry is a role descriptor carrying an optional human-readable `description`; roles are formal parameters (names, not types), bound to actual components at a `coupling_import` (esm-spec §10.10).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -1306,17 +1324,6 @@ export const schema: AnySchemaObject = {
       ],
       "additionalProperties": false,
       "properties": {
-        "coupletype": {
-          "description": "Coupling type name. Informational label identifying this system's role in coupling.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "reference": {
           "$ref": "#/$defs/Reference"
         },
@@ -1583,17 +1590,6 @@ export const schema: AnySchemaObject = {
       ],
       "additionalProperties": false,
       "properties": {
-        "coupletype": {
-          "description": "Coupling type name. Informational label identifying this system's role in coupling.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "reference": {
           "$ref": "#/$defs/Reference"
         },
@@ -2695,8 +2691,39 @@ export const schema: AnySchemaObject = {
         },
         {
           "$ref": "#/$defs/CouplingEvent"
+        },
+        {
+          "$ref": "#/$defs/CouplingImport"
         }
       ]
+    },
+    "CouplingImport": {
+      "type": "object",
+      "description": "Reuse of a coupling-library file (esm-spec §10.9, §10.10): imports the library named by `ref` and binds each of its declared roles to a component in the assembly. Expands at flatten into concrete variable_map/couple/operator_compose/event edges by substituting bound actuals for role names; the entry itself round-trips intact. Carries no `expression_template_imports` (injection is a property of the wiring entries, not of an import indirection).",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "ref"
+      ],
+      "properties": {
+        "type": {
+          "const": "coupling_import"
+        },
+        "ref": {
+          "type": "string",
+          "description": "§4.7 reference (relative path, absolute path, URL, or ${VAR}) to a coupling-library file (a document with top-level `coupling_roles`)."
+        },
+        "bind": {
+          "type": "object",
+          "description": "Total map from every library role name to a scoped component reference in the assembly (esm-spec §10.10.1). Each value names a top-level or nested models/reaction_systems/data_loaders component (a system or loader node), not a variable. No role may be omitted; there is no auto-binding.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
     },
     "CouplingOperatorCompose": {
       "type": "object",

@@ -35,7 +35,10 @@ if TYPE_CHECKING:
 import jsonschema
 from jsonschema import validate
 
-from .diagnostics import SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY
+from .diagnostics import (
+    SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+)
 from .errors import EarthSciAstError
 from .esm_types import (
     AffectEquation,
@@ -46,6 +49,7 @@ from .esm_types import (
     ContinuousEvent,
     CouplingCouple,
     CouplingEntry,
+    CouplingImport,
     CouplingType,
     DataLoader,
     DataLoaderDeterminism,
@@ -964,6 +968,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
         "operator_apply": CouplingType.OPERATOR_APPLY,
         "callback": CouplingType.CALLBACK,
         "event": CouplingType.EVENT,
+        "coupling_import": CouplingType.COUPLING_IMPORT,
     }
 
     if schema_type not in type_mapping:
@@ -1024,6 +1029,19 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             to_var=coupling_data.get("to"),
             transform=transform,
             factor=coupling_data.get("factor"),
+        )
+
+    if coupling_type == CouplingType.COUPLING_IMPORT:
+        # A `coupling_import` (esm-spec §10.10) carries only a `ref` to a
+        # coupling-library file and a role->component `bind` map. Expansion is
+        # deferred to flatten (earthsci_ast.coupling_imports); the source entry
+        # is preserved here for round-trip.
+        bind_raw = coupling_data.get("bind", {})
+        bind = {k: v for k, v in bind_raw.items()} if isinstance(bind_raw, dict) else {}
+        return CouplingImport(
+            description=description,
+            ref=coupling_data.get("ref"),
+            bind=bind,
         )
 
     if coupling_type == CouplingType.OPERATOR_APPLY:
@@ -1487,6 +1505,19 @@ def _load_ref_data(
             f"Subsystem ref '{ref_str}' targets a template-library file; "
             "libraries are imported via expression_template_imports "
             "(esm-spec §9.7.1)",
+        )
+
+    # A §4.7 subsystem ref MUST NOT target a coupling-library file either —
+    # a coupling library is imported via a coupling_import coupling entry, not
+    # mounted as a subsystem (esm-spec §10.9).
+    from .coupling_imports import is_coupling_library_doc
+
+    if is_coupling_library_doc(ref_data):
+        raise ExpressionTemplateError(
+            SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+            f"Subsystem ref '{ref_str}' targets a coupling-library file; "
+            "libraries are imported via a coupling_import coupling entry "
+            "(esm-spec §10.9)",
         )
 
     # Validate the referenced file against the schema.

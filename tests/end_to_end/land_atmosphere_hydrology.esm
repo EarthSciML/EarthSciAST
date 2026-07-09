@@ -25,7 +25,6 @@
   },
   "models": {
     "AtmosphericBoundaryLayer": {
-      "coupletype": "AtmosphereCoupler",
       "reference": {
         "notes": "Atmospheric boundary layer model with temperature, humidity, and momentum exchange"
       },
@@ -187,7 +186,6 @@
       ]
     },
     "SoilHydrologyThermal": {
-      "coupletype": "SoilCoupler",
       "reference": {
         "notes": "Multi-layer soil model with water and heat transport",
         "citation": "Campbell & Norman, 1998. Environmental Biophysics"

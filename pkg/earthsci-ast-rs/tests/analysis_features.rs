@@ -50,7 +50,6 @@ fn test_analysis_features_integration() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Simple Model".to_string()),
@@ -137,7 +136,6 @@ fn test_analysis_features_integration() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -151,6 +149,7 @@ fn test_analysis_features_integration() {
     reaction_systems.insert("simple_rs".to_string(), rs);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -221,7 +220,6 @@ fn test_editing_operations() {
 
     // Create a simple model
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),

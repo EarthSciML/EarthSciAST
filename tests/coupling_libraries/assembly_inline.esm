@@ -1,0 +1,39 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "wildfire_rothermel_inline",
+    "description": "The substituted form of assembly_import.esm: identical models, but the five Rothermel variable_map edges authored INLINE. flatten(this) must deep-equal flatten(assembly_import.esm) (esm-spec 10.10.3 / RFC 11 equivalence)."
+  },
+  "models": {
+    "FuelModelLookup": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 },
+        "w_0": { "type": "parameter", "units": "kg/m^2", "default": 0.5 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.3 },
+        "M_x": { "type": "parameter", "units": "1", "default": 0.2 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 }
+      },
+      "equations": []
+    },
+    "RothermelFireSpread": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "w0": { "type": "parameter", "units": "kg/m^2", "default": 0.0 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.0 },
+        "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 },
+        "r": { "type": "state", "units": "m/s", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": { "op": "-", "args": ["r"] } }
+      ]
+    }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "FuelModelLookup.sigma", "to": "RothermelFireSpread.sigma", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "FuelModelLookup.w_0", "to": "RothermelFireSpread.w0", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "FuelModelLookup.delta", "to": "RothermelFireSpread.delta", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "FuelModelLookup.M_x", "to": "RothermelFireSpread.Mx", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "FuelModelLookup.h", "to": "RothermelFireSpread.h", "transform": "param_to_var" }
+  ]
+}

@@ -480,24 +480,23 @@ describe('Schema Edge Cases', () => {
       expect(result.reaction_systems?.['null_rs'].reactions[1].products).toBeNull()
     })
 
-    it('should handle nullable coupletype fields', () => {
-      const nullCoupletype = {
-        esm: '0.1.0',
-        metadata: { name: 'null_coupletype_test' },
+    it('should reject the removed coupletype field (0.8.0 clean break)', () => {
+      // coupletype was removed in 0.8.0; Model is additionalProperties:false, so
+      // a document still carrying it must fail schema validation loudly.
+      const withCoupletype = {
+        esm: '0.8.0',
+        metadata: { name: 'coupletype_removed_test' },
         models: {
           test_model: {
-            coupletype: null, // Should be allowed
+            coupletype: null,
             variables: {},
             equations: [],
           },
         },
       }
 
-      const errors = validateSchema(nullCoupletype)
-      expect(errors).toEqual([])
-
-      const result = load(nullCoupletype)
-      expect((result.models?.['test_model'] as Model).coupletype).toBeNull()
+      const errors = validateSchema(withCoupletype)
+      expect(errors.length).toBeGreaterThan(0)
     })
 
     it('should fail when required fields are null', () => {

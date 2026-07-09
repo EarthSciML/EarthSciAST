@@ -25,7 +25,6 @@
   },
   "models": {
     "AtmosphericChemistry": {
-      "coupletype": "ChemistryCoupler",
       "reference": {
         "notes": "NOx-O3-VOC photochemistry with temperature-dependent kinetics",
         "doi": "10.5194/acp-8-6365-2008"
@@ -561,7 +560,6 @@
       ]
     },
     "SurfaceExchange": {
-      "coupletype": "SurfaceExchangeCoupler",
       "reference": {
         "notes": "Bidirectional surface-atmosphere exchange via resistance model",
         "citation": "Wesely, 1989. Parameterization of surface resistances to gaseous dry deposition"

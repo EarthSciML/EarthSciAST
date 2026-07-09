@@ -29,7 +29,6 @@
     },
     "reaction_systems": {
         "Chemistry": {
-            "coupletype": "ChemistryCoupler",
             "reference": {
                 "notes": "0-D O3-NOx photochemistry (the reaction part). A reaction system is 0-D: each species is a scalar with a `default`, and it hosts no `ic` of its own. It is lowered to GENERIC per-species scalar ODEs (`D(sp)=Σ mass-action terms`) BEFORE coupling, then spatially LIFTED onto the lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise. A non-constant / loaded-field IC for a lifted species is declared with a scoped-reference `ic` in ChemistryICs (spec 11.4.1)."
             },

@@ -1,0 +1,15 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryUnknownRoleEdge",
+    "description": "INVALID coupling library: an edge's top-level system segment ('Ghost') is not a declared role (esm-spec 10.9, role-scoped resolution). Expected: coupling_edge_unknown_role."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Ghost.w_0", "to": "Spread.w0", "transform": "param_to_var" }
+  ]
+}

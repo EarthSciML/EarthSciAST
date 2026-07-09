@@ -189,6 +189,10 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
                         )
                     }
                 }
+                // A `coupling_import` is an indirection to a coupling-library
+                // file; its concrete edges are materialized only at flatten, so
+                // the source-level component graph carries no edge for it.
+                CouplingEntry::CouplingImport { .. } => continue,
             };
 
             edges.push(CouplingEdge {
@@ -904,6 +908,7 @@ mod tests {
     #[test]
     fn test_component_graph_empty() {
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -942,7 +947,6 @@ mod tests {
             "model1".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model 1".to_string()),
                 variables: HashMap::new(),
@@ -961,7 +965,6 @@ mod tests {
             "model2".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model 2".to_string()),
                 variables: HashMap::new(),
@@ -978,6 +981,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1023,7 +1027,6 @@ mod tests {
             "test_model".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables: HashMap::new(),
@@ -1040,6 +1043,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1077,7 +1081,6 @@ mod tests {
             "test_model".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables: HashMap::new(),
@@ -1097,7 +1100,6 @@ mod tests {
         reaction_systems.insert(
             "test_rs".to_string(),
             ReactionSystem {
-                coupletype: None,
                 reference: None,
                 species: HashMap::new(),
                 parameters: HashMap::new(),
@@ -1110,6 +1112,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1229,7 +1232,6 @@ mod tests {
             "source".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Source System".to_string()),
                 variables: HashMap::new(),
@@ -1248,7 +1250,6 @@ mod tests {
             "target".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Target System".to_string()),
                 variables: HashMap::new(),
@@ -1273,6 +1274,7 @@ mod tests {
         }];
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),

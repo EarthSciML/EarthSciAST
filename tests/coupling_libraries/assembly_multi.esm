@@ -1,0 +1,61 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "wildfire_two_fuel_sources",
+    "description": "Multiple instantiation (RFC 6 / 11): two coupling_import edges reference rothermel_fuel.esm with DIFFERENT binds, expanding to two independent, non-interfering edge sets - the case type dispatch cannot express."
+  },
+  "models": {
+    "FuelModelLookup": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 },
+        "w_0": { "type": "parameter", "units": "kg/m^2", "default": 0.5 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.3 },
+        "M_x": { "type": "parameter", "units": "1", "default": 0.2 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 }
+      },
+      "equations": []
+    },
+    "RothermelFireSpread": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "w0": { "type": "parameter", "units": "kg/m^2", "default": 0.0 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.0 },
+        "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 }
+      },
+      "equations": []
+    },
+    "LandfireFuel": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 2000.0 },
+        "w_0": { "type": "parameter", "units": "kg/m^2", "default": 0.8 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.5 },
+        "M_x": { "type": "parameter", "units": "1", "default": 0.25 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 }
+      },
+      "equations": []
+    },
+    "RothermelStatic": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "w0": { "type": "parameter", "units": "kg/m^2", "default": 0.0 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.0 },
+        "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./rothermel_fuel.esm",
+      "bind": { "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread" }
+    },
+    {
+      "type": "coupling_import",
+      "ref": "./rothermel_fuel.esm",
+      "bind": { "Fuel": "LandfireFuel", "Spread": "RothermelStatic" }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "import_misbind_downstream",
+    "description": "Mis-bind caught downstream (RFC 11): the bind is STRUCTURALLY COMPLETE (both roles bound to real components), so binding-time checks pass, but 'Spread' points at RothermelNoW0, which lacks the parameter `w0` the library's `Fuel.w_0 -> Spread.w0` edge references. Per esm-spec 4.1/7 the expanded edge fails at flatten with unresolved_scoped_ref naming RothermelNoW0.w0 - the same diagnostic a hand-authored bad edge produces."
+  },
+  "models": {
+    "FuelModelLookup": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 },
+        "w_0": { "type": "parameter", "units": "kg/m^2", "default": 0.5 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.3 },
+        "M_x": { "type": "parameter", "units": "1", "default": 0.2 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 }
+      },
+      "equations": []
+    },
+    "RothermelNoW0": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.0 },
+        "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./rothermel_fuel.esm",
+      "bind": { "Fuel": "FuelModelLookup", "Spread": "RothermelNoW0" }
+    }
+  ]
+}

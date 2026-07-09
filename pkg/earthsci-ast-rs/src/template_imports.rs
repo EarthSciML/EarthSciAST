@@ -1531,6 +1531,18 @@ fn resolve_import_entry(
     reject_expression_templates_pre_v04(&raw)?;
     reject_template_imports_pre_v08(&raw)?;
 
+    // Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
+    // a coupling-library file (top-level `coupling_roles`) is imported via a
+    // `coupling_import` coupling entry, not as a template library (esm-spec §10.9).
+    if crate::coupling_imports::is_coupling_library_doc(&raw) {
+        return Err(err(
+            "template_import_is_coupling_library",
+            format!(
+                "{origin}: import target '{ref_str}' is a coupling-library file (has \
+                 `coupling_roles`), not a template library (esm-spec §10.9)"
+            ),
+        ));
+    }
     // Library purity (esm-spec §9.7.1): the two reference mechanisms are
     // disjoint — a component/subsystem file is not importable as a library.
     if !is_template_library_doc(&raw) {

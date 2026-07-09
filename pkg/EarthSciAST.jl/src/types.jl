@@ -1015,6 +1015,26 @@ struct CouplingEvent <: CouplingEntry
 end
 
 """
+    CouplingImport <: CouplingEntry
+
+Reuse of a coupling-library file (esm-spec §10.9, §10.10). Names a library by
+`ref` and binds each of the library's declared roles to a component in the
+assembly via `bind` (role name → a top-level `models`/`reaction_systems`/
+`data_loaders` key, or a dotted `Parent.Child` subsystem path). At flatten the
+import expands into concrete `variable_map`/`couple`/`operator_compose`/`event`
+edges by substituting the bound actual for every role-named top-level segment
+(`expand_coupling_imports`); the entry itself round-trips intact.
+"""
+struct CouplingImport <: CouplingEntry
+    ref::String
+    bind::Dict{String,String}
+    description::Union{String,Nothing}
+
+    CouplingImport(ref::String, bind::AbstractDict=Dict{String,String}(); description=nothing) =
+        new(ref, Dict{String,String}(string(k) => string(v) for (k, v) in pairs(bind)), description)
+end
+
+"""
     DataLoaderSource
 
 File discovery configuration for a DataLoader. Describes how to locate data

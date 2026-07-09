@@ -17,7 +17,6 @@
   },
   "reaction_systems": {
     "AtmosphericChemistry": {
-      "coupletype": "AtmosphericChemistryCoupler",
       "reference": {
         "doi": "10.1000/test.version.compat",
         "citation": "Test et al. (2024). Version Compatibility in ESM Format.",

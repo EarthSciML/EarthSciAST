@@ -1116,7 +1116,14 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
     reject_template_imports_pre_v08(raw)
 
     # Library purity (esm-spec §9.7.1): the two reference mechanisms are
-    # disjoint — a component/subsystem file is not importable as a library.
+    # disjoint — a component/subsystem file, and a coupling-library file, are
+    # not importable as a template library.
+    if _is_coupling_library_doc(raw)
+        throw(ExpressionTemplateError(
+            "template_import_is_coupling_library",
+            "$origin: import target '$ref' is a coupling-library file " *
+            "(has `coupling_roles`), not a template library (esm-spec §10.9)"))
+    end
     _is_template_library_doc(raw) || throw(ExpressionTemplateError(
         "template_import_not_library",
         "$origin: import target '$ref' lacks top-level `expression_templates` — " *

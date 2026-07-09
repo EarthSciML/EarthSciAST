@@ -40,7 +40,6 @@ fn test_component_graph_generation() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
@@ -75,7 +74,6 @@ fn test_component_graph_generation() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -89,6 +87,7 @@ fn test_component_graph_generation() {
     reaction_systems.insert("rs1".to_string(), rs);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -147,7 +146,6 @@ fn test_component_graph_exports() {
     };
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("SimpleModel".to_string()),
@@ -167,6 +165,7 @@ fn test_component_graph_exports() {
     models.insert("simple".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -246,7 +245,6 @@ fn test_model_expression_graph() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("ExprTest".to_string()),
@@ -359,7 +357,6 @@ fn test_reaction_system_expression_graph() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -405,7 +402,6 @@ fn test_component_existence() {
     };
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
@@ -425,6 +421,7 @@ fn test_component_existence() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -534,7 +531,6 @@ fn test_expected_graph_outputs() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Simple".to_string()),

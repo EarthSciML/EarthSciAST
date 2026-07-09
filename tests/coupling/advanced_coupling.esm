@@ -13,7 +13,6 @@
   },
   "models": {
     "Chemistry": {
-      "coupletype": "ChemistryCoupler",
       "variables": {
         "O3": {
           "type": "state",
@@ -102,7 +101,6 @@
       ]
     },
     "Surface": {
-      "coupletype": "SurfaceCoupler",
       "variables": {
         "surface_resistance": {
           "type": "parameter",

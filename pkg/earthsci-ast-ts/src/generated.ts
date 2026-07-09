@@ -253,7 +253,7 @@ export type ExpressionNode1 = {
  */
 export type Expression = number | string | ExpressionNode1;
 /**
- * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.
+ * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible in structural integer sites (`index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs) AND as an import-edge / subsystem-edge binding VALUE, whose free names resolve in the importing document's metaparameter scope.
  */
 export type MetaparameterExpression =
   | number
@@ -440,7 +440,8 @@ export type CouplingEntry =
   | CouplingCouple
   | CouplingVariableMap
   | CouplingCallback
-  | CouplingEvent;
+  | CouplingEvent
+  | CouplingImport;
 /**
  * Translation target: a simple variable reference string or an object with var and factor.
  */
@@ -569,7 +570,7 @@ export type IndexSet = IndexSet1 & {
    */
   kind: "interval" | "categorical" | "derived" | "ragged";
   /**
-   * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.
+   * A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible in structural integer sites (`index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs) AND as an import-edge / subsystem-edge binding VALUE, whose free names resolve in the importing document's metaparameter scope.
    */
   size?:
     | number
@@ -664,6 +665,14 @@ export interface ESMFormat2 {
    */
   expression_template_imports?: TemplateImport[];
   metaparameters?: Metaparameters;
+  /**
+   * Coupling-library formal component roles (esm-spec §10.9). Present only in a coupling-library file, which pairs it with a role-scoped `coupling` array and declares no models/reaction_systems/data_loaders/domain/index_sets/metaparameters/expression_templates (enforced by the resolver as `coupling_library_illegal_payload`). Presence of this key is the sole positive identifier of the coupling-library file kind. Each entry is a role descriptor carrying an optional human-readable `description`; roles are formal parameters (names, not types), bound to actual components at a `coupling_import` (esm-spec §10.10).
+   */
+  coupling_roles?: {
+    [k: string]: {
+      description?: string;
+    };
+  };
 }
 /**
  * Authorship, provenance, and description.
@@ -730,10 +739,6 @@ export interface Reference {
  * An ODE system — a fully specified set of time-dependent equations.
  */
 export interface Model {
-  /**
-   * Coupling type name. Informational label identifying this system's role in coupling.
-   */
-  coupletype?: string | null;
   reference?: Reference;
   /**
    * All variables, keyed by name.
@@ -934,6 +939,10 @@ export interface DataLoaderTemporal {
    * Name of the time coordinate variable in the file. Used when records_per_file is absent or "auto". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback.
    */
   time_variable?: string;
+  /**
+   * How many time records the DISCRETE loader returns per query time — pure I/O; the loader does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file).
+   */
+  records_per_sample?: 1 | 2;
 }
 /**
  * Reproducibility contract a binary-format loader advertises to bindings. A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.
@@ -1009,7 +1018,7 @@ export interface TemplateImport {
    */
   only?: [string, ...string[]];
   /**
-   * Bindings closing the target document's metaparameters at this edge (esm-spec §9.7.6 site 1). Each value is a metaparameter expression over the IMPORTING document's metaparameters (an integer literal, or e.g. `NX*NY`), carried symbolically into the child and folded when the importing document closes.
+   * Bindings closing the target document's metaparameters at this edge (esm-spec §9.7.6 site 1). Each value is a metaparameter expression over the importing document's metaparameters; a value with still-open names is carried symbolically and folds at the importer's close.
    */
   bindings?: {
     [k: string]: MetaparameterExpression;
@@ -1250,10 +1259,6 @@ export interface ExpressionTemplate {
  * A reaction network — declarative representation of chemical or biological reactions.
  */
 export interface ReactionSystem {
-  /**
-   * Coupling type name. Informational label identifying this system's role in coupling.
-   */
-  coupletype?: string | null;
   reference?: Reference;
   /**
    * Named reactive species.
@@ -1507,6 +1512,23 @@ export interface FunctionalAffect1 {
   config?: {
     [k: string]: unknown;
   };
+}
+/**
+ * Reuse of a coupling-library file (esm-spec §10.9, §10.10): imports the library named by `ref` and binds each of its declared roles to a component in the assembly. Expands at flatten into concrete variable_map/couple/operator_compose/event edges by substituting bound actuals for role names; the entry itself round-trips intact. Carries no `expression_template_imports` (injection is a property of the wiring entries, not of an import indirection).
+ */
+export interface CouplingImport {
+  type: "coupling_import";
+  /**
+   * §4.7 reference (relative path, absolute path, URL, or ${VAR}) to a coupling-library file (a document with top-level `coupling_roles`).
+   */
+  ref: string;
+  /**
+   * Total map from every library role name to a scoped component reference in the assembly (esm-spec §10.10.1). Each value names a top-level or nested models/reaction_systems/data_loaders component (a system or loader node), not a variable. No role may be omitted; there is no auto-binding.
+   */
+  bind?: {
+    [k: string]: string;
+  };
+  description?: string;
 }
 /**
  * The single temporal domain shared by every component in the document (temporal extent + numeric representation). A document has at most one domain; all spatial models live on it, and 0-D models simply have scalar-shaped variables.

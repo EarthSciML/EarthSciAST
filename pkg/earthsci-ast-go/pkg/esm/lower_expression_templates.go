@@ -147,6 +147,21 @@ const MaxRewritePasses = 64
 //   - metaparameter_unbound
 //   - metaparameter_type_error
 //   - metaparameter_name_conflict
+//
+// or one of the esm-spec §10.11 coupling-library / coupling_import codes
+// (raised from coupling_imports.go, subsystem_ref.go, template_imports.go):
+//
+//   - coupling_import_unresolved
+//   - coupling_import_not_library
+//   - subsystem_ref_is_coupling_library
+//   - template_import_is_coupling_library
+//   - coupling_library_illegal_payload
+//   - coupling_library_nested_import
+//   - coupling_edge_unknown_role
+//   - coupling_role_unused
+//   - coupling_import_unknown_role
+//   - coupling_import_role_unbound
+//   - coupling_import_bind_not_a_component
 type ExpressionTemplateError struct {
 	Code    string
 	Message string

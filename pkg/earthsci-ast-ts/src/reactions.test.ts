@@ -303,9 +303,8 @@ describe('Reaction system ODE derivation', () => {
       })
     })
 
-    it('should preserve coupletype and reference', () => {
+    it('should preserve reference', () => {
       const system: ReactionSystem = {
-        coupletype: 'chemistry',
         reference: { doi: '10.1000/test', url: 'https://example.com' },
         species: {
           A: { units: 'mol/L', default: 1.0 },
@@ -325,7 +324,6 @@ describe('Reaction system ODE derivation', () => {
 
       const model = deriveODEs(system)
 
-      expect(model.coupletype).toBe('chemistry')
       expect(model.reference).toEqual({ doi: '10.1000/test', url: 'https://example.com' })
     })
 

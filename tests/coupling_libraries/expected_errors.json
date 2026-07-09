@@ -1,0 +1,61 @@
+{
+  "_description": "RFC §11 conformance corpus for the coupling-library / coupling_import feature (docs/content/rfcs/coupling-libraries-role-binding.md). Follows the tests/invalid/expected_errors.json convention: a map from fixture filename to its expected outcome. `pass` fixtures load/flatten/expand cleanly; `fail` fixtures raise the named esm-spec §10.11 diagnostic `code` via the listed `driver`. Kept in a dedicated directory so the other bindings' auto-globbed valid/ and invalid/ suites are undisturbed.",
+
+  "pass": {
+    "rothermel_fuel.esm": {
+      "kind": "coupling_library",
+      "note": "Well-formed coupling library (RFC §6): schema-valid, load()s clean, and save()->load() round-trips (esm-spec §10.9). Also the regression guard for the §9 root-`anyOf` `coupling_roles` branch — a bare roles+coupling document passes root-schema validation."
+    },
+    "assembly_import.esm": {
+      "kind": "assembly",
+      "note": "Imports rothermel_fuel.esm; flatten() deep-equals flatten(assembly_inline.esm) (equivalence — pure sugar over the coupling layer, esm-spec §10.10.3)."
+    },
+    "assembly_inline.esm": {
+      "kind": "assembly",
+      "note": "The substituted form of assembly_import.esm (five inline variable_map edges). The equivalence partner."
+    },
+    "assembly_multi.esm": {
+      "kind": "assembly",
+      "note": "Two coupling_import edges of one library with distinct binds -> two independent, non-interfering edge sets (multiple instantiation, RFC §6/§11)."
+    },
+    "full_surface_lib.esm": {
+      "kind": "coupling_library",
+      "note": "Exercises every §10.10.2 occurrence site (variable_map apply_expression_template bindings values, couple systems+connector, operator_compose translate keys+values, event conditions/affects/discrete_parameters)."
+    },
+    "assembly_full_surface.esm": {
+      "kind": "assembly",
+      "note": "Imports full_surface_lib.esm; expandCouplingImports rewrites every role occurrence (no residual role names in the expanded edges)."
+    },
+    "plain_model.esm": {
+      "kind": "model",
+      "note": "An ordinary model document (no coupling_roles). Not itself under test; the non-library import target for import_not_library.esm."
+    }
+  },
+
+  "fail": {
+    "lib_declares_models.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
+    "lib_has_callback.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
+    "lib_edge_template_imports.esm": { "code": "coupling_library_illegal_payload", "driver": "flatten", "site": "library" },
+    "lib_unknown_role_edge.esm": { "code": "coupling_edge_unknown_role", "driver": "flatten", "site": "library" },
+    "lib_unused_role.esm": { "code": "coupling_role_unused", "driver": "flatten", "site": "library" },
+    "lib_nested_import.esm": { "code": "coupling_library_nested_import", "driver": "flatten", "site": "library" },
+
+    "import_role_unbound.esm": { "code": "coupling_import_role_unbound", "driver": "flatten", "site": "import" },
+    "import_unknown_role.esm": { "code": "coupling_import_unknown_role", "driver": "flatten", "site": "import" },
+    "import_bind_not_a_component.esm": { "code": "coupling_import_bind_not_a_component", "driver": "flatten", "site": "import" },
+    "import_not_library.esm": { "code": "coupling_import_not_library", "driver": "flatten", "site": "import" },
+
+    "import_misbind_downstream.esm": {
+      "code": "unresolved_scoped_ref",
+      "driver": "flatten+validate",
+      "site": "flatten",
+      "note": "Binding is structurally complete, so expandCouplingImports SUCCEEDS; the mis-bind (Spread -> RothermelNoW0, which lacks `w0`) surfaces on the expanded edge as the existing unresolved_scoped_ref (esm-spec §4.1/§7). KNOWN TS GAP: the TS reference `flatten()` does not itself re-run scoped-ref resolution on expanded edges (that check lives in validate.ts, which iterates the UN-expanded coupling), so the test drives it by validating the expanded coupling — proving 'a bad binding is just a bad edge, caught where all bad edges are.' The gap is reported, not patched."
+    },
+
+    "subsystem_ref_to_library.esm": { "code": "subsystem_ref_is_coupling_library", "driver": "resolveSubsystemRefs", "site": "cross-kind" },
+    "template_import_to_library.esm": { "code": "template_import_is_coupling_library", "driver": "load", "site": "cross-kind" },
+
+    "coupletype_model.esm": { "code": "additionalProperties", "driver": "validateSchema", "site": "schema", "note": "Model carries the removed `coupletype`; Model is additionalProperties:false, so schema validation fails (unknown property)." },
+    "coupletype_reaction_system.esm": { "code": "additionalProperties", "driver": "validateSchema", "site": "schema", "note": "ReactionSystem carries the removed `coupletype`; additionalProperties:false schema failure." }
+  }
+}

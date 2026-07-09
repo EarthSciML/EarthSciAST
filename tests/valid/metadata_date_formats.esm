@@ -10,7 +10,6 @@
 
   "reaction_systems": {
     "DateTestSystem": {
-      "coupletype": "TestCoupler",
       "reference": {
         "notes": "System for testing date format validation"
       },

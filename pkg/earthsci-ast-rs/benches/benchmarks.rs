@@ -73,7 +73,6 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
 
         let model = Model {
             reference: None,
-            coupletype: None,
             subsystems: None,
             name: Some(format!("model_{i}")),
             variables,
@@ -92,6 +91,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
     }
 
     EsmFile {
+        coupling_roles: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {
             name: Some("benchmark_test".to_string()),
@@ -162,7 +162,6 @@ fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> Reac
     }
 
     ReactionSystem {
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),

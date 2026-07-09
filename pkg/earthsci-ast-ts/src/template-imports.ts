@@ -1176,8 +1176,15 @@ function resolveImportEntry(
   rejectExpressionTemplatesPreV04(raw)
   rejectTemplateImportsPreV08(raw)
 
-  // Library purity (esm-spec §9.7.1): the two reference mechanisms are
-  // disjoint — a component/subsystem file is not importable as a library.
+  // Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
+  // a component/subsystem file, and a coupling-library file, are not importable
+  // as a template library.
+  if (isObject(raw) && 'coupling_roles' in raw) {
+    throw new ExpressionTemplateError(
+      'template_import_is_coupling_library',
+      `${origin}: import target '${ref}' is a coupling-library file (has \`coupling_roles\`), not a template library (esm-spec §10.9)`,
+    )
+  }
   if (!isTemplateLibraryDoc(raw)) {
     throw new ExpressionTemplateError(
       'template_import_not_library',

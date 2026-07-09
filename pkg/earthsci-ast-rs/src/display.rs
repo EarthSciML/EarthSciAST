@@ -2133,7 +2133,6 @@ mod tests {
         );
 
         let reaction_system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species,
             parameters,
@@ -2149,6 +2148,7 @@ mod tests {
 
         // Create ESM file
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),

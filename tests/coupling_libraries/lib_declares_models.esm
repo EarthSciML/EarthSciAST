@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryWithModels",
+    "description": "INVALID coupling library: declares `models`. A coupling library is nothing but roles + wiring (esm-spec 10.9 purity). Expected: coupling_library_illegal_payload."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" }
+  },
+  "models": {
+    "StubModel": {
+      "variables": { "x": { "type": "parameter", "units": "1", "default": 0.0 } },
+      "equations": []
+    }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" }
+  ]
+}

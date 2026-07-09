@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "RothermelFuelCoupling",
+    "description": "Anderson-13 fuel properties -> Rothermel (1972) spread inputs. A pure coupling-library file (esm-spec 10.9): top-level coupling_roles + a role-scoped coupling array, no models/loaders. Mirrors RFC 6."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "Anderson-13 fuel-property source (sigma, w_0, delta, M_x, h)." },
+    "Spread": { "description": "Rothermel (1972) spread model consuming those properties." }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.w_0", "to": "Spread.w0", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.delta", "to": "Spread.delta", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.M_x", "to": "Spread.Mx", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.h", "to": "Spread.h", "transform": "param_to_var" }
+  ]
+}

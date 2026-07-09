@@ -428,6 +428,7 @@ mod tests {
     #[test]
     fn test_validate_empty_file() {
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -483,7 +484,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -509,6 +509,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -588,7 +589,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -617,6 +617,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -663,6 +664,7 @@ mod tests {
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -723,7 +725,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -740,6 +741,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -847,7 +849,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -873,6 +874,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1010,7 +1012,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -1045,6 +1046,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1129,7 +1131,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -1155,6 +1156,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1238,7 +1240,6 @@ mod tests {
             "test_model".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -1264,6 +1265,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1330,7 +1332,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -1362,6 +1363,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1414,6 +1416,7 @@ mod tests {
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),

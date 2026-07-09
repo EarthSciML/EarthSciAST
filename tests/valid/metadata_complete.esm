@@ -50,7 +50,6 @@
   },
   "reaction_systems": {
     "ComprehensiveOzoneChemistry": {
-      "coupletype": "OzoneChemistryCoupler",
       "reference": {
         "notes": "Complete O3-NOx-HOx photochemical cycle with metadata demonstration",
         "doi": "10.1029/2023JD038742"

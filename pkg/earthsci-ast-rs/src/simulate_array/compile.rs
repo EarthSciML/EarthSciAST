@@ -455,7 +455,6 @@ impl ArrayCompiled {
         // registry and work here.
         let model = Model {
             name: None,
-            coupletype: None,
             reference: None,
             variables,
             equations: flat.equations.clone(),

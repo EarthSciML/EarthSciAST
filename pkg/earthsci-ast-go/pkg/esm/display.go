@@ -735,6 +735,8 @@ func ModelSummary(esm *EsmFile) string {
 				fmt.Fprintf(&result, "callback: %s", c.CallbackID)
 			case EventCoupling:
 				fmt.Fprintf(&result, "event: %s (%s)", c.Name, c.EventType)
+			case CouplingImport:
+				fmt.Fprintf(&result, "coupling_import: %s", c.Ref)
 			default:
 				result.WriteString("unknown coupling type")
 			}

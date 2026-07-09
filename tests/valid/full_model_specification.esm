@@ -22,7 +22,6 @@
   },
   "models": {
     "CompleteModel": {
-      "coupletype": "TestCoupler",
       "reference": {
         "citation": "Complete model specification test case",
         "notes": "All variables, parameters, and equations fully defined"

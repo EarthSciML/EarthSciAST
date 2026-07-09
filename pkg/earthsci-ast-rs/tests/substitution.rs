@@ -198,7 +198,6 @@ fn test_model_substitution() {
     );
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
@@ -301,7 +300,6 @@ fn test_reaction_system_substitution() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),

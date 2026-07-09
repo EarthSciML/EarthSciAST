@@ -32,6 +32,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -115,7 +116,6 @@ fn reaction_system(
         );
     }
     ReactionSystem {
-        coupletype: None,
         reference: None,
         species,
         parameters,
@@ -156,6 +156,7 @@ fn flatten_reactions_only_file_produces_mass_action_odes() {
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
     };
@@ -202,7 +203,6 @@ fn flatten_mixed_model_and_reaction_system() {
     models.insert(
         "dyn".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -238,6 +238,7 @@ fn flatten_mixed_model_and_reaction_system() {
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -285,6 +286,7 @@ fn flatten_autocatalytic_reaction_net_stoichiometry() {
     let mut reaction_systems = HashMap::new();
     reaction_systems.insert("auto".to_string(), rs);
     let file = EsmFile {
+        coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
     };
@@ -345,6 +347,7 @@ fn flatten_source_and_sink_reactions() {
     let mut reaction_systems = HashMap::new();
     reaction_systems.insert("box".to_string(), rs);
     let file = EsmFile {
+        coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
     };
@@ -388,7 +391,6 @@ fn flatten_conflicting_derivative_raises_error() {
     models.insert(
         "sys".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -424,6 +426,7 @@ fn flatten_conflicting_derivative_raises_error() {
     reaction_systems.insert("sys".to_string(), rs);
 
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -498,7 +501,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "A".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -520,7 +522,6 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "B".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -554,6 +555,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     }];
 
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
         ..empty_file()
@@ -643,7 +645,6 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "M".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -665,7 +666,6 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "S".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -691,6 +691,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     }];
 
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
         ..empty_file()
@@ -738,7 +739,6 @@ fn flatten_couple_includes_connector_equations() {
     models.insert(
         "A".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -769,6 +769,7 @@ fn flatten_couple_includes_connector_equations() {
         description: None,
     }];
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
         ..empty_file()
@@ -813,7 +814,6 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
         },
     );
     let model = Model {
-        coupletype: None,
         subsystems: None,
         name: Some("Nested".to_string()),
         reference: None,
@@ -860,7 +860,6 @@ fn flatten_rejects_spatial_operators() {
     models.insert(
         "transport".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -887,6 +886,7 @@ fn flatten_rejects_spatial_operators() {
         },
     );
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         ..empty_file()
     };
@@ -932,7 +932,6 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
     models.insert(
         "pde".to_string(),
         Model {
-            coupletype: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -958,6 +957,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         },
     );
     let file = EsmFile {
+        coupling_roles: None,
         models: Some(models),
         ..empty_file()
     };

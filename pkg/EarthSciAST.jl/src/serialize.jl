@@ -769,9 +769,29 @@ function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
         return serialize_callback(entry)
     elseif entry isa CouplingEvent
         return serialize_event(entry)
+    elseif entry isa CouplingImport
+        return serialize_coupling_import(entry)
     else
         throw(ArgumentError("Unknown CouplingEntry type: $(typeof(entry))"))
     end
+end
+
+"""
+    serialize_coupling_import(entry::CouplingImport) -> Dict{String,Any}
+
+Serialize a `coupling_import` coupling entry (esm-spec §10.10). The import
+round-trips intact; expansion happens only in the flattened system.
+"""
+function serialize_coupling_import(entry::CouplingImport)::Dict{String,Any}
+    result = Dict{String,Any}(
+        "type" => "coupling_import",
+        "ref" => entry.ref,
+        "bind" => Dict{String,Any}(entry.bind),
+    )
+    if entry.description !== nothing
+        result["description"] = entry.description
+    end
+    return result
 end
 
 """

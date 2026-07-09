@@ -26,7 +26,6 @@
   },
   "reaction_systems": {
     "AtmosphericChemistry": {
-      "coupletype": "ChemistryCoupler",
       "reference": {
         "doi": "10.5194/acp-20-1000-2020",
         "citation": "Chen, A. & Wong, B. (2020). Atmospheric chemistry mechanisms. ACP, 20, 1000-1020.",

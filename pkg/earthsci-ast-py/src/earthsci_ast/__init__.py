@@ -36,6 +36,7 @@ from .esm_types import (
     DataLoaderDeterminism,
     Operator,
     CouplingEntry,
+    CouplingImport,
     Domain,
     TemporalDomain,
     Reference,
@@ -69,6 +70,13 @@ from .template_imports import (
     MAX_TEMPLATE_EXPANSION_DEPTH,
     reject_template_imports_pre_v08,
     resolve_template_machinery,
+)
+
+# Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11;
+# docs/content/rfcs/coupling-libraries-role-binding.md).
+from .coupling_imports import (
+    expand_coupling_imports,
+    is_coupling_library_doc,
 )
 
 # Coupled system flattening (spec §4.7.5 + §4.7.6)
@@ -331,6 +339,7 @@ __all__ = [
     "DataLoaderDeterminism",
     "Operator",
     "CouplingEntry",
+    "CouplingImport",
     "Domain",
     "TemporalDomain",
     "Reference",
@@ -352,6 +361,9 @@ __all__ = [
     "reject_template_imports_pre_v08",
     "resolve_template_machinery",
     "EarthSciAstError",
+    # Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11)
+    "expand_coupling_imports",
+    "is_coupling_library_doc",
     # Validation
     "validate",
     "ValidationResult",

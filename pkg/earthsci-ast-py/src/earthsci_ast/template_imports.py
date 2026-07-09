@@ -41,6 +41,7 @@ from .diagnostics import (
     TEMPLATE_BODY_EXPANSION_TOO_DEEP,
     TEMPLATE_IMPORT_CYCLE,
     TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+    TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
     TEMPLATE_IMPORT_NAME_CONFLICT,
     TEMPLATE_IMPORT_NOT_LIBRARY,
     TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
@@ -1140,6 +1141,18 @@ def _resolve_import_entry(
     raw, target_dir = _load_import_raw(ref, base_dir, origin)
     reject_expression_templates_pre_v04(raw)
     reject_template_imports_pre_v08(raw)
+
+    # Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
+    # a coupling-library file (top-level `coupling_roles`) is imported via a
+    # coupling_import coupling entry, never as a template library (esm-spec
+    # §10.9). Checked before the generic not-library diagnostic so the more
+    # specific cause is reported.
+    if _is_object(raw) and "coupling_roles" in raw:
+        raise ExpressionTemplateError(
+            TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+            f"{origin}: import target '{ref}' is a coupling-library file "
+            "(has `coupling_roles`), not a template library (esm-spec §10.9)",
+        )
 
     # Library purity (esm-spec §9.7.1): the two reference mechanisms are
     # disjoint — a component/subsystem file is not importable as a library.

@@ -1,0 +1,39 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "wildfire_rothermel_import",
+    "description": "Assembly that stands up the Rothermel fuel stack by IMPORTING rothermel_fuel.esm (one coupling_import binding Fuel/Spread). Its flattened system must be byte-identical to assembly_inline.esm (esm-spec 10.10.3 / RFC 11 equivalence)."
+  },
+  "models": {
+    "FuelModelLookup": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 },
+        "w_0": { "type": "parameter", "units": "kg/m^2", "default": 0.5 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.3 },
+        "M_x": { "type": "parameter", "units": "1", "default": 0.2 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 }
+      },
+      "equations": []
+    },
+    "RothermelFireSpread": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "w0": { "type": "parameter", "units": "kg/m^2", "default": 0.0 },
+        "delta": { "type": "parameter", "units": "m", "default": 0.0 },
+        "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 },
+        "r": { "type": "state", "units": "m/s", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": { "op": "-", "args": ["r"] } }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./rothermel_fuel.esm",
+      "bind": { "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread" }
+    }
+  ]
+}

@@ -17,7 +17,6 @@
   },
   "reaction_systems": {
     "AtmosphericChemistry": {
-      "coupletype": "AtmChemCoupler",
       "reference": {
         "notes": "Simplified atmospheric chemistry"
       },

@@ -1692,8 +1692,13 @@ func resolveImportEntry(entry interface{}, baseDir string, stack *[]string, orig
 		return nil, err
 	}
 
-	// Library purity (esm-spec §9.7.1): the two reference mechanisms are
-	// disjoint — a component/subsystem file is not importable as a library.
+	// Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
+	// a component/subsystem file, and a coupling-library file, are not
+	// importable as a template library.
+	if isCouplingLibraryDoc(view) {
+		return nil, newETErr("template_import_is_coupling_library",
+			fmt.Sprintf("%s: import target '%s' is a coupling-library file (has `coupling_roles`), not a template library (esm-spec §10.9)", origin, ref))
+	}
 	if !isTemplateLibraryDoc(view) {
 		return nil, newETErr("template_import_not_library",
 			fmt.Sprintf("%s: import target '%s' lacks top-level `expression_templates` — not a template-library file (esm-spec §9.7.1)", origin, ref))

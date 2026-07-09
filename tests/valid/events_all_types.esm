@@ -17,7 +17,6 @@
   },
   "reaction_systems": {
     "EventTestChem": {
-      "coupletype": "EventChemCoupler",
       "reference": {
         "notes": "Chemistry system with events"
       },

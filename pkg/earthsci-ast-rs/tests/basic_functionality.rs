@@ -80,7 +80,6 @@ fn test_structural_validation() {
     // Create a model with equations but no variables (should fail structural validation)
     let variables = HashMap::new();
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
@@ -103,6 +102,7 @@ fn test_structural_validation() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -211,7 +211,6 @@ fn test_stoichiometric_matrix() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -246,7 +245,6 @@ fn test_component_graph() {
     };
 
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
@@ -266,6 +264,7 @@ fn test_component_graph() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.1.0".to_string(),
@@ -315,7 +314,6 @@ fn test_pretty_printing() {
 #[test]
 fn test_editing() {
     let model = Model {
-        coupletype: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),

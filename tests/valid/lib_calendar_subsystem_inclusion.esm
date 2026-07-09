@@ -9,7 +9,6 @@
   },
   "models": {
     "Diurnal": {
-      "coupletype": "Diurnal",
       "subsystems": {
         "Calendar": { "ref": "../../lib/calendar.esm" }
       },

@@ -49,6 +49,14 @@ pub struct EsmFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coupling: Option<Vec<CouplingEntry>>,
 
+    /// Coupling-library formal component roles (esm-spec §10.9). Present only
+    /// in a coupling-library file, which pairs it with a role-scoped `coupling`
+    /// array and declares no models/reaction_systems/data_loaders/domain/
+    /// index_sets/metaparameters/expression_templates. Presence of this key is
+    /// the sole positive identifier of the coupling-library file kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupling_roles: Option<HashMap<String, CouplingRole>>,
+
     /// The single temporal domain shared by every component in the document
     /// (v0.8.0). A document has at most one domain; all spatial models live on
     /// it, and 0-D models simply have scalar-shaped variables. Spatiality is
@@ -903,10 +911,6 @@ pub struct Model {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// Coupling type label
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coupletype: Option<String>,
-
     /// Academic citation or data source reference
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
@@ -1176,10 +1180,6 @@ pub enum RootFindDirection {
 /// Reaction network component
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactionSystem {
-    /// Coupling type label
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coupletype: Option<String>,
-
     /// Academic citation or data source reference
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
@@ -1675,6 +1675,36 @@ pub enum CouplingEntry {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// Reuse of a coupling-library file (esm-spec §10.9, §10.10): imports the
+    /// library named by `ref` and binds each of its declared roles to an
+    /// assembly component. Expands at flatten into concrete
+    /// `variable_map`/`couple`/`operator_compose`/`event` edges by substituting
+    /// bound actuals for role names; the entry itself round-trips intact.
+    CouplingImport {
+        /// §4.7 reference to a coupling-library file (a document with a
+        /// top-level `coupling_roles` map). `ref` is a Rust keyword, so the
+        /// field is spelled `reference` and renamed on the wire.
+        #[serde(rename = "ref")]
+        reference: String,
+        /// Total map from every library role name to a scoped component
+        /// reference in the assembly (esm-spec §10.10.1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bind: Option<HashMap<String, String>>,
+        /// Optional description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+/// A coupling-library formal component role (esm-spec §10.9). Present only in
+/// a coupling-library file's top-level `coupling_roles` map; each entry carries
+/// an optional human-readable description. Roles are formal parameters (names,
+/// not types), bound to actual components at a `coupling_import`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CouplingRole {
+    /// Human-readable description of the role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Variable mapping between systems

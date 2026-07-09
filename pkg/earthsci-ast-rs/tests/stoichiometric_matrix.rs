@@ -49,7 +49,6 @@ fn test_simple_stoichiometric_matrix() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -139,7 +138,6 @@ fn test_multiple_reaction_stoichiometric_matrix() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -225,7 +223,6 @@ fn test_stoichiometric_coefficients() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -303,7 +300,6 @@ fn test_reversible_reactions() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -444,7 +440,6 @@ fn test_complex_reaction_network() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -487,7 +482,6 @@ fn test_complex_reaction_network() {
 fn test_empty_reaction_system() {
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species: std::collections::HashMap::new(),
         parameters: HashMap::new(),
@@ -523,7 +517,6 @@ fn test_no_reactions() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),
@@ -584,7 +577,6 @@ fn test_default_coefficients() {
 
     let rs = ReactionSystem {
         subsystems: None,
-        coupletype: None,
         reference: None,
         species,
         parameters: HashMap::new(),

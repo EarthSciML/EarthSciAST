@@ -15,6 +15,10 @@ import type {
   CouplingEntry,
 } from './types.js'
 import { numericValue } from './numeric-literal.js'
+import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
+
+/** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
+export type FlattenOptions = CouplingImportOptions
 
 /**
  * A single equation in the flattened system, with dot-namespaced variable names.
@@ -68,7 +72,7 @@ export interface FlattenedSystem {
  * @param file - The ESM file to flatten
  * @returns A FlattenedSystem with all variables namespaced and equations unified
  */
-export function flatten(file: EsmFile): FlattenedSystem {
+export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedSystem {
   const stateVariables: string[] = []
   const parameters: string[] = []
   const brownianVariables: string[] = []
@@ -104,9 +108,12 @@ export function flatten(file: EsmFile): FlattenedSystem {
     }
   }
 
-  // 3. Process coupling entries
-  if (file.coupling) {
-    for (const entry of file.coupling) {
+  // 3. Expand coupling_import entries (esm-spec §10.10.3), then process the
+  // resulting coupling sequence. A file with no coupling_import entries yields
+  // its `coupling` array verbatim and needs no options.
+  const coupling = expandCouplingImports(file, options)
+  if (coupling) {
+    for (const entry of coupling) {
       processCouplingEntry(entry, equations, variables, couplingRules)
     }
   }

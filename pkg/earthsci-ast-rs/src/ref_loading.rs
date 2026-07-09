@@ -546,6 +546,19 @@ fn resolve_value(
             ));
         }
 
+        // Likewise, a §4.7 subsystem ref MUST NOT target a coupling-library
+        // file — those are imported via a `coupling_import` coupling entry, not
+        // mounted as a subsystem (esm-spec §10.9).
+        if crate::coupling_imports::is_coupling_library_doc(&parsed) {
+            visited.remove(&canonical);
+            return Err(format!(
+                "[subsystem_ref_is_coupling_library] Subsystem ref '{ref_str}' targets a \
+                 coupling-library file ({}); libraries are imported via a coupling_import \
+                 coupling entry (esm-spec 10.9)",
+                canonical.display()
+            ));
+        }
+
         // Resolve the referenced document's §9.7 machinery in its own
         // directory, closing its metaparameters with this edge's `bindings`
         // (esm-spec §9.7.6 binding site 3), then run the §9.6.3 fixpoint so

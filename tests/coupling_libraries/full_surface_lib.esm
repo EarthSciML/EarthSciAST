@@ -1,0 +1,60 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "FullSurfaceCoupling",
+    "description": "A coupling library that exercises EVERY esm-spec 10.10.2 role-occurrence site so expansion is proven to rewrite all of them: a variable_map whose transform is an apply_expression_template with role-scoped bindings VALUES; a couple with a systems array + connector equations (from/to/expression); an operator_compose with a translate map (role-scoped keys AND values); and an event referencing roles in conditions/affects/discrete_parameters. Roles Fuel and Spread are each used at multiple sites (no coupling_role_unused)."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "source role, used at from/systems/connector/translate-key/event-condition sites" },
+    "Spread": { "description": "target role, used at to/systems/connector/translate-value/event-affect sites" }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Fuel.sigma",
+      "to": "Spread.sigma",
+      "transform": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "regrid",
+        "bindings": { "src": "Fuel.sigma", "weights": "Spread.w_regrid" }
+      }
+    },
+    {
+      "type": "couple",
+      "systems": ["Fuel", "Spread"],
+      "connector": {
+        "equations": [
+          {
+            "from": "Fuel.h",
+            "to": "Spread.h",
+            "transform": "additive",
+            "expression": { "op": "*", "args": ["Fuel.h", 0.5] }
+          }
+        ]
+      }
+    },
+    {
+      "type": "operator_compose",
+      "systems": ["Fuel", "Spread"],
+      "translate": {
+        "Fuel.flux": { "var": "Spread.flux", "factor": 2.0 }
+      }
+    },
+    {
+      "type": "event",
+      "event_type": "continuous",
+      "name": "flux_limit",
+      "conditions": [
+        { "op": "-", "args": ["Fuel.sigma", 2000] }
+      ],
+      "affects": [
+        {
+          "lhs": "Spread.r",
+          "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["Spread.r"] }, 0.5] }
+        }
+      ],
+      "discrete_parameters": ["Spread.r"]
+    }
+  ]
+}

@@ -1317,9 +1317,40 @@ function coerce_coupling_entry(data::Any)::CouplingEntry
         return coerce_callback(data)
     elseif coupling_type == "event"
         return coerce_coupling_event(data)
+    elseif coupling_type == "coupling_import"
+        return coerce_coupling_import(data)
     else
         throw(ParseError("Unknown coupling type: $coupling_type"))
     end
+end
+
+"""
+    coerce_coupling_import(data::AbstractDict) -> CouplingImport
+
+Parse a `coupling_import` coupling entry (esm-spec §10.10). The entry carries a
+`ref` to a coupling-library file and a `bind` map (role name → component); it is
+stored verbatim and expanded at flatten by `expand_coupling_imports`.
+"""
+function coerce_coupling_import(data::AbstractDict)::CouplingImport
+    if !haskey(data, "ref")
+        throw(ParseError("coupling_import requires 'ref' field"))
+    end
+    ref = String(data["ref"])
+    bind = Dict{String,String}()
+    bind_raw = get(data, "bind", nothing)
+    if bind_raw !== nothing
+        if !(bind_raw isa AbstractDict)
+            throw(ParseError("coupling_import 'bind' must be an object mapping role names to components"))
+        end
+        for (k, v) in pairs(bind_raw)
+            bind[string(k)] = String(v)
+        end
+    end
+    description = get(data, "description", nothing)
+    if description !== nothing
+        description = String(description)
+    end
+    return CouplingImport(ref, bind; description=description)
 end
 
 """
@@ -1833,6 +1864,15 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             comp = _to_native_json(JSON3.read(read(refpath, String)))
             comp isa Dict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
+            # A §4.7 subsystem ref (here, a top-level model `{ref}`) MUST NOT
+            # target a coupling-library file — libraries are imported via a
+            # `coupling_import` coupling entry (esm-spec §10.9).
+            if _is_coupling_library_doc(comp)
+                throw(ExpressionTemplateError(
+                    "subsystem_ref_is_coupling_library",
+                    "Subsystem ref '$(ref)' targets a coupling-library file " *
+                    "($(refpath)); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
+            end
             compdir = dirname(refpath)
             _inline_toplevel_model_refs!(comp, compdir, visited)   # component-of-component
             cmodels = get(comp, "models", nothing)
@@ -2313,11 +2353,20 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # A §4.7 subsystem ref MUST NOT target a template-library file — the two
     # reference mechanisms are disjoint (esm-spec §9.7.1).
     content = read(resolved_path, String)
-    if _is_template_library_doc(JSON3.read(content))
+    raw_ref_doc = JSON3.read(content)
+    if _is_template_library_doc(raw_ref_doc)
         throw(ExpressionTemplateError(
             "subsystem_ref_is_template_library",
             "Subsystem ref '$(ref)' targets a template-library file " *
             "($(resolved_path)); libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
+    end
+    # A §4.7 subsystem ref MUST NOT target a coupling-library file — libraries
+    # are imported via a `coupling_import` coupling entry (esm-spec §10.9).
+    if _is_coupling_library_doc(raw_ref_doc)
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_coupling_library",
+            "Subsystem ref '$(ref)' targets a coupling-library file " *
+            "($(resolved_path)); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
     end
 
     # Parse the referenced file using the IO-based load (no ref resolution on
@@ -2365,6 +2414,14 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
             "subsystem_ref_is_template_library",
             "Subsystem ref '$(url)' targets a template-library file; " *
             "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
+    end
+    # A §4.7 subsystem ref MUST NOT target a coupling-library file — libraries
+    # are imported via a `coupling_import` coupling entry (esm-spec §10.9).
+    if _is_coupling_library_doc(raw_data)
+        throw(ExpressionTemplateError(
+            "subsystem_ref_is_coupling_library",
+            "Subsystem ref '$(url)' targets a coupling-library file; " *
+            "libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
     end
 
     schema_errors = validate_schema(raw_data)

@@ -248,6 +248,13 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 				fmt.Sprintf("subsystem %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", key, ref, sourceDesc))
 		}
 
+		// Nor a coupling-library file — those are imported via a coupling_import
+		// coupling entry, not a subsystem ref (esm-spec §10.9).
+		if isCouplingLibraryDoc(view) {
+			return newETErr("subsystem_ref_is_coupling_library",
+				fmt.Sprintf("subsystem %q: ref %q targets a coupling-library file (%s); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)", key, ref, sourceDesc))
+		}
+
 		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
 		// referenced file's single top-level component BEFORE resolution, so its
 		// rewrite-targets lower under the assembler-chosen discretization.

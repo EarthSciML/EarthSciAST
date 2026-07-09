@@ -18,7 +18,6 @@
   },
   "reaction_systems": {
     "AtmosphericChemistry": {
-      "coupletype": "AtmosphericCoupler",
       "reference": {
         "notes": "Simplified atmospheric chemistry system"
       },
@@ -104,7 +103,6 @@
       ]
     },
     "BiologicalSystem": {
-      "coupletype": "BiologicalCoupler",
       "reference": {
         "notes": "Plant response to air quality"
       },

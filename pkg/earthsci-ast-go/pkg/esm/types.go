@@ -150,7 +150,6 @@ type ModelVariable struct {
 
 // Model represents an ODE system
 type Model struct {
-	CoupleType       *string                  `json:"coupletype,omitempty"`
 	Reference        *Reference               `json:"reference,omitempty"`
 	Variables        map[string]ModelVariable `json:"variables"`
 	Equations        []Equation               `json:"equations"`
@@ -221,7 +220,6 @@ type Reaction struct {
 
 // ReactionSystem represents a chemical reaction network
 type ReactionSystem struct {
-	CoupleType          *string                `json:"coupletype,omitempty"`
 	Reference           *Reference             `json:"reference,omitempty"`
 	Species             map[string]Species     `json:"species"`
 	Parameters          map[string]Parameter   `json:"parameters"`
@@ -637,6 +635,31 @@ type EventCoupling struct {
 
 func (e EventCoupling) GetType() string { return e.Type }
 
+// CouplingImport reuses a coupling-library file (esm-spec §10.9, §10.10): it
+// imports the library named by `Ref` and binds each of its declared roles to a
+// component in the assembly via `Bind` (role name -> scoped component
+// reference). At flatten (esm-spec §10.10.3) the import expands into concrete
+// variable_map / couple / operator_compose / event edges by substituting the
+// bound actual for every role-named top-level segment; the entry itself
+// round-trips intact. Carries no `expression_template_imports` (injection is a
+// property of the wiring entries, not of an import indirection).
+type CouplingImport struct {
+	Type        string            `json:"type"` // "coupling_import"
+	Ref         string            `json:"ref"`
+	Bind        map[string]string `json:"bind,omitempty"`
+	Description *string           `json:"description,omitempty"`
+}
+
+func (c CouplingImport) GetType() string { return c.Type }
+
+// CouplingRole is one entry in a coupling-library file's `coupling_roles` map
+// (esm-spec §10.9): a formal component role (a name, not a type), carrying an
+// optional human-readable description. Roles are bound to actual components at
+// a `coupling_import` (esm-spec §10.10).
+type CouplingRole struct {
+	Description *string `json:"description,omitempty"`
+}
+
 // Connector represents the connector system for couple coupling
 type Connector struct {
 	Equations []ConnectorEquation `json:"equations"`
@@ -735,6 +758,12 @@ type EsmFile struct {
 	// (resolution to `const`-op integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
 	Coupling []interface{}             `json:"coupling,omitempty"` // Properly deserialized coupling entries
+	// CouplingRoles is present only in a coupling-library file (esm-spec §10.9):
+	// the map of formal component roles a role-scoped `coupling` array wires.
+	// Presence of this key is the sole positive identifier of the
+	// coupling-library file kind (see isCouplingLibraryDoc). An assembly file
+	// never declares it.
+	CouplingRoles map[string]CouplingRole `json:"coupling_roles,omitempty"`
 	// Domain is the single temporal domain shared by every component in the
 	// document. A document has at most one domain. See esm-spec §11.
 	Domain *Domain `json:"domain,omitempty"`
@@ -1131,6 +1160,7 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 		DataLoaders     map[string]DataLoader     `json:"data_loaders,omitempty"`
 		Enums           map[string]map[string]int `json:"enums,omitempty"`
 		Coupling        json.RawMessage           `json:"coupling,omitempty"`
+		CouplingRoles   map[string]CouplingRole   `json:"coupling_roles,omitempty"`
 		Domain          *Domain                   `json:"domain,omitempty"`
 		FunctionTables  map[string]FunctionTable  `json:"function_tables,omitempty"`
 		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
@@ -1148,6 +1178,7 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 	esm.ReactionSystems = temp.ReactionSystems
 	esm.DataLoaders = temp.DataLoaders
 	esm.Enums = temp.Enums
+	esm.CouplingRoles = temp.CouplingRoles
 	esm.Domain = temp.Domain
 	esm.FunctionTables = temp.FunctionTables
 	esm.IndexSets = temp.IndexSets
@@ -1243,6 +1274,13 @@ func UnmarshalCouplingEntry(data []byte) (CouplingEntry, error) {
 		var coupling EventCoupling
 		if err := json.Unmarshal(data, &coupling); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal EventCoupling: %w", err)
+		}
+		return coupling, nil
+
+	case "coupling_import":
+		var coupling CouplingImport
+		if err := json.Unmarshal(data, &coupling); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal CouplingImport: %w", err)
 		}
 		return coupling, nil
 

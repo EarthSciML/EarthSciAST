@@ -1,0 +1,15 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryWithCallback",
+    "description": "INVALID coupling library: contains a `callback` edge. A callback exposes only an opaque config bag with no structured system-reference field, so a role inside it could not be rewritten (esm-spec 10.9). Expected: coupling_library_illegal_payload."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "callback", "callback_id": "SomeHandler", "config": { "when": "hourly" } }
+  ]
+}

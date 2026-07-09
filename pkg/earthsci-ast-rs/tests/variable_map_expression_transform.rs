@@ -40,6 +40,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        coupling_roles: None,
         domain: None,
         index_sets: None,
         esm: "0.8.0".to_string(),
@@ -70,7 +71,6 @@ fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable
 
 fn make_model(variables: HashMap<String, ModelVariable>, equations: Vec<Equation>) -> Model {
     Model {
-        coupletype: None,
         subsystems: None,
         name: None,
         reference: None,
@@ -151,6 +151,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
     );
 
     EsmFile {
+        coupling_roles: None,
         models: Some(models),
         coupling: Some(vec![CouplingEntry::VariableMap {
             from: "Src.F".to_string(),

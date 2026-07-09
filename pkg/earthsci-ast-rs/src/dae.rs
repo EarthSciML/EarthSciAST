@@ -377,6 +377,7 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(model_name.into(), model);
         EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.2.0".into(),
@@ -448,7 +449,6 @@ mod tests {
     fn empty_model() -> Model {
         Model {
             name: None,
-            coupletype: None,
             reference: None,
             variables: HashMap::new(),
             equations: vec![],

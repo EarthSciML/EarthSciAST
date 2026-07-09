@@ -887,7 +887,6 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 {
   "models": {
     "SuperFast": {
-      "coupletype": "SuperFastCoupler",
 
       "reference": {
         "doi": "10.5194/acp-8-6365-2008",
@@ -990,7 +989,6 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 
 | Field | Required | Description |
 |---|---|---|
-| `coupletype` | | Coupling type name (maps to EarthSciML `:coupletype` metadata). Informational label identifying this system's role in coupling. |
 | `reference` | | Academic citation: `doi`, `citation`, `url`, `notes` |
 | `variables` | ✓ | All variables, keyed by name |
 | `equations` | ✓ | Array of `{lhs, rhs}` equation objects |
@@ -1026,7 +1024,6 @@ Advection is a model like any other — fully specified:
 ```json
 {
   "Advection": {
-    "coupletype": null,
     "reference": {
       "notes": "First-order upwind advection operator"
     },
@@ -1066,7 +1063,6 @@ A model that computes deposition velocities from surface resistance parameters. 
 ```json
 {
   "DryDeposition": {
-    "coupletype": "DryDepositionCoupler",
     "reference": {
       "doi": "10.1016/0004-6981(89)90153-4",
       "citation": "Wesely, 1989. Parameterization of surface resistances to gaseous dry deposition.",
@@ -1449,7 +1445,6 @@ This section maps to Catalyst.jl's `ReactionSystem` but is fully self-contained.
 {
   "reaction_systems": {
     "SuperFastReactions": {
-      "coupletype": "SuperFastCoupler",
 
       "reference": {
         "doi": "10.5194/acp-8-6365-2008",
@@ -1628,7 +1623,6 @@ This section maps to Catalyst.jl's `ReactionSystem` but is fully self-contained.
 
 | Field | Required | Description |
 |---|---|---|
-| `coupletype` | | Coupling type name. Informational label identifying this system's role in coupling. |
 | `reference` | | Academic citation |
 | `species` | ✓ | Named reactive species with units, defaults, descriptions. Each species may set `constant: true` to declare a **reservoir species** whose concentration is held fixed (no ODE integration) while it still participates in reactions as a substrate or product (see §7.4). |
 | `parameters` | ✓ | Named parameters (rate constants, temperature, photolysis rates, etc.) |
@@ -2769,6 +2763,7 @@ Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier 
 | `variable_map` | `param_to_var` + connection | Replace a parameter in one system with a variable from another, or with an expression computed from it (§10.4) |
 | `callback` | `init_callback` | Register a callback for simulation events |
 | `event` | Cross-system event | Continuous or discrete event involving multiple coupled systems (see Section 5.6) |
+| `coupling_import` | Reuse a coupling library | Import a coupling-library file (§10.9) and bind its declared roles to local components; expands at flatten into concrete `variable_map` / `couple` / `operator_compose` / `event` edges (§10.10). |
 
 ### 10.2 The `translate` Field
 
@@ -2813,7 +2808,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 Every `variable_map` transform performs a **replacement**: the target is bound to the source, optionally scaled by `factor`. `factor` is a scaling coefficient valid only on the scaling transforms (`additive`, `multiplicative`, `conversion_factor`); a `factor` on `param_to_var` or `identity` — which have nothing to scale — or alongside an Expression transform — which spells its own arithmetic — is rejected at load. The three scaling transforms are equivalent in effect for a `variable_map` and differ only in documented intent. Genuine additive/multiplicative **term composition** (adding a source/sink term, or multiplying a tendency in place) is a `couple`/ConnectorSystem concern (§10.3), not a `variable_map`.
 
-**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they expand at load (§9.6.4), before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. As with all of §9.6.4, round-trip emits the expanded form.
+**Expression-transform evaluation contract.** When `transform` is an Expression — always an **operator node** (the degenerate bare-reference and literal Expression spellings are not admissible in this slot: bare replacement is what the named transforms already provide, and the string space is reserved for their names) — the entry binds the target to a **derived value**: flattening (§10.7) removes the `to` parameter and introduces in its place a derived (observed) variable — same name, units, and shape — whose defining expression is the transform, so every reference to the target evaluates the expression's value exactly as an authored observed would. The expression's free variables follow the connector-equation convention (§10.3, §4.6): every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system. The expression MUST reference the entry's `from` variable — it is the data-flow edge the entry declares — and MAY reference any other variable, parameter, or observed in scope of the flattened system (this is what the §8.6 regridding form relies on: the receiving component's build-once overlap weights, normalization row-sums, and sliver tolerance appear alongside the source field). The expression's value must be shaped like the target (its units are the target's declared units; validators MAY check consistency as for `identity`). Template invocations (`apply_expression_template`) are legal anywhere in the transform: they expand at load (§9.6.4), before validation and flattening, against the template registry of the component that owns the `to` target — the receiving component — which is where a regridding library import (§9.7) naturally lives. As with all of §9.6.4, round-trip emits the expanded form. **One carve-out for coupling-library edges (§10.9).** When a `variable_map` edge arrives via a `coupling_import` expansion (§10.10) rather than being authored inline, its `to` owner is a role and is not known until binding, so its transform templates cannot expand at load. For such an edge, transform-template expansion is deferred to the flatten-time expansion step (§10.10, `esm-libraries-spec.md` §4.7.5): the invocations expand against the *bound* `to` owner's registry immediately after role substitution. Because this is *after* the §9.6.3 fixpoint, a library edge's transform MUST expand to an already-lowered form (a regridding `aggregate`/`index` carries no rewrite-target operator); a transform template that would introduce `grad` / `div` / spatial `D` is rejected with `coupling_library_illegal_payload`.
 
 ### 10.5 Coupling across grids and dimensionality
 
@@ -2921,6 +2916,225 @@ Reads as: *compose these two, and discretize `Advection` with central difference
 **Target resolution.** Each map key MUST name a system **referenced by that entry**: `operator_compose`/`couple` → a member of `systems`; `variable_map`/`callback`/`event` → a system named by that entry's reference fields (`variable_map` `from`/`to`; an `event`'s `conditions`/`affects` variable scopes). A key naming no such system is `template_inject_target_unknown` (§9.6.6). A key resolving to a data loader — pure I/O with no expression positions (§14) — is `template_inject_target_is_loader`; a key resolving to neither model, reaction system, nor loader is `template_inject_target_not_component`. Resolution follows §4.6 scoped-reference rules, so a subsystem path (`"Parent.RefSubsystem"`) is a valid key when the entry references a nested system.
 
 **Timing and round-trip** are the load-time-composition regime of §9.7.10: coupling-entry injections are collected after all `coupling`-named systems resolve (so an entry may target an inline-declared system as well as a referenced one), appended to the target's scope in the §9.7.10 merge order, and consumed by the §9.6.3 fixpoint before flattening; they do **not** survive `parse → emit`. Hanging the discretization on the entry that mounts a PDE component keeps the choice next to the wiring that makes it necessary and needs no new top-level section.
+
+### 10.9 Coupling-library files
+
+Coupling is the one part of an assembly that could not, until now, be factored and reused: the
+`coupling` array of `variable_map` / `couple` edges could only be authored inline in the assembling
+document. A **coupling-library file** lifts a *recurring* wiring pattern into a referenceable,
+role-parameterized document, exactly as a template-library file (§9.7.1) does for rewrite rules.
+
+A coupling-library file is a valid ESM document (`esm`, `metadata`) whose payload is:
+
+- **`coupling_roles`** (required, non-empty) — a map from role name to a role descriptor. A role is
+  the library's *formal component parameter*: a name, not a type or shape. A descriptor carries a
+  single optional `description` (documentation only; it never affects binding or expansion and
+  round-trips verbatim). There is deliberately **no** structural contract — no interface, no
+  variable-name list — because the library's edges already spell which variables each role must
+  expose, and after binding the ordinary flatten-time scoped-reference resolution
+  (`unresolved_scoped_ref`) checks that the bound component exposes them.
+- **`coupling`** (required, non-empty) — an array of §10.1 coupling entries whose system-naming
+  fields are written against **role names** as their top-level system segment (§10.10.2 enumerates
+  every such site).
+
+A coupling-library file **MUST NOT** declare `models`, `reaction_systems`, `data_loaders`,
+`domain`, `index_sets`, `metaparameters`, or `expression_templates` (`coupling_library_illegal_payload`).
+Purity keeps the three reference mechanisms disjoint: a §4.7 subsystem file is not importable as a
+coupling library, a template-library file is not importable as a coupling library, and a
+coupling-library file is includable **only** through `coupling_import` — never as a subsystem
+(`subsystem_ref_is_coupling_library`) or a template import (`template_import_is_coupling_library`).
+**Presence of top-level `coupling_roles` is the sole positive identifier of the file kind:** a
+document carrying both `coupling_roles` and a forbidden payload is classified as a *malformed
+coupling library* (`coupling_library_illegal_payload`), never as an assembly with a stray
+`coupling_roles`.
+
+**Permitted edge types.** The role-bearing entry types a library MAY contain are exactly
+`variable_map`, `couple`, `operator_compose`, and `event`. It MUST NOT contain a `callback` entry,
+and no library edge may carry an `expression_template_imports` map (both
+`coupling_library_illegal_payload`). A `callback` exposes only a registered id and an opaque
+`config` bag with no structured system-reference field, so a role reference inside it could be
+neither located nor rewritten; and an `expression_template_imports` map is a §9.7.10/§10.8
+*pre-fixpoint* injection, consumed by the §9.6.3 fixpoint **before** flattening, whereas a
+`coupling_import` expands **at** flatten — strictly after the fixpoint — so such a map on a library
+edge could never reach the engine that consumes it. Both are therefore forbidden rather than
+silently dropped. An implementation MAY further restrict the permitted set (e.g. `variable_map` +
+`couple` only), enforcing the narrowing with `coupling_library_illegal_payload`.
+
+A coupling-library file **MUST NOT** itself contain a `coupling_import` entry
+(`coupling_library_nested_import`); layering coupling libraries on coupling libraries is deferred.
+
+**No discretization inside a library edge, and no rewrite-target transform templates.** A regridding
+`transform` (§10.4) references the *receiving* component's build-once weight arrays and index sets;
+after binding, the `to` target is a real component whose registry is in scope, so the library needs
+no `index_sets` or templates of its own. Because a library edge's transform templates expand at
+flatten (§10.4 carve-out, §10.10.3) — after the §9.6.3 fixpoint — a library transform MUST expand
+to an already-lowered form; a transform template that would introduce a rewrite-target operator
+(`grad` / `div` / spatial `D`) is rejected with `coupling_library_illegal_payload`.
+
+**Role-scoped reference resolution.** In an ordinary document a coupling edge's top-level segment
+must resolve to a top-level `models` / `reaction_systems` / `data_loaders` key (§4.6). A library
+file has no such systems, so that resolution is **suspended** when a coupling-library file is
+validated on its own: at every role-occurrence site (§10.10.2) the top-level segment must instead
+name a declared role (`coupling_edge_unknown_role` otherwise), and a role that appears in
+`coupling_roles` but at no occurrence site is `coupling_role_unused`. Ordinary §4.6 resolution
+applies only *after* binding, when each role segment has been rewritten to a real component.
+
+```json
+{
+  "esm": "0.8.0",
+  "metadata": { "name": "RothermelFuelCoupling",
+    "description": "Anderson-13 fuel properties → Rothermel (1972) spread inputs." },
+  "coupling_roles": {
+    "Fuel":   { "description": "fuel-property source" },
+    "Spread": { "description": "Rothermel spread model" }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.w_0",   "to": "Spread.w0",    "transform": "param_to_var" },
+    { "type": "variable_map", "from": "Fuel.delta", "to": "Spread.delta", "transform": "param_to_var" }
+  ]
+}
+```
+
+### 10.10 Coupling imports and role binding
+
+An assembly reuses a coupling library with a `coupling_import` entry in its ordinary `coupling`
+array:
+
+```json
+{
+  "type": "coupling_import",
+  "ref":  "../earthscimodels/couplings/rothermel_fuel.esm",
+  "bind": { "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread" },
+  "description": "Optional; documentation only, round-trips verbatim."
+}
+```
+
+`ref` resolves by the §4.7 reference formats (relative path, absolute path, URL, `${VAR}`), with
+the same per-binding capability rules as a template import; a `ref` that fails to load or parse is
+`coupling_import_unresolved`, and a `ref` that targets a document without top-level `coupling_roles`
+is `coupling_import_not_library`.
+
+#### 10.10.1 Binding — total and checked by name
+
+For a `coupling_import` referencing a library that declares roles `R₁ … Rₙ`, binding is a **total,
+explicit map** — there is no search, no inference, no auto-binding:
+
+1. **Every role MUST have a `bind` entry.** A declared role absent from `bind` is
+   `coupling_import_role_unbound`.
+2. **Every `bind` key MUST name a declared role.** A key that is not one of `R₁ … Rₙ` is
+   `coupling_import_unknown_role`.
+3. **Every `bind` value MUST resolve to a component.** A value that does not resolve to a top-level
+   or nested `models` / `reaction_systems` / `data_loaders` component is
+   `coupling_import_bind_not_a_component`.
+
+**Component-reference resolution (distinct from §4.6).** A `bind` value names a *component* all the
+way down, not a variable: split the value on `"."` into segments `[s₁, …, sₖ]`; `s₁` MUST name a
+top-level `models` / `reaction_systems` / `data_loaders` key, and each subsequent `sᵢ` MUST name a
+key in the preceding system's `subsystems` map. The whole path MUST terminate on a system or loader
+node — a path that bottoms out at (or passes through) a variable, parameter, or species is
+`coupling_import_bind_not_a_component`. Data loaders are bindable (a `Loader` role binds a
+`data_loaders` entry), consistent with §10 treating a loader as a coupling endpoint. This is the
+§4.6 hierarchy walk stopped one segment short of a variable.
+
+Because binding is total and explicit, it is unambiguous by construction: two components of the same
+kind that must couple differently (two fuel sources feeding two spread models) are disambiguated
+simply by writing two different `bind` values — the case a type-dispatch mechanism could not
+express. A `bind` whose keys are all correct but whose value names a component that does not expose
+a variable the library's edges reference is **not** caught here; it surfaces at flatten as
+`unresolved_scoped_ref` (§10.10.3), the same diagnostic a hand-authored edge to a nonexistent
+variable produces.
+
+#### 10.10.2 Expansion and the role-substitution occurrence surface
+
+Once every role is bound, each edge in the library's `coupling` array is emitted into the assembly's
+effective coupling sequence with **every role-named top-level segment rewritten to its bound
+actual**, as **one simultaneous substitution** (all roles at once). A role bound to a dotted path
+replaces the single role segment with the full path, so `Fuel.w_0` under `bind: { "Fuel":
+"Parent.Child" }` becomes `Parent.Child.w_0` (a well-formed §4.6 reference). A role name occurs, and
+is rewritten, at exactly these sites of a library edge:
+
+| Entry field | Occurrence of a role name | In |
+|---|---|---|
+| `from`, `to` | top-level segment of the scoped reference | `variable_map` |
+| `systems[]` | each array element (a bare system name) | `couple`, `operator_compose` |
+| `connector.equations[].from` / `.to` | top-level segment of the scoped reference | `couple` |
+| `connector.equations[].expression` | top-level segment of every scoped reference in the Expression | `couple` |
+| `transform` (Expression form) | top-level segment of every scoped reference in the Expression | `variable_map` |
+| `apply_expression_template` node `bindings` **values** | top-level segment of each bound scoped reference; occurs inside **any** Expression above — a `transform`, a `connector` expression, or any `event` Expression | `variable_map`, `couple`, `event` |
+| `translate` map | each **key** and each **value** | `operator_compose` |
+| `conditions[]` | top-level segment of every scoped reference in each condition Expression | `event` |
+| `affects[]`, `affect_neg[]` | top-level segment of `.lhs` and of every scoped reference in `.rhs` | `event` |
+| `trigger.expression` | top-level segment of every scoped reference in the Expression (`condition` trigger form only) | `event` |
+| `functional_affect` | top-level segment of each entry of `read_vars`, `read_params`, `modified_params` | `event` |
+| `discrete_parameters[]` | top-level segment of each scoped-parameter reference | `event` |
+
+Non-reference fields (`transform` string values, `factor`, `lifting`, `description`, `event_type`,
+`name`, `handler_id`, `root_find`, `reinitialize`, literal Expression operands) copy unchanged. An
+opaque `config` bag (a `functional_affect`'s `config`) is copied verbatim and is **not** a
+substitution surface — a library MUST NOT hide a component reference there. `callback` entries and
+edge-level `expression_template_imports` never appear because §10.9 forbids them.
+
+#### 10.10.3 Timing, ordering, and round-trip
+
+`coupling_import` expands **at flatten time**, as a new sub-step of the §4.7.5 flattening algorithm
+inserted after variable-namespacing (§4.7.5 step 2) and before the coupling-rule step (§4.7.5 step
+3). Subsystem mounting and template-import resolution happen earlier, at load (§2.1b / §2.1c), so
+every `bind` target and every expanded edge resolves against fully-mounted components. Expanded
+edges are spliced into the coupling sequence **in the position of the import entry**, preserving
+`coupling`-array order; two import entries never interleave. This is expressly **not** the §9.7.10
+pre-fixpoint injection regime.
+
+Because expansion is a flatten-time step, the **source document round-trips with the
+`coupling_import` entry intact** — `{ type, ref, bind }` survives `parse → emit`, exactly like every
+other coupling entry, while the *flattened* system contains the expanded edges. An assembly that
+inlines the library's edges by hand and an assembly that imports them flatten to the **same** system
+(the same equations *and* the same §4.7.5 "coupling rules applied" metadata, which records the
+expanded edges in both builds, never the `coupling_import` indirection), because both resolve at the
+same §4.7.5 step.
+
+Two consequences of expanding inside flatten are normative:
+
+- **A mis-bind is caught by validating the expanded edges, exactly as any bad edge is.** The
+  structural `unresolved_scoped_ref` check (§ libraries-spec 4.7.5, §3) resolves a coupling edge's
+  scoped references against the coupled system. It runs at load on the pre-flatten representation,
+  where a `coupling_import` is still `{ type, ref, bind }` and the expanded edges do not yet exist —
+  so a bad binding cannot be seen there. A conforming implementation therefore MUST apply the
+  coupled-system reference validation to the **expanded** coupling (the edges produced by §10.10.2),
+  not the source `coupling` array; a bound component that resolves but lacks a referenced variable
+  then fails with `unresolved_scoped_ref` naming the missing `Component.var` — the same diagnostic,
+  over the same expanded edge, that a hand-authored edge to a nonexistent variable produces. Whether
+  that validation is folded into the flatten pass or run as a separate coupled-system check over the
+  flattened form is a binding-implementation choice; the requirement is only that it sees the
+  expanded edges.
+- **A library-edge transform's templates expand at flatten** against the bound `to` owner's
+  registry (§10.4 carve-out), to an already-lowered form.
+
+Two independent import edges referencing the same library with *different* `bind` maps expand to two
+independent edge sets. A double-driven `param_to_var` target (two edges, imported or inline, whose
+targets collide on one parameter) is neither created nor specially diagnosed by imports: it is
+handled exactly as two inline edges doing the same, and the flattening algorithm is commutative
+(libraries-spec §4.7), so no order-dependent outcome is asserted. Authors should route each role to
+its own target rather than share one.
+
+### 10.11 Coupling-import diagnostics
+
+| Code | Raised when |
+|---|---|
+| `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse. |
+| `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`). |
+| `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file. |
+| `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file. |
+| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_loaders` / `domain` / `index_sets` / `metaparameters` / `expression_templates`; **or** contains a `callback` entry or a library edge carrying `expression_template_imports`; **or** carries a library edge whose transform template would expand to a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
+| `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry. |
+| `coupling_edge_unknown_role` | A library edge's top-level system segment, at any occurrence site, is not a declared role. |
+| `coupling_role_unused` | A declared role appears at no occurrence site in any library edge. |
+| `coupling_import_unknown_role` | A `bind` key names a role the referenced library does not declare. |
+| `coupling_import_role_unbound` | A role the referenced library declares has no `bind` entry. |
+| `coupling_import_bind_not_a_component` | A `bind` value does not resolve to a top-level or subsystem component in the assembly. |
+
+A bound component that resolves but lacks a referenced variable is **not** a new code: it surfaces
+at flatten as the existing `unresolved_scoped_ref`.
 
 ---
 
@@ -3044,7 +3258,6 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
 
   "reaction_systems": {
     "SimpleOzone": {
-      "coupletype": "SimpleOzoneCoupler",
       "reference": { "notes": "Minimal O3-NOx photochemical cycle" },
       "species": {
         "O3":  { "units": "mol/mol", "default": 40e-9,  "description": "Ozone" },

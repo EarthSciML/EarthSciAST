@@ -1,0 +1,36 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "full_surface_assembly",
+    "description": "Imports full_surface_lib.esm and binds its two roles to SourceModel/SinkModel (names deliberately free of the substrings 'Fuel'/'Spread' so a residual-role check is a clean substring assertion). Proves every 10.10.2 occurrence site is rewritten."
+  },
+  "models": {
+    "SourceModel": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 18600.0 },
+        "flux": { "type": "parameter", "units": "1", "default": 0.0 }
+      },
+      "equations": []
+    },
+    "SinkModel": {
+      "variables": {
+        "sigma": { "type": "parameter", "units": "1/m", "default": 0.0 },
+        "h": { "type": "parameter", "units": "J/kg", "default": 0.0 },
+        "flux": { "type": "parameter", "units": "1", "default": 0.0 },
+        "w_regrid": { "type": "parameter", "units": "1", "default": 1.0 },
+        "r": { "type": "state", "units": "m/s", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": { "op": "-", "args": ["r"] } }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./full_surface_lib.esm",
+      "bind": { "Fuel": "SourceModel", "Spread": "SinkModel" }
+    }
+  ]
+}

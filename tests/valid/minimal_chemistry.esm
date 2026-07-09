@@ -13,7 +13,6 @@
   },
   "reaction_systems": {
     "SimpleOzone": {
-      "coupletype": "SimpleOzoneCoupler",
       "reference": {
         "notes": "Minimal O3-NOx photochemical cycle"
       },

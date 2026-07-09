@@ -24,6 +24,7 @@ import {
   requireMetaExpr,
   resolveTemplateMachinery,
 } from './template-imports.js'
+import { isCouplingLibraryDoc } from './coupling-imports.js'
 import { load, validateSchema } from './parse.js'
 import { save } from './serialize.js'
 
@@ -224,6 +225,12 @@ function resolveRefDocument(
     throw new ExpressionTemplateError(
       'subsystem_ref_is_template_library',
       `Subsystem ref '${ref}' targets a template-library file; libraries are imported via expression_template_imports (esm-spec §9.7.1)`,
+    )
+  }
+  if (isCouplingLibraryDoc(parsed)) {
+    throw new ExpressionTemplateError(
+      'subsystem_ref_is_coupling_library',
+      `Subsystem ref '${ref}' targets a coupling-library file; libraries are imported via a coupling_import coupling entry (esm-spec §10.9)`,
     )
   }
   rejectExpressionTemplatesPreV04(parsed)

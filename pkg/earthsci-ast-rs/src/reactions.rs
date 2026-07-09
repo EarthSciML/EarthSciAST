@@ -206,7 +206,6 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
 
     Ok(Model {
         name: None,
-        coupletype: system.coupletype.clone(),
         reference: system.reference.clone(),
         variables,
         equations,
@@ -363,7 +362,6 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
 ///
 /// // Assuming you have a reaction system
 /// let reaction_system = ReactionSystem {
-///     coupletype: None,
 ///     reference: None,
 ///     species: std::collections::HashMap::new(),
 ///     parameters: std::collections::HashMap::new(),
@@ -438,7 +436,6 @@ mod tests {
     #[test]
     fn test_derive_odes_simple() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
@@ -495,7 +492,6 @@ mod tests {
     #[test]
     fn test_stoichiometric_matrix() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [
                 create_test_species("A"),
@@ -553,7 +549,6 @@ mod tests {
     #[test]
     fn test_stoichiometric_matrix_empty() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: std::collections::HashMap::new(),
             parameters: HashMap::new(),
@@ -571,7 +566,6 @@ mod tests {
     #[test]
     fn test_derive_odes_empty_system() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: std::collections::HashMap::new(),
             parameters: HashMap::new(),
@@ -590,7 +584,6 @@ mod tests {
     #[test]
     fn test_derive_odes_unknown_species_error() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
@@ -620,7 +613,6 @@ mod tests {
     #[test]
     fn test_derive_odes_mass_action_kinetics() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [
                 create_test_species("A"),
@@ -675,7 +667,6 @@ mod tests {
     #[test]
     fn test_derive_odes_source_reaction() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
@@ -706,7 +697,6 @@ mod tests {
     #[test]
     fn test_derive_odes_sink_reaction() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
@@ -752,7 +742,6 @@ mod tests {
     #[test]
     fn test_derive_odes_higher_order_reaction() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
@@ -802,7 +791,6 @@ mod tests {
     #[test]
     fn test_derive_odes_reactions_with_no_substrates_and_products() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
@@ -832,7 +820,6 @@ mod tests {
     #[test]
     fn test_derive_odes_complex_reaction_network() {
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [
                 create_test_species("A"),
@@ -892,7 +879,6 @@ mod tests {
         use std::collections::HashMap;
 
         let system = ReactionSystem {
-            coupletype: None,
             reference: None,
             species: [
                 create_test_species("A"),

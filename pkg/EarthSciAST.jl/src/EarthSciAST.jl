@@ -41,6 +41,8 @@ include("template_imports.jl")
 # Wire I/O
 include("parse.jl")
 include("serialize.jl")
+# Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11)
+include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
 include("display.jl")
@@ -91,7 +93,9 @@ export
     Operator, RegisteredFunction, RegisteredFunctionSignature, CouplingEntry,
     # Concrete coupling types
     CouplingOperatorCompose, CouplingCouple, CouplingVariableMap,
-    CouplingOperatorApply, CouplingCallback, CouplingEvent,
+    CouplingOperatorApply, CouplingCallback, CouplingEvent, CouplingImport,
+    # Coupling-library reuse (esm-spec §10.9–§10.11)
+    expand_coupling_imports,
     # Flattened system (§4.7.5 / §4.7.6)
     FlattenMetadata, FlattenedSystem, flatten, lower_reactions_to_equations,
     infer_array_shapes,

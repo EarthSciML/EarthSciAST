@@ -17,6 +17,7 @@ from .esm_types import (
     ContinuousEvent,
     CouplingCouple,
     CouplingEntry,
+    CouplingImport,
     DataLoader,
     DataLoaderDeterminism,
     DataLoaderSource,
@@ -847,6 +848,15 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
                 result["transform"] = coupling.transform
         if coupling.factor is not None:
             result["factor"] = coupling.factor
+
+    elif isinstance(coupling, CouplingImport):
+        # Round-trip the source entry verbatim (esm-spec §10.10.3): only the
+        # flattened system carries the expanded edges.
+        result["type"] = "coupling_import"
+        if coupling.ref is not None:
+            result["ref"] = coupling.ref
+        if coupling.bind:
+            result["bind"] = dict(coupling.bind)
 
     elif isinstance(coupling, OperatorApplyCoupling):
         result["type"] = "operator_apply"

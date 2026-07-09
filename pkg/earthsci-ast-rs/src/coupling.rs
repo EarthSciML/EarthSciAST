@@ -192,6 +192,12 @@ pub(crate) fn validate_coupling(
                 // Cross-system event affects are validated by the JSON-level
                 // event checks in `parse` (mirroring Python).
             }
+            crate::CouplingEntry::CouplingImport { .. } => {
+                // A `coupling_import` is resolved and its bindings checked at
+                // flatten (esm-spec §10.10.3 / §10.11), where the library `ref`
+                // is loaded and every role→component bind is verified; the
+                // structural validator has no library document to check against.
+            }
         }
     }
 }

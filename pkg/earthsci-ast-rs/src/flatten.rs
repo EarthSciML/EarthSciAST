@@ -142,6 +142,11 @@ pub enum FlattenError {
     #[error("Reaction lowering failed: {0}")]
     Reaction(#[from] crate::reactions::DeriveError),
 
+    /// A `coupling_import` entry failed to resolve or expand (esm-spec
+    /// §10.9–§10.11). Carries the stable diagnostic `code` + message.
+    #[error("{0}")]
+    CouplingImport(#[from] crate::diagnostic::DiagnosticError),
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -265,6 +270,42 @@ pub struct FlattenedSystem {
 ///
 /// Returns [`FlattenError`] per §4.7.6.10 error taxonomy.
 pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
+    flatten_with_options(file, &crate::coupling_imports::CouplingImportOptions::default())
+}
+
+/// Flatten with explicit [`CouplingImportOptions`] controlling how
+/// `coupling_import` `ref`s resolve (esm-spec §10.10.3). When the file carries
+/// no `coupling_import` entry this is identical to [`flatten`]; otherwise the
+/// import entries are expanded into concrete edges — spliced in position — as a
+/// §4.7.5 sub-step *before* the coupling-rule step, and flattening proceeds over
+/// the expanded coupling sequence. The `coupling_import` source entry is not
+/// mutated on the caller's `file`; the expansion operates on an internal clone.
+///
+/// # Errors
+///
+/// Returns [`FlattenError::CouplingImport`] (carrying a stable §10.11
+/// diagnostic code) if any `coupling_import` fails to resolve or expand;
+/// otherwise the [`FlattenError`] taxonomy of [`flatten`].
+pub fn flatten_with_options(
+    file: &EsmFile,
+    options: &crate::coupling_imports::CouplingImportOptions,
+) -> Result<FlattenedSystem, FlattenError> {
+    // §4.7.5 expansion sub-step: expand `coupling_import` edges before the
+    // coupling-rule step. Only clone the file when an import is actually
+    // present, so the common (no-import) path is untouched.
+    if crate::coupling_imports::has_coupling_import(file) {
+        let expanded = crate::coupling_imports::expand_coupling_imports(file, options)?;
+        let mut cloned = file.clone();
+        cloned.coupling = expanded;
+        flatten_impl(&cloned)
+    } else {
+        flatten_impl(file)
+    }
+}
+
+/// The core flattening algorithm, operating over an already-`coupling_import`-
+/// expanded [`EsmFile`] (see [`flatten_with_options`]).
+fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let has_models = file.models.as_ref().is_some_and(|m| !m.is_empty());
     let has_rs = file
         .reaction_systems
@@ -630,6 +671,7 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
     models.insert(system_name, model.clone());
 
     let file = EsmFile {
+        coupling_roles: None,
         esm: crate::SCHEMA_VERSION.to_string(),
         metadata: Metadata {
             name: None,
@@ -1238,6 +1280,10 @@ fn apply_coupling_entry(
                 )
             }));
         }
+        // `coupling_import` entries are expanded into concrete edges by
+        // `flatten_with_options` before `flatten_impl` runs, so one never
+        // reaches the rule-application step. Treat as a no-op for robustness.
+        CouplingEntry::CouplingImport { .. } => {}
     }
     Ok(())
 }
@@ -1784,6 +1830,7 @@ mod tests {
 
     fn empty_file() -> EsmFile {
         EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -1842,7 +1889,6 @@ mod tests {
             "sys".to_string(),
             Model {
                 name: Some("System".to_string()),
-                coupletype: None,
                 subsystems: None,
                 reference: None,
                 variables: vars,
@@ -1868,6 +1914,7 @@ mod tests {
         );
 
         let file = EsmFile {
+            coupling_roles: None,
             models: Some(models),
             ..empty_file()
         };

@@ -1,0 +1,18 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "template_import_to_library",
+    "description": "Cross-kind rejection: a 9.7.2 expression_template_imports entry targets the coupling-library file rothermel_fuel.esm. The reference mechanisms are disjoint - a coupling library is not importable as a template library (esm-spec 10.9). Surfaces at load. Expected: template_import_is_coupling_library."
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [{ "ref": "./rothermel_fuel.esm" }],
+      "variables": {
+        "x": { "type": "state", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+      ]
+    }
+  }
+}

@@ -22,6 +22,7 @@ use crate::{EsmFile, error::EsmError};
 /// use earthsci_ast::{EsmFile, Metadata, save};
 ///
 /// let esm_file = EsmFile {
+///     coupling_roles: None,
 ///     esm: "0.1.0".to_string(),
 ///     metadata: Metadata {
 ///         name: Some("test_model".to_string()),
@@ -81,6 +82,7 @@ mod tests {
     #[test]
     fn test_save_minimal_file() {
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -138,7 +140,6 @@ mod tests {
             "test".to_string(),
             Model {
                 reference: None,
-                coupletype: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
@@ -158,6 +159,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -197,6 +199,7 @@ mod tests {
     #[test]
     fn test_save_compact() {
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),

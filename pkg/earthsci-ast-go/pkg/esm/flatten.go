@@ -61,6 +61,13 @@ type FlattenMetadata struct {
 //  3. Applies coupling rules (operator_compose, couple, variable_map, operator_apply)
 //  4. Collects and returns the unified flattened system
 func Flatten(file *EsmFile) (*FlattenedSystem, error) {
+	return FlattenWithOptions(file, CouplingImportOptions{})
+}
+
+// FlattenWithOptions is Flatten with control over how `coupling_import` refs are
+// resolved (esm-spec §10.10). Only needed when the file uses `coupling_import`;
+// a file with no such entries flattens identically under the zero-value options.
+func FlattenWithOptions(file *EsmFile, opts CouplingImportOptions) (*FlattenedSystem, error) {
 	if file == nil {
 		return nil, fmt.Errorf("flatten: input file is nil")
 	}
@@ -188,9 +195,15 @@ func Flatten(file *EsmFile) (*FlattenedSystem, error) {
 	sort.Strings(flat.BrownianVariables)
 
 	// ---------------------------------------------------------------
-	// Step 3: Apply coupling rules
+	// Step 3: Expand coupling_import entries (esm-spec §10.10.3), then apply
+	// the resulting coupling sequence. A file with no coupling_import entries
+	// yields its `coupling` slice verbatim and needs no options.
 	// ---------------------------------------------------------------
-	for _, entry := range file.Coupling {
+	coupling, err := expandCouplingImports(file, opts)
+	if err != nil {
+		return nil, fmt.Errorf("flatten: %w", err)
+	}
+	for _, entry := range coupling {
 		if err := applyCouplingRule(flat, entry, allVarNames); err != nil {
 			return nil, fmt.Errorf("flatten: coupling error: %w", err)
 		}

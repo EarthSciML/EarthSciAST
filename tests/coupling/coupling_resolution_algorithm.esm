@@ -10,7 +10,6 @@
   },
   "models": {
     "AtmosphereModel": {
-      "coupletype": "AtmosphereCoupler",
       "variables": {
         "pressure": {
           "type": "parameter",
@@ -27,7 +26,6 @@
       },
       "subsystems": {
         "Chemistry": {
-          "coupletype": "ChemistryCoupler",
           "variables": {
             "O3": {
               "type": "state",
@@ -207,7 +205,6 @@
       "equations": []
     },
     "SurfaceModel": {
-      "coupletype": "SurfaceCoupler",
       "variables": {
         "soil_temperature": {
           "type": "parameter",

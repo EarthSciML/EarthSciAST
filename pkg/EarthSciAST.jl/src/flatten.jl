@@ -1467,16 +1467,50 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
 end
 
 """
-    flatten(file::EsmFile) -> FlattenedSystem
+    _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry}) -> EsmFile
+
+Return a copy of `file` with its `coupling` vector replaced (every other field
+shared by reference). Used to splice `coupling_import`-expanded edges into the
+document the rest of `flatten` consumes.
+"""
+_with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
+    EsmFile(file.esm, file.metadata;
+            models=file.models,
+            reaction_systems=file.reaction_systems,
+            data_loaders=file.data_loaders,
+            operators=file.operators,
+            registered_functions=file.registered_functions,
+            coupling=coupling,
+            domain=file.domain,
+            enums=file.enums,
+            function_tables=file.function_tables,
+            index_sets=file.index_sets)
+
+"""
+    flatten(file::EsmFile; base_path=".", load_ref=nothing) -> FlattenedSystem
 
 Flatten the coupled systems in `file` into a single symbolic representation
 per spec §4.7.5 (+ §4.7.6 for hybrid dimension-promoted cases).
+
+`coupling_import` entries (esm-spec §10.10) are expanded first; `base_path`
+anchors their `ref`s and `load_ref` optionally overrides the resolver (see
+[`expand_coupling_imports`](@ref)).
 
 Throws `ConflictingDerivativeError` if any species is both the LHS of an
 explicit `D(X, t) = ...` equation and a reactant/product of a reaction — such
 a system is over-determined.
 """
-function flatten(file::EsmFile)::FlattenedSystem
+function flatten(file::EsmFile; base_path::AbstractString=".",
+                 load_ref=nothing)::FlattenedSystem
+    # Step 0a: Expand `coupling_import` entries (esm-spec §10.10.3) into concrete
+    # edges BEFORE any coupling-consuming step, so imported edges participate in
+    # conflict detection, unit checks, the coupling-rule loop, and the pointwise
+    # lift exactly as inline edges would. A file with no imports is unchanged.
+    expanded = expand_coupling_imports(file; base_path=base_path, load_ref=load_ref)
+    if expanded !== file.coupling
+        file = _with_coupling(file, expanded)
+    end
+
     # Step 0: Pre-flight conflict detection. Spec §4.7.5 item E.
     conflicting = _find_conflicting_derivatives(file)
     if !isempty(conflicting)

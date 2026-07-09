@@ -60,6 +60,27 @@ TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component"
 TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader"
 
 # ---------------------------------------------------------------------------
+# Coupling-library / coupling_import role-binding codes (esm-spec §10.9–§10.11;
+# RFC docs/content/rfcs/coupling-libraries-role-binding.md §8). Named for parity
+# with the §9.7 template-import codes. Raised as ``ExpressionTemplateError`` from
+# ``coupling_imports.py`` (the expansion codes), ``parse.py``
+# (``subsystem_ref_is_coupling_library``), and ``template_imports.py``
+# (``template_import_is_coupling_library``).
+# ---------------------------------------------------------------------------
+
+COUPLING_IMPORT_UNRESOLVED = "coupling_import_unresolved"
+COUPLING_IMPORT_NOT_LIBRARY = "coupling_import_not_library"
+SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library"
+TEMPLATE_IMPORT_IS_COUPLING_LIBRARY = "template_import_is_coupling_library"
+COUPLING_LIBRARY_ILLEGAL_PAYLOAD = "coupling_library_illegal_payload"
+COUPLING_LIBRARY_NESTED_IMPORT = "coupling_library_nested_import"
+COUPLING_EDGE_UNKNOWN_ROLE = "coupling_edge_unknown_role"
+COUPLING_ROLE_UNUSED = "coupling_role_unused"
+COUPLING_IMPORT_UNKNOWN_ROLE = "coupling_import_unknown_role"
+COUPLING_IMPORT_ROLE_UNBOUND = "coupling_import_role_unbound"
+COUPLING_IMPORT_BIND_NOT_A_COMPONENT = "coupling_import_bind_not_a_component"
+
+# ---------------------------------------------------------------------------
 # Closed function registry codes (esm-spec §9.1–§9.3), raised as
 # ``ClosedFunctionError`` (or ``ValueError`` for the enum codes) from
 # ``registered_functions.py``.

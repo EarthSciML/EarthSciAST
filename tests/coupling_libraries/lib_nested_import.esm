@@ -1,0 +1,15 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "IllegalLibraryNestedImport",
+    "description": "INVALID coupling library: contains a nested `coupling_import` entry. v1 forbids layering coupling libraries on coupling libraries (esm-spec 10.9). Expected: coupling_library_nested_import."
+  },
+  "coupling_roles": {
+    "Fuel": { "description": "fuel-property source" },
+    "Spread": { "description": "spread model" }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var" },
+    { "type": "coupling_import", "ref": "./rothermel_fuel.esm", "bind": { "Fuel": "Fuel", "Spread": "Spread" } }
+  ]
+}

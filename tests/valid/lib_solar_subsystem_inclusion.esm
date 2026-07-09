@@ -9,7 +9,6 @@
   },
   "models": {
     "Photolysis": {
-      "coupletype": "Photolysis",
       "subsystems": {
         "Solar": { "ref": "../../lib/solar.esm" }
       },

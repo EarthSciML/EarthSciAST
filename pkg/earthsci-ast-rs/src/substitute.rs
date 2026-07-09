@@ -554,7 +554,6 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                coupletype: None,
                 subsystems: None,
                 reference: None,
                 variables: model_variables,
@@ -571,6 +570,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -634,7 +634,6 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                coupletype: None,
                 subsystems: None,
                 reference: None,
                 variables: model_variables,
@@ -651,6 +650,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -717,7 +717,6 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                coupletype: None,
                 subsystems: None,
                 reference: None,
                 variables: model_variables,
@@ -734,6 +733,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -814,7 +814,6 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                coupletype: None,
                 subsystems: None,
                 reference: None,
                 variables: model_variables,
@@ -831,6 +830,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -996,7 +996,6 @@ mod tests {
         // Create a model with discrete and continuous events
         let model = Model {
             name: Some("TestModel".to_string()),
-            coupletype: None,
             subsystems: None,
             reference: None,
             variables: {

@@ -1,0 +1,27 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "coupletype_reaction_system",
+    "description": "coupletype removal (RFC 5/11): a ReactionSystem still carrying the deleted `coupletype` field. ReactionSystem is additionalProperties:false, so it fails schema validation loudly. Expected: schema validation error."
+  },
+  "reaction_systems": {
+    "Chem": {
+      "coupletype": "GasPhaseCoupler",
+      "species": {
+        "A": { "units": "mol/mol", "default": 1.0 },
+        "B": { "units": "mol/mol", "default": 0.0 }
+      },
+      "parameters": {
+        "k": { "units": "1/s", "default": 0.1 }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [{ "species": "A", "stoichiometry": 1 }],
+          "products": [{ "species": "B", "stoichiometry": 1 }],
+          "rate": { "op": "*", "args": ["k", "A"] }
+        }
+      ]
+    }
+  }
+}

@@ -579,6 +579,7 @@ mod tests {
 
     fn create_empty_esm_file() -> EsmFile {
         EsmFile {
+            coupling_roles: None,
             domain: None,
             index_sets: None,
             esm: "0.1.0".to_string(),
@@ -609,7 +610,6 @@ mod tests {
     fn create_simple_model() -> Model {
         Model {
             reference: None,
-            coupletype: None,
             subsystems: None,
             name: Some("Test Model".to_string()),
             variables: HashMap::new(),

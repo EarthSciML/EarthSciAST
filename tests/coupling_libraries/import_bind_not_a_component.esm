@@ -1,0 +1,20 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "import_bind_not_a_component",
+    "description": "INVALID import: 'Spread' is bound to 'DoesNotExist', which resolves to no top-level or nested models/reaction_systems/data_loaders component (esm-spec 10.10.1). Expected: coupling_import_bind_not_a_component."
+  },
+  "models": {
+    "FuelModelLookup": {
+      "variables": { "sigma": { "type": "parameter", "units": "1/m", "default": 1500.0 } },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "./rothermel_fuel.esm",
+      "bind": { "Fuel": "FuelModelLookup", "Spread": "DoesNotExist" }
+    }
+  ]
+}

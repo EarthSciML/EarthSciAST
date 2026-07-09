@@ -91,7 +91,11 @@ export { migrate, canMigrate, getSupportedMigrationTargets, MigrationError } fro
 
 // Coupled system flattening
 export { flatten } from './flatten.js'
-export type { FlattenedEquation, FlattenMetadata, FlattenedSystem } from './flatten.js'
+export type { FlattenedEquation, FlattenMetadata, FlattenedSystem, FlattenOptions } from './flatten.js'
+
+// Coupling-library files and coupling_import role binding (esm-spec §10.9–§10.11)
+export { expandCouplingImports, isCouplingLibraryDoc } from './coupling-imports.js'
+export type { CouplingImportOptions } from './coupling-imports.js'
 
 // Subsystem reference loading
 export {

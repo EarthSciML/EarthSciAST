@@ -377,7 +377,18 @@ UnitWarning:
 | `undefined_parameter` | Parameter referenced in a rate expression is not declared |
 | `undefined_system` | Coupling entry references a nonexistent model, reaction system, data loader, or operator |
 | `undefined_operator` | `operator_apply` references a nonexistent operator |
-| `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared |
+| `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared. Also raised at flatten for an edge produced by a `coupling_import` expansion whose bound component lacks a referenced variable (esm-spec §10.10.3) |
+| `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
+| `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
+| `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file |
+| `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file |
+| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_loaders`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
+| `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry |
+| `coupling_edge_unknown_role` | A library edge's top-level system segment, at an occurrence site, is not a declared role |
+| `coupling_role_unused` | A declared role appears at no occurrence site in any library edge |
+| `coupling_import_unknown_role` | A `bind` key names a role the referenced library does not declare |
+| `coupling_import_role_unbound` | A role the referenced library declares has no `bind` entry (binding is total) |
+| `coupling_import_bind_not_a_component` | A `bind` value does not resolve to a top-level or subsystem component in the assembly |
 | `invalid_discrete_param` | `discrete_parameters` entry does not match a declared parameter |
 | `null_reaction` | Reaction has both `substrates: null` and `products: null` |
 | `missing_observed_expr` | Observed variable is missing its `expression` field |
@@ -531,7 +542,31 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - Rewrite all equations so that variable references use the dot-namespaced names.
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
 
-3. **Apply coupling rules.** Process each coupling entry to merge equations across systems:
+   **Between steps 2 and 3 — Expand coupling imports (esm-spec §10.10).** Before applying coupling
+   rules, replace each `coupling_import` entry in the coupling sequence with the concrete edges its
+   referenced **coupling-library file** (esm-spec §10.9) declares, substituting the bound actual
+   component for every role-named top-level segment (esm-spec §10.10.2), spliced **in the position
+   of the import entry**. Resolution of the library `ref`, the totality and validity of `bind`, and
+   library purity are checked at this step, raising the esm-spec §10.11 diagnostics
+   (`coupling_import_unresolved`, `coupling_import_not_library`, `coupling_import_role_unbound`,
+   `coupling_import_unknown_role`, `coupling_import_bind_not_a_component`,
+   `coupling_library_illegal_payload`, …). A library edge's transform templates
+   (`apply_expression_template`) expand here against the **bound** `to` owner's template registry,
+   to an already-lowered form (esm-spec §10.4 carve-out). After this sub-step every entry in the
+   sequence is an ordinary coupling entry; the `coupling_import` source entry is retained only in
+   the *source* document (esm-spec §10.10.3), never in the flattened system. The expansion is a
+   pure structural rewrite over ordered inputs and does not disturb the commutativity of the
+   coupling-rule step.
+
+3. **Apply coupling rules.** Process each coupling entry to merge equations across systems. Because a
+   `coupling_import` is expanded (above) into ordinary edges before this step, its edges are
+   indistinguishable from inline edges here. A mis-bind therefore surfaces the same way any bad edge
+   does: the coupled-system reference resolution (the `unresolved_scoped_ref` check, §3) applied to
+   the **expanded** coupling reports a bound component that lacks a referenced variable. The
+   load-time `unresolved_scoped_ref` pass cannot catch it — it runs before expansion and never sees
+   the expanded edges — so a conforming library MUST run coupling-reference resolution over the
+   expanded edge set (whether inside flattening or as a coupled-system validation over the flattened
+   form).
    - **`operator_compose`**: Match equations by dependent variable (applying the `translate` map and `_var` placeholder expansion as described in Section 4.7.1). Combine matched equations by summing their RHS terms. The resulting equation uses the namespaced LHS variable (e.g., `D(SimpleOzone.O3, t) = [chemistry RHS] + [advection RHS]`).
    - **`couple`**: Apply connector equations, resolving the `from` and `to` scoped references to their namespaced equivalents.
    - **`variable_map`**: Substitute the target parameter with the source variable. For `param_to_var`, replace all occurrences of `Target.param` with `Source.var` in the flattened equations and remove the parameter from the target's parameter list.

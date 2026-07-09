@@ -24,7 +24,6 @@
   },
   "models": {
     "AtmosphericCarbon": {
-      "coupletype": "AtmosphereCoupler",
       "reference": {
         "notes": "Atmospheric CO2 and O2 with air-sea gas exchange"
       },
@@ -88,7 +87,6 @@
       ]
     },
     "OceanCarbon": {
-      "coupletype": "OceanCoupler",
       "reference": {
         "notes": "Ocean carbonate system with pH, alkalinity, and dissolved inorganic carbon"
       },

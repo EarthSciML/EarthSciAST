@@ -1383,6 +1383,9 @@ fn analyze_coupling_strength(
                     let affected_count = affects.as_ref().map(|a| a.len()).unwrap_or(0);
                     println!("  Event coupling: {event_name} affects {affected_count} components");
                 }
+                earthsci_ast::CouplingEntry::CouplingImport { reference, .. } => {
+                    println!("  Library import: {reference} (coupling_import)");
+                }
             }
         }
 
@@ -1926,6 +1929,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create a new ESM file with just the requested component
             let mut extracted_esm = earthsci_ast::EsmFile {
+                coupling_roles: None,
                 esm: esm_file.esm.clone(),
                 metadata: esm_file.metadata.clone(),
                 // Document-scoped registry (v0.8.0): preserve it on the
@@ -2351,6 +2355,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         i + 1,
                                         event_name,
                                         systems
+                                    );
+                                }
+                                earthsci_ast::CouplingEntry::CouplingImport {
+                                    reference, ..
+                                } => {
+                                    println!(
+                                        "  Rule {}: {} (CouplingImport)",
+                                        i + 1,
+                                        reference
                                     );
                                 }
                             }
