@@ -18,8 +18,10 @@ import {
 } from './lower-expression-templates.js'
 import {
   applyScopeInjections,
+  evalMetaExpr,
   isTemplateLibraryDoc,
   rejectTemplateImportsPreV08,
+  requireMetaExpr,
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { load, validateSchema } from './parse.js'
@@ -142,8 +144,21 @@ function mergeSubsystemIndexSets(
 
 /**
  * Read the optional metaparameter `bindings` off a `{ ref, bindings }`
- * subsystem entry (esm-spec §9.7.6 binding site 3). Values MUST be
- * integers (`metaparameter_type_error` otherwise).
+ * subsystem entry (esm-spec §9.7.6 binding site 3), folding each value to a
+ * concrete integer at the mount.
+ *
+ * A value may be a *metaparameter expression* — an integer literal, a name in
+ * the MOUNTING document's metaparameter scope, or a `{op: +|-|*|/, args}` tree
+ * over the same (e.g. `NTGT = NX*NY`). Unlike an import edge, a §4.7 subsystem
+ * ref is resolved as a complete document folded to concrete integers at the
+ * mount, so its binding values cannot be carried symbolically: each folds
+ * IMMEDIATELY against the mounting document's already-closed metaparameter
+ * environment. That closing has already happened — `load` → `resolveTemplate
+ * Machinery` substitutes the mounting doc's closed metaparameters into these
+ * ref bindings before this runs (a symbolic `NX*NY` arrives here as `18*20`),
+ * so the fold below closes against an empty env; a free name that survived the
+ * substitution is a genuine mount-edge typo and folds to
+ * `template_import_unknown_name`, reported at the edge.
  */
 function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<string, number> {
   const out: Record<string, number> = {}
@@ -152,17 +167,12 @@ function readEdgeBindings(sub: { bindings?: unknown }, subName: string): Record<
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new ExpressionTemplateError(
       'metaparameter_type_error',
-      `subsystems.${subName}: \`bindings\` must be an object of integers (esm-spec §9.7.6)`,
+      `subsystems.${subName}: \`bindings\` must be an object (esm-spec §9.7.6)`,
     )
   }
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof v !== 'number' || !Number.isInteger(v)) {
-      throw new ExpressionTemplateError(
-        'metaparameter_type_error',
-        `subsystems.${subName}: binding '${k}' is not an integer (esm-spec §9.7.6)`,
-      )
-    }
-    out[k] = v
+    const expr = requireMetaExpr(v, `subsystems.${subName}: binding '${k}'`)
+    out[k] = evalMetaExpr(expr, {}, `mount subsystems.${subName}, binding '${k}'`)
   }
   return out
 }

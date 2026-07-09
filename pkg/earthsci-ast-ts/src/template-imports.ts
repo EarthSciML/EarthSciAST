@@ -237,7 +237,7 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
  * except the `META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
  * expression-position substitution; no folding here).
  */
-function substituteMetaparams(x: Json, values: Record<string, number>): Json {
+function substituteMetaparams(x: Json, values: Record<string, Json>): Json {
   if (typeof x === 'string') {
     return Object.prototype.hasOwnProperty.call(values, x) ? values[x] : x
   }
@@ -259,7 +259,7 @@ function substituteMetaparams(x: Json, values: Record<string, number>): Json {
  * template's own `params` shadow like-named metaparameters inside its `body`
  * and `match` (a param is the inner binder; substitution must not capture it).
  */
-function substituteMetaparamsDecl(decl: Json, values: Record<string, number>): Json {
+function substituteMetaparamsDecl(decl: Json, values: Record<string, Json>): Json {
   let shadowed = values
   if (isObject(decl) && Array.isArray(decl.params)) {
     const params = decl.params
@@ -367,6 +367,90 @@ function collectNames(x: Json, out: string[]): string[] {
     }
   }
   return out
+}
+
+/**
+ * Structural grammar check for a metaparameter expression (esm-spec §9.7.6),
+ * independent of whether its names are yet concrete: integer literal, name
+ * string, or `{op: +|-|*|/, args: [...non-empty...]}` recursively. Unlike
+ * `tryFold` (which defers op-validation until every arg is concrete), this
+ * catches an inadmissible op (`%`, missing `args`, float literal) at the
+ * binding EDGE even when an arg is still a symbolic importer name.
+ */
+function validateMetaExpr(x: Json, ctx: string): void {
+  const i = asInt(x)
+  if (i !== undefined && typeof x !== 'boolean') return // integer literal
+  if (typeof x === 'string') return // metaparameter name
+  if (typeof x === 'boolean' || typeof x === 'number' || isNumericLiteral(x)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: non-integer literal ${JSON.stringify(isNumericLiteral(x) ? x.value : x)} in a metaparameter expression (esm-spec §9.7.6)`,
+    )
+  }
+  if (!isObject(x)) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: invalid metaparameter expression (expected integer, name, or {op, args})`,
+    )
+  }
+  const op = x.op
+  const args = x.args
+  if (
+    !(op === '+' || op === '-' || op === '*' || op === '/') ||
+    !Array.isArray(args) ||
+    args.length === 0
+  ) {
+    throw new ExpressionTemplateError(
+      'metaparameter_type_error',
+      `${ctx}: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})`,
+    )
+  }
+  for (const a of args) validateMetaExpr(a, ctx)
+}
+
+/**
+ * Validate that `v` is a *metaparameter expression* (esm-spec §9.7.6): an
+ * integer literal, a metaparameter-name string, or a `{op: +|-|*|/, args}`
+ * tree over the same. Returns `v` unchanged (UNFOLDED) — its free names close
+ * at a later binding site. Throws `metaparameter_type_error` on an
+ * inadmissible node.
+ *
+ * This is the relaxed replacement for `requireInt` at the metaparameter
+ * *binding* sites (import edge / subsystem edge). Before this, binding values
+ * were bare integers; a binding may now derive a child metaparameter from an
+ * arithmetic combination of the importer's metaparameters (e.g. `NTGT = NX*NY`),
+ * which import renaming (name→name) could not express.
+ */
+export function requireMetaExpr(v: Json, ctx: string): Json {
+  validateMetaExpr(v, ctx)
+  return v
+}
+
+/**
+ * Fold a metaparameter expression to a concrete integer against a CLOSED
+ * environment `env` (name → int) — the importing document's metaparameter
+ * scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
+ * folds with the exact-integer `tryFold` arithmetic (`/` must divide exactly;
+ * 64-bit overflow is an error). Throws `template_import_unknown_name` if the
+ * expression references a name absent from `env` — the mount-edge typo
+ * failure, keeping error locality at the edge that authored the expression.
+ */
+export function evalMetaExpr(expr: Json, env: Record<string, number>, ctx: string): number {
+  const folded = tryFold(substituteMetaparams(expr, env), ctx)
+  if (folded === null) {
+    const free = [
+      ...new Set(
+        collectNames(expr, []).filter((n) => !Object.prototype.hasOwnProperty.call(env, n)),
+      ),
+    ].sort()
+    throw new ExpressionTemplateError(
+      'template_import_unknown_name',
+      `${ctx}: metaparameter expression references ${
+        free.join(', ') || 'a name'
+      } not in the importing document's metaparameter scope (esm-spec §9.7.6)`,
+    )
+  }
+  return Number(folded)
 }
 
 /**
@@ -501,11 +585,13 @@ function mergeScope(dst: TemplateScope, src: TemplateScope, origin: string): voi
 
 /**
  * Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
- * substitute the bound names as integer literals throughout the exported
- * templates and index sets, then fold the structural sites that are now
- * closed.
+ * substitute the bound names throughout the exported templates and index sets,
+ * then fold the structural sites that are now closed. A bound VALUE is a
+ * metaparameter expression (usually an integer literal, but possibly a symbolic
+ * `NX*NY` over the importer's still-open metaparameters); the folds leave any
+ * site still carrying a free name symbolic for the importer's close.
  */
-function instantiateScope(scope: TemplateScope, values: Record<string, number>, ctx: string): void {
+function instantiateScope(scope: TemplateScope, values: Record<string, Json>, ctx: string): void {
   const newTemplates: JsonObject = {}
   for (const [n, d] of Object.entries(scope.templates)) {
     const nd = substituteMetaparamsDecl(d, values)
@@ -1124,8 +1210,12 @@ function resolveImportEntry(
     stack.pop()
   }
 
-  // Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
-  const values: Record<string, number> = {}
+  // Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
+  // VALUE may be a metaparameter expression over the importer's metaparameters
+  // (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
+  // (innermost-first), so the value is carried SYMBOLICALLY into the child and
+  // folds when the importing document closes (§9.7.6 "Binding value flow").
+  const values: Record<string, Json> = {}
   const bindingsRaw = entry.bindings
   if (isObject(bindingsRaw)) {
     for (const [name, v] of Object.entries(bindingsRaw)) {
@@ -1135,7 +1225,7 @@ function resolveImportEntry(
           `${origin}: import of '${ref}' binds metaparameter '${name}', which the target neither declares nor re-exports (esm-spec §9.7.6)`,
         )
       }
-      values[name] = requireInt(v, `${origin}: import of '${ref}', binding '${name}'`)
+      values[name] = requireMetaExpr(v, `${origin}: import of '${ref}', binding '${name}'`)
     }
   }
   if (Object.keys(values).length > 0) {

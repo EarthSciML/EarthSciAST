@@ -984,10 +984,10 @@ export interface SubsystemRef {
    */
   model?: string;
   /**
-   * Integer bindings closing the referenced document's metaparameters (esm-spec §9.7.6), e.g. a convergence wrapper instantiating a problem file at a given grid size.
+   * Bindings closing the referenced document's metaparameters (esm-spec §9.7.6 site 3). Each value is a metaparameter expression over the MOUNTING document's metaparameters (an integer literal, or e.g. `NX*NY`), folded to a concrete integer at the mount.
    */
   bindings?: {
-    [k: string]: number;
+    [k: string]: MetaparameterExpression;
   };
   /**
    * Template-library imports registered into the REFERENCED component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a mounted PDE component, without editing the leaf file. Same entry shape as §9.7.2; target implicit (this edge mounts one component). Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
@@ -1009,10 +1009,10 @@ export interface TemplateImport {
    */
   only?: [string, ...string[]];
   /**
-   * Integer bindings closing the target document's metaparameters at this edge.
+   * Bindings closing the target document's metaparameters at this edge (esm-spec §9.7.6 site 1). Each value is a metaparameter expression over the IMPORTING document's metaparameters (an integer literal, or e.g. `NX*NY`), carried symbolically into the child and folded when the importing document closes.
    */
   bindings?: {
-    [k: string]: number;
+    [k: string]: MetaparameterExpression;
   };
   /**
    * Namespace prefix: every surviving exported name without an explicit `rename` entry is renamed to `<prefix>.<name>` (esm-spec §9.7.7). Grammar (resolver-enforced): dotted identifier segments [A-Za-z_][A-Za-z0-9_]*.
