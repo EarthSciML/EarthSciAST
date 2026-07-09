@@ -1440,9 +1440,9 @@ export const schema: AnySchemaObject = {
         "bindings": {
           "type": "object",
           "additionalProperties": {
-            "type": "integer"
+            "$ref": "#/$defs/MetaparameterExpression"
           },
-          "description": "Integer bindings closing the referenced document's metaparameters (esm-spec §9.7.6), e.g. a convergence wrapper instantiating a problem file at a given grid size."
+          "description": "Bindings closing the referenced document's metaparameters (esm-spec §9.7.6 site 3). Each value is a metaparameter expression over the MOUNTING document's metaparameters (an integer literal, or e.g. `NX*NY`), folded to a concrete integer at the mount."
         },
         "expression_template_imports": {
           "type": "array",
@@ -1770,9 +1770,9 @@ export const schema: AnySchemaObject = {
         "bindings": {
           "type": "object",
           "additionalProperties": {
-            "type": "integer"
+            "$ref": "#/$defs/MetaparameterExpression"
           },
-          "description": "Integer bindings closing the target document's metaparameters at this edge."
+          "description": "Bindings closing the target document's metaparameters at this edge (esm-spec §9.7.6 site 1). Each value is a metaparameter expression over the importing document's metaparameters; a value with still-open names is carried symbolically and folds at the importer's close."
         },
         "prefix": {
           "type": "string",
@@ -1823,7 +1823,7 @@ export const schema: AnySchemaObject = {
       }
     },
     "MetaparameterExpression": {
-      "description": "A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible only in structural integer sites: `index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, and `makearray` `regions` bound pairs.",
+      "description": "A load-time integer expression over metaparameters (esm-spec §9.7.6): an integer literal, a declared metaparameter name, or `{op: +|-|*|/, args: [...]}` over metaparameter expressions (unary `-` allowed). Folded to a concrete integer at load with exact 64-bit arithmetic; `/` MUST divide exactly and overflow is an error (`metaparameter_type_error`). Admissible in structural integer sites (`index_sets` interval `size`, `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs) AND as an import-edge / subsystem-edge binding VALUE, whose free names resolve in the importing document's metaparameter scope.",
       "oneOf": [
         {
           "type": "integer"
@@ -2481,6 +2481,14 @@ export const schema: AnySchemaObject = {
         "time_variable": {
           "type": "string",
           "description": "Name of the time coordinate variable in the file. Used when records_per_file is absent or \"auto\". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback."
+        },
+        "records_per_sample": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "description": "How many time records the DISCRETE loader returns per query time — pure I/O; the loader does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
         }
       }
     },
