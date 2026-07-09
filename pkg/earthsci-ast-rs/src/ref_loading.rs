@@ -22,8 +22,33 @@
 //! model only ever sees fully resolved input.
 
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Capture a document's closed metaparameter environment from its top-level
+/// `metaparameters` block: each name's integer `default`, overlaid with the
+/// loader-API `api_meta` bindings (esm-spec §9.7.6 sites 4-5). This is the
+/// scope against which a §4.7 subsystem-edge binding EXPRESSION folds at the
+/// mount (e.g. `NTGT = NX*NY`), captured BEFORE the root template-machinery
+/// pass consumes the `metaparameters` block. Mirrors the Python `load()`
+/// `root_meta_env`.
+fn root_metaparameter_env(value: &Value, api_meta: &BTreeMap<String, i64>) -> BTreeMap<String, i64> {
+    let mut env: BTreeMap<String, i64> = BTreeMap::new();
+    if let Some(decls) = value.get("metaparameters").and_then(|v| v.as_object()) {
+        for (name, decl) in decls {
+            if let Some(d) = decl.get("default")
+                && d.as_i64().is_some()
+                && !d.is_boolean()
+            {
+                env.insert(name.clone(), d.as_i64().expect("checked integer default"));
+            }
+        }
+    }
+    for (k, v) in api_meta {
+        env.insert(k.clone(), *v);
+    }
+    env
+}
 
 /// Resolve all subsystem references in a parsed JSON value representing an
 /// ESM file.
@@ -45,8 +70,23 @@ use std::path::{Path, PathBuf};
 /// * `value` - the parsed ESM JSON to resolve (modified in place)
 /// * `base_path` - directory to resolve relative file paths against
 pub fn resolve_subsystem_refs(value: &mut Value, base_path: &Path) -> Result<(), String> {
+    resolve_subsystem_refs_with_metaparameters(value, base_path, &BTreeMap::new())
+}
+
+/// Like [`resolve_subsystem_refs`], but with the loader-API metaparameter
+/// bindings (esm-spec §9.7.6 site 4) available, so a §4.7 subsystem-edge
+/// binding EXPRESSION (`NTGT = NX*NY`, §9.7.6 site 3) folds against the root
+/// document's closed metaparameter environment (defaults overlaid with the API
+/// bindings) at the mount. Mirrors the Python `resolve_model_refs(...,
+/// parent_metaparameters=root_meta_env)`.
+pub fn resolve_subsystem_refs_with_metaparameters(
+    value: &mut Value,
+    base_path: &Path,
+    api_meta: &BTreeMap<String, i64>,
+) -> Result<(), String> {
+    let root_meta = root_metaparameter_env(value, api_meta);
     let mut visited = HashSet::new();
-    walk_top_level(value, base_path, &mut visited)
+    walk_top_level(value, base_path, &mut visited, &root_meta)
 }
 
 /// Merge a referenced subsystem file's top-level `index_sets` into the
@@ -81,6 +121,7 @@ fn walk_top_level(
     value: &mut Value,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
+    parent_meta: &BTreeMap<String, i64>,
 ) -> Result<(), String> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -110,7 +151,7 @@ fn walk_top_level(
 
     if let Some(map) = obj.get_mut("models").and_then(|v| v.as_object_mut()) {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, Some(&mut registry))?;
+            walk_subsystems(system, base_path, visited, Some(&mut registry), parent_meta)?;
         }
     }
     if let Some(map) = obj
@@ -118,7 +159,7 @@ fn walk_top_level(
         .and_then(|v| v.as_object_mut())
     {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(system, base_path, visited, None)?;
+            walk_subsystems(system, base_path, visited, None, parent_meta)?;
         }
     }
 
@@ -375,6 +416,7 @@ fn walk_subsystems(
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     mut registry: Option<&mut Map<String, Value>>,
+    parent_meta: &BTreeMap<String, i64>,
 ) -> Result<(), String> {
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -394,7 +436,8 @@ fn walk_subsystems(
     let names: Vec<String> = subs.keys().cloned().collect();
     for name in names {
         let entry = subs.remove(&name).unwrap_or(Value::Null);
-        let resolved = resolve_value(entry, base_path, visited, registry.as_deref_mut())?;
+        let resolved =
+            resolve_value(entry, base_path, visited, registry.as_deref_mut(), parent_meta)?;
         subs.insert(name, resolved);
     }
 
@@ -402,10 +445,19 @@ fn walk_subsystems(
 }
 
 /// Read the optional metaparameter `bindings` off a `{ ref, bindings }`
-/// subsystem entry (esm-spec §9.7.6 binding site 3). Values MUST be
-/// integers (`metaparameter_type_error` otherwise).
+/// subsystem entry (esm-spec §9.7.6 binding site 3). A value may be a
+/// *metaparameter expression* — an integer literal, a name in the MOUNTING
+/// document's metaparameter scope, or a `{op: +|-|*|/, args}` tree over the
+/// same (e.g. `NTGT = NX*NY`). A subsystem ref is resolved as a complete
+/// document and folded to concrete integers at the mount, so — unlike an
+/// import edge — its binding values cannot be carried symbolically: each folds
+/// IMMEDIATELY against `parent_meta`, the mounting document's already-closed
+/// metaparameter environment (the parent closes before its refs resolve).
+/// A free name absent from `parent_meta` is `template_import_unknown_name`;
+/// a bad op / empty args / float is `metaparameter_type_error`.
 fn read_edge_bindings(
     obj: &serde_json::Map<String, Value>,
+    parent_meta: &std::collections::BTreeMap<String, i64>,
 ) -> Result<std::collections::BTreeMap<String, i64>, String> {
     let mut out = std::collections::BTreeMap::new();
     let Some(bindings) = obj.get("bindings") else {
@@ -414,18 +466,18 @@ fn read_edge_bindings(
     let Some(bindings_obj) = bindings.as_object() else {
         return Err(
             "[metaparameter_type_error] subsystem ref `bindings` must be an object of \
-             integers (esm-spec 9.7.6)"
+             metaparameter expressions (esm-spec 9.7.6)"
                 .to_string(),
         );
     };
     for (k, v) in bindings_obj {
-        let Some(i) = v.as_i64() else {
-            return Err(format!(
-                "[metaparameter_type_error] subsystem ref binding '{k}' is not an integer \
-                 (esm-spec 9.7.6)"
-            ));
-        };
-        out.insert(k.clone(), i);
+        let ctx = format!("subsystem ref, binding '{k}'");
+        // Structural grammar check at the edge (bad op / empty args / float —
+        // even with a symbolic arg), then fold against the mounting scope.
+        crate::template_imports::require_meta_expr(v, &ctx).map_err(|e| e.to_string())?;
+        let folded = crate::template_imports::eval_meta_expr(v, parent_meta, &ctx)
+            .map_err(|e| e.to_string())?;
+        out.insert(k.clone(), folded);
     }
     Ok(out)
 }
@@ -448,6 +500,7 @@ fn resolve_value(
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
     registry: Option<&mut Map<String, Value>>,
+    parent_meta: &BTreeMap<String, i64>,
 ) -> Result<Value, String> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -503,7 +556,7 @@ fn resolve_value(
                 .map_err(|e| e.to_string())?;
             crate::template_imports::reject_template_imports_pre_v08(&parsed)
                 .map_err(|e| e.to_string())?;
-            let bindings = read_edge_bindings(obj)?;
+            let bindings = read_edge_bindings(obj, parent_meta)?;
             // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
             // inject a discretization into the referenced component's own
             // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
@@ -540,7 +593,12 @@ fn resolve_value(
         // today, but a path left marked visited would silently skip the file
         // if resolution ever becomes partially recoverable.
         let nested_result = (|| -> Result<(), String> {
-            walk_top_level(&mut parsed, &parent_dir, visited)?;
+            // The referenced document's own metaparameters were just closed and
+            // folded by `resolve_template_machinery` above, so any binding on
+            // its OWN nested subsystem refs arrives with metaparameter names
+            // already substituted to concrete integers — its refs fold against
+            // an empty environment (esm-spec §9.7.6: refs resolve post-close).
+            walk_top_level(&mut parsed, &parent_dir, visited, &BTreeMap::new())?;
             if let Some(reg) = registry
                 && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
             {
@@ -556,7 +614,7 @@ fn resolve_value(
     }
 
     let mut value = value;
-    walk_subsystems(&mut value, base_path, visited, registry)?;
+    walk_subsystems(&mut value, base_path, visited, registry, parent_meta)?;
     Ok(value)
 }
 

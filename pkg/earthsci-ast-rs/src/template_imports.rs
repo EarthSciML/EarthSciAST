@@ -236,13 +236,17 @@ fn collect_metaparam_decls(
 }
 
 /// Substitute closed metaparameter names — appearing as bare strings, the
-/// variable-reference surface syntax — with their integer values, everywhere
+/// variable-reference surface syntax — with their bound VALUES, everywhere
 /// except the [`META_SUBST_SKIP_KEYS`] structural fields (esm-spec §9.7.6:
-/// expression-position substitution; no folding here).
-fn substitute_metaparams(x: &Value, values: &BTreeMap<String, i64>) -> Value {
+/// expression-position substitution; no folding here). A bound value is
+/// usually an integer literal (`Value::from(i64)`), but at an import edge it
+/// may be a symbolic metaparameter expression (`{op, args}` over the
+/// importer's still-open names) spliced in for a deferred fold at the
+/// importer's close (esm-spec §9.7.6 binding value flow, site 1).
+fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
     match x {
         Value::String(s) => match values.get(s) {
-            Some(v) => Value::from(*v),
+            Some(v) => v.clone(),
             None => x.clone(),
         },
         Value::Array(arr) => Value::Array(
@@ -269,7 +273,7 @@ fn substitute_metaparams(x: &Value, values: &BTreeMap<String, i64>) -> Value {
 /// template's own `params` shadow like-named metaparameters inside its
 /// `body` and `match` (a param is the inner binder; substitution must not
 /// capture it).
-fn substitute_metaparams_decl(decl: &Value, values: &BTreeMap<String, i64>) -> Value {
+fn substitute_metaparams_decl(decl: &Value, values: &BTreeMap<String, Value>) -> Value {
     let params: Vec<String> = decl
         .get("params")
         .and_then(|p| p.as_array())
@@ -404,6 +408,101 @@ fn collect_names(x: &Value, out: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+/// Structural grammar check for a metaparameter expression (esm-spec §9.7.6),
+/// independent of whether its names are yet concrete: an integer literal, a
+/// name string, or `{op: +|-|*|/, args: [...non-empty...]}` recursively.
+/// Unlike [`try_fold`] (which defers op-validation until every arg is
+/// concrete), this catches an inadmissible op (`%`), missing/empty `args`, or a
+/// float/bool literal at the binding EDGE even when an arg is still a symbolic
+/// importer name. Mirrors the Python `_validate_meta_expr`.
+fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateError> {
+    if as_int(x).is_some() || x.is_string() {
+        return Ok(());
+    }
+    if x.is_boolean() || x.is_number() {
+        return Err(err(
+            "metaparameter_type_error",
+            format!("{ctx}: non-integer literal {x} in a metaparameter expression (esm-spec §9.7.6)"),
+        ));
+    }
+    let Some(obj) = x.as_object() else {
+        return Err(err(
+            "metaparameter_type_error",
+            format!(
+                "{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})"
+            ),
+        ));
+    };
+    let op = obj.get("op").and_then(|v| v.as_str());
+    let args = obj.get("args").and_then(|a| a.as_array());
+    let op_ok = matches!(op, Some("+" | "-" | "*" | "/"));
+    match args {
+        Some(a) if op_ok && !a.is_empty() => {
+            for elem in a {
+                validate_meta_expr(elem, ctx)?;
+            }
+            Ok(())
+        }
+        _ => Err(err(
+            "metaparameter_type_error",
+            format!("{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"),
+        )),
+    }
+}
+
+/// Validate that `v` is a *metaparameter expression* (esm-spec §9.7.6) — an
+/// integer literal, a metaparameter-name string, or a `{op: +|-|*|/, args}`
+/// tree over the same — and return it UNCHANGED (UNFOLDED); its free names
+/// close at a later binding site. Raises `metaparameter_type_error` on an
+/// inadmissible node. This is the relaxed replacement for [`require_int`] at
+/// the metaparameter *binding* sites (import edge / subsystem edge): a binding
+/// may now derive a child metaparameter from an arithmetic combination of the
+/// importer's metaparameters (e.g. `NTGT = NX*NY`), which import renaming
+/// (name→name) could not express. Mirrors the Python `require_meta_expr`.
+pub(crate) fn require_meta_expr(v: &Value, ctx: &str) -> Result<Value, ExpressionTemplateError> {
+    validate_meta_expr(v, ctx)?;
+    Ok(v.clone())
+}
+
+/// Fold a metaparameter expression to a concrete `i64` against a CLOSED
+/// environment `env` (name → int) — the importing document's metaparameter
+/// scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
+/// folds with the exact-integer [`try_fold`] arithmetic (`/` must divide
+/// exactly; 64-bit overflow is an error). Raises `template_import_unknown_name`
+/// if the expression references a name absent from `env` — the mount-edge typo
+/// failure, keeping error locality at the edge that authored the expression.
+/// Mirrors the Python `eval_meta_expr`.
+pub(crate) fn eval_meta_expr(
+    expr: &Value,
+    env: &BTreeMap<String, i64>,
+    ctx: &str,
+) -> Result<i64, ExpressionTemplateError> {
+    let env_values: BTreeMap<String, Value> =
+        env.iter().map(|(k, v)| (k.clone(), Value::from(*v))).collect();
+    let substituted = substitute_metaparams(expr, &env_values);
+    match try_fold(&substituted, ctx)? {
+        Some(v) => Ok(v),
+        None => {
+            let mut names = Vec::new();
+            collect_names(expr, &mut names);
+            let free: std::collections::BTreeSet<String> =
+                names.into_iter().filter(|n| !env.contains_key(n)).collect();
+            let free_list = if free.is_empty() {
+                "a name".to_string()
+            } else {
+                free.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            Err(err(
+                "template_import_unknown_name",
+                format!(
+                    "{ctx}: metaparameter expression references {free_list} not in the importing \
+                     document's metaparameter scope (esm-spec §9.7.6)"
+                ),
+            ))
+        }
     }
 }
 
@@ -1290,12 +1389,15 @@ fn merge_scope(
 }
 
 /// Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
-/// substitute the bound names as integer literals throughout the exported
-/// templates and index sets, then fold the structural sites that are now
-/// closed.
+/// substitute the bound names throughout the exported templates and index
+/// sets, then fold the structural sites that are now closed. A bound VALUE is
+/// a metaparameter expression (usually an integer literal, but possibly a
+/// symbolic `NX*NY` over the importer's still-open metaparameters); the folds
+/// leave any site still carrying a free name symbolic for the importer's close
+/// (esm-spec §9.7.6 binding value flow, site 1).
 fn instantiate_scope(
     scope: &mut TemplateScope,
-    values: &BTreeMap<String, i64>,
+    values: &BTreeMap<String, Value>,
     ctx: &str,
 ) -> Result<(), ExpressionTemplateError> {
     let mut new_templates = Map::new();
@@ -1463,8 +1565,12 @@ fn resolve_import_entry(
     stack.pop();
     let mut scope = result?;
 
-    // Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
-    let mut values: BTreeMap<String, i64> = BTreeMap::new();
+    // Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
+    // VALUE may be a metaparameter expression over the importer's metaparameters
+    // (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
+    // (innermost-first), so the value is carried SYMBOLICALLY into the child and
+    // folds when the importing document closes (§9.7.6 "Binding value flow").
+    let mut values: BTreeMap<String, Value> = BTreeMap::new();
     if let Some(bindings) = entry_obj.get("bindings").and_then(|v| v.as_object()) {
         for (name, v) in bindings {
             if !scope.metaparams.contains_key(name) {
@@ -1478,7 +1584,7 @@ fn resolve_import_entry(
             }
             values.insert(
                 name.clone(),
-                require_int(
+                require_meta_expr(
                     v,
                     &format!("{origin}: import of '{ref_str}', binding '{name}'"),
                 )?,
@@ -1968,11 +2074,19 @@ fn substitute_closed_metaparams(
     root: &mut Map<String, Value>,
     top_templates: &mut Map<String, Value>,
     doc_isets: &mut Map<String, Value>,
-    values: &BTreeMap<String, i64>,
+    int_values: &BTreeMap<String, i64>,
 ) {
-    if values.is_empty() {
+    if int_values.is_empty() {
         return;
     }
+    // The closed metaparameters substitute as integer-literal VALUES (the
+    // substitute helpers take a name → `Value` map so an import edge can splice
+    // a symbolic expression; here every value is a concrete integer).
+    let values: BTreeMap<String, Value> = int_values
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::from(*v)))
+        .collect();
+    let values = &values;
     for compkind in COMPONENT_KINDS {
         let Some(Value::Object(comps)) = root.get_mut(compkind) else {
             continue;
@@ -2371,5 +2485,67 @@ mod tests {
         assert_eq!(e.code, "metaparameter_type_error");
         let e = try_fold(&json!(2.5), "t").unwrap_err();
         assert_eq!(e.code, "metaparameter_type_error");
+    }
+
+    // -- metaparameter-EXPRESSION binding-value helpers (esm-spec §9.7.6) --
+    // Mirrors pkg/earthsci-ast-py/tests/test_metaparam_expr_bindings.py §1.
+
+    fn env(pairs: &[(&str, i64)]) -> BTreeMap<String, i64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn eval_meta_expr_folds_product() {
+        // A `{op:*, args:[name, name]}` value folds against the closed env.
+        assert_eq!(
+            eval_meta_expr(&json!({"op": "*", "args": ["NX", "NY"]}), &env(&[("NX", 18), ("NY", 20)]), "t")
+                .unwrap(),
+            360
+        );
+    }
+
+    #[test]
+    fn eval_meta_expr_name_and_literal() {
+        assert_eq!(eval_meta_expr(&json!("NX"), &env(&[("NX", 7)]), "t").unwrap(), 7);
+        assert_eq!(eval_meta_expr(&json!(5), &env(&[]), "t").unwrap(), 5);
+    }
+
+    #[test]
+    fn eval_meta_expr_nested_arithmetic() {
+        // (NX + 2) * NY  with NX=4, NY=3  ->  18
+        let expr = json!({"op": "*", "args": [{"op": "+", "args": ["NX", 2]}, "NY"]});
+        assert_eq!(eval_meta_expr(&expr, &env(&[("NX", 4), ("NY", 3)]), "t").unwrap(), 18);
+    }
+
+    #[test]
+    fn require_meta_expr_returns_unfolded() {
+        let expr = json!({"op": "*", "args": ["NX", "NY"]});
+        assert_eq!(require_meta_expr(&expr, "t").unwrap(), expr); // unchanged, unfolded
+    }
+
+    #[test]
+    fn meta_expr_helper_diagnostics() {
+        // (expr, env, expected code) — require_meta_expr then eval_meta_expr,
+        // first error wins, mirroring the Python parametrized helper test.
+        let cases: Vec<(Value, BTreeMap<String, i64>, &str)> = vec![
+            // Bad op is caught structurally at the edge, even with a symbolic arg.
+            (json!({"op": "%", "args": ["NX", 2]}), env(&[]), "metaparameter_type_error"),
+            (json!({"op": "*", "args": []}), env(&[]), "metaparameter_type_error"),
+            (json!(1.5), env(&[]), "metaparameter_type_error"),
+            // Unknown free name is caught at fold time.
+            (
+                json!({"op": "*", "args": ["NZ", "NY"]}),
+                env(&[("NX", 18), ("NY", 20)]),
+                "template_import_unknown_name",
+            ),
+            // Inexact division is rejected.
+            (json!({"op": "/", "args": ["NX", 7]}), env(&[("NX", 18)]), "metaparameter_type_error"),
+        ];
+        for (expr, e, code) in cases {
+            let got = require_meta_expr(&expr, "t")
+                .and_then(|_| eval_meta_expr(&expr, &e, "t").map(|_| ()))
+                .unwrap_err();
+            assert_eq!(got.code, code, "expr {expr}");
+        }
     }
 }

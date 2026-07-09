@@ -108,9 +108,17 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
 
     // Resolve any subsystem refs before schema validation, per spec section
     // 2.1b. Callers that load from a known file path should use `load_path`,
-    // which uses the file's own directory as the base.
-    crate::ref_loading::resolve_subsystem_refs(&mut json_value, &base)
-        .map_err(EsmError::SchemaValidation)?;
+    // which uses the file's own directory as the base. The loader-API
+    // metaparameters are threaded so a §4.7 subsystem-edge binding EXPRESSION
+    // (`NTGT = NX*NY`, esm-spec §9.7.6 site 3) folds against the root document's
+    // closed metaparameter environment (defaults overlaid with the API
+    // bindings) at the mount.
+    crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
+        &mut json_value,
+        &base,
+        &options.metaparameters,
+    )
+    .map_err(EsmError::SchemaValidation)?;
 
     // v0.4.0 expression_templates / apply_expression_template are rejected
     // when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).

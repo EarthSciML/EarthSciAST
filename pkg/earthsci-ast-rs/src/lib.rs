@@ -133,7 +133,7 @@ pub use parse::{LoadOptions, load, load_path, load_path_with_options, load_with_
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
-pub use ref_loading::resolve_subsystem_refs;
+pub use ref_loading::{resolve_subsystem_refs, resolve_subsystem_refs_with_metaparameters};
 pub use reference_resolution::{
     EdgeKind, ReferenceEdge, ReferenceError, ReferenceGraph, ReferenceVertex, VertexKind,
     build_reference_graph, resolve_references,
