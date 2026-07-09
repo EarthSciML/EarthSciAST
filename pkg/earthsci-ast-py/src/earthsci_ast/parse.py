@@ -1351,21 +1351,21 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
             return f.read()
 
 
-def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, int]:
+def _subsystem_ref_bindings(sub_value: Dict[str, Any], where: str) -> Dict[str, Any]:
     """Extract the optional metaparameter ``bindings`` of a §4.7 subsystem
-    ref (esm-spec §9.7.6 binding site 3), validating integer values."""
-    from .lower_expression_templates import ExpressionTemplateError
+    ref (esm-spec §9.7.6 binding site 3). A value may be a *metaparameter
+    expression* — an integer literal, a name in the MOUNTING document's
+    metaparameter scope, or a ``{op: +|-|*|/, args}`` tree over the same (e.g.
+    ``NTGT = NX*NY``). Values are returned UNFOLDED; :func:`_load_ref_data` folds
+    them against the mounting document's closed environment before closing the
+    referenced document's metaparameters."""
+    from .template_imports import require_meta_expr
 
-    bindings: Dict[str, int] = {}
+    bindings: Dict[str, Any] = {}
     raw = sub_value.get("bindings")
     if isinstance(raw, dict):
         for bk, bv in raw.items():
-            if not isinstance(bv, int) or isinstance(bv, bool):
-                raise ExpressionTemplateError(
-                    "metaparameter_type_error",
-                    f"{where}: binding '{bk}' is not an integer (esm-spec §9.7.6)",
-                )
-            bindings[str(bk)] = bv
+            bindings[str(bk)] = require_meta_expr(bv, f"{where}: binding '{bk}'")
     return bindings
 
 
@@ -1421,10 +1421,11 @@ def _absolutize_injected_imports(
 def _load_ref_data(
     ref_str: str,
     base_path: str,
-    bindings: Dict[str, int],
+    bindings: Dict[str, Any],
     kind: str,
     injected_imports: Optional[List[Any]] = None,
     loader_metaparameters: Optional[Dict[str, int]] = None,
+    parent_metaparameters: Optional[Dict[str, int]] = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1516,7 +1517,18 @@ def _load_ref_data(
     effective_bindings: Dict[str, int] = {
         k: v for k, v in (loader_metaparameters or {}).items() if k in leaf_decls
     }
-    effective_bindings.update(bindings or {})
+    # Fold each edge binding VALUE (a metaparameter expression, esm-spec §9.7.6)
+    # to a concrete integer against the MOUNTING document's closed metaparameter
+    # environment. A subsystem ref is resolved as a complete document and folded
+    # to concrete integers at the mount, so — unlike an import edge — its binding
+    # values cannot be carried symbolically; they fold here against the parent's
+    # already-closed metaparameters (the parent closes before its refs resolve).
+    from .template_imports import eval_meta_expr
+
+    for bk, bv in (bindings or {}).items():
+        effective_bindings[bk] = eval_meta_expr(
+            bv, parent_metaparameters or {}, f"mount of '{ref_str}', binding '{bk}'"
+        )
 
     # Resolve the referenced document's §9.7 machinery under the effective
     # metaparameter close, then run the §9.6.3 rewrite fixpoint so the inlined
@@ -1784,6 +1796,7 @@ def resolve_model_refs(
     esm_file: EsmFile,
     base_path: str,
     loader_metaparameters: Optional[Dict[str, int]] = None,
+    parent_metaparameters: Optional[Dict[str, int]] = None,
 ) -> None:
     """Resolve all top-level model references in an ESM file.
 
@@ -1854,6 +1867,7 @@ def resolve_model_refs(
             "model",
             injected,
             loader_metaparameters=loader_metaparameters,
+            parent_metaparameters=parent_metaparameters,
         )
 
         parsed = _parse_esm_data(ref_data)
@@ -1993,6 +2007,21 @@ def load(
     if injected_root is not None:
         data = injected_root
 
+    # Capture the ROOT document's closed metaparameter environment (declared
+    # defaults overlaid with the loader-API bindings) BEFORE resolution consumes
+    # the `metaparameters` block. This is the scope against which a §4.7 mount
+    # edge's binding EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6).
+    root_meta_env: Dict[str, int] = {}
+    _root_meta_decls = data.get("metaparameters")
+    if isinstance(_root_meta_decls, dict):
+        for _mn, _md in _root_meta_decls.items():
+            if isinstance(_md, dict) and isinstance(_md.get("default"), int) and not isinstance(
+                _md.get("default"), bool
+            ):
+                root_meta_env[str(_mn)] = _md["default"]
+    if metaparameters:
+        root_meta_env.update({str(k): v for k, v in metaparameters.items()})
+
     # Resolve esm-spec §9.7 machinery — template-library imports (depth-first
     # post-order, per-edge metaparameter instantiation), index_sets merge,
     # metaparameter close+fold — BEFORE any validator sees the tree (esm-spec
@@ -2024,7 +2053,12 @@ def load(
     # resolves its leaf's discretization under the loader's grid (NX/NY) even
     # when the edge carries no explicit `bindings` — matching the Julia/Rust
     # single-root-resolve semantics so the SAME file runs identically.
-    resolve_model_refs(esm_file, base_path, loader_metaparameters=metaparameters)
+    resolve_model_refs(
+        esm_file,
+        base_path,
+        loader_metaparameters=metaparameters,
+        parent_metaparameters=root_meta_env,
+    )
 
     # Resolve subsystem references so subsystems land as concrete Model
     # / ReactionSystem objects (rather than `{ref: ...}` dicts) before the

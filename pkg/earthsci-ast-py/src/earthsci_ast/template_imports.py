@@ -338,6 +338,71 @@ def _collect_names(out: List[str], x: Any) -> List[str]:
     return out
 
 
+def _validate_meta_expr(x: Any, ctx: str) -> None:
+    """Structural grammar check for a metaparameter expression (esm-spec §9.7.6),
+    independent of whether its names are yet concrete: integer literal, name
+    string, or ``{op: +|-|*|/, args: [...non-empty...]}`` recursively. Unlike
+    :func:`_try_fold` (which defers op-validation until every arg is concrete),
+    this catches an inadmissible op (`%`, missing `args`, float literal) at the
+    binding EDGE even when an arg is still a symbolic importer name."""
+    if _is_int(x) or isinstance(x, str):
+        return
+    if isinstance(x, (bool, float)):
+        raise ExpressionTemplateError(
+            METAPARAMETER_TYPE_ERROR,
+            f"{ctx}: non-integer literal {x!r} in a metaparameter expression (esm-spec §9.7.6)",
+        )
+    if not _is_object(x):
+        raise ExpressionTemplateError(
+            METAPARAMETER_TYPE_ERROR,
+            f"{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})",
+        )
+    op, args = x.get("op"), x.get("args")
+    if op not in ("+", "-", "*", "/") or not _is_array(args) or len(args) == 0:
+        raise ExpressionTemplateError(
+            METAPARAMETER_TYPE_ERROR,
+            f"{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})",
+        )
+    for a in args:
+        _validate_meta_expr(a, ctx)
+
+
+def require_meta_expr(v: Any, ctx: str) -> Any:
+    """Validate that ``v`` is a *metaparameter expression* (esm-spec §9.7.6):
+    an integer literal, a metaparameter-name string, or a ``{"op": <"+"|"-"|
+    "*"|"/">, "args": [...]}`` tree over the same. Returns ``v`` unchanged
+    (UNFOLDED) — its free names close at a later binding site. Raises
+    ``metaparameter_type_error`` on an inadmissible node.
+
+    This is the relaxed replacement for :func:`_require_int` at the metaparameter
+    *binding* sites (import edge / subsystem edge). Before this, binding values
+    were bare integers; a binding may now derive a child metaparameter from an
+    arithmetic combination of the importer's metaparameters (e.g.
+    ``NTGT = NX*NY``), which import renaming (name→name) could not express."""
+    _validate_meta_expr(v, ctx)
+    return v
+
+
+def eval_meta_expr(expr: Any, env: Dict[str, int], ctx: str) -> int:
+    """Fold a metaparameter expression to a concrete integer against a CLOSED
+    environment ``env`` (name → int) — the importing document's metaparameter
+    scope (esm-spec §9.7.6 binding value flow). Substitutes the env names, then
+    folds with the exact-integer :func:`_try_fold` arithmetic (``/`` must divide
+    exactly; 64-bit overflow is an error). Raises ``template_import_unknown_name``
+    if the expression references a name absent from ``env`` — the mount-edge typo
+    failure, keeping error locality at the edge that authored the expression."""
+    folded = _try_fold(_substitute_metaparams(expr, env), ctx)
+    if folded is None:
+        free = sorted({n for n in _collect_names([], expr) if n not in env})
+        raise ExpressionTemplateError(
+            TEMPLATE_IMPORT_UNKNOWN_NAME,
+            f"{ctx}: metaparameter expression references "
+            f"{', '.join(free) or 'a name'} not in the importing document's "
+            "metaparameter scope (esm-spec §9.7.6)",
+        )
+    return folded
+
+
 def _fold_structural_sites(x: Any, ctx: str) -> None:
     """Fold metaparameter expressions in the structural integer sites —
     ``aggregate`` dense ``ranges`` tuple entries and ``makearray`` ``regions``
@@ -581,11 +646,13 @@ def _merge_scope(dst: _TemplateScope, src: _TemplateScope, origin: str) -> None:
         _merge_named(dst.metaparams, n, d, TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin)
 
 
-def _instantiate_scope(scope: _TemplateScope, values: Dict[str, int], ctx: str) -> None:
+def _instantiate_scope(scope: _TemplateScope, values: Dict[str, Any], ctx: str) -> None:
     """Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
-    substitute the bound names as integer literals throughout the exported
-    templates and index sets, then fold the structural sites that are now
-    closed."""
+    substitute the bound names throughout the exported templates and index sets,
+    then fold the structural sites that are now closed. A bound VALUE is a
+    metaparameter expression (usually an integer literal, but possibly a symbolic
+    ``NX*NY`` over the importer's still-open metaparameters); ``_fold_*`` leaves
+    any site still carrying a free name symbolic for the importer's close."""
     newt: Dict[str, Any] = {}
     for n, d in scope.templates.items():
         nd = _substitute_metaparams_decl(d, values)
@@ -1108,9 +1175,13 @@ def _resolve_import_entry(
     finally:
         stack.pop()
 
-    # Edge metaparameter bindings (esm-spec §9.7.6 binding site 1).
+    # Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
+    # VALUE may be a metaparameter expression over the importer's metaparameters
+    # (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
+    # (innermost-first), so the value is carried SYMBOLICALLY into the child and
+    # folds when the importing document closes (§9.7.6 "Binding value flow").
     bindings_raw = entry.get("bindings")
-    values: Dict[str, int] = {}
+    values: Dict[str, Any] = {}
     if _is_object(bindings_raw):
         for name, v in bindings_raw.items():
             if name not in scope.metaparams:
@@ -1120,7 +1191,9 @@ def _resolve_import_entry(
                     f"'{name}', which the target neither declares nor "
                     "re-exports (esm-spec §9.7.6)",
                 )
-            values[name] = _require_int(v, f"{origin}: import of '{ref}', binding '{name}'")
+            values[name] = require_meta_expr(
+                v, f"{origin}: import of '{ref}', binding '{name}'"
+            )
     if values:
         _instantiate_scope(scope, values, f"{origin} -> {ref}")
         for name in values:
