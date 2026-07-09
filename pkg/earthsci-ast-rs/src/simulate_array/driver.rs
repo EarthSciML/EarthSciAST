@@ -29,6 +29,38 @@ impl ArrayCompiled {
         &self.param_names
     }
 
+    /// Cadence partition of the observed rules given the discrete-forcing names,
+    /// as `(const, discrete, continuous)` sorted name lists. Exposed for the
+    /// cadence-tier test: a forcing-derived but state-free / `t`-free observed
+    /// must land in the DISCRETE tier (materialized once per segment), not
+    /// CONTINUOUS (recomputed every step). Mirrors the split in `run_segmented`.
+    #[doc(hidden)]
+    pub fn debug_cadence_partition(
+        &self,
+        discrete_forcing: &[String],
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let df: HashSet<String> = discrete_forcing.iter().cloned().collect();
+        let const_set = self.classify_static_observeds(&df);
+        let leq_discrete = self.classify_segment_invariant_observeds(&df, true);
+        let mut const_: Vec<String> = const_set.iter().cloned().collect();
+        let mut discrete: Vec<String> = leq_discrete
+            .iter()
+            .filter(|n| !const_set.contains(*n))
+            .cloned()
+            .collect();
+        let mut continuous: Vec<String> = self
+            .observed_rules
+            .iter()
+            .map(observed_rule_var)
+            .filter(|n| !leq_discrete.contains(*n))
+            .cloned()
+            .collect();
+        const_.sort();
+        discrete.sort();
+        continuous.sort();
+        (const_, discrete, continuous)
+    }
+
     /// Evaluate the RHS `f(state, t)` once and return `(dy, stats)`. Exposed for
     /// the no-scalarization verification (ess-bdm): callers compare the
     /// vectorized path (`force_scalar = false`) against the per-cell oracle
@@ -376,11 +408,41 @@ impl ArrayCompiled {
         // and seed them into every RHS eval, rather than recomputing the
         // (expensive) regrid on every step. A model with no such observeds hoists
         // nothing and stays byte-identical to the un-hoisted path.
+        // Three-tier cadence split (cadence.rs lattice `CONST ⊏ DISCRETE ⊏
+        // CONTINUOUS`):
+        //   * CONST      (static_names)      — materialized ONCE at setup below.
+        //   * DISCRETE   (segment_static)    — state-free & `t`-free but reaches a
+        //                                      refreshed forcing buffer; constant
+        //                                      WITHIN a segment, so materialized
+        //                                      once per segment in `run_one_segment`.
+        //   * CONTINUOUS (continuous_rules)  — reaches `t` or state; re-evaluated
+        //                                      every RHS step.
+        // Collapsing DISCRETE into CONTINUOUS (the old two-tier split) recomputed
+        // the per-cell conservative regrid every step — the dominant cost of a
+        // coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
+        // for the non-hot observed-trajectory output pass.
         let static_names = self.classify_static_observeds(discrete_forcing);
+        let seg_invariant_names =
+            self.classify_segment_invariant_observeds(discrete_forcing, true);
         let static_rules: Vec<AlgebraicRule> = self
             .observed_rules
             .iter()
             .filter(|r| static_names.contains(observed_rule_var(r)))
+            .cloned()
+            .collect();
+        let segment_static_rules: Vec<AlgebraicRule> = self
+            .observed_rules
+            .iter()
+            .filter(|r| {
+                seg_invariant_names.contains(observed_rule_var(r))
+                    && !static_names.contains(observed_rule_var(r))
+            })
+            .cloned()
+            .collect();
+        let continuous_rules: Vec<AlgebraicRule> = self
+            .observed_rules
+            .iter()
+            .filter(|r| !seg_invariant_names.contains(observed_rule_var(r)))
             .cloned()
             .collect();
         let varying_rules: Vec<AlgebraicRule> = self
@@ -459,7 +521,8 @@ impl ArrayCompiled {
                 &ic_vec,
                 &param_vec,
                 &static_obs,
-                &varying_rules,
+                &segment_static_rules,
+                &continuous_rules,
                 opts,
             )?;
             let mut state_variable_names = self.scalar_state_names.clone();
@@ -528,7 +591,8 @@ impl ArrayCompiled {
                 &u0,
                 &param_vec,
                 &static_obs,
-                &varying_rules,
+                &segment_static_rules,
+                &continuous_rules,
                 &seg_opts,
             )?;
             // `run_solver` pushes the REQUESTED grid time verbatim, so a float
@@ -586,7 +650,8 @@ impl ArrayCompiled {
         u0: &[f64],
         param_vec: &[f64],
         static_obs: &ArrMap,
-        varying_rules: &[AlgebraicRule],
+        segment_static_rules: &[AlgebraicRule],
+        continuous_rules: &[AlgebraicRule],
         opts: &SimulateOptions,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError> {
         let n_states = self.n_states;
@@ -595,21 +660,53 @@ impl ArrayCompiled {
         let param_names = self.param_names.clone();
 
         let rhs_rules_jac = rhs_rules.clone();
-        let varying_rules_rhs = varying_rules.to_vec();
-        let varying_rules_jac = varying_rules.to_vec();
+        let varying_rules_rhs = continuous_rules.to_vec();
+        let varying_rules_jac = continuous_rules.to_vec();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
 
+        // Materialize the DISCRETE (segment-invariant) observeds ONCE for this
+        // segment, on top of the CONST `static_obs`. The caller refreshed the
+        // forcing buffer at this segment's start (`refresh_fn(a)` / the `t0`
+        // prime), and it stays fixed within the segment, so these forcing-derived
+        // but state-free / `t`-free observeds (the per-cell conservative regrid)
+        // are constant here — evaluating them once and seeding them as "static"
+        // for the segment removes the per-step recompute that dominated the
+        // coupled-loader profile. They are state-free, so `sa_seg` is only a
+        // consistency placeholder; their FAQ rings are produced-and-consumed in
+        // this one pass (own transient registry, discarded after).
+        let seg_seed: ArrMap = if segment_static_rules.is_empty() {
+            static_obs.clone()
+        } else {
+            let sa_seg = build_state_arrays(&self.var_shapes, u0);
+            let seg_rings: RefCell<HashMap<String, ArrayD<f64>>> =
+                RefCell::new(HashMap::new());
+            let mut seed = static_obs.clone();
+            materialize_observeds_append(
+                &mut seed,
+                segment_static_rules,
+                &sa_seg,
+                param_vec,
+                &self.param_names,
+                t0,
+                &seg_rings,
+                &self.forcing,
+                false,
+                &mut RhsStats::default(),
+            );
+            seed
+        };
+
         // Per-closure reusable scratch (ess-mro), pre-seeded ONCE with the
-        // hoisted static observeds (retained in place across steps, never
-        // re-cloned) so each RHS eval materializes only the varying observeds.
-        // `RefCell` gives the interior mutability diffsol's `Fn` RHS requires;
-        // the Jacobian closure carries its own so the two never alias.
+        // CONST + per-segment DISCRETE observeds (retained in place across steps,
+        // never re-cloned) so each RHS eval materializes only the CONTINUOUS
+        // observeds. `RefCell` gives the interior mutability diffsol's `Fn` RHS
+        // requires; the Jacobian closure carries its own so the two never alias.
         let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
-        rhs_scratch_val.set_static(static_obs.clone());
+        rhs_scratch_val.set_static(seg_seed.clone());
         let rhs_scratch = RefCell::new(rhs_scratch_val);
         let mut jac_scratch_val = RhsScratch::new(&var_shapes_jac);
-        jac_scratch_val.set_static(static_obs.clone());
+        jac_scratch_val.set_static(seg_seed);
         let jac_scratch = RefCell::new(jac_scratch_val);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
@@ -848,9 +945,34 @@ impl ArrayCompiled {
     /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
     /// Python `BuildInspection`.
     fn classify_static_observeds(&self, discrete_forcing: &HashSet<String>) -> HashSet<String> {
+        // CONST tier: state-free, `t`-free, AND forcing-free.
+        self.classify_segment_invariant_observeds(discrete_forcing, false)
+    }
+
+    /// Classify the observeds that are invariant *within a cadence segment* — the
+    /// cadence lattice's `≤ DISCRETE` set (`CONST ⊏ DISCRETE`, `cadence.rs`): their
+    /// transitive references reach neither `t` nor any state variable.
+    ///
+    /// * `allow_forcing = false` → the CONST set (also forcing-free): constant for
+    ///   the entire solve, materialized ONCE at setup (the hoisted `static_obs`).
+    /// * `allow_forcing = true` → CONST ∪ DISCRETE: an observed may reach a
+    ///   discrete forcing buffer. Since the driver refreshes forcing only *between*
+    ///   segments (never inside a solver step), such an observed is constant
+    ///   *within* a segment — so the DISCRETE remainder is materialized ONCE per
+    ///   segment rather than re-evaluated every RHS step. This is the fix for a
+    ///   coupled model whose per-cell conservative-regrid observeds (state-free,
+    ///   `t`-free, forcing-fed) were previously recomputed every step.
+    ///
+    /// `observed_rules` are dependency-ordered, so the transitive
+    /// `set.contains(r)` check resolves against already-classified predecessors.
+    fn classify_segment_invariant_observeds(
+        &self,
+        discrete_forcing: &HashSet<String>,
+        allow_forcing: bool,
+    ) -> HashSet<String> {
         let observed_names: HashSet<&String> =
             self.observed_rules.iter().map(observed_rule_var).collect();
-        let mut static_set: HashSet<String> = HashSet::new();
+        let mut set: HashSet<String> = HashSet::new();
         for rule in &self.observed_rules {
             let mut refs = HashSet::new();
             collect_expr_var_refs(observed_rule_body(rule), &mut refs);
@@ -858,17 +980,17 @@ impl ArrayCompiled {
                 r != "t"
                     && !self.var_shapes.contains_key(r)
                     // A DISCRETE (hourly) forcing buffer is a LIVE field the driver
-                    // refreshes between segments — an observed reaching it must NOT
-                    // freeze at setup; it recomputes over the refreshed buffer. (A
-                    // CONST forcing, e.g. terrain, is absent here and stays static.)
-                    && !discrete_forcing.contains(r)
-                    && (!observed_names.contains(r) || static_set.contains(r))
+                    // refreshes between segments. Excluded from the CONST tier (it
+                    // must not freeze at setup), but ALLOWED in the ≤DISCRETE tier
+                    // (constant *within* a segment, so hoistable to per-segment).
+                    && (allow_forcing || !discrete_forcing.contains(r))
+                    && (!observed_names.contains(r) || set.contains(r))
             });
             if ok {
-                static_set.insert(observed_rule_var(rule).clone());
+                set.insert(observed_rule_var(rule).clone());
             }
         }
-        static_set
+        set
     }
 
     /// Fill a [`BuildInspection`] sink from the already-hoisted static observeds:
