@@ -53,14 +53,21 @@ dotted bind value (`{Fuel => "Parent.Child"}`) → `"Parent.Child.w_0"`. A segme
 not in `bind` is returned unchanged (e.g. bare `"t"`, literals).
 """
 function _rewrite_scoped_ref(ref::AbstractString, bind::AbstractDict)::String
+    actual = get(bind, _head_segment(ref), nothing)
+    actual === nothing && return String(ref)
     i = findfirst('.', ref)
-    head = i === nothing ? String(ref) : String(ref[1:prevind(ref, i)])
     tail = i === nothing ? "" : String(ref[i:end])
-    actual = get(bind, head, nothing)
-    return actual === nothing ? String(ref) : String(actual) * tail
+    return String(actual) * tail
 end
 
-"""Rewrite/visit every scoped reference inside a (native) Expression tree."""
+"""
+Rewrite/visit every scoped reference inside a (native) Expression tree.
+
+Deliberately NOT a `_walk_json`/`_map_json` traversal: this is an in-place
+SELECTIVE walker whose descent set — `args` plus `apply_expression_template`
+binding VALUES — IS the §10.10.2 expression-position surface; a full-tree
+combinator would visit (and rewrite strings in) non-expression positions.
+"""
 function _rewrite_expr!(expr, fn)
     if expr isa AbstractString
         return fn(expr)
@@ -292,13 +299,15 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    _expand_one(lib, ref, bind, file) -> Vector{CouplingEntry}
+    _validate_library(lib, ref) -> (roles, edges)
 
-Validate a resolved coupling-library document and expand one `coupling_import`
-entry into its concrete edges, bound to `bind`. Raises the esm-spec §10.11
-diagnostics.
+Validate a resolved coupling-library document (esm-spec §10.9): the
+`coupling_roles` form marker, payload purity, non-empty roles + edges, edge
+types role-substitutable, every edge reference a declared role, and every role
+used. Returns the declared role names (declaration order) and the raw edge
+list. Raises the esm-spec §10.11 diagnostics.
 """
-function _expand_one(lib, ref::AbstractString, bind::AbstractDict, file::EsmFile)::Vector{CouplingEntry}
+function _validate_library(lib, ref::AbstractString)
     if !_is_coupling_library_doc(lib)
         throw(ExpressionTemplateError(
             "coupling_import_not_library",
@@ -376,8 +385,19 @@ function _expand_one(lib, ref::AbstractString, bind::AbstractDict, file::EsmFile
                 "referenced by no edge (esm-spec §10.9)"))
         end
     end
+    return roles, edges
+end
 
-    # Binding — total and checked (esm-spec §10.10.1).
+"""
+    _validate_bind(bind, roles, ref, file)
+
+Check one import's `bind` map against the library's declared `roles`
+(esm-spec §10.10.1): every bind key names a role, the binding is total, and
+every bound value resolves to a component of `file`.
+"""
+function _validate_bind(bind::AbstractDict, roles::Vector{String},
+                        ref::AbstractString, file::EsmFile)
+    role_set = Set{String}(roles)
     for key in keys(bind)
         if !(key in role_set)
             throw(ExpressionTemplateError(
@@ -400,8 +420,12 @@ function _expand_one(lib, ref::AbstractString, bind::AbstractDict, file::EsmFile
                 "does not resolve to a component (esm-spec §10.10.1)"))
         end
     end
+    return
+end
 
-    # Expand: substitute bound actuals for role names, one simultaneous rewrite.
+# Expand a validated library's edges: substitute bound actuals for role names,
+# one simultaneous rewrite per edge (esm-spec §10.10.2).
+function _expand_edges(edges, bind::AbstractDict)::Vector{CouplingEntry}
     rw = ref_ -> _rewrite_scoped_ref(ref_, bind)
     expanded = CouplingEntry[]
     for edge in edges
@@ -410,6 +434,20 @@ function _expand_one(lib, ref::AbstractString, bind::AbstractDict, file::EsmFile
         push!(expanded, coerce_coupling_entry(clone))
     end
     return expanded
+end
+
+"""
+    _expand_one(lib, ref, bind, file) -> Vector{CouplingEntry}
+
+Validate a resolved coupling-library document and expand one `coupling_import`
+entry into its concrete edges, bound to `bind`. Raises the esm-spec §10.11
+diagnostics. Three phases: [`_validate_library`](@ref) (§10.9),
+[`_validate_bind`](@ref) (§10.10.1), [`_expand_edges`](@ref) (§10.10.2).
+"""
+function _expand_one(lib, ref::AbstractString, bind::AbstractDict, file::EsmFile)::Vector{CouplingEntry}
+    roles, edges = _validate_library(lib, ref)
+    _validate_bind(bind, roles, ref, file)
+    return _expand_edges(edges, bind)
 end
 
 """

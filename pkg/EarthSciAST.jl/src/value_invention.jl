@@ -1,23 +1,27 @@
-# ============================================================
-# Build-time value-invention front-door
-# (RFC semiring-faq-unified-ir §6.1 cadence-partition / §5.5 / §7.3)
-# ============================================================
-#
-# Replaces the `E_TREEWALK_DERIVED_INDEX_SET` throw (tree_walk.jl). A
-# `kind:"derived"` index set whose `from_faq` names a value-invention aggregate
-# (skolem / distinct / rank) is materialised here, ONCE at setup, off the
-# per-step hot path — the §6.1 CONST/DISCRETE materialisation point. The
-# aggregate's keys are evaluated over the build-time const-array factors and run
-# through the `Relational` engine (skolem / distinct / equijoin, §5.5
-# determinism); the distinct set's cardinality is handed to the tree-walk
-# index-set resolver as the dense extent `[1, n]` — exactly as
-# `_materialize_geometry_rings` does for an `intersect_polygon` clip ring (§8.1),
-# now generalised to the relational engine.
-#
-# The pass runs on the RAW JSON model document, not the typed `OpExpr` IR: the
-# value-invention vocabulary (the aggregate `key`, the `distinct` flag) lives in
-# fields the typed IR does not preserve (mirrors the `Cadence` module, which
-# walks raw JSON for the same reason).
+"""
+Build-time value-invention front door
+(RFC semiring-faq-unified-ir §6.1 cadence-partition / §5.5 / §7.3).
+
+Replaces the `E_TREEWALK_DERIVED_INDEX_SET` throw (tree_walk.jl). A
+`kind:"derived"` index set whose `from_faq` names a value-invention aggregate
+(skolem / distinct / rank) is materialised here, ONCE at setup, off the
+per-step hot path — the §6.1 CONST/DISCRETE materialisation point. The
+aggregate's keys are evaluated over the build-time const-array factors and run
+through the `Relational` engine (skolem / distinct / equijoin, §5.5
+determinism); the distinct set's cardinality is handed to the tree-walk
+index-set resolver as the dense extent `[1, n]` — exactly as
+[`_materialize_geometry_rings`](@ref) does for an `intersect_polygon` clip
+ring (§8.1), now generalised to the relational engine.
+
+The pass runs on the RAW JSON model document, not the typed `OpExpr` IR: the
+value-invention vocabulary (the aggregate `key`, the `distinct` flag) lives in
+fields the typed IR does not preserve (mirrors the `Cadence` module, which
+walks raw JSON for the same reason).
+
+All diagnostics are raised as [`TreeWalkError`](@ref) carrying stable
+`E_TREEWALK_*` codes (`E_TREEWALK_VI_*` for the value-invention-specific
+failures) so they are machine-checkable across bindings.
+"""
 
 # Base variable name of a typed-IR LHS (`VarExpr` / `index` / `D`), used by
 # build_evaluator to drop value-invention equations from the ODE.
@@ -110,18 +114,13 @@ end
 # `{op:"index", args:[NAME, …]}` → NAME. A derived buffer (`centroid = num/den`) is
 # recognised by its body reading an upstream VI buffer name.
 function _vi_index_targets!(refs, node)
-    if isa(node, AbstractDict)
-        if _vi_get(node, "op") == "index"
-            args = _vi_get(node, "args", Any[])
+    _walk_json(node) do _, n
+        isa(n, AbstractDict) || return true
+        if _vi_get(n, "op") == "index"
+            args = _vi_get(n, "args", Any[])
             !isempty(args) && isa(args[1], AbstractString) && push!(refs, args[1])
         end
-        for (_, v) in node
-            _vi_index_targets!(refs, v)
-        end
-    elseif isa(node, AbstractVector)
-        for v in node
-            _vi_index_targets!(refs, v)
-        end
+        return true
     end
     return refs
 end
@@ -297,6 +296,18 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
     elseif isa(node, Real)
         return Float64(node)
     elseif isa(node, AbstractString)
+        # Four-way bare-string resolution, in precedence order:
+        #   1. a bound range symbol (the enumeration binding wins);
+        #   2. a const-array factor name — returned AS the name; only `index`
+        #      consumes it, gathering from `ctx.const_arrays`;
+        #   3. a scalar `parameter` variable — its override-or-default value;
+        #   4. FALLTHROUGH: anything else is returned verbatim and treated as a
+        #      relation tag ("edge"/"bin"/"pair", stripped by `_vi_skolem`).
+        # Arm 4 is deliberately silent: a typo'd symbol or misspelled factor
+        # name degrades to a "tag" instead of raising an E_TREEWALK_VI_* code
+        # (it usually surfaces later as E_TREEWALK_VI_KEY / a Float64 cast
+        # error). Kept as-is for behavior preservation — flagged for Wave 3 to
+        # consider failing closed on strings reaching a numeric context.
         haskey(bindings, node) && return bindings[node]   # bound range symbol
         haskey(ctx.const_arrays, node) && return node     # bare factor name (used by index)
         haskey(ctx.variables, node) && _vi_get(ctx.variables[node], "type") == "parameter" &&

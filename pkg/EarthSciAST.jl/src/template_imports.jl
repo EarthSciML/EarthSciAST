@@ -153,17 +153,88 @@ function _collect_metaparam_decls(raw, origin::String)::OrderedDict{String,Any}
     return out
 end
 
+# ---------------------------------------------------------------------------
+# Canonical structural-field table
+# ---------------------------------------------------------------------------
+# The ONE registry of raw-JSON object keys whose VALUES are structural — never
+# ordinary expression positions — for the two load-time rewrite passes in this
+# file (metaparameter substitution, esm-spec §9.7.6, and the import-edge
+# rename walk, esm-spec §9.7.7). The skip/protect sets below are DERIVED from
+# it; nothing else hand-maintains key membership.
+#
+# NEW Expression structural fields MUST be registered here with the right
+# kind, or metaparameter substitution / import-edge renaming will rewrite
+# their string values as if they were variable references.
+#
+# Kinds:
+#   :protected  — opaque to metaparameter substitution AND copied verbatim by
+#                 the rename walk. (`name` and `where` additionally get a
+#                 positional rename-walk branch: apply-template `name` maps
+#                 through `tplmap`; a `where` OBJECT's §9.6.1 `shape` entries
+#                 map through `isetmap` via `_rename_where`.)
+#   :axis       — scalar value NAMES an index set / axis: the rename walk maps
+#                 it through `isetmap`; also opaque to metaparameter
+#                 substitution.
+#   :axis_open  — index-set name position for the rename walk ONLY;
+#                 metaparameter substitution recurses into it (this split
+#                 preserves `dim`'s historical membership exactly).
+#   :registry   — closed-registry id / literal enum: copied verbatim by the
+#                 rename walk only.
+#   :positional — no derived-set membership; handled by a dedicated branch in
+#                 `_rename_walk` / `_collect_ref_names!`: `from` ({from:
+#                 <indexSet>} references map through `isetmap`) and `of`
+#                 (aggregate bound-index lists are copied verbatim).
+const _STRUCTURAL_FIELDS = (
+    "metadata"                    => :protected,
+    "params"                      => :protected,
+    "type"                        => :protected,
+    "units"                       => :protected,
+    "kind"                        => :protected,
+    "description"                 => :protected,
+    "name"                        => :protected,
+    "expression_template_imports" => :protected,
+    "metaparameters"              => :protected,
+    "only"                        => :protected,
+    # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
+    # NAMES, a structural namespace — never expression positions.
+    "where"                       => :protected,
+    "wrt"                         => :axis,
+    "dim"                         => :axis_open,
+    "op"                          => :registry,
+    "id"                          => :registry,
+    "expect_cadence"              => :registry,
+    "reduce"                      => :registry,
+    "semiring"                    => :registry,
+    "manifold"                    => :registry,
+    "fn"                          => :registry,
+    "table"                       => :registry,
+    "side"                        => :registry,
+    "attrs"                       => :registry,
+    "members"                     => :registry,
+    "from_faq"                    => :registry,
+    "from"                        => :positional,
+    "of"                          => :positional,
+)
+
 # Keys whose VALUES are never expression positions: metaparameter names are
 # substituted as bare variable-reference strings, so structural string fields
 # must not be rewritten. Template `params` shadowing is handled separately in
 # `_substitute_metaparams_decl`.
-const _META_SUBST_SKIP_KEYS = Set{String}([
-    "metadata", "params", "type", "units", "kind", "description", "name",
-    "wrt", "expression_template_imports", "metaparameters", "only",
-    # `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
-    # NAMES, a structural namespace — never expression positions.
-    "where",
-])
+const _META_SUBST_SKIP_KEYS = Set{String}(
+    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :protected || kind === :axis)
+
+# Scalar Expression-node fields whose string value names an AXIS / index set
+# (rewritten by the index-set rename map, param-shadowed like §9.6.1).
+const _RENAME_AXIS_KEYS = Set{String}(
+    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :axis || kind === :axis_open)
+
+# Object keys whose values are never variable-reference positions for the
+# rename walk: the metaparameter skip set plus the remaining scalar structural
+# ExpressionNode fields (`op`, closed-registry ids, literal enums). `from`,
+# `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
+const _RENAME_PROTECTED_KEYS = Set{String}(
+    k for (k, kind) in _STRUCTURAL_FIELDS
+    if kind === :protected || kind === :axis || kind === :registry)
 
 """
     _substitute_metaparams(x, values)
@@ -174,21 +245,14 @@ except the `_META_SUBST_SKIP_KEYS` structural fields (esm-spec §9.7.6:
 expression-position substitution; no folding here).
 """
 function _substitute_metaparams(x, values::AbstractDict{String})
-    if x isa AbstractString
-        s = string(x)
-        return haskey(values, s) ? values[s] : x
-    elseif _is_array(x)
-        return Any[_substitute_metaparams(v, values) for v in x]
-    elseif _is_object(x)
-        out = OrderedDict{String,Any}()
-        for (k, v) in pairs(x)
-            ks = string(k)
-            out[ks] = ks in _META_SUBST_SKIP_KEYS ? _to_ordered(v) :
-                      _substitute_metaparams(v, values)
+    return _map_json(x) do key, n
+        key !== nothing && key in _META_SUBST_SKIP_KEYS && return _to_ordered(n)
+        if n isa AbstractString
+            s = string(n)
+            haskey(values, s) && return values[s]
         end
-        return out
+        return _JSON_DESCEND
     end
-    return x
 end
 
 """
@@ -277,18 +341,13 @@ function _try_fold(x, ctx::String)::Union{Int64,Nothing}
     end
 end
 
+# Every bare string of a metaparameter expression except the structural value
+# under `"op"` (the free-name scan for unbound-name diagnostics).
 function _collect_names!(out::Vector{String}, x)
-    if x isa AbstractString
-        push!(out, string(x))
-    elseif _is_array(x)
-        for v in x
-            _collect_names!(out, v)
-        end
-    elseif _is_object(x)
-        for (k, v) in pairs(x)
-            string(k) == "op" && continue
-            _collect_names!(out, v)
-        end
+    _walk_json(x) do key, n
+        key == "op" && return false
+        n isa AbstractString && push!(out, string(n))
+        return true
     end
     return out
 end
@@ -382,45 +441,42 @@ not-yet-fully-bound library) are left symbolic for a later binding site.
 Index-set sizes are folded separately by [`_fold_index_set_sizes!`](@ref).
 """
 function _fold_structural_sites!(x, ctx::String)
-    if _is_array(x)
-        for v in x
-            _fold_structural_sites!(v, ctx)
-        end
-        return
-    end
-    _is_object(x) || return
-    op = get(x, "op", nothing)
-    op_str = op === nothing ? "" : string(op)
-    if op_str == "aggregate"
-        ranges = get(x, "ranges", nothing)
-        if ranges !== nothing && _is_object(ranges)
-            for (k, rv) in pairs(ranges)
-                _is_array(rv) || continue   # {from: ...} index-set refs untouched
-                for (i, entry) in enumerate(rv)
-                    (entry isa Integer && !(entry isa Bool)) && continue
-                    f = _try_fold(entry, "$ctx: aggregate ranges.$(string(k))")
-                    f === nothing || (rv[i] = f)
+    # `_walk_json` visits parents first, so each structural array is folded in
+    # place at its owning `aggregate` / `makearray` node before the walk
+    # descends into it (the fold replaces entries, never reshapes).
+    _walk_json(x) do _, n
+        _is_object(n) || return true
+        op = get(n, "op", nothing)
+        op_str = op === nothing ? "" : string(op)
+        if op_str == "aggregate"
+            ranges = get(n, "ranges", nothing)
+            if ranges !== nothing && _is_object(ranges)
+                for (k, rv) in pairs(ranges)
+                    _is_array(rv) || continue   # {from: ...} index-set refs untouched
+                    for (i, entry) in enumerate(rv)
+                        (entry isa Integer && !(entry isa Bool)) && continue
+                        f = _try_fold(entry, "$ctx: aggregate ranges.$(string(k))")
+                        f === nothing || (rv[i] = f)
+                    end
                 end
             end
-        end
-    elseif op_str == "makearray"
-        regions = get(x, "regions", nothing)
-        if regions !== nothing && _is_array(regions)
-            for region in regions
-                _is_array(region) || continue
-                for bounds in region
-                    _is_array(bounds) || continue
-                    for (i, entry) in enumerate(bounds)
-                        (entry isa Integer && !(entry isa Bool)) && continue
-                        f = _try_fold(entry, "$ctx: makearray regions bound")
-                        f === nothing || (bounds[i] = f)
+        elseif op_str == "makearray"
+            regions = get(n, "regions", nothing)
+            if regions !== nothing && _is_array(regions)
+                for region in regions
+                    _is_array(region) || continue
+                    for bounds in region
+                        _is_array(bounds) || continue
+                        for (i, entry) in enumerate(bounds)
+                            (entry isa Integer && !(entry isa Bool)) && continue
+                            f = _try_fold(entry, "$ctx: makearray regions bound")
+                            f === nothing || (bounds[i] = f)
+                        end
                     end
                 end
             end
         end
-    end
-    for (_, v) in pairs(x)
-        _fold_structural_sites!(v, ctx)
+        return true
     end
     return
 end
@@ -457,26 +513,26 @@ end
 # Registration-time body composition (esm-spec §9.7.3)
 # ---------------------------------------------------------------------------
 
+# The `name` of every `apply_expression_template` node in a template body
+# (document order) — the §9.7.3 body-reference edges.
 function _collect_apply_names!(out::Vector{String}, x)
-    if _is_array(x)
-        for c in x
-            _collect_apply_names!(out, c)
-        end
-        return out
-    end
-    if _is_object(x)
-        op = _raw_get(x, "op")
+    _walk_json(x) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
         if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-            nm = _raw_get(x, "name")
+            nm = _raw_get(n, "name")
             nm !== nothing && push!(out, string(nm))
         end
-        for (_, v) in pairs(x)
-            _collect_apply_names!(out, v)
-        end
+        return true
     end
     return out
 end
 
+# Deliberately NOT a `_map_json` rewrite: this is a POST-order substitution
+# (children inline before the apply node is expanded), and it must keep its
+# plain-`Dict` rebuild — composed-body key order surfaces in emitted component
+# documents, so switching to the combinator's `OrderedDict` rebuild would
+# change output bytes.
 function _inline_applies(node, templates::AbstractDict, scope::String)
     if _is_array(node)
         return Any[_inline_applies(c, templates, scope) for c in node]
@@ -595,21 +651,21 @@ whatever the target actually exports (or whatever occurs free).
 _is_valid_dotted_name(s::AbstractString) =
     !isempty(s) && all(seg -> occursin(_NAME_SEGMENT_RE, seg), split(s, '.'))
 
-function _name_map(raw, field::String, where::String)::OrderedDict{String,String}
+function _name_map(raw, field::String, ctx::String)::OrderedDict{String,String}
     out = OrderedDict{String,String}()
     raw === nothing && return out
     _is_object(raw) || throw(ExpressionTemplateError(
         "template_import_rename_invalid",
-        "$where: `$field` must be an object mapping names to names (esm-spec §9.7.7)"))
+        "$ctx: `$field` must be an object mapping names to names (esm-spec §9.7.7)"))
     for (k, v) in pairs(raw)
         ks = string(k)
         isempty(ks) && throw(ExpressionTemplateError(
             "template_import_rename_invalid",
-            "$where: `$field` has an empty key (esm-spec §9.7.7)"))
+            "$ctx: `$field` has an empty key (esm-spec §9.7.7)"))
         (v isa AbstractString && _is_valid_dotted_name(string(v))) ||
             throw(ExpressionTemplateError(
                 "template_import_rename_invalid",
-                "$where: `$field`.$ks target $(repr(v)) is not a valid dotted " *
+                "$ctx: `$field`.$ks target $(repr(v)) is not a valid dotted " *
                 "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; " *
                 "esm-spec §9.7.7)"))
         out[ks] = string(v)
@@ -617,18 +673,9 @@ function _name_map(raw, field::String, where::String)::OrderedDict{String,String
     return out
 end
 
-# Scalar Expression-node fields whose string value names an AXIS / index set
-# (rewritten by the index-set rename map, param-shadowed like §9.6.1).
-const _RENAME_AXIS_KEYS = ("wrt", "dim")
-
-# Object keys whose values are never variable-reference positions for the
-# rename walk: the metaparameter skip set plus the remaining scalar structural
-# ExpressionNode fields (`op`, closed-registry ids, literal enums). `from`,
-# `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
-const _RENAME_PROTECTED_KEYS = union(_META_SUBST_SKIP_KEYS,
-    Set{String}(["op", "id", "expect_cadence", "reduce", "semiring",
-                 "manifold", "fn", "table", "side", "attrs",
-                 "members", "from_faq"]))
+# (`_RENAME_AXIS_KEYS` / `_RENAME_PROTECTED_KEYS` — the key sets this walk
+# dispatches on — are derived from the canonical `_STRUCTURAL_FIELDS` table in
+# the metaparameters section above; register new structural fields THERE.)
 
 """
     _rename_walk(x, varmap, isetmap, tplmap)
@@ -652,6 +699,12 @@ index-set reference (a name absent from the map stays as spelled, matching the
 body-reference rule). Without this the rule body/registry would use the renamed
 `meshA.x` while `where` still said `x`, and registration would fail with
 `template_constraint_unknown_index_set`.
+
+Deliberately a direct recursion rather than a `_map_json` visitor: nearly
+every object key needs sibling-context dispatch (the op-dependent apply
+`name`, positional `from`/`of`/`where`, the axis/protected sets), so a
+combinator visitor would rebuild every object by hand anyway and the
+combinator would only ever handle arrays.
 """
 function _rename_walk(x, varmap::AbstractDict{String,String},
                       isetmap::AbstractDict{String,String},
@@ -743,30 +796,23 @@ end
 # ranges KEYS (object keys, unreachable by value substitution) from their
 # `expr` occurrences, so it is rejected outright.
 function _collect_bound_syms!(out::Set{String}, x)
-    if _is_array(x)
-        for v in x
-            _collect_bound_syms!(out, v)
-        end
-        return out
-    end
-    _is_object(x) || return out
-    op = _raw_get(x, "op")
-    if op !== nothing && string(op) == "aggregate"
-        oi = _raw_get(x, "output_idx")
+    _walk_json(x) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        (op !== nothing && string(op) == "aggregate") || return true
+        oi = _raw_get(n, "output_idx")
         if oi !== nothing && _is_array(oi)
             for e in oi
                 e isa AbstractString && push!(out, string(e))
             end
         end
-        rg = _raw_get(x, "ranges")
+        rg = _raw_get(n, "ranges")
         if rg !== nothing && _is_object(rg)
             for (k, _) in pairs(rg)
                 push!(out, string(k))
             end
         end
-    end
-    for (_, v) in pairs(x)
-        _collect_bound_syms!(out, v)
+        return true
     end
     return out
 end
@@ -775,23 +821,18 @@ end
 # positions `varmap` would rewrite), minus the per-template `params` shadow
 # set. Used for the rebind occurs-check and the freshness (collision) guard.
 function _collect_ref_names!(out::Set{String}, x, shadowed::Set{String})
-    if x isa AbstractString
-        s = string(x)
-        s in shadowed || push!(out, s)
-        return out
-    elseif _is_array(x)
-        for v in x
-            _collect_ref_names!(out, v, shadowed)
+    _walk_json(x) do key, n
+        # Prune exactly the keys `_rename_walk` does not treat as
+        # variable-reference positions (see `_STRUCTURAL_FIELDS`).
+        if key !== nothing && (key == "from" || key in _RENAME_AXIS_KEYS ||
+                               key == "of" || key in _RENAME_PROTECTED_KEYS)
+            return false
         end
-        return out
-    elseif _is_object(x)
-        for (k, v) in pairs(x)
-            ks = string(k)
-            (ks == "from" || ks in _RENAME_AXIS_KEYS || ks == "of" ||
-             ks in _RENAME_PROTECTED_KEYS) && continue
-            _collect_ref_names!(out, v, shadowed)
+        if n isa AbstractString
+            s = string(n)
+            s in shadowed || push!(out, s)
         end
-        return out
+        return true
     end
     return out
 end
@@ -815,15 +856,15 @@ untouched.
 # (`scope` is a `_TemplateScope`; the struct is declared in the import-graph
 # section below, so the argument is left unannotated.)
 function _apply_edge_renames!(scope, entry, origin::String, ref::String)
-    where = "$origin: import of '$ref'"
+    ctx = "$origin: import of '$ref'"
     prefix_raw = _raw_get(entry, "prefix")
-    rename = _name_map(_raw_get(entry, "rename"), "rename", where)
-    rebind = _name_map(_raw_get(entry, "rebind"), "rebind", where)
+    rename = _name_map(_raw_get(entry, "rename"), "rename", ctx)
+    rebind = _name_map(_raw_get(entry, "rebind"), "rebind", ctx)
     if prefix_raw !== nothing &&
        !(prefix_raw isa AbstractString && _is_valid_dotted_name(string(prefix_raw)))
         throw(ExpressionTemplateError(
             "template_import_rename_invalid",
-            "$where: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
+            "$ctx: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
             "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"))
     end
     prefix = _maybe(string, prefix_raw)
@@ -837,7 +878,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     for k in keys(rename)
         k in exported || throw(ExpressionTemplateError(
             "template_import_rename_unknown_name",
-            "$where: `rename` names '$k', which the target does not export at this " *
+            "$ctx: `rename` names '$k', which the target does not export at this " *
             "edge (the surviving exports are templates after `only`, index sets, and " *
             "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"))
     end
@@ -854,7 +895,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
         for (o, n) in m
             haskey(seen, n) && throw(ExpressionTemplateError(
                 "template_import_rename_collision",
-                "$where: $what names '$(seen[n])' and '$o' both map to '$n' after " *
+                "$ctx: $what names '$(seen[n])' and '$o' both map to '$n' after " *
                 "renaming (esm-spec §9.7.7)"))
             seen[n] = o
         end
@@ -888,16 +929,16 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     for k in keys(rebind)
         k in exported && throw(ExpressionTemplateError(
             "template_import_rebind_unknown_name",
-            "$where: `rebind` names '$k', a declared name of the target (template / " *
+            "$ctx: `rebind` names '$k', a declared name of the target (template / " *
             "index set / metaparameter) — `rebind` addresses only free names; use " *
             "`rename` for declared names (esm-spec §9.7.7)"))
         k in bound && throw(ExpressionTemplateError(
             "template_import_rename_invalid",
-            "$where: `rebind` key '$k' is a bound index symbol (`output_idx` / " *
+            "$ctx: `rebind` key '$k' is a bound index symbol (`output_idx` / " *
             "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"))
         k in free || throw(ExpressionTemplateError(
             "template_import_rebind_unknown_name",
-            "$where: `rebind` names '$k', which does not occur free in the imported " *
+            "$ctx: `rebind` names '$k', which does not occur free in the imported " *
             "declarations (esm-spec §9.7.7)"))
     end
 
@@ -913,7 +954,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     for t in newnames
         t in taken && throw(ExpressionTemplateError(
             "template_import_rename_collision",
-            "$where: renamed/rebound name '$t' collides with a name still in use " *
+            "$ctx: renamed/rebound name '$t' collides with a name still in use " *
             "inside the imported declarations (a remaining free name, a bound index " *
             "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"))
         push!(taken, t)
@@ -1005,6 +1046,55 @@ function _merge_scope!(dst::_TemplateScope, src::_TemplateScope, origin::String)
 end
 
 """
+    _collect_own_templates(raw, origin) -> OrderedDict{String,Any}
+
+Collect a document/component/library's OWN `expression_templates` block as an
+ordered name → declaration map (declaration order is normative for the §9.6.3
+tie-break), deep-normalized via `_to_ordered`, and validate the declarations
+(`_validate_templates`). Absent or non-object blocks yield an empty map. The
+one collect/validate step shared by library resolution, the root-library
+phase, and the per-component phase — they differ only in `origin`.
+"""
+function _collect_own_templates(raw, origin::String)::OrderedDict{String,Any}
+    own = OrderedDict{String,Any}()
+    tpl = _raw_get(raw, "expression_templates")
+    if tpl !== nothing && _is_object(tpl)
+        for (n, d) in pairs(tpl)
+            own[string(n)] = _to_ordered(d)
+        end
+    end
+    _validate_templates(Dict{String,Any}(own), origin)
+    return own
+end
+
+# Append own template declarations to a scope's template map — imports first,
+# then own declarations in declaration order (esm-spec §9.7.4) — with the
+# §9.7.4/§9.7.5 dedup/conflict rules.
+function _merge_own_templates!(dst::OrderedDict{String,Any}, raw, origin::String)
+    for (n, d) in _collect_own_templates(raw, origin)
+        _merge_named!(dst, n, d, "template_import_name_conflict", "template", origin)
+    end
+    return dst
+end
+
+# Merge a resolved scope's index sets and still-open metaparameter
+# declarations into the ROOT document's registries (`resolve_template_machinery`
+# phases 1-2; same conflict rules as the scope merge).
+function _merge_scope_registries!(doc_isets::OrderedDict{String,Any},
+                                  doc_meta::OrderedDict{String,Any},
+                                  scope::_TemplateScope, origin::String)
+    for (n, d) in scope.index_sets
+        _merge_named!(doc_isets, n, d, "template_import_index_set_conflict",
+                      "index set", origin)
+    end
+    for (n, d) in scope.metaparams
+        _merge_named!(doc_meta, n, d, "template_import_name_conflict",
+                      "metaparameter", origin)
+    end
+    return
+end
+
+"""
     _instantiate_scope!(scope, values, ctx)
 
 Per-edge metaparameter instantiation (esm-spec §9.7.6 binding site 1):
@@ -1037,9 +1127,14 @@ end
 # simply fails to resolve (`template_import_unresolved` / the subsystem error)
 # rather than silently misresolving. Bindings without this capability treat
 # `${VAR}` as a literal path segment, i.e. the same unresolved failure.
+# `${VAR}` with the variable name as capture group 1.
+const _ENV_REF_RE = r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+
 function _expand_ref_env(ref::AbstractString)
-    return replace(String(ref), r"\$\{[A-Za-z_][A-Za-z0-9_]*\}" =>
-        m -> get(ENV, m[3:prevind(m, lastindex(m))], m))
+    # `replace` hands the callback the whole matched token (`"${VAR}"`);
+    # re-match to pull the variable name out of the capture group.
+    return replace(String(ref), _ENV_REF_RE =>
+        token -> get(ENV, match(_ENV_REF_RE, token)[1], token))
 end
 
 function _load_import_raw(ref::String, base_dir::String, origin::String)
@@ -1091,9 +1186,13 @@ target (path-scoped cycle detection over canonical refs, as §4.7), verify
 library purity, resolve the target recursively in its own scope, instantiate
 at this edge's `bindings`, apply `only` visibility filtering, then apply the
 edge's `prefix`/`rename`/`rebind` (esm-spec §9.7.7).
+
+`load_ref(ref, base_dir, origin) -> (raw_doc, target_base_dir)` resolves the
+edge's target document (see [`resolve_template_machinery`](@ref)); it defaults
+to the file/URL loader `_load_import_raw`.
 """
 function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
-                               origin::String)::_TemplateScope
+                               origin::String; load_ref=_load_import_raw)::_TemplateScope
     _is_object(entry) || throw(ExpressionTemplateError(
         "template_import_unresolved",
         "$origin: expression_template_imports entries must be objects with a `ref` field"))
@@ -1111,7 +1210,7 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
             "$origin: import-graph cycle detected: $(join(cyc, " -> ")) (esm-spec §9.7.2)"))
     end
 
-    raw, target_dir = _load_import_raw(ref, base_dir, origin)
+    raw, target_dir = load_ref(ref, base_dir, origin)
     reject_expression_templates_pre_v04(raw)
     reject_template_imports_pre_v08(raw)
 
@@ -1141,7 +1240,7 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
 
     push!(stack, canonical)
     scope = try
-        _process_library(raw, target_dir, stack, "$origin -> $ref")
+        _process_library(raw, target_dir, stack, "$origin -> $ref"; load_ref=load_ref)
     finally
         pop!(stack)
     end
@@ -1205,27 +1304,17 @@ body composition — so a BC-layer body reference to an imported interior
 stencil closes here, before any `only` filtering by a downstream importer.
 """
 function _process_library(raw, dir::String, stack::Vector{String},
-                          origin::String)::_TemplateScope
+                          origin::String; load_ref=_load_import_raw)::_TemplateScope
     scope = _TemplateScope()
     imports = _raw_get(raw, "expression_template_imports")
     if imports !== nothing && _is_array(imports)
         for entry in imports
-            sub = _resolve_import_entry(entry, dir, stack, origin)
+            sub = _resolve_import_entry(entry, dir, stack, origin; load_ref=load_ref)
             _merge_scope!(scope, sub, origin)
         end
     end
 
-    own = OrderedDict{String,Any}()
-    tpl = _raw_get(raw, "expression_templates")
-    if tpl !== nothing && _is_object(tpl)
-        for (n, d) in pairs(tpl)
-            own[string(n)] = _to_ordered(d)
-        end
-    end
-    _validate_templates(Dict{String,Any}(own), origin)
-    for (n, d) in own
-        _merge_named!(scope.templates, n, d, "template_import_name_conflict", "template", origin)
-    end
+    _merge_own_templates!(scope.templates, raw, origin)
 
     isets = _raw_get(raw, "index_sets")
     if isets !== nothing && _is_object(isets)
@@ -1266,80 +1355,39 @@ function _has_import_machinery(raw)
     return false
 end
 
-"""
-    resolve_template_machinery(raw_data, base_path; metaparameters=Dict{String,Int}())
-
-Resolve every esm-spec §9.7 construct of the ROOT document `raw_data`
-(relative import refs resolve against `base_path`): imports recursively with
-per-edge instantiation, `index_sets` merge, metaparameter close
-(`metaparameters` is the loader-API binding site 4; already-closed edge
-bindings win, then API bindings, then defaults) and fold, expression-position
-substitution, and — for a root library file — §9.7.3 body composition.
-
-Returns an order-preserving native tree ready for
-[`lower_expression_templates`](@ref) with `expression_template_imports`,
-`metaparameters`, and top-level `expression_templates` consumed (Option A
-round-trip: none survives `parse → emit`), or `nothing` when the document
-carries no §9.7 machinery (the legacy fast path).
-"""
-function resolve_template_machinery(raw_data, base_path::AbstractString;
-        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())
-    if !_has_import_machinery(raw_data)
-        isempty(metaparameters) || throw(ExpressionTemplateError(
-            "template_import_unknown_name",
-            "loader API binds metaparameter(s) " *
-            "$(join(sort(collect(String[string(k) for k in keys(metaparameters)])), ", ")) " *
-            "but the document declares none (esm-spec §9.7.6)"))
-        return nothing
-    end
-    base_dir = String(base_path)
-    root = _to_ordered(raw_data)::OrderedDict{String,Any}
-    stack = String[]
-
-    doc_meta = _collect_metaparam_decls(root, "document")
-    doc_isets = OrderedDict{String,Any}()
-    if haskey(root, "index_sets") && _is_object(root["index_sets"])
-        for (n, d) in pairs(root["index_sets"])
-            doc_isets[string(n)] = d
+# --- phase 1: top-level templates + imports (root template-library file) ---
+# Resolve the root's own imports into a top scope, merge its own templates
+# (§9.7.4 order), and land the scope's index sets / open metaparameters in the
+# document registries. Returns the effective top-level template map.
+function _resolve_root_templates!(root::OrderedDict{String,Any}, base_dir::String,
+                                  stack::Vector{String},
+                                  doc_isets::OrderedDict{String,Any},
+                                  doc_meta::OrderedDict{String,Any};
+                                  load_ref=_load_import_raw)::OrderedDict{String,Any}
+    topscope = _TemplateScope()
+    imports = get(root, "expression_template_imports", nothing)
+    if imports !== nothing && _is_array(imports)
+        for entry in imports
+            sub = _resolve_import_entry(entry, base_dir, stack, "document";
+                                        load_ref=load_ref)
+            _merge_scope!(topscope, sub, "document")
         end
     end
+    _merge_own_templates!(topscope.templates, root, "document")
+    _merge_scope_registries!(doc_isets, doc_meta, topscope, "document")
+    return topscope.templates
+end
 
-    # --- top-level templates + imports (root template-library file) ---
-    is_library = haskey(root, "expression_templates")
-    top_templates = OrderedDict{String,Any}()
-    if is_library
-        topscope = _TemplateScope()
-        imports = get(root, "expression_template_imports", nothing)
-        if imports !== nothing && _is_array(imports)
-            for entry in imports
-                sub = _resolve_import_entry(entry, base_dir, stack, "document")
-                _merge_scope!(topscope, sub, "document")
-            end
-        end
-        own = OrderedDict{String,Any}()
-        tpl = root["expression_templates"]
-        if _is_object(tpl)
-            for (n, d) in pairs(tpl)
-                own[string(n)] = d
-            end
-        end
-        _validate_templates(Dict{String,Any}(own), "document")
-        for (n, d) in own
-            _merge_named!(topscope.templates, n, d, "template_import_name_conflict",
-                          "template", "document")
-        end
-        for (n, d) in topscope.index_sets
-            _merge_named!(doc_isets, n, d, "template_import_index_set_conflict",
-                          "index set", "document")
-        end
-        for (n, d) in topscope.metaparams
-            _merge_named!(doc_meta, n, d, "template_import_name_conflict",
-                          "metaparameter", "document")
-        end
-        top_templates = topscope.templates
-    end
-
-    # --- per-component imports (models / reaction systems, esm-spec §9.7.2) ---
+# --- phase 2: per-component imports (models / reaction systems, §9.7.2) ---
+# Each component carrying `expression_template_imports` gets its effective
+# template sequence (imports depth-first post-order, then local declarations)
+# as its own template block; scope index sets / open metaparameters merge into
+# the document registries.
+function _resolve_component_imports!(root::OrderedDict{String,Any}, base_dir::String,
+                                     stack::Vector{String},
+                                     doc_isets::OrderedDict{String,Any},
+                                     doc_meta::OrderedDict{String,Any};
+                                     load_ref=_load_import_raw)
     for compkind in _COMPONENT_KINDS
         comps = get(root, compkind, nothing)
         (comps !== nothing && _is_object(comps)) || continue
@@ -1351,30 +1399,13 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
             corigin = "$compkind.$(string(cname))"
             if _is_array(imports)
                 for entry in imports
-                    sub = _resolve_import_entry(entry, base_dir, stack, corigin)
+                    sub = _resolve_import_entry(entry, base_dir, stack, corigin;
+                                                load_ref=load_ref)
                     _merge_scope!(cscope, sub, corigin)
                 end
             end
-            tpl = get(comp, "expression_templates", nothing)
-            if tpl !== nothing && _is_object(tpl)
-                own = OrderedDict{String,Any}()
-                for (n, d) in pairs(tpl)
-                    own[string(n)] = d
-                end
-                _validate_templates(Dict{String,Any}(own), corigin)
-                for (n, d) in own
-                    _merge_named!(cscope.templates, n, d,
-                                  "template_import_name_conflict", "template", corigin)
-                end
-            end
-            for (n, d) in cscope.index_sets
-                _merge_named!(doc_isets, n, d, "template_import_index_set_conflict",
-                              "index set", corigin)
-            end
-            for (n, d) in cscope.metaparams
-                _merge_named!(doc_meta, n, d, "template_import_name_conflict",
-                              "metaparameter", corigin)
-            end
+            _merge_own_templates!(cscope.templates, comp, corigin)
+            _merge_scope_registries!(doc_isets, doc_meta, cscope, corigin)
             # The effective sequence (imports depth-first post-order, then
             # local declarations) becomes the component's template block; the
             # OrderedDict key order IS the §9.6.3 declaration order.
@@ -1382,8 +1413,14 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
             delete!(comp, "expression_template_imports")
         end
     end
+    return
+end
 
-    # --- close this document's metaparameters (§9.7.6 sites 4-5) ---
+# --- phase 3: close this document's metaparameters (§9.7.6 sites 4-5) ---
+# Loader-API bindings win, then declaration defaults; any name still open is
+# `metaparameter_unbound`. Returns the closed name → Int64 environment.
+function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
+        metaparameters::AbstractDict{String,<:Integer})::Dict{String,Int64}
     api = Dict{String,Int64}()
     for (k, v) in pairs(metaparameters)
         api[string(k)] = _require_int(v, "loader API metaparameter '$(string(k))'")
@@ -1407,62 +1444,78 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
         "metaparameter_unbound",
         "metaparameter(s) $(join(open_names, ", ")) still open after edge bindings, " *
         "loader-API bindings, and defaults (esm-spec §9.7.6)"))
+    return values
+end
 
-    # --- §9.7.6 name-collision check: no shadowing of visible names ---
-    if !isempty(doc_meta)
-        visible = Set{String}(String[string(k) for k in keys(doc_isets)])
-        for compkind in _COMPONENT_KINDS
-            comps = get(root, compkind, nothing)
-            (comps !== nothing && _is_object(comps)) || continue
-            for (_, comp) in pairs(comps)
-                _is_object(comp) || continue
-                for blk in ("variables", "species", "parameters")
-                    b = get(comp, blk, nothing)
-                    (b !== nothing && _is_object(b)) || continue
-                    for (vn, _) in pairs(b)
-                        push!(visible, string(vn))
-                    end
+# --- phase 4: §9.7.6 name-collision check — no shadowing of visible names ---
+function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
+                                         doc_meta::OrderedDict{String,Any},
+                                         doc_isets::OrderedDict{String,Any})
+    isempty(doc_meta) && return
+    visible = Set{String}(String[string(k) for k in keys(doc_isets)])
+    for compkind in _COMPONENT_KINDS
+        comps = get(root, compkind, nothing)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (_, comp) in pairs(comps)
+            _is_object(comp) || continue
+            for blk in ("variables", "species", "parameters")
+                b = get(comp, blk, nothing)
+                (b !== nothing && _is_object(b)) || continue
+                for (vn, _) in pairs(b)
+                    push!(visible, string(vn))
                 end
             end
         end
-        for name in keys(doc_meta)
-            name in visible && throw(ExpressionTemplateError(
-                "metaparameter_name_conflict",
-                "metaparameter '$name' collides with a visible " *
-                "variable/parameter/species/index-set name (esm-spec §9.7.6)"))
-        end
     end
+    for name in keys(doc_meta)
+        name in visible && throw(ExpressionTemplateError(
+            "metaparameter_name_conflict",
+            "metaparameter '$name' collides with a visible " *
+            "variable/parameter/species/index-set name (esm-spec §9.7.6)"))
+    end
+    return
+end
 
-    # --- expression-position substitution of the closed values ---
-    if !isempty(values)
-        for compkind in _COMPONENT_KINDS
-            comps = get(root, compkind, nothing)
-            (comps !== nothing && _is_object(comps)) || continue
-            for (cname, comp) in pairs(comps)
-                _is_object(comp) || continue
-                for k in collect(keys(comp))
-                    if k == "expression_templates" && _is_object(comp[k])
-                        tpl = comp[k]
-                        for (tn, td) in collect(pairs(tpl))
-                            tpl[tn] = _substitute_metaparams_decl(td, values)
-                        end
-                    else
-                        comp[k] = _substitute_metaparams(comp[k], values)
+# --- phase 5: expression-position substitution of the closed values ---
+# Rewrites components and top-level templates in place (with per-declaration
+# `params` shadowing); returns the substituted index-set registry (the input
+# one when there is nothing to substitute).
+function _substitute_closed_metaparams!(root::OrderedDict{String,Any},
+                                        top_templates::OrderedDict{String,Any},
+                                        doc_isets::OrderedDict{String,Any},
+                                        values::Dict{String,Int64})
+    isempty(values) && return doc_isets
+    for compkind in _COMPONENT_KINDS
+        comps = get(root, compkind, nothing)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (cname, comp) in pairs(comps)
+            _is_object(comp) || continue
+            for k in collect(keys(comp))
+                if k == "expression_templates" && _is_object(comp[k])
+                    tpl = comp[k]
+                    for (tn, td) in collect(pairs(tpl))
+                        tpl[tn] = _substitute_metaparams_decl(td, values)
                     end
+                else
+                    comp[k] = _substitute_metaparams(comp[k], values)
                 end
             end
         end
-        for (tn, td) in collect(pairs(top_templates))
-            top_templates[tn] = _substitute_metaparams_decl(td, values)
-        end
-        newisets = OrderedDict{String,Any}()
-        for (n, d) in doc_isets
-            newisets[n] = _substitute_metaparams(d, values)
-        end
-        doc_isets = newisets
     end
+    for (tn, td) in collect(pairs(top_templates))
+        top_templates[tn] = _substitute_metaparams_decl(td, values)
+    end
+    newisets = OrderedDict{String,Any}()
+    for (n, d) in doc_isets
+        newisets[n] = _substitute_metaparams(d, values)
+    end
+    return newisets
+end
 
-    # --- fold structural sites on the closed document ---
+# --- phase 6: fold structural sites on the closed document ---
+function _fold_closed_document!(root::OrderedDict{String,Any},
+                                top_templates::OrderedDict{String,Any},
+                                doc_isets::OrderedDict{String,Any})
     for compkind in _COMPONENT_KINDS
         comps = get(root, compkind, nothing)
         (comps !== nothing && _is_object(comps)) || continue
@@ -1475,9 +1528,69 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
         _fold_structural_sites!(td, "document.expression_templates.$tn")
     end
     _fold_index_set_sizes!(doc_isets, "document"; strict=true)
+    return
+end
 
-    # --- root library file: compose bodies (validation), then strip; no §9.7
-    #     construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+"""
+    resolve_template_machinery(raw_data, base_path;
+                               metaparameters=Dict{String,Int}(), load_ref=nothing)
+
+Resolve every esm-spec §9.7 construct of the ROOT document `raw_data`
+(relative import refs resolve against `base_path`): imports recursively with
+per-edge instantiation, `index_sets` merge, metaparameter close
+(`metaparameters` is the loader-API binding site 4; already-closed edge
+bindings win, then API bindings, then defaults) and fold, expression-position
+substitution, and — for a root library file — §9.7.3 body composition.
+
+`load_ref` is an optional import-edge resolver
+`(ref, base_dir, origin) -> (raw_doc, target_base_dir)` — a test seam
+mirroring [`expand_coupling_imports`](@ref)'s kwarg; `nothing` (the default)
+uses the file/URL loader `_load_import_raw`.
+
+Returns an order-preserving native tree ready for
+[`lower_expression_templates`](@ref) with `expression_template_imports`,
+`metaparameters`, and top-level `expression_templates` consumed (Option A
+round-trip: none survives `parse → emit`), or `nothing` when the document
+carries no §9.7 machinery (the legacy fast path).
+"""
+function resolve_template_machinery(raw_data, base_path::AbstractString;
+        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+        load_ref=nothing)
+    if !_has_import_machinery(raw_data)
+        isempty(metaparameters) || throw(ExpressionTemplateError(
+            "template_import_unknown_name",
+            "loader API binds metaparameter(s) " *
+            "$(join(sort(collect(String[string(k) for k in keys(metaparameters)])), ", ")) " *
+            "but the document declares none (esm-spec §9.7.6)"))
+        return nothing
+    end
+    loader = load_ref === nothing ? _load_import_raw : load_ref
+    base_dir = String(base_path)
+    root = _to_ordered(raw_data)::OrderedDict{String,Any}
+    stack = String[]
+
+    doc_meta = _collect_metaparam_decls(root, "document")
+    doc_isets = OrderedDict{String,Any}()
+    if haskey(root, "index_sets") && _is_object(root["index_sets"])
+        for (n, d) in pairs(root["index_sets"])
+            doc_isets[string(n)] = d
+        end
+    end
+
+    is_library = haskey(root, "expression_templates")
+    top_templates = is_library ?
+        _resolve_root_templates!(root, base_dir, stack, doc_isets, doc_meta;
+                                 load_ref=loader) :
+        OrderedDict{String,Any}()
+    _resolve_component_imports!(root, base_dir, stack, doc_isets, doc_meta;
+                                load_ref=loader)
+    values = _close_document_metaparams(doc_meta, metaparameters)
+    _check_metaparam_name_conflicts(root, doc_meta, doc_isets)
+    doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
+    _fold_closed_document!(root, top_templates, doc_isets)
+
+    # --- phase 7: root library file — compose bodies (validation), then
+    #     strip; no §9.7 construct survives parse → emit (§9.7.6 round-trip) ---
     if is_library
         _compose_template_bodies!(Dict{String,Any}(top_templates), "document")
         delete!(root, "expression_templates")
