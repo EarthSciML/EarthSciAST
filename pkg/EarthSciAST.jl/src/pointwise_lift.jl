@@ -1,0 +1,235 @@
+# Pointwise spatial lift (esm-spec §10.5): flatten step 3b. Split from
+# flatten.jl.
+
+using OrderedCollections: OrderedDict
+
+# ========================================
+# Pointwise spatial lift of merged state ODEs (§10.5)
+# ========================================
+#
+# Reaction ODE-gen and coupling both run at the AST level and IN THAT ORDER
+# (reactions → generic `D(sp)=Σ terms` equations, then `operator_compose` merges
+# each species' reaction ODE with the spatial operator's advection contribution).
+# What operator_compose does NOT do is array-ify the result: the merged
+# `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+# its advection `makearray` indexes `sp` per grid cell. This step performs the
+# `lifting:"pointwise"` promotion — it reuses the same arrayop lowering a spatial
+# MODEL uses — by wrapping each such merged state ODE in an `aggregate` over the
+# grid, indexing the bare reaction species per cell and each operator makearray
+# per cell, and giving the species a grid shape. The reaction network then runs
+# pointwise on the grid through the existing arrayop evaluator.
+
+# Collect every `makearray` OpExpr node reachable from `expr`.
+function _collect_makearrays!(acc::Vector{OpExpr}, expr::Expr)
+    expr isa OpExpr || return acc
+    expr.op == "makearray" && push!(acc, expr)
+    # Walk every immediate sub-expression via the shared traversal instead of a
+    # hand-listed {args, expr_body, values} field walk. `child_exprs` is a strict
+    # superset (it also visits `lower`/`upper`/`filter`/`key`/`table_axes`/dense
+    # `ranges` bounds), but a `makearray` — a materialized spatial array — never
+    # lives inside those scalar-valued fields, so both the set of collected nodes
+    # and their depth-first order (`args`, then `expr_body`, then `values`) are
+    # unchanged.
+    for c in child_exprs(expr)
+        _collect_makearrays!(acc, c)
+    end
+    return acc
+end
+
+# First VarExpr leaf name in an index-argument expression (the loop variable of
+# that index position), or `nothing` for a constant position.
+function _index_arg_loop(expr::Expr)::Union{String,Nothing}
+    if expr isa VarExpr
+        return expr.name
+    elseif expr isa OpExpr
+        for a in expr.args
+            v = _index_arg_loop(a)
+            v === nothing || return v
+        end
+    end
+    return nothing
+end
+
+# Determine the ordered spatial loop variables of a lowered spatial operator by
+# reading an `index(<lifted species>, a1, …, aRank)` gather inside `ma` whose
+# every position carries a loop variable (the interior stencil). Returns the loop
+# names in index-position (dim) order, or `nothing` if none is found.
+function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int)
+    result = Ref{Union{Vector{String},Nothing}}(nothing)
+    function walk(e)
+        result[] === nothing || return
+        e isa OpExpr || return
+        if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
+           ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
+            loops = String[]
+            ok = true
+            for k in 2:length(e.args)
+                lv = _index_arg_loop(e.args[k])
+                lv === nothing && (ok = false; break)
+                push!(loops, lv)
+            end
+            ok && (result[] = loops; return)
+        end
+        for a in e.args; walk(a); end
+        e.expr_body === nothing || walk(e.expr_body)
+        if e.values !== nothing
+            for v in e.values; walk(v); end
+        end
+    end
+    walk(ma)
+    return result[]
+end
+
+# Per-dimension grid extent of a lowered spatial operator: the largest cell index
+# addressed in each `regions` dimension (the regions partition the grid).
+function _makearray_extents(ma::OpExpr)::Vector{Int}
+    regions = ma.regions
+    (regions === nothing || isempty(regions)) && return Int[]
+    rank = length(regions[1])
+    ext = zeros(Int, rank)
+    for region in regions
+        length(region) == rank || continue
+        for d in 1:rank
+            ext[d] = max(ext[d], region[d][2])
+        end
+    end
+    return ext
+end
+
+# Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
+# the spatial `loops`: a bare reference to an array variable becomes
+# `index(var, loops…)`, and each spatial-operator `makearray` becomes
+# `index(makearray, loops…)` (its region values already index per cell).
+# Self-contained nodes (index / aggregate / arrayop) are left untouched;
+# elementwise ops recurse.
+function _lift_rhs_to_cell(expr::Expr, arrayvars::Set{String},
+                           loops::Vector{String})::Expr
+    if expr isa VarExpr
+        if expr.name in arrayvars
+            return OpExpr("index", Expr[VarExpr(expr.name),
+                          (VarExpr(l) for l in loops)...])
+        end
+        return expr
+    elseif expr isa OpExpr
+        if expr.op == "makearray"
+            return OpExpr("index", Expr[expr,
+                          (VarExpr(l) for l in loops)...])
+        elseif expr.op == "index" || expr.op == "aggregate" || expr.op == "arrayop"
+            return expr
+        end
+        new_args = Expr[_lift_rhs_to_cell(a, arrayvars, loops)
+                                              for a in expr.args]
+        return reconstruct(expr; args=new_args)
+    end
+    return expr
+end
+
+"""
+    _apply_pointwise_lift!(equations, states, params, observeds, index_sets, coupling)
+
+Pointwise spatial lift (§10.5) for `operator_compose` couplings that declare
+`lifting: "pointwise"`. Promotes every state ODE that `operator_compose` merged
+with a spatial operator (its merged RHS carries an operator `makearray`) from a
+0-D scalar to the operator's grid shape, and rewrites the equation into an
+`aggregate` over the grid. No-op when no coupling requests pointwise lifting, or
+no merged equation carries a spatial-operator makearray.
+"""
+function _apply_pointwise_lift!(equations::Vector{Equation},
+                                states::OrderedDict{String,ModelVariable},
+                                params::OrderedDict{String,ModelVariable},
+                                observeds::OrderedDict{String,ModelVariable},
+                                index_sets::OrderedDict{String,IndexSet},
+                                coupling)
+    any(c -> c isa CouplingOperatorCompose &&
+             (c.lifting !== nothing && c.lifting == "pointwise"), coupling) || return
+
+    # A species is lifted iff its state ODE's merged RHS carries a spatial-operator
+    # makearray (the advection contribution operator_compose added).
+    lifted = Set{String}()
+    for eq in equations
+        (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D" &&
+         !isempty((eq.lhs::OpExpr).args) && (eq.lhs::OpExpr).args[1] isa VarExpr) || continue
+        isempty(_collect_makearrays!(OpExpr[], eq.rhs)) && continue
+        push!(lifted, ((eq.lhs::OpExpr).args[1]::VarExpr).name)
+    end
+    isempty(lifted) && return
+
+    # Operands to index per cell: the lifted species plus any already array-shaped
+    # parameter/observed (e.g. a grid-shaped wind field bound from a loader).
+    arrayvars = Set{String}(lifted)
+    for d in (params, observeds, states)
+        for (k, v) in d
+            (v.shape !== nothing && !isempty(v.shape)) && push!(arrayvars, k)
+        end
+    end
+
+    # Grid axis for a makearray dimension is the declared index set whose size
+    # matches that dimension's extent (the `index_sets` map is unordered, so this
+    # matches by size rather than key order).
+    size_to_names = Dict{Int,Vector{String}}()
+    for (name, iset) in index_sets
+        iset.size === nothing && continue
+        push!(get!(size_to_names, iset.size, String[]), name)
+    end
+
+    for (n, eq) in enumerate(equations)
+        (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D") || continue
+        lop = eq.lhs::OpExpr
+        (!isempty(lop.args) && lop.args[1] isa VarExpr) || continue
+        species = (lop.args[1]::VarExpr).name
+        species in lifted || continue
+
+        mas = _collect_makearrays!(OpExpr[], eq.rhs)
+        (isempty(mas) || mas[1].regions === nothing || isempty(mas[1].regions)) && continue
+        rank = length(mas[1].regions[1])
+        loops = nothing
+        for ma in mas
+            loops = _detect_lift_loops(ma, lifted, rank)
+            loops === nothing || break
+        end
+        loops === nothing && throw(DimensionPromotionError(
+            "pointwise lift: could not determine the spatial loop variables for " *
+            "species '$(species)' from its operator makearray"))
+
+        # Map each grid dimension to a declared index set by matching extents.
+        extents = _makearray_extents(mas[1])
+        gaxes = String[]
+        ranges = Dict{String,Any}()
+        for d in 1:rank
+            cands = get(size_to_names, extents[d], String[])
+            if length(cands) == 1
+                push!(gaxes, cands[1])
+                ranges[loops[d]] = IndexSetRef(cands[1])
+            else
+                # No unique index set of this size — fall back to a dense range and
+                # a synthetic shape axis (still a valid non-scalar shape).
+                if length(cands) > 1
+                    @warn "pointwise lift: grid dimension $(d) of species " *
+                          "'$(species)' (extent $(extents[d])) matches multiple " *
+                          "declared index sets $(sort(cands)) by size; the lift " *
+                          "cannot pick one, so a synthetic dense axis " *
+                          "'_liftdim$(d)_$(extents[d])' is used instead of an " *
+                          "index-set reference."
+                end
+                axname = "_liftdim$(d)_$(extents[d])"
+                push!(gaxes, axname)
+                ranges[loops[d]] = Any[1, extents[d]]
+            end
+        end
+
+        # Promote the species to the grid shape so the scoped-ic fold, array-cell
+        # discovery, and evaluator all see an array state.
+        haskey(states, species) && (states[species] = _with_shape(states[species], gaxes))
+        oidx = Any[l for l in loops]
+        idx_species = OpExpr("index", Expr[VarExpr(species),
+                             (VarExpr(l) for l in loops)...])
+        new_lhs = OpExpr("aggregate", Expr[];
+                         output_idx=oidx, ranges=ranges,
+                         expr_body=OpExpr("D", Expr[idx_species], wrt="t"))
+        new_rhs = OpExpr("aggregate", Expr[];
+                         output_idx=oidx, ranges=ranges,
+                         expr_body=_lift_rhs_to_cell(eq.rhs, arrayvars, loops))
+        equations[n] = Equation(new_lhs, new_rhs; _comment=eq._comment)
+    end
+    return
+end
