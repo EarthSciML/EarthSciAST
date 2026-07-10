@@ -311,7 +311,11 @@ function remove_species(system::ReactionSystem, name::String)::ReactionSystem
         throw(EditError("Species '$name' not found"))
     end
 
-    # Check for dependencies
+    # Check for dependencies.
+    # `.reactants`/`.products` go through the legacy Dict{String,Float64}
+    # property shim — intentional here: this is a species-membership test
+    # (`haskey`), which is exactly the Dict view's semantics; the ordered
+    # `raw_substrates`/`raw_products` entry vectors offer nothing extra.
     dependent_reactions = Int[]
     for (i, reaction) in enumerate(system.reactions)
         if haskey(reaction.reactants, name) || haskey(reaction.products, name)
@@ -449,23 +453,17 @@ from `file_b` take precedence. Defined as a method of `Base.merge` (the
 semantics match Base's "right operand wins" merge), so it is always in scope
 for consumers without shadowing the Base function.
 """
+# Right-biased merge of two optional component Dicts: a `nothing` side yields
+# the other side unchanged; two Dicts merge with `b` winning key conflicts
+# (Base.merge semantics).
+_merge_optional(a, b) = a === nothing ? b : b === nothing ? a : merge(a, b)
+
 function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     # Merge dictionaries (file_b takes precedence), handling nothing values
-    merged_models = file_a.models === nothing ? file_b.models :
-                   file_b.models === nothing ? file_a.models :
-                   merge(file_a.models, file_b.models)
-
-    merged_reaction_systems = file_a.reaction_systems === nothing ? file_b.reaction_systems :
-                             file_b.reaction_systems === nothing ? file_a.reaction_systems :
-                             merge(file_a.reaction_systems, file_b.reaction_systems)
-
-    merged_data_loaders = file_a.data_loaders === nothing ? file_b.data_loaders :
-                         file_b.data_loaders === nothing ? file_a.data_loaders :
-                         merge(file_a.data_loaders, file_b.data_loaders)
-
-    merged_operators = file_a.operators === nothing ? file_b.operators :
-                      file_b.operators === nothing ? file_a.operators :
-                      merge(file_a.operators, file_b.operators)
+    merged_models = _merge_optional(file_a.models, file_b.models)
+    merged_reaction_systems = _merge_optional(file_a.reaction_systems, file_b.reaction_systems)
+    merged_data_loaders = _merge_optional(file_a.data_loaders, file_b.data_loaders)
+    merged_operators = _merge_optional(file_a.operators, file_b.operators)
 
     # v0.8.0: a single shared `domain` object (file_b takes precedence).
     merged_domain = file_b.domain === nothing ? file_a.domain : file_b.domain

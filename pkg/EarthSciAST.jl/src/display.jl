@@ -130,61 +130,62 @@ function convert_greek_letters(text::AbstractString, format::Symbol)
 end
 
 """
-    has_element_pattern(variable::String) -> Bool
+    _scan_element_tokens(on_element, on_other, variable::String) -> Bool
 
-Check if a variable has element patterns (for chemical formula detection).
-Uses greedy matching algorithm per spec Section 6.1.
+Greedy element-token scanner shared by [`has_element_pattern`](@ref) and
+[`format_chemical_subscripts`](@ref): at each position, try a 2-character
+element symbol before a 1-character one (per spec Section 6.1), then consume
+the digit run following a match. Calls `on_element(element, digits)` for each
+recognized element (with its possibly-empty trailing digit string) and
+`on_other(c)` for every other character. Returns `true` when at least one
+element was found. Works on a `Char` vector: byte-indexing a String with
+`1:length(...)` bounds throws `StringIndexError` for non-ASCII names like "α2".
 """
-function has_element_pattern(variable::String)
-    # Work on a Char vector: byte-indexing a String with 1:length(...) bounds
-    # throws StringIndexError for non-ASCII names like "α2".
+function _scan_element_tokens(on_element::Function, on_other::Function, variable::String)
     chars = collect(variable)
     n = length(chars)
     i = 1
-    has_element = false
+    found = false
 
     while i <= n
-        # Skip non-alphabetic characters at the start
-        while i <= n && !isletter(chars[i])
+        # Try 2-character element first (greedy matching), then 1-character.
+        len = if i + 1 <= n && String(chars[i:i+1]) in ELEMENTS
+            2
+        elseif string(chars[i]) in ELEMENTS
+            1
+        else
+            0
+        end
+
+        if len == 0
+            # Not an element: emit the character and move to the next one.
+            on_other(chars[i])
             i += 1
-        end
-
-        if i > n
-            break
-        end
-
-        # Try 2-character element first (greedy matching)
-        if i + 1 <= n
-            two_char = String(chars[i:i+1])
-            if two_char in ELEMENTS
-                has_element = true
-                i += 2
-                # Skip digits
-                while i <= n && isdigit(chars[i])
-                    i += 1
-                end
-                continue
-            end
-        end
-
-        # Try 1-character element
-        one_char = string(chars[i])
-        if one_char in ELEMENTS
-            has_element = true
-            i += 1
-            # Skip digits
-            while i <= n && isdigit(chars[i])
-                i += 1
-            end
             continue
         end
 
-        # Not an element, move to next character
-        i += 1
+        found = true
+        element = String(chars[i:i+len-1])
+        i += len
+        digit_start = i
+        while i <= n && isdigit(chars[i])
+            i += 1
+        end
+        on_element(element, String(chars[digit_start:i-1]))
     end
 
-    return has_element
+    return found
 end
+
+"""
+    has_element_pattern(variable::String) -> Bool
+
+Check if a variable has element patterns (for chemical formula detection).
+Uses the greedy matching algorithm per spec Section 6.1 (see
+[`_scan_element_tokens`](@ref)).
+"""
+has_element_pattern(variable::String) =
+    _scan_element_tokens((element, digits) -> nothing, c -> nothing, variable)
 
 """
     format_chemical_subscripts(variable::String, format::Symbol) -> String
@@ -231,54 +232,19 @@ function format_chemical_subscripts(variable::String, format::Symbol)
         return variable
     end
 
-    # For unicode: element-aware subscript detection. Work on a Char vector so
-    # non-ASCII names (e.g. "α2") cannot trigger StringIndexError.
-    chars = collect(variable)
-    n = length(chars)
-    result = ""
-    i = 1
-
-    while i <= n
-        matched = false
-
-        # Try 2-character element first (greedy matching)
-        if i + 1 <= n
-            two_char = String(chars[i:i+1])
-            if two_char in ELEMENTS
-                result *= two_char
-                i += 2
-                # Convert following digits to subscripts
-                while i <= n && isdigit(chars[i])
-                    result *= string(SUBSCRIPT_MAP[chars[i]])
-                    i += 1
-                end
-                matched = true
+    # For unicode: element-aware subscript conversion — digits become Unicode
+    # subscripts only when they follow a recognized element symbol.
+    buf = IOBuffer()
+    _scan_element_tokens(
+        (element, digits) -> begin
+            print(buf, element)
+            for d in digits
+                print(buf, SUBSCRIPT_MAP[d])
             end
-        end
-
-        # Try 1-character element if 2-char didn't match
-        if !matched && i <= n
-            one_char = string(chars[i])
-            if one_char in ELEMENTS
-                result *= one_char
-                i += 1
-                # Convert following digits to subscripts
-                while i <= n && isdigit(chars[i])
-                    result *= string(SUBSCRIPT_MAP[chars[i]])
-                    i += 1
-                end
-                matched = true
-            end
-        end
-
-        # If not an element, copy character as-is
-        if !matched
-            result *= chars[i]
-            i += 1
-        end
-    end
-
-    return result
+        end,
+        c -> print(buf, c),
+        variable)
+    return String(take!(buf))
 end
 
 """
@@ -330,24 +296,29 @@ function format_number(num::Real, format::Symbol)
     end
 end
 
+# Display-notation operator precedence (mirrors pretty-print.ts). Hoisted to a
+# module const: `get_operator_precedence` runs for every operand rendered.
+const _DISPLAY_OP_PRECEDENCE = Dict{String,Int}(
+    "or" => 1,
+    "and" => 2,
+    "==" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
+    "+" => 4, "-" => 4,
+    "*" => 5, "/" => 5,
+    "not" => 6,  # Unary
+    "^" => 7
+)
+
+# Function calls / atoms bind tightest — anything without an explicit infix
+# precedence above (mirrors codegen.jl's `_CODEGEN_FUNCTION_PRECEDENCE = 8`).
+const _DISPLAY_FUNCTION_PRECEDENCE = 8
+
 """
     get_operator_precedence(op::String) -> Int
 
 Get operator precedence for proper parenthesization.
 """
-function get_operator_precedence(op::String)
-    op_precedence = Dict(
-        "or" => 1,
-        "and" => 2,
-        "==" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
-        "+" => 4, "-" => 4,
-        "*" => 5, "/" => 5,
-        "not" => 6,  # Unary
-        "^" => 7
-    )
-
-    return get(op_precedence, op, 8)  # Functions get highest precedence
-end
+get_operator_precedence(op::String) =
+    get(_DISPLAY_OP_PRECEDENCE, op, _DISPLAY_FUNCTION_PRECEDENCE)
 
 """
     is_function_call_op(op::String) -> Bool
@@ -357,7 +328,8 @@ pretty-print.ts `isFunctionCallOp`: the infix operators carry an explicit
 precedence (1–7); everything else (elementary/trig functions, `min`/`max`, …)
 binds tightest and is a function-call op.
 """
-is_function_call_op(op::String) = get_operator_precedence(op) == 8
+is_function_call_op(op::String) =
+    get_operator_precedence(op) == _DISPLAY_FUNCTION_PRECEDENCE
 
 """
     needs_parentheses(parent_op::String, child::Expr, is_right_operand::Bool=false) -> Bool
@@ -391,7 +363,15 @@ function needs_parentheses(parent_op::String, child::Expr, is_right_operand::Boo
         return false
     end
 
-    # Same precedence: need parens if child is right operand and operator is not associative
+    # Same precedence: need parens if child is right operand and operator is not
+    # associative.
+    # NOTE deliberate divergence from codegen.jl `_codegen_needs_parens`: for
+    # `^` at equal precedence, DISPLAY parenthesizes the RIGHT operand — the
+    # rule frozen by the cross-language pretty-printer contract
+    # (pretty-print.ts `needsParentheses`, pinned by the tests/display
+    # fixtures) — while the code emitters parenthesize the LEFT operand so
+    # emitted code re-parses with the right-associativity of Julia `^` /
+    # Python `**`. Do not reconcile the two.
     if is_right_operand && parent_op in ["-", "/", "^"]
         return true
     end
@@ -739,6 +719,226 @@ function format_structural_op(node::OpExpr, format::Symbol)
     end
 end
 
+# ── Scalar operator rendering ─────────────────────────────────────────────
+# `format_operator_expression` dispatches to `_format_infix_op` (binary infix),
+# `_format_unary_op`, and `_format_nary_op` (ifelse + n-ary chains); each
+# helper returns `nothing` for ops it does not handle, falling through to the
+# generic function-call rendering.
+
+# Infix separator per op → (ascii, unicode, latex). Ops with special
+# per-format structure (`/` → \frac, `^` → superscripts) and ops whose
+# separator is uniform across formats ("+", "<", ">") are handled directly in
+# `_format_infix_op`. Field names match the format Symbols so lookups are
+# `getproperty(row, format)`.
+const _INFIX_SEPARATORS = Dict{String,NamedTuple{(:ascii, :unicode, :latex),NTuple{3,String}}}(
+    "-"   => (ascii = " - ",   unicode = " − ", latex = " - "),
+    "*"   => (ascii = " * ",   unicode = "·",   latex = " \\cdot "),
+    ">="  => (ascii = " >= ",  unicode = " ≥ ", latex = " \\geq "),
+    "<="  => (ascii = " <= ",  unicode = " ≤ ", latex = " \\leq "),
+    "=="  => (ascii = " == ",  unicode = " = ", latex = " = "),
+    "="   => (ascii = " == ",  unicode = " = ", latex = " = "),
+    "!="  => (ascii = " != ",  unicode = " ≠ ", latex = " \\neq "),
+    "and" => (ascii = " and ", unicode = " ∧ ", latex = " \\land "),
+    "or"  => (ascii = " or ",  unicode = " ∨ ", latex = " \\lor "),
+)
+
+_infix_separator(op::String, format::Symbol) =
+    getproperty(_INFIX_SEPARATORS[op], format)
+
+"""Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
+function _format_operand(op::String, arg::Expr, format::Symbol,
+                         is_right_operand::Bool=false)
+    result = format_expression(arg, format)
+    return needs_parentheses(op, arg, is_right_operand) ? "($result)" : result
+end
+
+# LaTeX function-call: `\left( \right)` only when the argument is tall
+# (contains a \frac), else plain parentheses.
+function _latex_func(name::AbstractString, arg::Expr)
+    la = format_expression_latex(arg)
+    return occursin("\\frac", la) ? "$name\\left($la\\right)" : "$name($la)"
+end
+
+"""Render a binary infix operator node, or `nothing` for non-infix ops."""
+function _format_infix_op(node::OpExpr, format::Symbol)
+    op = node.op
+    left, right = node.args
+    fa(arg, is_right_operand=false) = _format_operand(op, arg, format, is_right_operand)
+
+    if op == "+"
+        return "$(fa(left)) + $(fa(right, true))"
+    elseif op == "/"
+        if format == :latex
+            return "\\frac{$(format_expression_latex(left))}{$(format_expression_latex(right))}"
+        elseif format == :unicode
+            return "$(fa(left))/$(fa(right, true))"
+        else
+            return "$(fa(left)) / $(fa(right, true))"
+        end
+    elseif op == "^"
+        if format == :latex
+            return "$(fa(left))^{$(format_expression_latex(right))}"
+        elseif format == :unicode && isa(right, IntExpr)
+            return "$(fa(left))$(to_superscript(string(right.value)))"
+        elseif format == :unicode && isa(right, NumExpr) && isinteger(right.value)
+            return "$(fa(left))$(to_superscript(string(Int(right.value))))"
+        else
+            return "$(fa(left))^$(fa(right, true))"
+        end
+    elseif op in [">", "<"]
+        return "$(fa(left)) $op $(fa(right, true))"
+    elseif haskey(_INFIX_SEPARATORS, op)
+        sep = _infix_separator(op, format)
+        return "$(fa(left))$sep$(fa(right, true))"
+    elseif op == "atan2"
+        if format == :latex
+            return "\\mathrm{atan2}($(format_expression_latex(left)), $(format_expression_latex(right)))"
+        else
+            return "atan2($(fa(left)), $(fa(right)))"
+        end
+    end
+
+    return nothing
+end
+
+"""Render a unary operator node, or `nothing` for ops without a unary form."""
+function _format_unary_op(node::OpExpr, format::Symbol)
+    op = node.op
+    arg = node.args[1]
+    fa(a) = _format_operand(op, a, format)
+
+    if op == "-"
+        return format == :unicode ? "−$(fa(arg))" : "-$(fa(arg))"
+    elseif op == "not"
+        if format == :unicode
+            return "¬$(fa(arg))"
+        elseif format == :latex
+            return "\\neg $(fa(arg))"
+        else
+            return "not $(fa(arg))"
+        end
+    elseif op in ["exp", "sin", "cos", "tan", "sinh", "cosh", "tanh"]
+        return format == :latex ? _latex_func("\\$op", arg) : "$op($(fa(arg)))"
+    elseif op == "log"
+        if format == :unicode
+            return "ln($(fa(arg)))"
+        elseif format == :latex
+            return _latex_func("\\ln", arg)
+        else
+            return "log($(fa(arg)))"
+        end
+    elseif op == "log10"
+        if format == :unicode
+            return "log₁₀($(fa(arg)))"
+        elseif format == :latex
+            return _latex_func("\\log_{10}", arg)
+        else
+            return "log10($(fa(arg)))"
+        end
+    elseif op == "sqrt"
+        if format == :unicode
+            argstr = format_expression_unicode(arg)
+            return isa(arg, OpExpr) ? "√($argstr)" : "√$argstr"
+        elseif format == :latex
+            return "\\sqrt{$(format_expression_latex(arg))}"
+        else
+            return "sqrt($(fa(arg)))"
+        end
+    elseif op == "abs"
+        if format == :unicode
+            return "|$(fa(arg))|"
+        elseif format == :latex
+            return "|$(format_expression_latex(arg))|"
+        else
+            return "abs($(fa(arg)))"
+        end
+    elseif op == "sign"
+        if format == :unicode
+            return "sgn($(fa(arg)))"
+        elseif format == :latex
+            return "\\mathrm{sgn}($(format_expression_latex(arg)))"
+        else
+            return "sign($(fa(arg)))"
+        end
+    elseif op == "floor"
+        if format == :unicode
+            return "⌊$(fa(arg))⌋"
+        elseif format == :latex
+            return "\\lfloor $(format_expression_latex(arg)) \\rfloor"
+        else
+            return "floor($(fa(arg)))"
+        end
+    elseif op == "ceil"
+        if format == :unicode
+            return "⌈$(fa(arg))⌉"
+        elseif format == :latex
+            return "\\lceil $(format_expression_latex(arg)) \\rceil"
+        else
+            return "ceil($(fa(arg)))"
+        end
+    elseif op in ["asin", "acos", "atan"]
+        arc = replace(op, "a" => "arc"; count=1)
+        if format == :unicode
+            return "$arc($(fa(arg)))"
+        elseif format == :latex
+            return "\\$arc($(format_expression_latex(arg)))"
+        else
+            return "$op($(fa(arg)))"
+        end
+    elseif op in ["asinh", "acosh", "atanh"]
+        hyp = replace(op, "a" => ""; count=1)
+        if format == :unicode
+            # `$(hyp)` (not `$hyp`) — the superscript chars are identifier
+            # continuation chars, so `$hyp⁻¹` would interpolate `hyp⁻¹`.
+            return "$(hyp)⁻¹($(fa(arg)))"
+        elseif format == :latex
+            return "\\$hyp^{-1}($(format_expression_latex(arg)))"
+        else
+            return "$op($(fa(arg)))"
+        end
+    elseif op == "Pre"
+        return format == :latex ?
+            "\\mathrm{Pre}($(format_expression_latex(arg)))" :
+            "Pre($(fa(arg)))"
+    elseif op == "D"
+        wrt_var = isnothing(node.wrt) ? "t" : node.wrt
+        if format == :unicode
+            return "∂$(format_expression_unicode(arg))/∂$wrt_var"
+        elseif format == :latex
+            return "\\frac{\\partial $(format_expression_latex(arg))}{\\partial $wrt_var}"
+        else
+            return "D($(format_expression_ascii(arg)))/D$wrt_var"
+        end
+    end
+
+    return nothing
+end
+
+"""Render ternary `ifelse` and n-ary (≥ 3) `+`/`*`/`or` chains, or `nothing`."""
+function _format_nary_op(node::OpExpr, format::Symbol)
+    op = node.op
+    args = node.args
+    fa(arg, is_right_operand=false) = _format_operand(op, arg, format, is_right_operand)
+
+    if length(args) == 3 && op == "ifelse"
+        cond, thenx, elsex = args
+        if format == :latex
+            return "\\begin{cases} $(format_expression_latex(thenx)) & \\text{if } $(format_expression_latex(cond)) \\\\ $(format_expression_latex(elsex)) & \\text{otherwise} \\end{cases}"
+        end
+        return "ifelse($(fa(cond)), $(fa(thenx)), $(fa(elsex)))"
+    end
+
+    if length(args) >= 3
+        if op == "+"
+            return join([fa(arg) for arg in args], " + ")
+        elseif op == "*" || op == "or"
+            return join([fa(arg) for arg in args], _infix_separator(op, format))
+        end
+    end
+
+    return nothing
+end
+
 """
     format_operator_expression(node::OpExpr, format::Symbol) -> String
 
@@ -747,24 +947,10 @@ Format an OpExpr (operator with arguments).
 function format_operator_expression(node::OpExpr, format::Symbol)
     op = node.op
     args = node.args
-    wrt = node.wrt
 
     # Closed-core structural / array-query ops render specially.
     structural = format_structural_op(node, format)
     structural === nothing || return structural
-
-    # Helper to format arguments with proper parenthesization.
-    format_arg = function(arg, is_right_operand=false)
-        result = format_expression(arg, format)
-        needs_parentheses(op, arg, is_right_operand) ? "($result)" : result
-    end
-
-    # LaTeX function-call: `\left( \right)` only when the argument is tall
-    # (contains a \frac), else plain parentheses.
-    latex_func = function(name, arg)
-        la = format_expression_latex(arg)
-        occursin("\\frac", la) ? "$name\\left($la\\right)" : "$name($la)"
-    end
 
     # min/max: function-call notation for any arity ≥ 2 (esm-spec §4.2)
     if (op == "min" || op == "max") && length(args) >= 2
@@ -779,195 +965,19 @@ function format_operator_expression(node::OpExpr, format::Symbol)
 
     # Binary operators
     if length(args) == 2
-        left, right = args
-
-        if op == "+"
-            return "$(format_arg(left)) + $(format_arg(right, true))"
-        elseif op == "-"
-            sep = format == :unicode ? " − " : " - "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "*"
-            if format == :unicode
-                return "$(format_arg(left))·$(format_arg(right, true))"
-            elseif format == :latex
-                return "$(format_arg(left)) \\cdot $(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) * $(format_arg(right, true))"
-            end
-        elseif op == "/"
-            if format == :latex
-                return "\\frac{$(format_expression_latex(left))}{$(format_expression_latex(right))}"
-            elseif format == :unicode
-                return "$(format_arg(left))/$(format_arg(right, true))"
-            else
-                return "$(format_arg(left)) / $(format_arg(right, true))"
-            end
-        elseif op == "^"
-            if format == :latex
-                return "$(format_arg(left))^{$(format_expression_latex(right))}"
-            elseif format == :unicode && isa(right, IntExpr)
-                return "$(format_arg(left))$(to_superscript(string(right.value)))"
-            elseif format == :unicode && isa(right, NumExpr) && isinteger(right.value)
-                return "$(format_arg(left))$(to_superscript(string(Int(right.value))))"
-            else
-                return "$(format_arg(left))^$(format_arg(right, true))"
-            end
-        elseif op in [">", "<"]
-            return "$(format_arg(left)) $op $(format_arg(right, true))"
-        elseif op == ">="
-            sep = format == :unicode ? " ≥ " : format == :latex ? " \\geq " : " >= "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "<="
-            sep = format == :unicode ? " ≤ " : format == :latex ? " \\leq " : " <= "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "==" || op == "="
-            sep = format == :ascii ? " == " : " = "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "!="
-            sep = format == :unicode ? " ≠ " : format == :latex ? " \\neq " : " != "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "and"
-            sep = format == :unicode ? " ∧ " : format == :latex ? " \\land " : " and "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "or"
-            sep = format == :unicode ? " ∨ " : format == :latex ? " \\lor " : " or "
-            return "$(format_arg(left))$sep$(format_arg(right, true))"
-        elseif op == "atan2"
-            if format == :latex
-                return "\\mathrm{atan2}($(format_expression_latex(left)), $(format_expression_latex(right)))"
-            else
-                return "atan2($(format_arg(left)), $(format_arg(right)))"
-            end
-        end
+        rendered = _format_infix_op(node, format)
+        rendered === nothing || return rendered
     end
 
     # Unary operators
     if length(args) == 1
-        arg = args[1]
-
-        if op == "-"
-            return format == :unicode ? "−$(format_arg(arg))" : "-$(format_arg(arg))"
-        elseif op == "not"
-            if format == :unicode
-                return "¬$(format_arg(arg))"
-            elseif format == :latex
-                return "\\neg $(format_arg(arg))"
-            else
-                return "not $(format_arg(arg))"
-            end
-        elseif op in ["exp", "sin", "cos", "tan", "sinh", "cosh", "tanh"]
-            return format == :latex ? latex_func("\\$op", arg) : "$op($(format_arg(arg)))"
-        elseif op == "log"
-            if format == :unicode
-                return "ln($(format_arg(arg)))"
-            elseif format == :latex
-                return latex_func("\\ln", arg)
-            else
-                return "log($(format_arg(arg)))"
-            end
-        elseif op == "log10"
-            if format == :unicode
-                return "log₁₀($(format_arg(arg)))"
-            elseif format == :latex
-                return latex_func("\\log_{10}", arg)
-            else
-                return "log10($(format_arg(arg)))"
-            end
-        elseif op == "sqrt"
-            if format == :unicode
-                argstr = format_expression_unicode(arg)
-                return isa(arg, OpExpr) ? "√($argstr)" : "√$argstr"
-            elseif format == :latex
-                return "\\sqrt{$(format_expression_latex(arg))}"
-            else
-                return "sqrt($(format_arg(arg)))"
-            end
-        elseif op == "abs"
-            if format == :unicode
-                return "|$(format_arg(arg))|"
-            elseif format == :latex
-                return "|$(format_expression_latex(arg))|"
-            else
-                return "abs($(format_arg(arg)))"
-            end
-        elseif op == "sign"
-            if format == :unicode
-                return "sgn($(format_arg(arg)))"
-            elseif format == :latex
-                return "\\mathrm{sgn}($(format_expression_latex(arg)))"
-            else
-                return "sign($(format_arg(arg)))"
-            end
-        elseif op == "floor"
-            if format == :unicode
-                return "⌊$(format_arg(arg))⌋"
-            elseif format == :latex
-                return "\\lfloor $(format_expression_latex(arg)) \\rfloor"
-            else
-                return "floor($(format_arg(arg)))"
-            end
-        elseif op == "ceil"
-            if format == :unicode
-                return "⌈$(format_arg(arg))⌉"
-            elseif format == :latex
-                return "\\lceil $(format_expression_latex(arg)) \\rceil"
-            else
-                return "ceil($(format_arg(arg)))"
-            end
-        elseif op in ["asin", "acos", "atan"]
-            arc = replace(op, "a" => "arc"; count=1)
-            if format == :unicode
-                return "$arc($(format_arg(arg)))"
-            elseif format == :latex
-                return "\\$arc($(format_expression_latex(arg)))"
-            else
-                return "$op($(format_arg(arg)))"
-            end
-        elseif op in ["asinh", "acosh", "atanh"]
-            hyp = replace(op, "a" => ""; count=1)
-            if format == :unicode
-                return "$hyp⁻¹($(format_arg(arg)))"
-            elseif format == :latex
-                return "\\$hyp^{-1}($(format_expression_latex(arg)))"
-            else
-                return "$op($(format_arg(arg)))"
-            end
-        elseif op == "Pre"
-            return format == :latex ?
-                "\\mathrm{Pre}($(format_expression_latex(arg)))" :
-                "Pre($(format_arg(arg)))"
-        elseif op == "D"
-            wrt_var = isnothing(wrt) ? "t" : wrt
-            if format == :unicode
-                return "∂$(format_expression_unicode(arg))/∂$wrt_var"
-            elseif format == :latex
-                return "\\frac{\\partial $(format_expression_latex(arg))}{\\partial $wrt_var}"
-            else
-                return "D($(format_expression_ascii(arg)))/D$wrt_var"
-            end
-        end
+        rendered = _format_unary_op(node, format)
+        rendered === nothing || return rendered
     end
 
     # Ternary / n-ary operators
-    if length(args) == 3 && op == "ifelse"
-        cond, thenx, elsex = args
-        if format == :latex
-            return "\\begin{cases} $(format_expression_latex(thenx)) & \\text{if } $(format_expression_latex(cond)) \\\\ $(format_expression_latex(elsex)) & \\text{otherwise} \\end{cases}"
-        end
-        return "ifelse($(format_arg(cond)), $(format_arg(thenx)), $(format_arg(elsex)))"
-    end
-
-    if length(args) >= 3
-        if op == "+"
-            return join([format_arg(arg) for arg in args], " + ")
-        elseif op == "*"
-            sep = format == :unicode ? "·" : format == :latex ? " \\cdot " : " * "
-            return join([format_arg(arg) for arg in args], sep)
-        elseif op == "or"
-            sep = format == :unicode ? " ∨ " : format == :latex ? " \\lor " : " or "
-            return join([format_arg(arg) for arg in args], sep)
-        end
-    end
+    rendered = _format_nary_op(node, format)
+    rendered === nothing || return rendered
 
     # Generic fallback: function-call notation for open-tier sugar
     # (grad/div/laplacian), skolem/rank, and any unknown user op. Only `args`
@@ -1139,6 +1149,33 @@ function Base.show(io::IO, reaction_system::ReactionSystem)
 end
 
 """
+    _format_stoichiometry_side(entries; format_species=identity,
+                               format_coefficient=string, empty="∅") -> String
+
+Render one side (substrates or products) of a reaction from the ordered
+`StoichiometryEntry` vector — get it via [`raw_substrates`](@ref) /
+[`raw_products`](@ref), which preserve author order (the `.reactants` /
+`.products` property shim yields an unordered Dict view). Entries join with
+`" + "`; an entry with stoichiometry 1 renders as the bare species, otherwise
+`format_coefficient(stoichiometry)` is prefixed (the formatter supplies any
+coefficient/species separator itself, e.g. `"2*"` for code emitters or `"2"`
+for chemical notation). `empty` is returned for a `nothing`/empty side.
+Shared by the ReactionSystem summary below and codegen.jl's reaction emitters.
+"""
+function _format_stoichiometry_side(entries::Union{Vector{StoichiometryEntry},Nothing};
+                                    format_species::Function = identity,
+                                    format_coefficient::Function = string,
+                                    empty::String = "∅")
+    if entries === nothing || isempty(entries)
+        return empty
+    end
+    return join(
+        [(entry.stoichiometry == 1 ? "" : format_coefficient(entry.stoichiometry)) *
+         format_species(entry.species)
+         for entry in entries], " + ")
+end
+
+"""
     Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
 
 ReactionSystem display: reactions in chemical notation.
@@ -1173,46 +1210,20 @@ function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
     end
 
     println(io, "  Reactions ($(length(reaction_system.reactions))):")
+    # Chemical-notation formatters: species get unicode subscripts; integral
+    # stoichiometric coefficients print without the trailing ".0" (2.0 → "2").
+    unicode_species(s) = format_chemical_subscripts(s, :unicode)
+    chem_coefficient(c) = isinteger(c) ? string(Int(c)) : string(c)
     for (i, reaction) in enumerate(reaction_system.reactions)
-        # Access the ordered StoichiometryEntry vectors via getfield: the
-        # `.products` property goes through a backward-compat Dict shim whose
-        # iteration yields Pairs (and loses author order).
-        substrates = getfield(reaction, :substrates)
-        products = getfield(reaction, :products)
-
-        # Format substrates
-        reactants_str = if substrates === nothing || isempty(substrates)
-            ""
-        else
-            join([
-                if entry.stoichiometry == 1
-                    format_chemical_subscripts(entry.species, :unicode)
-                else
-                    coeff_str = isinteger(entry.stoichiometry) ?
-                        string(Int(entry.stoichiometry)) :
-                        string(entry.stoichiometry)
-                    "$(coeff_str)$(format_chemical_subscripts(entry.species, :unicode))"
-                end
-                for entry in substrates
-            ], " + ")
-        end
-
-        # Format products
-        products_str = if products === nothing || isempty(products)
-            ""
-        else
-            join([
-                if entry.stoichiometry == 1
-                    format_chemical_subscripts(entry.species, :unicode)
-                else
-                    coeff_str = isinteger(entry.stoichiometry) ?
-                        string(Int(entry.stoichiometry)) :
-                        string(entry.stoichiometry)
-                    "$(coeff_str)$(format_chemical_subscripts(entry.species, :unicode))"
-                end
-                for entry in products
-            ], " + ")
-        end
+        # raw_substrates/raw_products: the ordered StoichiometryEntry vectors
+        # (the `.reactants`/`.products` property shim is an unordered Dict
+        # view that loses author order).
+        reactants_str = _format_stoichiometry_side(raw_substrates(reaction);
+            format_species=unicode_species, format_coefficient=chem_coefficient,
+            empty="")
+        products_str = _format_stoichiometry_side(raw_products(reaction);
+            format_species=unicode_species, format_coefficient=chem_coefficient,
+            empty="")
 
         # Arrow type (no reversible field in new schema)
         arrow = " → "
@@ -1284,8 +1295,11 @@ to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"
     to_latex(target) -> String
 
 Format `target` as Unicode / LaTeX mathematical notation. Parallel to
-[`to_ascii`](@ref); dispatch mirrors it so all three formatters share a naming
-convention across the language bindings (see tests/display/RENDERING_CONTRACT.md).
+[`to_ascii`](@ref) for `Nothing`, `Real`, `String`, `Expr`, and `Equation`
+targets, sharing its naming convention across the language bindings (see
+tests/display/RENDERING_CONTRACT.md). Unlike `to_ascii`, there are no
+summary methods for `Model`/`ReactionSystem`/`EsmFile` — those types throw
+`ArgumentError` here.
 """
 to_unicode(target) =
     throw(ArgumentError("Unsupported type for Unicode formatting: $(typeof(target))"))

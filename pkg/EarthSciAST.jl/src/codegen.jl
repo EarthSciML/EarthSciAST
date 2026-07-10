@@ -8,6 +8,105 @@ from ESM files in multiple target languages:
 """
 
 """
+    _generate_script(file::EsmFile; language, imports, model_emitter,
+                     reaction_system_emitter, coupling_lang,
+                     simulation_setup=nothing, emit_data_loaders=false)
+
+Shared script driver behind [`to_julia_code`](@ref) and
+[`to_python_code`](@ref). Both emitters produce the same skeleton — header →
+imports → models → reaction systems → coupling → domain — so they route
+through this one function and pass their language-specific pieces explicitly;
+the skeletons cannot drift structurally. The two DELIBERATE asymmetries
+between the emitters are visible as parameters rather than divergent copies:
+
+- `simulation_setup`: extra lines emitted after the reaction systems — only
+  the Python emitter has a "Simulation setup" block.
+- `emit_data_loaders`: whether to emit data-loader placeholder comments —
+  only the Julia emitter does.
+
+Note: events are handled within individual models, not at the file level.
+Coupling, domain, and data-loader sections are comment-only placeholders
+(their codegen is not yet implemented).
+"""
+function _generate_script(file::EsmFile;
+                          language::String,
+                          imports::Vector{String},
+                          model_emitter::Function,
+                          reaction_system_emitter::Function,
+                          coupling_lang::Symbol,
+                          simulation_setup::Union{Vector{String},Nothing}=nothing,
+                          emit_data_loaders::Bool=false)
+    lines = String[]
+
+    # Header comment
+    push!(lines, "# Generated $language script from ESM file")
+    push!(lines, "# ESM version: $(file.esm)")
+    if !isnothing(file.metadata) && !isnothing(file.metadata.name)
+        push!(lines, "# Title: $(file.metadata.name)")
+    end
+    if !isnothing(file.metadata) && !isnothing(file.metadata.description)
+        push!(lines, "# Description: $(file.metadata.description)")
+    end
+    push!(lines, "")
+
+    # Import statements
+    push!(lines, "# Package imports")
+    append!(lines, imports)
+    push!(lines, "")
+
+    # Generate models
+    if !isnothing(file.models) && !isempty(file.models)
+        push!(lines, "# Models")
+        for (name, model) in file.models
+            append!(lines, model_emitter(name, model))
+            push!(lines, "")
+        end
+    end
+
+    # Generate reaction systems
+    if !isnothing(file.reaction_systems) && !isempty(file.reaction_systems)
+        push!(lines, "# Reaction Systems")
+        for (name, reaction_system) in file.reaction_systems
+            append!(lines, reaction_system_emitter(name, reaction_system))
+            push!(lines, "")
+        end
+    end
+
+    # Simulation setup (Python-only asymmetry; see docstring)
+    if simulation_setup !== nothing
+        append!(lines, simulation_setup)
+    end
+
+    # Generate coupling placeholders (codegen not yet implemented)
+    if !isnothing(file.coupling) && !isempty(file.coupling)
+        push!(lines, "# Coupling")
+        for coupling in file.coupling
+            append!(lines, generate_coupling_placeholder(coupling; lang=coupling_lang))
+        end
+        push!(lines, "")
+    end
+
+    # Generate domain placeholder (codegen not yet implemented)
+    if !isnothing(file.domain)
+        push!(lines, "# Domain")
+        append!(lines, generate_domain_placeholder(file.domain))
+        push!(lines, "")
+    end
+
+    # Generate data loader placeholders (Julia-only asymmetry; codegen not
+    # yet implemented)
+    if emit_data_loaders && !isnothing(file.data_loaders) && !isempty(file.data_loaders)
+        push!(lines, "# Data Loaders")
+        for (name, data_loader) in file.data_loaders
+            append!(lines, generate_data_loader_placeholder(name, data_loader))
+        end
+        push!(lines, "")
+    end
+
+    return join(lines, "\n")
+end
+
+"""
     to_julia_code(file::EsmFile)
 
 Generate a Julia script from an ESM file.
@@ -19,75 +118,19 @@ but is not guaranteed to run unmodified against the current ModelingToolkit
 release (e.g. variable default/unit metadata syntax, SDE noise equations).
 """
 function to_julia_code(file::EsmFile)
-    lines = String[]
-
-    # Header comment
-    push!(lines, "# Generated Julia script from ESM file")
-    push!(lines, "# ESM version: $(file.esm)")
-    if !isnothing(file.metadata) && !isnothing(file.metadata.name)
-        push!(lines, "# Title: $(file.metadata.name)")
-    end
-    if !isnothing(file.metadata) && !isnothing(file.metadata.description)
-        push!(lines, "# Description: $(file.metadata.description)")
-    end
-    push!(lines, "")
-
-    # Using statements
-    push!(lines, "# Package imports")
-    push!(lines, "using ModelingToolkit")
-    push!(lines, "using Catalyst")
-    push!(lines, "using EarthSciMLBase")
-    push!(lines, "using OrdinaryDiffEq")
-    push!(lines, "using Unitful")
-    push!(lines, "")
-
-    # Generate models
-    if !isnothing(file.models) && !isempty(file.models)
-        push!(lines, "# Models")
-        for (name, model) in file.models
-            append!(lines, generate_model_code(name, model))
-            push!(lines, "")
-        end
-    end
-
-    # Generate reaction systems
-    if !isnothing(file.reaction_systems) && !isempty(file.reaction_systems)
-        push!(lines, "# Reaction Systems")
-        for (name, reaction_system) in file.reaction_systems
-            append!(lines, generate_reaction_system_code(name, reaction_system))
-            push!(lines, "")
-        end
-    end
-
-    # Note: Events are handled within individual models, not at the file level
-
-    # Generate coupling placeholders (codegen not yet implemented)
-    if !isnothing(file.coupling) && !isempty(file.coupling)
-        push!(lines, "# Coupling")
-        for coupling in file.coupling
-            append!(lines, generate_coupling_placeholder(coupling))
-        end
-        push!(lines, "")
-    end
-
-    # Generate domain placeholder (codegen not yet implemented). v0.8.0: a
-    # single shared top-level `domain`, not a map of named domains.
-    if !isnothing(file.domain)
-        push!(lines, "# Domain")
-        append!(lines, generate_domain_placeholder("domain", file.domain))
-        push!(lines, "")
-    end
-
-    # Generate data loader placeholders (codegen not yet implemented)
-    if !isnothing(file.data_loaders) && !isempty(file.data_loaders)
-        push!(lines, "# Data Loaders")
-        for (name, data_loader) in file.data_loaders
-            append!(lines, generate_data_loader_placeholder(name, data_loader))
-        end
-        push!(lines, "")
-    end
-
-    return join(lines, "\n")
+    return _generate_script(file;
+        language = "Julia",
+        imports = [
+            "using ModelingToolkit",
+            "using Catalyst",
+            "using EarthSciMLBase",
+            "using OrdinaryDiffEq",
+            "using Unitful",
+        ],
+        model_emitter = generate_model_code,
+        reaction_system_emitter = generate_reaction_system_code,
+        coupling_lang = :julia,
+        emit_data_loaders = true)
 end
 
 """
@@ -100,72 +143,26 @@ Like [`to_julia_code`](@ref), the output is illustrative scaffolding for a
 SymPy/earthsci_ast workflow, not guaranteed-runnable code.
 """
 function to_python_code(file::EsmFile)
-    lines = String[]
-
-    # Header comment
-    push!(lines, "# Generated Python script from ESM file")
-    push!(lines, "# ESM version: $(file.esm)")
-    if !isnothing(file.metadata) && !isnothing(file.metadata.name)
-        push!(lines, "# Title: $(file.metadata.name)")
-    end
-    if !isnothing(file.metadata) && !isnothing(file.metadata.description)
-        push!(lines, "# Description: $(file.metadata.description)")
-    end
-    push!(lines, "")
-
-    # Import statements
-    push!(lines, "# Package imports")
-    push!(lines, "import sympy as sp")
-    push!(lines, "import earthsci_ast as esm")
-    push!(lines, "import scipy")
-    push!(lines, "from sympy import Function")
-    push!(lines, "")
-
-    # Generate models
-    if !isnothing(file.models) && !isempty(file.models)
-        push!(lines, "# Models")
-        for (name, model) in file.models
-            append!(lines, generate_python_model_code(name, model))
-            push!(lines, "")
-        end
-    end
-
-    # Generate reaction systems
-    if !isnothing(file.reaction_systems) && !isempty(file.reaction_systems)
-        push!(lines, "# Reaction Systems")
-        for (name, reaction_system) in file.reaction_systems
-            append!(lines, generate_python_reaction_system_code(name, reaction_system))
-            push!(lines, "")
-        end
-    end
-
-    # Generate simulation setup
-    push!(lines, "# Simulation setup")
-    push!(lines, "tspan = (0, 10)  # time span")
-    push!(lines, "parameters = {}  # parameter values")
-    push!(lines, "initial_conditions = {}  # initial values")
-    push!(lines, "")
-    push!(lines, "# result = esm.simulate(tspan=tspan, parameters=parameters, initial_conditions=initial_conditions)")
-    push!(lines, "")
-
-    # Generate coupling placeholders (codegen not yet implemented)
-    if !isnothing(file.coupling) && !isempty(file.coupling)
-        push!(lines, "# Coupling")
-        for coupling in file.coupling
-            append!(lines, generate_coupling_placeholder(coupling; lang=:python))
-        end
-        push!(lines, "")
-    end
-
-    # Generate domain placeholder (codegen not yet implemented). v0.8.0: a
-    # single shared top-level `domain`, not a map of named domains.
-    if !isnothing(file.domain)
-        push!(lines, "# Domain")
-        append!(lines, generate_domain_placeholder("domain", file.domain))
-        push!(lines, "")
-    end
-
-    return join(lines, "\n")
+    return _generate_script(file;
+        language = "Python",
+        imports = [
+            "import sympy as sp",
+            "import earthsci_ast as esm",
+            "import scipy",
+            "from sympy import Function",
+        ],
+        model_emitter = generate_python_model_code,
+        reaction_system_emitter = generate_python_reaction_system_code,
+        coupling_lang = :python,
+        simulation_setup = [
+            "# Simulation setup",
+            "tspan = (0, 10)  # time span",
+            "parameters = {}  # parameter values",
+            "initial_conditions = {}  # initial values",
+            "",
+            "# result = esm.simulate(tspan=tspan, parameters=parameters, initial_conditions=initial_conditions)",
+            "",
+        ])
 end
 
 # Helper functions for Julia code generation
@@ -332,15 +329,16 @@ function generate_coupling_placeholder(coupling::CouplingEntry; lang::Symbol=:ju
 end
 
 """
-    generate_domain_placeholder(name::String, domain::Domain)
+    generate_domain_placeholder(domain::Domain)
 
 Emit comment-only placeholder lines describing the domain (domain codegen is
 not yet implemented). The comment syntax is identical in Julia and Python, so
-one generator serves both emitters.
+one generator serves both emitters. v0.8.0 has a single shared top-level
+`domain` (not a map of named domains), so the heading is fixed.
 """
-function generate_domain_placeholder(name::String, domain::Domain)
+function generate_domain_placeholder(domain::Domain)
     lines = String[]
-    push!(lines, "# Domain: $name")
+    push!(lines, "# Domain: domain")
     if !isnothing(domain.temporal)
         temporal = domain.temporal
         tstart = get(temporal, "start", nothing)
@@ -396,27 +394,24 @@ function format_species_declaration(species::Species)
 end
 
 function format_equation(equation::Equation)
-    lhs = format_expression(equation.lhs)
-    rhs = format_expression(equation.rhs)
+    lhs = format_julia_expression(equation.lhs)
+    rhs = format_julia_expression(equation.rhs)
     return "$lhs ~ $rhs"
 end
 
 # Render one side (substrates or products) of a reaction from the ordered
-# StoichiometryEntry vector (accessed via getfield to bypass the
-# backward-compat Dict property shim, whose iteration order is nondeterministic).
-function _format_reaction_side(entries::Union{Vector{StoichiometryEntry},Nothing})
-    if entries === nothing || isempty(entries)
-        return "∅"
-    end
-    return join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
-                 for entry in entries], " + ")
-end
+# StoichiometryEntry vector (see raw_substrates/raw_products — the
+# backward-compat Dict property shim loses author order). Thin wrapper over
+# display.jl's shared `_format_stoichiometry_side` with code-emitter
+# formatting: bare species names, `<coeff>*` prefixes, ∅ for empty sides.
+_format_reaction_side(entries::Union{Vector{StoichiometryEntry},Nothing}) =
+    _format_stoichiometry_side(entries; format_coefficient = c -> "$(c)*")
 
 function format_reaction(reaction::Reaction)
-    rate = isnothing(reaction.rate) ? "1.0" : format_expression(reaction.rate)
+    rate = isnothing(reaction.rate) ? "1.0" : format_julia_expression(reaction.rate)
 
-    reactants = _format_reaction_side(getfield(reaction, :substrates))
-    products = _format_reaction_side(getfield(reaction, :products))
+    reactants = _format_reaction_side(raw_substrates(reaction))
+    products = _format_reaction_side(raw_products(reaction))
 
     return "Reaction($rate, [$reactants], [$products])"
 end
@@ -469,7 +464,13 @@ function _codegen_needs_parens(table::Dict{String,Int}, parent_op::String,
     child_prec > parent_prec && return false
     # Equal precedence:
     parent_op in ("-", "/") && return is_right   # left-associative, non-commutative
-    parent_op == "^" && return !is_right         # right-associative (Julia ^, Python **)
+    # `^` right-associative (Julia ^, Python **): parenthesize the LEFT
+    # operand. NOTE deliberate divergence from display.jl `needs_parentheses`,
+    # which parenthesizes the RIGHT operand of `^` — the rule frozen by the
+    # cross-language pretty-printer contract (pretty-print.ts, pinned by the
+    # tests/display fixtures). Emitted code must instead re-parse correctly in
+    # the target language, so the emitters wrap the left. Do not reconcile.
+    parent_op == "^" && return !is_right
     # Chained comparisons mean something different in both languages — wrap.
     parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
     return false
@@ -485,7 +486,11 @@ function _format_unary_minus_operand(arg::Expr, table::Dict{String,Int}, fmt::Fu
     return inner
 end
 
-function format_expression(expr::Expr)
+# Julia-source emitter. Named `format_julia_expression` (not the bare
+# `format_expression`) so it cannot be confused with display.jl's same-named
+# pretty-printer, whose 2-arg method renders notation rather than executable
+# code.
+function format_julia_expression(expr::Expr)
     if isa(expr, IntExpr)
         return string(expr.value)
     elseif isa(expr, NumExpr)
@@ -493,20 +498,20 @@ function format_expression(expr::Expr)
     elseif isa(expr, VarExpr)
         return expr.name
     elseif isa(expr, OpExpr)
-        return format_expression_node(expr)
+        return format_julia_expression_node(expr)
     else
-        error("Unsupported expression type: $(typeof(expr))")
+        throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
     end
 end
 
-function format_expression_node(node::OpExpr)
+function format_julia_expression_node(node::OpExpr)
     op = node.op
     args = node.args
 
     # Format one operand with precedence-aware parenthesization. In n-ary
     # chains (`a - b - c`), every operand after the first is a right operand.
     fmt(arg, is_right::Bool=false) = begin
-        s = format_expression(arg)
+        s = format_julia_expression(arg)
         _codegen_needs_parens(_JULIA_CODEGEN_PRECEDENCE, op, arg, is_right) ? "($s)" : s
     end
     fmt_chain(sep) = join([fmt(args[1]); [fmt(a, true) for a in args[2:end]]], sep)
@@ -519,28 +524,28 @@ function format_expression_node(node::OpExpr)
     elseif op == "D"
         # D(x,t) → D(x) (remove time parameter)
         if length(args) >= 1
-            return "D($(format_expression(args[1])))"
+            return "D($(format_julia_expression(args[1])))"
         end
         return "D()"
     elseif op == "exp"
-        return "exp($(join(map(format_expression, args), ", ")))"
+        return "exp($(join(map(format_julia_expression, args), ", ")))"
     elseif op == "ifelse"
-        return "ifelse($(join(map(format_expression, args), ", ")))"
+        return "ifelse($(join(map(format_julia_expression, args), ", ")))"
     elseif op == "Pre"
-        return "Pre($(join(map(format_expression, args), ", ")))"
+        return "Pre($(join(map(format_julia_expression, args), ", ")))"
     elseif op == "^"
         return fmt_chain(" ^ ")
     elseif op == "grad"
         # grad(x,y) → Differential(y)(x)
         if length(args) >= 2
-            return "Differential($(format_expression(args[2])))($(format_expression(args[1])))"
+            return "Differential($(format_julia_expression(args[2])))($(format_julia_expression(args[1])))"
         elseif length(args) == 1
-            return "Differential(x)($(format_expression(args[1])))"
+            return "Differential(x)($(format_julia_expression(args[1])))"
         end
         return "Differential(x)()"
     elseif op == "-"
         if length(args) == 1
-            return "-$(_format_unary_minus_operand(args[1], _JULIA_CODEGEN_PRECEDENCE, format_expression))"
+            return "-$(_format_unary_minus_operand(args[1], _JULIA_CODEGEN_PRECEDENCE, format_julia_expression))"
         else
             return fmt_chain(" - ")
         end
@@ -553,10 +558,10 @@ function format_expression_node(node::OpExpr)
     elseif op == "or"
         return fmt_chain(" || ")
     elseif op == "not"
-        return "!($(format_expression(args[1])))"
+        return "!($(format_julia_expression(args[1])))"
     else
         # For other operators, use function call syntax
-        return "$op($(join(map(format_expression, args), ", ")))"
+        return "$op($(join(map(format_julia_expression, args), ", ")))"
     end
 end
 
@@ -670,17 +675,13 @@ function generate_python_reaction_system_code(name::String, reaction_system::Rea
         push!(lines, "# Stoichiometry")
         for (i, reaction) in enumerate(reaction_system.reactions)
             push!(lines, "# Reaction $i:")
-            substrates = getfield(reaction, :substrates)
+            substrates = raw_substrates(reaction)
             if !isnothing(substrates) && !isempty(substrates)
-                reactant_str = join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
-                                     for entry in substrates], " + ")
-                push!(lines, "#   Reactants: $reactant_str")
+                push!(lines, "#   Reactants: $(_format_reaction_side(substrates))")
             end
-            products = getfield(reaction, :products)
+            products = raw_products(reaction)
             if !isnothing(products) && !isempty(products)
-                product_str = join(["$(entry.stoichiometry != 1 ? "$(entry.stoichiometry)*" : "")$(entry.species)"
-                                    for entry in products], " + ")
-                push!(lines, "#   Products: $product_str")
+                push!(lines, "#   Products: $(_format_reaction_side(products))")
             end
         end
     end
@@ -698,7 +699,7 @@ function format_python_expression(expr::Expr)
     elseif isa(expr, OpExpr)
         return format_python_expression_node(expr)
     else
-        error("Unsupported expression type: $(typeof(expr))")
+        throw(ArgumentError("Unsupported expression type: $(typeof(expr))"))
     end
 end
 

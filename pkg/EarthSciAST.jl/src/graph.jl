@@ -8,11 +8,18 @@ as specified in the ESM Libraries Spec Section 4.8.
 # Graph data structures
 
 """
+Element type of a `Graph{N,E}` edge list: a `(source, target, data)` named
+tuple. Alias so edge-vector construction sites don't each spell out the
+NamedTuple type.
+"""
+const _GraphEdge{N, E} = NamedTuple{(:source, :target, :data), Tuple{N, N, E}}
+
+"""
 Generic graph structure with nodes and edges.
 """
 struct Graph{N, E}
     nodes::Vector{N}
-    edges::Vector{NamedTuple{(:source, :target, :data), Tuple{N, N, E}}}
+    edges::Vector{_GraphEdge{N, E}}
 end
 
 """
@@ -109,8 +116,11 @@ end
 
 Generate component-level graph showing systems and their couplings.
 
-Creates nodes for each model, reaction system, data loader, and operator.
-Creates edges based on coupling entries with appropriate types and labels.
+Creates nodes for each model, reaction system, and data loader. Operators are
+NOT given nodes: a `CouplingOperatorApply` entry only registers an operator
+(the operator lives in the file's `operators` section), so it contributes no
+node or edge here. Creates edges based on the remaining coupling entries with
+appropriate types and labels.
 
 # Arguments
 - `file::EsmFile`: Input ESM file
@@ -132,7 +142,7 @@ end
 """
 function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     nodes = ComponentNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{ComponentNode, ComponentNode, CouplingEdge}}[]
+    edges = _GraphEdge{ComponentNode, CouplingEdge}[]
 
     # Create mapping from component name to node
     node_map = Dict{String, ComponentNode}()
@@ -203,56 +213,38 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
         end
     end
 
+    # Shared edge builder for the two two-system coupling forms
+    # (operator_compose / couple). Although the coupling SEMANTICS are
+    # bidirectional, the graph gets a single DIRECTED edge from the first
+    # listed system to the second (renderers draw one arrow; no reverse edge
+    # is added). Entries with fewer than two systems, or naming unknown
+    # systems, contribute no edge.
+    function push_two_system_edge!(coupling, edge_id, type, label, description)
+        length(coupling.systems) >= 2 || return
+        system_a = coupling.systems[1]
+        system_b = coupling.systems[2]
+        from_node = get(node_map, system_a, nothing)
+        to_node = get(node_map, system_b, nothing)
+        (from_node === nothing || to_node === nothing) && return
+
+        edge = CouplingEdge(edge_id, system_a, system_b, type, label,
+                            description, coupling)
+        push!(edges, (source=from_node, target=to_node, data=edge))
+        return
+    end
+
     # Create edges from coupling entries
     for (i, coupling) in enumerate(file.coupling)
         edge_id = "coupling_$i"
 
         # Handle different coupling types
         if coupling isa CouplingOperatorCompose
-            # Bidirectional edge for operator composition
-            if length(coupling.systems) >= 2
-                system_a = coupling.systems[1]
-                system_b = coupling.systems[2]
-                from_node = get(node_map, system_a, nothing)
-                to_node = get(node_map, system_b, nothing)
-
-                if from_node !== nothing && to_node !== nothing
-                    edge = CouplingEdge(
-                        edge_id,
-                        system_a,
-                        system_b,
-                        "operator_compose",
-                        "compose",
-                        "System composition coupling",
-                        coupling
-                    )
-                    push!(edges, (source=from_node, target=to_node, data=edge))
-                end
-            end
+            push_two_system_edge!(coupling, edge_id, "operator_compose",
+                                  "compose", "System composition coupling")
 
         elseif coupling isa CouplingCouple
-            # Bidirectional edge for couple
-            if length(coupling.systems) >= 2
-                system_a = coupling.systems[1]
-                system_b = coupling.systems[2]
-                from_node = get(node_map, system_a, nothing)
-                to_node = get(node_map, system_b, nothing)
-
-                if from_node !== nothing && to_node !== nothing
-                    label = "couple"
-
-                    edge = CouplingEdge(
-                        edge_id,
-                        system_a,
-                        system_b,
-                        "couple",
-                        label,
-                        "Bidirectional coupling",
-                        coupling
-                    )
-                    push!(edges, (source=from_node, target=to_node, data=edge))
-                end
-            end
+            push_two_system_edge!(coupling, edge_id, "couple",
+                                  "couple", "Bidirectional coupling")
 
         elseif coupling isa CouplingVariableMap
             # Directed edge for variable mapping
@@ -325,7 +317,7 @@ graph = expression_graph(equation)
 """
 function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # Create mapping from scoped variable name to node
     node_map = Dict{String, VariableNode}()
@@ -407,7 +399,7 @@ end
 
 function expression_graph(model::Model)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # Create mapping from variable name to node
     node_map = Dict{String, VariableNode}()
@@ -461,7 +453,7 @@ end
 
 function expression_graph(rxn_sys::ReactionSystem)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # Create mapping from name to node
     node_map = Dict{String, VariableNode}()
@@ -517,7 +509,7 @@ end
 
 function expression_graph(equation::Equation)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # Get LHS variable (target of dependencies)
     lhs_vars = free_variables(equation.lhs)
@@ -559,12 +551,16 @@ end
 
 function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # Create mapping from name to node
     node_map = Dict{String, VariableNode}()
 
-    # Collect all species and parameters
+    # Collect all species and parameters.
+    # `.reactants`/`.products` go through the legacy Dict{String,Float64}
+    # property shim — intentional here: the dependency graph wants each
+    # species once (Dict-key semantics), not the ordered author-entry list
+    # (`raw_substrates`/`raw_products`), which may repeat a species.
     all_species = Set{String}()
     for (species, _) in reaction.reactants
         push!(all_species, species)
@@ -636,7 +632,7 @@ end
 
 function expression_graph(expr::Expr)::Graph{VariableNode, DependencyEdge}
     nodes = VariableNode[]
-    edges = NamedTuple{(:source, :target, :data), Tuple{VariableNode, VariableNode, DependencyEdge}}[]
+    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
     # For single expressions, just create nodes for free variables
     # No dependencies since we don't know the target
@@ -704,6 +700,55 @@ _mermaid_label(label::AbstractString)::String = replace(String(label), "\"" => "
 _dot_escape(s::AbstractString)::String =
     replace(String(s), "\\" => "\\\\", "\"" => "\\\"")
 
+# ── Export styling tables ────────────────────────────────────────────────
+# One row per node/edge category holding BOTH the DOT and the Mermaid styling,
+# so `to_dot` and `to_mermaid` consume the same source of truth and cannot
+# drift. Unknown categories fall back to the paired _DEFAULT row.
+
+# ComponentNode.type → styling. `mermaid` is the (open, close) shape delimiters.
+const _COMPONENT_NODE_STYLE = Dict{String,@NamedTuple{dot_fillcolor::String, mermaid::Tuple{String,String}}}(
+    "model"           => (dot_fillcolor = "lightgreen",  mermaid = ("[", "]")),
+    "reaction_system" => (dot_fillcolor = "lightcoral",  mermaid = ("(", ")")),
+    "data_loader"     => (dot_fillcolor = "lightyellow", mermaid = ("{", "}")),
+)
+const _COMPONENT_NODE_DEFAULT_STYLE =
+    (dot_fillcolor = "lightgray", mermaid = ("((", "))"))
+
+# CouplingEdge.type → styling. No row for "operator_apply": component_graph
+# never emits such edges (CouplingOperatorApply only registers an operator),
+# so it styles like any unknown type.
+const _COUPLING_EDGE_STYLE = Dict{String,@NamedTuple{dot_color::String, mermaid_arrow::String}}(
+    "operator_compose" => (dot_color = "blue",  mermaid_arrow = "-->"),
+    "couple"           => (dot_color = "blue",  mermaid_arrow = "-->"),
+    "variable_map"     => (dot_color = "green", mermaid_arrow = "-.->"),
+)
+const _COUPLING_EDGE_DEFAULT_STYLE = (dot_color = "black", mermaid_arrow = "-->")
+
+# VariableNode.kind → styling ("state" has a DOT shape but the default
+# Mermaid delimiters).
+const _VARIABLE_NODE_STYLE = Dict{String,@NamedTuple{dot_shape::String, mermaid::Tuple{String,String}}}(
+    "species"   => (dot_shape = "ellipse", mermaid = ("(", ")")),
+    "parameter" => (dot_shape = "box",     mermaid = ("[", "]")),
+    "state"     => (dot_shape = "circle",  mermaid = ("((", "))")),
+)
+const _VARIABLE_NODE_DEFAULT_STYLE = (dot_shape = "diamond", mermaid = ("((", "))"))
+
+# DependencyEdge.relationship → styling.
+const _DEPENDENCY_EDGE_STYLE = Dict{String,@NamedTuple{dot_style::String, mermaid_arrow::String}}(
+    "rate"           => (dot_style = "dotted", mermaid_arrow = "-..->"),
+    "stoichiometric" => (dot_style = "dashed", mermaid_arrow = "-..->"),
+)
+const _DEPENDENCY_EDGE_DEFAULT_STYLE = (dot_style = "solid", mermaid_arrow = "-->")
+
+_component_node_style(type::String) =
+    get(_COMPONENT_NODE_STYLE, type, _COMPONENT_NODE_DEFAULT_STYLE)
+_coupling_edge_style(type::String) =
+    get(_COUPLING_EDGE_STYLE, type, _COUPLING_EDGE_DEFAULT_STYLE)
+_variable_node_style(kind::String) =
+    get(_VARIABLE_NODE_STYLE, kind, _VARIABLE_NODE_DEFAULT_STYLE)
+_dependency_edge_style(relationship::String) =
+    get(_DEPENDENCY_EDGE_STYLE, relationship, _DEPENDENCY_EDGE_DEFAULT_STYLE)
+
 """
 Export graph to DOT format for Graphviz rendering.
 """
@@ -712,32 +757,14 @@ function to_dot(graph::Graph{ComponentNode, CouplingEdge})::String
 
     # Add nodes with colors based on type
     for node in graph.nodes
-        color = if node.type == "model"
-            "lightgreen"
-        elseif node.type == "reaction_system"
-            "lightcoral"
-        elseif node.type == "data_loader"
-            "lightyellow"
-        else
-            "lightgray"
-        end
-
+        color = _component_node_style(node.type).dot_fillcolor
         label = format_node_label(node.name)
         push!(lines, "  \"$(_dot_escape(node.id))\" [label=\"$(_dot_escape(label))\", fillcolor=$color, style=filled];")
     end
 
     # Add edges with colors based on coupling type
     for edge in graph.edges
-        edge_color = if edge.data.type == "operator_compose" || edge.data.type == "couple"
-            "blue"
-        elseif edge.data.type == "variable_map"
-            "green"
-        elseif edge.data.type == "operator_apply"
-            "purple"
-        else
-            "black"
-        end
-
+        edge_color = _coupling_edge_style(edge.data.type).dot_color
         push!(lines, "  \"$(_dot_escape(edge.data.from))\" -> \"$(_dot_escape(edge.data.to))\" [label=\"$(_dot_escape(edge.data.label))\", color=$edge_color];")
     end
 
@@ -750,30 +777,14 @@ function to_dot(graph::Graph{VariableNode, DependencyEdge})::String
 
     # Add nodes with shapes based on variable kind
     for node in graph.nodes
-        shape = if node.kind == "species"
-            "ellipse"
-        elseif node.kind == "parameter"
-            "box"
-        elseif node.kind == "state"
-            "circle"
-        else
-            "diamond"
-        end
-
+        shape = _variable_node_style(node.kind).dot_shape
         label = format_node_label(node.name)
         push!(lines, "  \"$(_dot_escape(node.name))\" [label=\"$(_dot_escape(label))\", shape=$shape];")
     end
 
     # Add edges with styles based on relationship
     for edge in graph.edges
-        style = if edge.data.relationship == "rate"
-            "dotted"
-        elseif edge.data.relationship == "stoichiometric"
-            "dashed"
-        else
-            "solid"
-        end
-
+        style = _dependency_edge_style(edge.data.relationship).dot_style
         push!(lines, "  \"$(_dot_escape(edge.data.source))\" -> \"$(_dot_escape(edge.data.target))\" [label=\"$(_dot_escape(edge.data.relationship))\", style=$style];")
     end
 
@@ -785,35 +796,22 @@ end
 Export graph to Mermaid format for markdown embedding.
 
 Node ids are sanitized to plain identifiers (`model.x` → `model_x`) and
-labels are quoted, so dotted/scoped names render correctly.
+labels are quoted, so dotted/scoped names render correctly. Edges carry no
+labels (adding them would change the pinned output; see tests/graphs).
 """
 function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
     lines = ["graph TD"]
 
     # Add nodes
     for node in graph.nodes
-        shape_open, shape_close = if node.type == "model"
-            "[", "]"
-        elseif node.type == "reaction_system"
-            "(", ")"
-        elseif node.type == "data_loader"
-            "{", "}"
-        else
-            "((", "))"
-        end
-
+        shape_open, shape_close = _component_node_style(node.type).mermaid
         label = format_node_label(node.name)
         push!(lines, "    $(_mermaid_id(node.id))$shape_open\"$(_mermaid_label(label))\"$shape_close")
     end
 
     # Add edges
     for edge in graph.edges
-        arrow = if edge.data.type == "variable_map"
-            "-.->"
-        else
-            "-->"
-        end
-
+        arrow = _coupling_edge_style(edge.data.type).mermaid_arrow
         push!(lines, "    $(_mermaid_id(edge.data.from)) $arrow $(_mermaid_id(edge.data.to))")
     end
 
@@ -825,26 +823,14 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
 
     # Add nodes
     for node in graph.nodes
-        shape_open, shape_close = if node.kind == "species"
-            "(", ")"
-        elseif node.kind == "parameter"
-            "[", "]"
-        else
-            "((", "))"
-        end
-
+        shape_open, shape_close = _variable_node_style(node.kind).mermaid
         label = format_node_label(node.name)
         push!(lines, "    $(_mermaid_id(node.name))$shape_open\"$(_mermaid_label(label))\"$shape_close")
     end
 
     # Add edges
     for edge in graph.edges
-        arrow = if edge.data.relationship == "rate" || edge.data.relationship == "stoichiometric"
-            "-..->"
-        else
-            "-->"
-        end
-
+        arrow = _dependency_edge_style(edge.data.relationship).mermaid_arrow
         push!(lines, "    $(_mermaid_id(edge.data.source)) $arrow $(_mermaid_id(edge.data.target))")
     end
 
