@@ -170,17 +170,12 @@ end
 # INVARIANT: every op here MUST have a scalar arm in `_eval_node_op` (and hence a
 # vectorized arm in `_eval_vec_op`) — the fold inlines the op into a state RHS,
 # so a non-evaluable op would convert a clear build-time UNSUPPORTED_SHAPE error
-# into a runtime UNSUPPORTED_OP after folding. The set therefore lists only the
+# into a runtime UNSUPPORTED_OP after folding. The set therefore holds only the
 # esm-spec §4.2 evaluable-core elementwise ops (plus the canonicalize-internal
-# `neg`/`pow` aliases); it is pinned by tree_walk_op_table_test.jl.
-const _WS4_FOLDABLE_ELEMENTWISE_OPS = Set{String}([
-    "+", "-", "*", "/", "^", "neg", "pow",
-    "sqrt", "abs", "sign",
-    "exp", "log", "log10",
-    "sin", "cos", "tan", "asin", "acos", "atan",
-    "sinh", "cosh", "tanh",
-    "max", "min", "floor", "ceil",
-])
+# `neg`/`pow` aliases). Membership is declared per-op in src/op_registry.jl
+# (flag `:ws4_foldable`) and pinned by op_registry_test.jl; the containment
+# invariant above is pinned by tree_walk_op_table_test.jl.
+const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining

@@ -40,8 +40,8 @@ const _COMPONENT_KINDS = ("models", "reaction_systems")
 const _LIBRARY_FORBIDDEN_KEYS =
     ("models", "reaction_systems", "data_loaders", "coupling", "domain")
 
-_raw_get(x, key::String) = get(x, key, get(x, Symbol(key), nothing))
-_raw_haskey(x, key::String) = haskey(x, key) || haskey(x, Symbol(key))
+# (`_raw_get` / `_raw_haskey` — Symbol-or-String key access over raw JSON —
+# live in src/json_walk.jl with the shared traversal combinators.)
 
 """
     _to_ordered(x)

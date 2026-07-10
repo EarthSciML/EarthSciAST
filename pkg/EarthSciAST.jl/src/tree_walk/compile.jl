@@ -349,11 +349,9 @@ end
 # `_compile`. Everything else is the scalar arithmetic / comparison /
 # transcendental family that `_compile` lowers to a plain `_NK_OP`, which is
 # exactly what `_compile_cse` reconstructs, so hoisting those is sound.
-const _CSE_OPAQUE_OPS = Set{String}([
-    "fn", "const", "enum", "call", "D", "ic", "grad", "div", "laplacian",
-    "arrayop", "aggregate", "makearray", "broadcast", "reshape",
-    "transpose", "concat", "index",
-])
+# Membership is declared per-op in src/op_registry.jl (flag `:cse_opaque`)
+# and pinned by op_registry_test.jl.
+const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 
 # A node is a CSE hoist/recurse candidate iff it is an OpExpr whose op is not
 # opaque. Leaves (state/param/literal/time) are never hoisted — caching a leaf

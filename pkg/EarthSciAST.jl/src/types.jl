@@ -1754,14 +1754,32 @@ function get_products_dict(reaction::Reaction)::Dict{String,Float64}
     end
 end
 
+"""
+    raw_substrates(r::Reaction) -> Union{Vector{StoichiometryEntry},Nothing}
+    raw_products(r::Reaction)  -> Union{Vector{StoichiometryEntry},Nothing}
+
+The `substrates` / `products` fields as stored: the ORDERED
+`Vector{StoichiometryEntry}` (or `nothing` for a source/sink reaction, ∅ → X /
+X → ∅). These exist because plain property access does not reach the fields:
+the legacy `Base.getproperty` shim below maps `.reactants` / `.products` to
+unordered `Dict{String,Float64}` views (and `.products` therefore does NOT
+return the stored field). Internal code must use these accessors for ordered
+field access — never `r.products`, whose meaning is the legacy Dict view, and
+not bare `getfield`, which re-encodes the shim workaround at every call site.
+For the Dict view, use [`get_reactants_dict`](@ref) / [`get_products_dict`](@ref).
+"""
+raw_substrates(r::Reaction) = getfield(r, :substrates)
+raw_products(r::Reaction) = getfield(r, :products)
+
 # Backward-compatibility property shim. `.reactants` / `.products` return the
 # legacy Dict{String,Float64} view (NOT the ordered Vector{StoichiometryEntry}
 # stored in the `substrates` / `products` fields — use
-# `getfield(reaction, :products)` or `get_products_dict` explicitly for the
-# raw field). The shim CANNOT be retired yet: Dict-style `.reactants` /
-# `.products` access remains throughout src/codegen.jl, src/graph.jl,
-# src/edit.jl, src/mock_systems.jl, and ext/EarthSciASTCatalystExt.jl
-# (their migration to getfield-based ordered access is tracked separately).
+# `raw_substrates` / `raw_products` (or `get_products_dict` for the Dict view)
+# explicitly for the raw field). The shim CANNOT be retired yet: Dict-style
+# `.reactants` / `.products` access remains throughout src/codegen.jl,
+# src/graph.jl, src/edit.jl, src/mock_systems.jl, and
+# ext/EarthSciASTCatalystExt.jl
+# (their migration to accessor-based ordered access is tracked separately).
 Base.getproperty(reaction::Reaction, name::Symbol) = begin
     if name == :reactants
         return get_reactants_dict(reaction)

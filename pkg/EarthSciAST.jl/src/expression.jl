@@ -71,6 +71,32 @@ function child_exprs(e::OpExpr)::Vector{Expr}
     return out
 end
 
+"""
+    foreach_subexpr(f, expr::Expr) -> Nothing
+
+Apply `f` to `expr` and to every descendant expression node, depth-first,
+parent before children, drawing children from [`child_exprs`](@ref) — so `f`
+sees expressions nested in EVERY expression-bearing `OpExpr` field
+(aggregate/arrayop bodies, filters, integral bounds, makearray `values`,
+table-lookup axis inputs, dense `ranges` bounds, value-invention `key`s), not
+just `args`.
+
+Build predicate scans and collectors on this instead of hand-rolling a
+recursive field walk: a hand-rolled walk over `args` (or a partial field list)
+silently misses variables in the fields above, and a newly added
+expression-bearing `OpExpr` field then has to be patched into every copy.
+`child_exprs`/[`map_children`](@ref) are the two places that enumerate the
+field list; this is the corresponding whole-subtree visitor. Internal —
+read-only traversal; for structure-preserving rewrites use `map_children`.
+"""
+function foreach_subexpr(f, expr::Expr)
+    f(expr)
+    for c in child_exprs(expr)
+        foreach_subexpr(f, c)
+    end
+    return nothing
+end
+
 # Index/loop symbols BOUND by this node itself (aggregate/arrayop range keys,
 # `output_idx` axis names, an integral's `int_var`). These are node-local
 # binders, not references to enclosing-scope variables.

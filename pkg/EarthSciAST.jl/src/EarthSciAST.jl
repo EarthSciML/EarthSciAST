@@ -29,12 +29,19 @@ using Tullio
 # Core data model + validation
 include("types.jl")
 include("validate.jl")
+# Operator-vocabulary registry — single source of truth for the derived op
+# sets (tree-walk fold/CSE/stencil/geometry whitelists + the MTK-ext known-op
+# set). Pure data, no AST dependency; must precede tree_walk.jl, whose derived
+# consts are computed at include time.
+include("op_registry.jl")
 # Flattening pipeline (reactions → equations, subsystem flattening, shapes)
 include("reactions.jl")
 include("flatten.jl")
 include("shape_promotion.jl")
 include("mock_systems.jl")
-# Load-time lowering passes (closed registry, templates, imports)
+# Load-time lowering passes (closed registry, templates, imports) and their
+# shared raw-JSON traversal helpers
+include("json_walk.jl")
 include("registered_functions.jl")
 include("lower_expression_templates.jl")
 include("template_imports.jl")

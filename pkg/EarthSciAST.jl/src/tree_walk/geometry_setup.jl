@@ -748,11 +748,9 @@ end
 # A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`, `fn`
 # (`interp.linear`), `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
 # only the general evaluator speaks; those, and only those, route to `_eval_cellwise`.
-_GEO_EVAL_OPS = Set{String}([
-    "+", "*", "-", "/", "^", "max", "min", "sqrt", "abs", "cos", "sin", "atan2",
-    "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
-    "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-    "true", "false", "aggregate", "arrayop"])
+# Membership is declared per-op in src/op_registry.jl (flag `:geo_eval`) and
+# pinned by op_registry_test.jl.
+const _GEO_EVAL_OPS = _ops_with(:geo_eval)
 
 # True iff any op node in the subtree is OUTSIDE the `_geo_eval` vocabulary — i.e.
 # the body cannot be materialized by the setup-time geometry evaluator and needs
@@ -1239,7 +1237,7 @@ end
 # A reduce-aggregate whose body reads only const-array factors already in `env`
 # (never a state / live field), contracting at least one non-output index — i.e. a
 # build-time coordinate projection eligible for the derivation above.
-_REDUCE_PROJECTION_KINDS = ("min", "max", "sum", "prod")
+const _REDUCE_PROJECTION_KINDS = ("min", "max", "sum", "prod")
 
 function _is_reduce_projection_agg(e, env, state_names)
     (e isa OpExpr && _is_aggregate_op(e.op)) || return false

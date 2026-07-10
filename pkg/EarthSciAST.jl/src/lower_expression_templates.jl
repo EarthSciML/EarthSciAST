@@ -159,9 +159,8 @@ Base.showerror(io::IO, e::ExpressionTemplateError) =
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_is_object(x) = (x isa AbstractDict || x isa JSON3.Object)
-_is_array(x)  = (x isa AbstractVector || x isa JSON3.Array)
+# (`_is_object` / `_is_array` — the raw-JSON node-kind predicates — live in
+# src/json_walk.jl with the shared traversal combinators.)
 
 function _to_dict(x)::Dict{String,Any}
     out = Dict{String,Any}()

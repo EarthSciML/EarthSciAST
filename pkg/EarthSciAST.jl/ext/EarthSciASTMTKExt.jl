@@ -2319,16 +2319,10 @@ end
 
 # --- registered-function gap detection ---
 
-const _KNOWN_OPS = Set([
-    "+", "-", "*", "/", "^",
-    "exp", "log", "log10", "sin", "cos", "tan", "sinh", "cosh", "tanh",
-    "asin", "acos", "atan", "sqrt", "abs",
-    "min", "max",
-    ">", "<", ">=", "<=", "==", "!=",
-    "D", "grad", "div", "laplacian",
-    "arrayop", "aggregate", "makearray", "index", "broadcast", "reshape", "transpose",
-    "concat", "Pre", "ifelse", "call", "fn", "ic",
-])
+# Ops the exporter recognizes as standard; any other OpExpr op is flagged as a
+# likely registered-function gap. Membership is declared per-op in
+# src/op_registry.jl (flag `:mtk_known`) and pinned by op_registry_test.jl.
+const _KNOWN_OPS = EarthSciAST._ops_with(:mtk_known)
 
 function _detect_registered_call_gaps!(gaps::Vector{GapReport},
                                        equations::Vector{Equation})

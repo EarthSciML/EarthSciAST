@@ -66,16 +66,11 @@ end
 # Whitelisted pure-elementwise ops: every op `_eval_node_op` evaluates by
 # recursing its `args` with no `expr_body`/`ranges`/`values` sub-structure. An op
 # outside this set (and not `index`/`fn`) that depends on a loop var forces the
-# per-cell fallback. Kept in sync with `_eval_node_op`; drift only costs a missed
-# fast path — never correctness, since an unknown op simply falls back.
-const _STENCIL_ELEMENTWISE_OPS = Set{String}([
-    "+", "*", "-", "neg", "/", "^", "pow",
-    "<", "<=", ">", ">=", "==", "!=", "and", "or", "not", "ifelse",
-    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-    "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil",
-    "min", "max", "pi", "π", "e", "Pre",
-])
+# per-cell fallback. Membership is declared per-op in src/op_registry.jl (flag
+# `:stencil_elementwise`, mirroring `_eval_node_op`) and pinned by
+# op_registry_test.jl; drift only costs a missed fast path — never correctness,
+# since an unknown op simply falls back.
+const _STENCIL_ELEMENTWISE_OPS = _ops_with(:stencil_elementwise)
 
 # A NUL byte can never appear in a real variable / cell name, so a lane sentinel
 # name never collides with a state cell, param, or observed variable.

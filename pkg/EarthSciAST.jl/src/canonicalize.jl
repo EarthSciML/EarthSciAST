@@ -302,16 +302,32 @@ function _emit_json(e::Expr)::String
     error("cannot canonicalize value of type $(typeof(e))")
 end
 
+# OpExpr fields WITH a pinned slot in the cross-binding canonical JSON node
+# encoding: exactly the set every binding serializes and the cross-language
+# canonical fixtures pin (see `canonical_json` docstring). CLOSED — extending
+# it is a cross-binding format change, never a Julia-local edit.
+const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value)
+
+# OpExpr fields that are TOLERATED-AND-IGNORED by the canonical emitter: a node
+# carrying them still canonicalizes, emitting the pinned fields only. Both are
+# display/rendering conveniences with no wire slot of their own (`arg` — the
+# argmin/argmax witness index for the pretty-printer; `bindings` — the
+# apply_expression_template parameter map, normally lowered away before typed
+# parsing), and both were absent from the historical hand-maintained
+# non-emissible tuple — that tolerance is pinned by op_registry_test.jl.
+const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings)
+
 # OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding (see `canonical_json` docstring). If any is set, the node cannot be
 # emitted faithfully and `_emit_node_json` throws E_CANONICAL_UNSUPPORTED_FIELD.
-const _NON_EMISSIBLE_FIELDS = (
-    :int_var, :lower, :upper, :output_idx, :expr_body, :reduce, :semiring,
-    :ranges, :regions, :values, :shape, :perm, :axis,
-    :table, :table_axes, :output,
-    :join, :filter, :join_gates,
-    :id, :manifold, :distinct, :key,
-)
+# Derived, FAIL-CLOSED: every `OpExpr` field that is neither emissible nor
+# explicitly ignored is non-emissible, so a future field cannot be silently
+# dropped from canonical JSON by forgetting to list it here — it must be added
+# to one of the two closed tuples above deliberately. `setdiff` preserves
+# `fieldnames` order, keeping the E_CANONICAL_UNSUPPORTED_FIELD message's
+# field listing byte-identical to the former literal tuple.
+const _NON_EMISSIBLE_FIELDS = Tuple(setdiff(fieldnames(OpExpr),
+    (_EMISSIBLE_FIELDS..., _CANONICAL_IGNORED_FIELDS...)))
 
 function _emit_node_json(n::OpExpr)::String
     offending = String[]
