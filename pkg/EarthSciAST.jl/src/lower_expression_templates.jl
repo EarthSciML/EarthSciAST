@@ -115,38 +115,15 @@ Base.length(v::JSONLikeDict) = length(getfield(v, :data))
 """
     ExpressionTemplateError <: Exception
 
-Exception raised when expression-template expansion fails. Carries a
-stable `code` matching one of:
-
-- `apply_expression_template_unknown_template`
-- `apply_expression_template_bindings_mismatch`
-- `apply_expression_template_recursive_body`
-- `apply_expression_template_invalid_declaration`
-- `apply_expression_template_version_too_old`
-- `rewrite_rule_nonterminating`
-- `template_constraint_unknown_index_set`
-
-or one of the esm-spec §9.7 template-library / metaparameter codes
-(§9.6.6, raised from `template_imports.jl` and `parse.jl`):
-
-- `template_import_version_too_old`
-- `template_import_unresolved`
-- `template_import_not_library`
-- `subsystem_ref_is_template_library`
-- `subsystem_index_set_conflict`
-- `template_import_cycle`
-- `template_import_name_conflict`
-- `template_import_unknown_name`
-- `template_import_index_set_conflict`
-- `template_import_rename_unknown_name`
-- `template_import_rebind_unknown_name`
-- `template_import_rename_collision`
-- `template_import_rename_invalid`
-- `template_body_expansion_too_deep`
-- `metaparameter_unbound`
-- `metaparameter_type_error`
-- `metaparameter_name_conflict`
-- `makearray_region_inverted`
+Exception raised when a load-time lowering pass fails: expression-template
+expansion (esm-spec §9.6), template-library imports (§9.7), coupling-library
+imports (§10.9–§10.11), and the subsystem-reference / index-set checks in
+`parse.jl`. Carries a stable diagnostic `code` drawn from
+[`_KNOWN_DIAGNOSTIC_CODES`](@ref), the single registry of every code this
+exception is raised with. Codes (and their message texts) are
+conformance-relevant, so a new raise site MUST use a code registered there —
+and a genuinely new code MUST be added to the registry alongside its first
+raise site.
 """
 struct ExpressionTemplateError <: Exception
     code::String
@@ -155,6 +132,66 @@ end
 
 Base.showerror(io::IO, e::ExpressionTemplateError) =
     print(io, "[$(e.code)] $(e.message)")
+
+"""
+    _KNOWN_DIAGNOSTIC_CODES
+
+Registry of every stable diagnostic code raised as an
+[`ExpressionTemplateError`](@ref) anywhere in the package (this file,
+`template_imports.jl`, `coupling_imports.jl`, `parse.jl`), grouped by the
+spec section that pins it. Diagnostic codes are conformance-relevant
+(cross-binding fixtures assert them), so keep this tuple in sync with the
+raise sites: register any new code here when introducing it.
+"""
+const _KNOWN_DIAGNOSTIC_CODES = (
+    # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
+    # (lower_expression_templates.jl; the recursive-body composition check
+    # lives in template_imports.jl).
+    "apply_expression_template_unknown_template",
+    "apply_expression_template_bindings_mismatch",
+    "apply_expression_template_recursive_body",
+    "apply_expression_template_invalid_declaration",
+    "apply_expression_template_version_too_old",
+    "rewrite_rule_nonterminating",
+    "template_constraint_unknown_index_set",
+    "geometry_manifold_invalid",
+    "makearray_region_inverted",
+    # esm-spec §9.7 template-library imports + metaparameters
+    # (template_imports.jl).
+    "template_import_version_too_old",
+    "template_import_unresolved",
+    "template_import_not_library",
+    "template_import_is_coupling_library",
+    "template_import_cycle",
+    "template_import_name_conflict",
+    "template_import_unknown_name",
+    "template_import_index_set_conflict",
+    "template_import_rename_unknown_name",
+    "template_import_rebind_unknown_name",
+    "template_import_rename_collision",
+    "template_import_rename_invalid",
+    "template_inject_target_unknown",
+    "template_inject_target_not_component",
+    "template_inject_target_is_loader",
+    "template_body_expansion_too_deep",
+    "metaparameter_unbound",
+    "metaparameter_type_error",
+    "metaparameter_name_conflict",
+    # esm-spec §10.9–§10.11 coupling-library imports (coupling_imports.jl).
+    "coupling_import_unresolved",
+    "coupling_import_not_library",
+    "coupling_import_unknown_role",
+    "coupling_import_role_unbound",
+    "coupling_import_bind_not_a_component",
+    "coupling_edge_unknown_role",
+    "coupling_role_unused",
+    "coupling_library_illegal_payload",
+    "coupling_library_nested_import",
+    # Subsystem-reference / index-set checks (parse.jl).
+    "subsystem_ref_is_template_library",
+    "subsystem_ref_is_coupling_library",
+    "subsystem_index_set_conflict",
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -192,11 +229,7 @@ function _assert_no_nested_apply(body, template_name::String, path::String)
         return
     end
     if _is_object(body)
-        op = get(body, :op, get(body, "op", nothing))
-        if op === nothing
-            # Some objects may use string-keyed maps post-normalization.
-            op = get(body, "op", nothing)
-        end
+        op = _raw_get(body, "op")
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
             throw(ExpressionTemplateError(
@@ -318,25 +351,21 @@ end
 # Substitution
 # ---------------------------------------------------------------------------
 
+"""
+    _substitute(body, bindings) -> instantiated tree
+
+Pure structural substitution of `bindings` into a template `body`: every
+string node naming a bound param is replaced by a deep copy of its binding.
+The replacement is spliced verbatim — NOT re-scanned for further params
+(esm-spec §9.6.3 rule 2: a replacement body is not re-matched).
+"""
 function _substitute(body, bindings::Dict{String,Any})
-    if body isa AbstractString
-        s = string(body)
-        if haskey(bindings, s)
-            return deepcopy(bindings[s])
+    return _map_json(body) do _, n
+        if n isa AbstractString && haskey(bindings, string(n))
+            return deepcopy(bindings[string(n)])
         end
-        return body
+        return _JSON_DESCEND
     end
-    if _is_array(body)
-        return Any[_substitute(c, bindings) for c in body]
-    end
-    if _is_object(body)
-        out = Dict{String,Any}()
-        for (k, v) in pairs(body)
-            out[string(k)] = _substitute(v, bindings)
-        end
-        return out
-    end
-    return body
 end
 
 function _expand_apply(node, templates::AbstractDict, scope::String)
@@ -359,8 +388,9 @@ function _expand_apply(node, templates::AbstractDict, scope::String)
             "apply_expression_template_bindings_mismatch",
             "$scope: apply_expression_template '$name' missing 'bindings' object"))
     end
-    decl_params_raw = get(decl, "params", get(decl, :params, []))
-    decl_params = String[string(p) for p in decl_params_raw]
+    decl_params_raw = _raw_get(decl, "params")
+    decl_params = decl_params_raw === nothing ? String[] :
+        String[string(p) for p in decl_params_raw]
     declared = Set(decl_params)
     provided = Set{String}([string(k) for (k, _) in pairs(bindings_raw)])
     for p in decl_params
@@ -417,8 +447,7 @@ function _json_equal(a, b)::Bool
         kb = Set(string(k) for (k, _) in pairs(b))
         ka == kb || return false
         for k in ka
-            _json_equal(get(a, k, get(a, Symbol(k), nothing)),
-                        get(b, k, get(b, Symbol(k), nothing))) || return false
+            _json_equal(_raw_get(a, k), _raw_get(b, k)) || return false
         end
         return true
     else
@@ -465,8 +494,8 @@ function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{Strin
         _is_object(node) || return false
         for (k, pv) in pairs(pattern)
             ks = string(k)
-            nv = get(node, ks, get(node, Symbol(ks), nothing))
-            (nv === nothing && !_has_key(node, ks)) && return false
+            nv = _raw_get(node, ks)
+            (nv === nothing && !_raw_haskey(node, ks)) && return false
             _match_pattern(pv, nv, params, bindings) || return false
         end
         return true
@@ -475,9 +504,6 @@ function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{Strin
         return pattern === node
     end
 end
-
-_has_key(node, ks::AbstractString) =
-    (haskey(node, ks) || haskey(node, Symbol(ks)))
 
 # ---------------------------------------------------------------------------
 # Static match-scoping constraints (`where`, esm-spec §9.6.1;
@@ -596,11 +622,49 @@ function _rule_priority(decl)::Int
 end
 
 """
+    _RewriteRule
+
+One registered auto-applied `match` rewrite rule (esm-spec §9.6.3), as consumed
+by [`_rewrite_pass`](@ref). `priority` and `decl_index` (1-based declaration
+position) carry the deterministic selection order — highest `priority` first,
+ties broken by earliest declaration. `where_clause` is the normalized static
+constraint map produced by [`_registered_where`](@ref) (`nothing` when the
+rule is unconstrained).
+"""
+struct _RewriteRule
+    name::String
+    pattern::Any
+    params::Set{String}
+    body::Any
+    priority::Int
+    decl_index::Int
+    where_clause::Union{Nothing,Dict{String,Vector{String}}}
+end
+
+"""
+    _ComponentRegistry
+
+One component's rewrite registry, captured by
+[`lower_expression_templates`](@ref): `named` — every template declaration
+keyed by name, consulted by `apply_expression_template` (order-independent);
+`match_rules` — the auto-applied rules pre-sorted into §9.6.3 selection order;
+`shape_env` — the component's static shape environment
+([`_component_shape_env`](@ref)) for `where` constraint evaluation. This is
+everything needed to rewrite a coupling `variable_map` transform against the
+RECEIVING component (esm-spec §10.4).
+"""
+struct _ComponentRegistry
+    named::Dict{String,Any}
+    match_rules::Vector{_RewriteRule}
+    shape_env::Dict{String,Vector{String}}
+end
+
+"""
     _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
 
-One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3). At
-each object node the engine first tries to fire a rule AT the node before
-descending:
+One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3),
+expressed on [`_map_json`](@ref). At each object node the engine first tries
+to fire a rule AT the node before descending:
 
 1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
 2. the first rule in `sorted_rules` (pre-sorted highest-`priority`-first, ties by
@@ -612,53 +676,42 @@ descending:
    in priority / declaration order.
 
 A fired rule's body replaces the node and the walk does NOT descend into that
-freshly-produced body during this pass (it is revisited next pass). If nothing
-fires, the walk descends into the node's children. `changed` is `true` iff any
-rewrite occurred in this subtree; `last` (a `Ref{String}`) records the op of the
-most recent rewrite, for the non-convergence diagnostic. `shape_env` is the
-enclosing component's static shape environment (`_component_shape_env`).
+freshly-produced body during this pass (it is revisited next pass) — the
+`_map_json` replace-verbatim contract. If nothing fires, the walk descends
+into the node's children. `changed` is `true` iff any rewrite occurred in this
+subtree; `last` (a `Ref{String}`) records the op of the most recent rewrite,
+for the non-convergence diagnostic. `shape_env` is the enclosing component's
+static shape environment (`_component_shape_env`).
 """
-function _rewrite_pass(node, named::Dict{String,Any}, sorted_rules::Vector{Any},
+function _rewrite_pass(node, named::Dict{String,Any},
+                       sorted_rules::Vector{_RewriteRule},
                        scope::String, last::Ref{String},
                        shape_env::Dict{String,Vector{String}})
-    if _is_array(node)
-        changed = false
-        out = Vector{Any}(undef, length(node))
-        for (i, c) in enumerate(node)
-            nc, ch = _rewrite_pass(c, named, sorted_rules, scope, last, shape_env)
-            out[i] = nc
-            changed |= ch
-        end
-        return (out, changed)
-    end
-    if !_is_object(node)
-        return (node, false)
-    end
-    op = _raw_get(node, "op")
-    op_str = op === nothing ? "" : string(op)
-    # (1) Outermost-first: fire a rule AT this node before descending.
-    if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-        # Named-template expansion. The substituted body is spliced in with its
-        # bindings' sub-ASTs intact; those are rewritten in subsequent passes.
-        last[] = APPLY_EXPRESSION_TEMPLATE_OP
-        return (_expand_apply(node, named, scope), true)
-    end
-    for rule in sorted_rules
-        (_name, pattern, rparams, body, _prio, _idx, where_c) = rule
-        bindings = Dict{String,Any}()
-        if _match_pattern(pattern, node, rparams, bindings) &&
-           _where_satisfied(where_c, bindings, shape_env)
-            last[] = op_str
-            return (_substitute(body, bindings), true)
-        end
-    end
-    # (2) No rule fired here — descend into children.
     changed = false
-    out = Dict{String,Any}()
-    for (k, v) in pairs(node)
-        nv, ch = _rewrite_pass(v, named, sorted_rules, scope, last, shape_env)
-        out[string(k)] = nv
-        changed |= ch
+    out = _map_json(node) do _, n
+        _is_object(n) || return _JSON_DESCEND
+        op = _raw_get(n, "op")
+        op_str = op === nothing ? "" : string(op)
+        # (1) Outermost-first: fire a rule AT this node before descending.
+        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
+            # Named-template expansion. The substituted body is spliced in with
+            # its bindings' sub-ASTs intact; those are rewritten in subsequent
+            # passes.
+            last[] = APPLY_EXPRESSION_TEMPLATE_OP
+            changed = true
+            return _expand_apply(n, named, scope)
+        end
+        for rule in sorted_rules
+            bindings = Dict{String,Any}()
+            if _match_pattern(rule.pattern, n, rule.params, bindings) &&
+               _where_satisfied(rule.where_clause, bindings, shape_env)
+                last[] = op_str
+                changed = true
+                return _substitute(rule.body, bindings)
+            end
+        end
+        # (2) No rule fired here — descend into children.
+        return _JSON_DESCEND
     end
     return (out, changed)
 end
@@ -674,7 +727,7 @@ termination guard, so a self-reintroducing rule fails to converge rather than
 being flagged up front.
 """
 function _rewrite_to_fixpoint(node, named::Dict{String,Any},
-                              sorted_rules::Vector{Any}, scope::String,
+                              sorted_rules::Vector{_RewriteRule}, scope::String,
                               shape_env::Dict{String,Vector{String}}=_EMPTY_SHAPE_ENV)
     last = Ref{String}("")
     current = node
@@ -715,20 +768,19 @@ function _find_apply_paths!(hits::Vector{String}, x, path::String)
 end
 
 function _has_apply_op(x)
-    if _is_array(x)
-        for child in x
-            _has_apply_op(child) && return true
+    found = false
+    _walk_json(x) do _, n
+        found && return false   # already answered — prune the rest
+        if _is_object(n)
+            op = _raw_get(n, "op")
+            if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
+                found = true
+                return false
+            end
         end
-        return false
+        return true
     end
-    if _is_object(x)
-        op = _raw_get(x, "op")
-        op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP && return true
-        for (_, v) in pairs(x)
-            _has_apply_op(v) && return true
-        end
-    end
-    return false
+    return found
 end
 
 """
@@ -744,7 +796,7 @@ function _has_template_machinery(raw_data)
     raw_data === nothing && return false
     _is_object(raw_data) || return false
     for compkind in ("models", "reaction_systems")
-        comps = get(raw_data, Symbol(compkind), get(raw_data, compkind, nothing))
+        comps = _raw_get(raw_data, compkind)
         comps === nothing && continue
         _is_object(comps) || continue
         for (_, comp) in pairs(comps)
@@ -897,7 +949,7 @@ Go checks for cross-binding-uniform diagnostics.
 function reject_expression_templates_pre_v04(raw_data)
     raw_data === nothing && return
     !_is_object(raw_data) && return
-    esm_raw = get(raw_data, :esm, get(raw_data, "esm", nothing))
+    esm_raw = _raw_get(raw_data, "esm")
     esm_raw === nothing && return
     m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
     m === nothing && return
@@ -908,12 +960,12 @@ function reject_expression_templates_pre_v04(raw_data)
 
     offences = String[]
     for compkind in ("models", "reaction_systems")
-        comps = get(raw_data, Symbol(compkind), get(raw_data, compkind, nothing))
+        comps = _raw_get(raw_data, compkind)
         comps === nothing && continue
         _is_object(comps) || continue
         for (cname, comp) in pairs(comps)
             _is_object(comp) || continue
-            if haskey(comp, "expression_templates") || haskey(comp, :expression_templates)
+            if _raw_haskey(comp, "expression_templates")
                 push!(offences, "/$compkind/$(string(cname))/expression_templates")
             end
         end
@@ -972,25 +1024,17 @@ which deliberately preserves an authored `1.0`, is on a separate path and is
 untouched.
 """
 function _narrow_arg_literals!(x)
-    if x isa AbstractDict
-        for (k, v) in x
-            if string(k) == "args" && v isa AbstractVector
-                for i in eachindex(v)
-                    vi = v[i]
-                    if _int64_narrowable(vi)
-                        v[i] = Int64(vi)
-                    else
-                        _narrow_arg_literals!(vi)
-                    end
-                end
-            else
-                _narrow_arg_literals!(v)
+    _walk_json(x) do key, n
+        # Narrow the DIRECT elements of every `args` array in place; the walk
+        # then descends into the (mutated) array, recursing through nested
+        # operand objects toward their own `args` arrays.
+        if key == "args" && n isa AbstractVector
+            for i in eachindex(n)
+                vi = n[i]
+                _int64_narrowable(vi) && (n[i] = Int64(vi))
             end
         end
-    elseif x isa AbstractVector
-        for v in x
-            _narrow_arg_literals!(v)
-        end
+        return true
     end
     return x
 end
@@ -1047,12 +1091,11 @@ function lower_expression_templates(raw_data)
         end
     end
 
-    # Per-component rewrite registries (named templates + ordered match rules +
-    # static shape environment), captured so coupling `variable_map` expression
-    # transforms (esm-spec §10.4) can be rewritten against the RECEIVING
-    # component's registry below. Models are registered first; a reaction
-    # system never overwrites a same-named model.
-    registries = Dict{String,Tuple{Dict{String,Any},Vector{Any},Dict{String,Vector{String}}}}()
+    # Per-component rewrite registries, captured so coupling `variable_map`
+    # expression transforms (esm-spec §10.4) can be rewritten against the
+    # RECEIVING component's registry below. Models are registered first; a
+    # reaction system never overwrites a same-named model.
+    registries = Dict{String,_ComponentRegistry}()
 
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
@@ -1070,7 +1113,7 @@ function lower_expression_templates(raw_data)
             # `match_rules` — the auto-applied `match` rules, in template
             #                 DECLARATION order (esm-spec §9.6.3).
             named = Dict{String,Any}()
-            match_rules = Vector{Any}()
+            match_rules = _RewriteRule[]
             if _is_object(tplraw)
                 templates = Dict{String,Any}()
                 for (tname, tdecl) in pairs(tplraw)
@@ -1089,8 +1132,10 @@ function lower_expression_templates(raw_data)
                     named[tname] = decl
                     m = _raw_get(decl, "match")
                     if m !== nothing
-                        params = Set{String}(string(p) for p in get(decl, "params", String[]))
-                        body = get(decl, "body", nothing)
+                        params_raw = _raw_get(decl, "params")
+                        params = Set{String}(string(p) for p in
+                                             something(params_raw, String[]))
+                        body = _raw_get(decl, "body")
                         # `where` registration: normalize constraints and
                         # resolve every referenced index-set name against the
                         # consuming document's registry (esm-spec §9.6.1;
@@ -1098,14 +1143,15 @@ function lower_expression_templates(raw_data)
                         where_c = _registered_where(decl, iset_names,
                                                     "$compkind.$(string(cname))", tname)
                         push!(match_rules,
-                              (tname, m, params, body, _rule_priority(decl),
-                               decl_index, where_c))
+                              _RewriteRule(tname, m, params, body,
+                                           _rule_priority(decl), decl_index,
+                                           where_c))
                     end
                 end
                 # Deterministic selection order (esm-spec §9.6.3): highest
                 # `priority` first, ties broken by declaration order (earliest
                 # wins). `_rewrite_pass` then takes the FIRST matching rule.
-                sort!(match_rules, by = r -> (-r[5], r[6]))
+                sort!(match_rules, by = r -> (-r.priority, r.decl_index))
             end
             # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
             # non-template field (esm-spec §9.6.3): expands
@@ -1117,7 +1163,8 @@ function lower_expression_templates(raw_data)
             end
             delete!(comp, "expression_templates")
             haskey(registries, string(cname)) ||
-                (registries[string(cname)] = (named, match_rules, shape_env))
+                (registries[string(cname)] =
+                    _ComponentRegistry(named, match_rules, shape_env))
         end
     end
 
@@ -1139,8 +1186,9 @@ function lower_expression_templates(raw_data)
             comp_name = String(first(split(target, "."; limit=2)))
             reg = get(registries, comp_name, nothing)
             reg === nothing && continue
-            entry["transform"] = _rewrite_to_fixpoint(tr, reg[1], reg[2],
-                                     "coupling[$(i)].transform", reg[3])
+            entry["transform"] = _rewrite_to_fixpoint(tr, reg.named,
+                                     reg.match_rules,
+                                     "coupling[$(i)].transform", reg.shape_env)
         end
     end
 
@@ -1183,12 +1231,10 @@ still deterministic.
 function _ordered_template_names(raw_data, compkind, cname, templates::Dict{String,Any})
     ordered = String[]
     seen = Set{String}()
-    comps = raw_data === nothing ? nothing :
-        get(raw_data, Symbol(compkind), get(raw_data, compkind, nothing))
-    comp = comps === nothing ? nothing :
-        get(comps, Symbol(cname), get(comps, cname, nothing))
+    comps = raw_data === nothing ? nothing : _raw_get(raw_data, compkind)
+    comp = comps === nothing ? nothing : _raw_get(comps, cname)
     tpl = (comp === nothing || !_is_object(comp)) ? nothing :
-        get(comp, :expression_templates, get(comp, "expression_templates", nothing))
+        _raw_get(comp, "expression_templates")
     if tpl !== nothing && _is_object(tpl)
         for (k, _) in pairs(tpl)
             ks = string(k)
@@ -1202,17 +1248,4 @@ function _ordered_template_names(raw_data, compkind, cname, templates::Dict{Stri
         ks in seen || (push!(ordered, ks); push!(seen, ks))
     end
     return ordered
-end
-
-function _strip_expression_templates(root::Dict{String,Any})::Dict{String,Any}
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (_, compraw) in pairs(comps)
-            _is_object(compraw) || continue
-            delete!(compraw, "expression_templates")
-        end
-    end
-    return root
 end
