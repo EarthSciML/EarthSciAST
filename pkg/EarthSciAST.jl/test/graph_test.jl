@@ -81,7 +81,8 @@ _graph_rsys() = ReactionSystem(
         # ids: dots replaced with underscores; labels: original names, quoted
         @test occursin("M_x((\"M.x\"))", mmd)
         @test occursin("M_k[\"M.k\"]", mmd)
-        @test occursin("M_k --> M_x", mmd)
+        # edges carry a quoted relationship label: `M_k -->|"additive"| M_x`
+        @test occursin(r"M_k -->\|\"\w+\"\| M_x", mmd)
         # node ids (the token before the shape bracket) never contain dots
         for line in split(mmd, "\n")[2:end]  # skip "graph TD"
             occursin(r"[\[({]", line) || continue  # edge lines have no shape

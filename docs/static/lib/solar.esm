@@ -17,7 +17,6 @@
   },
   "models": {
     "Solar": {
-      "coupletype": "Solar",
       "variables": {
         "t_utc": {
           "type": "parameter",

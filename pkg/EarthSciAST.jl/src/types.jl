@@ -81,6 +81,20 @@ struct VarExpr <: Expr
     name::String
 end
 
+# One resolved key-column pair of an aggregate `join` (RFC §5.3): the two range
+# symbols and, for each, a map from a range position (the loop-variable value)
+# to its bucket code. A combination is admitted iff
+# `codes_l[pos_l] == codes_r[pos_r]` for every gate. Defined HERE — ahead of
+# `OpExpr` — so the internal `OpExpr.join_gates` field can name this concrete
+# element type; it is BUILT and CONSUMED in tree_walk/semiring.jl
+# (`_resolve_join_gates_for` / `_join_admits`), never parsed or serialized.
+struct _JoinGate
+    sym_l::String
+    sym_r::String
+    codes_l::Dict{Int,Int}
+    codes_r::Dict{Int,Int}
+end
+
 """
     OpExpr(op::String, args::Vector{Expr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)
 
@@ -187,14 +201,14 @@ mutable struct OpExpr <: Expr
     #            is false contributes the additive identity 0̄ — compiled into a
     #            runtime `ifelse(pred, term, 0̄)` guard (it may reference factors
     #            whose values are only known at run time, so it is NOT folded).
-    # `join_gates` — INTERNAL: the build-time-resolved join, a `Vector` of
-    #            `_JoinGate` mapping each key symbol's range position to a bucket
-    #            code (equal codes ⇔ equal key values). Populated by
+    # `join_gates` — INTERNAL: the build-time-resolved join, a
+    #            `Vector{_JoinGate}` mapping each key symbol's range position to a
+    #            bucket code (equal codes ⇔ equal key values). Populated by
     #            `_resolve_join_gates` against the document index-set registry;
     #            never parsed or serialized (the wire form is `join`).
     join::Union{Vector{Any},Nothing}
     filter::Union{Expr,Nothing}
-    join_gates::Union{Vector{Any},Nothing}
+    join_gates::Union{Vector{_JoinGate},Nothing}
 
     # ── M4 geometry kernel (RFC semiring-faq-unified-ir §8.1 / Appendix B;
     #    schema bead ess-my4.4.2; Julia kernel ess-my4.4.3) ──

@@ -669,24 +669,39 @@ end
 #
 # The identity VALUES are shared vocabulary with the runtime aggregate resolver:
 # sourced from `_OPLUS_IDENTITY` (tree_walk/semiring.jl) so the 0̄ constants live
-# in one table. Everything else DELIBERATELY diverges from
-# `_aggregate_oplus_identity` — behavior-pinned, flagged for a Wave-3 decision,
-# do not "unify" silently:
+# in one table. Two behaviors DELIBERATELY diverge from `_aggregate_oplus_identity`
+# (geometry-specific, behavior-pinned — do not "unify" silently):
 #   * precedence: here `reduce` wins over `semiring`; the runtime resolver
 #     treats `semiring` as authoritative (§5.1);
 #   * spelling:  here the projection kinds `"sum"`/`"prod"` are accepted
 #     (`_REDUCE_PROJECTION_KINDS`); the runtime resolver speaks only ⊕
-#     spellings (`+`, `*`, `max`, `min`, `or`);
-#   * failure:   an unknown / absent spelling here silently falls back to the
-#     additive fold (so `semiring="sum_product"` — whose ⊕ IS `+` — and
-#     unspecified nodes keep their historical SUM); the runtime resolver throws
-#     E_TREEWALK_UNKNOWN_SEMIRING / E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE.
+#     spellings (`+`, `*`, `max`, `min`, `or`).
+# Failure handling, however, now MATCHES the runtime: an unrecognized reduce
+# spelling or semiring name FAILS CLOSED with the same E_TREEWALK codes rather
+# than silently degrading to the additive fold (which previously also made a
+# non-additive semiring name such as `max_product` silently SUM).
 function _geo_reduce_fold(reduce_spec, semiring_spec)
-    r = reduce_spec !== nothing ? reduce_spec : semiring_spec
-    r == "min" && return (_OPLUS_IDENTITY["min"], min)
-    r == "max" && return (_OPLUS_IDENTITY["max"], max)
-    (r == "prod" || r == "*") && return (_OPLUS_IDENTITY["*"], *)
-    return (_OPLUS_IDENTITY["+"], +)   # "+", "sum", "sum_product", or unspecified → additive fold
+    oplus = if reduce_spec !== nothing
+        # `reduce` shorthand, plus the geometry-only projection spellings.
+        reduce_spec == "sum" ? "+" : reduce_spec == "prod" ? "*" : reduce_spec
+    elseif semiring_spec !== nothing
+        # A `semiring` name resolves ⊕ through the same closed registry as the
+        # runtime — unknown names fail closed here too.
+        sr = get(_SEMIRING_REGISTRY, semiring_spec, nothing)
+        sr === nothing && throw(TreeWalkError("E_TREEWALK_UNKNOWN_SEMIRING",
+            "unknown semiring '$semiring_spec'; the closed registry is " *
+            join(sort(collect(keys(_SEMIRING_REGISTRY))), ", ")))
+        sr.oplus
+    else
+        "+"   # unspecified → additive fold (§5.1 note 1)
+    end
+    oplus == "+"   && return (_OPLUS_IDENTITY["+"], +)
+    oplus == "min" && return (_OPLUS_IDENTITY["min"], min)
+    oplus == "max" && return (_OPLUS_IDENTITY["max"], max)
+    oplus == "*"   && return (_OPLUS_IDENTITY["*"], *)
+    throw(TreeWalkError("E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+        "unsupported geometry reduce=$(repr(reduce_spec)) / semiring=$(repr(semiring_spec)); " *
+        "expected reduce ∈ (+, sum, *, prod, max, min) or a numeric registry semiring"))
 end
 
 # Materialize a geometry-derived array observed (e.g. `area[p]`, `A_ij[i,j]`) by

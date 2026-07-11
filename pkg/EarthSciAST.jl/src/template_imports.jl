@@ -172,12 +172,10 @@ end
 #                 positional rename-walk branch: apply-template `name` maps
 #                 through `tplmap`; a `where` OBJECT's §9.6.1 `shape` entries
 #                 map through `isetmap` via `_rename_where`.)
-#   :axis       — scalar value NAMES an index set / axis: the rename walk maps
-#                 it through `isetmap`; also opaque to metaparameter
-#                 substitution.
-#   :axis_open  — index-set name position for the rename walk ONLY;
-#                 metaparameter substitution recurses into it (this split
-#                 preserves `dim`'s historical membership exactly).
+#   :axis       — scalar value NAMES an index set / axis (`wrt`, `dim`): the
+#                 rename walk maps it through `isetmap`; also opaque to
+#                 metaparameter substitution (an axis name is never an
+#                 integer-valued metaparameter reference).
 #   :registry   — closed-registry id / literal enum: copied verbatim by the
 #                 rename walk only.
 #   :positional — no derived-set membership; handled by a dedicated branch in
@@ -199,7 +197,7 @@ const _STRUCTURAL_FIELDS = (
     # NAMES, a structural namespace — never expression positions.
     "where"                       => :protected,
     "wrt"                         => :axis,
-    "dim"                         => :axis_open,
+    "dim"                         => :axis,
     "op"                          => :registry,
     "id"                          => :registry,
     "expect_cadence"              => :registry,
@@ -226,7 +224,7 @@ const _META_SUBST_SKIP_KEYS = Set{String}(
 # Scalar Expression-node fields whose string value names an AXIS / index set
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).
 const _RENAME_AXIS_KEYS = Set{String}(
-    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :axis || kind === :axis_open)
+    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :axis)
 
 # Object keys whose values are never variable-reference positions for the
 # rename walk: the metaparameter skip set plus the remaining scalar structural
@@ -529,16 +527,16 @@ function _collect_apply_names!(out::Vector{String}, x)
 end
 
 # Deliberately NOT a `_map_json` rewrite: this is a POST-order substitution
-# (children inline before the apply node is expanded), and it must keep its
-# plain-`Dict` rebuild — composed-body key order surfaces in emitted component
-# documents, so switching to the combinator's `OrderedDict` rebuild would
-# change output bytes.
+# (children inline before the apply node is expanded). The rebuild uses an
+# `OrderedDict` so composed-body key order is the deterministic SOURCE order
+# (it surfaces in emitted component documents) — a plain `Dict` rebuilt keys in
+# hash order, which is not source order and can vary across Julia versions.
 function _inline_applies(node, templates::AbstractDict, scope::String)
     if _is_array(node)
         return Any[_inline_applies(c, templates, scope) for c in node]
     end
     _is_object(node) || return node
-    out = Dict{String,Any}()
+    out = OrderedDict{String,Any}()
     for (k, v) in pairs(node)
         out[string(k)] = _inline_applies(v, templates, scope)
     end

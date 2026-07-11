@@ -120,15 +120,11 @@ end
 # to its own dimension) keeps every term and is byte-identical to the join-free
 # node (§5.3). Inner-only; many-to-many is defined (m·n terms), not an error.
 
-# One resolved key-column pair: the two range symbols and, for each, a map from a
-# range position (the loop-variable value) to its bucket code. A combination is
-# admitted iff `codes_l[pos_l] == codes_r[pos_r]` for every gate.
-struct _JoinGate
-    sym_l::String
-    sym_r::String
-    codes_l::Dict{Int,Int}
-    codes_r::Dict{Int,Int}
-end
+# `_JoinGate` (one resolved key-column pair) is defined in types.jl, ahead of
+# `OpExpr`, so the `OpExpr.join_gates::Union{Vector{_JoinGate},Nothing}` field
+# can name it. It is built and consumed here (`_resolve_join_gates_for` /
+# `_join_admits`). A combination is admitted iff `codes_l[pos_l] ==
+# codes_r[pos_r]` for every gate.
 
 # Resolve a join-key name to the range symbol it denotes (RFC §5.3): either a
 # declared range symbol directly, or the name of an index set bound by exactly
@@ -295,13 +291,9 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
     ranges = node.ranges === nothing ? Dict{String,Any}() : node.ranges
     sym_to_set = Dict{String,String}(
         s => spec.from for (s, spec) in ranges if spec isa IndexSetRef)
-    # `Vector{Any}`, not `_JoinGate[]`: the gates are stored on
-    # `OpExpr.join_gates::Union{Vector{Any},Nothing}` (types.jl — which is
-    # loaded before this file defines `_JoinGate`, so the field cannot name the
-    # concrete type). A typed vector here would just be converted (copied) to
-    # `Vector{Any}` at every `reconstruct`; the `g::_JoinGate` assert in
-    # `_join_admits` is the deliberate type-recovery point on the read side.
-    gates = Vector{Any}()
+    # `OpExpr.join_gates` is typed `Union{Vector{_JoinGate},Nothing}` (types.jl
+    # defines `_JoinGate` ahead of `OpExpr`), so build the concrete vector here.
+    gates = _JoinGate[]
     for clause in node.join            # clause :: Vector{Tuple{String,String}}
         for (lkey, rkey) in clause
             sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets, sym_to_set, vi_maps)
@@ -316,15 +308,14 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
 end
 
 # True iff every join pair's key columns are equal under `binding` (symbol →
-# range position). `nothing` gates (no join) admit everything. The per-gate
-# `::_JoinGate` assert recovers the concrete type the `join_gates` field erases
-# (see the note in `_resolve_join_gates_for`) — required for a type-stable body
-# in the expansion product loops that call this per contracted tuple.
+# range position). `nothing` gates (no join) admit everything. `gates` is the
+# concrete `Vector{_JoinGate}` from `OpExpr.join_gates`, so the loop body is
+# type-stable — needed in the expansion product loops that call this per
+# contracted tuple.
 function _join_admits(gates, binding::AbstractDict)
     gates === nothing && return true
     for g in gates
-        gg = g::_JoinGate
-        gg.codes_l[binding[gg.sym_l]] == gg.codes_r[binding[gg.sym_r]] || return false
+        g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
     end
     return true
 end

@@ -1808,7 +1808,7 @@ end
 # at top level) with cycle detection shared across the walk.
 
 """
-    _reject_library_ref(raw_doc, ref, location; check_template=true)
+    _reject_library_ref(raw_doc, ref, location)
 
 A §4.7 subsystem reference (including a top-level model `{ref}`) MUST NOT
 target a library file — the reference mechanisms are disjoint: template
@@ -1819,17 +1819,14 @@ Throws [`ExpressionTemplateError`](@ref) with the stable diagnostic code
 esm-spec §9.6.6). `location` — the resolved path, or `nothing` for a remote
 URL ref — is appended parenthesized to the message when given.
 
-`check_template=false` skips the template-library check: the top-level
-model-ref inliner (`_inline_toplevel_model_refs!`) historically checks ONLY
-coupling libraries. That asymmetry is preserved here deliberately — adding the
-template check to the inliner would be a load-rejection behavior change (it
-may well be an accidental gap; see the call-site note).
+Both the local/remote subsystem loaders and the top-level model-ref inliner
+(`_inline_toplevel_model_refs!`) route through here, so template *and* coupling
+libraries are rejected uniformly at every subsystem-ref site.
 """
 function _reject_library_ref(raw_doc, ref::AbstractString,
-                             location::Union{AbstractString,Nothing};
-                             check_template::Bool=true)
+                             location::Union{AbstractString,Nothing})
     suffix = location === nothing ? "" : " ($(location))"
-    if check_template && _is_template_library_doc(raw_doc)
+    if _is_template_library_doc(raw_doc)
         throw(ExpressionTemplateError(
             "subsystem_ref_is_template_library",
             "Subsystem ref '$(ref)' targets a template-library file$(suffix); " *
@@ -1896,13 +1893,9 @@ function _inline_toplevel_model_refs!(native::Dict{String,Any}, base_path::Strin
             comp isa Dict{String,Any} || throw(SubsystemRefError(
                 "Referenced model file '$(ref)' did not parse as a JSON object"))
             # A §4.7 subsystem ref (here, a top-level model `{ref}`) MUST NOT
-            # target a library file. NOTE the asymmetry: this inliner has only
-            # ever rejected COUPLING-library targets (`check_template=false`),
-            # while `_load_local_ref` / `_load_remote_ref` reject template
-            # libraries too. Possibly an accidental gap, but adding the
-            # template check here would change load-rejection behavior — it is
-            # preserved as-is and merely made explicit.
-            _reject_library_ref(comp, ref, refpath; check_template=false)
+            # target a library file — neither a template library nor a coupling
+            # library. Same rejection as `_load_local_ref` / `_load_remote_ref`.
+            _reject_library_ref(comp, ref, refpath)
             compdir = dirname(refpath)
             _inline_toplevel_model_refs!(comp, compdir, visited)   # component-of-component
             cmodels = get(comp, "models", nothing)

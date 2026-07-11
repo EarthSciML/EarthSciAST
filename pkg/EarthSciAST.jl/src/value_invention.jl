@@ -286,6 +286,21 @@ function _vi_param(ctx::_ViCtx, name::AbstractString)
         "value-invention scalar parameter '$name' has no override or default"))
 end
 
+# Evaluate a value-invention node that MUST reduce to a build-time number.
+# `_vi_eval` arm 4 returns an unresolved bare string verbatim (a relation tag),
+# which is only meaningful in `skolem`'s leading position — never in an
+# arithmetic / index context. Guard those contexts so a typo'd range symbol,
+# const-array factor, or scalar-parameter name fails closed with a structured
+# code instead of an opaque `Float64("…")` / `Int("…")` ArgumentError.
+function _vi_num(node, ctx::_ViCtx, bindings::AbstractDict)
+    v = _vi_eval(node, ctx, bindings)
+    isa(v, Real) && return v
+    throw(TreeWalkError("E_TREEWALK_VI_SYMBOL",
+        "value-invention expression requires a build-time number here but got " *
+        "$(repr(v)); an unresolved name (range symbol, const-array factor, or " *
+        "scalar parameter) degraded to a relation tag"))
+end
+
 # Evaluate a raw value-invention sub-expression. Returns an Int / Float64 / Bool
 # / String tag / Tuple key, depending on the op.
 function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
@@ -303,11 +318,11 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         #   3. a scalar `parameter` variable — its override-or-default value;
         #   4. FALLTHROUGH: anything else is returned verbatim and treated as a
         #      relation tag ("edge"/"bin"/"pair", stripped by `_vi_skolem`).
-        # Arm 4 is deliberately silent: a typo'd symbol or misspelled factor
-        # name degrades to a "tag" instead of raising an E_TREEWALK_VI_* code
-        # (it usually surfaces later as E_TREEWALK_VI_KEY / a Float64 cast
-        # error). Kept as-is for behavior preservation — flagged for Wave 3 to
-        # consider failing closed on strings reaching a numeric context.
+        # Arm 4 stays lenient because a leading tag string is a valid `skolem`
+        # component. Any string that instead reaches an arithmetic / index /
+        # key context fails closed there: `_vi_num` guards the arithmetic and
+        # index arms and `_vi_key_int` guards key components, each raising a
+        # structured E_TREEWALK_VI_* code rather than an opaque cast error.
         haskey(bindings, node) && return bindings[node]   # bound range symbol
         haskey(ctx.const_arrays, node) && return node     # bare factor name (used by index)
         haskey(ctx.variables, node) && _vi_get(ctx.variables[node], "type") == "parameter" &&
@@ -325,21 +340,21 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         elseif op == "false"
             return false
         elseif op == "floor"
-            return floor(Int, Float64(_vi_eval(args[1], ctx, bindings)))
+            return floor(Int, Float64(_vi_num(args[1], ctx, bindings)))
         elseif op == "ceil"
-            return ceil(Int, Float64(_vi_eval(args[1], ctx, bindings)))
+            return ceil(Int, Float64(_vi_num(args[1], ctx, bindings)))
         elseif op == "/"
-            return Float64(_vi_eval(args[1], ctx, bindings)) / Float64(_vi_eval(args[2], ctx, bindings))
+            return Float64(_vi_num(args[1], ctx, bindings)) / Float64(_vi_num(args[2], ctx, bindings))
         elseif op == "*"
-            return prod(Float64(_vi_eval(a, ctx, bindings)) for a in args)
+            return prod(Float64(_vi_num(a, ctx, bindings)) for a in args)
         elseif op == "+"
-            return sum(Float64(_vi_eval(a, ctx, bindings)) for a in args)
+            return sum(Float64(_vi_num(a, ctx, bindings)) for a in args)
         elseif op == "-"
-            return length(args) == 1 ? -Float64(_vi_eval(args[1], ctx, bindings)) :
-                   Float64(_vi_eval(args[1], ctx, bindings)) - Float64(_vi_eval(args[2], ctx, bindings))
+            return length(args) == 1 ? -Float64(_vi_num(args[1], ctx, bindings)) :
+                   Float64(_vi_num(args[1], ctx, bindings)) - Float64(_vi_num(args[2], ctx, bindings))
         elseif op in ("<", ">", "<=", ">=", "==", "!=")
-            a = Float64(_vi_eval(args[1], ctx, bindings))
-            b = Float64(_vi_eval(args[2], ctx, bindings))
+            a = Float64(_vi_num(args[1], ctx, bindings))
+            b = Float64(_vi_num(args[2], ctx, bindings))
             op == "<"  && return a < b
             op == ">"  && return a > b
             op == "<=" && return a <= b
@@ -375,7 +390,7 @@ function _vi_index(node, ctx::_ViCtx, bindings::AbstractDict)
             "value-invention index target '$(repr(name))' must be a const-array factor " *
             "or an already-materialised value-invention buffer"))
     arr = ctx.const_arrays[name]
-    idxs = Tuple(Int(_vi_eval(a, ctx, bindings)) for a in args[2:end])
+    idxs = Tuple(Int(_vi_num(a, ctx, bindings)) for a in args[2:end])
     # A factor carrying a declared per-dimension boundary policy resolves an
     # out-of-range gather declaratively (periodic-wrap / edge-extend), exactly
     # as the tree_walk const_array gather does (ess-gj4). Plain factors keep the

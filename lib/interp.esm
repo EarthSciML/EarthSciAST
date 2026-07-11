@@ -14,7 +14,6 @@
   },
   "models": {
     "Interp": {
-      "coupletype": "Interp",
       "variables": {
         "x": {
           "type": "parameter",

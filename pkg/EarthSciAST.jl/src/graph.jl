@@ -796,8 +796,10 @@ end
 Export graph to Mermaid format for markdown embedding.
 
 Node ids are sanitized to plain identifiers (`model.x` → `model_x`) and
-labels are quoted, so dotted/scoped names render correctly. Edges carry no
-labels (adding them would change the pinned output; see tests/graphs).
+labels are quoted, so dotted/scoped names render correctly. Edges carry a
+quoted label — the coupling label (component graph) or dependency
+relationship (expression graph) — matching the DOT emitter and Mermaid's
+`A -->|"label"| B` labeled-edge syntax.
 """
 function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
     lines = ["graph TD"]
@@ -812,7 +814,7 @@ function to_mermaid(graph::Graph{ComponentNode, CouplingEdge})::String
     # Add edges
     for edge in graph.edges
         arrow = _coupling_edge_style(edge.data.type).mermaid_arrow
-        push!(lines, "    $(_mermaid_id(edge.data.from)) $arrow $(_mermaid_id(edge.data.to))")
+        push!(lines, "    $(_mermaid_id(edge.data.from)) $arrow|\"$(_mermaid_label(edge.data.label))\"| $(_mermaid_id(edge.data.to))")
     end
 
     return join(lines, "\n")
@@ -831,7 +833,7 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
     # Add edges
     for edge in graph.edges
         arrow = _dependency_edge_style(edge.data.relationship).mermaid_arrow
-        push!(lines, "    $(_mermaid_id(edge.data.source)) $arrow $(_mermaid_id(edge.data.target))")
+        push!(lines, "    $(_mermaid_id(edge.data.source)) $arrow|\"$(_mermaid_label(edge.data.relationship))\"| $(_mermaid_id(edge.data.target))")
     end
 
     return join(lines, "\n")
