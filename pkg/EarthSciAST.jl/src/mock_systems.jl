@@ -341,8 +341,9 @@ function MockCatalystSystem(rsys::ReactionSystem;
         reactant_str = side_str(raw_substrates(rxn))
         product_str = side_str(raw_products(rxn))
         rate_str = _expr_to_string(rxn.rate)
-        arrow = rxn.reversible ? " ⇌ " : " → "
-        push!(reactions, "$reactant_str$arrow$product_str, rate: $rate_str")
+        # The schema has no reversible flag (a reversible reaction is authored
+        # as a forward/reverse pair), so the arrow is always one-directional.
+        push!(reactions, "$reactant_str → $product_str, rate: $rate_str")
     end
 
     metadata = Dict{String,Any}(

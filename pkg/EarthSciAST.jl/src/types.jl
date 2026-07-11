@@ -1004,7 +1004,7 @@ end
 """
     CouplingOperatorApply <: CouplingEntry
 
-Register an Operator to run during simulation.
+Register an operator (referenced by name) to run during simulation.
 """
 struct CouplingOperatorApply <: CouplingEntry
     operator::String
@@ -1184,91 +1184,9 @@ struct DataLoader
             variables, reference, metadata)
 end
 
-"""
-    Operator
-
-Registered runtime operator (by reference).
-Platform-specific computational kernels and operations.
-
-DEPRECATION NOTE: the top-level `operators` wire block was REMOVED in
-esm-spec v0.3.0 (§9 closure) — `load` rejects it as a hard `ParseError` and
-`serialize_esm_file` refuses to emit it. This type (and `EsmFile.operators`)
-survives for in-memory compatibility only: it remains exported public API and
-removing it would be a breaking change, but it can no longer reach the wire.
-"""
-struct Operator
-    operator_id::String
-    reference::Union{Reference,Nothing}
-    config::Union{Dict{String,Any},Nothing}
-    needed_vars::Vector{String}
-    modifies::Union{Vector{String},Nothing}
-    description::Union{String,Nothing}
-
-    # Constructor with optional parameters
-    Operator(operator_id::String, needed_vars::Vector{String};
-             reference=nothing,
-             config=nothing,
-             modifies=nothing,
-             description=nothing) =
-        new(operator_id, reference, config, needed_vars, modifies, description)
-end
-
 # ========================================
 # 7. System Configuration Types
 # ========================================
-
-"""
-    RegisteredFunctionSignature
-
-Calling convention for a [`RegisteredFunction`](@ref). See esm-spec §9.2.
-
-DEPRECATION NOTE: in-memory compatibility surface only — see the note on
-[`RegisteredFunction`](@ref).
-"""
-struct RegisteredFunctionSignature
-    arg_count::Int
-    arg_types::Union{Vector{String},Nothing}
-    return_type::Union{String,Nothing}
-
-    RegisteredFunctionSignature(arg_count::Int;
-                                arg_types=nothing,
-                                return_type=nothing) =
-        new(arg_count, arg_types, return_type)
-end
-
-"""
-    RegisteredFunction
-
-A named pure function that may be invoked inside expressions via the `call`
-op (see esm-spec §4.4 / §9.2). The serialized entry declares the calling
-contract only; the concrete implementation is supplied by the runtime through
-a handler registry (in Julia, via `@register_symbolic`).
-
-DEPRECATION NOTE: the `call` op and the top-level `registered_functions` wire
-block were REMOVED in esm-spec v0.3.0 (§9 closure, superseded by the CLOSED
-function registry reached via `fn` ops) — `load` rejects the block as a hard
-`ParseError` and `serialize_esm_file` refuses to emit it. This type (and
-`EsmFile.registered_functions`) survives for in-memory compatibility only: it
-remains exported public API and removing it would be a breaking change, but it
-can no longer reach the wire.
-"""
-struct RegisteredFunction
-    id::String
-    signature::RegisteredFunctionSignature
-    units::Union{String,Nothing}
-    arg_units::Union{Vector{Union{String,Nothing}},Nothing}
-    description::Union{String,Nothing}
-    references::Vector{Reference}
-    config::Union{Dict{String,Any},Nothing}
-
-    RegisteredFunction(id::String, signature::RegisteredFunctionSignature;
-                       units=nothing,
-                       arg_units=nothing,
-                       description=nothing,
-                       references=Reference[],
-                       config=nothing) =
-        new(id, signature, units, arg_units, description, references, config)
-end
 
 """
     Domain
@@ -1428,14 +1346,6 @@ struct EsmFile
     models::Union{Dict{String,Model},Nothing}
     reaction_systems::Union{Dict{String,ReactionSystem},Nothing}
     data_loaders::Union{Dict{String,DataLoader},Nothing}
-    # DEPRECATION NOTE: `operators` / `registered_functions` were removed from
-    # the WIRE format in esm-spec v0.3.0 (§9 closure): `load` rejects the
-    # blocks and `serialize_esm_file` refuses to emit them, so both fields are
-    # always `nothing` for a loaded file. They survive here for in-memory
-    # compatibility only (removing them would break the exported constructor
-    # surface); see the notes on `Operator` / `RegisteredFunction`.
-    operators::Union{Dict{String,Operator},Nothing}
-    registered_functions::Union{Dict{String,RegisteredFunction},Nothing}
     coupling::Vector{CouplingEntry}
     # The single temporal domain shared by every component in the document
     # (esm-spec v0.8.0: top-level `domain`, not a map of named domains). A
@@ -1463,15 +1373,12 @@ struct EsmFile
             models=nothing,
             reaction_systems=nothing,
             data_loaders=nothing,
-            operators=nothing,
-            registered_functions=nothing,
             coupling=CouplingEntry[],
             domain=nothing,
             enums=nothing,
             function_tables=nothing,
             index_sets=Dict{String,IndexSet}()) =
         new(esm, metadata, models, reaction_systems, data_loaders,
-            operators, registered_functions,
             coupling, domain, enums, function_tables,
             Dict{String,IndexSet}(index_sets))
 end
@@ -1504,8 +1411,8 @@ and its location information.
 struct ReferenceResolution
     variable_name::String
     system_path::Vector{String}
-    system_type::Symbol  # :model, :reaction_system, :data_loader, :operator
-    resolved_system::Union{Model,ReactionSystem,DataLoader,Operator}
+    system_type::Symbol  # :model, :reaction_system, :data_loader
+    resolved_system::Union{Model,ReactionSystem,DataLoader}
 end
 
 """
@@ -1581,7 +1488,7 @@ function resolve_qualified_reference(esm_file::EsmFile, reference::String)::Refe
 end
 
 """
-    find_top_level_system(esm_file::EsmFile, name::String) -> (Union{Model,ReactionSystem,DataLoader,Operator,Nothing}, Symbol)
+    find_top_level_system(esm_file::EsmFile, name::String) -> (Union{Model,ReactionSystem,DataLoader,Nothing}, Symbol)
 
 Find a top-level system by name in models, reaction_systems, data_loaders, or operators.
 Returns the system and its type, or (nothing, :none) if not found.
@@ -1602,11 +1509,6 @@ function find_top_level_system(esm_file::EsmFile, name::String)
         return (esm_file.data_loaders[name], :data_loader)
     end
 
-    # Check operators
-    if esm_file.operators !== nothing && haskey(esm_file.operators, name)
-        return (esm_file.operators[name], :operator)
-    end
-
     return (nothing, :none)
 end
 
@@ -1624,8 +1526,8 @@ function find_subsystem(system::ReactionSystem, name::String)::Union{ReactionSys
     return get(system.subsystems, name, nothing)
 end
 
-function find_subsystem(system::Union{DataLoader,Operator}, name::String)
-    # Data loaders and operators don't have subsystems
+function find_subsystem(system::DataLoader, name::String)
+    # Data loaders don't have subsystems
     return nothing
 end
 
@@ -1656,8 +1558,8 @@ function variable_exists_in_system(system::ReactionSystem, variable_name::String
     return false
 end
 
-function variable_exists_in_system(system::Union{DataLoader,Operator}, variable_name::String)::Bool
-    # Data loaders and operators are referenced by type/name, not variables
+function variable_exists_in_system(system::DataLoader, variable_name::String)::Bool
+    # Data loaders are referenced by type/name, not variables
     return false
 end
 
@@ -1792,8 +1694,7 @@ end
 Get reactants as dictionary for backward compatibility.
 """
 function get_reactants_dict(reaction::Reaction)::Dict{String,Float64}
-    # Raw ordered field via the accessor (defined below) — NOT property
-    # access, which routes through the getproperty shim.
+    # Ordered field via `raw_substrates`, collapsed to the unordered Dict view.
     substrates_field = raw_substrates(reaction)
     if substrates_field === nothing
         return Dict{String,Float64}()
@@ -1808,9 +1709,7 @@ end
 Get products as dictionary for backward compatibility.
 """
 function get_products_dict(reaction::Reaction)::Dict{String,Float64}
-    # Raw ordered field via the accessor (defined below) — property access
-    # (`reaction.products`) routes through the getproperty shim back to this
-    # function and would recurse forever.
+    # Ordered field via `raw_products`, collapsed to the unordered Dict view.
     products_field = raw_products(reaction)
     if products_field === nothing
         return Dict{String,Float64}()
@@ -1825,50 +1724,22 @@ end
 
 The `substrates` / `products` fields as stored: the ORDERED
 `Vector{StoichiometryEntry}` (or `nothing` for a source/sink reaction, ∅ → X /
-X → ∅). These exist because plain property access does not reach the fields:
-the legacy `Base.getproperty` shim below maps `.reactants` / `.products` to
-unordered `Dict{String,Float64}` views (and `.products` therefore does NOT
-return the stored field). Internal code must use these accessors for ordered
-field access — never `r.products`, whose meaning is the legacy Dict view, and
-not bare `getfield`, which re-encodes the shim workaround at every call site.
-For the Dict view, use [`get_reactants_dict`](@ref) / [`get_products_dict`](@ref).
+X → ∅). Named accessors for the raw fields so ordered author-entry access reads
+the same at every call site (equivalent to `r.substrates` / `r.products` now
+that the `getproperty` shim is gone). For the unordered `Dict{String,Float64}`
+species→coefficient view, use [`get_reactants_dict`](@ref) /
+[`get_products_dict`](@ref).
 """
 raw_substrates(r::Reaction) = getfield(r, :substrates)
 raw_products(r::Reaction) = getfield(r, :products)
 
-# Backward-compatibility property shim. `.reactants` / `.products` return the
-# legacy Dict{String,Float64} view (NOT the ordered Vector{StoichiometryEntry}
-# stored in the `substrates` / `products` fields — use
-# `raw_substrates` / `raw_products` (or `get_products_dict` for the Dict view)
-# explicitly for the raw field). The shim CANNOT be retired yet: Dict-style
-# `.reactants` / `.products` access remains throughout src/codegen.jl,
-# src/graph.jl, src/edit.jl, src/mock_systems.jl, and
-# ext/EarthSciASTCatalystExt.jl
-# (their migration to accessor-based ordered access is tracked separately).
-Base.getproperty(reaction::Reaction, name::Symbol) = begin
-    if name == :reactants
-        return get_reactants_dict(reaction)
-    elseif name == :products
-        return get_products_dict(reaction)
-    elseif name == :reversible
-        return false  # Not supported in new schema
-    else
-        return getfield(reaction, name)
-    end
-end
-
-# Advertise the compat properties. Defined on the INSTANCE (not the type
-# object) so `propertynames(reaction)` actually reflects the getproperty
-# override above. `:products` is already a field name, so only the two extra
-# names are appended.
-Base.propertynames(::Reaction, private::Bool=false) = begin
-    names = fieldnames(Reaction)
-    if private
-        return (names..., :reactants, :reversible)
-    else
-        return names
-    end
-end
+# NOTE: `Reaction` has no `getproperty` override — plain `r.substrates` /
+# `r.products` reach the stored ORDERED `Vector{StoichiometryEntry}` fields
+# directly. Use `raw_substrates` / `raw_products` for that ordered view and
+# `get_reactants_dict` / `get_products_dict` for the unordered
+# `Dict{String,Float64}` species→coefficient view. (A legacy shim that mapped
+# `.reactants` / `.products` to the Dict view, and `.reversible` to `false`,
+# was removed.)
 
 # Add backwards compatibility property access for Model.events
 Base.getproperty(model::Model, name::Symbol) = begin

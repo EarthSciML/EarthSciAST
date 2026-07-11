@@ -81,10 +81,9 @@ using EarthSciAST
         products = Dict("C" => 1)
         rate = OpExpr("*", EarthSciAST.Expr[VarExpr("k"), VarExpr("A"), VarExpr("B")])
         reaction = Reaction(reactants, products, rate)
-        @test reaction.reactants == reactants
-        @test reaction.products == products
+        @test EarthSciAST.get_reactants_dict(reaction) == reactants
+        @test EarthSciAST.get_products_dict(reaction) == products
         @test reaction.rate == rate
-        @test reaction.reversible == false
     end
 
     @testset "Event System Types" begin

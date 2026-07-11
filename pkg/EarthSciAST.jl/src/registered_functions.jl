@@ -613,9 +613,9 @@ function _lower_reaction_system_enums!(rs::ReactionSystem,
                                        enums::Dict{String,Dict{String,Int}})
     new_reactions = Reaction[]
     for r in rs.reactions
-        # `raw_substrates`/`raw_products` bypass the back-compat property
-        # override that turns `r.products`/`r.reactants` into
-        # `Dict{String,Float64}` (the other fields are not shimmed).
+        # `raw_substrates`/`raw_products`: the ordered StoichiometryEntry
+        # fields (`get_reactants_dict`/`get_products_dict` give the unordered
+        # `Dict{String,Float64}` view instead).
         push!(new_reactions, Reaction(r.id,
             raw_substrates(r),
             raw_products(r),

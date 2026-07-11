@@ -361,24 +361,18 @@ function validate_expression_references(file::EsmFile, expr::Expr, path::String)
             append!(errors, validate_expression_references(file, arg, "$path/args/$(i-1)"))
         end
 
-        # Check operator_apply references.
-        # DEPRECATION NOTE: `file.operators` cannot be populated from the wire
-        # any more — the top-level `operators` block was removed in esm-spec
-        # v0.3.0 (§9 closure) and `load`/`save` reject it. This branch survives
-        # only for in-memory-constructed `EsmFile`s that still carry the legacy
-        # field; for any loaded file, an `operator_apply` reference is always
-        # flagged undefined here.
+        # Check operator_apply references. The top-level `operators` block was
+        # removed in esm-spec v0.3.0 (§9 closure), so an operator reference can
+        # never resolve — flag it undefined.
         if expr.op == "operator_apply"
             # First argument should be an operator reference
             if !isempty(expr.args) && isa(expr.args[1], VarExpr)
                 op_name = expr.args[1].name
-                if file.operators === nothing || !haskey(file.operators, op_name)
-                    push!(errors, StructuralError(
-                        path,
-                        "Operator '$op_name' referenced but not defined",
-                        "undefined_operator"
-                    ))
-                end
+                push!(errors, StructuralError(
+                    path,
+                    "Operator '$op_name' referenced but not defined",
+                    "undefined_operator"
+                ))
             end
         end
     end
@@ -468,18 +462,13 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         end
 
     elseif isa(coupling_entry, CouplingOperatorApply)
-        # Validate that the referenced operator exists.
-        # DEPRECATION NOTE: as with the `operator_apply` expression op above,
-        # `file.operators` survives for in-memory compatibility only (the wire
-        # block was removed in esm-spec v0.3.0 §9 closure), so for any loaded
-        # file this branch always reports the operator as not found.
-        if file.operators === nothing || !haskey(file.operators, coupling_entry.operator)
-            push!(errors, StructuralError(
-                "$path/operator",
-                "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
-                "undefined_operator"
-            ))
-        end
+        # The top-level `operators` block was removed in esm-spec v0.3.0 (§9
+        # closure), so the referenced operator can never resolve — flag it.
+        push!(errors, StructuralError(
+            "$path/operator",
+            "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
+            "undefined_operator"
+        ))
 
     elseif isa(coupling_entry, CouplingCallback)
         # Basic validation - callback_id should be a non-empty string
@@ -855,10 +844,8 @@ end
 
 Check if a system (model, reaction_system, data_loader, or operator) exists in
 the ESM file. Delegates to [`find_top_level_system`](@ref) (types.jl) so the
-four-way top-level lookup lives in exactly one place. (The `operators` leg of
-that lookup matches only in-memory-constructed files: the `operators` block was
-removed from the wire format in esm-spec v0.3.0 — see the deprecation note on
-the `Operator` type.)
+top-level lookup (models, reaction systems, data loaders) lives in exactly one
+place.
 """
 function system_exists_in_file(file::EsmFile, system_name::String)::Bool
     system, _ = find_top_level_system(file, system_name)

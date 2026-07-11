@@ -92,11 +92,11 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
         @test length(recovered.reactions) == 1
         rxn = recovered.reactions[1]
-        # rxn.reactants / rxn.products return Dict{String,Float64} via the
-        # backward-compatibility getproperty intercept.
-        @test rxn.reactants["CH3O2"] ≈ 2.0
-        @test rxn.products["CH2O"]  ≈ 2.0
-        @test rxn.products["HO2"]   ≈ 0.8
+        # get_reactants_dict / get_products_dict give the Dict{String,Float64}
+        # species→coefficient view.
+        @test EarthSciAST.get_reactants_dict(rxn)["CH3O2"] ≈ 2.0
+        @test EarthSciAST.get_products_dict(rxn)["CH2O"] ≈ 2.0
+        @test EarthSciAST.get_products_dict(rxn)["HO2"] ≈ 0.8
     end
 
     @testset "Reservoir species (constant=true) maps to isconstantspecies (gt-ertm)" begin

@@ -966,23 +966,6 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.data_loaders !== nothing
         result["data_loaders"] = Dict(k => serialize_data_loader(v) for (k, v) in file.data_loaders)
     end
-    # The top-level `operators` / `registered_functions` blocks were removed
-    # in esm-spec v0.3.0 (§9 closure) and `load` rejects them as hard errors,
-    # so emitting them would produce a file parse refuses. The typed fields
-    # remain on `EsmFile` (legacy in-memory use), but they cannot reach the
-    # wire: refuse loudly instead of writing an unloadable document.
-    if file.operators !== nothing && !isempty(file.operators)
-        throw(ArgumentError("`operators` cannot be serialized: the top-level " *
-                            "`operators` block was removed in esm-spec v0.3.0 " *
-                            "(§9 closure) and `load` rejects it. Migrate per " *
-                            "`docs/rfcs/closed-function-registry.md` §6."))
-    end
-    if file.registered_functions !== nothing && !isempty(file.registered_functions)
-        throw(ArgumentError("`registered_functions` cannot be serialized: the " *
-                            "block was removed in esm-spec v0.3.0 (§9 closure). " *
-                            "Use the closed function registry via `fn` ops with " *
-                            "spec-defined names."))
-    end
     if file.enums !== nothing
         # esm-spec §9.3 — enum names map to objects mapping symbol → positive
         # integer. The on-wire shape is the parsed shape unchanged.

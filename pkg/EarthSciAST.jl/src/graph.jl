@@ -557,15 +557,15 @@ function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdg
     node_map = Dict{String, VariableNode}()
 
     # Collect all species and parameters.
-    # `.reactants`/`.products` go through the legacy Dict{String,Float64}
-    # property shim — intentional here: the dependency graph wants each
+    # Use the unordered Dict{String,Float64} views (`get_reactants_dict` /
+    # `get_products_dict`) intentionally: the dependency graph wants each
     # species once (Dict-key semantics), not the ordered author-entry list
     # (`raw_substrates`/`raw_products`), which may repeat a species.
     all_species = Set{String}()
-    for (species, _) in reaction.reactants
+    for (species, _) in get_reactants_dict(reaction)
         push!(all_species, species)
     end
-    for (species, _) in reaction.products
+    for (species, _) in get_products_dict(reaction)
         push!(all_species, species)
     end
 
@@ -587,8 +587,8 @@ function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdg
     end
 
     # Create stoichiometric edges (reactants and products affect each other)
-    for (reactant, _) in reaction.reactants
-        for (product, _) in reaction.products
+    for (reactant, _) in get_reactants_dict(reaction)
+        for (product, _) in get_products_dict(reaction)
             if reactant != product
                 # Reactant affects product (consumption -> production)
                 source_node = get(node_map, reactant, nothing)

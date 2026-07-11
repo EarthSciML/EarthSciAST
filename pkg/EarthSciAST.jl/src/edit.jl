@@ -67,7 +67,6 @@ function _rebuild(file::EsmFile;
                   models = file.models,
                   reaction_systems = file.reaction_systems,
                   data_loaders = file.data_loaders,
-                  operators = file.operators,
                   coupling = file.coupling,
                   domain = file.domain)
     return EsmFile(
@@ -75,8 +74,6 @@ function _rebuild(file::EsmFile;
         models = models,
         reaction_systems = reaction_systems,
         data_loaders = data_loaders,
-        operators = operators,
-        registered_functions = file.registered_functions,
         coupling = coupling,
         domain = domain,
         enums = file.enums,
@@ -311,14 +308,14 @@ function remove_species(system::ReactionSystem, name::String)::ReactionSystem
         throw(EditError("Species '$name' not found"))
     end
 
-    # Check for dependencies.
-    # `.reactants`/`.products` go through the legacy Dict{String,Float64}
-    # property shim — intentional here: this is a species-membership test
-    # (`haskey`), which is exactly the Dict view's semantics; the ordered
-    # `raw_substrates`/`raw_products` entry vectors offer nothing extra.
+    # Check for dependencies via the unordered Dict{String,Float64} views
+    # (`get_reactants_dict` / `get_products_dict`) intentionally: this is a
+    # species-membership test (`haskey`), which is exactly the Dict view's
+    # semantics; the ordered `raw_substrates`/`raw_products` entry vectors
+    # offer nothing extra.
     dependent_reactions = Int[]
     for (i, reaction) in enumerate(system.reactions)
-        if haskey(reaction.reactants, name) || haskey(reaction.products, name)
+        if haskey(get_reactants_dict(reaction), name) || haskey(get_products_dict(reaction), name)
             push!(dependent_reactions, i)
         end
     end
@@ -463,7 +460,6 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     merged_models = _merge_optional(file_a.models, file_b.models)
     merged_reaction_systems = _merge_optional(file_a.reaction_systems, file_b.reaction_systems)
     merged_data_loaders = _merge_optional(file_a.data_loaders, file_b.data_loaders)
-    merged_operators = _merge_optional(file_a.operators, file_b.operators)
 
     # v0.8.0: a single shared `domain` object (file_b takes precedence).
     merged_domain = file_b.domain === nothing ? file_a.domain : file_b.domain
@@ -480,7 +476,6 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
         models=merged_models,
         reaction_systems=merged_reaction_systems,
         data_loaders=merged_data_loaders,
-        operators=merged_operators,
         coupling=merged_coupling,
         domain=merged_domain)
 end
@@ -498,7 +493,6 @@ function extract(file::EsmFile, component_name::String)::EsmFile
     extracted_models = Dict{String,Model}()
     extracted_reaction_systems = Dict{String,ReactionSystem}()
     extracted_data_loaders = Dict{String,DataLoader}()
-    extracted_operators = Dict{String,Operator}()
 
     found = false
     if file.models !== nothing && haskey(file.models, component_name)
@@ -509,9 +503,6 @@ function extract(file::EsmFile, component_name::String)::EsmFile
         found = true
     elseif file.data_loaders !== nothing && haskey(file.data_loaders, component_name)
         extracted_data_loaders[component_name] = file.data_loaders[component_name]
-        found = true
-    elseif file.operators !== nothing && haskey(file.operators, component_name)
-        extracted_operators[component_name] = file.operators[component_name]
         found = true
     end
 
@@ -547,6 +538,5 @@ function extract(file::EsmFile, component_name::String)::EsmFile
         models=extracted_models,
         reaction_systems=extracted_reaction_systems,
         data_loaders=extracted_data_loaders,
-        operators=extracted_operators,
         coupling=relevant_coupling)
 end

@@ -105,7 +105,7 @@ export
     # Data and operator types
     DataLoader, DataLoaderSource, DataLoaderTemporal,
     DataLoaderVariable, DataLoaderDeterminism,
-    Operator, RegisteredFunction, RegisteredFunctionSignature, CouplingEntry,
+    CouplingEntry,
     # Concrete coupling types
     CouplingOperatorCompose, CouplingCouple, CouplingVariableMap,
     CouplingOperatorApply, CouplingCallback, CouplingEvent, CouplingImport,

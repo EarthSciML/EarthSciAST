@@ -221,8 +221,8 @@ end
         # Substituting the rate must not disturb coupling references:
         # substrates/products still point to "A" / "B" with the original
         # stoichiometries, and species/parameter lists are unchanged.
-        # Raw field access — `.products`/`.reactants` go through a
-        # backward-compat Dict shim (see types.jl getproperty).
+        # Direct access to the ordered StoichiometryEntry vectors
+        # (equivalently `raw_substrates` / `raw_products`).
         @test getfield(sys.reactions[1], :substrates) == [SE("A", 1)]
         @test getfield(sys.reactions[1], :products) == [SE("B", 1)]
         @test [s.name for s in sys.species] == ["A", "B"]

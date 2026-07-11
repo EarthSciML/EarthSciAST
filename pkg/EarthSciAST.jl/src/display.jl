@@ -1130,9 +1130,6 @@ function Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile)
     if !isnothing(esm_file.data_loaders) && !isempty(esm_file.data_loaders)
         push!(components, "$(length(esm_file.data_loaders)) data loaders")
     end
-    if !isnothing(esm_file.operators) && !isempty(esm_file.operators)
-        push!(components, "$(length(esm_file.operators)) operators")
-    end
 
     if !isempty(components)
         println(io, "Components: $(join(components, ", "))")
@@ -1160,8 +1157,8 @@ end
 
 Render one side (substrates or products) of a reaction from the ordered
 `StoichiometryEntry` vector — get it via [`raw_substrates`](@ref) /
-[`raw_products`](@ref), which preserve author order (the `.reactants` /
-`.products` property shim yields an unordered Dict view). Entries join with
+[`raw_products`](@ref), which preserve author order (the `get_reactants_dict` /
+`get_products_dict` Dict views do not). Entries join with
 `" + "`; an entry with stoichiometry 1 renders as the bare species, otherwise
 `format_coefficient(stoichiometry)` is prefixed (the formatter supplies any
 coefficient/species separator itself, e.g. `"2*"` for code emitters or `"2"`
@@ -1222,8 +1219,8 @@ function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
     chem_coefficient(c) = isinteger(c) ? string(Int(c)) : string(c)
     for (i, reaction) in enumerate(reaction_system.reactions)
         # raw_substrates/raw_products: the ordered StoichiometryEntry vectors
-        # (the `.reactants`/`.products` property shim is an unordered Dict
-        # view that loses author order).
+        # (the `get_reactants_dict`/`get_products_dict` Dict views lose author
+        # order).
         reactants_str = _format_stoichiometry_side(raw_substrates(reaction);
             format_species=unicode_species, format_coefficient=chem_coefficient,
             empty="")

@@ -27,6 +27,7 @@ module EarthSciASTCatalystExt
 using EarthSciAST
 using EarthSciAST: NumExpr, IntExpr, VarExpr, OpExpr, Reaction,
     ReactionSystem, Species, Parameter,
+    get_reactants_dict, get_products_dict,
     GapReport,
     # MTK-independent export helpers shared with the MTK extension
     # (defined next to GapReport in src/mtk_export.jl).
@@ -160,7 +161,7 @@ function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
         # change the reaction's stoichiometry, so fail loudly instead.
         reactants_syms = Any[]
         reactant_stoich = Real[]
-        for (spname, st) in esm_rxn.reactants
+        for (spname, st) in get_reactants_dict(esm_rxn)
             haskey(species_dict, spname) || throw(ArgumentError(
                 "reaction reactant '$(spname)' is not declared in the " *
                 "reaction system's species list"))
@@ -170,7 +171,7 @@ function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
 
         products_syms = Any[]
         product_stoich = Real[]
-        for (spname, st) in esm_rxn.products
+        for (spname, st) in get_products_dict(esm_rxn)
             haskey(species_dict, spname) || throw(ArgumentError(
                 "reaction product '$(spname)' is not declared in the " *
                 "reaction system's species list"))

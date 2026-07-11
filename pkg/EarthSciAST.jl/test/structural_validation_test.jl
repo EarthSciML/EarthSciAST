@@ -200,15 +200,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
 
         @testset "CouplingOperatorApply validation" begin
-            operator = EarthSciAST.Operator("test_op", ["x"])
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, operators=Dict("test_op" => operator))
+            # The top-level `operators` block was removed (esm-spec v0.3.0 §9
+            # closure), so an operator reference can never resolve — it is
+            # always flagged undefined.
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata)
 
-            # Valid operator reference
-            coupling = EarthSciAST.CouplingOperatorApply("test_op")
-            errors = EarthSciAST.validate_coupling_references(esm_file, coupling, "/coupling/0")
-            @test isempty(errors)
-
-            # Invalid operator reference
             coupling_bad = EarthSciAST.CouplingOperatorApply("nonexistent_op")
             errors = EarthSciAST.validate_coupling_references(esm_file, coupling_bad, "/coupling/0")
             @test length(errors) == 1

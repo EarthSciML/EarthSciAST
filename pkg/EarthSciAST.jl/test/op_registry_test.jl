@@ -233,16 +233,16 @@ end
         @test same == Dict("a" => Any[1, 2])
     end
 
-    @testset "raw_substrates / raw_products bypass the Dict-view shim" begin
+    @testset "raw_substrates / raw_products give the ordered fields" begin
         subs = [ESM.StoichiometryEntry("B", 1.0), ESM.StoichiometryEntry("A", 2.0)]
         prods = [ESM.StoichiometryEntry("C", 1.0)]
         r = Reaction("r1", subs, prods, NumExpr(1.0))
         @test ESM.raw_substrates(r) === getfield(r, :substrates)
         @test ESM.raw_products(r) === getfield(r, :products)
-        # Order preserved (the shim's Dict view loses it).
+        # Order preserved (the Dict view loses it).
         @test [e.species for e in ESM.raw_substrates(r)] == ["B", "A"]
-        # The legacy shim still serves the Dict view.
-        @test r.products == Dict("C" => 1.0)
+        # get_products_dict serves the unordered Dict view.
+        @test ESM.get_products_dict(r) == Dict("C" => 1.0)
         # Source/sink reactions keep the raw `nothing`.
         rsrc = Reaction("r2", nothing, prods, NumExpr(1.0))
         @test ESM.raw_substrates(rsrc) === nothing
