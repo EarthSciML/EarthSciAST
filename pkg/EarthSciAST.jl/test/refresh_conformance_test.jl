@@ -28,6 +28,8 @@ import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solve
 using JSON3
 const _ESS_RG = EarthSciAST
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture (idempotent)
+
 # Recursively convert a parsed JSON3 tree into a mutable nested Dict/Vector so the
 # loader-fed `discrete` declarations can be stripped for the simulate view.
 _rg_mutable(x::JSON3.Object) = Dict{String,Any}(String(k) => _rg_mutable(v) for (k, v) in x)

@@ -84,6 +84,29 @@ const ESM = EarthSciAST
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
+    @testset "_SPATIAL_OPS / _DIM_SPATIAL_OPS membership (pre-registry literal)" begin
+        # flatten.jl's spatial-operator detection (plus `D` with a spatial
+        # `wrt`, which is checked separately at the use sites).
+        @test ESM._SPATIAL_OPS == Set{String}(["grad", "div", "laplacian"])
+        @test ESM._SPATIAL_OPS isa Set{String}
+        # The spatial operators carrying an explicit `dim` field (`laplacian`
+        # does not — it implies the domain's full spatial axes).
+        @test ESM._DIM_SPATIAL_OPS == Set{String}(["grad", "div"])
+        @test ESM._DIM_SPATIAL_OPS isa Set{String}
+    end
+
+    @testset "_ARRAY_PRODUCER_OPS / _SELF_INDEXED_OPS membership (pre-registry literal)" begin
+        # shape_promotion.jl's array rewrites: producers, and the
+        # self-indexing nodes (producers + `index`) the leaf-indexing
+        # rewrites never descend into.
+        @test ESM._ARRAY_PRODUCER_OPS ==
+              Set{String}(["aggregate", "arrayop", "makearray"])
+        @test ESM._ARRAY_PRODUCER_OPS isa Set{String}
+        @test ESM._SELF_INDEXED_OPS ==
+              Set{String}(["aggregate", "arrayop", "makearray", "index"])
+        @test ESM._SELF_INDEXED_OPS isa Set{String}
+    end
+
     @testset "registry accessors" begin
         @test ESM._op_spec("sin") isa ESM._OpSpec
         @test ESM._op_spec("sin").scalar_fn === sin

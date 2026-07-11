@@ -1,5 +1,6 @@
 using Test
 using EarthSciAST
+using JSON3
 # Import both MTK and Catalyst qualified to avoid name collisions with
 # EarthSciAST exports (e.g. `Equation`, `Reaction`).
 import ModelingToolkit

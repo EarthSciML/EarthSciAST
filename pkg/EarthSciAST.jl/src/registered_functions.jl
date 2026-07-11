@@ -613,14 +613,15 @@ function _lower_reaction_system_enums!(rs::ReactionSystem,
                                        enums::Dict{String,Dict{String,Int}})
     new_reactions = Reaction[]
     for r in rs.reactions
-        # Use getfield to bypass the back-compat property override that
-        # turns `r.products`/`r.reactants` into `Dict{String,Float64}`.
-        push!(new_reactions, Reaction(getfield(r, :id),
-            getfield(r, :substrates),
-            getfield(r, :products),
-            _lower_expr_enums(getfield(r, :rate), enums);
-            name=getfield(r, :name),
-            reference=getfield(r, :reference)))
+        # `raw_substrates`/`raw_products` bypass the back-compat property
+        # override that turns `r.products`/`r.reactants` into
+        # `Dict{String,Float64}` (the other fields are not shimmed).
+        push!(new_reactions, Reaction(r.id,
+            raw_substrates(r),
+            raw_products(r),
+            _lower_expr_enums(r.rate, enums);
+            name=r.name,
+            reference=r.reference))
     end
     empty!(rs.reactions)
     append!(rs.reactions, new_reactions)

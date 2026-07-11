@@ -27,6 +27,11 @@
 using Test
 using EarthSciAST
 import JSON3
+# GeometryOps + GeoInterface trigger EarthSciASTGeometryOpsExt — the spherical
+# clip/area the narrow phase runs through. Under runtests.jl the sibling
+# geometry files already load them; the imports keep this file standalone-safe.
+import GeometryOps
+import GeoInterface
 
 const ESS = EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT

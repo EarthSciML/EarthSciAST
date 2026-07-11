@@ -47,14 +47,20 @@ struct _OpSpec
     stencil_elementwise::Bool
     geo_eval::Bool
     mtk_known::Bool
+    spatial::Bool
+    dim_spatial::Bool
+    array_producer::Bool
+    self_indexed::Bool
 end
 
 # Compact row constructor for `_OP_TABLE` (keyword flags keep the table
 # readable; every flag defaults to false).
 _op(name::String; arity=nothing, category::Symbol, fn=nothing,
     ws4::Bool=false, cse::Bool=false, stencil::Bool=false,
-    geo::Bool=false, known::Bool=false) =
-    _OpSpec(name, arity, category, fn, ws4, cse, stencil, geo, known)
+    geo::Bool=false, known::Bool=false, spatial::Bool=false,
+    dimsp::Bool=false, arrprod::Bool=false, selfidx::Bool=false) =
+    _OpSpec(name, arity, category, fn, ws4, cse, stencil, geo, known,
+            spatial, dimsp, arrprod, selfidx)
 
 """
     _OP_FLAG_NAMES
@@ -66,9 +72,14 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:stencil_elementwise`→ `_STENCIL_ELEMENTWISE_OPS`      (tree_walk/stencil.jl)
 - `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/geometry_setup.jl)
 - `:mtk_known`          → `_KNOWN_OPS`                    (ext/EarthSciASTMTKExt.jl)
+- `:spatial`            → `_SPATIAL_OPS`                  (flatten.jl)
+- `:dim_spatial`        → `_DIM_SPATIAL_OPS`              (flatten.jl)
+- `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
+- `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 """
 const _OP_FLAG_NAMES =
-    (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known)
+    (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
+     :spatial, :dim_spatial, :array_producer, :self_indexed)
 
 """
     _OP_TABLE
@@ -88,6 +99,14 @@ hand:
   setup-time geometry evaluator (`_geo_eval` / `_geo_apply_scalar`) speaks.
 - `_KNOWN_OPS` (ext/EarthSciASTMTKExt.jl) — ops the MTK exporter recognizes;
   anything else is flagged as a likely registered-function gap (gt-p3ep).
+- `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` (src/flatten.jl) — the spatial
+  differential operators the flatten pipeline detects (`_DIM_SPATIAL_OPS` are
+  the subset carrying an explicit `dim` field; `laplacian` does not — it
+  implies the domain's full spatial axes).
+- `_ARRAY_PRODUCER_OPS` / `_SELF_INDEXED_OPS` (src/shape_promotion.jl) —
+  array-producing nodes for the shape-promotion / pointwise-lift rewrites,
+  and the nodes that carry their own indexing (the producers plus `index`),
+  which the leaf-indexing rewrites never descend into.
 - [`_UNARY_ELEMENTWISE_OPS`](@ref) — the ordered mechanical-unary table
   (derived by filter, not by flag).
 
@@ -211,21 +230,27 @@ const _OP_TABLE = _OpSpec[
     #    time; never scalar-evaluated) ──
     _op("D";         category=:calculus, cse=true, known=true),
     _op("ic";        category=:calculus, cse=true, known=true),
-    _op("grad";      category=:calculus, cse=true, known=true),
-    _op("div";       category=:calculus, cse=true, known=true),
-    _op("laplacian"; category=:calculus, cse=true, known=true),
+    _op("grad";      category=:calculus, cse=true, known=true,
+        spatial=true, dimsp=true),
+    _op("div";       category=:calculus, cse=true, known=true,
+        spatial=true, dimsp=true),
+    _op("laplacian"; category=:calculus, cse=true, known=true, spatial=true),
 
     # ── Array producers / gathers / reshapes ──
-    _op("index";     category=:array, cse=true, geo=true, known=true),
-    _op("makearray"; category=:array, cse=true, known=true),
+    _op("index";     category=:array, cse=true, geo=true, known=true,
+        selfidx=true),
+    _op("makearray"; category=:array, cse=true, known=true,
+        arrprod=true, selfidx=true),
     _op("broadcast"; category=:array, cse=true, known=true),
     _op("reshape";   category=:array, cse=true, known=true),
     _op("transpose"; category=:array, cse=true, known=true),
     _op("concat";    category=:array, cse=true, known=true),
 
     # ── Aggregates (semiring FAQ; RFC §5.3/§7.2) ──
-    _op("arrayop";   category=:aggregate, cse=true, geo=true, known=true),
-    _op("aggregate"; category=:aggregate, cse=true, geo=true, known=true),
+    _op("arrayop";   category=:aggregate, cse=true, geo=true, known=true,
+        arrprod=true, selfidx=true),
+    _op("aggregate"; category=:aggregate, cse=true, geo=true, known=true,
+        arrprod=true, selfidx=true),
 
     # ── Geometry kernel leaves (RFC §8.1) & value invention (RFC §5.5) ──
     _op("intersect_polygon";         category=:geometry, geo=true),

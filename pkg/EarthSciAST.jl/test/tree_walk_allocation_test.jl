@@ -66,7 +66,7 @@ end
 
 # Closed-function (`interp.*`) leaves on the array RHS (ess-wrh). Each is a single
 # arrayop `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
-# axis ride on the fn handler (lowered to a typed `_Interp*Spec` at build time);
+# axis ride on the fn payload (lowered to a typed `_Interp*Spec` at build time);
 # the per-cell query `u[i]` merges to a GATHER. These exercise the de-boxed
 # whole-array `_eval_vec_interp_*` kernels: the only Float64 arrays are the
 # preallocated buffers, so a steady-state `f!` call must allocate 0 bytes even

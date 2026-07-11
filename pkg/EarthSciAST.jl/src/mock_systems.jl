@@ -329,17 +329,17 @@ function MockCatalystSystem(rsys::ReactionSystem;
     params = [p.name for p in rsys.parameters]
 
     # Render one side of a reaction from the ORDERED StoichiometryEntry vector
-    # (`getfield` bypasses the backward-compat `getproperty` that converts
-    # :reactants/:products into an unordered Dict — Dict iteration order made
-    # the rendered string nondeterministic).
+    # (`raw_substrates`/`raw_products` bypass the backward-compat `getproperty`
+    # that converts :reactants/:products into an unordered Dict — Dict
+    # iteration order made the rendered string nondeterministic).
     side_str(entries) = (entries === nothing || isempty(entries)) ? "∅" :
         join([e.stoichiometry > 1 ? "$(e.stoichiometry) $(e.species)" : e.species
               for e in entries], " + ")
 
     reactions = String[]
     for rxn in rsys.reactions
-        reactant_str = side_str(getfield(rxn, :substrates))
-        product_str = side_str(getfield(rxn, :products))
+        reactant_str = side_str(raw_substrates(rxn))
+        product_str = side_str(raw_products(rxn))
         rate_str = _expr_to_string(rxn.rate)
         arrow = rxn.reversible ? " ⇌ " : " → "
         push!(reactions, "$reactant_str$arrow$product_str, rate: $rate_str")

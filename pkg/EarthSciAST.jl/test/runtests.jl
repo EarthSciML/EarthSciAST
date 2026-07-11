@@ -7,7 +7,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 @testset "EarthSciAST.jl Tests" begin
 
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
-    #      validate.jl, structural_validation.jl, display.jl, graph.jl) ----
+    #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")
     include("parse_test.jl")
     include("validate_test.jl")
@@ -35,12 +35,15 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_ops_test.jl")
     include("catalyst_extension_test.jl")
 
-    # ---- References, codegen, flatten, editing (src/reference_resolution.jl,
-    #      codegen.jl, flatten.jl, mock_systems.jl, editing.jl) ----
+    # ---- References, codegen, flatten, editing (reference helpers in
+    #      src/types.jl; codegen.jl; flatten.jl and its split passes
+    #      (flatten_errors.jl, namespacing.jl, coupling_apply.jl,
+    #      pointwise_lift.jl, array_shape_inference.jl, shape_promotion.jl);
+    #      mock_systems.jl; edit.jl) ----
     include("reference_resolution_test.jl")
     include("codegen_test.jl")
     include("flatten_test.jl")
-    include("coupling_imports.jl")
+    include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
     include("mock_systems_test.jl")
     include("shape_promotion_test.jl")
@@ -104,8 +107,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
 
-    # ---- Expression templates & scoped imports (src/expression_templates.jl,
-    #      template machinery) ----
+    # ---- Expression templates & scoped imports
+    #      (src/lower_expression_templates.jl, template_imports.jl) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
     include("scope_injection_test.jl")

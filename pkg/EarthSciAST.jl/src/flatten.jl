@@ -214,17 +214,16 @@ end
 # Spatial-operator detection
 # ========================================
 
-# Op-class memberships used by the flatten pipeline's spatial detection.
-# NOTE: these (like shape_promotion.jl's `_ARRAY_PRODUCER_OPS` /
-# `_SELF_INDEXED_OPS`) really belong in op_registry.jl as membership flags;
-# the registry is frozen this wave, so they live here for now.
+# Op-class memberships used by the flatten pipeline's spatial detection,
+# derived from the registry flags (src/op_registry.jl); memberships are
+# pinned literal-for-literal by test/op_registry_test.jl.
 #
 # All spatial differential operators (plus `D` with a spatial `wrt`, which is
 # checked separately since it depends on the `wrt` value).
-const _SPATIAL_OPS = ("grad", "div", "laplacian")
+const _SPATIAL_OPS = _ops_with(:spatial)
 # The spatial operators that carry an explicit `dim` field (`laplacian` does
 # not — it implies the domain's full spatial axes).
-const _DIM_SPATIAL_OPS = ("grad", "div")
+const _DIM_SPATIAL_OPS = _ops_with(:dim_spatial)
 
 """
     has_spatial_operator(expr) -> Bool

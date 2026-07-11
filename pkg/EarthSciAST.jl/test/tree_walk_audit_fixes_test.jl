@@ -161,12 +161,12 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.Expr[a...]; kw...)
     end
 
     # ----------------------------------------------------------------
-    @testset ":fn arm throws explicitly on a non-interp const-args handler" begin
+    @testset ":fn arm throws explicitly on a non-interp const-args payload" begin
         # Hand-construct the (compile-unreachable) node shape: const args
         # present, but the name matches no interp.* eval case. The arm must
         # throw, never return `nothing`.
         bad = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-                          handler=("datetime.julian_day", Any[[1.0]]),
+                          payload=("datetime.julian_day", Any[[1.0]]),
                           children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL,
                                                          literal=0.0)])
         err = try

@@ -1778,8 +1778,9 @@ end
 Get reactants as dictionary for backward compatibility.
 """
 function get_reactants_dict(reaction::Reaction)::Dict{String,Float64}
-    # Use getfield to avoid infinite recursion
-    substrates_field = getfield(reaction, :substrates)
+    # Raw ordered field via the accessor (defined below) — NOT property
+    # access, which routes through the getproperty shim.
+    substrates_field = raw_substrates(reaction)
     if substrates_field === nothing
         return Dict{String,Float64}()
     else
@@ -1793,8 +1794,10 @@ end
 Get products as dictionary for backward compatibility.
 """
 function get_products_dict(reaction::Reaction)::Dict{String,Float64}
-    # Use getfield to avoid infinite recursion
-    products_field = getfield(reaction, :products)
+    # Raw ordered field via the accessor (defined below) — property access
+    # (`reaction.products`) routes through the getproperty shim back to this
+    # function and would recurse forever.
+    products_field = raw_products(reaction)
     if products_field === nothing
         return Dict{String,Float64}()
     else

@@ -759,3 +759,35 @@ end
         @test f.index_sets["edges"].size == 6                   # merged registry
     end
 end
+
+# ---------------------------------------------------------------------------
+# Diagnostic-code registry coverage (src/lower_expression_templates.jl).
+# `_KNOWN_DIAGNOSTIC_CODES` documents itself as "the single registry of every
+# code this exception is raised with" — hold src/ to that: scan every source
+# file for `ExpressionTemplateError("<code>", …)` raise sites and assert the
+# raised codes are a subset of the registry.
+# ---------------------------------------------------------------------------
+@testset "every raised ExpressionTemplateError code is registered" begin
+    src_dir = normpath(joinpath(@__DIR__, "..", "src"))
+    raised = Set{String}()
+    for (root, _, files) in walkdir(src_dir), file in files
+        endswith(file, ".jl") || continue
+        text = read(joinpath(root, file), String)
+        # First string-literal argument of each raise site (the code). The two
+        # sites in template_imports.jl `_merge_named!` pass the code through a
+        # variable (template_import_name_conflict /
+        # template_import_index_set_conflict — asserted registered below) and
+        # are deliberately not matched by this literal-only pattern.
+        for m in eachmatch(r"ExpressionTemplateError\(\s*\"([^\"]+)\"", text)
+            push!(raised, m.captures[1])
+        end
+    end
+    # Guard the scan itself: a pattern/layout drift that matched nothing would
+    # pass the subset check vacuously.
+    @test length(raised) >= 30
+    registry = Set{String}(EarthSciAST._KNOWN_DIAGNOSTIC_CODES)
+    @test isempty(setdiff(raised, registry))
+    # The variable-code sites' codes are registered too.
+    @test "template_import_name_conflict" in registry
+    @test "template_import_index_set_conflict" in registry
+end

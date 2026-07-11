@@ -36,10 +36,10 @@ const _NK_TIME         = UInt8(4)   # return t
 const _NK_OP           = UInt8(5)   # apply op to children
 const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
 const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
-const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: handler[idx] (ess-14f.3)
+const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx] (ess-14f.3)
 
 # One compiled scalar-IR node. `kind` selects which fields are live. The
-# catch-all `handler::Any` slot carries a KIND-DEPENDENT runtime payload,
+# catch-all `payload::Any` slot carries a KIND-DEPENDENT runtime payload,
 # type-asserted at its read sites (`_eval_node` / `_eval_node_op`, and the
 # vectorized lowerings `_merge_nodes` / `_lower_template`, which mirror the
 # same field on `_VecNode` — the name is shared across both IRs):
@@ -60,7 +60,7 @@ struct _Node
     literal::Float64
     idx::Int
     sym::Symbol
-    handler::Any
+    payload::Any
     children::Vector{_Node}
 end
 
@@ -102,19 +102,19 @@ const _MaybeMemo = Union{Nothing,_BuildMemo}
 
 function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
                  literal::Float64=0.0, idx::Int=0,
-                 sym::Symbol=Symbol(""), handler=nothing,
+                 sym::Symbol=Symbol(""), payload=nothing,
                  children::Vector{_Node}=_Node[])
-    return _Node(kind, op, literal, idx, sym, handler, children)
+    return _Node(kind, op, literal, idx, sym, payload, children)
 end
 
 # ---- interp.* const-arg protocol (one table, both ends) ------------------------
 # Which spec arg positions of each `interp.*` closed function are CONST-ARRAY
-# args. `_compile_op` pre-extracts those args into the node's `handler` payload
+# args. `_compile_op` pre-extracts those args into the node's `payload` slot
 # (`(fname, Vector{Any})`, in table order) and compiles only the remaining
 # scalar args as children (in spec order); the `:fn` arm of `_eval_node_op`
 # re-splices both back into spec arg-position order from this SAME table, so
 # the two ends of the protocol cannot drift. The vectorized `_merge_fn_node`
-# (vectorize.jl) consumes the handler payload layout pinned here. `const_errs`
+# (vectorize.jl) consumes the payload layout pinned here. `const_errs`
 # are the pinned per-position diagnostics for a non-const argument.
 const _FN_CONST_ARG_SPECS = (
     # Spec arg order: (x, xs) — xs const, x scalar.
@@ -185,10 +185,10 @@ function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo
 end
 function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
-    handler = nothing
+    payload = nothing
     if op_sym === :fn
         # Closed function registry (esm-spec §9.2 / esm-tzp). The function
-        # name is captured in the node's `handler` slot as a tuple of
+        # name is captured in the node's `payload` slot as a tuple of
         # (name::String, const_args_or_nothing). For the `interp.*` functions
         # the const-array args are pre-extracted per `_FN_CONST_ARG_SPECS` so
         # the runtime hot path doesn't walk the AST.
@@ -202,7 +202,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if spec === nothing
             children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
                              for a in expr.args]
-            handler = (fname, nothing)
+            payload = (fname, nothing)
         else
             length(expr.args) == spec.arity ||
                 throw(TreeWalkError("E_TREEWALK_FN_ARITY",
@@ -215,9 +215,9 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                              for (k, pos) in enumerate(spec.const_positions)]
             children = _Node[_compile(expr.args[pos], var_map, param_syms, reg_funcs, memo)
                              for pos in 1:spec.arity if !(pos in spec.const_positions)]
-            handler = (fname, const_args)
+            payload = (fname, const_args)
         end
-        return _mknode(kind=_NK_OP, op=op_sym, children=children, handler=handler)
+        return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -301,7 +301,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # `index`); see the JL-J0 feasibility-gate note in `_build_evaluator_impl`.
         if expr.value isa _PGatherRef
             ref = expr.value::_PGatherRef
-            return _mknode(kind=_NK_PARAM_GATHER, idx=ref.lin, handler=ref.flat)
+            return _mknode(kind=_NK_PARAM_GATHER, idx=ref.lin, payload=ref.flat)
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
@@ -310,7 +310,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                             "$(expr.op) reached _compile unresolved — " *
                             "_resolve_indices must run first"))
     end
-    return _mknode(kind=_NK_OP, op=op_sym, children=children, handler=handler)
+    return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
 end
 
 # ============================================================
@@ -441,7 +441,7 @@ function _compile_cse(expr::Expr, var_map, param_syms, reg_funcs, ctx::_CSEConte
     key = _cse_key(expr)
     if key !== nothing && key in ctx.cached
         s = get(ctx.slot, key, 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, handler=ctx.cache)
+        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
         # First occurrence: compile children first (assigning them lower slots,
         # keeping `defs` topologically ordered), reserve this slot, register the
         # def, and return a ref. Every later occurrence hits the `s != 0` path.
@@ -451,7 +451,7 @@ function _compile_cse(expr::Expr, var_map, param_syms, reg_funcs, ctx::_CSEConte
         s = length(ctx.defs) + 1
         ctx.slot[key] = s
         push!(ctx.defs, defnode)
-        return _mknode(kind=_NK_CACHED, idx=s, handler=ctx.cache)
+        return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
     end
     # Not cached: reconstruct the same `_NK_OP` node `_compile` would, but with
     # hoisted children.
@@ -505,22 +505,22 @@ end
     elseif k === _NK_PARAM
         return getfield(p, n.sym)
     elseif k === _NK_PARAM_GATHER
-        # Live read of a captured forcing buffer (ess-14f.3). `handler` is the
+        # Live read of a captured forcing buffer (ess-14f.3). `payload` is the
         # aliased flat `Vector{Float64}` (a `_PGatherArray.flat`) and `idx` the
         # pre-linearized column-major offset, both fixed at build time; the buffer
         # CONTENTS are refreshed in place by the J1 discrete callback. The concrete
         # `::Vector{Float64}` assert keeps this monomorphic + zero-alloc (no
         # runtime-symbol `getfield`, so the scalar `p` NamedTuple stays homogeneous).
-        @inbounds return (n.handler::Vector{Float64})[n.idx]
+        @inbounds return (n.payload::Vector{Float64})[n.idx]
     elseif k === _NK_TIME
         return t
     elseif k === _NK_CACHED
         # Common-subexpression reference (ess-r7h). The value was computed once
         # into the per-call scratch cache by the CSE prelude (see `_make_rhs`);
         # every occurrence reads it here instead of re-walking the subtree. The
-        # cache vector is captured in `handler` at build time, so this needs no
+        # cache vector is captured in `payload` at build time, so this needs no
         # extra eval argument and the recursive `_eval_node` family is unchanged.
-        @inbounds return (n.handler::Vector{Float64})[n.idx]
+        @inbounds return (n.payload::Vector{Float64})[n.idx]
     elseif k === _NK_CONTRACTION
         return _eval_contraction(n, u, p, t)
     else
@@ -703,7 +703,7 @@ function _eval_node_op(n::_Node, u, p, t)
         return _eval_node(c[1], u, p, t)
 
     elseif op === :fn
-        # `n.handler` is `(fname::String, const_args_or_nothing)`. The
+        # `n.payload` is `(fname::String, const_args_or_nothing)`. The
         # tuple's second slot is `nothing` for closed functions whose args
         # are all scalar (e.g. `datetime.*`): the children are the full
         # spec-order arg list. For closed functions with const-array args it
@@ -711,7 +711,7 @@ function _eval_node_op(n::_Node, u, p, t)
         # `_FN_CONST_ARG_SPECS` order; re-splice them (at their table-pinned
         # spec positions) with the evaluated scalar children (in child order)
         # to rebuild the spec-order argument vector.
-        fname, const_args = n.handler::Tuple{String,Any}
+        fname, const_args = n.payload::Tuple{String,Any}
         if const_args === nothing
             args_evaluated = Any[_eval_node(ci, u, p, t) for ci in c]
             return Float64(evaluate_closed_function(fname, args_evaluated))

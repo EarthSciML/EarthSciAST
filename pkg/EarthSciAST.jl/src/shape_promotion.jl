@@ -66,17 +66,16 @@ function _infer_expr_shape(expr::Expr,
     return String[]
 end
 
-# Op-class memberships for the array rewrites below and in pointwise_lift.jl.
-# NOTE: like flatten.jl's `_SPATIAL_OPS`/`_DIM_SPATIAL_OPS`, these belong in
-# op_registry.jl as membership flags; the registry is frozen this wave, so
-# they live here for now.
+# Op-class memberships for the array rewrites below and in pointwise_lift.jl,
+# derived from the registry flags (src/op_registry.jl); memberships are
+# pinned literal-for-literal by test/op_registry_test.jl.
 #
 # Nodes that PRODUCE an array (subject to `output_idx` emptiness for the
 # reductions — see `_is_array_producer`).
-const _ARRAY_PRODUCER_OPS = ("aggregate", "arrayop", "makearray")
+const _ARRAY_PRODUCER_OPS = _ops_with(:array_producer)
 # Nodes that carry their own indexing (the array producers plus an `index`
 # gather): the leaf-indexing rewrites never descend into them.
-const _SELF_INDEXED_OPS = ("aggregate", "arrayop", "makearray", "index")
+const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
 
 # Shared typed bare-array-reference rewrite: wrap array references in
 # `index(ref, loops…)` gathers. A `VarExpr` leaf naming a variable in

@@ -1,7 +1,7 @@
 """
     EarthSciASTEarthSciIOExt
 
-Wires the EarthSciIO Julia `Provider` into ESS's data-provider seam
+Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 ([`provider_refresh_times`](@ref) / [`provider_sample`](@ref)), loaded
 automatically whenever `EarthSciIO` is in the session alongside
 EarthSciAST. Before this extension existed the adapter shipped only as
@@ -9,7 +9,7 @@ a doc comment on the seam (`data_refresh.jl`), so every run script had to repeat
 it; now `simulate(...; providers = Dict("Loader.var" => provider))` accepts an
 EarthSciIO provider with no per-script glue.
 
-DELIBERATELY THIN. ESS is agnostic to dimension order: the provider sample is
+DELIBERATELY THIN. EarthSciAST is agnostic to dimension order: the provider sample is
 handed straight to the forcing-write / const-array fold, which
 linearizes it column-major against the CONSUMER's declared shape and never
 inspects the data's named dims or coordinates (`_write_forcing!`,
@@ -38,7 +38,7 @@ provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
 # One forcing field at cadence tick `t`, in the source's NATIVE layout (no
 # reorder — see the module docstring). `providers` is keyed one entry per consumer
 # variable, so a sample carries exactly one data variable; a multi-variable blob
-# is a binding error the caller must split (ESS can't know which field a bare
+# is a binding error the caller must split (EarthSciAST can't know which field a bare
 # array means). Returns the bare `AbstractArray` that `_write_forcing!` /
 # `_provider_const_field` expect for a single-variable sample.
 function provider_sample(p::EarthSciIO.Provider, t::Real)

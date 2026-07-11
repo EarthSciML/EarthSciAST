@@ -90,7 +90,7 @@ const _VK_PGATHER  = UInt8(10)  # forcing[slots] — gather over a captured live
 # the boxed all-scalar `fn` path (`datetime.*`): a reused closed-function argument
 # vector and the child result buffers, so that map reuses one `Any[]` across lanes
 # instead of building a fresh one per cell. The `interp.*` `fn` ops carry a typed
-# `_Interp*Spec` in `handler` instead and run zero-box whole-array kernels
+# `_Interp*Spec` in `payload` instead and run zero-box whole-array kernels
 # (ess-wrh), leaving `fnargs`/`cvbufs` as shared empty sentinels; every non-`fn`
 # node shares those sentinels too.
 #
@@ -104,15 +104,14 @@ struct _VecNode
     literal::Float64
     idx::Int
     sym::Symbol
-    # Per-kind payload (`handler` is the historical name, pinned by tests —
-    # test/tree_walk_vectorized_test.jl reads `merged.handler`):
+    # Per-kind payload:
     #   _VK_PGATHER → the captured live forcing buffer (`Vector{Float64}`,
     #                 aliased — refreshed in place by the loader callback);
     #   _VK_FN      → a typed `_Interp*Spec` (zero-box `interp.*` kernels) or
     #                 the boxed closed-function carrier `Tuple{String,Any}`
     #                 (`(fname, const_args)`) for the all-scalar `datetime.*`
     #                 path;
-    #   _VK_OP      → whatever `_Node.handler` carried through `_merge_nodes`
+    #   _VK_OP      → whatever `_Node.payload` carried through `_merge_nodes`
     #                 (a `(name, const_args)` tuple on closed-call ops;
     #                 `nothing` for ordinary elementwise ops);
     #   every other kind → `nothing`.
@@ -120,7 +119,7 @@ struct _VecNode
     # typeassert (`_eval_vec`'s `_VK_PGATHER` arm, `_eval_vec_fn`,
     # `_eval_vec_fn_boxed`), so a `Union` field type would not improve
     # inference and could only change codegen.
-    handler::Any
+    payload::Any
     vals::Vector{Float64}
     slots::Vector{Int}
     children::Vector{_VecNode}
@@ -136,13 +135,13 @@ const _VK_NO_FNARGS = Any[]
 const _VK_NO_CVBUFS = Vector{Float64}[]
 
 function _mkvnode(; kind::UInt8, op::Symbol=Symbol(""), literal::Float64=0.0,
-                  idx::Int=0, sym::Symbol=Symbol(""), handler=nothing,
+                  idx::Int=0, sym::Symbol=Symbol(""), payload=nothing,
                   vals::Vector{Float64}=_VK_NO_VALS, slots::Vector{Int}=_VK_NO_SLOTS,
                   children::Vector{_VecNode}=_VecNode[],
                   buf::Vector{Float64}=_VK_NO_BUF,
                   fnargs::Vector{Any}=_VK_NO_FNARGS,
                   cvbufs::Vector{Vector{Float64}}=_VK_NO_CVBUFS)
-    return _VecNode(kind, op, literal, idx, sym, handler, vals, slots, children,
+    return _VecNode(kind, op, literal, idx, sym, payload, vals, slots, children,
                     buf, fnargs, cvbufs)
 end
 
@@ -180,11 +179,11 @@ function _struct_sig!(io::IOBuffer, n::_Node)
     elseif k === _NK_PARAM
         print(io, "P:", n.sym)
     elseif k === _NK_PARAM_GATHER
-        # Cells gathering from the SAME captured buffer (same `handler` object)
+        # Cells gathering from the SAME captured buffer (same `payload` object)
         # merge into one `_VK_PGATHER`, exactly as same-array STATE cells merge to
         # `_VK_GATHER`; the per-lane linear `idx` becomes the gather `slots`.
         # Different buffers ⇒ different `objectid` ⇒ separate kernels.
-        print(io, "PG:", objectid(n.handler))
+        print(io, "PG:", objectid(n.payload))
     elseif k === _NK_TIME
         print(io, 'T')
     elseif k === _NK_CONTRACTION
@@ -193,8 +192,8 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, ')')
     else  # _NK_OP (including closed `fn`)
         print(io, "O:", n.op)
-        if n.handler isa Tuple && length(n.handler) >= 1
-            print(io, '@', n.handler[1])
+        if n.payload isa Tuple && length(n.payload) >= 1
+            print(io, '@', n.payload[1])
         end
         print(io, '(')
         _sig_children!(io, n.children)
@@ -247,11 +246,11 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
     elseif k === _NK_PARAM
         return _mkvnode(kind=_VK_PARAM, sym=n1.sym, buf=Vector{Float64}(undef, len))
     elseif k === _NK_PARAM_GATHER
-        # All cells share the captured buffer (`handler`, guaranteed equal by
+        # All cells share the captured buffer (`payload`, guaranteed equal by
         # `_struct_sig`); the per-lane linear offsets become the gather `slots`.
         # Mirrors the STATE→`_VK_GATHER` lowering, reading the live forcing buffer
         # instead of `u` (ess-14f.3).
-        return _mkvnode(kind=_VK_PGATHER, handler=n1.handler,
+        return _mkvnode(kind=_VK_PGATHER, payload=n1.payload,
                         slots=Int[nd.idx for nd in nodes],
                         buf=Vector{Float64}(undef, len))
     elseif k === _NK_TIME
@@ -265,47 +264,51 @@ function _merge_nodes(nodes::Vector{_Node}, len::Int)::_VecNode
         m = length(n1.children)
         ch = _VecNode[_merge_nodes(_Node[nd.children[c] for nd in nodes], len) for c in 1:m]
         if n1.op === :fn
-            return _merge_fn_node(n1.handler, ch, len, m)
+            return _merge_fn_node(n1.payload, ch, len, m)
         end
-        return _mkvnode(kind=_VK_OP, op=n1.op, handler=n1.handler, children=ch,
+        return _mkvnode(kind=_VK_OP, op=n1.op, payload=n1.payload, children=ch,
                         buf=Vector{Float64}(undef, len))
     end
 end
 
 # Build the vectorized node for a closed-function (`fn`) leaf. `interp.*` ops are
-# lowered to a typed `_Interp*Spec` handler (validated + coerced ONCE here at build
+# lowered to a typed `_Interp*Spec` payload (validated + coerced ONCE here at build
 # time) so `_eval_vec_fn` runs a zero-box whole-array kernel; all other closed
 # functions (`datetime.*`, all-scalar args) keep the boxed per-lane path. As a
 # build-time specialization (ess-wrh §4), an interp leaf whose query children are
 # all compile-time constants folds to a single `_VK_LITERAL` — the closed-function
 # call (and its box) vanish entirely for that leaf.
-function _merge_fn_node(handler, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNode
-    fname, const_args = handler::Tuple{String,Any}
-    if fname == "interp.linear"
-        spec = _build_interp_linear_spec(fname, const_args[1], const_args[2])
+function _merge_fn_node(payload, ch::Vector{_VecNode}, len::Int, m::Int)::_VecNode
+    fname, const_args = payload::Tuple{String,Any}
+    if _fn_const_arg_spec(fname) !== nothing
+        # Const-arg closed function — exactly the `_FN_CONST_ARG_SPECS` rows
+        # (compile.jl), which also pin the payload layout: `const_args` is the
+        # pre-extracted const arrays in that table's `const_positions` order,
+        # so splatting it into the per-function typed-spec builder keeps the
+        # arity/position knowledge in the one table.
+        spec = if fname == "interp.linear"
+            _build_interp_linear_spec(fname, const_args...)
+        elseif fname == "interp.bilinear"
+            _build_interp_bilinear_spec(fname, const_args...)
+        elseif fname == "interp.searchsorted"
+            _build_interp_searchsorted_spec(fname, const_args...)
+        else
+            # Unreachable while every `_FN_CONST_ARG_SPECS` row has a builder
+            # arm above — throw explicitly (mirrors the scalar `:fn` arm)
+            # rather than silently taking the boxed path a new row can't use.
+            throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+                "fn '$(fname)' carries const args but has no vectorized interp.* lowering"))
+        end
         folded = _try_fold_const_interp(spec, ch, len)
         folded === nothing || return folded
-        return _mkvnode(kind=_VK_FN, op=:fn, handler=spec, children=ch,
+        return _mkvnode(kind=_VK_FN, op=:fn, payload=spec, children=ch,
                         buf=Vector{Float64}(undef, len))
-    elseif fname == "interp.bilinear"
-        spec = _build_interp_bilinear_spec(fname, const_args[1], const_args[2], const_args[3])
-        folded = _try_fold_const_interp(spec, ch, len)
-        folded === nothing || return folded
-        return _mkvnode(kind=_VK_FN, op=:fn, handler=spec, children=ch,
-                        buf=Vector{Float64}(undef, len))
-    elseif fname == "interp.searchsorted"
-        spec = _build_interp_searchsorted_spec(fname, const_args[1])
-        folded = _try_fold_const_interp(spec, ch, len)
-        folded === nothing || return folded
-        return _mkvnode(kind=_VK_FN, op=:fn, handler=spec, children=ch,
-                        buf=Vector{Float64}(undef, len))
-    else
-        # All-scalar closed functions (e.g. `datetime.*`): boxed per-lane path.
-        return _mkvnode(kind=_VK_FN, op=:fn, handler=handler, children=ch,
-                        buf=Vector{Float64}(undef, len),
-                        fnargs=_make_fnargs(m),
-                        cvbufs=Vector{Vector{Float64}}(undef, m))
     end
+    # All-scalar closed functions (e.g. `datetime.*`): boxed per-lane path.
+    return _mkvnode(kind=_VK_FN, op=:fn, payload=payload, children=ch,
+                    buf=Vector{Float64}(undef, len),
+                    fnargs=_make_fnargs(m),
+                    cvbufs=Vector{Vector{Float64}}(undef, m))
 end
 
 # (ess-wrh §4) On-knot / constant-query lowering. When EVERY query child of an
@@ -388,10 +391,10 @@ function _eval_vec(n::_VecNode, u, p, t)::Vector{Float64}
         return b
     elseif k === _VK_PGATHER
         # Gather over a captured live forcing buffer (ess-14f.3): identical to
-        # `_VK_GATHER` but reads the aliased flat `Vector{Float64}` in `handler`
+        # `_VK_GATHER` but reads the aliased flat `Vector{Float64}` in `payload`
         # (refreshed in place by the J1 callback) instead of the state `u`. The
         # concrete assert + preallocated `buf`/`slots` keep it zero-alloc.
-        b = n.buf; f = n.handler::Vector{Float64}; s = n.slots
+        b = n.buf; f = n.payload::Vector{Float64}; s = n.slots
         @inbounds for j in eachindex(s)
             b[j] = f[s[j]]
         end
@@ -448,17 +451,17 @@ end
 
 # Closed-function map — one kernel node writing its lane values into `n.buf`. The
 # `interp.*` ops run as zero-box whole-array kernels: their validated table/axis
-# live on the node's typed `_Interp*Spec` handler (built once in `_merge_fn_node`)
+# live on the node's typed `_Interp*Spec` payload (built once in `_merge_fn_node`)
 # and the per-lane query is a typed `Float64`, so the only Float64 arrays are the
 # preallocated buffers (ess-wrh) — the `f!` stays allocation-free even with an
 # interp/table-lookup leaf on the RHS. Bit-identical to the scalar `:fn` arm: the
 # array kernels call the SAME `_interp_*_core` (registered_functions.jl). All other
 # closed functions (`datetime.*`, all-scalar args) keep the boxed `AbstractVector`
 # path — a cold case off the PDE array RHS. The `isa` ladder is a manual union
-# split: each branch narrows `n.handler::Any` to a concrete type, so the kernels
+# split: each branch narrows `n.payload::Any` to a concrete type, so the kernels
 # it calls are type-stable (no dispatch box).
 function _eval_vec_fn(n::_VecNode, u, p, t)::Vector{Float64}
-    h = n.handler
+    h = n.payload
     if h isa _InterpLinearSpec
         return _eval_vec_interp_linear(h, n, u, p, t)
     elseif h isa _InterpBilinearSpec
@@ -520,7 +523,7 @@ end
 # per-lane `Float64`→`Any` box is tolerated. `interp.*` never reaches here — those
 # are lowered to typed specs at build time.
 function _eval_vec_fn_boxed(n::_VecNode, u, p, t)::Vector{Float64}
-    fname, const_args = n.handler::Tuple{String,Any}
+    fname, const_args = n.payload::Tuple{String,Any}
     const_args === nothing ||
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_VEC_OP", string("fn:", fname)))
     c = n.children

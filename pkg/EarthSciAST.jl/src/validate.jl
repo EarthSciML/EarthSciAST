@@ -576,9 +576,9 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
     for (i, reaction) in enumerate(rs.reactions)
         reaction_path = "$path/reactions/$(i-1)"
 
-        # Check substrates (reactants) are declared species
-        # Use getfield to access the actual Vector{StoichiometryEntry} instead of backward-compatibility Dict
-        substrates_field = getfield(reaction, :substrates)
+        # Check substrates (reactants) are declared species (ordered
+        # StoichiometryEntry vector, not the backward-compat Dict view)
+        substrates_field = raw_substrates(reaction)
         if substrates_field !== nothing
             for entry in substrates_field
                 if entry.species ∉ species_names
@@ -600,9 +600,9 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String)::Vector
             end
         end
 
-        # Check products are declared species
-        # Use getfield to access the actual Vector{StoichiometryEntry} instead of backward-compatibility Dict
-        products_field = getfield(reaction, :products)
+        # Check products are declared species (ordered StoichiometryEntry
+        # vector, not the backward-compat Dict view)
+        products_field = raw_products(reaction)
         if products_field !== nothing
             for entry in products_field
                 if entry.species ∉ species_names
@@ -689,7 +689,7 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
         rate_dim = parse_units(rate_units_str)
         rate_dim === nothing && continue
 
-        substrates_field = getfield(reaction, :substrates)
+        substrates_field = raw_substrates(reaction)
         (substrates_field === nothing || isempty(substrates_field)) && continue
 
         # Require every referenced substrate to have declared units.

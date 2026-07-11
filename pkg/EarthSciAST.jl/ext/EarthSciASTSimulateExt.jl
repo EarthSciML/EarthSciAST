@@ -6,7 +6,7 @@ session. It supplies the one method the core `_simulate_solve` generic is
 missing: build an `ODEProblem` from the tree-walk RHS and integrate it with the
 caller-supplied algorithm, returning a [`SimulationResult`](@ref).
 
-Kept out of the base package per `[[library-exposes-rhs-not-solver]]`: ESS
+Kept out of the base package per `[[library-exposes-rhs-not-solver]]`: EarthSciAST
 exposes the RHS (`build_evaluator`) and the cadence callback
 (`build_refresh_callback`) but never a solver. `ODEProblem` / `solve` /
 `ReturnCode` need `SciMLBase`, so they stay a `weakdep`, mirroring the

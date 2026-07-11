@@ -456,7 +456,7 @@ function _lower_template(n::_Node, recipes::Vector{_LaneRecipe},
                 return _mkvnode(kind=_VK_GATHER, slots=slots, buf=Vector{Float64}(undef, len))
             elseif rec.kind == LANE_PGATHER
                 slots = Int[cell_lanes[j][r]::Int for j in 1:len]
-                return _mkvnode(kind=_VK_PGATHER, handler=(rec.arr::_PGatherArray).flat,
+                return _mkvnode(kind=_VK_PGATHER, payload=(rec.arr::_PGatherArray).flat,
                                 slots=slots, buf=Vector{Float64}(undef, len))
             else  # LANE_CONST / LANE_LOOPLIT → per-lane float
                 vals = Float64[cell_lanes[j][r]::Float64 for j in 1:len]
@@ -476,7 +476,7 @@ function _lower_template(n::_Node, recipes::Vector{_LaneRecipe},
         return _mkvnode(kind=_VK_TIME, buf=Vector{Float64}(undef, len))
     elseif k === _NK_PARAM_GATHER
         # Invariant forcing gather (constant index) — one lin offset broadcast.
-        return _mkvnode(kind=_VK_PGATHER, handler=n.handler,
+        return _mkvnode(kind=_VK_PGATHER, payload=n.payload,
                         slots=fill(n.idx, len), buf=Vector{Float64}(undef, len))
     elseif k === _NK_CONTRACTION
         # Contractions take the per-cell path (einsum), never the symbolic one —
@@ -489,9 +489,9 @@ function _lower_template(n::_Node, recipes::Vector{_LaneRecipe},
     else  # _NK_OP / fn
         ch = _VecNode[_lower_template(c, recipes, cell_lanes, len) for c in n.children]
         if n.op === :fn
-            return _merge_fn_node(n.handler, ch, len, length(ch))
+            return _merge_fn_node(n.payload, ch, len, length(ch))
         end
-        return _mkvnode(kind=_VK_OP, op=n.op, handler=n.handler, children=ch,
+        return _mkvnode(kind=_VK_OP, op=n.op, payload=n.payload, children=ch,
                         buf=Vector{Float64}(undef, len))
     end
 end

@@ -546,11 +546,10 @@ function serialize_reaction(reaction::Reaction)::Dict{String,Any}
         result["name"] = reaction.name
     end
 
-    # Use getfield to bypass the legacy getproperty override that converts
-    # :products into a Dict{String,Int}. We want the raw
-    # Vector{StoichiometryEntry} so serialization can emit schema-compliant
-    # {species, stoichiometry} objects.
-    substrates_raw = getfield(reaction, :substrates)
+    # Raw ordered Vector{StoichiometryEntry} (not the legacy Dict property
+    # view) so serialization emits schema-compliant {species, stoichiometry}
+    # objects in author order.
+    substrates_raw = raw_substrates(reaction)
     if substrates_raw !== nothing
         result["substrates"] = [
             Dict("species" => entry.species, "stoichiometry" => _emit_stoich(entry.stoichiometry))
@@ -560,7 +559,7 @@ function serialize_reaction(reaction::Reaction)::Dict{String,Any}
         result["substrates"] = nothing
     end
 
-    products_raw = getfield(reaction, :products)
+    products_raw = raw_products(reaction)
     if products_raw !== nothing
         result["products"] = [
             Dict("species" => entry.species, "stoichiometry" => _emit_stoich(entry.stoichiometry))

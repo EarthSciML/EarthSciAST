@@ -201,7 +201,7 @@ end
     @testset "constant-query interp folds to a literal; runtime query stays a kernel (ess-wrh)" begin
         table = [10.0, 20.0, 40.0, 80.0, 160.0]; axis = [0.0, 1.0, 2.0, 3.0, 4.0]
         mkfn(child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-            handler=("interp.linear", Any[table, axis]), children=ESM._Node[child])
+            payload=("interp.linear", Any[table, axis]), children=ESM._Node[child])
 
         @testset "literal on-knot query → _VK_LITERAL = table entry" begin
             lit = mkfn(ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0))  # on knot axis[3]
@@ -219,7 +219,7 @@ end
 
         @testset "searchsorted literal query folds too" begin
             ss = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-                handler=("interp.searchsorted", Any[[1.0, 2.0, 3.0, 4.0, 5.0]]),
+                payload=("interp.searchsorted", Any[[1.0, 2.0, 3.0, 4.0, 5.0]]),
                 children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL, literal=2.5)])
             merged = ESM._merge_nodes(ESM._Node[ss], 1)
             @test merged.kind === ESM._VK_LITERAL
@@ -231,9 +231,9 @@ end
             g2 = mkfn(ESM._mknode(kind=ESM._NK_STATE, idx=2))
             merged = ESM._merge_nodes(ESM._Node[g1, g2], 2)
             @test merged.kind === ESM._VK_FN
-            @test merged.handler isa ESM._InterpLinearSpec
-            @test merged.handler.table == table
-            @test merged.handler.axis == axis
+            @test merged.payload isa ESM._InterpLinearSpec
+            @test merged.payload.table == table
+            @test merged.payload.axis == axis
         end
 
         @testset "end-to-end: folded constant-query arrayop is correct + 0-alloc" begin
