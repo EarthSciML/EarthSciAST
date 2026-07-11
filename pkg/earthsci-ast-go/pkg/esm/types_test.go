@@ -407,6 +407,120 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 	assert.True(t, foundError, "Should find error about unknown system 'model3' in coupling")
 }
 
+// TestEventCouplingPreservesAllFields is a regression test for a decode bug
+// where EventCoupling.UnmarshalJSON's temp struct omitted functional_affect,
+// affect_neg, root_find, and reinitialize, silently dropping those documented
+// fields on load. It asserts each survives a full Load -> Save -> Load cycle.
+func TestEventCouplingPreservesAllFields(t *testing.T) {
+	jsonData := `{
+		"esm": "0.8.0",
+		"metadata": {"name": "EventCouplingFields", "authors": ["Test"]},
+		"models": {
+			"m1": {"variables": {"x": {"type": "state"}}, "equations": []},
+			"m2": {"variables": {"y": {"type": "state"}}, "equations": []}
+		},
+		"coupling": [
+			{
+				"type": "event",
+				"event_type": "continuous",
+				"name": "cross_ev",
+				"conditions": [{"op": "-", "args": ["m1.x", 1]}],
+				"affect_neg": [{"lhs": "m2.y", "rhs": 1}],
+				"functional_affect": {
+					"handler_id": "h1",
+					"read_vars": ["m1.x"],
+					"read_params": []
+				},
+				"root_find": "left",
+				"reinitialize": true
+			}
+		]
+	}`
+
+	assertFields := func(t *testing.T, ec EventCoupling) {
+		t.Helper()
+		require.NotNil(t, ec.FunctionalAffect, "functional_affect dropped")
+		assert.Equal(t, "h1", ec.FunctionalAffect.HandlerID)
+		require.Len(t, ec.AffectNeg, 1, "affect_neg dropped")
+		assert.Equal(t, "m2.y", ec.AffectNeg[0].LHS)
+		require.NotNil(t, ec.RootFind, "root_find dropped")
+		assert.Equal(t, "left", *ec.RootFind)
+		require.NotNil(t, ec.Reinitialize, "reinitialize dropped")
+		assert.True(t, *ec.Reinitialize)
+	}
+
+	ef, err := LoadString(jsonData)
+	require.NoError(t, err)
+	require.Len(t, ef.Coupling, 1)
+	ec, ok := ef.Coupling[0].(EventCoupling)
+	require.True(t, ok, "coupling entry should be EventCoupling")
+	assertFields(t, ec)
+
+	// The fields must also survive re-serialization and re-load.
+	out, err := Save(ef)
+	require.NoError(t, err)
+	ef2, err := LoadString(out)
+	require.NoError(t, err)
+	ec2, ok := ef2.Coupling[0].(EventCoupling)
+	require.True(t, ok)
+	assertFields(t, ec2)
+}
+
+// TestIntegerDefaultRoundTrip is a regression test for the int/float wire
+// distinction (RFC §5.4.1): an integer-valued `default` (and `guesses` value)
+// must stay an integer through Load -> Save instead of mutating to a float and
+// re-emitting as "1.0".
+func TestIntegerDefaultRoundTrip(t *testing.T) {
+	jsonData := `{
+		"esm": "0.8.0",
+		"metadata": {"name": "IntDefault", "authors": ["Test"]},
+		"models": {
+			"m": {
+				"variables": {
+					"x": {"type": "state", "default": 1},
+					"z": {"type": "parameter", "default": 2.0}
+				},
+				"equations": [{"lhs": "x", "rhs": 0}],
+				"guesses": {"x": 3}
+			}
+		},
+		"reaction_systems": {
+			"rs": {
+				"species": {"A": {"default": 5}},
+				"parameters": {"k": {"default": 7}},
+				"reactions": [{"id": "R1", "substrates": null, "products": [{"species": "A", "stoichiometry": 1}], "rate": "k"}]
+			}
+		}
+	}`
+
+	ef, err := LoadString(jsonData)
+	require.NoError(t, err)
+
+	// Decoded integer default keeps its int64 type; float default stays float64.
+	m := ef.Models["m"]
+	assert.Equal(t, int64(1), m.Variables["x"].Default, "integer default should decode to int64")
+	assert.Equal(t, float64(2.0), m.Variables["z"].Default, "float default should stay float64")
+	assert.Equal(t, int64(3), m.Guesses["x"], "integer guess should decode to int64")
+
+	rs := ef.ReactionSystems["rs"]
+	assert.Equal(t, int64(5), rs.Species["A"].Default, "integer species default should decode to int64")
+	assert.Equal(t, int64(7), rs.Parameters["k"].Default, "integer parameter default should decode to int64")
+
+	// And it must re-emit as an integer literal, not "1.0".
+	out, err := Save(ef)
+	require.NoError(t, err)
+	assert.Contains(t, out, `"default": 1`)
+	assert.NotContains(t, out, `"default": 1.0`)
+	assert.Contains(t, out, `"default": 5`)
+	assert.NotContains(t, out, `"default": 5.0`)
+
+	// Idempotent under a second round-trip.
+	ef2, err := LoadString(out)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ef2.Models["m"].Variables["x"].Default)
+	assert.Equal(t, int64(5), ef2.ReactionSystems["rs"].Species["A"].Default)
+}
+
 // Helper function to get string pointers
 func strPtr(s string) *string {
 	return &s
