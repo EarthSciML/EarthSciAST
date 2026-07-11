@@ -6,7 +6,7 @@ import (
 )
 
 // opNode builds an operator ExprNode from an op name and args.
-func opNode(op string, args ...interface{}) ExprNode {
+func opNode(op string, args ...any) ExprNode {
 	return ExprNode{Op: op, Args: args}
 }
 
@@ -14,7 +14,7 @@ func opNode(op string, args ...interface{}) ExprNode {
 func dEq(name, indep string, rhs Expression) Equation {
 	w := indep
 	return Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{name}, Wrt: &w},
+		LHS: ExprNode{Op: "D", Args: []any{name}, Wrt: &w},
 		RHS: rhs,
 	}
 }
@@ -24,9 +24,9 @@ func algEq(lhs string, rhs Expression) Equation {
 	return Equation{LHS: lhs, RHS: rhs}
 }
 
-func singleModelFile(m Model) *EsmFile {
-	return &EsmFile{
-		Esm:      "0.2.0",
+func singleModelFile(m Model) *ESMFile {
+	return &ESMFile{
+		ESM:      "0.2.0",
 		Metadata: Metadata{Name: "t"},
 		Models:   map[string]Model{"M": m},
 	}
@@ -187,7 +187,7 @@ func TestApplyDAEContract_NontrivialConstraint(t *testing.T) {
 	// Error message must name the offending equation path and the Julia
 	// escape hatch, per the RFC §12 contract.
 	wantSubstrings := []string{
-		"models.M.equations",
+		"/models/M/equations",
 		"Julia",
 		"RFC §12",
 	}
@@ -304,8 +304,8 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 			dEq("x", "time", int64(1)),
 		},
 	}
-	file := &EsmFile{
-		Esm:      "0.2.0",
+	file := &ESMFile{
+		ESM:      "0.2.0",
 		Metadata: Metadata{Name: "t"},
 		Models:   map[string]Model{"M": m},
 		Domain:   &Domain{IndependentVariable: &iv},

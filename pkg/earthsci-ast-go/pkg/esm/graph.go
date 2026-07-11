@@ -9,12 +9,6 @@ import (
 // 1. Graph Data Structures
 // ========================================
 
-// Graph represents a generic directed graph structure
-type Graph[N any, E any] struct {
-	Nodes []N           `json:"nodes"`
-	Edges []GraphEdge[N, E] `json:"edges"`
-}
-
 // GraphEdge represents an edge in a directed graph
 type GraphEdge[N any, E any] struct {
 	Source N `json:"source"`
@@ -24,23 +18,23 @@ type GraphEdge[N any, E any] struct {
 
 // ComponentNode represents a node in the component graph
 type ComponentNode struct {
-	ID           string                 `json:"id"`
-	Type         string                 `json:"type"` // "model", "reaction_system", "data_loader", "operator"
-	Name         string                 `json:"name"`
-	VariableCount *int                  `json:"variable_count,omitempty"`
-	EquationCount *int                  `json:"equation_count,omitempty"`
-	SpeciesCount  *int                  `json:"species_count,omitempty"`
-	ReactionCount *int                  `json:"reaction_count,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	ID            string         `json:"id"`
+	Type          string         `json:"type"` // "model", "reaction_system", "data_loader", "operator"
+	Name          string         `json:"name"`
+	VariableCount *int           `json:"variable_count,omitempty"`
+	EquationCount *int           `json:"equation_count,omitempty"`
+	SpeciesCount  *int           `json:"species_count,omitempty"`
+	ReactionCount *int           `json:"reaction_count,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 // CouplingEdge represents an edge in the component graph
 type CouplingEdge struct {
-	Type        string      `json:"type"` // coupling type
-	Label       *string     `json:"label,omitempty"`
-	Description *string     `json:"description,omitempty"`
-	Bidirectional bool      `json:"bidirectional"`
-	CouplingEntry interface{} `json:"coupling_entry"`
+	Type          string  `json:"type"` // coupling type
+	Label         *string `json:"label,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Bidirectional bool    `json:"bidirectional"`
+	CouplingEntry any     `json:"coupling_entry"`
 }
 
 // VariableNode represents a node in the expression graph
@@ -53,23 +47,23 @@ type VariableNode struct {
 
 // DependencyEdge represents an edge in the expression graph
 type DependencyEdge struct {
-	Source       string      `json:"source"`
-	Target       string      `json:"target"`
-	Relationship string      `json:"relationship"` // "additive", "multiplicative", "rate", "stoichiometric"
+	Source        string     `json:"source"`
+	Target        string     `json:"target"`
+	Relationship  string     `json:"relationship"` // "additive", "multiplicative", "rate", "stoichiometric"
 	EquationIndex *int       `json:"equation_index,omitempty"`
-	Expression   Expression `json:"expression,omitempty"`
+	Expression    Expression `json:"expression,omitempty"`
 }
 
 // ComponentGraph is a specialized graph for system components
 type ComponentGraph struct {
-	Nodes []ComponentNode                               `json:"nodes"`
-	Edges []GraphEdge[ComponentNode, CouplingEdge]     `json:"edges"`
+	Nodes []ComponentNode                          `json:"nodes"`
+	Edges []GraphEdge[ComponentNode, CouplingEdge] `json:"edges"`
 }
 
 // ExpressionGraph is a specialized graph for variable dependencies
 type ExpressionGraph struct {
-	Nodes []VariableNode                               `json:"nodes"`
-	Edges []GraphEdge[VariableNode, DependencyEdge]   `json:"edges"`
+	Nodes []VariableNode                            `json:"nodes"`
+	Edges []GraphEdge[VariableNode, DependencyEdge] `json:"edges"`
 }
 
 // ========================================
@@ -77,7 +71,7 @@ type ExpressionGraph struct {
 // ========================================
 
 // ComponentGraphFromFile creates a component graph from an ESM file
-func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
+func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 	graph := &ComponentGraph{
 		Nodes: make([]ComponentNode, 0),
 		Edges: make([]GraphEdge[ComponentNode, CouplingEdge], 0),
@@ -89,10 +83,10 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 	// Add nodes for models
 	for id, model := range file.Models {
 		node := ComponentNode{
-			ID:   id,
-			Type: "model",
-			Name: id,
-			Metadata: make(map[string]interface{}),
+			ID:       id,
+			Type:     "model",
+			Name:     id,
+			Metadata: make(map[string]any),
 		}
 
 		// Count variables and equations
@@ -108,10 +102,10 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 	// Add nodes for reaction systems
 	for id, system := range file.ReactionSystems {
 		node := ComponentNode{
-			ID:   id,
-			Type: "reaction_system",
-			Name: id,
-			Metadata: make(map[string]interface{}),
+			ID:       id,
+			Type:     "reaction_system",
+			Name:     id,
+			Metadata: make(map[string]any),
 		}
 
 		// Count species and reactions
@@ -130,8 +124,8 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 			ID:   id,
 			Type: "data_loader",
 			Name: id,
-			Metadata: map[string]interface{}{
-				"kind":     loader.Kind,
+			Metadata: map[string]any{
+				"kind":      loader.Kind,
 				"variables": len(loader.Variables),
 			},
 		}
@@ -152,7 +146,7 @@ func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
 }
 
 // createCouplingEdges creates edges for a coupling entry
-func createCouplingEdges(coupling interface{}, nodeMap map[string]ComponentNode) []GraphEdge[ComponentNode, CouplingEdge] {
+func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []GraphEdge[ComponentNode, CouplingEdge] {
 	var edges []GraphEdge[ComponentNode, CouplingEdge]
 
 	switch c := coupling.(type) {
@@ -251,7 +245,7 @@ func createCouplingEdges(coupling interface{}, nodeMap map[string]ComponentNode)
 // ========================================
 
 // ExpressionGraphFromFile creates an expression graph from an ESM file
-func ExpressionGraphFromFile(file *EsmFile) *ExpressionGraph {
+func ExpressionGraphFromFile(file *ESMFile) *ExpressionGraph {
 	graph := &ExpressionGraph{
 		Nodes: make([]VariableNode, 0),
 		Edges: make([]GraphEdge[VariableNode, DependencyEdge], 0),
@@ -303,6 +297,12 @@ func ExpressionGraphFromReactionSystem(system ReactionSystem, systemName string)
 	return graph
 }
 
+// depNodeKey is the nodeMap key for a variable node. Keying by system+name (not
+// bare name) prevents same-named variables in different systems from colliding.
+func depNodeKey(systemName, name string) string {
+	return systemName + "." + name
+}
+
 // addModelNodesToGraph adds nodes from a model to the graph
 func addModelNodesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNode, systemName string, model Model) {
 	for varName, variable := range model.Variables {
@@ -314,7 +314,7 @@ func addModelNodesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNod
 		}
 
 		graph.Nodes = append(graph.Nodes, node)
-		nodeMap[varName] = node
+		nodeMap[depNodeKey(systemName, varName)] = node
 	}
 }
 
@@ -330,7 +330,7 @@ func addReactionSystemNodesToGraph(graph *ExpressionGraph, nodeMap map[string]Va
 		}
 
 		graph.Nodes = append(graph.Nodes, node)
-		nodeMap[speciesName] = node
+		nodeMap[depNodeKey(systemName, speciesName)] = node
 	}
 
 	// Add parameters as nodes
@@ -343,13 +343,17 @@ func addReactionSystemNodesToGraph(graph *ExpressionGraph, nodeMap map[string]Va
 		}
 
 		graph.Nodes = append(graph.Nodes, node)
-		nodeMap[paramName] = node
+		nodeMap[depNodeKey(systemName, paramName)] = node
 	}
 }
 
 // addModelEdgesToGraph adds edges from a model to the graph
 func addModelEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNode, systemName string, model Model) {
 	for i, equation := range model.Equations {
+		// Per-iteration copy: taking &i of the range variable (go 1.21 loopvar
+		// semantics) would make every edge point at the last index.
+		idx := i
+
 		// Extract LHS variable
 		lhsVar := extractVariableFromLHS(equation.LHS)
 		if lhsVar == "" {
@@ -362,19 +366,19 @@ func addModelEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNod
 		// Create edges from each RHS variable to LHS variable
 		for _, rhsVar := range rhsVars {
 			if rhsVar != lhsVar { // Avoid self-loops for basic dependencies
-				sourceNode, sourceExists := nodeMap[rhsVar]
-				targetNode, targetExists := nodeMap[lhsVar]
+				sourceNode, sourceExists := nodeMap[depNodeKey(systemName, rhsVar)]
+				targetNode, targetExists := nodeMap[depNodeKey(systemName, lhsVar)]
 
 				if sourceExists && targetExists {
 					edge := GraphEdge[VariableNode, DependencyEdge]{
 						Source: sourceNode,
 						Target: targetNode,
 						Data: DependencyEdge{
-							Source:       rhsVar,
-							Target:       lhsVar,
-							Relationship: "additive",
-							EquationIndex: &i,
-							Expression:   equation.RHS,
+							Source:        rhsVar,
+							Target:        lhsVar,
+							Relationship:  "additive",
+							EquationIndex: &idx,
+							Expression:    equation.RHS,
 						},
 					}
 					graph.Edges = append(graph.Edges, edge)
@@ -387,6 +391,10 @@ func addModelEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNod
 // addReactionSystemEdgesToGraph adds edges from a reaction system to the graph
 func addReactionSystemEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNode, systemName string, system ReactionSystem) {
 	for i, reaction := range system.Reactions {
+		// Per-iteration copy: taking &i of the range variable (go 1.21 loopvar
+		// semantics) would make every edge point at the last reaction index.
+		idx := i
+
 		// Get all variables in the rate expression
 		rateVars := extractVariablesFromExpression(reaction.Rate)
 
@@ -406,19 +414,19 @@ func addReactionSystemEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]Va
 		// Create edges from rate variables to affected species
 		for _, rateVar := range rateVars {
 			for speciesName := range affectedSpecies {
-				sourceNode, sourceExists := nodeMap[rateVar]
-				targetNode, targetExists := nodeMap[speciesName]
+				sourceNode, sourceExists := nodeMap[depNodeKey(systemName, rateVar)]
+				targetNode, targetExists := nodeMap[depNodeKey(systemName, speciesName)]
 
 				if sourceExists && targetExists && rateVar != speciesName {
 					edge := GraphEdge[VariableNode, DependencyEdge]{
 						Source: sourceNode,
 						Target: targetNode,
 						Data: DependencyEdge{
-							Source:       rateVar,
-							Target:       speciesName,
-							Relationship: "rate",
-							EquationIndex: &i,
-							Expression:   reaction.Rate,
+							Source:        rateVar,
+							Target:        speciesName,
+							Relationship:  "rate",
+							EquationIndex: &idx,
+							Expression:    reaction.Rate,
 						},
 					}
 					graph.Edges = append(graph.Edges, edge)
@@ -429,18 +437,18 @@ func addReactionSystemEdgesToGraph(graph *ExpressionGraph, nodeMap map[string]Va
 		// Create stoichiometric edges between species
 		for _, substrate := range reaction.Substrates {
 			for _, product := range reaction.Products {
-				sourceNode, sourceExists := nodeMap[substrate.Species]
-				targetNode, targetExists := nodeMap[product.Species]
+				sourceNode, sourceExists := nodeMap[depNodeKey(systemName, substrate.Species)]
+				targetNode, targetExists := nodeMap[depNodeKey(systemName, product.Species)]
 
 				if sourceExists && targetExists {
 					edge := GraphEdge[VariableNode, DependencyEdge]{
 						Source: sourceNode,
 						Target: targetNode,
 						Data: DependencyEdge{
-							Source:       substrate.Species,
-							Target:       product.Species,
-							Relationship: "stoichiometric",
-							EquationIndex: &i,
+							Source:        substrate.Species,
+							Target:        product.Species,
+							Relationship:  "stoichiometric",
+							EquationIndex: &idx,
 						},
 					}
 					graph.Edges = append(graph.Edges, edge)
@@ -518,28 +526,23 @@ func extractVariablesFromExpression(expr Expression) []string {
 // 5. Graph Utility Methods
 // ========================================
 
-// Adjacency returns adjacent nodes for a given node in component graph
-func (g *ComponentGraph) Adjacency(node ComponentNode) []struct {
+// ComponentAdjacency is one entry returned by ComponentGraph.Adjacency: a
+// neighbouring component node and the coupling edge that reaches it.
+type ComponentAdjacency struct {
 	Neighbor ComponentNode
 	Edge     CouplingEdge
-} {
-	var result []struct {
-		Neighbor ComponentNode
-		Edge     CouplingEdge
-	}
+}
+
+// Adjacency returns adjacent nodes for a given node in component graph
+func (g *ComponentGraph) Adjacency(node ComponentNode) []ComponentAdjacency {
+	var result []ComponentAdjacency
 
 	for _, edge := range g.Edges {
 		if edge.Source.ID == node.ID {
-			result = append(result, struct {
-				Neighbor ComponentNode
-				Edge     CouplingEdge
-			}{edge.Target, edge.Data})
+			result = append(result, ComponentAdjacency{edge.Target, edge.Data})
 		}
 		if edge.Data.Bidirectional && edge.Target.ID == node.ID {
-			result = append(result, struct {
-				Neighbor ComponentNode
-				Edge     CouplingEdge
-			}{edge.Source, edge.Data})
+			result = append(result, ComponentAdjacency{edge.Source, edge.Data})
 		}
 	}
 
@@ -578,22 +581,20 @@ func (g *ComponentGraph) Successors(node ComponentNode) []ComponentNode {
 	return result
 }
 
-// AdjacencyVariable returns adjacent nodes for a given node in expression graph
-func (g *ExpressionGraph) AdjacencyVariable(node VariableNode) []struct {
+// VariableAdjacency is one entry returned by ExpressionGraph.AdjacencyVariable:
+// a neighbouring variable node and the dependency edge that reaches it.
+type VariableAdjacency struct {
 	Neighbor VariableNode
 	Edge     DependencyEdge
-} {
-	var result []struct {
-		Neighbor VariableNode
-		Edge     DependencyEdge
-	}
+}
+
+// AdjacencyVariable returns adjacent nodes for a given node in expression graph
+func (g *ExpressionGraph) AdjacencyVariable(node VariableNode) []VariableAdjacency {
+	var result []VariableAdjacency
 
 	for _, edge := range g.Edges {
 		if edge.Source.Name == node.Name && edge.Source.System == node.System {
-			result = append(result, struct {
-				Neighbor VariableNode
-				Edge     DependencyEdge
-			}{edge.Target, edge.Data})
+			result = append(result, VariableAdjacency{edge.Target, edge.Data})
 		}
 	}
 

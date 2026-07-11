@@ -11,8 +11,8 @@ import (
 )
 
 func TestSave(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -28,7 +28,7 @@ func TestSave(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -36,12 +36,12 @@ func TestSave(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Save(esmFile)
+	jsonStr, err := Serialize(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
 	// Verify it's valid JSON
-	var parsed interface{}
+	var parsed any
 	err = json.Unmarshal([]byte(jsonStr), &parsed)
 	assert.NoError(t, err)
 
@@ -51,8 +51,8 @@ func TestSave(t *testing.T) {
 }
 
 func TestSaveCompact(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -64,7 +64,7 @@ func TestSaveCompact(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -72,7 +72,7 @@ func TestSaveCompact(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := SaveCompact(esmFile)
+	jsonStr, err := SerializeCompact(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
@@ -80,21 +80,21 @@ func TestSaveCompact(t *testing.T) {
 	assert.NotContains(t, jsonStr, "\n  ")
 
 	// Verify it's valid JSON
-	var parsed interface{}
+	var parsed any
 	err = json.Unmarshal([]byte(jsonStr), &parsed)
 	assert.NoError(t, err)
 }
 
 func TestSaveNilFile(t *testing.T) {
-	_, err := Save(nil)
+	_, err := Serialize(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot serialize nil ESM file")
 }
 
 func TestSaveInvalidFile(t *testing.T) {
 	// Create an invalid ESM file (missing required models/reaction_systems)
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -102,14 +102,14 @@ func TestSaveInvalidFile(t *testing.T) {
 		// Missing both Models and ReactionSystems
 	}
 
-	_, err := Save(esmFile)
+	_, err := Serialize(esmFile)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed before serialization")
 }
 
 func TestSaveToFile(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -121,7 +121,7 @@ func TestSaveToFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -144,8 +144,8 @@ func TestSaveToFile(t *testing.T) {
 }
 
 func TestSaveCompactToFile(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -157,7 +157,7 @@ func TestSaveCompactToFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -182,7 +182,7 @@ func TestSaveCompactToFile(t *testing.T) {
 func TestSerializeExpression(t *testing.T) {
 	expr := ExprNode{
 		Op:   "+",
-		Args: []interface{}{"a", "b"},
+		Args: []any{"a", "b"},
 	}
 
 	jsonStr, err := SerializeExpression(expr)
@@ -199,7 +199,7 @@ func TestSerializeExpression(t *testing.T) {
 func TestSerializeExpressionCompact(t *testing.T) {
 	expr := ExprNode{
 		Op:   "*",
-		Args: []interface{}{"x", 2},
+		Args: []any{"x", 2},
 	}
 
 	jsonStr, err := SerializeExpressionCompact(expr)
@@ -227,7 +227,7 @@ func TestSerializeModel(t *testing.T) {
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 				RHS: float64(1.0),
 			},
 		},
@@ -290,8 +290,8 @@ func TestSerializeReactionSystemNil(t *testing.T) {
 
 func TestRoundTripSerialization(t *testing.T) {
 	// Create a complex ESM file
-	originalFile := &EsmFile{
-		Esm: "0.1.0",
+	originalFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "ComplexModel",
 			Authors: []string{"Test Author"},
@@ -307,13 +307,13 @@ func TestRoundTripSerialization(t *testing.T) {
 					},
 					"y": {
 						Type:       "observed",
-						Expression: ExprNode{Op: "+", Args: []interface{}{"x", 2}},
+						Expression: ExprNode{Op: "+", Args: []any{"x", 2}},
 					},
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{-0.1, "x"}},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{-0.1, "x"}},
 					},
 				},
 			},
@@ -338,7 +338,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	}
 
 	// Serialize
-	jsonStr, err := Save(originalFile)
+	jsonStr, err := Serialize(originalFile)
 	require.NoError(t, err)
 
 	// Deserialize
@@ -346,7 +346,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	require.NoError(t, err)
 
 	// Compare key fields
-	assert.Equal(t, originalFile.Esm, parsedFile.Esm)
+	assert.Equal(t, originalFile.ESM, parsedFile.ESM)
 	assert.Equal(t, originalFile.Metadata.Name, parsedFile.Metadata.Name)
 	assert.Equal(t, len(originalFile.Models), len(parsedFile.Models))
 	assert.Equal(t, len(originalFile.ReactionSystems), len(parsedFile.ReactionSystems))

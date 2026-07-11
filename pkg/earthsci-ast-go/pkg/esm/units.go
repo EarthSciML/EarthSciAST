@@ -551,7 +551,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		}
 		return propagateDimensionWithCoords(node.Args[0], env, coordEnv)
 
-	case "D":
+	case OpDerivative:
 		if len(node.Args) != 1 {
 			return nil, fmt.Errorf("'D' requires 1 argument, got %d", len(node.Args))
 		}
@@ -559,7 +559,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 		if err != nil {
 			return nil, err
 		}
-		wrt := "t"
+		wrt := DefaultIndepVar
 		if node.Wrt != nil {
 			wrt = *node.Wrt
 		}
@@ -631,9 +631,10 @@ func propagateExprNode(node ExprNode, env map[string]Unit, coordEnv map[string]*
 	return nil, nil
 }
 
-// BuildUnitEnv converts a map of name→unit-string into a map of name→Unit,
-// silently skipping entries whose unit string fails to parse. The skipped
-// entries are returned so callers can emit warnings.
+// BuildUnitEnv converts a map of name→unit-string into a map of name→Unit.
+// Entries whose unit string fails to parse are omitted from the returned
+// environment and reported in the second return value (a name→parse-error map)
+// so callers can emit warnings. Empty unit strings are skipped without error.
 func BuildUnitEnv(raw map[string]string) (map[string]Unit, map[string]error) {
 	env := make(map[string]Unit, len(raw))
 	bad := map[string]error{}
@@ -651,42 +652,42 @@ func BuildUnitEnv(raw map[string]string) (map[string]Unit, map[string]error) {
 	return env, bad
 }
 
+// buildModelUnitEnv builds the unit environment for a model from its declared
+// variable units. See BuildUnitEnv for the return-value contract.
+func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
+	raw := make(map[string]string, len(model.Variables))
+	for name, v := range model.Variables {
+		if v.Units != nil {
+			raw[name] = *v.Units
+		}
+	}
+	return BuildUnitEnv(raw)
+}
+
+// buildSystemUnitEnv builds the unit environment for a reaction system from the
+// declared units of its species and parameters. See BuildUnitEnv for the
+// return-value contract.
+func buildSystemUnitEnv(system *ReactionSystem) (map[string]Unit, map[string]error) {
+	raw := make(map[string]string, len(system.Species)+len(system.Parameters))
+	for name, sp := range system.Species {
+		if sp.Units != nil {
+			raw[name] = *sp.Units
+		}
+	}
+	for name, p := range system.Parameters {
+		if p.Units != nil {
+			raw[name] = *p.Units
+		}
+	}
+	return BuildUnitEnv(raw)
+}
+
 // ValidateEquationDimensions checks that the LHS and RHS of an equation have
 // the same dimension. It returns a non-nil UnitWarning iff a concrete
 // inconsistency was detected. Missing annotations are treated as "unknown" and
 // do NOT produce a warning (matching the Python/Julia best-effort semantics).
 func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) *UnitWarning {
-	lhs, lhsErr := PropagateDimension(eq.LHS, env)
-	rhs, rhsErr := PropagateDimension(eq.RHS, env)
-
-	if lhsErr != nil {
-		return &UnitWarning{
-			Path:     path + ".lhs",
-			Message:  "dimensional analysis failed on LHS: " + lhsErr.Error(),
-			LhsUnits: "error",
-			RhsUnits: dimString(rhs),
-		}
-	}
-	if rhsErr != nil {
-		return &UnitWarning{
-			Path:     path + ".rhs",
-			Message:  "dimensional analysis failed on RHS: " + rhsErr.Error(),
-			LhsUnits: dimString(lhs),
-			RhsUnits: "error",
-		}
-	}
-	if lhs == nil || rhs == nil {
-		return nil
-	}
-	if !lhs.Dim.Equal(rhs.Dim) {
-		return &UnitWarning{
-			Path:     path,
-			Message:  fmt.Sprintf("LHS dimension %s does not match RHS dimension %s", lhs.Dim, rhs.Dim),
-			LhsUnits: lhs.Dim.String(),
-			RhsUnits: rhs.Dim.String(),
-		}
-	}
-	return nil
+	return validateEquationDimensionsCoords(eq, env, nil, path)
 }
 
 func dimString(u *Unit) string {
@@ -696,24 +697,18 @@ func dimString(u *Unit) string {
 	return u.Dim.String()
 }
 
-// ValidateModelUnits runs dimensional analysis over every equation in a model
+// validateModelUnits runs dimensional analysis over every equation in a model
 // and appends any warnings it finds to the result.
-func validateModelUnits(modelName string, model *Model, basePath string, file *EsmFile, result *StructuralValidationResult) {
-	raw := make(map[string]string, len(model.Variables))
-	for name, v := range model.Variables {
-		if v.Units != nil {
-			raw[name] = *v.Units
-		}
-	}
-	env, bad := BuildUnitEnv(raw)
+func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
+	env, bad := buildModelUnitEnv(model)
 	for name, err := range bad {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-			Path:    fmt.Sprintf("%s.variables.%s.units", basePath, name),
+			Path:    fmt.Sprintf("%s/variables/%s/units", basePath, name),
 			Message: fmt.Sprintf("could not parse unit: %v", err),
 		})
 	}
 	for i, eq := range model.Equations {
-		eqPath := fmt.Sprintf("%s.equations[%d]", basePath, i)
+		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		if w := validateEquationDimensionsCoords(&eq, env, nil, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
@@ -731,7 +726,7 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 
 	if lhsErr != nil {
 		return &UnitWarning{
-			Path:     path + ".lhs",
+			Path:     path + "/lhs",
 			Message:  "dimensional analysis failed on LHS: " + lhsErr.Error(),
 			LhsUnits: "error",
 			RhsUnits: dimString(rhs),
@@ -739,7 +734,7 @@ func validateEquationDimensionsCoords(eq *Equation, env map[string]Unit, coordEn
 	}
 	if rhsErr != nil {
 		return &UnitWarning{
-			Path:     path + ".rhs",
+			Path:     path + "/rhs",
 			Message:  "dimensional analysis failed on RHS: " + rhsErr.Error(),
 			LhsUnits: dimString(lhs),
 			RhsUnits: "error",
@@ -784,7 +779,7 @@ var knownPhysicalConstants = map[string]knownPhysicalConstant{
 // Mirrors Python's parse._check_physical_constant_units (gt-3tgv).
 func checkPhysicalConstantUnits(modelName string, model *Model, result *StructuralValidationResult) {
 	for vname, vdef := range model.Variables {
-		if vdef.Type != "parameter" {
+		if vdef.Type != VarTypeParameter {
 			continue
 		}
 		constant, ok := knownPhysicalConstants[vname]
@@ -808,7 +803,7 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 		}
 		usageName := ""
 		for otherName, otherDef := range model.Variables {
-			if otherDef.Type != "observed" || otherDef.Expression == nil {
+			if otherDef.Type != VarTypeObserved || otherDef.Expression == nil {
 				continue
 			}
 			if exprReferencesName(otherDef.Expression, vname) {
@@ -824,7 +819,7 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 			Path:    fmt.Sprintf("/models/%s/variables/%s", modelName, target),
 			Code:    ErrorUnitInconsistency,
 			Message: "Physical constant used with incorrect dimensional analysis",
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"constant_name":        vname,
 				"constant_description": constant.description,
 				"declared_units":       declared,
@@ -879,7 +874,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 		}
 	}
 	for vname, vdef := range model.Variables {
-		if vdef.Type != "observed" || vdef.Expression == nil {
+		if vdef.Type != VarTypeObserved || vdef.Expression == nil {
 			continue
 		}
 		lhsUnits := ""
@@ -953,7 +948,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 			Path:    fmt.Sprintf("/models/%s/variables/%s", modelName, vname),
 			Code:    ErrorUnitInconsistency,
 			Message: "Unit conversion factor is incorrect for specified unit transformation",
-			Details: map[string]interface{}{
+			Details: map[string]any{
 				"variable":        vname,
 				"declared_units":  lhsUnits,
 				"source_units":    srcUnits,
@@ -979,13 +974,16 @@ func exprAsNode(e Expression) (ExprNode, bool) {
 }
 
 // isAffineTempUnit reports whether a unit string denotes a temperature scale
-// with an offset (Celsius/Fahrenheit). Go's unit registry represents these as
-// plain Kelvin, so we use a conservative string match to skip them from
-// scale-factor comparisons.
+// with an offset (Celsius). Go's unit registry represents Celsius as plain
+// Kelvin, so we use a conservative string match to skip it from scale-factor
+// comparisons. Only the Celsius spellings that ParseUnit accepts ("degC", "C")
+// are matched — Fahrenheit ("degF"/"F") is absent from unitRegistry, so it
+// never reaches this check (the caller's ParseUnit fails and short-circuits
+// first); add it here if and when the registry gains a Fahrenheit entry.
 func isAffineTempUnit(s string) bool {
 	s = strings.TrimSpace(s)
 	switch s {
-	case "degC", "degF", "C", "F":
+	case "degC", "C":
 		return true
 	}
 	return false
@@ -997,19 +995,8 @@ func isAffineTempUnit(s string) bool {
 // Matches the Julia/Python/TS/Rust checks. Skipped for dimensionless species
 // (mol/mol, ppm, …) because atmospheric-chemistry rate expressions commonly
 // bake a number-density factor into the rate constant.
-func validateReactionRateUnits(systemName string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
-	raw := make(map[string]string)
-	for name, sp := range system.Species {
-		if sp.Units != nil {
-			raw[name] = *sp.Units
-		}
-	}
-	for name, p := range system.Parameters {
-		if p.Units != nil {
-			raw[name] = *p.Units
-		}
-	}
-	env, _ := BuildUnitEnv(raw)
+func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
+	env, _ := buildSystemUnitEnv(system)
 
 	timeUnit := Unit{Dim: Dimension{dimTime: 1}, Scale: 1.0}
 
@@ -1072,7 +1059,7 @@ func validateReactionRateUnits(systemName string, system *ReactionSystem, basePa
 				Path:    rxPath,
 				Code:    ErrorUnitInconsistency,
 				Message: "Reaction rate expression has incompatible units for reaction stoichiometry",
-				Details: map[string]interface{}{
+				Details: map[string]any{
 					"reaction_id":         rx.ID,
 					"rate_units":          rateUnitsStr,
 					"expected_rate_units": formatExpectedRateUnits(firstSpUnits, totalOrder),
@@ -1174,27 +1161,16 @@ func rateVarName(rate Expression) (string, bool) {
 // validateReactionSystemUnits runs dimensional analysis over a reaction
 // system. Rate expressions whose dimensions cannot be determined are skipped;
 // rate expressions that surface a concrete inconsistency produce a warning.
-func validateReactionSystemUnits(systemName string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
-	raw := make(map[string]string)
-	for name, sp := range system.Species {
-		if sp.Units != nil {
-			raw[name] = *sp.Units
-		}
-	}
-	for name, p := range system.Parameters {
-		if p.Units != nil {
-			raw[name] = *p.Units
-		}
-	}
-	env, bad := BuildUnitEnv(raw)
+func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
+	env, bad := buildSystemUnitEnv(system)
 	for name, err := range bad {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-			Path:    fmt.Sprintf("%s.%s.units", basePath, name),
+			Path:    fmt.Sprintf("%s/%s/units", basePath, name),
 			Message: fmt.Sprintf("could not parse unit: %v", err),
 		})
 	}
 	for i, rx := range system.Reactions {
-		rxPath := fmt.Sprintf("%s.reactions[%d].rate", basePath, i)
+		rxPath := fmt.Sprintf("%s/reactions/%d/rate", basePath, i)
 		if _, err := PropagateDimension(rx.Rate, env); err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:    rxPath,
@@ -1203,7 +1179,7 @@ func validateReactionSystemUnits(systemName string, system *ReactionSystem, base
 		}
 	}
 	for i, eq := range system.ConstraintEquations {
-		eqPath := fmt.Sprintf("%s.constraint_equations[%d]", basePath, i)
+		eqPath := fmt.Sprintf("%s/constraint_equations/%d", basePath, i)
 		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}

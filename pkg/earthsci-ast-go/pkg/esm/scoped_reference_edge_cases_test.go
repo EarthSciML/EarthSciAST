@@ -9,8 +9,8 @@ import (
 
 func TestScopedReferenceEdgeCases(t *testing.T) {
 	// Create a complex test ESM file with deep nesting and cross-references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -21,7 +21,7 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "ModelB.y", // Cross-model reference
 					},
 				},
@@ -30,15 +30,15 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"DeepNest": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"z": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"DeepNest": map[string]any{
+						"variables": map[string]any{
+							"z": map[string]any{"type": "state"},
 						},
-						"subsystems": map[string]interface{}{
-							"Level3": map[string]interface{}{
-								"variables": map[string]interface{}{
-									"w": map[string]interface{}{"type": "parameter"},
+						"subsystems": map[string]any{
+							"Level3": map[string]any{
+								"variables": map[string]any{
+									"w": map[string]any{"type": "parameter"},
 								},
 							},
 						},
@@ -139,8 +139,8 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 
 func TestValidationWithComplexScopedReferences(t *testing.T) {
 	// Test validation with the complex file structure
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -151,10 +151,10 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: ExprNode{
 							Op:   "+",
-							Args: []interface{}{"ModelB.y", "ModelB.DeepNest.z"},
+							Args: []any{"ModelB.y", "ModelB.DeepNest.z"},
 						},
 					},
 				},
@@ -163,10 +163,10 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"DeepNest": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"z": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"DeepNest": map[string]any{
+						"variables": map[string]any{
+							"z": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -188,8 +188,8 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 
 func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	// Test substitution with complex scoped references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -198,10 +198,10 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -217,13 +217,13 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	// Test expression with mixed scoped references
 	expr := ExprNode{
 		Op: "+",
-		Args: []interface{}{
-			"x",                        // Direct variable in current system
-			"SubA.temp",               // Relative scoped reference
-			"ModelB.y",                // Absolute cross-model reference
+		Args: []any{
+			"x",         // Direct variable in current system
+			"SubA.temp", // Relative scoped reference
+			"ModelB.y",  // Absolute cross-model reference
 			ExprNode{
 				Op:   "*",
-				Args: []interface{}{"SubA.temp", float64(2.0)},
+				Args: []any{"SubA.temp", float64(2.0)},
 			},
 		},
 	}
@@ -236,7 +236,8 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	}
 
 	// Perform substitution with scoped reference support
-	result := SubstituteWithScoped(expr, bindings, file, "ModelA")
+	result, err := SubstituteWithScoped(expr, bindings, file, "ModelA")
+	assert.NoError(t, err)
 
 	// Verify the result
 	resultNode, ok := result.(ExprNode)
@@ -259,8 +260,8 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 
 func TestValidationErrorsForUnresolvedScopedReferences(t *testing.T) {
 	// Test that validation properly reports errors for unresolved scoped references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Test Model with Errors",
 		},
@@ -271,7 +272,7 @@ func TestValidationErrorsForUnresolvedScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "NonExistent.Model.var", // Invalid scoped reference
 					},
 				},

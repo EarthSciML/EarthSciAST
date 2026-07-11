@@ -9,8 +9,8 @@ import (
 // TestComponentGraphFromFile tests component graph creation from an ESM file
 func TestComponentGraphFromFile(t *testing.T) {
 	// Create a sample ESM file
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "Test Model",
 			Authors: []string{"Test Author"},
@@ -23,7 +23,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "y",
 					},
 				},
@@ -49,7 +49,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 						},
 						Rate: ExprNode{
 							Op:   "*",
-							Args: []interface{}{"k", "A"},
+							Args: []any{"k", "A"},
 						},
 					},
 				},
@@ -66,7 +66,7 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{
 				Type:      "variable_map",
 				From:      "TestLoader.temp",
@@ -132,12 +132,12 @@ func TestExpressionGraphFromModel(t *testing.T) {
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 				RHS: "y",
 			},
 			{
 				LHS: "z",
-				RHS: ExprNode{Op: "*", Args: []interface{}{2.0, "x"}},
+				RHS: ExprNode{Op: "*", Args: []any{2.0, "x"}},
 			},
 		},
 	}
@@ -168,6 +168,47 @@ func TestExpressionGraphFromModel(t *testing.T) {
 	}
 }
 
+// TestExpressionGraphEquationIndex guards against the loop-variable capture bug:
+// under go 1.21 loopvar semantics, taking &i of the range variable made every
+// dependency edge report the last equation index. Each edge must carry its own
+// per-equation index (y->x from eq 0, x->z from eq 1).
+func TestExpressionGraphEquationIndex(t *testing.T) {
+	model := Model{
+		Variables: map[string]ModelVariable{
+			"x": {Type: "state"},
+			"y": {Type: "parameter"},
+			"z": {Type: "observed"},
+		},
+		Equations: []Equation{
+			{
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
+				RHS: "y",
+			},
+			{
+				LHS: "z",
+				RHS: ExprNode{Op: "*", Args: []any{2.0, "x"}},
+			},
+		},
+	}
+
+	graph := ExpressionGraphFromModel(model, "TestSystem")
+
+	byTarget := make(map[string]int)
+	for _, edge := range graph.Edges {
+		if edge.Data.EquationIndex == nil {
+			t.Fatalf("edge %s->%s has nil EquationIndex", edge.Data.Source, edge.Data.Target)
+		}
+		byTarget[edge.Data.Target] = *edge.Data.EquationIndex
+	}
+
+	if got := byTarget["x"]; got != 0 {
+		t.Errorf("edge into x: expected equation_index 0, got %d", got)
+	}
+	if got := byTarget["z"]; got != 1 {
+		t.Errorf("edge into z: expected equation_index 1, got %d", got)
+	}
+}
+
 // TestExpressionGraphFromReactionSystem tests expression graph creation from a reaction system
 func TestExpressionGraphFromReactionSystem(t *testing.T) {
 	system := ReactionSystem{
@@ -189,7 +230,7 @@ func TestExpressionGraphFromReactionSystem(t *testing.T) {
 				},
 				Rate: ExprNode{
 					Op:   "*",
-					Args: []interface{}{"k", "A"},
+					Args: []any{"k", "A"},
 				},
 			},
 		},
@@ -262,8 +303,13 @@ func TestGraphExport(t *testing.T) {
 		t.Errorf("DOT output doesn't contain expected header")
 	}
 
-	if !strings.Contains(dotOutput, "\"A\" -- \"B\"") {
-		t.Errorf("DOT output doesn't contain expected bidirectional edge")
+	// A bidirectional coupling is a directed edge annotated with dir=both; an
+	// undirected `--` edge is a Graphviz syntax error inside a digraph.
+	if !strings.Contains(dotOutput, "\"A\" -> \"B\"") {
+		t.Errorf("DOT output doesn't contain expected directed edge")
+	}
+	if !strings.Contains(dotOutput, "dir=both") {
+		t.Errorf("DOT output doesn't mark the bidirectional edge with dir=both")
 	}
 
 	// Test Mermaid export
@@ -317,7 +363,7 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "binary operation",
 			expr: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "y"},
+				Args: []any{"x", "y"},
 			},
 			expected: []string{"x", "y"},
 		},
@@ -325,11 +371,11 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "nested expression",
 			expr: ExprNode{
 				Op: "*",
-				Args: []interface{}{
+				Args: []any{
 					"k",
 					ExprNode{
 						Op:   "+",
-						Args: []interface{}{"x", 2.0},
+						Args: []any{"x", 2.0},
 					},
 				},
 			},
@@ -339,7 +385,7 @@ func TestExtractVariablesFromExpression(t *testing.T) {
 			name: "duplicate variables",
 			expr: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "x"},
+				Args: []any{"x", "x"},
 			},
 			expected: []string{"x"},
 		},
@@ -385,7 +431,7 @@ func TestExtractVariableFromLHS(t *testing.T) {
 			name: "derivative",
 			lhs: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"y"},
+				Args: []any{"y"},
 				Wrt:  stringPtr("t"),
 			},
 			expected: "y",
@@ -399,7 +445,7 @@ func TestExtractVariableFromLHS(t *testing.T) {
 			name: "other operator",
 			lhs: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "y"},
+				Args: []any{"x", "y"},
 			},
 			expected: "",
 		},
@@ -414,4 +460,3 @@ func TestExtractVariableFromLHS(t *testing.T) {
 		})
 	}
 }
-

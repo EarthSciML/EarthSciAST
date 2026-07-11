@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func writeJSON(t *testing.T, path string, payload interface{}) {
+func writeJSON(t *testing.T, path string, payload any) {
 	t.Helper()
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -22,7 +22,7 @@ func writeJSON(t *testing.T, path string, payload interface{}) {
 }
 
 func TestResolveSubsystemRefs_NoRefs(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"main": {Variables: map[string]ModelVariable{}, Equations: []Equation{}},
 		},
@@ -34,29 +34,29 @@ func TestResolveSubsystemRefs_NoRefs(t *testing.T) {
 
 func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 	dir := t.TempDir()
-	inner := map[string]interface{}{
+	inner := map[string]any{
 		"esm": "0.1.0",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "inner",
 		},
-		"models": map[string]interface{}{
-			"Inner": map[string]interface{}{
-				"variables": map[string]interface{}{
-					"x": map[string]interface{}{"type": "state"},
+		"models": map[string]any{
+			"Inner": map[string]any{
+				"variables": map[string]any{
+					"x": map[string]any{"type": "state"},
 				},
-				"equations": []interface{}{},
+				"equations": []any{},
 			},
 		},
 	}
 	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Variables: map[string]ModelVariable{},
 				Equations: []Equation{},
-				Subsystems: map[string]interface{}{
-					"Inner": map[string]interface{}{"ref": "inner.json"},
+				Subsystems: map[string]any{
+					"Inner": map[string]any{"ref": "inner.json"},
 				},
 			},
 		},
@@ -66,7 +66,7 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 		t.Fatalf("ResolveSubsystemRefs: %v", err)
 	}
 
-	resolved, ok := file.Models["Outer"].Subsystems["Inner"].(map[string]interface{})
+	resolved, ok := file.Models["Outer"].Subsystems["Inner"].(map[string]any)
 	if !ok {
 		t.Fatalf("Inner not resolved to a map: %T", file.Models["Outer"].Subsystems["Inner"])
 	}
@@ -81,19 +81,19 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 	dir := t.TempDir()
 	// A loader-only referenced file: its sole component is a single data loader.
-	inner := map[string]interface{}{
+	inner := map[string]any{
 		"esm": "0.1.0",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "inner-loader",
 		},
-		"data_loaders": map[string]interface{}{
-			"ERA5_PL": map[string]interface{}{
+		"data_loaders": map[string]any{
+			"ERA5_PL": map[string]any{
 				"kind": "grid",
-				"source": map[string]interface{}{
+				"source": map[string]any{
 					"url_template": "cds://reanalysis-era5-pressure-levels/{date:%Y}/era5_pl_{date:%Y}.nc",
 				},
-				"variables": map[string]interface{}{
-					"t": map[string]interface{}{
+				"variables": map[string]any{
+					"t": map[string]any{
 						"file_variable": "t",
 						"units":         "K",
 						"description":   "Air temperature",
@@ -104,13 +104,13 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 	}
 	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Variables: map[string]ModelVariable{},
 				Equations: []Equation{},
-				Subsystems: map[string]interface{}{
-					"Loader": map[string]interface{}{"ref": "inner.json"},
+				Subsystems: map[string]any{
+					"Loader": map[string]any{"ref": "inner.json"},
 				},
 			},
 		},
@@ -120,7 +120,7 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 		t.Fatalf("ResolveSubsystemRefs: %v", err)
 	}
 
-	resolved, ok := file.Models["Outer"].Subsystems["Loader"].(map[string]interface{})
+	resolved, ok := file.Models["Outer"].Subsystems["Loader"].(map[string]any)
 	if !ok {
 		t.Fatalf("Loader not resolved to a map: %T", file.Models["Outer"].Subsystems["Loader"])
 	}
@@ -137,11 +137,11 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 
 func TestResolveSubsystemRefs_MissingFile(t *testing.T) {
 	dir := t.TempDir()
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
-				Subsystems: map[string]interface{}{
-					"Missing": map[string]interface{}{"ref": "does-not-exist.json"},
+				Subsystems: map[string]any{
+					"Missing": map[string]any{"ref": "does-not-exist.json"},
 				},
 			},
 		},
@@ -157,32 +157,32 @@ func TestResolveSubsystemRefs_MissingFile(t *testing.T) {
 
 func TestResolveSubsystemRefs_Circular(t *testing.T) {
 	dir := t.TempDir()
-	a := map[string]interface{}{
+	a := map[string]any{
 		"esm": "0.1.0",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "a",
 		},
-		"models": map[string]interface{}{
-			"A": map[string]interface{}{
-				"variables": map[string]interface{}{},
-				"equations": []interface{}{},
-				"subsystems": map[string]interface{}{
-					"Cycle": map[string]interface{}{"ref": "b.json"},
+		"models": map[string]any{
+			"A": map[string]any{
+				"variables": map[string]any{},
+				"equations": []any{},
+				"subsystems": map[string]any{
+					"Cycle": map[string]any{"ref": "b.json"},
 				},
 			},
 		},
 	}
-	b := map[string]interface{}{
+	b := map[string]any{
 		"esm": "0.1.0",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "b",
 		},
-		"models": map[string]interface{}{
-			"B": map[string]interface{}{
-				"variables": map[string]interface{}{},
-				"equations": []interface{}{},
-				"subsystems": map[string]interface{}{
-					"Cycle": map[string]interface{}{"ref": "a.json"},
+		"models": map[string]any{
+			"B": map[string]any{
+				"variables": map[string]any{},
+				"equations": []any{},
+				"subsystems": map[string]any{
+					"Cycle": map[string]any{"ref": "a.json"},
 				},
 			},
 		},
@@ -190,11 +190,11 @@ func TestResolveSubsystemRefs_Circular(t *testing.T) {
 	writeJSON(t, filepath.Join(dir, "a.json"), a)
 	writeJSON(t, filepath.Join(dir, "b.json"), b)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Root": {
-				Subsystems: map[string]interface{}{
-					"Start": map[string]interface{}{"ref": "a.json"},
+				Subsystems: map[string]any{
+					"Start": map[string]any{"ref": "a.json"},
 				},
 			},
 		},
@@ -210,15 +210,15 @@ func TestResolveSubsystemRefs_Circular(t *testing.T) {
 }
 
 func TestResolveSubsystemRefs_RemoteURL(t *testing.T) {
-	inner := map[string]interface{}{
+	inner := map[string]any{
 		"esm": "0.1.0",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "remote",
 		},
-		"models": map[string]interface{}{
-			"Remote": map[string]interface{}{
-				"variables": map[string]interface{}{},
-				"equations": []interface{}{},
+		"models": map[string]any{
+			"Remote": map[string]any{
+				"variables": map[string]any{},
+				"equations": []any{},
 			},
 		},
 	}
@@ -229,11 +229,11 @@ func TestResolveSubsystemRefs_RemoteURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
-				Subsystems: map[string]interface{}{
-					"Remote": map[string]interface{}{"ref": srv.URL + "/inner.json"},
+				Subsystems: map[string]any{
+					"Remote": map[string]any{"ref": srv.URL + "/inner.json"},
 				},
 			},
 		},
@@ -243,7 +243,7 @@ func TestResolveSubsystemRefs_RemoteURL(t *testing.T) {
 		t.Fatalf("ResolveSubsystemRefs: %v", err)
 	}
 
-	resolved, ok := file.Models["Outer"].Subsystems["Remote"].(map[string]interface{})
+	resolved, ok := file.Models["Outer"].Subsystems["Remote"].(map[string]any)
 	if !ok {
 		t.Fatalf("Remote not resolved to a map: %T", file.Models["Outer"].Subsystems["Remote"])
 	}

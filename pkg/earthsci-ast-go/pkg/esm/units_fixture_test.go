@@ -33,11 +33,11 @@ type unitsFixtureTolerance struct {
 	Abs float64
 }
 
-func parseTol(raw interface{}) (unitsFixtureTolerance, bool) {
+func parseTol(raw any) (unitsFixtureTolerance, bool) {
 	if raw == nil {
 		return unitsFixtureTolerance{}, false
 	}
-	m, ok := raw.(map[string]interface{})
+	m, ok := raw.(map[string]any)
 	if !ok {
 		return unitsFixtureTolerance{}, false
 	}
@@ -55,8 +55,8 @@ func parseTol(raw interface{}) (unitsFixtureTolerance, bool) {
 	return out, true
 }
 
-func resolveUnitsFixtureTol(modelTol, testTol, assertionTol interface{}) (float64, float64) {
-	for _, raw := range []interface{}{assertionTol, testTol, modelTol} {
+func resolveUnitsFixtureTol(modelTol, testTol, assertionTol any) (float64, float64) {
+	for _, raw := range []any{assertionTol, testTol, modelTol} {
 		if t, ok := parseTol(raw); ok {
 			return t.Rel, t.Abs
 		}
@@ -68,7 +68,7 @@ func resolveUnitsFixtureTol(modelTol, testTol, assertionTol interface{}) (float6
 // strings, operator nodes as map[string]interface{}). Returns ok=false if
 // any variable reference is unbound so the caller can defer observed
 // resolution.
-func evalFixtureExpr(expr interface{}, bindings map[string]float64) (float64, bool) {
+func evalFixtureExpr(expr any, bindings map[string]float64) (float64, bool) {
 	switch e := expr.(type) {
 	case nil:
 		return 0, false
@@ -79,12 +79,12 @@ func evalFixtureExpr(expr interface{}, bindings map[string]float64) (float64, bo
 	case string:
 		v, ok := bindings[e]
 		return v, ok
-	case map[string]interface{}:
+	case map[string]any:
 		opRaw, ok := e["op"].(string)
 		if !ok {
 			return 0, false
 		}
-		argsRaw, ok := e["args"].([]interface{})
+		argsRaw, ok := e["args"].([]any)
 		if !ok {
 			return 0, false
 		}
@@ -150,12 +150,12 @@ func evalFixtureExpr(expr interface{}, bindings map[string]float64) (float64, bo
 	}
 }
 
-func resolveUnitsFixtureObserved(variables map[string]interface{}, bindings map[string]float64) {
+func resolveUnitsFixtureObserved(variables map[string]any, bindings map[string]float64) {
 	n := len(variables) + 1
 	for i := 0; i < n; i++ {
 		progress := false
 		for vname, vraw := range variables {
-			v, ok := vraw.(map[string]interface{})
+			v, ok := vraw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -183,12 +183,12 @@ func resolveUnitsFixtureObserved(variables map[string]interface{}, bindings map[
 }
 
 func buildUnitsFixtureBindings(
-	variables map[string]interface{},
-	initialConditions, parameterOverrides map[string]interface{},
+	variables map[string]any,
+	initialConditions, parameterOverrides map[string]any,
 ) map[string]float64 {
 	bindings := map[string]float64{}
 	for vname, vraw := range variables {
-		v, ok := vraw.(map[string]interface{})
+		v, ok := vraw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -213,8 +213,8 @@ func buildUnitsFixtureBindings(
 	return bindings
 }
 
-func mapOr(m map[string]interface{}, key string) map[string]interface{} {
-	if v, ok := m[key].(map[string]interface{}); ok {
+func mapOr(m map[string]any, key string) map[string]any {
+	if v, ok := m[key].(map[string]any); ok {
 		return v
 	}
 	return nil
@@ -258,7 +258,7 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)
 			}
-			var doc map[string]interface{}
+			var doc map[string]any
 			if err := json.Unmarshal(raw, &doc); err != nil {
 				t.Fatalf("unmarshal %s: %v", name, err)
 			}
@@ -268,18 +268,18 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 			}
 			fixtureTests := 0
 			for mname, mraw := range models {
-				model, ok := mraw.(map[string]interface{})
+				model, ok := mraw.(map[string]any)
 				if !ok {
 					continue
 				}
-				testsRaw, _ := model["tests"].([]interface{})
+				testsRaw, _ := model["tests"].([]any)
 				if len(testsRaw) == 0 {
 					continue
 				}
 				variables := mapOr(model, "variables")
 				modelTol := model["tolerance"]
 				for _, tcRaw := range testsRaw {
-					tc, ok := tcRaw.(map[string]interface{})
+					tc, ok := tcRaw.(map[string]any)
 					if !ok {
 						continue
 					}
@@ -289,12 +289,12 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 					bindings := buildUnitsFixtureBindings(variables, ic, po)
 					resolveUnitsFixtureObserved(variables, bindings)
 
-					assertionsRaw, _ := tc["assertions"].([]interface{})
+					assertionsRaw, _ := tc["assertions"].([]any)
 					testTol := tc["tolerance"]
 					subname := fmt.Sprintf("%s/%s", mname, id)
 					t.Run(subname, func(t *testing.T) {
 						for _, aRaw := range assertionsRaw {
-							a, ok := aRaw.(map[string]interface{})
+							a, ok := aRaw.(map[string]any)
 							if !ok {
 								continue
 							}

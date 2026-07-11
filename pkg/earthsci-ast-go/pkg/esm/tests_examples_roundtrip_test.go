@@ -41,7 +41,7 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 
 	// Idempotence under re-save (spec §2.1a): the JSON form after the second
 	// round-trip must match the first.
-	var o1, o2 interface{}
+	var o1, o2 any
 	if err := json.Unmarshal(out1, &o1); err != nil {
 		t.Fatalf("unmarshal out1: %v", err)
 	}

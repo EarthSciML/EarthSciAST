@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEsmFileBasicStructure(t *testing.T) {
+func TestESMFileBasicStructure(t *testing.T) {
 	// Test creating a basic ESM file structure
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:        "TestModel",
 			Description: strPtr("A test model"),
@@ -21,15 +21,15 @@ func TestEsmFileBasicStructure(t *testing.T) {
 	}
 
 	// Test validation - this should fail because no models, reaction systems, or data loaders
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 }
 
-func TestEsmFileWithDataLoaderOnly(t *testing.T) {
+func TestESMFileWithDataLoaderOnly(t *testing.T) {
 	// Test creating an ESM file whose sole component is a data loader.
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "LoaderOnly",
 			Authors: []string{"Test Author"},
@@ -52,14 +52,14 @@ func TestEsmFileWithDataLoaderOnly(t *testing.T) {
 	}
 
 	// Test validation - this should pass since data_loaders is present.
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
-func TestEsmFileWithModel(t *testing.T) {
+func TestESMFileWithModel(t *testing.T) {
 	// Test creating an ESM file with a simple model
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -75,7 +75,7 @@ func TestEsmFileWithModel(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -84,14 +84,14 @@ func TestEsmFileWithModel(t *testing.T) {
 	}
 
 	// Test validation - this should pass
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
-func TestEsmFileWithReactionSystem(t *testing.T) {
+func TestESMFileWithReactionSystem(t *testing.T) {
 	// Test creating an ESM file with a reaction system
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -118,14 +118,14 @@ func TestEsmFileWithReactionSystem(t *testing.T) {
 	}
 
 	// Test validation - this should pass
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
 func TestJSONSerialization(t *testing.T) {
 	// Test basic JSON serialization
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -141,7 +141,7 @@ func TestJSONSerialization(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -155,12 +155,12 @@ func TestJSONSerialization(t *testing.T) {
 	assert.NotEmpty(t, jsonData)
 
 	// Test that we can unmarshal it back
-	var parsed EsmFile
+	var parsed ESMFile
 	err = json.Unmarshal(jsonData, &parsed)
 	require.NoError(t, err)
 
 	// Basic checks
-	assert.Equal(t, "0.1.0", parsed.Esm)
+	assert.Equal(t, "0.1.0", parsed.ESM)
 	assert.Equal(t, "TestModel", parsed.Metadata.Name)
 	assert.Len(t, parsed.Models, 1)
 }
@@ -169,7 +169,7 @@ func TestUnmarshalExpression(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "number",
@@ -186,7 +186,7 @@ func TestUnmarshalExpression(t *testing.T) {
 			input: `{"op": "+", "args": ["a", "b"]}`,
 			expected: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"a", "b"},
+				Args: []any{"a", "b"},
 			},
 		},
 	}
@@ -254,7 +254,7 @@ func TestCouplingDeserialization(t *testing.T) {
 	}`
 
 	// Unmarshal the JSON
-	var esmFile EsmFile
+	var esmFile ESMFile
 	err := json.Unmarshal([]byte(jsonData), &esmFile)
 	require.NoError(t, err)
 
@@ -330,7 +330,7 @@ func TestCouplingDeserializationErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var esmFile EsmFile
+			var esmFile ESMFile
 			err := json.Unmarshal([]byte(tt.jsonData), &esmFile)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorMsg)
@@ -372,7 +372,7 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 	}`
 
 	// Unmarshal the JSON
-	var esmFile EsmFile
+	var esmFile ESMFile
 	err := json.Unmarshal([]byte(jsonData), &esmFile)
 	require.NoError(t, err)
 
@@ -405,6 +405,120 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 		}
 	}
 	assert.True(t, foundError, "Should find error about unknown system 'model3' in coupling")
+}
+
+// TestEventCouplingPreservesAllFields is a regression test for a decode bug
+// where EventCoupling.UnmarshalJSON's temp struct omitted functional_affect,
+// affect_neg, root_find, and reinitialize, silently dropping those documented
+// fields on load. It asserts each survives a full Load -> Save -> Load cycle.
+func TestEventCouplingPreservesAllFields(t *testing.T) {
+	jsonData := `{
+		"esm": "0.8.0",
+		"metadata": {"name": "EventCouplingFields", "authors": ["Test"]},
+		"models": {
+			"m1": {"variables": {"x": {"type": "state"}}, "equations": []},
+			"m2": {"variables": {"y": {"type": "state"}}, "equations": []}
+		},
+		"coupling": [
+			{
+				"type": "event",
+				"event_type": "continuous",
+				"name": "cross_ev",
+				"conditions": [{"op": "-", "args": ["m1.x", 1]}],
+				"affect_neg": [{"lhs": "m2.y", "rhs": 1}],
+				"functional_affect": {
+					"handler_id": "h1",
+					"read_vars": ["m1.x"],
+					"read_params": []
+				},
+				"root_find": "left",
+				"reinitialize": true
+			}
+		]
+	}`
+
+	assertFields := func(t *testing.T, ec EventCoupling) {
+		t.Helper()
+		require.NotNil(t, ec.FunctionalAffect, "functional_affect dropped")
+		assert.Equal(t, "h1", ec.FunctionalAffect.HandlerID)
+		require.Len(t, ec.AffectNeg, 1, "affect_neg dropped")
+		assert.Equal(t, "m2.y", ec.AffectNeg[0].LHS)
+		require.NotNil(t, ec.RootFind, "root_find dropped")
+		assert.Equal(t, "left", *ec.RootFind)
+		require.NotNil(t, ec.Reinitialize, "reinitialize dropped")
+		assert.True(t, *ec.Reinitialize)
+	}
+
+	ef, err := LoadString(jsonData)
+	require.NoError(t, err)
+	require.Len(t, ef.Coupling, 1)
+	ec, ok := ef.Coupling[0].(EventCoupling)
+	require.True(t, ok, "coupling entry should be EventCoupling")
+	assertFields(t, ec)
+
+	// The fields must also survive re-serialization and re-load.
+	out, err := Serialize(ef)
+	require.NoError(t, err)
+	ef2, err := LoadString(out)
+	require.NoError(t, err)
+	ec2, ok := ef2.Coupling[0].(EventCoupling)
+	require.True(t, ok)
+	assertFields(t, ec2)
+}
+
+// TestIntegerDefaultRoundTrip is a regression test for the int/float wire
+// distinction (RFC §5.4.1): an integer-valued `default` (and `guesses` value)
+// must stay an integer through Load -> Save instead of mutating to a float and
+// re-emitting as "1.0".
+func TestIntegerDefaultRoundTrip(t *testing.T) {
+	jsonData := `{
+		"esm": "0.8.0",
+		"metadata": {"name": "IntDefault", "authors": ["Test"]},
+		"models": {
+			"m": {
+				"variables": {
+					"x": {"type": "state", "default": 1},
+					"z": {"type": "parameter", "default": 2.0}
+				},
+				"equations": [{"lhs": "x", "rhs": 0}],
+				"guesses": {"x": 3}
+			}
+		},
+		"reaction_systems": {
+			"rs": {
+				"species": {"A": {"default": 5}},
+				"parameters": {"k": {"default": 7}},
+				"reactions": [{"id": "R1", "substrates": null, "products": [{"species": "A", "stoichiometry": 1}], "rate": "k"}]
+			}
+		}
+	}`
+
+	ef, err := LoadString(jsonData)
+	require.NoError(t, err)
+
+	// Decoded integer default keeps its int64 type; float default stays float64.
+	m := ef.Models["m"]
+	assert.Equal(t, int64(1), m.Variables["x"].Default, "integer default should decode to int64")
+	assert.Equal(t, float64(2.0), m.Variables["z"].Default, "float default should stay float64")
+	assert.Equal(t, int64(3), m.Guesses["x"], "integer guess should decode to int64")
+
+	rs := ef.ReactionSystems["rs"]
+	assert.Equal(t, int64(5), rs.Species["A"].Default, "integer species default should decode to int64")
+	assert.Equal(t, int64(7), rs.Parameters["k"].Default, "integer parameter default should decode to int64")
+
+	// And it must re-emit as an integer literal, not "1.0".
+	out, err := Serialize(ef)
+	require.NoError(t, err)
+	assert.Contains(t, out, `"default": 1`)
+	assert.NotContains(t, out, `"default": 1.0`)
+	assert.Contains(t, out, `"default": 5`)
+	assert.NotContains(t, out, `"default": 5.0`)
+
+	// Idempotent under a second round-trip.
+	ef2, err := LoadString(out)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ef2.Models["m"].Variables["x"].Default)
+	assert.Equal(t, int64(5), ef2.ReactionSystems["rs"].Species["A"].Default)
 }
 
 // Helper function to get string pointers

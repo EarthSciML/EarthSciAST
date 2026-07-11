@@ -207,13 +207,13 @@ func TestPropagateDimensionAddition(t *testing.T) {
 	env := mkEnv(t, map[string]string{"a": "m", "b": "m", "c": "s"})
 
 	// a + b: same dim → m
-	ok := ExprNode{Op: "+", Args: []interface{}{"a", "b"}}
+	ok := ExprNode{Op: "+", Args: []any{"a", "b"}}
 	if u, err := PropagateDimension(ok, env); err != nil || u == nil || u.Dim != (Dimension{dimLength: 1}) {
 		t.Errorf("a+b: %v %v", u, err)
 	}
 
 	// a + c: mismatch → error
-	bad := ExprNode{Op: "+", Args: []interface{}{"a", "c"}}
+	bad := ExprNode{Op: "+", Args: []any{"a", "c"}}
 	if _, err := PropagateDimension(bad, env); err == nil {
 		t.Error("a+c should have errored")
 	}
@@ -222,7 +222,7 @@ func TestPropagateDimensionAddition(t *testing.T) {
 func TestPropagateDimensionMultiplication(t *testing.T) {
 	env := mkEnv(t, map[string]string{"v": "m/s", "t": "s"})
 	// v * t should give m
-	node := ExprNode{Op: "*", Args: []interface{}{"v", "t"}}
+	node := ExprNode{Op: "*", Args: []any{"v", "t"}}
 	u, err := PropagateDimension(node, env)
 	if err != nil || u == nil {
 		t.Fatalf("v*t: %v %v", u, err)
@@ -234,7 +234,7 @@ func TestPropagateDimensionMultiplication(t *testing.T) {
 
 func TestPropagateDimensionDivision(t *testing.T) {
 	env := mkEnv(t, map[string]string{"x": "m", "t": "s"})
-	node := ExprNode{Op: "/", Args: []interface{}{"x", "t"}}
+	node := ExprNode{Op: "/", Args: []any{"x", "t"}}
 	u, err := PropagateDimension(node, env)
 	if err != nil || u == nil {
 		t.Fatalf("x/t: %v %v", u, err)
@@ -247,7 +247,7 @@ func TestPropagateDimensionDivision(t *testing.T) {
 func TestPropagateDimensionPower(t *testing.T) {
 	env := mkEnv(t, map[string]string{"r": "m"})
 	// r^2 → m^2
-	node := ExprNode{Op: "^", Args: []interface{}{"r", 2}}
+	node := ExprNode{Op: "^", Args: []any{"r", 2}}
 	u, err := PropagateDimension(node, env)
 	if err != nil || u == nil || u.Dim != (Dimension{dimLength: 2}) {
 		t.Errorf("r^2: %v %v", u, err)
@@ -255,7 +255,7 @@ func TestPropagateDimensionPower(t *testing.T) {
 
 	// Dimensionful exponent → error.
 	env["k"] = unitRegistry["s"]
-	bad := ExprNode{Op: "^", Args: []interface{}{"r", "k"}}
+	bad := ExprNode{Op: "^", Args: []any{"r", "k"}}
 	if _, err := PropagateDimension(bad, env); err == nil {
 		t.Error("r^k (k in seconds) should have errored")
 	}
@@ -269,13 +269,13 @@ func TestPropagateDimensionTranscendental(t *testing.T) {
 	// a dimensionless argument).
 	//
 	// Use a literal: sin(3.14) → dimensionless.
-	ok := ExprNode{Op: "sin", Args: []interface{}{3.14}}
+	ok := ExprNode{Op: "sin", Args: []any{3.14}}
 	if u, err := PropagateDimension(ok, env); err != nil || u == nil || !u.Dim.IsDimensionless() {
 		t.Errorf("sin(3.14): %v %v", u, err)
 	}
 
 	// exp(t) with t in seconds → error.
-	bad := ExprNode{Op: "exp", Args: []interface{}{"t"}}
+	bad := ExprNode{Op: "exp", Args: []any{"t"}}
 	if _, err := PropagateDimension(bad, env); err == nil {
 		t.Error("exp(t) should have errored")
 	}
@@ -284,7 +284,7 @@ func TestPropagateDimensionTranscendental(t *testing.T) {
 func TestPropagateDimensionDerivative(t *testing.T) {
 	env := mkEnv(t, map[string]string{"x": "m", "t": "s"})
 	wrt := "t"
-	node := ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: &wrt}
+	node := ExprNode{Op: "D", Args: []any{"x"}, Wrt: &wrt}
 	u, err := PropagateDimension(node, env)
 	if err != nil || u == nil {
 		t.Fatalf("D(x,t): %v %v", u, err)
@@ -295,7 +295,7 @@ func TestPropagateDimensionDerivative(t *testing.T) {
 
 	// Default wrt = time in seconds when wrt is absent and env lacks "t".
 	env2 := mkEnv(t, map[string]string{"x": "m"})
-	node2 := ExprNode{Op: "D", Args: []interface{}{"x"}}
+	node2 := ExprNode{Op: "D", Args: []any{"x"}}
 	u2, err := PropagateDimension(node2, env2)
 	if err != nil || u2 == nil {
 		t.Fatalf("D(x) default: %v %v", u2, err)
@@ -308,8 +308,8 @@ func TestPropagateDimensionDerivative(t *testing.T) {
 func TestPropagateDimensionComplexExpression(t *testing.T) {
 	// Expression: kinetic energy 1/2 * m * v^2 should have dimension of J.
 	env := mkEnv(t, map[string]string{"m": "kg", "v": "m/s"})
-	v2 := ExprNode{Op: "^", Args: []interface{}{"v", 2}}
-	ke := ExprNode{Op: "*", Args: []interface{}{0.5, "m", v2}}
+	v2 := ExprNode{Op: "^", Args: []any{"v", 2}}
+	ke := ExprNode{Op: "*", Args: []any{0.5, "m", v2}}
 	u, err := PropagateDimension(ke, env)
 	if err != nil || u == nil {
 		t.Fatalf("0.5*m*v^2: %v %v", u, err)
@@ -327,7 +327,7 @@ func TestValidateEquationDimensionsConsistent(t *testing.T) {
 	// D(x, t) = v
 	wrt := "t"
 	eq := &Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: &wrt},
+		LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: &wrt},
 		RHS: "v",
 	}
 	if w := ValidateEquationDimensions(eq, env, "$"); w != nil {
@@ -339,7 +339,7 @@ func TestValidateEquationDimensionsInconsistent(t *testing.T) {
 	env := mkEnv(t, map[string]string{"x": "m", "t": "s", "v": "kg"})
 	wrt := "t"
 	eq := &Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: &wrt},
+		LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: &wrt},
 		RHS: "v",
 	}
 	w := ValidateEquationDimensions(eq, env, "$")
@@ -372,18 +372,18 @@ func TestValidateModelUnitsIntegration(t *testing.T) {
 		},
 		Equations: []Equation{
 			// Consistent: dx/dt = v
-			{LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")}, RHS: "v"},
+			{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: "v"},
 			// Inconsistent: dv/dt = x (should be m/s^2 = m/s; mismatch m/s^2 vs m/s)
-			{LHS: ExprNode{Op: "D", Args: []interface{}{"v"}, Wrt: strPtr("t")}, RHS: "x"},
+			{LHS: ExprNode{Op: "D", Args: []any{"v"}, Wrt: strPtr("t")}, RHS: "x"},
 		},
 	}
 	result := &StructuralValidationResult{}
-	validateModelUnits("M", &model, "$.models.M", nil, result)
+	validateModelUnits("M", &model, "/models/M", nil, result)
 	if len(result.UnitWarnings) != 1 {
 		t.Fatalf("expected 1 unit warning, got %d: %+v", len(result.UnitWarnings), result.UnitWarnings)
 	}
 	w := result.UnitWarnings[0]
-	if w.Path != "$.models.M.equations[1]" {
+	if w.Path != "/models/M/equations/1" {
 		t.Errorf("wrong path: %s", w.Path)
 	}
 }
@@ -415,7 +415,7 @@ func TestValidateFileUnitsEndToEnd(t *testing.T) {
 	}
 	found := false
 	for _, w := range result.UnitWarnings {
-		if w.Path == "$.models.M.equations[0]" {
+		if w.Path == "/models/M/equations/0" {
 			found = true
 			if w.LhsUnits == w.RhsUnits {
 				t.Errorf("mismatch warning has matching dims: %+v", w)

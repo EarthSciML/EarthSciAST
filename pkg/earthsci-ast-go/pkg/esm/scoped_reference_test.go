@@ -8,23 +8,23 @@ import (
 
 func TestResolveScopedReference(t *testing.T) {
 	// Create a test ESM file with models and subsystems
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
 					"y": {Type: "parameter"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
-							"pressure": map[string]interface{}{"type": "parameter"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp":     map[string]any{"type": "state"},
+							"pressure": map[string]any{"type": "parameter"},
 						},
-						"subsystems": map[string]interface{}{
-							"NestedSub": map[string]interface{}{
-								"variables": map[string]interface{}{
-									"depth": map[string]interface{}{"type": "state"},
+						"subsystems": map[string]any{
+							"NestedSub": map[string]any{
+								"variables": map[string]any{
+									"depth": map[string]any{"type": "state"},
 								},
 							},
 						},
@@ -41,13 +41,13 @@ func TestResolveScopedReference(t *testing.T) {
 				Parameters: map[string]Parameter{
 					"rate_const": {},
 				},
-				Subsystems: map[string]interface{}{
-					"FastReactions": map[string]interface{}{
-						"species": map[string]interface{}{
-							"OH": map[string]interface{}{},
+				Subsystems: map[string]any{
+					"FastReactions": map[string]any{
+						"species": map[string]any{
+							"OH": map[string]any{},
 						},
-						"parameters": map[string]interface{}{
-							"k_fast": map[string]interface{}{},
+						"parameters": map[string]any{
+							"k_fast": map[string]any{},
 						},
 					},
 				},
@@ -56,11 +56,11 @@ func TestResolveScopedReference(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		scopedRef      string
-		currentSystem  string
-		expectedVar    string
-		expectedFound  bool
+		name          string
+		scopedRef     string
+		currentSystem string
+		expectedVar   string
+		expectedFound bool
 	}{
 		{
 			name:          "Direct variable in model",
@@ -131,51 +131,10 @@ func TestResolveScopedReference(t *testing.T) {
 	}
 }
 
-func TestGetAllAvailableVariables(t *testing.T) {
-	// Create a test ESM file
-	file := &EsmFile{
-		Models: map[string]Model{
-			"MainModel": {
-				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "parameter"},
-				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
-						},
-					},
-				},
-			},
-			"OtherModel": {
-				Variables: map[string]ModelVariable{
-					"z": {Type: "state"},
-				},
-			},
-		},
-	}
-
-	allVars := getAllAvailableVariables(file, "MainModel")
-
-	// Should include direct variables from MainModel
-	assert.True(t, allVars["x"], "Should include direct variable 'x'")
-	assert.True(t, allVars["y"], "Should include direct variable 'y'")
-
-	// Should include subsystem variables with proper scoping
-	assert.True(t, allVars["SubsystemA.temp"], "Should include scoped subsystem variable")
-
-	// Should include variables from other systems with full scoping
-	assert.True(t, allVars["OtherModel.z"], "Should include cross-system scoped variable")
-
-	// Should not include non-existent variables
-	assert.False(t, allVars["nonexistent"], "Should not include non-existent variable")
-}
-
 func TestValidationWithScopedReferences(t *testing.T) {
 	// Create a test ESM file with scoped references in equations
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Test Model",
 		},
@@ -187,14 +146,14 @@ func TestValidationWithScopedReferences(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: stringPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")},
 						RHS: "SubsystemA.temp", // Scoped reference
 					},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -216,16 +175,16 @@ func TestValidationWithScopedReferences(t *testing.T) {
 
 func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// Create a test ESM file
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
 				},
-				Subsystems: map[string]interface{}{
-					"SubsystemA": map[string]interface{}{
-						"variables": map[string]interface{}{
-							"temp": map[string]interface{}{"type": "state"},
+				Subsystems: map[string]any{
+					"SubsystemA": map[string]any{
+						"variables": map[string]any{
+							"temp": map[string]any{"type": "state"},
 						},
 					},
 				},
@@ -236,7 +195,7 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// Test expression with scoped reference
 	expr := ExprNode{
 		Op:   "+",
-		Args: []interface{}{"x", "SubsystemA.temp"},
+		Args: []any{"x", "SubsystemA.temp"},
 	}
 
 	// Bindings map
@@ -246,7 +205,8 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	}
 
 	// Perform substitution with scoped reference support
-	result := SubstituteWithScoped(expr, bindings, file, "MainModel")
+	result, err := SubstituteWithScoped(expr, bindings, file, "MainModel")
+	assert.NoError(t, err)
 
 	// Verify the result
 	resultNode, ok := result.(ExprNode)
@@ -257,4 +217,3 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// The scoped reference should be resolved and substituted
 	assert.Equal(t, float64(25.0), resultNode.Args[1])
 }
-

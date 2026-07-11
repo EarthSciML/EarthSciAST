@@ -2,8 +2,10 @@ package esm
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSubstituteSimpleVariable(t *testing.T) {
@@ -41,7 +43,8 @@ func TestSubstituteSimpleVariable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Substitute(tt.input, tt.bindings)
+			result, err := Substitute(tt.input, tt.bindings)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -58,44 +61,44 @@ func TestSubstituteExprNode(t *testing.T) {
 			name: "substitute in addition",
 			input: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", "y"},
+				Args: []any{"x", "y"},
 			},
 			bindings: map[string]Expression{"x": 5.0},
 			expected: ExprNode{
 				Op:   "+",
-				Args: []interface{}{5.0, "y"},
+				Args: []any{5.0, "y"},
 			},
 		},
 		{
 			name: "substitute multiple variables",
 			input: ExprNode{
 				Op:   "*",
-				Args: []interface{}{"k", "T"},
+				Args: []any{"k", "T"},
 			},
 			bindings: map[string]Expression{"T": 298.15},
 			expected: ExprNode{
 				Op:   "*",
-				Args: []interface{}{"k", 298.15},
+				Args: []any{"k", 298.15},
 			},
 		},
 		{
 			name: "substitute in nested expression",
 			input: ExprNode{
 				Op: "exp",
-				Args: []interface{}{
+				Args: []any{
 					ExprNode{
 						Op:   "/",
-						Args: []interface{}{-1370, "T"},
+						Args: []any{-1370, "T"},
 					},
 				},
 			},
 			bindings: map[string]Expression{"T": 298.15},
 			expected: ExprNode{
 				Op: "exp",
-				Args: []interface{}{
+				Args: []any{
 					ExprNode{
 						Op:   "/",
-						Args: []interface{}{-1370, 298.15},
+						Args: []any{-1370, 298.15},
 					},
 				},
 			},
@@ -104,13 +107,13 @@ func TestSubstituteExprNode(t *testing.T) {
 			name: "substitute in derivative",
 			input: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"_var"},
+				Args: []any{"_var"},
 				Wrt:  strPtr("t"),
 			},
 			bindings: map[string]Expression{"_var": "O3"},
 			expected: ExprNode{
 				Op:   "D",
-				Args: []interface{}{"O3"},
+				Args: []any{"O3"},
 				Wrt:  strPtr("t"),
 			},
 		},
@@ -118,19 +121,20 @@ func TestSubstituteExprNode(t *testing.T) {
 			name: "substitute all variables",
 			input: ExprNode{
 				Op:   "+",
-				Args: []interface{}{"a", "b", "c"},
+				Args: []any{"a", "b", "c"},
 			},
 			bindings: map[string]Expression{"a": 1.0, "c": 3.0},
 			expected: ExprNode{
 				Op:   "+",
-				Args: []interface{}{1.0, "b", 3.0},
+				Args: []any{1.0, "b", 3.0},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Substitute(tt.input, tt.bindings)
+			result, err := Substitute(tt.input, tt.bindings)
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -139,11 +143,11 @@ func TestSubstituteExprNode(t *testing.T) {
 func TestSubstituteRecursive(t *testing.T) {
 	input := ExprNode{
 		Op: "*",
-		Args: []interface{}{
+		Args: []any{
 			"x",
 			ExprNode{
 				Op:   "+",
-				Args: []interface{}{"x", 1},
+				Args: []any{"x", 1},
 			},
 		},
 	}
@@ -152,50 +156,53 @@ func TestSubstituteRecursive(t *testing.T) {
 
 	expected := ExprNode{
 		Op: "*",
-		Args: []interface{}{
+		Args: []any{
 			2.0,
 			ExprNode{
 				Op:   "+",
-				Args: []interface{}{2.0, 1},
+				Args: []any{2.0, 1},
 			},
 		},
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
 func TestSubstituteInEquation(t *testing.T) {
 	eq := Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-		RHS: ExprNode{Op: "*", Args: []interface{}{"k", "x"}},
+		LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+		RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
 	}
 
 	bindings := map[string]Expression{"k": 0.5}
 
 	expected := Equation{
-		LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-		RHS: ExprNode{Op: "*", Args: []interface{}{0.5, "x"}},
+		LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+		RHS: ExprNode{Op: "*", Args: []any{0.5, "x"}},
 	}
 
-	result := SubstituteInEquation(eq, bindings)
+	result, err := SubstituteInEquation(eq, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
 func TestSubstituteInAffectEquation(t *testing.T) {
 	affect := AffectEquation{
 		LHS: "x",
-		RHS: ExprNode{Op: "+", Args: []interface{}{"y", 1}},
+		RHS: ExprNode{Op: "+", Args: []any{"y", 1}},
 	}
 
 	bindings := map[string]Expression{"y": 5.0}
 
 	expected := AffectEquation{
 		LHS: "x", // LHS should not change
-		RHS: ExprNode{Op: "+", Args: []interface{}{5.0, 1}},
+		RHS: ExprNode{Op: "+", Args: []any{5.0, 1}},
 	}
 
-	result := SubstituteInAffectEquation(affect, bindings)
+	result, err := SubstituteInAffectEquation(affect, bindings)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
@@ -207,27 +214,28 @@ func TestSubstituteInModel(t *testing.T) {
 			},
 			"y": {
 				Type:       "observed",
-				Expression: ExprNode{Op: "+", Args: []interface{}{"x", "k"}},
+				Expression: ExprNode{Op: "+", Args: []any{"x", "k"}},
 			},
 		},
 		Equations: []Equation{
 			{
-				LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-				RHS: ExprNode{Op: "*", Args: []interface{}{"k", "x"}},
+				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+				RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
 			},
 		},
 	}
 
 	bindings := map[string]Expression{"k": 0.1}
 
-	result := SubstituteInModel(model, bindings)
+	result, err := SubstituteInModel(model, bindings)
+	assert.NoError(t, err)
 
 	// Check equation substitution
-	expectedEqRHS := ExprNode{Op: "*", Args: []interface{}{0.1, "x"}}
+	expectedEqRHS := ExprNode{Op: "*", Args: []any{0.1, "x"}}
 	assert.Equal(t, expectedEqRHS, result.Equations[0].RHS)
 
 	// Check observed variable expression substitution
-	expectedObsExpr := ExprNode{Op: "+", Args: []interface{}{"x", 0.1}}
+	expectedObsExpr := ExprNode{Op: "+", Args: []any{"x", 0.1}}
 	assert.Equal(t, expectedObsExpr, result.Variables["y"].Expression)
 }
 
@@ -245,23 +253,24 @@ func TestSubstituteInReactionSystem(t *testing.T) {
 				ID:         "R1",
 				Substrates: []SubstrateProduct{{Species: "A", Stoichiometry: 1}},
 				Products:   []SubstrateProduct{{Species: "B", Stoichiometry: 1}},
-				Rate:       ExprNode{Op: "*", Args: []interface{}{"k1", "temperature"}},
+				Rate:       ExprNode{Op: "*", Args: []any{"k1", "temperature"}},
 			},
 		},
 	}
 
 	bindings := map[string]Expression{"temperature": 298.15}
 
-	result := SubstituteInReactionSystem(system, bindings)
+	result, err := SubstituteInReactionSystem(system, bindings)
+	assert.NoError(t, err)
 
-	expectedRate := ExprNode{Op: "*", Args: []interface{}{"k1", 298.15}}
+	expectedRate := ExprNode{Op: "*", Args: []any{"k1", 298.15}}
 	assert.Equal(t, expectedRate, result.Reactions[0].Rate)
 }
 
 func TestPartialSubstitute(t *testing.T) {
 	input := ExprNode{
 		Op:   "+",
-		Args: []interface{}{"a", "b", "c"},
+		Args: []any{"a", "b", "c"},
 	}
 
 	bindings := map[string]Expression{
@@ -274,22 +283,23 @@ func TestPartialSubstitute(t *testing.T) {
 
 	expected := ExprNode{
 		Op:   "+",
-		Args: []interface{}{1.0, "b", 3.0}, // 'b' should remain as variable
+		Args: []any{1.0, "b", 3.0}, // 'b' should remain as variable
 	}
 
-	result := PartialSubstitute(input, bindings, keepSymbolic)
+	result, err := PartialSubstitute(input, bindings, keepSymbolic)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
 
 func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	input := ExprNode{
 		Op:   "*",
-		Args: []interface{}{"rate", "concentration"},
+		Args: []any{"rate", "concentration"},
 	}
 
 	complexExpr := ExprNode{
 		Op:   "exp",
-		Args: []interface{}{ExprNode{Op: "/", Args: []interface{}{-1000, "T"}}},
+		Args: []any{ExprNode{Op: "/", Args: []any{-1000, "T"}}},
 	}
 
 	bindings := map[string]Expression{
@@ -297,16 +307,17 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 		"T":    298.15,
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 
 	// The result should have 'rate' replaced with the complex expression
 	// and 'T' within that expression should be substituted with 298.15
 	expected := ExprNode{
 		Op: "*",
-		Args: []interface{}{
+		Args: []any{
 			ExprNode{
 				Op:   "exp",
-				Args: []interface{}{ExprNode{Op: "/", Args: []interface{}{-1000, 298.15}}},
+				Args: []any{ExprNode{Op: "/", Args: []any{-1000, 298.15}}},
 			},
 			"concentration",
 		},
@@ -315,10 +326,57 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
+// A cyclic binding (x → f(x)) must not stack-overflow: cycle detection halts
+// the recursion and returns a SubstitutionError instead of panicking or looping.
+func TestSubstituteCyclicBindingErrors(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "f", Args: []any{"x"}},
+	}
+	type res struct {
+		out Expression
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		out, err := Substitute("x", bindings) // must return, not crash or hang
+		done <- res{out, err}
+	}()
+	select {
+	case r := <-done:
+		var se *SubstitutionError
+		require.ErrorAs(t, r.err, &se, "cyclic binding must surface a SubstitutionError")
+		assert.Equal(t, codeCyclicSubstitution, se.DiagnosticCode())
+	case <-time.After(10 * time.Second):
+		t.Fatal("Substitute did not terminate on a cyclic binding")
+	}
+}
+
+// A transitive cycle (x → y, y → x) is detected the same way.
+func TestSubstituteTransitiveCycleErrors(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "+", Args: []any{"y", 1.0}},
+		"y": ExprNode{Op: "+", Args: []any{"x", 1.0}},
+	}
+	_, err := Substitute("x", bindings)
+	var se *SubstitutionError
+	require.ErrorAs(t, err, &se)
+}
+
+// A binding whose replacement mentions a variable twice in sibling positions
+// (not its own key) substitutes cleanly without a false-positive cycle.
+func TestSubstituteRepeatedVariableNotACycle(t *testing.T) {
+	bindings := map[string]Expression{
+		"x": ExprNode{Op: "*", Args: []any{"a", "a"}}, // a appears twice, no cycle
+	}
+	out, err := Substitute("x", bindings)
+	require.NoError(t, err)
+	assert.Equal(t, ExprNode{Op: "*", Args: []any{"a", "a"}}, out)
+}
+
 func TestSubstituteWithDerivativeWrtParameter(t *testing.T) {
 	input := ExprNode{
 		Op:   "D",
-		Args: []interface{}{"x"},
+		Args: []any{"x"},
 		Wrt:  strPtr("time_var"),
 	}
 
@@ -326,11 +384,12 @@ func TestSubstituteWithDerivativeWrtParameter(t *testing.T) {
 		"time_var": "t",
 	}
 
-	result := Substitute(input, bindings)
+	result, err := Substitute(input, bindings)
+	assert.NoError(t, err)
 
 	expected := ExprNode{
 		Op:   "D",
-		Args: []interface{}{"x"},
+		Args: []any{"x"},
 		Wrt:  strPtr("t"),
 	}
 

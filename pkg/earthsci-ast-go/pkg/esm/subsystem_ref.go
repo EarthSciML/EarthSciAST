@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 // ResolveSubsystemRefs walks all subsystem maps in models and reaction systems,
@@ -23,7 +20,7 @@ import (
 //
 // The function modifies file in-place, replacing reference objects with the
 // resolved model or reaction system content.
-func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
+func ResolveSubsystemRefs(file *ESMFile, basePath string) error {
 	return resolveSubsystemRefsWithMeta(file, basePath, nil)
 }
 
@@ -37,7 +34,7 @@ func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
 // with the loader-API bindings) and passes it here BEFORE the root's
 // metaparameters are consumed by the template-machinery resolver. Direct
 // callers (which have no mounting metaparameters) pass nil.
-func resolveSubsystemRefsWithMeta(file *EsmFile, basePath string, parentMeta map[string]int64) error {
+func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta map[string]int64) error {
 	visited := make(map[string]bool)
 	// The importing document's index_sets registry (esm-spec §4.7): a mounted
 	// subsystem file's top-level index_sets merge into it, so a mounted mesh's
@@ -53,21 +50,22 @@ func resolveSubsystemRefsWithMeta(file *EsmFile, basePath string, parentMeta map
 // visited paths for circular reference detection and threads the importing
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
-func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
-	// Resolve subsystems in models
+func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+	// Resolve subsystems in models. model.Subsystems is a map (reference type)
+	// that resolveSubsystemMap mutates in place, so no write-back of the Model
+	// struct into file.Models is needed.
 	for modelName, model := range file.Models {
 		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
-		file.Models[modelName] = model
 	}
 
-	// Resolve subsystems in reaction systems
+	// Resolve subsystems in reaction systems (rs.Subsystems is likewise mutated
+	// in place).
 	for rsName, rs := range file.ReactionSystems {
 		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
-		file.ReactionSystems[rsName] = rs
 	}
 
 	return nil
@@ -91,8 +89,8 @@ func indexSetDeepEqual(a, b IndexSet) bool {
 // load-time error `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh
 // failure mode this makes loud. Mirrors the Julia reference
 // `_merge_subsystem_index_sets!`.
-func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]interface{}, ref string) error {
-	isetsRaw, ok := view["index_sets"].(map[string]interface{})
+func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, ref string) error {
+	isetsRaw, ok := view["index_sets"].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -108,7 +106,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]inter
 		if existing, has := registry[n]; has {
 			if !indexSetDeepEqual(existing, decl) {
 				return newETErr("subsystem_index_set_conflict",
-					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document. A referenced subsystem file's top-level index_sets merge into the importing document's registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7).", n, ref))
+					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7)", n, ref))
 			}
 			continue
 		}
@@ -128,27 +126,28 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]inter
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
 	if len(subsystems) == 0 {
 		return nil
 	}
 
-	for key, value := range subsystems {
-		refObj, bindingsRaw, isRef := extractRefWithBindings(value)
+	// Iterate in sorted key order so a document with multiple bad refs fails
+	// with a deterministic diagnostic (the rest of the package does this).
+	for _, key := range sortedKeys(subsystems) {
+		value := subsystems[key]
+		ref, bindingsRaw, isRef := extractRefWithBindings(value)
 		if !isRef {
 			continue
 		}
-
-		ref := refObj
 
 		// esm-spec §9.7.10 form A: the edge's optional `expression_template_imports`
 		// inject a discretization into the REFERENCED component's own scope. Kept
 		// as raw §9.7.2 entries and threaded into the referenced document's load,
 		// where the §9.6.3 fixpoint lowers its rewrite-targets before the mounted
 		// form is inlined (so the field does not survive parse → emit).
-		var injected []interface{}
-		if m, ok := value.(map[string]interface{}); ok {
-			if inj, ok := m["expression_template_imports"].([]interface{}); ok {
+		var injected []any
+		if m, ok := value.(map[string]any); ok {
+			if inj, ok := m["expression_template_imports"].([]any); ok {
 				injected = inj
 			}
 		}
@@ -178,59 +177,16 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 			bindings[bk] = bv
 		}
 
-		var (
-			data        []byte
-			refKey      string
-			refBasePath string
-			sourceDesc  string
-			err         error
-		)
-
-		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-			refKey = ref
-			sourceDesc = ref
-			refBasePath = basePath
-
-			if visited[refKey] {
-				return fmt.Errorf("subsystem %q: circular reference detected for %q", key, ref)
-			}
-			visited[refKey] = true
-
-			data, err = fetchRemoteRef(ref)
-			if err != nil {
-				return fmt.Errorf("subsystem %q: %w", key, err)
-			}
-		} else {
-			refPath := ref
-			if !filepath.IsAbs(refPath) {
-				refPath = filepath.Join(basePath, refPath)
-			}
-
-			absPath, absErr := filepath.Abs(refPath)
-			if absErr != nil {
-				return fmt.Errorf("subsystem %q: failed to resolve path %q: %w", key, ref, absErr)
-			}
-
-			refKey = absPath
-			sourceDesc = absPath
-			refBasePath = filepath.Dir(absPath)
-
-			if visited[refKey] {
-				return fmt.Errorf("subsystem %q: circular reference detected for %q", key, ref)
-			}
-			visited[refKey] = true
-
-			data, err = os.ReadFile(absPath)
-			if err != nil {
-				return fmt.Errorf("subsystem %q: failed to read referenced file %q: %w", key, absPath, err)
-			}
+		data, refKey, refBasePath, err := loadSubsystemRefBytes(ref, basePath, key, visited)
+		if err != nil {
+			return err
 		}
 
 		// Decode the referenced file's raw view (UseNumber preserves the
 		// int/float distinction through the §9.7 resolver).
 		view, err := decodeJSONView(data)
 		if err != nil {
-			return fmt.Errorf("subsystem %q: failed to parse referenced file %q: %w", key, sourceDesc, err)
+			return fmt.Errorf("subsystem %q: failed to parse referenced file %q: %w", key, refKey, err)
 		}
 
 		// Spec-version gates (esm-spec §9.6.5).
@@ -245,14 +201,14 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		// two reference mechanisms are disjoint (esm-spec §9.7.1).
 		if isTemplateLibraryDoc(view) {
 			return newETErr("subsystem_ref_is_template_library",
-				fmt.Sprintf("subsystem %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", key, ref, sourceDesc))
+				fmt.Sprintf("subsystem %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", key, ref, refKey))
 		}
 
 		// Nor a coupling-library file — those are imported via a coupling_import
 		// coupling entry, not a subsystem ref (esm-spec §10.9).
 		if isCouplingLibraryDoc(view) {
 			return newETErr("subsystem_ref_is_coupling_library",
-				fmt.Sprintf("subsystem %q: ref %q targets a coupling-library file (%s); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)", key, ref, sourceDesc))
+				fmt.Sprintf("subsystem %q: ref %q targets a coupling-library file (%s); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)", key, ref, refKey))
 		}
 
 		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
@@ -291,19 +247,19 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		// Recursively resolve subsystem refs nested in the loaded file's
 		// components, relative to its own directory; nested mounts merge their
 		// axes into the same importing-document registry (transitive, §4.7).
-		for _, kind := range []string{"models", "reaction_systems"} {
-			comps, ok := view[kind].(map[string]interface{})
+		for _, kind := range templateComponentKinds {
+			comps, ok := view[kind].(map[string]any)
 			if !ok {
 				continue
 			}
 			for _, compRaw := range comps {
-				compObj, ok := compRaw.(map[string]interface{})
+				compObj, ok := compRaw.(map[string]any)
 				if !ok {
 					continue
 				}
-				if subs, ok := compObj["subsystems"].(map[string]interface{}); ok {
+				if subs, ok := compObj["subsystems"].(map[string]any); ok {
 					if err := resolveSubsystemMap(subs, refBasePath, visited, registry, childMeta); err != nil {
-						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, sourceDesc, err)
+						return fmt.Errorf("subsystem %q: resolving nested refs in %q: %w", key, refKey, err)
 					}
 				}
 			}
@@ -314,7 +270,7 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 		delete(visited, refKey)
 
 		// Extract the single top-level model, reaction system, or data loader
-		resolved, err := extractSingleSystemRaw(view, sourceDesc)
+		resolved, err := extractSingleSystemRaw(view, refKey)
 		if err != nil {
 			return fmt.Errorf("subsystem %q: %w", key, err)
 		}
@@ -323,6 +279,34 @@ func resolveSubsystemMap(subsystems map[string]interface{}, basePath string, vis
 	}
 
 	return nil
+}
+
+// loadSubsystemRefBytes resolves a subsystem ref (an http(s) URL or a path
+// relative to basePath) to its raw bytes, layering the subsystem-ref concerns
+// the generic loadRefBytes does not model onto its http(s)-vs-local branch: a
+// stable visited-map key for circular-reference detection and a source identity
+// for diagnostics.
+//
+// refKey is that canonical identity — the URL for a remote ref, the absolute
+// path for a local one (via canonicalImportRef) — and doubles as the value
+// echoed in "referenced file" error messages. refBasePath is the directory the
+// referenced document's OWN nested refs resolve against (basePath for a remote
+// ref; the referenced file's directory for a local one), threaded back from
+// loadRefBytes. A ref already on the resolution stack is the circular-reference
+// error; a read/fetch failure is wrapped so it still reads "failed to read
+// referenced file …".
+func loadSubsystemRefBytes(ref, basePath, key string, visited map[string]bool) (data []byte, refKey, refBasePath string, err error) {
+	refKey = canonicalImportRef(ref, basePath)
+	if visited[refKey] {
+		return nil, refKey, "", fmt.Errorf("subsystem %q: circular reference detected for %q", key, ref)
+	}
+	visited[refKey] = true
+
+	data, refBasePath, err = loadRefBytes(ref, basePath)
+	if err != nil {
+		return nil, refKey, "", fmt.Errorf("subsystem %q: failed to read referenced file %q: %w", key, refKey, err)
+	}
+	return data, refKey, refBasePath, nil
 }
 
 // fetchRemoteRef downloads a subsystem reference from an HTTP(S) URL and
@@ -353,11 +337,11 @@ func fetchRemoteRef(url string) ([]byte, error) {
 // bindings, esm-spec §9.7.6 sites 4-5) and is the environment a nested §4.7
 // subsystem edge folds its own binding expressions against. Non-integer or
 // absent defaults are simply omitted (an open name is not in scope until bound).
-func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string]int64 {
+func metaEnvFromDecls(declsRaw any, overlay map[string]int64) map[string]int64 {
 	env := map[string]int64{}
-	if decls, ok := declsRaw.(map[string]interface{}); ok {
+	if decls, ok := declsRaw.(map[string]any); ok {
 		for name, dRaw := range decls {
-			decl, ok := dRaw.(map[string]interface{})
+			decl, ok := dRaw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -376,18 +360,11 @@ func metaEnvFromDecls(declsRaw interface{}, overlay map[string]int64) map[string
 	return env
 }
 
-// extractRef checks if a value is a reference object (a map with a "ref" key)
-// and returns the ref string if so.
-func extractRef(value interface{}) (string, bool) {
-	ref, _, ok := extractRefWithBindings(value)
-	return ref, ok
-}
-
 // extractRefWithBindings checks if a value is a reference object (a map with
 // a "ref" key) and returns the ref string plus its optional metaparameter
 // `bindings` object (esm-spec §9.7.6 binding site 3).
-func extractRefWithBindings(value interface{}) (string, map[string]interface{}, bool) {
-	m, ok := value.(map[string]interface{})
+func extractRefWithBindings(value any) (string, map[string]any, bool) {
+	m, ok := value.(map[string]any)
 	if !ok {
 		return "", nil, false
 	}
@@ -402,7 +379,7 @@ func extractRefWithBindings(value interface{}) (string, map[string]interface{}, 
 		return "", nil, false
 	}
 
-	bindings, _ := m["bindings"].(map[string]interface{})
+	bindings, _ := m["bindings"].(map[string]any)
 	return refStr, bindings, true
 }
 
@@ -411,10 +388,10 @@ func extractRefWithBindings(value interface{}) (string, map[string]interface{}, 
 // file contains exactly one such component it is returned as-is (a generic
 // map, preserving every Expression field verbatim). If there are multiple
 // systems or none, an error is returned.
-func extractSingleSystemRaw(view map[string]interface{}, path string) (interface{}, error) {
-	models, _ := view["models"].(map[string]interface{})
-	rss, _ := view["reaction_systems"].(map[string]interface{})
-	loaders, _ := view["data_loaders"].(map[string]interface{})
+func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
+	models, _ := view["models"].(map[string]any)
+	rss, _ := view["reaction_systems"].(map[string]any)
+	loaders, _ := view["data_loaders"].(map[string]any)
 	total := len(models) + len(rss) + len(loaders)
 
 	if total == 0 {

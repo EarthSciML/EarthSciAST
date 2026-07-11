@@ -48,9 +48,9 @@ const arrheniusFixture = `{
   }
 }`
 
-func decodeFixture(t *testing.T, s string) map[string]interface{} {
+func decodeFixture(t *testing.T, s string) map[string]any {
 	t.Helper()
-	var v map[string]interface{}
+	var v map[string]any
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.UseNumber()
 	if err := dec.Decode(&v); err != nil {
@@ -64,11 +64,11 @@ func TestLowerExpressionTemplates_StripsBlock(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("expansion failed: %v", err)
 	}
-	chem := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})
+	chem := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)
 	if _, ok := chem["expression_templates"]; ok {
 		t.Errorf("expression_templates block was not stripped")
 	}
-	rate := chem["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})
+	rate := chem["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)
 	if rate["op"] != "*" {
 		t.Errorf("expanded rate op = %v; want '*'", rate["op"])
 	}
@@ -76,7 +76,7 @@ func TestLowerExpressionTemplates_StripsBlock(t *testing.T) {
 
 func TestLowerExpressionTemplates_RejectsUnknownTemplate(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	rate := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})
+	rate := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)
 	rate["name"] = "missing"
 	err := LowerExpressionTemplates(v)
 	etErr, ok := err.(*ExpressionTemplateError)
@@ -90,7 +90,7 @@ func TestLowerExpressionTemplates_RejectsUnknownTemplate(t *testing.T) {
 
 func TestLowerExpressionTemplates_RejectsMissingBinding(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	bindings := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})["bindings"].(map[string]interface{})
+	bindings := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)["bindings"].(map[string]any)
 	delete(bindings, "Ea")
 	err := LowerExpressionTemplates(v)
 	etErr, ok := err.(*ExpressionTemplateError)
@@ -104,7 +104,7 @@ func TestLowerExpressionTemplates_RejectsMissingBinding(t *testing.T) {
 
 func TestLowerExpressionTemplates_RejectsExtraBinding(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	bindings := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})["bindings"].(map[string]interface{})
+	bindings := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)["bindings"].(map[string]any)
 	bindings["bogus"] = json.Number("99")
 	err := LowerExpressionTemplates(v)
 	etErr, ok := err.(*ExpressionTemplateError)
@@ -118,12 +118,12 @@ func TestLowerExpressionTemplates_RejectsExtraBinding(t *testing.T) {
 
 func TestLowerExpressionTemplates_RejectsRecursiveBody(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	tplArrh := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["expression_templates"].(map[string]interface{})["arrhenius"].(map[string]interface{})
-	tplArrh["body"] = map[string]interface{}{
+	tplArrh := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["expression_templates"].(map[string]any)["arrhenius"].(map[string]any)
+	tplArrh["body"] = map[string]any{
 		"op":       "apply_expression_template",
-		"args":     []interface{}{},
+		"args":     []any{},
 		"name":     "arrhenius",
-		"bindings": map[string]interface{}{"A_pre": json.Number("1"), "Ea": json.Number("1")},
+		"bindings": map[string]any{"A_pre": json.Number("1"), "Ea": json.Number("1")},
 	}
 	err := LowerExpressionTemplates(v)
 	etErr, ok := err.(*ExpressionTemplateError)
@@ -169,7 +169,7 @@ func TestLowerExpressionTemplates_NoTemplatesIsNoOp(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("expansion failed: %v", err)
 	}
-	rate := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"]
+	rate := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"]
 	if rate != "k" {
 		t.Errorf("rate = %v; want 'k'", rate)
 	}
@@ -177,16 +177,16 @@ func TestLowerExpressionTemplates_NoTemplatesIsNoOp(t *testing.T) {
 
 func TestLowerExpressionTemplates_ASTValuedBindings(t *testing.T) {
 	v := decodeFixture(t, arrheniusFixture)
-	bindings := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})["bindings"].(map[string]interface{})
-	bindings["Ea"] = map[string]interface{}{
+	bindings := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)["bindings"].(map[string]any)
+	bindings["Ea"] = map[string]any{
 		"op":   "*",
-		"args": []interface{}{json.Number("3"), "T"},
+		"args": []any{json.Number("3"), "T"},
 	}
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("expansion failed: %v", err)
 	}
-	rate := v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"].([]interface{})[0].(map[string]interface{})["rate"].(map[string]interface{})
-	expNode := rate["args"].([]interface{})[1].(map[string]interface{})
+	rate := v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"].([]any)[0].(map[string]any)["rate"].(map[string]any)
+	expNode := rate["args"].([]any)[1].(map[string]any)
 	if expNode["op"] != "exp" {
 		t.Errorf("expected exp node, got op=%v", expNode["op"])
 	}
@@ -210,8 +210,8 @@ func TestExpressionTemplates_ConformanceFixture(t *testing.T) {
 		t.Fatalf("expansion failed: %v", err)
 	}
 	expanded := decodeFixture(t, string(expandedBytes))
-	gotReactions := mustJSON(t, v["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"])
-	wantReactions := mustJSON(t, expanded["reaction_systems"].(map[string]interface{})["chem"].(map[string]interface{})["reactions"])
+	gotReactions := mustJSON(t, v["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"])
+	wantReactions := mustJSON(t, expanded["reaction_systems"].(map[string]any)["chem"].(map[string]any)["reactions"])
 	if gotReactions != wantReactions {
 		t.Errorf("reactions diverge from expanded.esm:\n got=%s\nwant=%s", gotReactions, wantReactions)
 	}
@@ -254,7 +254,7 @@ func readFileBytes(t *testing.T, relPath string) ([]byte, error) {
 	return readFileFromTestDir(relPath)
 }
 
-func mustJSON(t *testing.T, v interface{}) string {
+func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	out, err := json.Marshal(v)
 	if err != nil {
@@ -282,10 +282,10 @@ func TestLoadString_ExpandsTemplatesEndToEnd(t *testing.T) {
 		t.Fatalf("re-marshal: %v", err)
 	}
 	if strings.Contains(string(out), "apply_expression_template") {
-		t.Errorf("expanded EsmFile still contains apply_expression_template:\n%s", out)
+		t.Errorf("expanded ESMFile still contains apply_expression_template:\n%s", out)
 	}
 	if strings.Contains(string(out), "expression_templates") {
-		t.Errorf("expanded EsmFile still contains expression_templates block:\n%s", out)
+		t.Errorf("expanded ESMFile still contains expression_templates block:\n%s", out)
 	}
 }
 
@@ -313,9 +313,9 @@ func scalarFieldParamDoc(templates, bindings, name string) string {
     }`
 }
 
-func scalarFieldAreaExpr(t *testing.T, v map[string]interface{}) map[string]interface{} {
+func scalarFieldAreaExpr(t *testing.T, v map[string]any) map[string]any {
 	t.Helper()
-	return v["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})["area"].(map[string]interface{})["expression"].(map[string]interface{})
+	return v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["area"].(map[string]any)["expression"].(map[string]any)
 }
 
 // A parameter name appearing as the string value of a scalar Expression-node
@@ -338,7 +338,7 @@ func TestScalarFieldSubstitution_HappyPath(t *testing.T) {
 	if expr["op"] != "polygon_intersection_area" || expr["manifold"] != "planar" {
 		t.Errorf("expanded expr = %v; want polygon_intersection_area with manifold 'planar'", expr)
 	}
-	args := expr["args"].([]interface{})
+	args := expr["args"].([]any)
 	if len(args) != 2 || args[0] != "pa" || args[1] != "pb" {
 		t.Errorf("expanded args = %v; want [pa pb]", args)
 	}
@@ -370,7 +370,7 @@ func TestScalarFieldSubstitution_ThreadsThroughBodyComposition(t *testing.T) {
 	if expr["op"] != "*" {
 		t.Fatalf("expanded expr op = %v; want *", expr["op"])
 	}
-	area := expr["args"].([]interface{})[0].(map[string]interface{})
+	area := expr["args"].([]any)[0].(map[string]any)
 	if area["op"] != "polygon_intersection_area" || area["manifold"] != "spherical" {
 		t.Errorf("inner expr = %v; want polygon_intersection_area with manifold 'spherical'", area)
 	}
@@ -444,9 +444,9 @@ func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 	if got != want {
 		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", got, want)
 	}
-	vars := v["models"].(map[string]interface{})["Overlap"].(map[string]interface{})["variables"].(map[string]interface{})
-	planar := vars["area_planar"].(map[string]interface{})["expression"].(map[string]interface{})
-	spherical := vars["area_spherical"].(map[string]interface{})["expression"].(map[string]interface{})
+	vars := v["models"].(map[string]any)["Overlap"].(map[string]any)["variables"].(map[string]any)
+	planar := vars["area_planar"].(map[string]any)["expression"].(map[string]any)
+	spherical := vars["area_spherical"].(map[string]any)["expression"].(map[string]any)
 	if planar["manifold"] != "planar" || spherical["manifold"] != "spherical" {
 		t.Errorf("manifolds = %v / %v; want planar / spherical", planar["manifold"], spherical["manifold"])
 	}

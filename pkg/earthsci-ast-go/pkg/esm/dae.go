@@ -1,34 +1,7 @@
-// DAE handling per discretization RFC §12 for the Go binding.
-//
-// Per docs/rfcs/dae-binding-strategies.md, the Go binding implements a
-// **trivial-DAE** strategy. When an ESM model contains algebraic
-// equations alongside differential ones, ApplyDAEContract factors out
-// equations of the form
-//
-//	y ~ f(...)
-//
-// where `y` is a plain variable that does not appear in `f` (acyclic).
-// Such equations are symbolically substituted into every other
-// equation (and into observed-variable expressions) and then removed
-// from the model. The factoring runs to a fixed point so that chains
-// like
-//
-//	z ~ g(y); y ~ h(x); D(x) ~ F(y, z)
-//
-// reduce to a pure ODE in `x`.
-//
-// After factoring, if any algebraic equations remain, ApplyDAEContract
-// returns a *RuleEngineError with code E_NONTRIVIAL_DAE. The error
-// message lists the residual equation paths, explains that the Go
-// binding implements trivial-DAE support only, and points the author
-// at the Julia binding (full DAE via ModelingToolkit.jl) and RFC §12.
-//
-// This function does not run the RFC §11 discretization pipeline: it is
-// intended to be composed with discretize() when that lands in Go, or
-// called standalone by tools that need DAE factoring on an already
-// discretized model. Models carrying an explicit non-ODE SystemKind
-// ("nonlinear", "sde", "pde") are skipped — the DAE contract only
-// applies to would-be ODE systems.
+// dae.go implements the Go binding's trivial-DAE strategy (discretization RFC
+// §12). See ApplyDAEContract for the full contract. The package-level
+// documentation lives in doc.go.
+
 package esm
 
 import (
@@ -36,6 +9,10 @@ import (
 	"sort"
 	"strings"
 )
+
+// codeNontrivialDAE is the RFC §12 stable error code raised when residual
+// algebraic equations survive trivial factoring.
+const codeNontrivialDAE = "E_NONTRIVIAL_DAE"
 
 // RuleEngineError is a stable-coded error raised by the DAE contract.
 // Code is one of the RFC §12 codes (e.g. E_NONTRIVIAL_DAE).
@@ -45,14 +22,17 @@ type RuleEngineError struct {
 }
 
 func (e *RuleEngineError) Error() string {
-	return fmt.Sprintf("RuleEngineError(%s): %s", e.Code, e.Message)
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *RuleEngineError) DiagnosticCode() string { return e.Code }
 
 func newRuleErr(code, msg string) *RuleEngineError {
 	return &RuleEngineError{Code: code, Message: msg}
 }
 
-// DAEInfo records the outcome of ApplyDAEContract on an EsmFile.
+// DAEInfo records the outcome of ApplyDAEContract on an ESMFile.
 type DAEInfo struct {
 	// SystemClass is "ode" if ApplyDAEContract succeeded with no
 	// residual algebraic equations, else "dae".
@@ -69,14 +49,37 @@ type DAEInfo struct {
 	PerModelFactored map[string]int
 }
 
-// ApplyDAEContract applies the Go binding's trivial-DAE strategy to
-// every applicable model in file (mutating each in place) and
-// classifies the result. It returns a populated DAEInfo and, if any
-// non-trivial algebraic equations remain, a *RuleEngineError with code
-// E_NONTRIVIAL_DAE.
-func ApplyDAEContract(file *EsmFile) (DAEInfo, error) {
+// ApplyDAEContract applies the Go binding's trivial-DAE strategy to every
+// applicable model in file (mutating each in place) and classifies the result.
+//
+// Per docs/rfcs/dae-binding-strategies.md, when an ESM model contains algebraic
+// equations alongside differential ones, ApplyDAEContract factors out equations
+// of the form
+//
+//	y ~ f(...)
+//
+// where `y` is a plain variable that does not appear in `f` (acyclic). Such
+// equations are symbolically substituted into every other equation (and into
+// observed-variable expressions) and then removed from the model. The factoring
+// runs to a fixed point so that chains like
+//
+//	z ~ g(y); y ~ h(x); D(x) ~ F(y, z)
+//
+// reduce to a pure ODE in `x`.
+//
+// It returns a populated DAEInfo and, if any non-trivial algebraic equations
+// remain after factoring, a *RuleEngineError with code E_NONTRIVIAL_DAE whose
+// message lists the residual equation paths and points the author at the Julia
+// binding (full DAE via ModelingToolkit.jl) and RFC §12.
+//
+// ApplyDAEContract does not run the RFC §11 discretization pipeline: it is
+// intended to be composed with discretize() when that lands in Go, or called
+// standalone by tools that need DAE factoring on an already discretized model.
+// Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde", "pde")
+// are skipped — the DAE contract only applies to would-be ODE systems.
+func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 	info := DAEInfo{
-		SystemClass:      "ode",
+		SystemClass:      SystemKindODE,
 		PerModel:         map[string]int{},
 		PerModelFactored: map[string]int{},
 	}
@@ -111,7 +114,7 @@ func ApplyDAEContract(file *EsmFile) (DAEInfo, error) {
 			}
 			residual++
 			residualPaths = append(residualPaths,
-				fmt.Sprintf("models.%s.equations[%d]", mname, i))
+				fmt.Sprintf("/models/%s/equations/%d", mname, i))
 		}
 		info.AlgebraicEquationCount += residual
 		info.PerModel[mname] = residual
@@ -122,21 +125,20 @@ func ApplyDAEContract(file *EsmFile) (DAEInfo, error) {
 		return info, nil
 	}
 
-	info.SystemClass = "dae"
+	info.SystemClass = SystemKindDAE
 	msg := fmt.Sprintf(
-		"discretize() output contains %d non-trivial algebraic equation(s) "+
-			"that could not be factored symbolically (at %s). The Go binding "+
-			"implements trivial-DAE support only: observed-style equations "+
-			"`y ~ f(...)` where y does not appear in f are substituted and "+
-			"removed, but cyclic observed equations and genuine algebraic "+
-			"constraints (e.g., x^2 + y^2 = 1) require a full DAE assembler. "+
-			"Use the Julia binding (EarthSciAST.jl), which hands "+
+		"model contains %d non-trivial algebraic equation(s) that could not be "+
+			"factored symbolically (at %s). The Go binding implements trivial-DAE "+
+			"support only: observed-style equations `y ~ f(...)` where y does not "+
+			"appear in f are substituted and removed, but cyclic observed equations "+
+			"and genuine algebraic constraints (e.g., x^2 + y^2 = 1) require a full "+
+			"DAE assembler. Use the Julia binding (EarthSciAST.jl), which hands "+
 			"mixed DAEs to ModelingToolkit.jl. See RFC §12 and "+
 			"docs/rfcs/dae-binding-strategies.md.",
 		info.AlgebraicEquationCount,
 		strings.Join(residualPaths, ", "),
 	)
-	return info, newRuleErr("E_NONTRIVIAL_DAE", msg)
+	return info, newRuleErr(codeNontrivialDAE, msg)
 }
 
 // factorTrivialDAE runs trivial-algebraic factoring on a single model
@@ -166,16 +168,19 @@ func factorTrivialDAE(model *Model, indep string) int {
 		if idx < 0 {
 			return factored
 		}
+		// A single binding y -> f where y does not occur in f (guaranteed by the
+		// Contains guard above): acyclic by construction, so substitution here
+		// cannot return a SubstitutionError — the errors are safely discarded.
 		bindings := map[string]Expression{lhsName: rhsExpr}
 		for j := range model.Equations {
 			if j == idx {
 				continue
 			}
-			model.Equations[j] = SubstituteInEquation(model.Equations[j], bindings)
+			model.Equations[j], _ = SubstituteInEquation(model.Equations[j], bindings)
 		}
 		for vname, v := range model.Variables {
 			if v.Expression != nil {
-				v.Expression = Substitute(v.Expression, bindings)
+				v.Expression, _ = Substitute(v.Expression, bindings)
 				model.Variables[vname] = v
 			}
 		}
@@ -200,7 +205,7 @@ func isDifferentialEquation(eq Equation, indep string) bool {
 	default:
 		return false
 	}
-	if node.Op != "D" {
+	if node.Op != OpDerivative {
 		return false
 	}
 	if node.Wrt == nil {
@@ -217,15 +222,15 @@ func isDAETargetSystem(model *Model) bool {
 	if model.SystemKind == nil {
 		return true
 	}
-	return *model.SystemKind == "ode"
+	return *model.SystemKind == SystemKindODE
 }
 
 // fileIndepVar returns the independent (time) variable for the document. Every
 // component shares the single top-level domain; when it declares an explicit
 // independent_variable that name is used, otherwise it defaults to "t".
-func fileIndepVar(file *EsmFile) string {
+func fileIndepVar(file *ESMFile) string {
 	if file.Domain != nil && file.Domain.IndependentVariable != nil {
 		return *file.Domain.IndependentVariable
 	}
-	return "t"
+	return DefaultIndepVar
 }

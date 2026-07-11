@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,8 +9,8 @@ import (
 )
 
 func TestValidateValidModel(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -29,7 +30,7 @@ func TestValidateValidModel(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -43,8 +44,8 @@ func TestValidateValidModel(t *testing.T) {
 }
 
 func TestValidateModelWithUnknownVariable(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -56,7 +57,7 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: "unknown_var", // This variable doesn't exist
 					},
 				},
@@ -71,9 +72,37 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 	assert.Equal(t, "error", result.Messages[0].Level)
 }
 
+// TestValidationPathsAreJSONPointer pins that structural-error Paths are emitted
+// as RFC 6901 JSON Pointers (as SchemaError.Path and the shared invalid-fixture
+// goldens are), not the legacy JSONPath-ish "$.models.x.equations[0]" dialect.
+func TestValidationPathsAreJSONPointer(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.1.0",
+		Metadata: Metadata{Name: "TestModel", Authors: []string{"Test Author"}},
+		Models: map[string]Model{
+			"TestModel": {
+				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Equations: []Equation{{
+					LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+					RHS: "unknown_var",
+				}},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+	require.NotEmpty(t, result.StructuralErrors)
+	for _, se := range result.StructuralErrors {
+		assert.Truef(t, strings.HasPrefix(se.Path, "/"), "path %q must start with '/'", se.Path)
+		assert.NotContainsf(t, se.Path, "$", "path %q must not use the '$' JSONPath root", se.Path)
+		assert.NotContainsf(t, se.Path, "[", "path %q must use '/index', not '[index]'", se.Path)
+		assert.Containsf(t, se.Path, "/models/TestModel", "path %q must locate the model", se.Path)
+	}
+}
+
 func TestValidateObservedVariableWithoutExpression(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -86,7 +115,7 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -101,8 +130,8 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 }
 
 func TestValidateReactionSystem(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -133,9 +162,55 @@ func TestValidateReactionSystem(t *testing.T) {
 	assert.Empty(t, result.Messages)
 }
 
+// TestDuplicateSpeciesWarningBothTracks pins that a duplicated reaction species
+// is surfaced as an advisory warning on BOTH validation surfaces (previously the
+// coded track lacked it) and that the warning does NOT invalidate the document.
+func TestDuplicateSpeciesWarningBothTracks(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "0.1.0",
+		Metadata: Metadata{Name: "TestReactions", Authors: []string{"Test Author"}},
+		ReactionSystems: map[string]ReactionSystem{
+			"TestReactions": {
+				Species:    map[string]Species{"A": {Units: strPtr("mol/mol")}, "B": {Units: strPtr("mol/mol")}},
+				Parameters: map[string]Parameter{"k": {Units: strPtr("1/s")}},
+				Reactions: []Reaction{{
+					ID:         "R1",
+					Substrates: []SubstrateProduct{{Species: "A", Stoichiometry: 1}, {Species: "A", Stoichiometry: 1}},
+					Products:   []SubstrateProduct{{Species: "B", Stoichiometry: 1}},
+					Rate:       "k",
+				}},
+			},
+		},
+	}
+
+	// Coded surface: warning present, code stable, document still valid.
+	coded := ValidateStructuralWithCodes(esmFile)
+	assert.True(t, coded.Valid, "an advisory duplicate-species warning must not invalidate the document")
+	var found *StructuralError
+	for i := range coded.StructuralErrors {
+		if coded.StructuralErrors[i].Code == CodeDuplicateReactionSpecies {
+			found = &coded.StructuralErrors[i]
+		}
+	}
+	require.NotNil(t, found, "coded track must surface the duplicate-species warning")
+	assert.Equal(t, "warning", found.Level)
+	assert.Equal(t, "/reaction_systems/TestReactions/reactions/0/substrates", found.Path)
+
+	// Legacy surface: same finding rendered as a warning-level message.
+	legacy := Validate(esmFile)
+	assert.True(t, legacy.Valid)
+	sawWarning := false
+	for _, m := range legacy.Messages {
+		if m.Level == "warning" && strings.Contains(m.Message, "appears multiple times") {
+			sawWarning = true
+		}
+	}
+	assert.True(t, sawWarning, "legacy track must still surface the duplicate-species warning")
+}
+
 func TestValidateReactionWithUnknownSpecies(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -167,8 +242,8 @@ func TestValidateReactionWithUnknownSpecies(t *testing.T) {
 }
 
 func TestValidateComplexExpression(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -182,22 +257,22 @@ func TestValidateComplexExpression(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "*",
-							Args: []interface{}{
+							Args: []any{
 								"k",
-								ExprNode{Op: "+", Args: []interface{}{"x", "y"}},
+								ExprNode{Op: "+", Args: []any{"x", "y"}},
 							},
 						},
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"y"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
 						RHS: ExprNode{
 							Op: "*",
-							Args: []interface{}{
+							Args: []any{
 								"k",
-								ExprNode{Op: "-", Args: []interface{}{"x", "y"}},
+								ExprNode{Op: "-", Args: []any{"x", "y"}},
 							},
 						},
 					},
@@ -212,8 +287,8 @@ func TestValidateComplexExpression(t *testing.T) {
 }
 
 func TestValidateDiscreteEvent(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -225,7 +300,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -233,7 +308,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 					{
 						Trigger: DiscreteEventTrigger{
 							Type:       "condition",
-							Expression: ExprNode{Op: ">", Args: []interface{}{"x", 10.0}},
+							Expression: ExprNode{Op: ">", Args: []any{"x", 10.0}},
 						},
 						Affects: []AffectEquation{
 							{
@@ -253,8 +328,8 @@ func TestValidateDiscreteEvent(t *testing.T) {
 }
 
 func TestValidateDataLoaders(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -266,7 +341,7 @@ func TestValidateDataLoaders(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -291,8 +366,8 @@ func TestValidateDataLoaders(t *testing.T) {
 }
 
 func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -304,7 +379,7 @@ func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -348,7 +423,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -365,12 +440,12 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{"k", "y"}},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "y"}},
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"y"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []interface{}{"k", "x"}},
+						LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
 					},
 				},
 			},
@@ -385,7 +460,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -402,11 +477,11 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"k"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
 						RHS: float64(2.0),
 					},
 				},
@@ -422,7 +497,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"k"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 				},
@@ -435,17 +510,17 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			model: Model{
 				Variables: map[string]ModelVariable{
 					"x": {Type: "state"},
-					"y": {Type: "observed", Expression: ExprNode{Op: "*", Args: []interface{}{"x", 2.0}}},
+					"y": {Type: "observed", Expression: ExprNode{Op: "*", Args: []any{"x", 2.0}}},
 				},
 				Equations: []Equation{
 					{
-						LHS: ExprNode{Op: "D", Args: []interface{}{"x"}, Wrt: strPtr("t")},
+						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
 					{
 						// This is not an ODE, it's an algebraic constraint
 						LHS: "y",
-						RHS: ExprNode{Op: "*", Args: []interface{}{"x", 2.0}},
+						RHS: ExprNode{Op: "*", Args: []any{"x", 2.0}},
 					},
 				},
 			},
@@ -455,8 +530,8 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			esmFile := &EsmFile{
-				Esm: "0.1.0",
+			esmFile := &ESMFile{
+				ESM: "0.1.0",
 				Metadata: Metadata{
 					Name:    "TestModel",
 					Authors: []string{"Test Author"},

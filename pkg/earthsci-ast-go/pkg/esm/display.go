@@ -40,17 +40,23 @@ var chemicalElements = map[string]bool{
 }
 
 // ToUnicode converts an expression to Unicode string with chemical subscripts and operator precedence
-func ToUnicode(target interface{}) string {
-	return formatExpression(target, "unicode")
+func ToUnicode(target Expression) string {
+	return formatExpression(target, FmtUnicode)
 }
 
 // ToLatex converts an expression to LaTeX string with chemical subscripts and operator precedence
-func ToLatex(target interface{}) string {
-	return formatExpression(target, "latex")
+func ToLatex(target Expression) string {
+	return formatExpression(target, FmtLatex)
+}
+
+// ToAscii converts an expression to a plain-text string using the ascii render
+// format (function-call notation, no Unicode symbols in the operator layer).
+func ToAscii(target Expression) string {
+	return formatExpression(target, FmtAscii)
 }
 
 // formatExpression is the internal function that handles different output formats
-func formatExpression(target interface{}, format string) string {
+func formatExpression(target any, format string) string {
 	switch expr := target.(type) {
 	case float64:
 		return formatNumber(expr, format)
@@ -73,21 +79,21 @@ func formatExpression(target interface{}, format string) string {
 	case string:
 		return formatVariable(expr, format)
 	case ExprNode:
-		return formatExprNode(expr, format, 0)
+		return formatExprNode(expr, format)
 	case *ExprNode:
-		return formatExprNode(*expr, format, 0)
-	case map[string]interface{}:
+		return formatExprNode(*expr, format)
+	case map[string]any:
 		// A raw op-node object (an un-normalized nested expression). Re-decode
 		// it into an ExprNode so all structural fields are populated, then render.
 		if b, err := json.Marshal(expr); err == nil {
 			if e, err := UnmarshalExpression(b); err == nil {
-				if _, isMap := e.(map[string]interface{}); !isMap {
+				if _, isMap := e.(map[string]any); !isMap {
 					return formatExpression(e, format)
 				}
 			}
 		}
 		return fmt.Sprintf("%v", target)
-	case []interface{}:
+	case []any:
 		// A bare array literal (e.g. a const array reaching the recursion).
 		parts := make([]string, len(expr))
 		for i, v := range expr {
@@ -113,7 +119,7 @@ func formatNumber(num float64, format string) string {
 		mantissa := num / math.Pow(10, float64(exp))
 
 		switch format {
-		case "unicode":
+		case FmtUnicode, FmtUnicodeSpaced:
 			expStr := formatSuperscript(exp)
 			mantissaStr := fmt.Sprintf("%.3g", mantissa)
 			// Replace regular minus with unicode minus for negative mantissa
@@ -121,7 +127,7 @@ func formatNumber(num float64, format string) string {
 				mantissaStr = "−" + mantissaStr[1:]
 			}
 			return fmt.Sprintf("%s×10%s", mantissaStr, expStr)
-		case "latex":
+		case FmtLatex:
 			return fmt.Sprintf("%.3g \\times 10^{%d}", mantissa, exp)
 		default:
 			return fmt.Sprintf("%.2g", num)
@@ -130,7 +136,7 @@ func formatNumber(num float64, format string) string {
 
 	result := fmt.Sprintf("%g", num)
 	// Replace regular minus with unicode minus in unicode format
-	if format == "unicode" && strings.HasPrefix(result, "-") {
+	if (format == FmtUnicode || format == FmtUnicodeSpaced) && strings.HasPrefix(result, "-") {
 		result = "−" + result[1:]
 	}
 	return result
@@ -160,6 +166,15 @@ func latexEscape(name string) string {
 	return strings.ReplaceAll(name, "_", "\\_")
 }
 
+// opDisplayName renders an operator / function name for display: an upright,
+// latex-escaped \mathrm{…} in latex, and the bare name in every other format.
+func opDisplayName(name, format string) string {
+	if format == FmtLatex {
+		return "\\mathrm{" + latexEscape(name) + "}"
+	}
+	return name
+}
+
 // formatVariable formats variable names, mirroring the cross-language rendering
 // contract (tests/display/RENDERING_CONTRACT.md): chemical species get
 // element-aware subscripts; Greek letter names render as symbols/commands;
@@ -176,19 +191,19 @@ func formatVariable(varName string, format string) string {
 	// Chemical species: element-aware subscripting.
 	if isChemicalSpecies(varName) {
 		formatted := formatChemicalSubscripts(varName, format)
-		if format == "latex" {
+		if format == FmtLatex {
 			return "\\mathrm{" + formatted + "}"
 		}
 		return formatted
 	}
 
 	switch format {
-	case "unicode":
+	case FmtUnicode, FmtUnicodeSpaced:
 		if sym, ok := greekUnicode[varName]; ok {
 			return sym
 		}
 		return varName
-	case "latex":
+	case FmtLatex:
 		if cmd, ok := greekLatex[varName]; ok {
 			return cmd
 		}
@@ -201,147 +216,98 @@ func formatVariable(varName string, format string) string {
 	}
 }
 
-// isChemicalSpecies detects if a variable name represents a chemical species using element-aware tokenizer
+// isChemicalSpecies reports whether a variable name contains at least one
+// element-symbol token (using the shared greedy tokenizer).
 func isChemicalSpecies(name string) bool {
-	return hasElementPattern(name)
+	return tokenizeChemical(name, nil, nil)
 }
 
-// hasElementPattern checks if a variable has element patterns for chemical formula detection
-func hasElementPattern(variable string) bool {
-	i := 0
-	hasElement := false
-
-	for i < len(variable) {
-		// Skip non-alphabetic characters at the start
-		for i < len(variable) && !isAlpha(variable[i]) {
-			i++
-		}
-
-		if i >= len(variable) {
-			break
-		}
-
-		// Try 2-character element first (greedy matching)
-		if i+1 < len(variable) {
-			twoChar := variable[i : i+2]
-			if chemicalElements[twoChar] {
-				hasElement = true
-				i += 2
-				// Skip digits
-				for i < len(variable) && isDigit(variable[i]) {
-					i++
-				}
-				continue
-			}
-		}
-
-		// Try 1-character element
-		oneChar := string(variable[i])
-		if chemicalElements[oneChar] {
-			hasElement = true
-			i++
-			// Skip digits
-			for i < len(variable) && isDigit(variable[i]) {
-				i++
-			}
-			continue
-		}
-
-		// Not an element, move to next character
-		i++
-	}
-
-	return hasElement
-}
-
-// Helper functions for character classification
-func isAlpha(c byte) bool {
-	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-}
-
+// isDigit reports whether c is an ASCII digit.
 func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }
 
-// formatChemicalSubscripts converts numbers in chemical formulas to subscripts using element-aware tokenizer
-func formatChemicalSubscripts(name string, format string) string {
-	// Check if variable looks like a chemical formula
-	hasElements := hasElementPattern(name)
-
-	// Handle LaTeX format first
-	if format == "latex" {
-		if hasElements {
-			// Chemical formula: convert digits to subscripts using regex
-			re := regexp.MustCompile(`([A-Za-z])([0-9]+)`)
-			result := re.ReplaceAllString(name, `${1}_{${2}}`)
-			return result
-		}
-		// Regular variable: return as-is
-		return name
-	}
-
-	// For unicode format, only apply subscript conversion if it has element patterns
-	if !hasElements {
-		return name
-	}
-
-	// Element-aware subscript conversion for unicode format
-	result := strings.Builder{}
+// tokenizeChemical walks name as a chemical formula with a greedy tokenizer that
+// prefers a 2-character element symbol over a 1-character one. For each
+// recognized element it calls onElement with the symbol and its trailing digit
+// run; every other byte is passed to onOther (either callback may be nil). It
+// returns whether any element symbol was recognized. Both chemical detection
+// (isChemicalSpecies) and unicode subscript rendering (formatChemicalSubscripts)
+// share this single walker.
+func tokenizeChemical(name string, onElement func(symbol, digits string), onOther func(b byte)) bool {
 	i := 0
-
+	hasElement := false
 	for i < len(name) {
-		matched := false
-
-		// Try 2-character element first (greedy matching)
-		if i+1 < len(name) {
-			twoChar := name[i : i+2]
-			if chemicalElements[twoChar] {
-				result.WriteString(twoChar)
-				i += 2
-				// Convert following digits to subscripts
-				for i < len(name) && isDigit(name[i]) {
-					result.WriteString(formatSubscript(string(name[i])))
-					i++
-				}
-				matched = true
-			}
+		symLen := 0
+		if i+1 < len(name) && chemicalElements[name[i:i+2]] {
+			symLen = 2
+		} else if chemicalElements[name[i:i+1]] {
+			symLen = 1
 		}
 
-		// Try 1-character element if 2-char didn't match
-		if !matched && i < len(name) {
-			oneChar := string(name[i])
-			if chemicalElements[oneChar] {
-				result.WriteString(oneChar)
-				i++
-				// Convert following digits to subscripts
-				for i < len(name) && isDigit(name[i]) {
-					result.WriteString(formatSubscript(string(name[i])))
-					i++
-				}
-				matched = true
+		if symLen == 0 {
+			if onOther != nil {
+				onOther(name[i])
 			}
+			i++
+			continue
 		}
 
-		// If not an element, copy character as-is
-		if !matched {
-			result.WriteByte(name[i])
+		symbol := name[i : i+symLen]
+		i += symLen
+		start := i
+		for i < len(name) && isDigit(name[i]) {
 			i++
 		}
+		if onElement != nil {
+			onElement(symbol, name[start:i])
+		}
+		hasElement = true
+	}
+	return hasElement
+}
+
+// formatChemicalSubscripts renders a chemical formula's digit runs as subscripts.
+// It is only called for names already confirmed as chemical species. In latex,
+// a digit run following any letter becomes _{…}; in the other formats, digits
+// following a recognized element symbol become Unicode subscripts.
+func formatChemicalSubscripts(name string, format string) string {
+	if format == FmtLatex {
+		// Chemical formula: convert digits to subscripts using regex.
+		re := regexp.MustCompile(`([A-Za-z])([0-9]+)`)
+		return re.ReplaceAllString(name, `${1}_{${2}}`)
 	}
 
+	// Element-aware subscript conversion for the unicode / ascii formats.
+	result := strings.Builder{}
+	tokenizeChemical(name,
+		func(symbol, digits string) {
+			result.WriteString(symbol)
+			result.WriteString(formatSubscript(digits))
+		},
+		func(b byte) { result.WriteByte(b) },
+	)
 	return result.String()
+}
+
+// subscriptRunes maps ASCII digits to their Unicode subscript characters.
+var subscriptRunes = map[rune]rune{
+	'0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+	'5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+}
+
+// superscriptRunes maps ASCII digits and signs to Unicode superscript characters.
+var superscriptRunes = map[rune]rune{
+	'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+	'5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+	'-': '⁻', '+': '⁺',
 }
 
 // formatSubscript converts numbers to Unicode subscript characters
 func formatSubscript(num string) string {
-	subscripts := map[rune]rune{
-		'0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-		'5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-	}
-
 	result := strings.Builder{}
 	for _, char := range num {
-		if sub, ok := subscripts[char]; ok {
+		if sub, ok := subscriptRunes[char]; ok {
 			result.WriteRune(sub)
 		} else {
 			result.WriteRune(char)
@@ -352,16 +318,10 @@ func formatSubscript(num string) string {
 
 // formatSuperscript converts numbers to Unicode superscript characters
 func formatSuperscript(num int) string {
-	superscripts := map[rune]rune{
-		'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-		'5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-		'-': '⁻', '+': '⁺',
-	}
-
 	numStr := fmt.Sprintf("%d", num)
 	result := strings.Builder{}
 	for _, char := range numStr {
-		if sup, ok := superscripts[char]; ok {
+		if sup, ok := superscriptRunes[char]; ok {
 			result.WriteRune(sup)
 		} else {
 			result.WriteRune(char)
@@ -371,7 +331,7 @@ func formatSuperscript(num int) string {
 }
 
 // formatExprNode formats an expression node with proper precedence and parentheses
-func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
+func formatExprNode(node ExprNode, format string) string {
 	op := node.Op
 	args := node.Args
 
@@ -400,9 +360,9 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 			// Unary minus
 			arg := formatExpression(args[0], format)
 			switch format {
-			case "unicode":
+			case FmtUnicode, FmtUnicodeSpaced:
 				return "−" + arg
-			case "latex":
+			case FmtLatex:
 				return "-" + arg
 			default:
 				return "-" + arg
@@ -419,9 +379,9 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 			}
 
 			switch format {
-			case "unicode":
+			case FmtUnicode, FmtUnicodeSpaced:
 				return left + " − " + right
-			case "latex":
+			case FmtLatex:
 				return left + " - " + right
 			default:
 				return left + " - " + right
@@ -444,7 +404,7 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 		if len(args) == 1 {
 			arg := formatExpression(args[0], format)
 			switch format {
-			case "unicode", "latex":
+			case FmtUnicode, FmtUnicodeSpaced, FmtLatex:
 				return "|" + arg + "|"
 			default:
 				return "abs(" + arg + ")"
@@ -452,17 +412,21 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 		}
 
 	case "exp":
-		arg := formatExpression(args[0], format)
-		switch format {
-		case "unicode":
-			return "exp(" + arg + ")"
-		case "latex":
-			if shouldUseExpLeft(args[0]) {
-				return "\\exp\\left(" + arg + "\\right)"
+		// Guard args[0] for malformed nodes; fall through to the generic
+		// function-call fallback (like abs) when arity is wrong.
+		if len(args) >= 1 {
+			arg := formatExpression(args[0], format)
+			switch format {
+			case FmtUnicode, FmtUnicodeSpaced:
+				return "exp(" + arg + ")"
+			case FmtLatex:
+				if shouldUseExpLeft(args[0]) {
+					return "\\exp\\left(" + arg + "\\right)"
+				}
+				return "\\exp(" + arg + ")"
+			default:
+				return "exp(" + arg + ")"
 			}
-			return "\\exp(" + arg + ")"
-		default:
-			return "exp(" + arg + ")"
 		}
 
 	case "ifelse":
@@ -472,7 +436,7 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 			falseVal := formatExpression(args[2], format)
 
 			switch format {
-			case "latex":
+			case FmtLatex:
 				return fmt.Sprintf("\\begin{cases} %s & \\text{if } %s \\\\ %s & \\text{otherwise} \\end{cases}",
 					trueVal, condition, falseVal)
 			default:
@@ -481,12 +445,16 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 		}
 
 	case "Pre":
-		arg := formatExpression(args[0], format)
-		switch format {
-		case "latex":
-			return "\\mathrm{Pre}(" + arg + ")"
-		default:
-			return "Pre(" + arg + ")"
+		// Guard args[0] for malformed nodes; fall through to the generic
+		// function-call fallback (like abs) when arity is wrong.
+		if len(args) >= 1 {
+			arg := formatExpression(args[0], format)
+			switch format {
+			case FmtLatex:
+				return "\\mathrm{Pre}(" + arg + ")"
+			default:
+				return "Pre(" + arg + ")"
+			}
 		}
 
 	// Comparison operators
@@ -508,13 +476,13 @@ func formatExprNode(node ExprNode, format string, parentPrecedence int) string {
 		argStrs[i] = formatExpression(arg, format)
 	}
 	inner := strings.Join(argStrs, ", ")
-	if format == "latex" {
+	if format == FmtLatex {
 		return "\\mathrm{" + latexEscape(op) + "}(" + inner + ")"
 	}
 	return op + "(" + inner + ")"
 }
 
-func formatMultiplication(args []interface{}, format string) string {
+func formatMultiplication(args []any, format string) string {
 	if len(args) < 2 {
 		return "*(...)"
 	}
@@ -524,26 +492,28 @@ func formatMultiplication(args []interface{}, format string) string {
 		formatted := formatExpression(arg, format)
 
 		// Add parentheses if needed for addition/subtraction terms
-		if node, ok := arg.(ExprNode); ok {
-			if node.Op == "+" || (node.Op == "-" && len(node.Args) == 2) {
-				formatted = "(" + formatted + ")"
-			}
+		if node, ok := arg.(ExprNode); ok && isAdditiveNode(node) {
+			formatted = "(" + formatted + ")"
 		}
 
 		parts[i] = formatted
 	}
 
 	switch format {
-	case "unicode":
+	case FmtUnicodeSpaced:
+		// Spacing is applied here, at the operator, so it can never touch a "·"
+		// occurring inside a rendered leaf (variable name, chemical formula).
+		return strings.Join(parts, " · ")
+	case FmtUnicode:
 		return strings.Join(parts, "·")
-	case "latex":
+	case FmtLatex:
 		return strings.Join(parts, " \\cdot ")
 	default:
 		return strings.Join(parts, " * ")
 	}
 }
 
-func formatDivision(args []interface{}, format string) string {
+func formatDivision(args []any, format string) string {
 	if len(args) != 2 {
 		return "/(...)"
 	}
@@ -552,20 +522,18 @@ func formatDivision(args []interface{}, format string) string {
 	right := formatExpression(args[1], format)
 
 	switch format {
-	case "latex":
+	case FmtLatex:
 		return "\\frac{" + left + "}{" + right + "}"
 	default:
 		// Add parentheses if the right side is complex
-		if node, ok := args[1].(ExprNode); ok {
-			if node.Op == "+" || node.Op == "-" || node.Op == "*" || node.Op == "/" {
-				right = "(" + right + ")"
-			}
+		if node, ok := args[1].(ExprNode); ok && isArithmeticNode(node) {
+			right = "(" + right + ")"
 		}
 		return left + "/" + right
 	}
 }
 
-func formatExponentiation(args []interface{}, format string) string {
+func formatExponentiation(args []any, format string) string {
 	if len(args) != 2 {
 		return "^(...)"
 	}
@@ -574,44 +542,46 @@ func formatExponentiation(args []interface{}, format string) string {
 	exp := formatExpression(args[1], format)
 
 	// Add parentheses to base if it's a complex expression
-	if node, ok := args[0].(ExprNode); ok {
-		if node.Op == "+" || node.Op == "-" || node.Op == "*" || node.Op == "/" {
-			base = "(" + base + ")"
-		}
+	if node, ok := args[0].(ExprNode); ok && isArithmeticNode(node) {
+		base = "(" + base + ")"
 	}
 
 	switch format {
-	case "unicode":
+	case FmtUnicode, FmtUnicodeSpaced:
 		if exp == "2" {
 			return base + "²"
 		} else if exp == "3" {
 			return base + "³"
-		} else if numExp, ok := args[1].(float64); ok {
+		} else if numExp, ok := args[1].(float64); ok && numExp == math.Trunc(numExp) {
+			// Only integer-valued exponents get a superscript; a fractional
+			// exponent (e.g. x^2.5) must not be truncated to x².
 			return base + formatSuperscript(int(numExp))
 		}
 		return base + "^" + exp
-	case "latex":
+	case FmtLatex:
 		return base + "^{" + exp + "}"
 	default:
 		return base + "^" + exp
 	}
 }
 
-// ToUnicodeSpaced converts an expression to Unicode string with spaced multiplication
-// for better readability in model summary displays
-func ToUnicodeSpaced(target interface{}) string {
-	result := formatExpression(target, "unicode")
-	// Replace "·" with " · " for better readability in model summaries
-	return strings.ReplaceAll(result, "·", " · ")
+// ToUnicodeSpaced converts an expression to a Unicode string identical to
+// ToUnicode except that the multiplication operator renders as " · " (spaced)
+// for readability in model-summary displays. The spacing is produced at the
+// operator during formatting (FmtUnicodeSpaced), not by a post-hoc string
+// replace, so a "·" inside a rendered leaf (e.g. a hydrate chemical formula) is
+// never disturbed.
+func ToUnicodeSpaced(target Expression) string {
+	return formatExpression(target, FmtUnicodeSpaced)
 }
 
 // ModelSummary returns a structured model summary display showing all models,
 // reaction systems, data loaders, coupling, domain, and solver as specified in Section 6.3
-func ModelSummary(esm *EsmFile) string {
+func ModelSummary(esm *ESMFile) string {
 	result := strings.Builder{}
 
 	// Header: ESM version and metadata
-	fmt.Fprintf(&result, "ESM v%s: %s\n", esm.Esm, esm.Metadata.Name)
+	fmt.Fprintf(&result, "ESM v%s: %s\n", esm.ESM, esm.Metadata.Name)
 	if esm.Metadata.Description != nil {
 		fmt.Fprintf(&result, "  \"%s\"\n", *esm.Metadata.Description)
 	}
@@ -620,151 +590,153 @@ func ModelSummary(esm *EsmFile) string {
 	}
 	result.WriteString("\n")
 
-	// Reaction Systems
-	if len(esm.ReactionSystems) > 0 {
-		result.WriteString("  Reaction Systems:\n")
-		for name, rs := range esm.ReactionSystems {
-			speciesCount := len(rs.Species)
-			paramCount := len(rs.Parameters)
-			reactionCount := len(rs.Reactions)
-			fmt.Fprintf(&result, "    %s (%d species, %d parameters, %d reactions)\n",
-				name, speciesCount, paramCount, reactionCount)
-
-			// Display reactions
-			for _, reaction := range rs.Reactions {
-				result.WriteString("      ")
-				result.WriteString(reaction.ID)
-				result.WriteString(": ")
-
-				// Format substrates
-				substrateNames := make([]string, len(reaction.Substrates))
-				for i, substrate := range reaction.Substrates {
-					if substrate.Stoichiometry == 1 {
-						substrateNames[i] = ToUnicode(substrate.Species)
-					} else {
-						substrateNames[i] = fmt.Sprintf("%s%s", formatStoich(substrate.Stoichiometry), ToUnicode(substrate.Species))
-					}
-				}
-				result.WriteString(strings.Join(substrateNames, " + "))
-
-				result.WriteString(" → ")
-
-				// Format products
-				productNames := make([]string, len(reaction.Products))
-				for i, product := range reaction.Products {
-					if product.Stoichiometry == 1 {
-						productNames[i] = ToUnicode(product.Species)
-					} else {
-						productNames[i] = fmt.Sprintf("%s%s", formatStoich(product.Stoichiometry), ToUnicode(product.Species))
-					}
-				}
-				result.WriteString(strings.Join(productNames, " + "))
-
-				// Format rate
-				result.WriteString("    rate: ")
-				result.WriteString(ToUnicodeSpaced(reaction.Rate))
-				result.WriteString("\n")
-			}
-		}
-		result.WriteString("\n")
-	}
-
-	// Models
-	if len(esm.Models) > 0 {
-		result.WriteString("  Models:\n")
-		for name, model := range esm.Models {
-			// Count parameters vs other variable types
-			paramCount := 0
-			for _, variable := range model.Variables {
-				if variable.Type == "parameter" {
-					paramCount++
-				}
-			}
-			equationCount := len(model.Equations)
-			fmt.Fprintf(&result, "    %s (%d parameters, %d equation", name, paramCount, equationCount)
-			if equationCount != 1 {
-				result.WriteString("s")
-			}
-			result.WriteString(")\n")
-
-			// Display equations
-			for _, equation := range model.Equations {
-				result.WriteString("      ")
-				result.WriteString(ToUnicodeSpaced(equation.LHS))
-				result.WriteString(" = ")
-				result.WriteString(ToUnicodeSpaced(equation.RHS))
-				result.WriteString("\n")
-			}
-		}
-		result.WriteString("\n")
-	}
-
-	// Data Loaders
-	if len(esm.DataLoaders) > 0 {
-		result.WriteString("  Data Loaders:\n")
-		for name, loader := range esm.DataLoaders {
-			varNames := make([]string, 0, len(loader.Variables))
-			for varName := range loader.Variables {
-				varNames = append(varNames, varName)
-			}
-			// Sort for deterministic output
-			sort.Strings(varNames)
-			fmt.Fprintf(&result, "    %s: %s (%s)\n", name,
-				strings.Join(varNames, ", "), loader.Kind)
-		}
-		result.WriteString("\n")
-	}
-
-	// Coupling
-	if len(esm.Coupling) > 0 {
-		result.WriteString("  Coupling:\n")
-		for i, coupling := range esm.Coupling {
-			fmt.Fprintf(&result, "    %d. ", i+1)
-
-			// Type switch to handle different coupling types
-			switch c := coupling.(type) {
-			case OperatorComposeCoupling:
-				fmt.Fprintf(&result, "operator_compose: %s + %s", c.Systems[0], c.Systems[1])
-			case VariableMapCoupling:
-				fmt.Fprintf(&result, "variable_map: %s → %s", c.From, c.To)
-			case CouplingCouple:
-				fmt.Fprintf(&result, "couple: %s ↔ %s", c.Systems[0], c.Systems[1])
-			case OperatorApplyCoupling:
-				fmt.Fprintf(&result, "operator_apply: %s", c.Operator)
-			case CallbackCoupling:
-				fmt.Fprintf(&result, "callback: %s", c.CallbackID)
-			case EventCoupling:
-				fmt.Fprintf(&result, "event: %s (%s)", c.Name, c.EventType)
-			case CouplingImport:
-				fmt.Fprintf(&result, "coupling_import: %s", c.Ref)
-			default:
-				result.WriteString("unknown coupling type")
-			}
-			result.WriteString("\n")
-		}
-		result.WriteString("\n")
-	}
-
-	// Domain
-	if esm.Domain != nil {
-		parts := make([]string, 0)
-
-		// Temporal domain
-		if esm.Domain.Temporal != nil {
-			temporal := esm.Domain.Temporal
-			// Extract just the date parts for brevity
-			start := strings.Split(temporal.Start, "T")[0]
-			end := strings.Split(temporal.End, "T")[0]
-			parts = append(parts, fmt.Sprintf("%s to %s", start, end))
-		}
-
-		fmt.Fprintf(&result, "  Domain: %s\n", strings.Join(parts, ", "))
-	}
+	summarizeReactionSystems(&result, esm)
+	summarizeModels(&result, esm)
+	summarizeDataLoaders(&result, esm)
+	summarizeCoupling(&result, esm)
+	summarizeDomain(&result, esm)
 
 	return strings.TrimSpace(result.String())
 }
 
-func formatDerivative(args []interface{}, wrt *string, format string) string {
+// formatSpeciesList renders a reaction's substrate or product list, prefixing a
+// stoichiometric coefficient only when it is not 1, joined with " + ".
+func formatSpeciesList(items []SubstrateProduct) string {
+	names := make([]string, len(items))
+	for i, item := range items {
+		if item.Stoichiometry == 1 {
+			names[i] = ToUnicode(item.Species)
+		} else {
+			names[i] = fmt.Sprintf("%s%s", formatStoich(item.Stoichiometry), ToUnicode(item.Species))
+		}
+	}
+	return strings.Join(names, " + ")
+}
+
+// summarizeReactionSystems writes the "Reaction Systems" section (systems sorted
+// by name for deterministic output).
+func summarizeReactionSystems(b *strings.Builder, esm *ESMFile) {
+	if len(esm.ReactionSystems) == 0 {
+		return
+	}
+	b.WriteString("  Reaction Systems:\n")
+	for _, name := range sortedKeys(esm.ReactionSystems) {
+		rs := esm.ReactionSystems[name]
+		fmt.Fprintf(b, "    %s (%d species, %d parameters, %d reactions)\n",
+			name, len(rs.Species), len(rs.Parameters), len(rs.Reactions))
+
+		for _, reaction := range rs.Reactions {
+			b.WriteString("      ")
+			b.WriteString(reaction.ID)
+			b.WriteString(": ")
+			b.WriteString(formatSpeciesList(reaction.Substrates))
+			b.WriteString(" → ")
+			b.WriteString(formatSpeciesList(reaction.Products))
+			b.WriteString("    rate: ")
+			b.WriteString(ToUnicodeSpaced(reaction.Rate))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+}
+
+// summarizeModels writes the "Models" section (models sorted by name).
+func summarizeModels(b *strings.Builder, esm *ESMFile) {
+	if len(esm.Models) == 0 {
+		return
+	}
+	b.WriteString("  Models:\n")
+	for _, name := range sortedKeys(esm.Models) {
+		model := esm.Models[name]
+		paramCount := 0
+		for _, variable := range model.Variables {
+			if variable.Type == VarTypeParameter {
+				paramCount++
+			}
+		}
+		equationCount := len(model.Equations)
+		fmt.Fprintf(b, "    %s (%d parameters, %d equation", name, paramCount, equationCount)
+		if equationCount != 1 {
+			b.WriteString("s")
+		}
+		b.WriteString(")\n")
+
+		for _, equation := range model.Equations {
+			b.WriteString("      ")
+			b.WriteString(ToUnicodeSpaced(equation.LHS))
+			b.WriteString(" = ")
+			b.WriteString(ToUnicodeSpaced(equation.RHS))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+}
+
+// summarizeDataLoaders writes the "Data Loaders" section (loaders and their
+// variable names both sorted).
+func summarizeDataLoaders(b *strings.Builder, esm *ESMFile) {
+	if len(esm.DataLoaders) == 0 {
+		return
+	}
+	b.WriteString("  Data Loaders:\n")
+	for _, name := range sortedKeys(esm.DataLoaders) {
+		loader := esm.DataLoaders[name]
+		varNames := sortedKeys(loader.Variables)
+		fmt.Fprintf(b, "    %s: %s (%s)\n", name,
+			strings.Join(varNames, ", "), loader.Kind)
+	}
+	b.WriteString("\n")
+}
+
+// summarizeCoupling writes the "Coupling" section in declaration order.
+func summarizeCoupling(b *strings.Builder, esm *ESMFile) {
+	if len(esm.Coupling) == 0 {
+		return
+	}
+	b.WriteString("  Coupling:\n")
+	for i, coupling := range esm.Coupling {
+		fmt.Fprintf(b, "    %d. ", i+1)
+
+		switch c := coupling.(type) {
+		case OperatorComposeCoupling:
+			fmt.Fprintf(b, "operator_compose: %s + %s", c.Systems[0], c.Systems[1])
+		case VariableMapCoupling:
+			fmt.Fprintf(b, "variable_map: %s → %s", c.From, c.To)
+		case CouplingCouple:
+			fmt.Fprintf(b, "couple: %s ↔ %s", c.Systems[0], c.Systems[1])
+		case OperatorApplyCoupling:
+			fmt.Fprintf(b, "operator_apply: %s", c.Operator)
+		case CallbackCoupling:
+			fmt.Fprintf(b, "callback: %s", c.CallbackID)
+		case EventCoupling:
+			fmt.Fprintf(b, "event: %s (%s)", c.Name, c.EventType)
+		case CouplingImport:
+			fmt.Fprintf(b, "coupling_import: %s", c.Ref)
+		default:
+			b.WriteString("unknown coupling type")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+}
+
+// summarizeDomain writes the "Domain" section (temporal extent only).
+func summarizeDomain(b *strings.Builder, esm *ESMFile) {
+	if esm.Domain == nil {
+		return
+	}
+	parts := make([]string, 0)
+	if esm.Domain.Temporal != nil {
+		temporal := esm.Domain.Temporal
+		// Extract just the date parts for brevity
+		start := strings.Split(temporal.Start, "T")[0]
+		end := strings.Split(temporal.End, "T")[0]
+		parts = append(parts, fmt.Sprintf("%s to %s", start, end))
+	}
+	fmt.Fprintf(b, "  Domain: %s\n", strings.Join(parts, ", "))
+}
+
+func formatDerivative(args []any, wrt *string, format string) string {
 	if len(args) != 1 || wrt == nil {
 		return "D(...)"
 	}
@@ -773,9 +745,9 @@ func formatDerivative(args []interface{}, wrt *string, format string) string {
 	timeVar := *wrt
 
 	switch format {
-	case "unicode":
+	case FmtUnicode, FmtUnicodeSpaced:
 		return "∂" + variable + "/∂" + timeVar
-	case "latex":
+	case FmtLatex:
 		formattedVar := formatExpression(args[0], format)
 		return "\\frac{\\partial " + formattedVar + "}{\\partial " + timeVar + "}"
 	default:
@@ -798,11 +770,11 @@ func formatDerivative(args []interface{}, wrt *string, format string) string {
 
 // isOpNodeValue reports whether a value is an operator node (ExprNode or a raw
 // {"op": …} object) rather than a leaf.
-func isOpNodeValue(v interface{}) bool {
+func isOpNodeValue(v any) bool {
 	switch x := v.(type) {
 	case ExprNode, *ExprNode:
 		return true
-	case map[string]interface{}:
+	case map[string]any:
 		_, ok := x["op"]
 		return ok
 	}
@@ -811,7 +783,7 @@ func isOpNodeValue(v interface{}) bool {
 
 // wrapIfOpValue renders a sub-expression, parenthesizing it only when it is an
 // operator node (a leaf is never wrapped).
-func wrapIfOpValue(v interface{}, format string) string {
+func wrapIfOpValue(v any, format string) string {
 	s := formatExpression(v, format)
 	if isOpNodeValue(v) {
 		return "(" + s + ")"
@@ -822,7 +794,7 @@ func wrapIfOpValue(v interface{}, format string) string {
 // plainScalar returns the bare textual form of a raw scalar (index name, axis,
 // output selector, manifold, …) — mirrors JS String(): identifiers and enum
 // labels render verbatim, with no variable/greek formatting.
-func plainScalar(v interface{}) string {
+func plainScalar(v any) string {
 	switch x := v.(type) {
 	case nil:
 		return ""
@@ -845,9 +817,9 @@ func plainScalar(v interface{}) string {
 
 // formatConstValue renders a `const` node's literal payload: a scalar number or
 // a nested array, indistinguishable from a bare literal.
-func formatConstValue(v interface{}, format string) string {
+func formatConstValue(v any, format string) string {
 	switch x := v.(type) {
-	case []interface{}:
+	case []any:
 		parts := make([]string, len(x))
 		for i, e := range x {
 			parts[i] = formatConstValue(e, format)
@@ -876,7 +848,7 @@ func formatConstValue(v interface{}, format string) string {
 // formatStructBound renders a structural integer bound (region / shape / perm /
 // range entry): a plain integer or symbolic dimension, or a metaparameter
 // Expression node rendered recursively.
-func formatStructBound(v interface{}, format string) string {
+func formatStructBound(v any, format string) string {
 	if isOpNodeValue(v) {
 		return formatExpression(v, format)
 	}
@@ -884,12 +856,22 @@ func formatStructBound(v interface{}, format string) string {
 }
 
 // joinArgList renders each arg via the recursive formatter and joins with ", ".
-func joinArgList(args []interface{}, format string) string {
+func joinArgList(args []any, format string) string {
 	parts := make([]string, len(args))
 	for i, a := range args {
 		parts[i] = formatExpression(a, format)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// aggregateSymbolTable maps a reduction family to its {unicode, latex, ascii}
+// big-operator symbols.
+var aggregateSymbolTable = map[string][3]string{
+	"plus":  {"Σ", "\\sum", "sum"},
+	"times": {"Π", "\\prod", "prod"},
+	"max":   {"max", "\\max", "max"},
+	"min":   {"min", "\\min", "min"},
+	"bool":  {"⋁", "\\bigvee", "any"},
 }
 
 // aggregateSymbol returns the big-operator symbol for an aggregate reduction;
@@ -919,18 +901,11 @@ func aggregateSymbol(semiring, reduce, format string) string {
 			fam = "plus"
 		}
 	}
-	table := map[string][3]string{
-		"plus":  {"Σ", "\\sum", "sum"},
-		"times": {"Π", "\\prod", "prod"},
-		"max":   {"max", "\\max", "max"},
-		"min":   {"min", "\\min", "min"},
-		"bool":  {"⋁", "\\bigvee", "any"},
-	}
-	t := table[fam]
+	t := aggregateSymbolTable[fam]
 	switch format {
-	case "unicode":
+	case FmtUnicode, FmtUnicodeSpaced:
 		return t[0]
-	case "latex":
+	case FmtLatex:
 		return t[1]
 	default:
 		return t[2]
@@ -939,18 +914,18 @@ func aggregateSymbol(semiring, reduce, format string) string {
 
 // formatRange renders a single range value: an array [a,b]→"a:b" / [a,s,b]→
 // "a:s:b", or an index-set reference { "from": F, "of": […] }.
-func formatRange(v interface{}, format string) string {
+func formatRange(v any, format string) string {
 	switch x := v.(type) {
-	case []interface{}:
+	case []any:
 		parts := make([]string, len(x))
 		for i, e := range x {
 			parts[i] = formatStructBound(e, format)
 		}
 		return strings.Join(parts, ":")
-	case map[string]interface{}:
+	case map[string]any:
 		if from, ok := x["from"]; ok {
 			fromStr := plainScalar(from)
-			if of, ok := x["of"].([]interface{}); ok && len(of) > 0 {
+			if of, ok := x["of"].([]any); ok && len(of) > 0 {
 				ofParts := make([]string, len(of))
 				for i, o := range of {
 					ofParts[i] = plainScalar(o)
@@ -967,12 +942,12 @@ func formatRange(v interface{}, format string) string {
 
 // formatRangesClause renders the ` where {…}` clause shared by aggregate and
 // argmin/argmax (keys sorted).
-func formatRangesClause(ranges map[string]interface{}, format string) string {
+func formatRangesClause(ranges map[string]any, format string) string {
 	inSym := "∈"
 	switch format {
-	case "latex":
+	case FmtLatex:
 		inSym = " \\in "
-	case "ascii":
+	case FmtAscii:
 		inSym = " in "
 	}
 	keys := make([]string, 0, len(ranges))
@@ -984,7 +959,7 @@ func formatRangesClause(ranges map[string]interface{}, format string) string {
 	for i, k := range keys {
 		parts[i] = k + inSym + formatRange(ranges[k], format)
 	}
-	if format == "latex" {
+	if format == FmtLatex {
 		return " \\text{ where } \\{" + strings.Join(parts, ", ") + "\\}"
 	}
 	return " where {" + strings.Join(parts, ", ") + "}"
@@ -1013,7 +988,7 @@ func formatAggregate(node ExprNode, format string) string {
 	sym := aggregateSymbol(semiring, reduce, format)
 
 	var out string
-	if format == "latex" {
+	if format == FmtLatex {
 		out = sym + "_{" + outIdx + "} (" + exprStr + ")"
 	} else {
 		out = sym + "[" + outIdx + "] (" + exprStr + ")"
@@ -1025,14 +1000,14 @@ func formatAggregate(node ExprNode, format string) string {
 	if len(node.Join) > 0 {
 		clauses := make([]string, 0, len(node.Join))
 		for _, c := range node.Join {
-			cm, ok := c.(map[string]interface{})
+			cm, ok := c.(map[string]any)
 			if !ok {
 				continue
 			}
-			onRaw, _ := cm["on"].([]interface{})
+			onRaw, _ := cm["on"].([]any)
 			pairs := make([]string, 0, len(onRaw))
 			for _, p := range onRaw {
-				pp, ok := p.([]interface{})
+				pp, ok := p.([]any)
 				if !ok || len(pp) < 2 {
 					continue
 				}
@@ -1068,7 +1043,7 @@ func formatArgWitness(node ExprNode, format string) string {
 		exprStr = formatExpression(node.Expr, format)
 	}
 	var out string
-	if format == "latex" {
+	if format == FmtLatex {
 		out = "\\mathrm{" + node.Op + "}_{" + arg + "} (" + exprStr + ")"
 	} else {
 		out = node.Op + "[" + arg + "] (" + exprStr + ")"
@@ -1100,20 +1075,14 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			name = *node.Name
 		}
 		inner := joinArgList(args, format)
-		if format == "latex" {
-			return "\\mathrm{" + latexEscape(name) + "}(" + inner + ")", true
-		}
-		return name + "(" + inner + ")", true
+		return opDisplayName(name, format) + "(" + inner + ")", true
 
 	case "enum":
 		if len(args) < 2 {
 			return "", false
 		}
 		label := plainScalar(args[0]) + "." + plainScalar(args[1])
-		if format == "latex" {
-			return "\\mathrm{" + latexEscape(label) + "}", true
-		}
-		return label, true
+		return opDisplayName(label, format), true
 
 	case "index":
 		if len(args) == 0 {
@@ -1129,7 +1098,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		if node.Fn == nil {
 			return "", false
 		}
-		return formatExprNode(ExprNode{Op: *node.Fn, Args: args}, format, 0), true
+		return formatExprNode(ExprNode{Op: *node.Fn, Args: args}, format), true
 
 	case "integral":
 		if len(args) == 0 {
@@ -1149,9 +1118,9 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			hi = formatExpression(node.Upper, format)
 		}
 		switch format {
-		case "latex":
+		case FmtLatex:
 			return "\\int_{" + lo + "}^{" + hi + "} " + f + " \\, d" + v, true
-		case "unicode":
+		case FmtUnicode, FmtUnicodeSpaced:
 			return "∫[" + lo + ", " + hi + "] " + f + " d" + v, true
 		default:
 			return "integral(" + f + ", " + v + ", " + lo + ", " + hi + ")", true
@@ -1163,7 +1132,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			table = *node.Table
 		}
 		eq := "="
-		if format == "latex" {
+		if format == FmtLatex {
 			eq = " = "
 		}
 		keys := make([]string, 0, len(node.TableAxes))
@@ -1179,11 +1148,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		if node.Output != nil {
 			outStr = ":" + plainScalar(node.Output)
 		}
-		name := table
-		if format == "latex" {
-			name = "\\mathrm{" + latexEscape(table) + "}"
-		}
-		return name + "[" + strings.Join(parts, ", ") + "]" + outStr, true
+		return opDisplayName(table, format) + "[" + strings.Join(parts, ", ") + "]" + outStr, true
 
 	case "apply_expression_template":
 		name := ""
@@ -1191,7 +1156,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			name = *node.Name
 		}
 		eq := "="
-		if format == "latex" {
+		if format == FmtLatex {
 			eq = " = "
 		}
 		keys := make([]string, 0, len(node.Bindings))
@@ -1205,9 +1170,9 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		}
 		inner := strings.Join(parts, ", ")
 		switch format {
-		case "latex":
+		case FmtLatex:
 			return "\\mathrm{" + latexEscape(name) + "}\\langle " + inner + " \\rangle", true
-		case "unicode":
+		case FmtUnicode, FmtUnicodeSpaced:
 			return name + "⟨" + inner + "⟩", true
 		default:
 			return name + "<" + inner + ">", true
@@ -1233,11 +1198,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			}
 			parts = append(parts, "["+strings.Join(dims, ", ")+"] = "+val)
 		}
-		name := "makearray"
-		if format == "latex" {
-			name = "\\mathrm{makearray}"
-		}
-		return name + "(" + strings.Join(parts, ", ") + ")", true
+		return opDisplayName("makearray", format) + "(" + strings.Join(parts, ", ") + ")", true
 
 	case "reshape":
 		if len(args) == 0 {
@@ -1247,11 +1208,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		for i, s := range node.Shape {
 			shape[i] = formatStructBound(s, format)
 		}
-		name := "reshape"
-		if format == "latex" {
-			name = "\\mathrm{reshape}"
-		}
-		return name + "(" + formatExpression(args[0], format) + ", [" + strings.Join(shape, ", ") + "])", true
+		return opDisplayName("reshape", format) + "(" + formatExpression(args[0], format) + ", [" + strings.Join(shape, ", ") + "])", true
 
 	case "transpose":
 		if len(args) == 0 {
@@ -1262,16 +1219,12 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 			for i, p := range node.Perm {
 				perm[i] = formatStructBound(p, format)
 			}
-			name := "transpose"
-			if format == "latex" {
-				name = "\\mathrm{transpose}"
-			}
-			return name + "(" + formatExpression(args[0], format) + ", [" + strings.Join(perm, ", ") + "])", true
+			return opDisplayName("transpose", format) + "(" + formatExpression(args[0], format) + ", [" + strings.Join(perm, ", ") + "])", true
 		}
 		switch format {
-		case "latex":
+		case FmtLatex:
 			return wrapIfOpValue(args[0], format) + "^{T}", true
-		case "unicode":
+		case FmtUnicode, FmtUnicodeSpaced:
 			return wrapIfOpValue(args[0], format) + "ᵀ", true
 		default:
 			return "transpose(" + formatExpression(args[0], format) + ")", true
@@ -1283,11 +1236,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		if node.Axis != nil {
 			axis = plainScalar(node.Axis)
 		}
-		name := "concat"
-		if format == "latex" {
-			name = "\\mathrm{concat}"
-		}
-		return name + "(" + inner + ", axis=" + axis + ")", true
+		return opDisplayName("concat", format) + "(" + inner + ", axis=" + axis + ")", true
 
 	case "intersect_polygon", "polygon_intersection_area":
 		inner := joinArgList(args, format)
@@ -1295,11 +1244,7 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		if node.Manifold != nil {
 			manifold = *node.Manifold
 		}
-		name := op
-		if format == "latex" {
-			name = "\\mathrm{" + latexEscape(op) + "}"
-		}
-		return name + "(" + inner + ", manifold=" + manifold + ")", true
+		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + ")", true
 
 	case "aggregate":
 		return formatAggregate(node, format), true
@@ -1313,11 +1258,24 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 
 // Helper functions for specific formatting decisions
 
-func needsParenthesesForSubtraction(node ExprNode) bool {
+// isAdditiveNode reports whether an operator node is an addition or a binary
+// subtraction — the terms that need parenthesizing inside a product or on the
+// right of a subtraction.
+func isAdditiveNode(node ExprNode) bool {
 	return node.Op == "+" || (node.Op == "-" && len(node.Args) == 2)
 }
 
-func shouldUseExpLeft(arg interface{}) bool {
+// isArithmeticNode reports whether an operator node is any of + - * / — the
+// terms that need parenthesizing inside a quotient or as an exponent base.
+func isArithmeticNode(node ExprNode) bool {
+	return node.Op == "+" || node.Op == "-" || node.Op == "*" || node.Op == "/"
+}
+
+func needsParenthesesForSubtraction(node ExprNode) bool {
+	return isAdditiveNode(node)
+}
+
+func shouldUseExpLeft(arg any) bool {
 	// Use \left( \right) for complex expressions in exp()
 	if node, ok := arg.(ExprNode); ok {
 		return node.Op == "/" || node.Op == "+" || node.Op == "-"

@@ -27,11 +27,11 @@ import (
 
 // checkTestsBlock validates the structural shape of one `tests` block entry
 // and returns the number of assertions it declares.
-func checkTestsBlock(t *testing.T, label string, testsRaw []interface{}) int {
+func checkTestsBlock(t *testing.T, label string, testsRaw []any) int {
 	t.Helper()
 	assertions := 0
 	for i, tcRaw := range testsRaw {
-		tc, ok := tcRaw.(map[string]interface{})
+		tc, ok := tcRaw.(map[string]any)
 		if !ok {
 			t.Fatalf("%s: tests[%d] not an object", label, i)
 		}
@@ -39,7 +39,7 @@ func checkTestsBlock(t *testing.T, label string, testsRaw []interface{}) int {
 		if id == "" {
 			t.Fatalf("%s: tests[%d] missing id", label, i)
 		}
-		tsRaw, ok := tc["time_span"].(map[string]interface{})
+		tsRaw, ok := tc["time_span"].(map[string]any)
 		if !ok {
 			t.Fatalf("%s/%s: missing time_span", label, id)
 		}
@@ -49,12 +49,12 @@ func checkTestsBlock(t *testing.T, label string, testsRaw []interface{}) int {
 		if _, ok := tsRaw["end"].(float64); !ok {
 			t.Fatalf("%s/%s: time_span.end not numeric", label, id)
 		}
-		aRaw, _ := tc["assertions"].([]interface{})
+		aRaw, _ := tc["assertions"].([]any)
 		if len(aRaw) == 0 {
 			t.Fatalf("%s/%s: expected at least one assertion", label, id)
 		}
 		for j, raw := range aRaw {
-			a, ok := raw.(map[string]interface{})
+			a, ok := raw.(map[string]any)
 			if !ok {
 				t.Fatalf("%s/%s: assertions[%d] not an object", label, id, j)
 			}
@@ -121,7 +121,7 @@ func TestSimulationFixturesBlocksExecution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)
 			}
-			var doc map[string]interface{}
+			var doc map[string]any
 			if err := json.Unmarshal(raw, &doc); err != nil {
 				t.Fatalf("unmarshal %s: %v", name, err)
 			}
@@ -129,11 +129,11 @@ func TestSimulationFixturesBlocksExecution(t *testing.T) {
 			fixtureTests := 0
 			models := mapOr(doc, "models")
 			for mname, mraw := range models {
-				model, ok := mraw.(map[string]interface{})
+				model, ok := mraw.(map[string]any)
 				if !ok {
 					continue
 				}
-				tsRaw, _ := model["tests"].([]interface{})
+				tsRaw, _ := model["tests"].([]any)
 				if len(tsRaw) == 0 {
 					continue
 				}
@@ -143,11 +143,11 @@ func TestSimulationFixturesBlocksExecution(t *testing.T) {
 			}
 			rsys := mapOr(doc, "reaction_systems")
 			for rsname, rraw := range rsys {
-				rs, ok := rraw.(map[string]interface{})
+				rs, ok := rraw.(map[string]any)
 				if !ok {
 					continue
 				}
-				tsRaw, _ := rs["tests"].([]interface{})
+				tsRaw, _ := rs["tests"].([]any)
 				if len(tsRaw) == 0 {
 					continue
 				}

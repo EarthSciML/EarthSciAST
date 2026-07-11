@@ -17,7 +17,7 @@ func TestBrownianRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	var parsed EsmFile
+	var parsed ESMFile
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestBrownianRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var reparsed EsmFile
+	var reparsed ESMFile
 	if err := json.Unmarshal(out, &reparsed); err != nil {
 		t.Fatalf("unmarshal round-trip: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestFlattenBrownianVariables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	var parsed EsmFile
+	var parsed ESMFile
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

@@ -40,13 +40,13 @@ func tiConfDir(t *testing.T, parts ...string) string {
 // normalization, so json.Number / int64 / float64 encodings compare equal.
 // Fixture literals avoid integral-valued floats (conformance README), so the
 // float64 round-trip cannot conflate int and float spellings.
-func tiCanonJSON(t *testing.T, v interface{}) string {
+func tiCanonJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var plain interface{}
+	var plain any
 	if err := json.Unmarshal(b, &plain); err != nil {
 		t.Fatalf("re-decode: %v", err)
 	}
@@ -70,7 +70,7 @@ func tiExpandRaw(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("resolve+lower %s: %v", path, err)
 	}
-	var v interface{}
+	var v any
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		t.Fatalf("decode expanded: %v", err)
 	}
@@ -83,7 +83,7 @@ func tiGolden(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("read golden %s: %v", path, err)
 	}
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
 		t.Fatalf("decode golden %s: %v", path, err)
 	}
@@ -156,12 +156,12 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 // (the goldens carry golden-specific metadata, so the comparison is scoped to
 // the rewritten variables exactly as the reference testset does).
 func TestMatchScoping_ConformanceGoldens(t *testing.T) {
-	modelMVars := func(doc string) interface{} {
-		var v map[string]interface{}
+	modelMVars := func(doc string) any {
+		var v map[string]any
 		if err := json.Unmarshal([]byte(doc), &v); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		return v["models"].(map[string]interface{})["m"].(map[string]interface{})["variables"]
+		return v["models"].(map[string]any)["m"].(map[string]any)["variables"]
 	}
 	for _, group := range []string{
 		"constrained_match_scope",          // shape-constrained div rule; one fires, one survives
@@ -190,18 +190,18 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 // rewrite this raised template_constraint_unknown_index_set.
 func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 	doc := tiExpandRaw(t, tiConfDir(t, "import_where_rename_two_instances", "fixture.esm"))
-	var v map[string]interface{}
+	var v map[string]any
 	if err := json.Unmarshal([]byte(doc), &v); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	vars := v["models"].(map[string]interface{})["TwoGrids"].(map[string]interface{})["variables"].(map[string]interface{})
+	vars := v["models"].(map[string]any)["TwoGrids"].(map[string]any)["variables"].(map[string]any)
 	for name, wantN := range map[string]float64{"div_A": 16, "div_B": 8} {
-		expr := vars[name].(map[string]interface{})["expression"].(map[string]interface{})
+		expr := vars[name].(map[string]any)["expression"].(map[string]any)
 		if expr["op"] != "*" {
 			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
 		}
-		coef := expr["args"].([]interface{})[0].(map[string]interface{})
-		if coef["op"] != "/" || coef["args"].([]interface{})[1].(float64) != wantN {
+		coef := expr["args"].([]any)[0].(map[string]any)
+		if coef["op"] != "/" || coef["args"].([]any)[1].(float64) != wantN {
 			t.Errorf("%s: coef = %v; want (1/%v)", name, coef, wantN)
 		}
 	}
@@ -367,24 +367,24 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			sub, ok := f.Models["Sweep"].Subsystems["Problem"].(map[string]interface{})
+			sub, ok := f.Models["Sweep"].Subsystems["Problem"].(map[string]any)
 			if !ok {
 				t.Fatalf("Problem subsystem is %T; want map", f.Models["Sweep"].Subsystems["Problem"])
 			}
-			vars := sub["variables"].(map[string]interface{})
+			vars := sub["variables"].(map[string]any)
 			// Expression position: bare "N" substituted as an integer literal.
-			nptsJSON := mustJSON(t, vars["npts"].(map[string]interface{})["expression"])
+			nptsJSON := mustJSON(t, vars["npts"].(map[string]any)["expression"])
 			if nptsJSON != fmt.Sprintf("%d", tc.n) {
 				t.Errorf("npts expression = %s; want %d", nptsJSON, tc.n)
 			}
 			// Expression-position division stays an AST division (no folding).
-			halfJSON := mustJSON(t, vars["half"].(map[string]interface{})["expression"])
+			halfJSON := mustJSON(t, vars["half"].(map[string]any)["expression"])
 			wantHalf := fmt.Sprintf(`{"args":[%d,2],"op":"/"}`, tc.n)
 			if halfJSON != wantHalf {
 				t.Errorf("half expression = %s; want %s", halfJSON, wantHalf)
 			}
 			// Structural site: the aggregate dense range folded exactly.
-			ramp := vars["ramp"].(map[string]interface{})["expression"].(map[string]interface{})
+			ramp := vars["ramp"].(map[string]any)["expression"].(map[string]any)
 			rangesJSON := mustJSON(t, ramp["ranges"])
 			wantRanges := fmt.Sprintf(`{"i":[1,%d]}`, tc.n/2)
 			if rangesJSON != wantRanges {
@@ -395,7 +395,7 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal models: %v", err)
 			}
-			var gotModels interface{}
+			var gotModels any
 			if err := json.Unmarshal(b, &gotModels); err != nil {
 				t.Fatalf("re-decode models: %v", err)
 			}
@@ -404,7 +404,7 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v", err)
 			}
-			var golden map[string]interface{}
+			var golden map[string]any
 			if err := json.Unmarshal(goldenBytes, &golden); err != nil {
 				t.Fatalf("decode golden: %v", err)
 			}
@@ -595,11 +595,11 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 	if _, err := resolveTemplateMachinery(view, orders, dir, nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	tpl := view["models"].(map[string]interface{})["M"].(map[string]interface{})["expression_templates"].(map[string]interface{})
+	tpl := view["models"].(map[string]any)["M"].(map[string]any)["expression_templates"].(map[string]any)
 	if len(tpl) != 1 {
 		t.Fatalf("expected only t_keep in scope, got %v", sortedKeys(tpl))
 	}
-	body := tpl["t_keep"].(map[string]interface{})["body"]
+	body := tpl["t_keep"].(map[string]any)["body"]
 	if got := mustJSON(t, body); got != `{"args":[2,7],"op":"*"}` {
 		t.Errorf("composed body = %s; want {\"args\":[2,7],\"op\":\"*\"}", got)
 	}
@@ -707,19 +707,19 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve+lower: %v", err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if got := mustJSON(t, doc["index_sets"]); got != `{"cells":{"kind":"interval","size":12}}` {
 		t.Errorf("index_sets = %s; want cells size 12", got)
 	}
-	vars := doc["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})
-	agg := vars["agg"].(map[string]interface{})["expression"].(map[string]interface{})
+	vars := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)
+	agg := vars["agg"].(map[string]any)["expression"].(map[string]any)
 	if got := mustJSON(t, agg["ranges"]); got != `{"i":[1,5]}` {
 		t.Errorf("agg ranges = %s; want {\"i\":[1,5]}", got)
 	}
-	ma := vars["ma"].(map[string]interface{})["expression"].(map[string]interface{})
+	ma := vars["ma"].(map[string]any)["expression"].(map[string]any)
 	if got := mustJSON(t, ma["regions"]); got != `[[[3,6]]]` {
 		t.Errorf("ma regions = %s; want [[[3,6]]]", got)
 	}
@@ -750,11 +750,11 @@ func TestTemplateImports_ExpressionPositionSubstitutionNeverFolds(t *testing.T) 
 	if err != nil {
 		t.Fatalf("resolve+lower: %v", err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	dlon := doc["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})["dlon"].(map[string]interface{})["expression"]
+	dlon := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["dlon"].(map[string]any)["expression"]
 	if got := mustJSON(t, dlon); got != `{"args":[360,144],"op":"/"}` {
 		t.Errorf("dlon = %s; want the un-folded AST division {\"args\":[360,144],\"op\":\"/\"}", got)
 	}
@@ -802,7 +802,7 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	y := v["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})["y"].(map[string]interface{})
+	y := v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
 	if got := mustJSON(t, y["expression"]); got != `{"args":[1,{"args":[2,3],"op":"+"}],"op":"+"}` {
 		t.Errorf("composed y = %s", got)
 	}
@@ -885,14 +885,14 @@ func TestTemplateImports_CrossFileChainsDoNotAccumulateDepth(t *testing.T) {
 	// head is legal, not a 33-deep chain.
 	dir := t.TempDir()
 	chain := tiChainDoc(MaxTemplateExpansionDepth)
-	var chainView map[string]interface{}
+	var chainView map[string]any
 	if err := json.Unmarshal([]byte(chain), &chainView); err != nil {
 		t.Fatalf("decode chain doc: %v", err)
 	}
-	tpl := chainView["models"].(map[string]interface{})["M"].(map[string]interface{})["expression_templates"]
-	libDoc := map[string]interface{}{
+	tpl := chainView["models"].(map[string]any)["M"].(map[string]any)["expression_templates"]
+	libDoc := map[string]any{
 		"esm":                  "0.8.0",
-		"metadata":             map[string]interface{}{"name": "chainlib"},
+		"metadata":             map[string]any{"name": "chainlib"},
 		"expression_templates": tpl,
 	}
 	libBytes, err := json.Marshal(libDoc)
@@ -951,11 +951,11 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve+lower: %v", err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	y := doc["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})["y"].(map[string]interface{})
+	y := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
 	if got := mustJSON(t, y["expression"]); got != `{"args":[2,"x"],"op":"*"}` {
 		t.Errorf("y = %s; want the FIRST import's rule to win the tie (2*x)", got)
 	}
@@ -977,7 +977,7 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("zero-param template must be legal, got: %v", err)
 	}
-	y := v["models"].(map[string]interface{})["M"].(map[string]interface{})["variables"].(map[string]interface{})["y"].(map[string]interface{})
+	y := v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
 	if got := mustJSON(t, y["expression"]); got != "2" {
 		t.Errorf("y expression = %s; want 2", got)
 	}

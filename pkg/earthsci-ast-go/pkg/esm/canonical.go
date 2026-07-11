@@ -3,9 +3,7 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
-	"strconv"
 	"strings"
 )
 
@@ -15,58 +13,14 @@ import (
 // never spelled the same way, preserving the round-trip int/float node
 // distinction required by §5.4.1. Magnitudes outside [1e-6, 1e21) use
 // exponent notation with lowercase 'e', no leading '+', and no leading
-// zeros on the exponent. NaN and ±Inf are rejected with
-// E_CANONICAL_NONFINITE.
+// zeros on the exponent. NaN and ±Inf are rejected with an error wrapping
+// ErrCanonicalNonFinite (so errors.Is matches on the Save/ToJSON path too).
+//
+// This is a thin alias for the single shared §5.4.6 renderer
+// (formatCanonicalFloatShared in floatfmt.go); the previous byte-identical
+// re-implementation (and its normalizeExponentForm helper) has been removed.
 func canonicalFloat64String(f float64) (string, error) {
-	if math.IsNaN(f) {
-		return "", fmt.Errorf("E_CANONICAL_NONFINITE: NaN not representable in canonical JSON")
-	}
-	if math.IsInf(f, 0) {
-		return "", fmt.Errorf("E_CANONICAL_NONFINITE: %v not representable in canonical JSON", f)
-	}
-	if f == 0 {
-		if math.Signbit(f) {
-			return "-0.0", nil
-		}
-		return "0.0", nil
-	}
-	abs := math.Abs(f)
-	if abs < 1e-6 || abs >= 1e21 {
-		return normalizeExponentForm(strconv.FormatFloat(f, 'e', -1, 64)), nil
-	}
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.Contains(s, ".") {
-		s += ".0"
-	}
-	return s, nil
-}
-
-// normalizeExponentForm converts Go's "1e+25" / "1e-07" spellings to the
-// RFC §5.4.6 form: lowercase 'e', no leading '+', no leading zeros on
-// the exponent magnitude.
-func normalizeExponentForm(s string) string {
-	idx := strings.IndexAny(s, "eE")
-	if idx < 0 {
-		return s
-	}
-	mantissa := s[:idx]
-	exp := s[idx+1:]
-	neg := false
-	switch {
-	case strings.HasPrefix(exp, "+"):
-		exp = exp[1:]
-	case strings.HasPrefix(exp, "-"):
-		neg = true
-		exp = exp[1:]
-	}
-	exp = strings.TrimLeft(exp, "0")
-	if exp == "" {
-		exp = "0"
-	}
-	if neg {
-		exp = "-" + exp
-	}
-	return mantissa + "e" + exp
+	return formatCanonicalFloatShared(f)
 }
 
 var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
@@ -80,11 +34,11 @@ var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 // Types implementing json.Marshaler (e.g. json.Number, json.RawMessage)
 // are passed through untouched so that prior canonicalization inside
 // interface{} slots is preserved.
-func canonicalizeForJSON(v interface{}) (interface{}, error) {
+func canonicalizeForJSON(v any) (any, error) {
 	return canonicalizeValue(reflect.ValueOf(v))
 }
 
-func canonicalizeValue(rv reflect.Value) (interface{}, error) {
+func canonicalizeValue(rv reflect.Value) (any, error) {
 	if !rv.IsValid() {
 		return nil, nil
 	}
@@ -115,7 +69,7 @@ func canonicalizeValue(rv reflect.Value) (interface{}, error) {
 		if rv.IsNil() {
 			return nil, nil
 		}
-		result := make(map[string]interface{}, rv.Len())
+		result := make(map[string]any, rv.Len())
 		iter := rv.MapRange()
 		for iter.Next() {
 			key := iter.Key()
@@ -165,7 +119,7 @@ func canonicalizeValue(rv reflect.Value) (interface{}, error) {
 	return rv.Interface(), nil
 }
 
-func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
+func canonicalizeSequence(rv reflect.Value) (any, error) {
 	// []byte is a special case: encoding/json emits it as a base64 string.
 	if rv.Type().Elem().Kind() == reflect.Uint8 {
 		if rv.Kind() == reflect.Slice {
@@ -178,7 +132,7 @@ func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
 		}
 		return b, nil
 	}
-	result := make([]interface{}, rv.Len())
+	result := make([]any, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		val, err := canonicalizeValue(rv.Index(i))
 		if err != nil {
@@ -189,9 +143,9 @@ func canonicalizeSequence(rv reflect.Value) (interface{}, error) {
 	return result, nil
 }
 
-func canonicalizeStruct(rv reflect.Value) (interface{}, error) {
+func canonicalizeStruct(rv reflect.Value) (any, error) {
 	t := rv.Type()
-	result := make(map[string]interface{}, t.NumField())
+	result := make(map[string]any, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if !field.IsExported() {

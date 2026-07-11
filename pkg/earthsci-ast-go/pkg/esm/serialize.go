@@ -12,7 +12,7 @@ import (
 // that range) before running encoding/json. Without this pass Go emits
 // float64(1.0) as "1", which collides with int64(1) on the wire and
 // breaks the round-trip int/float node distinction.
-func marshalCanonical(v interface{}, indent bool) ([]byte, error) {
+func marshalCanonical(v any, indent bool) ([]byte, error) {
 	canonical, err := canonicalizeForJSON(v)
 	if err != nil {
 		return nil, err
@@ -23,18 +23,21 @@ func marshalCanonical(v interface{}, indent bool) ([]byte, error) {
 	return json.Marshal(canonical)
 }
 
-// Save serializes an ESM file to JSON string
-func Save(file *EsmFile) (string, error) {
+// save is the shared serialization core for the four exported entry points
+// (Serialize/SerializeCompact return the string; SaveToFile/SaveCompactToFile
+// persist it). It validates the file (unlike the raw (*ESMFile).ToJSON) and
+// emits canonical JSON, indented when indent is true and compact otherwise.
+func save(file *ESMFile, indent bool) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("cannot serialize nil ESM file")
 	}
 
 	// Validate the file before serializing
-	if err := file.Validate(); err != nil {
+	if err := file.ValidateStruct(); err != nil {
 		return "", fmt.Errorf("validation failed before serialization: %w", err)
 	}
 
-	jsonData, err := marshalCanonical(file, true)
+	jsonData, err := marshalCanonical(file, indent)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal ESM file to JSON: %w", err)
 	}
@@ -42,58 +45,51 @@ func Save(file *EsmFile) (string, error) {
 	return string(jsonData), nil
 }
 
-// SaveCompact serializes an ESM file to compact JSON string (no indentation)
-func SaveCompact(file *EsmFile) (string, error) {
-	if file == nil {
-		return "", fmt.Errorf("cannot serialize nil ESM file")
-	}
+// Serialize validates an ESM file and returns it as an indented canonical JSON
+// string. (The Save* verbs write to disk; Serialize* return the string.)
+func Serialize(file *ESMFile) (string, error) {
+	return save(file, true)
+}
 
-	// Validate the file before serializing
-	if err := file.Validate(); err != nil {
-		return "", fmt.Errorf("validation failed before serialization: %w", err)
-	}
-
-	jsonData, err := marshalCanonical(file, false)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal ESM file to JSON: %w", err)
-	}
-
-	return string(jsonData), nil
+// SerializeCompact validates an ESM file and returns it as a compact canonical
+// JSON string (no indentation).
+func SerializeCompact(file *ESMFile) (string, error) {
+	return save(file, false)
 }
 
 // SaveToFile saves an ESM file directly to a file path
-func SaveToFile(file *EsmFile, filepath string) error {
-	jsonStr, err := Save(file)
+func SaveToFile(file *ESMFile, path string) error {
+	jsonStr, err := Serialize(file)
 	if err != nil {
 		return err
 	}
 
 	// Write to file
-	if err := writeFile(filepath, []byte(jsonStr)); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", filepath, err)
+	if err := writeFile(path, []byte(jsonStr)); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
 	return nil
 }
 
 // SaveCompactToFile saves an ESM file to a file path in compact format
-func SaveCompactToFile(file *EsmFile, filepath string) error {
-	jsonStr, err := SaveCompact(file)
+func SaveCompactToFile(file *ESMFile, path string) error {
+	jsonStr, err := SerializeCompact(file)
 	if err != nil {
 		return err
 	}
 
 	// Write to file
-	if err := writeFile(filepath, []byte(jsonStr)); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", filepath, err)
+	if err := writeFile(path, []byte(jsonStr)); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// writeFile is a simple file writing helper that can be easily mocked for testing
-func writeFile(filepath string, data []byte) error {
-	return os.WriteFile(filepath, data, 0644)
+// writeFile is a simple file writing helper.
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0644)
 }
 
 // SerializeExpression serializes just an expression to JSON

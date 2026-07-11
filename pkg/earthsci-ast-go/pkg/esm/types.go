@@ -1,7 +1,6 @@
 package esm
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -14,21 +13,21 @@ import (
 
 // ExprNode represents an operator node in the expression tree
 type ExprNode struct {
-	Op    string        `json:"op"`
-	Args  []interface{} `json:"args"`
-	Wrt   *string       `json:"wrt,omitempty"`   // for derivatives
-	Dim   *string       `json:"dim,omitempty"`   // for grad
-	Fn    *string       `json:"fn,omitempty"`    // for bc wrapper kind encoding
-	Var   *string       `json:"var,omitempty"`   // integration variable name (for integral)
-	Lower interface{}   `json:"lower,omitempty"` // lower integration bound (for integral)
-	Upper interface{}   `json:"upper,omitempty"` // upper integration bound (for integral)
+	Op    string  `json:"op"`
+	Args  []any   `json:"args"`
+	Wrt   *string `json:"wrt,omitempty"`   // for derivatives
+	Dim   *string `json:"dim,omitempty"`   // for grad
+	Fn    *string `json:"fn,omitempty"`    // for bc wrapper kind encoding
+	Var   *string `json:"var,omitempty"`   // integration variable name (for integral)
+	Lower any     `json:"lower,omitempty"` // lower integration bound (for integral)
+	Upper any     `json:"upper,omitempty"` // upper integration bound (for integral)
 	// Name carries the dotted module path of a closed-registry function
 	// (esm-spec §4.4 / §9.2) for `fn` op nodes — e.g. "datetime.julian_day".
 	Name *string `json:"name,omitempty"`
 	// Value carries the inline literal payload of a `const` op node
 	// (esm-spec §4.2 / §9.3); `Args` MUST be empty for a const node. Any
 	// JSON value (number, integer, or nested array thereof).
-	Value interface{} `json:"value,omitempty"`
+	Value any `json:"value,omitempty"`
 	// Table is the function_tables entry id targeted by a `table_lookup` op
 	// (esm-spec §9.5).
 	Table *string `json:"table,omitempty"`
@@ -41,7 +40,7 @@ type ExprNode struct {
 	// `table_lookup` op. Either a non-negative integer (0-based index into the
 	// leading data dimension) or a string (an entry of the table's Outputs
 	// list). Single-output tables MAY omit this (defaults to 0).
-	Output interface{} `json:"output,omitempty"`
+	Output any `json:"output,omitempty"`
 	// Attrs carries optional named scalar attributes for an OPEN rewrite-target
 	// op (esm-spec §4.2). Mirrors the fixed `dim`/`side`/`wrt` slots the core ops
 	// use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its
@@ -49,7 +48,7 @@ type ExprNode struct {
 	// lowering (loading is permissive) round-trips. Evaluable-core ops MUST NOT
 	// use `attrs`. Structural `match` rules bind `attrs.<key>` params to matched
 	// literals via generic object matching (esm-spec §9.6.1).
-	Attrs map[string]interface{} `json:"attrs,omitempty"`
+	Attrs map[string]any `json:"attrs,omitempty"`
 
 	// --- Structural / array-query op fields (esm-spec §4.2). These carry the
 	// defining data of the closed structural tier in fields OTHER than `args`,
@@ -59,49 +58,49 @@ type ExprNode struct {
 	// read. ---
 
 	// Bindings is the param→expression map of an `apply_expression_template` op.
-	Bindings map[string]interface{} `json:"bindings,omitempty"`
+	Bindings map[string]any `json:"bindings,omitempty"`
 	// Regions is the list of hyper-rectangular index regions of a `makearray`
 	// op; each region is a list of [lo, hi] bound pairs.
-	Regions [][][]interface{} `json:"regions,omitempty"`
+	Regions [][][]any `json:"regions,omitempty"`
 	// Values is the per-region value list of a `makearray` op (paired with
 	// Regions by position).
-	Values []interface{} `json:"values,omitempty"`
+	Values []any `json:"values,omitempty"`
 	// Shape is the target shape of a `reshape` op.
-	Shape []interface{} `json:"shape,omitempty"`
+	Shape []any `json:"shape,omitempty"`
 	// Perm is the optional permutation of a `transpose` op.
-	Perm []interface{} `json:"perm,omitempty"`
+	Perm []any `json:"perm,omitempty"`
 	// Axis is the concatenation axis of a `concat` op.
-	Axis interface{} `json:"axis,omitempty"`
+	Axis any `json:"axis,omitempty"`
 	// Manifold is the geometry manifold of `intersect_polygon` /
 	// `polygon_intersection_area` ops.
 	Manifold *string `json:"manifold,omitempty"`
 	// OutputIdx are the surviving (free) index names of an `aggregate` op.
-	OutputIdx []interface{} `json:"output_idx,omitempty"`
+	OutputIdx []any `json:"output_idx,omitempty"`
 	// Expr is the reduced sub-expression of an `aggregate` / `argmin` / `argmax`
 	// op.
-	Expr interface{} `json:"expr,omitempty"`
+	Expr any `json:"expr,omitempty"`
 	// Reduce is the scalar reduction operator of an `aggregate` op.
 	Reduce *string `json:"reduce,omitempty"`
 	// Semiring is the optional named semiring of an `aggregate` op.
 	Semiring *string `json:"semiring,omitempty"`
 	// Ranges maps a bound index name to its iteration range for `aggregate` /
 	// `argmin` / `argmax` ops.
-	Ranges map[string]interface{} `json:"ranges,omitempty"`
+	Ranges map[string]any `json:"ranges,omitempty"`
 	// Join is the optional list of join clauses of an `aggregate` op.
-	Join []interface{} `json:"join,omitempty"`
+	Join []any `json:"join,omitempty"`
 	// Filter is the optional predicate of an `aggregate` op.
-	Filter interface{} `json:"filter,omitempty"`
+	Filter any `json:"filter,omitempty"`
 	// Distinct marks an `aggregate` op as reducing over distinct values.
 	Distinct *bool `json:"distinct,omitempty"`
 	// Key is the optional grouping key of an `aggregate` op.
-	Key interface{} `json:"key,omitempty"`
+	Key any `json:"key,omitempty"`
 	// Arg is the witness index name of an `argmin` / `argmax` op.
 	Arg *string `json:"arg,omitempty"`
 }
 
 // Expression represents the union type: number | string | ExprNode
 // In Go, this is handled by using interface{} and custom unmarshaling
-type Expression interface{}
+type Expression any
 
 // Equation represents a mathematical equation with LHS and RHS
 type Equation struct {
@@ -126,13 +125,13 @@ type AffectEquation struct {
 // system to an SDE system. NoiseKind and CorrelationGroup apply only to
 // brownian variables.
 type ModelVariable struct {
-	Type        string      `json:"type"` // "state", "parameter", "observed", or "brownian"
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
-	Expression  Expression  `json:"expression,omitempty"` // for observed variables
+	Type        string     `json:"type"` // "state", "parameter", "observed", or "brownian"
+	Units       *string    `json:"units,omitempty"`
+	Default     any        `json:"default,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	Expression  Expression `json:"expression,omitempty"` // for observed variables
 	// Shape lists index-set names for arrayed variables, drawn from the
-	// document-scoped `index_sets` registry (EsmFile.IndexSets). Nil means
+	// document-scoped `index_sets` registry (ESMFile.IndexSets). Nil means
 	// scalar. As of v0.8.0 the iteration domains named here live at document
 	// scope, not on the model. See RFC semiring-faq-unified-ir §5.2 / §6.1.
 	Shape []string `json:"shape,omitempty"`
@@ -155,7 +154,7 @@ type Model struct {
 	Equations        []Equation               `json:"equations"`
 	DiscreteEvents   []DiscreteEvent          `json:"discrete_events,omitempty"`
 	ContinuousEvents []ContinuousEvent        `json:"continuous_events,omitempty"`
-	Subsystems       map[string]interface{}   `json:"subsystems,omitempty"`
+	Subsystems       map[string]any           `json:"subsystems,omitempty"`
 	// Tolerance is the model-level default numerical tolerance applied to
 	// inline tests that do not override it (esm-spec §6.6).
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
@@ -170,7 +169,7 @@ type Model struct {
 	// Guesses provides initial-guess seeds for nonlinear solvers during
 	// initialization, keyed by variable name. Values may be numeric literals
 	// or Expression graphs (serialized as interface{}).
-	Guesses map[string]interface{} `json:"guesses,omitempty"`
+	Guesses map[string]any `json:"guesses,omitempty"`
 	// SystemKind discriminates the MTK system type this model maps to.
 	// One of "ode" (default), "nonlinear", "sde", "pde".
 	SystemKind *string `json:"system_kind,omitempty"`
@@ -182,9 +181,9 @@ type Model struct {
 
 // Species represents a chemical species
 type Species struct {
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
+	Units       *string `json:"units,omitempty"`
+	Default     any     `json:"default,omitempty"`
+	Description *string `json:"description,omitempty"`
 	// Constant marks reservoir species (held fixed, no ODE).
 	// Maps to Catalyst's isconstantspecies=true.
 	Constant *bool `json:"constant,omitempty"`
@@ -192,9 +191,9 @@ type Species struct {
 
 // Parameter represents a model parameter
 type Parameter struct {
-	Units       *string     `json:"units,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Description *string     `json:"description,omitempty"`
+	Units       *string `json:"units,omitempty"`
+	Default     any     `json:"default,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 // SubstrateProduct represents a substrate or product in a reaction.
@@ -220,14 +219,14 @@ type Reaction struct {
 
 // ReactionSystem represents a chemical reaction network
 type ReactionSystem struct {
-	Reference           *Reference             `json:"reference,omitempty"`
-	Species             map[string]Species     `json:"species"`
-	Parameters          map[string]Parameter   `json:"parameters"`
-	Reactions           []Reaction             `json:"reactions"`
-	ConstraintEquations []Equation             `json:"constraint_equations,omitempty"`
-	DiscreteEvents      []DiscreteEvent        `json:"discrete_events,omitempty"`
-	ContinuousEvents    []ContinuousEvent      `json:"continuous_events,omitempty"`
-	Subsystems          map[string]interface{} `json:"subsystems,omitempty"`
+	Reference           *Reference           `json:"reference,omitempty"`
+	Species             map[string]Species   `json:"species"`
+	Parameters          map[string]Parameter `json:"parameters"`
+	Reactions           []Reaction           `json:"reactions"`
+	ConstraintEquations []Equation           `json:"constraint_equations,omitempty"`
+	DiscreteEvents      []DiscreteEvent      `json:"discrete_events,omitempty"`
+	ContinuousEvents    []ContinuousEvent    `json:"continuous_events,omitempty"`
+	Subsystems          map[string]any       `json:"subsystems,omitempty"`
 	// Tolerance is the component-level default numerical tolerance for inline
 	// tests (esm-spec §6.6).
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
@@ -272,7 +271,7 @@ type Assertion struct {
 	Reduce string `json:"reduce,omitempty"`
 	// Reference is the analytic/precomputed solution required by error-norm
 	// reductions: an inline Expression or a from_file shape (esm-spec §6.6.5).
-	Reference interface{} `json:"reference,omitempty"`
+	Reference any `json:"reference,omitempty"`
 }
 
 // Test is an inline validation test for a Model or ReactionSystem.
@@ -290,8 +289,8 @@ type Test struct {
 	// config (a peer of ParameterOverrides), so — unlike a component's own
 	// imports — this DOES survive parse → emit. Consumed only by an ephemeral
 	// per-run build, which this binding does not perform (no numeric solver).
-	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
-	Assertions                []Assertion   `json:"assertions"`
+	ExpressionTemplateImports []any       `json:"expression_template_imports,omitempty"`
+	Assertions                []Assertion `json:"assertions"`
 }
 
 // PlotAxis is an axis specification for a plot.
@@ -323,65 +322,6 @@ type Plot struct {
 	Y           PlotAxis     `json:"y"`
 	Value       *PlotValue   `json:"value,omitempty"`
 	Series      []PlotSeries `json:"series,omitempty"`
-}
-
-// UnmarshalJSON handles plots.y as either a single PlotAxis or an array of
-// PlotAxis objects (v0.5.0 inline multi-series shorthand). When y is an
-// array the first entry becomes the canonical Y axis and all entries are
-// projected onto Series (using label-or-variable as the series name).
-// An explicit series field, if present, takes precedence over the projection.
-func (p *Plot) UnmarshalJSON(data []byte) error {
-	type TempPlot struct {
-		ID          string          `json:"id"`
-		Type        string          `json:"type"`
-		Description *string         `json:"description,omitempty"`
-		X           PlotAxis        `json:"x"`
-		Y           json.RawMessage `json:"y"`
-		Value       *PlotValue      `json:"value,omitempty"`
-		Series      []PlotSeries    `json:"series,omitempty"`
-	}
-
-	var temp TempPlot
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	p.ID = temp.ID
-	p.Type = temp.Type
-	p.Description = temp.Description
-	p.X = temp.X
-	p.Value = temp.Value
-
-	trimmed := bytes.TrimSpace(temp.Y)
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var axes []PlotAxis
-		if err := json.Unmarshal(temp.Y, &axes); err != nil {
-			return fmt.Errorf("failed to unmarshal y as PlotAxis array: %w", err)
-		}
-		if len(axes) == 0 {
-			return fmt.Errorf("plots.y array must have at least one entry")
-		}
-		p.Y = axes[0]
-		if len(temp.Series) > 0 {
-			p.Series = temp.Series
-		} else {
-			p.Series = make([]PlotSeries, len(axes))
-			for i, axis := range axes {
-				name := axis.Variable
-				if axis.Label != nil {
-					name = *axis.Label
-				}
-				p.Series[i] = PlotSeries{Name: name, Variable: axis.Variable}
-			}
-		}
-	} else {
-		if err := json.Unmarshal(temp.Y, &p.Y); err != nil {
-			return fmt.Errorf("failed to unmarshal y as PlotAxis: %w", err)
-		}
-		p.Series = temp.Series
-	}
-
-	return nil
 }
 
 // SweepRange is a generated range of parameter values.
@@ -420,7 +360,7 @@ type Example struct {
 	// §9.7.10 form C / §6.7). Authored per-run config (a peer of Parameters), so
 	// it DOES survive parse → emit; consumed only by an ephemeral per-run build,
 	// which this binding does not perform.
-	ExpressionTemplateImports []interface{} `json:"expression_template_imports,omitempty"`
+	ExpressionTemplateImports []any `json:"expression_template_imports,omitempty"`
 }
 
 // ========================================
@@ -430,11 +370,11 @@ type Example struct {
 // FunctionalAffect represents a registered functional affect handler for
 // discrete events that require complex behavior beyond symbolic expressions
 type FunctionalAffect struct {
-	HandlerID      string                 `json:"handler_id"`
-	ReadVars       []string               `json:"read_vars"`
-	ReadParams     []string               `json:"read_params"`
-	ModifiedParams []string               `json:"modified_params,omitempty"`
-	Config         map[string]interface{} `json:"config,omitempty"`
+	HandlerID      string         `json:"handler_id"`
+	ReadVars       []string       `json:"read_vars"`
+	ReadParams     []string       `json:"read_params"`
+	ModifiedParams []string       `json:"modified_params,omitempty"`
+	Config         map[string]any `json:"config,omitempty"`
 }
 
 // DiscreteEventTrigger represents different trigger types for discrete events
@@ -484,7 +424,7 @@ type DataLoader struct {
 	Determinism *DataLoaderDeterminism        `json:"determinism,omitempty"`
 	Variables   map[string]DataLoaderVariable `json:"variables"`
 	Reference   *Reference                    `json:"reference,omitempty"`
-	Metadata    map[string]interface{}        `json:"metadata,omitempty"`
+	Metadata    map[string]any                `json:"metadata,omitempty"`
 }
 
 // DataLoaderDeterminism is the reproducibility contract a loader advertises
@@ -506,22 +446,22 @@ type DataLoaderSource struct {
 // DataLoaderTemporal describes the temporal coverage and record layout.
 // RecordsPerFile may be an int or the string "auto"; represented as interface{}.
 type DataLoaderTemporal struct {
-	Start          *string     `json:"start,omitempty"`
-	End            *string     `json:"end,omitempty"`
-	FilePeriod     *string     `json:"file_period,omitempty"`
-	Frequency      *string     `json:"frequency,omitempty"`
-	RecordsPerFile interface{} `json:"records_per_file,omitempty"`
-	TimeVariable   *string     `json:"time_variable,omitempty"`
+	Start          *string `json:"start,omitempty"`
+	End            *string `json:"end,omitempty"`
+	FilePeriod     *string `json:"file_period,omitempty"`
+	Frequency      *string `json:"frequency,omitempty"`
+	RecordsPerFile any     `json:"records_per_file,omitempty"`
+	TimeVariable   *string `json:"time_variable,omitempty"`
 }
 
 // DataLoaderVariable describes one variable exposed by a data loader.
 // UnitConversion is either a number or an Expression AST node.
 type DataLoaderVariable struct {
-	FileVariable   string      `json:"file_variable"`
-	Units          string      `json:"units"`
-	UnitConversion interface{} `json:"unit_conversion,omitempty"`
-	Description    *string     `json:"description,omitempty"`
-	Reference      *Reference  `json:"reference,omitempty"`
+	FileVariable   string     `json:"file_variable"`
+	Units          string     `json:"units"`
+	UnitConversion any        `json:"unit_conversion,omitempty"`
+	Description    *string    `json:"description,omitempty"`
+	Reference      *Reference `json:"reference,omitempty"`
 }
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
@@ -536,19 +476,19 @@ type DataLoaderVariable struct {
 // CouplingEntry represents different types of coupling rules
 // This is a discriminated union based on the "type" field
 type CouplingEntry interface {
-	GetType() string
+	CouplingType() string
 }
 
 // OperatorComposeCoupling represents operator composition
 type OperatorComposeCoupling struct {
-	Type        string                 `json:"type"` // "operator_compose"
-	Systems     [2]string              `json:"systems"`
-	Translate   map[string]interface{} `json:"translate,omitempty"`
-	Lifting     *string                `json:"lifting,omitempty"`
-	Description *string                `json:"description,omitempty"`
+	Type        string         `json:"type"` // "operator_compose"
+	Systems     [2]string      `json:"systems"`
+	Translate   map[string]any `json:"translate,omitempty"`
+	Lifting     *string        `json:"lifting,omitempty"`
+	Description *string        `json:"description,omitempty"`
 }
 
-func (o OperatorComposeCoupling) GetType() string { return o.Type }
+func (o OperatorComposeCoupling) CouplingType() string { return o.Type }
 
 // CouplingCouple represents bi-directional coupling via connector equations
 type CouplingCouple struct {
@@ -559,7 +499,7 @@ type CouplingCouple struct {
 	Description *string   `json:"description,omitempty"`
 }
 
-func (c CouplingCouple) GetType() string { return c.Type }
+func (c CouplingCouple) CouplingType() string { return c.Type }
 
 // VariableMapCoupling represents variable mapping.
 // Transform is a union (mirrors DataLoaderVariable.UnitConversion): either one
@@ -579,7 +519,7 @@ type VariableMapCoupling struct {
 	Description *string    `json:"description,omitempty"`
 }
 
-func (v VariableMapCoupling) GetType() string { return v.Type }
+func (v VariableMapCoupling) CouplingType() string { return v.Type }
 
 // TransformKind returns the legacy string transform kind, or "" when the
 // transform is an Expression AST (or absent).
@@ -605,17 +545,17 @@ type OperatorApplyCoupling struct {
 	Description *string `json:"description,omitempty"`
 }
 
-func (o OperatorApplyCoupling) GetType() string { return o.Type }
+func (o OperatorApplyCoupling) CouplingType() string { return o.Type }
 
 // CallbackCoupling represents callback-based coupling
 type CallbackCoupling struct {
-	Type        string                 `json:"type"` // "callback"
-	CallbackID  string                 `json:"callback_id"`
-	Config      map[string]interface{} `json:"config,omitempty"`
-	Description *string                `json:"description,omitempty"`
+	Type        string         `json:"type"` // "callback"
+	CallbackID  string         `json:"callback_id"`
+	Config      map[string]any `json:"config,omitempty"`
+	Description *string        `json:"description,omitempty"`
 }
 
-func (c CallbackCoupling) GetType() string { return c.Type }
+func (c CallbackCoupling) CouplingType() string { return c.Type }
 
 // EventCoupling represents event-based coupling
 type EventCoupling struct {
@@ -633,7 +573,7 @@ type EventCoupling struct {
 	Description        *string               `json:"description,omitempty"`
 }
 
-func (e EventCoupling) GetType() string { return e.Type }
+func (e EventCoupling) CouplingType() string { return e.Type }
 
 // CouplingImport reuses a coupling-library file (esm-spec §10.9, §10.10): it
 // imports the library named by `Ref` and binds each of its declared roles to a
@@ -650,7 +590,7 @@ type CouplingImport struct {
 	Description *string           `json:"description,omitempty"`
 }
 
-func (c CouplingImport) GetType() string { return c.Type }
+func (c CouplingImport) CouplingType() string { return c.Type }
 
 // CouplingRole is one entry in a coupling-library file's `coupling_roles` map
 // (esm-spec §10.9): a formal component role (a name, not a type), carrying an
@@ -736,18 +676,18 @@ type Metadata struct {
 // The Go binding is schema-only: it stores and round-trips these declarations
 // but does not resolve `{from}` references or evaluate the sets.
 type IndexSet struct {
-	Kind    string        `json:"kind"`
-	Size    *int          `json:"size,omitempty"`
-	Members []interface{} `json:"members,omitempty"`
-	FromFAQ *string       `json:"from_faq,omitempty"`
-	Of      []string      `json:"of,omitempty"`
-	Offsets *string       `json:"offsets,omitempty"`
-	Values  *string       `json:"values,omitempty"`
+	Kind    string   `json:"kind"`
+	Size    *int     `json:"size,omitempty"`
+	Members []any    `json:"members,omitempty"`
+	FromFAQ *string  `json:"from_faq,omitempty"`
+	Of      []string `json:"of,omitempty"`
+	Offsets *string  `json:"offsets,omitempty"`
+	Values  *string  `json:"values,omitempty"`
 }
 
-// EsmFile represents the top-level ESM file structure
-type EsmFile struct {
-	Esm             string                    `json:"esm" validate:"required"`
+// ESMFile represents the top-level ESM file structure
+type ESMFile struct {
+	ESM             string                    `json:"esm" validate:"required"`
 	Metadata        Metadata                  `json:"metadata" validate:"required"`
 	Models          map[string]Model          `json:"models,omitempty"`
 	ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
@@ -757,7 +697,7 @@ type EsmFile struct {
 	// a map from symbolic names (strings) to positive integers. Lowering
 	// (resolution to `const`-op integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
-	Coupling []interface{}             `json:"coupling,omitempty"` // Properly deserialized coupling entries
+	Coupling []CouplingEntry           `json:"coupling,omitempty"` // deserialized coupling entries (discriminated union)
 	// CouplingRoles is present only in a coupling-library file (esm-spec §10.9):
 	// the map of formal component roles a role-scoped `coupling` array wires.
 	// Presence of this key is the sole positive identifier of the
@@ -802,7 +742,7 @@ type FunctionTable struct {
 	Interpolation *string             `json:"interpolation,omitempty"`
 	OutOfBounds   *string             `json:"out_of_bounds,omitempty"`
 	Outputs       []string            `json:"outputs,omitempty"`
-	Data          interface{}         `json:"data"`
+	Data          any                 `json:"data"`
 	Shape         []int               `json:"shape,omitempty"`
 	SchemaVersion *string             `json:"schema_version,omitempty"`
 }
@@ -811,9 +751,17 @@ type FunctionTable struct {
 // 10. Validation and Utility Methods
 // ========================================
 
-// Validate validates the ESM file structure
-func (e *EsmFile) Validate() error {
-	validate := validator.New()
+// validate is the shared go-playground struct validator. validator.New()
+// builds and caches struct metadata on first use, so it is documented as
+// cache-heavy and MUST be reused rather than reconstructed per call.
+var validate = validator.New()
+
+// ValidateStruct runs the go-playground struct validation over the ESM file
+// (required fields, tag constraints) plus the "at least one component present"
+// invariant. It is intentionally named distinctly from the package-level
+// semantic validator Validate(*ESMFile) (validate.go), which performs the
+// richer structural/reference/unit checks — the two are different layers.
+func (e *ESMFile) ValidateStruct() error {
 	if err := validate.Struct(e); err != nil {
 		return err
 	}
@@ -826,465 +774,27 @@ func (e *EsmFile) Validate() error {
 	return nil
 }
 
-// ToJSON converts the ESM file to JSON
-func (e *EsmFile) ToJSON() ([]byte, error) {
+// ToJSON converts the ESM file to canonical (indented) JSON bytes.
+//
+// Unlike Serialize (serialize.go), ToJSON does NOT run (*ESMFile).ValidateStruct
+// first — it serializes whatever it is given. Callers that need the file
+// validated before emission should use Serialize (which returns a string) or
+// call ValidateStruct explicitly; ToJSON exists for the raw byte form and for
+// round-trip paths that have already validated.
+func (e *ESMFile) ToJSON() ([]byte, error) {
 	return marshalCanonical(e, true)
 }
 
 // FromJSON creates an ESM file from JSON data
-func FromJSON(data []byte) (*EsmFile, error) {
-	var esm EsmFile
+func FromJSON(data []byte) (*ESMFile, error) {
+	var esm ESMFile
 	if err := json.Unmarshal(data, &esm); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
-	if err := esm.Validate(); err != nil {
+	if err := esm.ValidateStruct(); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
 	return &esm, nil
-}
-
-// ========================================
-// 11. Helper Functions for Expression Handling
-// ========================================
-
-// UnmarshalExpression handles the custom unmarshaling for Expression union
-// type. Numeric literals preserve the RFC §5.4.6 round-trip parse rule:
-// a JSON-number token with '.', 'e', or 'E' parses to float64; otherwise to
-// int64 (falling back to float64 if out of int64 range).
-func UnmarshalExpression(data []byte) (Expression, error) {
-	// Try to unmarshal as number first (via json.Number to preserve int/float
-	// distinction).
-	var num json.Number
-	if err := json.Unmarshal(data, &num); err == nil {
-		return normalizeJSONNumber(num), nil
-	}
-
-	// Try to unmarshal as string
-	var str string
-	if err := json.Unmarshal(data, &str); err == nil {
-		return str, nil
-	}
-
-	// Must be an object (ExprNode). Decode via UseNumber so nested literals in
-	// Args keep their int/float shape.
-	var node ExprNode
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	if err := dec.Decode(&node); err != nil {
-		return nil, fmt.Errorf("expression must be number, string, or object: %w", err)
-	}
-
-	// Recursively normalize Args, handling nested expressions and literals.
-	if node.Args != nil {
-		for i, arg := range node.Args {
-			switch a := arg.(type) {
-			case json.Number:
-				node.Args[i] = normalizeJSONNumber(a)
-			case map[string]interface{}:
-				argBytes, err := json.Marshal(a)
-				if err != nil {
-					return nil, fmt.Errorf("failed to marshal arg for re-processing: %w", err)
-				}
-				unmarshaledArg, err := UnmarshalExpression(argBytes)
-				if err != nil {
-					return nil, fmt.Errorf("failed to unmarshal nested expression in args: %w", err)
-				}
-				node.Args[i] = unmarshaledArg
-			}
-		}
-	}
-
-	return node, nil
-}
-
-// Custom JSON unmarshaling for Equation
-func (e *Equation) UnmarshalJSON(data []byte) error {
-	// Define a temporary struct with the same structure but using json.RawMessage
-	type TempEquation struct {
-		LHS json.RawMessage `json:"lhs"`
-		RHS json.RawMessage `json:"rhs"`
-	}
-
-	var temp TempEquation
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	// Unmarshal LHS
-	lhs, err := UnmarshalExpression(temp.LHS)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal LHS: %w", err)
-	}
-	e.LHS = lhs
-
-	// Unmarshal RHS
-	rhs, err := UnmarshalExpression(temp.RHS)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal RHS: %w", err)
-	}
-	e.RHS = rhs
-
-	return nil
-}
-
-// Custom JSON unmarshaling for AffectEquation
-func (ae *AffectEquation) UnmarshalJSON(data []byte) error {
-	type TempAffectEquation struct {
-		LHS string          `json:"lhs"`
-		RHS json.RawMessage `json:"rhs"`
-	}
-
-	var temp TempAffectEquation
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	ae.LHS = temp.LHS
-
-	// Unmarshal RHS
-	rhs, err := UnmarshalExpression(temp.RHS)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal RHS: %w", err)
-	}
-	ae.RHS = rhs
-
-	return nil
-}
-
-// Custom JSON unmarshaling for Reaction
-func (r *Reaction) UnmarshalJSON(data []byte) error {
-	type TempReaction struct {
-		ID         string             `json:"id"`
-		Name       *string            `json:"name,omitempty"`
-		Substrates []SubstrateProduct `json:"substrates"`
-		Products   []SubstrateProduct `json:"products"`
-		Rate       json.RawMessage    `json:"rate"`
-		Reference  *Reference         `json:"reference,omitempty"`
-	}
-
-	var temp TempReaction
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	r.ID = temp.ID
-	r.Name = temp.Name
-	r.Substrates = temp.Substrates
-	r.Products = temp.Products
-	r.Reference = temp.Reference
-
-	// Unmarshal Rate
-	rate, err := UnmarshalExpression(temp.Rate)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal rate: %w", err)
-	}
-	r.Rate = rate
-
-	return nil
-}
-
-// Custom JSON unmarshaling for ModelVariable
-func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
-	type TempModelVariable struct {
-		Type             string          `json:"type"`
-		Units            *string         `json:"units,omitempty"`
-		Default          interface{}     `json:"default,omitempty"`
-		Description      *string         `json:"description,omitempty"`
-		Expression       json.RawMessage `json:"expression,omitempty"`
-		Shape            []string        `json:"shape,omitempty"`
-		Location         string          `json:"location,omitempty"`
-		NoiseKind        string          `json:"noise_kind,omitempty"`
-		CorrelationGroup string          `json:"correlation_group,omitempty"`
-	}
-
-	var temp TempModelVariable
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	mv.Type = temp.Type
-	mv.Units = temp.Units
-	mv.Default = temp.Default
-	mv.Description = temp.Description
-	mv.Shape = temp.Shape
-	mv.Location = temp.Location
-	mv.NoiseKind = temp.NoiseKind
-	mv.CorrelationGroup = temp.CorrelationGroup
-
-	// Unmarshal Expression if present
-	if len(temp.Expression) > 0 && string(temp.Expression) != "null" {
-		expr, err := UnmarshalExpression(temp.Expression)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal expression: %w", err)
-		}
-		mv.Expression = expr
-	}
-
-	return nil
-}
-
-// Custom JSON unmarshaling for EventCoupling
-func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
-	type TempEventCoupling struct {
-		Type               string                `json:"type"`
-		EventType          string                `json:"event_type"`
-		Name               string                `json:"name"`
-		Conditions         []json.RawMessage     `json:"conditions,omitempty"`
-		Trigger            *DiscreteEventTrigger `json:"trigger,omitempty"`
-		Affects            []AffectEquation      `json:"affects"`
-		DiscreteParameters []string              `json:"discrete_parameters,omitempty"`
-		Description        *string               `json:"description,omitempty"`
-	}
-
-	var temp TempEventCoupling
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	ec.Type = temp.Type
-	ec.EventType = temp.EventType
-	ec.Name = temp.Name
-	ec.Trigger = temp.Trigger
-	ec.Affects = temp.Affects
-	ec.DiscreteParameters = temp.DiscreteParameters
-	ec.Description = temp.Description
-
-	// Unmarshal Conditions if present
-	if len(temp.Conditions) > 0 {
-		ec.Conditions = make([]Expression, len(temp.Conditions))
-		for i, conditionData := range temp.Conditions {
-			condition, err := UnmarshalExpression(conditionData)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal condition at index %d: %w", i, err)
-			}
-			ec.Conditions[i] = condition
-		}
-	}
-
-	return nil
-}
-
-// Custom JSON unmarshaling for DataLoaderVariable (handles Expression union
-// in unit_conversion: number | ExpressionNode).
-func (v *DataLoaderVariable) UnmarshalJSON(data []byte) error {
-	type TempDataLoaderVariable struct {
-		FileVariable   string          `json:"file_variable"`
-		Units          string          `json:"units"`
-		UnitConversion json.RawMessage `json:"unit_conversion,omitempty"`
-		Description    *string         `json:"description,omitempty"`
-		Reference      *Reference      `json:"reference,omitempty"`
-	}
-	var temp TempDataLoaderVariable
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-	v.FileVariable = temp.FileVariable
-	v.Units = temp.Units
-	v.Description = temp.Description
-	v.Reference = temp.Reference
-	if len(temp.UnitConversion) > 0 && string(temp.UnitConversion) != "null" {
-		expr, err := UnmarshalExpression(temp.UnitConversion)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal unit_conversion: %w", err)
-		}
-		v.UnitConversion = expr
-	}
-	return nil
-}
-
-// Custom JSON unmarshaling for VariableMapCoupling (handles the transform
-// union: legacy string kind | ExpressionNode object). A string transform is
-// stored as a string; an object transform is decoded via UnmarshalExpression
-// into an ExprNode. Any other JSON shape (number, array, boolean) is rejected:
-// an Expression transform is always an operator-node OBJECT (the degenerate
-// bare-reference / literal spellings are reserved for the string kinds).
-func (v *VariableMapCoupling) UnmarshalJSON(data []byte) error {
-	type TempVariableMapCoupling struct {
-		Type        string          `json:"type"`
-		From        string          `json:"from"`
-		To          string          `json:"to"`
-		Transform   json.RawMessage `json:"transform"`
-		Factor      *float64        `json:"factor,omitempty"`
-		Lifting     *string         `json:"lifting,omitempty"`
-		Description *string         `json:"description,omitempty"`
-	}
-	var temp TempVariableMapCoupling
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-	v.Type = temp.Type
-	v.From = temp.From
-	v.To = temp.To
-	v.Factor = temp.Factor
-	v.Lifting = temp.Lifting
-	v.Description = temp.Description
-	v.Transform = nil
-	if len(temp.Transform) > 0 && string(temp.Transform) != "null" {
-		raw := bytes.TrimSpace(temp.Transform)
-		switch {
-		case len(raw) > 0 && raw[0] == '"':
-			var kind string
-			if err := json.Unmarshal(raw, &kind); err != nil {
-				return fmt.Errorf("failed to unmarshal variable_map transform: %w", err)
-			}
-			v.Transform = kind
-		case len(raw) > 0 && raw[0] == '{':
-			expr, err := UnmarshalExpression(raw)
-			if err != nil {
-				return fmt.Errorf("failed to unmarshal variable_map transform expression: %w", err)
-			}
-			v.Transform = expr
-		default:
-			return fmt.Errorf("variable_map 'transform' must be a legacy string kind or an Expression operator-node object, got: %s", string(raw))
-		}
-	}
-	// `factor` is a scaling slot for the scaling STRING transforms only; an
-	// Expression transform computes its own value and admits no separate
-	// scaling coefficient (esm-schema CouplingVariableMap.factor).
-	if v.Factor != nil && v.TransformIsExpression() {
-		return fmt.Errorf("variable_map: 'factor' is not permitted with an Expression 'transform' (factor only applies to the scaling string transforms)")
-	}
-	return nil
-}
-
-// Custom JSON unmarshaling for EsmFile
-func (esm *EsmFile) UnmarshalJSON(data []byte) error {
-	// Define a temporary struct that matches EsmFile but uses json.RawMessage for coupling
-	type TempEsmFile struct {
-		Esm             string                    `json:"esm"`
-		Metadata        Metadata                  `json:"metadata"`
-		Models          map[string]Model          `json:"models,omitempty"`
-		ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
-		DataLoaders     map[string]DataLoader     `json:"data_loaders,omitempty"`
-		Enums           map[string]map[string]int `json:"enums,omitempty"`
-		Coupling        json.RawMessage           `json:"coupling,omitempty"`
-		CouplingRoles   map[string]CouplingRole   `json:"coupling_roles,omitempty"`
-		Domain          *Domain                   `json:"domain,omitempty"`
-		FunctionTables  map[string]FunctionTable  `json:"function_tables,omitempty"`
-		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
-	}
-
-	var temp TempEsmFile
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	// Copy all fields except coupling
-	esm.Esm = temp.Esm
-	esm.Metadata = temp.Metadata
-	esm.Models = temp.Models
-	esm.ReactionSystems = temp.ReactionSystems
-	esm.DataLoaders = temp.DataLoaders
-	esm.Enums = temp.Enums
-	esm.CouplingRoles = temp.CouplingRoles
-	esm.Domain = temp.Domain
-	esm.FunctionTables = temp.FunctionTables
-	esm.IndexSets = temp.IndexSets
-
-	// Handle coupling array with proper type deserialization
-	if len(temp.Coupling) > 0 && string(temp.Coupling) != "null" {
-		couplingEntries, err := UnmarshalCouplingArray(temp.Coupling)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal coupling: %w", err)
-		}
-		esm.Coupling = couplingEntries
-	}
-
-	return nil
-}
-
-// UnmarshalCouplingArray handles the deserialization of the coupling array
-func UnmarshalCouplingArray(data []byte) ([]interface{}, error) {
-	// First unmarshal as a slice of raw messages
-	var rawEntries []json.RawMessage
-	if err := json.Unmarshal(data, &rawEntries); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal coupling array: %w", err)
-	}
-
-	var result []interface{}
-	for i, rawEntry := range rawEntries {
-		entry, err := UnmarshalCouplingEntry(rawEntry)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal coupling entry at index %d: %w", i, err)
-		}
-		result = append(result, entry)
-	}
-
-	return result, nil
-}
-
-// UnmarshalCouplingEntry handles the deserialization of a single coupling entry
-func UnmarshalCouplingEntry(data []byte) (CouplingEntry, error) {
-	// First, determine the type by unmarshaling into a map
-	var typeMap map[string]interface{}
-	if err := json.Unmarshal(data, &typeMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal coupling entry as map: %w", err)
-	}
-
-	typeVal, ok := typeMap["type"]
-	if !ok {
-		return nil, fmt.Errorf("coupling entry missing required 'type' field")
-	}
-
-	typeStr, ok := typeVal.(string)
-	if !ok {
-		return nil, fmt.Errorf("coupling entry 'type' field must be a string, got %T", typeVal)
-	}
-
-	// Unmarshal into the appropriate concrete type based on the type field
-	switch typeStr {
-	case "operator_compose":
-		var coupling OperatorComposeCoupling
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal OperatorComposeCoupling: %w", err)
-		}
-		return coupling, nil
-
-	case "couple":
-		var coupling CouplingCouple
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal CouplingCouple: %w", err)
-		}
-		return coupling, nil
-
-	case "variable_map":
-		var coupling VariableMapCoupling
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal VariableMapCoupling: %w", err)
-		}
-		return coupling, nil
-
-	case "operator_apply":
-		var coupling OperatorApplyCoupling
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal OperatorApplyCoupling: %w", err)
-		}
-		return coupling, nil
-
-	case "callback":
-		var coupling CallbackCoupling
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal CallbackCoupling: %w", err)
-		}
-		return coupling, nil
-
-	case "event":
-		var coupling EventCoupling
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal EventCoupling: %w", err)
-		}
-		return coupling, nil
-
-	case "coupling_import":
-		var coupling CouplingImport
-		if err := json.Unmarshal(data, &coupling); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal CouplingImport: %w", err)
-		}
-		return coupling, nil
-
-	default:
-		return nil, fmt.Errorf("unknown coupling type: %s", typeStr)
-	}
 }

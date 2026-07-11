@@ -54,27 +54,32 @@ func canonFloat(f float64) (Expression, error) {
 	return f, nil
 }
 
-func canonOp(node ExprNode) (Expression, error) {
-	// Step 1: recursively canonicalize every child.
-	newArgs := make([]interface{}, len(node.Args))
-	for i, a := range node.Args {
-		ca, err := Canonicalize(a)
-		if err != nil {
-			return nil, err
-		}
-		newArgs[i] = ca
+// canonicalizeChild is the TOTAL child function handed to mapExprChildren by
+// canonOp. It canonicalizes the leaf/node types that make up the operator tier
+// (numbers, strings, ExprNode/*ExprNode) and passes EVERYTHING ELSE through
+// unchanged. mapExprChildren walks non-`args` fields (Attrs/Bindings/Ranges/
+// Regions/…) that hold RAW decoded JSON — json.Number, bool, raw maps/slices,
+// nil — which are not part of the canonicalizable tier; Canonicalize would
+// reject them with "unknown expression type", so they must be returned as-is to
+// honor the mapExprChildren totality contract.
+func canonicalizeChild(child Expression) (Expression, error) {
+	switch child.(type) {
+	case int, int32, int64, float32, float64, string, ExprNode, *ExprNode:
+		return Canonicalize(child)
+	default:
+		return child, nil
 	}
-	work := ExprNode{
-		Op:    node.Op,
-		Args:  newArgs,
-		Wrt:   node.Wrt,
-		Dim:   node.Dim,
-		// `Fn` carries the boundary-condition kind on synthetic `bc` nodes
-		// (esm-spec §9.2); preserve it through canonicalization so the kind
-		// survives into the canonical form (symmetric with `Dim`, ess-tox/G8).
-		Fn:    node.Fn,
-		Name:  node.Name,
-		Value: node.Value,
+}
+
+func canonOp(node ExprNode) (Expression, error) {
+	// Step 1: recursively canonicalize every child. Route through the shared
+	// field-preserving walker so EVERY field rides through untouched (the copy
+	// starts as `out := node`) instead of the old hand-picked
+	// Op/Args/Wrt/Dim/Fn/Name/Value subset that silently dropped
+	// Var/Lower/Upper/Table/axes/output/… — the confirmed integral bug.
+	work, err := mapExprChildren(node, canonicalizeChild)
+	if err != nil {
+		return nil, err
 	}
 
 	// Step 2: operator-specific rewrites.
@@ -152,8 +157,8 @@ func canonMul(node ExprNode) (Expression, error) {
 
 // partitionIdentity splits args into (non-identity, hadIntIdentity, hadFloatIdentity)
 // where identityValue is 0 (for +) or 1 (for *).
-func partitionIdentity(args []interface{}, identityValue int64) (others []interface{}, hadInt, hadFloat bool) {
-	others = make([]interface{}, 0, len(args))
+func partitionIdentity(args []any, identityValue int64) (others []any, hadInt, hadFloat bool) {
+	others = make([]any, 0, len(args))
 	for _, a := range args {
 		switch v := a.(type) {
 		case int64:
@@ -172,7 +177,7 @@ func partitionIdentity(args []interface{}, identityValue int64) (others []interf
 	return others, hadInt, hadFloat
 }
 
-func allFloatLiterals(args []interface{}) bool {
+func allFloatLiterals(args []any) bool {
 	if len(args) == 0 {
 		return false
 	}
@@ -195,7 +200,7 @@ func canonSub(node ExprNode) (Expression, error) {
 		a, b := node.Args[0], node.Args[1]
 		// -(0, x) -> neg(x) (with type-preserving: -(0, x_literal) folds to negated literal)
 		if exprIsZeroAny(a) {
-			return canonNeg(ExprNode{Op: "neg", Args: []interface{}{b}})
+			return canonNeg(ExprNode{Op: "neg", Args: []any{b}})
 		}
 		// -(x, 0) -> x, type-preserving: if 0 is float and x is int literal, promote.
 		if exprIsZeroAny(b) {
@@ -254,12 +259,12 @@ func canonNeg(node ExprNode) (Expression, error) {
 			return v.Args[0], nil
 		}
 	}
-	return ExprNode{Op: "neg", Args: []interface{}{x}}, nil
+	return ExprNode{Op: "neg", Args: []any{x}}, nil
 }
 
 // flattenSameOp inlines nested same-op children.
-func flattenSameOp(args []interface{}, op string) []interface{} {
-	out := make([]interface{}, 0, len(args))
+func flattenSameOp(args []any, op string) []any {
+	out := make([]any, 0, len(args))
 	for _, a := range args {
 		switch v := a.(type) {
 		case ExprNode:
@@ -278,17 +283,17 @@ func flattenSameOp(args []interface{}, op string) []interface{} {
 	return out
 }
 
-func exprIsFloat(a interface{}) bool {
+func exprIsFloat(a any) bool {
 	_, ok := a.(float64)
 	return ok
 }
 
-func exprIsIntLiteral(a interface{}) bool {
+func exprIsIntLiteral(a any) bool {
 	_, ok := a.(int64)
 	return ok
 }
 
-func exprIsZeroAny(a interface{}) bool {
+func exprIsZeroAny(a any) bool {
 	switch v := a.(type) {
 	case int64:
 		return v == 0
@@ -298,17 +303,17 @@ func exprIsZeroAny(a interface{}) bool {
 	return false
 }
 
-func exprIsZeroInt(a interface{}) bool {
+func exprIsZeroInt(a any) bool {
 	v, ok := a.(int64)
 	return ok && v == 0
 }
 
-func exprIsZeroFloat(a interface{}) bool {
+func exprIsZeroFloat(a any) bool {
 	v, ok := a.(float64)
 	return ok && v == 0.0
 }
 
-func exprIsOneAny(a interface{}) bool {
+func exprIsOneAny(a any) bool {
 	switch v := a.(type) {
 	case int64:
 		return v == 1
@@ -318,7 +323,7 @@ func exprIsOneAny(a interface{}) bool {
 	return false
 }
 
-func exprIsOneFloat(a interface{}) bool {
+func exprIsOneFloat(a any) bool {
 	v, ok := a.(float64)
 	return ok && v == 1.0
 }
@@ -328,10 +333,10 @@ func exprIsOneFloat(a interface{}) bool {
 //  1. Numeric literals first, ascending value, int-before-float at equal magnitude.
 //  2. Bare strings lexicographically.
 //  3. Non-leaf nodes by canonical JSON byte compare.
-func sortArgs(args []interface{}) {
+func sortArgs(args []any) {
 	// Memoize the canonical JSON for non-leaf nodes to avoid quadratic serialization.
 	jsonCache := make(map[int]string)
-	getJSON := func(idx int, a interface{}) string {
+	getJSON := func(idx int, a any) string {
 		if s, ok := jsonCache[idx]; ok {
 			return s
 		}
@@ -348,14 +353,14 @@ func sortArgs(args []interface{}) {
 	sort.SliceStable(idx, func(i, j int) bool {
 		return argLess(args[idx[i]], args[idx[j]], idx[i], idx[j], getJSON)
 	})
-	sorted := make([]interface{}, n)
+	sorted := make([]any, n)
 	for i, k := range idx {
 		sorted[i] = args[k]
 	}
 	copy(args, sorted)
 }
 
-func argTier(a interface{}) int {
+func argTier(a any) int {
 	switch a.(type) {
 	case int64, float64:
 		return 0
@@ -367,7 +372,7 @@ func argTier(a interface{}) int {
 	return 3
 }
 
-func argLess(a, b interface{}, ia, ib int, getJSON func(int, interface{}) string) bool {
+func argLess(a, b any, ia, ib int, getJSON func(int, any) string) bool {
 	ta, tb := argTier(a), argTier(b)
 	if ta != tb {
 		return ta < tb
@@ -388,7 +393,7 @@ func argLess(a, b interface{}, ia, ib int, getJSON func(int, interface{}) string
 	return false
 }
 
-func numericKey(a interface{}) float64 {
+func numericKey(a any) float64 {
 	switch v := a.(type) {
 	case int64:
 		return float64(v)
@@ -417,15 +422,25 @@ func CanonicalJSON(expr Expression) ([]byte, error) {
 	return []byte(s), nil
 }
 
-func emitCanonicalJSON(a interface{}) (string, error) {
+func emitCanonicalJSON(a any) (string, error) {
 	switch v := a.(type) {
 	case int64:
 		return strconv.FormatInt(v, 10), nil
+	case int:
+		return strconv.FormatInt(int64(v), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(v), 10), nil
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) {
 			return "", ErrCanonicalNonFinite
 		}
 		return formatCanonicalFloat(v), nil
+	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", ErrCanonicalNonFinite
+		}
+		return formatCanonicalFloat(f), nil
 	case string:
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -436,6 +451,21 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 		return emitExprNodeJSON(v)
 	case *ExprNode:
 		return emitExprNodeJSON(*v)
+	case []any:
+		// Composite payloads (const/makearray arrays, nested value lists) recurse
+		// so nested floats keep their §5.4.6 trailing-.0 disambiguation instead of
+		// collapsing to bare integers via json.Marshal.
+		parts := make([]string, len(v))
+		for i, e := range v {
+			s, err := emitCanonicalJSON(e)
+			if err != nil {
+				return "", err
+			}
+			parts[i] = s
+		}
+		return "[" + strings.Join(parts, ",") + "]", nil
+	case map[string]any:
+		return emitCanonicalObject(sortedKeys(v), func(k string) any { return v[k] })
 	case bool:
 		if v {
 			return "true", nil
@@ -444,8 +474,8 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 	case nil:
 		return "null", nil
 	}
-	// Fall back to encoding/json for other types (kept for safety; not
-	// expected in canonical ASTs).
+	// Fall back to encoding/json for other types (json.Number keeps its raw
+	// token; not otherwise expected in canonical ASTs).
 	b, err := json.Marshal(a)
 	if err != nil {
 		return "", err
@@ -453,54 +483,191 @@ func emitCanonicalJSON(a interface{}) (string, error) {
 	return string(b), nil
 }
 
+// emitCanonicalObject renders a JSON object with keys emitted in `keys` order
+// (callers pass sorted keys) and values rendered via emitCanonicalJSON so
+// nested floats stay canonical. Shared by the map arm of emitCanonicalJSON and
+// by every map-valued field of emitExprNodeJSON.
+func emitCanonicalObject(keys []string, get func(string) any) (string, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		kb, _ := json.Marshal(k)
+		buf.Write(kb)
+		buf.WriteByte(':')
+		vs, err := emitCanonicalJSON(get(k))
+		if err != nil {
+			return "", err
+		}
+		buf.WriteString(vs)
+	}
+	buf.WriteByte('}')
+	return buf.String(), nil
+}
+
+// emitExprNodeJSON renders an ExprNode's canonical JSON object. It emits EVERY
+// set field (driven from the same field set mapExprChildren walks, plus the
+// non-expression structural slots) rather than a hand-maintained subset — the
+// old emitter dropped table/axes/output/lower/upper/… and so collapsed distinct
+// expressions to equal canonical JSON (which is also the sortArgs sort key).
+// `op` and `args` are always present (args as `[]` when empty); every other
+// field follows its struct-tag omitempty (nil pointer / empty slice / empty map
+// omitted). Keys are emitted in sorted byte order to match json.Marshal.
 func emitExprNodeJSON(n ExprNode) (string, error) {
-	// Collect key-value pairs then sort by key.
-	kv := make([][2]string, 0, 4)
-	// op
+	kv := make([][2]string, 0, 8)
+	appendRaw := func(key, val string) { kv = append(kv, [2]string{key, val}) }
+	appendStr := func(key string, p *string) {
+		if p != nil {
+			b, _ := json.Marshal(*p)
+			appendRaw(key, string(b))
+		}
+	}
+	appendScalar := func(key string, v any) error {
+		if v == nil {
+			return nil
+		}
+		s, err := emitCanonicalJSON(v)
+		if err != nil {
+			return err
+		}
+		appendRaw(key, s)
+		return nil
+	}
+	appendSlice := func(key string, s []any) error {
+		if len(s) == 0 {
+			return nil
+		}
+		parts := make([]string, len(s))
+		for i, e := range s {
+			js, err := emitCanonicalJSON(e)
+			if err != nil {
+				return err
+			}
+			parts[i] = js
+		}
+		appendRaw(key, "["+strings.Join(parts, ",")+"]")
+		return nil
+	}
+	appendStrMap := func(key string, m map[string]any) error {
+		if len(m) == 0 {
+			return nil
+		}
+		s, err := emitCanonicalObject(sortedKeys(m), func(k string) any { return m[k] })
+		if err != nil {
+			return err
+		}
+		appendRaw(key, s)
+		return nil
+	}
+
+	// op (always) and args (always, `[]` when empty).
 	opJSON, err := json.Marshal(n.Op)
 	if err != nil {
 		return "", err
 	}
-	kv = append(kv, [2]string{"op", string(opJSON)})
-	// args
+	appendRaw("op", string(opJSON))
 	argParts := make([]string, len(n.Args))
 	for i, a := range n.Args {
-		s, err := emitCanonicalJSON(a)
-		if err != nil {
-			return "", err
+		s, e := emitCanonicalJSON(a)
+		if e != nil {
+			return "", e
 		}
 		argParts[i] = s
 	}
-	kv = append(kv, [2]string{"args", "[" + strings.Join(argParts, ",") + "]"})
-	// Optional fields (only emit when set).
-	if n.Wrt != nil {
-		b, _ := json.Marshal(*n.Wrt)
-		kv = append(kv, [2]string{"wrt", string(b)})
+	appendRaw("args", "["+strings.Join(argParts, ",")+"]")
+
+	// *string slots. `fn` carries the bc kind on synthetic `bc` nodes (§9.2);
+	// emitting it symmetrically keeps bc(u,dirichlet,…) and bc(u,neumann,…)
+	// distinct in the canonical form (ess-tox/G8).
+	appendStr("wrt", n.Wrt)
+	appendStr("dim", n.Dim)
+	appendStr("fn", n.Fn)
+	appendStr("var", n.Var)
+	appendStr("name", n.Name)
+	appendStr("table", n.Table)
+	appendStr("manifold", n.Manifold)
+	appendStr("reduce", n.Reduce)
+	appendStr("semiring", n.Semiring)
+	appendStr("arg", n.Arg)
+
+	// scalar Expression slots.
+	for _, f := range []struct {
+		key string
+		v   any
+	}{
+		{"lower", n.Lower}, {"upper", n.Upper}, {"value", n.Value},
+		{"output", n.Output}, {"axis", n.Axis}, {"expr", n.Expr},
+		{"filter", n.Filter}, {"key", n.Key},
+	} {
+		if err := appendScalar(f.key, f.v); err != nil {
+			return "", err
+		}
 	}
-	if n.Dim != nil {
-		b, _ := json.Marshal(*n.Dim)
-		kv = append(kv, [2]string{"dim", string(b)})
+
+	// list-of-Expression slots.
+	for _, f := range []struct {
+		key string
+		v   []any
+	}{
+		{"values", n.Values}, {"shape", n.Shape}, {"perm", n.Perm},
+		{"output_idx", n.OutputIdx}, {"join", n.Join},
+	} {
+		if err := appendSlice(f.key, f.v); err != nil {
+			return "", err
+		}
 	}
-	if n.Fn != nil {
-		// `fn` carries the boundary-condition kind on synthetic `bc` nodes
-		// (esm-spec §9.2). Emit it symmetrically with `dim`/`wrt` so the kind
-		// is preserved in the canonical form — otherwise bc(u,dirichlet,xmin)
-		// and bc(u,neumann,xmin) collapse to the same canonical JSON, making
-		// the kind/side matcher's canonical equality kind-blind (ess-tox/G8).
-		b, _ := json.Marshal(*n.Fn)
-		kv = append(kv, [2]string{"fn", string(b)})
-	}
-	if n.Name != nil {
-		b, _ := json.Marshal(*n.Name)
-		kv = append(kv, [2]string{"name", string(b)})
-	}
-	if n.Value != nil {
-		s, err := emitCanonicalJSON(n.Value)
+
+	// map slots. TableAxes is map[string]Expression; emit via the shared object
+	// renderer keyed in sorted order.
+	if len(n.TableAxes) > 0 {
+		s, err := emitCanonicalObject(sortedKeys(n.TableAxes), func(k string) any { return n.TableAxes[k] })
 		if err != nil {
 			return "", err
 		}
-		kv = append(kv, [2]string{"value", s})
+		appendRaw("axes", s)
 	}
+	if err := appendStrMap("attrs", n.Attrs); err != nil {
+		return "", err
+	}
+	if err := appendStrMap("bindings", n.Bindings); err != nil {
+		return "", err
+	}
+	if err := appendStrMap("ranges", n.Ranges); err != nil {
+		return "", err
+	}
+
+	// Regions [][][]interface{} (makearray hyper-rectangular index regions).
+	if len(n.Regions) > 0 {
+		regs := make([]string, len(n.Regions))
+		for i, region := range n.Regions {
+			pairs := make([]string, len(region))
+			for j, pair := range region {
+				elems := make([]string, len(pair))
+				for k, b := range pair {
+					s, e := emitCanonicalJSON(b)
+					if e != nil {
+						return "", e
+					}
+					elems[k] = s
+				}
+				pairs[j] = "[" + strings.Join(elems, ",") + "]"
+			}
+			regs[i] = "[" + strings.Join(pairs, ",") + "]"
+		}
+		appendRaw("regions", "["+strings.Join(regs, ",")+"]")
+	}
+
+	// Distinct *bool (aggregate reduces over distinct values).
+	if n.Distinct != nil {
+		if *n.Distinct {
+			appendRaw("distinct", "true")
+		} else {
+			appendRaw("distinct", "false")
+		}
+	}
+
 	sort.Slice(kv, func(i, j int) bool { return kv[i][0] < kv[j][0] })
 	var buf bytes.Buffer
 	buf.WriteByte('{')
@@ -521,45 +688,12 @@ func emitExprNodeJSON(n ExprNode) (string, error) {
 // round-trip decimal; plain decimal when 1e-6 <= |x| < 1e21 (with trailing
 // `.0` added for integer-valued magnitudes); exponent notation with lowercase
 // `e` and no leading `+` otherwise. Negative zero emits as `-0.0`.
+//
+// Thin alias for the single shared §5.4.6 renderer
+// (formatCanonicalFloatShared in floatfmt.go). Callers reach it only for
+// finite floats (emitCanonicalJSON screens NaN/±Inf first), so the shared
+// renderer's error is never returned here and is intentionally discarded.
 func formatCanonicalFloat(f float64) string {
-	if f == 0 {
-		if math.Signbit(f) {
-			return "-0.0"
-		}
-		return "0.0"
-	}
-	abs := math.Abs(f)
-	useExp := abs < 1e-6 || abs >= 1e21
-	if useExp {
-		s := strconv.FormatFloat(f, 'e', -1, 64)
-		// Go emits e.g. "1e+21", "3e-7"; spec requires no leading + on exp.
-		if i := strings.IndexByte(s, 'e'); i != -1 {
-			mant := s[:i]
-			exp := s[i+1:]
-			exp = strings.TrimPrefix(exp, "+")
-			// Strip leading zeros on the exponent while preserving the sign:
-			// Go emits e.g. "1e-07" for very small numbers on some platforms;
-			// ECMAScript emits "1e-7".
-			negExp := false
-			if strings.HasPrefix(exp, "-") {
-				negExp = true
-				exp = exp[1:]
-			}
-			exp = strings.TrimLeft(exp, "0")
-			if exp == "" {
-				exp = "0"
-			}
-			if negExp {
-				exp = "-" + exp
-			}
-			s = mant + "e" + exp
-		}
-		return s
-	}
-	// Plain decimal form.
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
-		s += ".0"
-	}
+	s, _ := formatCanonicalFloatShared(f)
 	return s
 }

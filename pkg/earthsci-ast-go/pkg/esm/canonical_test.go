@@ -60,8 +60,8 @@ func TestCanonicalFloat64NonFinite(t *testing.T) {
 // an integer-valued float64 literal in an Expression slot must serialize as
 // "1.0" (not "1") so that the parse-back rule recovers a float node.
 func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "IntegerFloatEmission",
 			Authors: []string{"Test"},
@@ -76,43 +76,43 @@ func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
 					{LHS: "y", RHS: int64(1)},     // integer node → "1"
 					{LHS: "z", RHS: float64(2.5)}, // non-integer float → "2.5"
 					{LHS: "w", RHS: float64(0.0)}, // integer-valued float zero → "0.0"
-					{LHS: "v", RHS: ExprNode{Op: "+", Args: []interface{}{float64(1.0), int64(2)}}},
+					{LHS: "v", RHS: ExprNode{Op: "+", Args: []any{float64(1.0), int64(2)}}},
 				},
 			},
 		},
 	}
 
-	jsonStr, err := Save(file)
+	jsonStr, err := Serialize(file)
 	require.NoError(t, err)
 
 	// Re-parse as a generic tree to inspect raw tokens precisely. UseNumber
 	// preserves the wire text so we can assert on it.
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
-	var tree map[string]interface{}
+	var tree map[string]any
 	require.NoError(t, dec.Decode(&tree))
 
-	equations := tree["models"].(map[string]interface{})["m"].(map[string]interface{})["equations"].([]interface{})
+	equations := tree["models"].(map[string]any)["m"].(map[string]any)["equations"].([]any)
 
 	// equations[0].rhs: float64(1.0) → "1.0"
-	rhs0 := equations[0].(map[string]interface{})["rhs"].(json.Number)
+	rhs0 := equations[0].(map[string]any)["rhs"].(json.Number)
 	assert.Equal(t, "1.0", string(rhs0))
 
 	// equations[1].rhs: int64(1) → "1"
-	rhs1 := equations[1].(map[string]interface{})["rhs"].(json.Number)
+	rhs1 := equations[1].(map[string]any)["rhs"].(json.Number)
 	assert.Equal(t, "1", string(rhs1))
 
 	// equations[2].rhs: float64(2.5) → "2.5"
-	rhs2 := equations[2].(map[string]interface{})["rhs"].(json.Number)
+	rhs2 := equations[2].(map[string]any)["rhs"].(json.Number)
 	assert.Equal(t, "2.5", string(rhs2))
 
 	// equations[3].rhs: float64(0.0) → "0.0"
-	rhs3 := equations[3].(map[string]interface{})["rhs"].(json.Number)
+	rhs3 := equations[3].(map[string]any)["rhs"].(json.Number)
 	assert.Equal(t, "0.0", string(rhs3))
 
 	// equations[4].rhs.args: mixed — [float64(1.0), int64(2)] → ["1.0", "2"]
-	rhs4 := equations[4].(map[string]interface{})["rhs"].(map[string]interface{})
-	args := rhs4["args"].([]interface{})
+	rhs4 := equations[4].(map[string]any)["rhs"].(map[string]any)
+	args := rhs4["args"].([]any)
 	assert.Equal(t, "1.0", string(args[0].(json.Number)))
 	assert.Equal(t, "2", string(args[1].(json.Number)))
 }
@@ -139,7 +139,7 @@ func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
 	parsed, err := LoadString(input)
 	require.NoError(t, err)
 
-	jsonStr, err := Save(parsed)
+	jsonStr, err := Serialize(parsed)
 	require.NoError(t, err)
 
 	reparsed, err := LoadString(jsonStr)
@@ -170,8 +170,8 @@ func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
 // VariableMapCoupling.Factor are a common case.
 func TestSaveTypedFloatFields(t *testing.T) {
 	factor := 2.0
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TypedFloats",
 			Authors: []string{"Test"},
@@ -182,12 +182,12 @@ func TestSaveTypedFloatFields(t *testing.T) {
 				Equations: []Equation{{LHS: "x", RHS: int64(0)}},
 			},
 		},
-		Coupling: []interface{}{
+		Coupling: []CouplingEntry{
 			VariableMapCoupling{Type: "variable_map", From: "a.x", To: "b.y", Transform: "multiplicative", Factor: &factor},
 		},
 	}
 
-	jsonStr, err := Save(file)
+	jsonStr, err := Serialize(file)
 	require.NoError(t, err)
 
 	// *float64 factor emits with trailing .0
@@ -197,8 +197,8 @@ func TestSaveTypedFloatFields(t *testing.T) {
 // TestSaveRejectsNonFiniteFloat verifies that NaN/Inf are rejected with
 // E_CANONICAL_NONFINITE per RFC §5.4.6.
 func TestSaveRejectsNonFiniteFloat(t *testing.T) {
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "NonFinite",
 			Authors: []string{"Test"},
@@ -211,7 +211,7 @@ func TestSaveRejectsNonFiniteFloat(t *testing.T) {
 		},
 	}
 
-	_, err := Save(file)
+	_, err := Serialize(file)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "E_CANONICAL_NONFINITE")
 }

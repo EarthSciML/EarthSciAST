@@ -5,22 +5,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/xeipuuv/gojsonschema"
 )
-
-// DeprecationWarningCode identifies a specific deprecation warning emitted at load time.
-type DeprecationWarningCode string
-
-// DeprecationWarningLogger is invoked once per deprecation the loader detects.
-// Default is to log via the standard `log` package; set to nil to silence.
-var DeprecationWarningLogger = func(code DeprecationWarningCode, message string) {
-	log.Printf("[%s] %s", code, message)
-}
 
 //go:embed esm-schema.json
 var embeddedSchema []byte
@@ -58,7 +48,7 @@ func applyLoadOptions(opts []LoadOption) loadOptions {
 
 // Load loads an ESM file from the specified path and validates it against the JSON schema.
 // After parsing, it resolves any subsystem references relative to the file's directory.
-func Load(path string, opts ...LoadOption) (*EsmFile, error) {
+func Load(path string, opts ...LoadOption) (*ESMFile, error) {
 	// Read the file
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -92,7 +82,7 @@ func Load(path string, opts ...LoadOption) (*EsmFile, error) {
 }
 
 // LoadString parses an ESM file from JSON string and validates it against the JSON schema
-func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
+func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	o := applyLoadOptions(opts)
 
 	// v0.4.0 expression_templates / apply_expression_template are rejected
@@ -104,7 +94,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 	// schema error. Operates on a generic map view of the JSON (UseNumber to
 	// preserve int/float).
 	{
-		var preCheck map[string]interface{}
+		var preCheck map[string]any
 		predec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 		predec.UseNumber()
 		if err := predec.Decode(&preCheck); err == nil {
@@ -126,9 +116,10 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 	if !result.IsValid {
 		var errorStrs []string
 		for _, schemaErr := range result.SchemaErrors {
-			errorStrs = append(errorStrs, schemaErr.Message)
+			errorStrs = append(errorStrs,
+				fmt.Sprintf("%s: %s (%s)", schemaErr.Path, schemaErr.Message, schemaErr.Keyword))
 		}
-		return nil, fmt.Errorf("JSON schema validation failed: %v", errorStrs)
+		return nil, fmt.Errorf("JSON schema validation failed: %s", strings.Join(errorStrs, "; "))
 	}
 
 	// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
@@ -145,14 +136,14 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 	}
 	jsonStr = expanded
 
-	// Parse JSON into our struct. Use UseNumber so that JSON numbers in
-	// Expression (interface{}) slots retain their wire form — otherwise
-	// json.Unmarshal coerces every number to float64, destroying the
-	// integer/float node distinction required by discretization RFC §5.4.1.
-	var esmFile EsmFile
-	dec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
-	dec.UseNumber()
-	if err := dec.Decode(&esmFile); err != nil {
+	// Parse JSON into our struct. ESMFile implements json.Unmarshaler, so a
+	// top-level decoder's UseNumber setting would NOT reach the nested
+	// Expression slots — the int/float wire distinction (discretization RFC
+	// §5.4.1) is instead preserved deeper down, by UnmarshalExpression's own
+	// UseNumber decoder for every Expression-bearing field, with the residual
+	// json.Number tokens cleaned up by normalizeNumericLiterals below.
+	var esmFile ESMFile
+	if err := json.Unmarshal([]byte(jsonStr), &esmFile); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
@@ -192,7 +183,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 // normalizeJSONNumber converts a json.Number to int64 (no '.', no 'e'/'E') or
 // float64 per discretization RFC §5.4.6 round-trip parse rule. Values outside
 // int64 range fall back to float64.
-func normalizeJSONNumber(n json.Number) interface{} {
+func normalizeJSONNumber(n json.Number) any {
 	s := string(n)
 	if strings.ContainsAny(s, ".eE") {
 		f, err := n.Float64()
@@ -213,46 +204,40 @@ func normalizeJSONNumber(n json.Number) interface{} {
 	return f
 }
 
-// normalizeExpression walks an Expression tree and replaces json.Number
-// tokens with int64 or float64 per RFC §5.4.6.
+// normalizeExpression walks an Expression tree and replaces json.Number tokens
+// with int64 or float64 per RFC §5.4.6. It is TOTAL over the Expression union:
+// every value it does not recognize is returned unchanged, which is required so
+// it can be handed to mapExprChildren as the child-normalizer (mapExprChildren
+// applies it to raw-JSON slots — Attrs/Bindings/Ranges/Regions/aggregate
+// scalars — that carry non-node leaves).
 func normalizeExpression(expr Expression) Expression {
 	switch e := expr.(type) {
 	case json.Number:
 		return normalizeJSONNumber(e)
 	case ExprNode:
-		for i, a := range e.Args {
-			e.Args[i] = normalizeExpression(a)
-		}
-		for k, v := range e.TableAxes {
-			e.TableAxes[k] = normalizeExpression(v)
-		}
-		for k, v := range e.Attrs {
-			e.Attrs[k] = normalizeExpression(v)
-		}
-		if n, ok := e.Output.(json.Number); ok {
-			e.Output = normalizeJSONNumber(n)
-		}
-		return e
+		// Route the child recursion through the shared field-preserving walker
+		// so a newly added Expression-bearing field can never be missed here.
+		// f never errors, so the returned error is always nil.
+		out, _ := mapExprChildren(e, func(child Expression) (Expression, error) {
+			return normalizeExpression(child), nil
+		})
+		return out
 	case *ExprNode:
-		for i, a := range e.Args {
-			e.Args[i] = normalizeExpression(a)
+		if e == nil {
+			return e
 		}
-		for k, v := range e.TableAxes {
-			e.TableAxes[k] = normalizeExpression(v)
-		}
-		for k, v := range e.Attrs {
-			e.Attrs[k] = normalizeExpression(v)
-		}
-		if n, ok := e.Output.(json.Number); ok {
-			e.Output = normalizeJSONNumber(n)
+		// Delegate to the value case, then write the normalized node back
+		// through the pointer so callers that reuse the *ExprNode see it.
+		if nv, ok := normalizeExpression(*e).(ExprNode); ok {
+			*e = nv
 		}
 		return e
-	case []interface{}:
+	case []any:
 		for i, a := range e {
 			e[i] = normalizeExpression(a)
 		}
 		return e
-	case map[string]interface{}:
+	case map[string]any:
 		for k, v := range e {
 			e[k] = normalizeExpression(v)
 		}
@@ -262,9 +247,9 @@ func normalizeExpression(expr Expression) Expression {
 	}
 }
 
-// normalizeNumericLiterals walks the parsed EsmFile and normalizes json.Number
+// normalizeNumericLiterals walks the parsed ESMFile and normalizes json.Number
 // tokens to int64 or float64 in every Expression-bearing field.
-func normalizeNumericLiterals(ef *EsmFile) {
+func normalizeNumericLiterals(ef *ESMFile) {
 	if ef.Models != nil {
 		for name, model := range ef.Models {
 			normalizeModelLiterals(&model)
@@ -276,6 +261,31 @@ func normalizeNumericLiterals(ef *EsmFile) {
 			normalizeReactionSystemLiterals(&rs)
 			ef.ReactionSystems[name] = rs
 		}
+	}
+}
+
+// normalizeDiscreteEventLiterals normalizes the Expression-bearing slots of a
+// discrete event (its condition-trigger expression and each affect RHS).
+func normalizeDiscreteEventLiterals(de *DiscreteEvent) {
+	for j := range de.Affects {
+		de.Affects[j].RHS = normalizeExpression(de.Affects[j].RHS)
+	}
+	if de.Trigger.Expression != nil {
+		de.Trigger.Expression = normalizeExpression(de.Trigger.Expression)
+	}
+}
+
+// normalizeContinuousEventLiterals normalizes the Expression-bearing slots of a
+// continuous event (each condition, each affect RHS, and each affect_neg RHS).
+func normalizeContinuousEventLiterals(ce *ContinuousEvent) {
+	for j := range ce.Conditions {
+		ce.Conditions[j] = normalizeExpression(ce.Conditions[j])
+	}
+	for j := range ce.Affects {
+		ce.Affects[j].RHS = normalizeExpression(ce.Affects[j].RHS)
+	}
+	for j := range ce.AffectNeg {
+		ce.AffectNeg[j].RHS = normalizeExpression(ce.AffectNeg[j].RHS)
 	}
 }
 
@@ -296,21 +306,18 @@ func normalizeModelLiterals(m *Model) {
 		m.Equations[i].LHS = normalizeExpression(m.Equations[i].LHS)
 		m.Equations[i].RHS = normalizeExpression(m.Equations[i].RHS)
 	}
+	for i := range m.InitializationEquations {
+		m.InitializationEquations[i].LHS = normalizeExpression(m.InitializationEquations[i].LHS)
+		m.InitializationEquations[i].RHS = normalizeExpression(m.InitializationEquations[i].RHS)
+	}
+	for name, g := range m.Guesses {
+		m.Guesses[name] = normalizeExpression(g)
+	}
 	for i := range m.DiscreteEvents {
-		for j := range m.DiscreteEvents[i].Affects {
-			m.DiscreteEvents[i].Affects[j].RHS = normalizeExpression(m.DiscreteEvents[i].Affects[j].RHS)
-		}
-		if m.DiscreteEvents[i].Trigger.Expression != nil {
-			m.DiscreteEvents[i].Trigger.Expression = normalizeExpression(m.DiscreteEvents[i].Trigger.Expression)
-		}
+		normalizeDiscreteEventLiterals(&m.DiscreteEvents[i])
 	}
 	for i := range m.ContinuousEvents {
-		for j := range m.ContinuousEvents[i].Conditions {
-			m.ContinuousEvents[i].Conditions[j] = normalizeExpression(m.ContinuousEvents[i].Conditions[j])
-		}
-		for j := range m.ContinuousEvents[i].Affects {
-			m.ContinuousEvents[i].Affects[j].RHS = normalizeExpression(m.ContinuousEvents[i].Affects[j].RHS)
-		}
+		normalizeContinuousEventLiterals(&m.ContinuousEvents[i])
 	}
 }
 
@@ -324,6 +331,12 @@ func normalizeReactionSystemLiterals(rs *ReactionSystem) {
 	for i := range rs.ConstraintEquations {
 		rs.ConstraintEquations[i].LHS = normalizeExpression(rs.ConstraintEquations[i].LHS)
 		rs.ConstraintEquations[i].RHS = normalizeExpression(rs.ConstraintEquations[i].RHS)
+	}
+	for i := range rs.DiscreteEvents {
+		normalizeDiscreteEventLiterals(&rs.DiscreteEvents[i])
+	}
+	for i := range rs.ContinuousEvents {
+		normalizeContinuousEventLiterals(&rs.ContinuousEvents[i])
 	}
 }
 
@@ -349,69 +362,137 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 	return nil
 }
 
-// rejectCallOps walks every expression tree and fails LoadString if any
-// node carries `op: "call"`. The `call` op was removed in v0.3.0 in favor
-// of the closed-registry `fn` op (esm-spec §4.4 / §9.2).
-func rejectCallOps(file *EsmFile) error {
+// rejectCallOps walks every expression tree and fails LoadString if any node
+// carries `op: "call"`. The `call` op was removed in v0.3.0 in favor of the
+// closed-registry `fn` op (esm-spec §4.4 / §9.2).
+//
+// Node recursion routes through mapExprChildren so every Expression-bearing
+// field is covered (not just Args/TableAxes), and the carrier walk reaches
+// every top-level expression slot: observed-variable expressions, equations,
+// initialization equations, guesses, event triggers/conditions/affects, and —
+// on reaction systems — reaction rates and constraint equations.
+func rejectCallOps(file *ESMFile) error {
 	var visit func(expr Expression) error
 	visit = func(expr Expression) error {
-		switch e := expr.(type) {
-		case ExprNode:
-			if e.Op == "call" {
+		if node, ok := asExprNode(expr); ok {
+			if node.Op == "call" {
 				return fmt.Errorf("deprecated_call_op: `call` op was removed in v0.3.0; " +
 					"use `fn` with a closed-registry name (esm-spec §4.4 / §9.2)")
 			}
-			for _, a := range e.Args {
+			_, err := mapExprChildren(node, func(child Expression) (Expression, error) {
+				return child, visit(child)
+			})
+			return err
+		}
+		// Raw containers (e.g. a decoded Attrs/Bindings value) may still hold
+		// operator objects; descend deterministically.
+		switch v := expr.(type) {
+		case []any:
+			for _, a := range v {
 				if err := visit(a); err != nil {
 					return err
 				}
 			}
-			for _, v := range e.TableAxes {
-				if err := visit(v); err != nil {
+		case map[string]any:
+			for _, k := range sortedKeys(v) {
+				if err := visit(v[k]); err != nil {
 					return err
 				}
 			}
-		case *ExprNode:
-			if e == nil {
-				return nil
-			}
-			return visit(*e)
 		}
 		return nil
 	}
-	if file.Models != nil {
-		for _, m := range file.Models {
-			for _, v := range m.Variables {
-				if v.Expression != nil {
-					if err := visit(v.Expression); err != nil {
-						return err
-					}
-				}
+
+	visitEquations := func(eqs []Equation) error {
+		for _, eq := range eqs {
+			if err := visit(eq.LHS); err != nil {
+				return err
 			}
-			for _, eq := range m.Equations {
-				if err := visit(eq.LHS); err != nil {
-					return err
-				}
-				if err := visit(eq.RHS); err != nil {
-					return err
-				}
+			if err := visit(eq.RHS); err != nil {
+				return err
 			}
-			for _, eq := range m.InitializationEquations {
-				if err := visit(eq.LHS); err != nil {
-					return err
-				}
-				if err := visit(eq.RHS); err != nil {
+		}
+		return nil
+	}
+	visitDiscreteEvent := func(de *DiscreteEvent) error {
+		if de.Trigger.Expression != nil {
+			if err := visit(de.Trigger.Expression); err != nil {
+				return err
+			}
+		}
+		for _, aff := range de.Affects {
+			if err := visit(aff.RHS); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	visitContinuousEvent := func(ce *ContinuousEvent) error {
+		for _, cond := range ce.Conditions {
+			if err := visit(cond); err != nil {
+				return err
+			}
+		}
+		for _, aff := range ce.Affects {
+			if err := visit(aff.RHS); err != nil {
+				return err
+			}
+		}
+		for _, aff := range ce.AffectNeg {
+			if err := visit(aff.RHS); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, m := range file.Models {
+		for _, v := range m.Variables {
+			if v.Expression != nil {
+				if err := visit(v.Expression); err != nil {
 					return err
 				}
 			}
 		}
+		if err := visitEquations(m.Equations); err != nil {
+			return err
+		}
+		if err := visitEquations(m.InitializationEquations); err != nil {
+			return err
+		}
+		for _, g := range m.Guesses {
+			if err := visit(g); err != nil {
+				return err
+			}
+		}
+		for i := range m.DiscreteEvents {
+			if err := visitDiscreteEvent(&m.DiscreteEvents[i]); err != nil {
+				return err
+			}
+		}
+		for i := range m.ContinuousEvents {
+			if err := visitContinuousEvent(&m.ContinuousEvents[i]); err != nil {
+				return err
+			}
+		}
 	}
-	if file.ReactionSystems != nil {
-		for _, rs := range file.ReactionSystems {
-			for _, r := range rs.Reactions {
-				if err := visit(r.Rate); err != nil {
-					return err
-				}
+	for _, rs := range file.ReactionSystems {
+		for _, r := range rs.Reactions {
+			if err := visit(r.Rate); err != nil {
+				return err
+			}
+		}
+		if err := visitEquations(rs.ConstraintEquations); err != nil {
+			return err
+		}
+		for i := range rs.DiscreteEvents {
+			if err := visitDiscreteEvent(&rs.DiscreteEvents[i]); err != nil {
+				return err
+			}
+		}
+		for i := range rs.ContinuousEvents {
+			if err := visitContinuousEvent(&rs.ContinuousEvents[i]); err != nil {
+				return err
 			}
 		}
 	}

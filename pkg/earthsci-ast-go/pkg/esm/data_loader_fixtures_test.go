@@ -84,19 +84,19 @@ func TestDataLoaderFixturesCoverage(t *testing.T) {
 			// 3. Round-trip: serialize, re-parse, and compare the canonicalized
 			// JSON trees. We compare via json.Unmarshal into generic interface{}
 			// so that map key ordering and whitespace don't matter.
-			serialized, err := Save(esmFile)
+			serialized, err := Serialize(esmFile)
 			if err != nil {
 				t.Fatalf("Save failed for %s: %v", tc.fixture, err)
 			}
 			roundTripped, err := LoadString(serialized)
 			if err != nil {
-				t.Fatalf("LoadString(Save()) failed for %s: %v", tc.fixture, err)
+				t.Fatalf("LoadString(Serialize()) failed for %s: %v", tc.fixture, err)
 			}
-			origNorm, err := normalizeEsmJSON(esmFile)
+			origNorm, err := normalizeESMJSON(esmFile)
 			if err != nil {
 				t.Fatalf("normalize original failed: %v", err)
 			}
-			rtNorm, err := normalizeEsmJSON(roundTripped)
+			rtNorm, err := normalizeESMJSON(roundTripped)
 			if err != nil {
 				t.Fatalf("normalize round-tripped failed: %v", err)
 			}
@@ -107,15 +107,15 @@ func TestDataLoaderFixturesCoverage(t *testing.T) {
 	}
 }
 
-// normalizeEsmJSON serializes an EsmFile and reparses it as interface{} so the
+// normalizeESMJSON serializes an ESMFile and reparses it as interface{} so the
 // result can be compared with reflect.DeepEqual without being affected by Go
 // map ordering or float representation quirks.
-func normalizeEsmJSON(f *EsmFile) (interface{}, error) {
+func normalizeESMJSON(f *ESMFile) (any, error) {
 	b, err := json.Marshal(f)
 	if err != nil {
 		return nil, err
 	}
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
 		return nil, err
 	}

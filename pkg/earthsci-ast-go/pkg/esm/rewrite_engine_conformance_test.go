@@ -26,7 +26,7 @@ func confFixtureBytes(t *testing.T, name, file string) []byte {
 // sorted-name declaration-order fallback — for these fixtures the outcome is
 // identical to genuine declaration order because equal-priority patterns are
 // mutually exclusive).
-func lowerConfFixture(t *testing.T, name string) map[string]interface{} {
+func lowerConfFixture(t *testing.T, name string) map[string]any {
 	t.Helper()
 	v := decodeFixture(t, string(confFixtureBytes(t, name, "fixture.esm")))
 	if err := LowerExpressionTemplates(v); err != nil {
@@ -35,17 +35,17 @@ func lowerConfFixture(t *testing.T, name string) map[string]interface{} {
 	return v
 }
 
-func modelMVariables(t *testing.T, v map[string]interface{}) map[string]interface{} {
+func modelMVariables(t *testing.T, v map[string]any) map[string]any {
 	t.Helper()
-	models, ok := v["models"].(map[string]interface{})
+	models, ok := v["models"].(map[string]any)
 	if !ok {
 		t.Fatalf("models block missing")
 	}
-	m, ok := models["m"].(map[string]interface{})
+	m, ok := models["m"].(map[string]any)
 	if !ok {
 		t.Fatalf("models.m missing")
 	}
-	vars, ok := m["variables"].(map[string]interface{})
+	vars, ok := m["variables"].(map[string]any)
 	if !ok {
 		t.Fatalf("models.m.variables missing")
 	}
@@ -71,7 +71,7 @@ func TestRewriteEngine_GodunovBeatsInnerDerivative(t *testing.T) {
 	// Guard the rewritten EXPRESSION subtree (the variables dict still declares an
 	// `inv_dx` parameter): the compound rule's product appears; the per-derivative
 	// rule's `inv_dx` product does not.
-	gradMag := modelMVariables(t, got)["grad_mag"].(map[string]interface{})
+	gradMag := modelMVariables(t, got)["grad_mag"].(map[string]any)
 	exprJSON := mustJSON(t, gradMag["expression"])
 	if strings.Contains(exprJSON, "inv_dx") {
 		t.Errorf("expanded grad_mag still contains inv_dx (per-derivative rule fired): %s", exprJSON)
@@ -94,7 +94,7 @@ func TestRewriteEngine_NestedDerivativeFixpoint(t *testing.T) {
 		t.Errorf("variables diverge from expanded.esm:\n got=%s\nwant=%s", gotVars, wantVars)
 	}
 
-	lap := modelMVariables(t, got)["lap"].(map[string]interface{})
+	lap := modelMVariables(t, got)["lap"].(map[string]any)
 	exprJSON := mustJSON(t, lap["expression"])
 	if strings.Contains(exprJSON, "laplacian") {
 		t.Errorf("expanded lap still contains laplacian: %s", exprJSON)
@@ -202,7 +202,7 @@ func TestRewriteEngine_AttrsBindAsScalarMetavariables(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	y := modelMVariables(t, v)["y"].(map[string]interface{})
+	y := modelMVariables(t, v)["y"].(map[string]any)
 	got := mustJSON(t, y["expression"])
 	// Go marshals map keys in sorted order: "args" before "op"; the bound
 	// gamma literal (1.4) substitutes into the first arg.

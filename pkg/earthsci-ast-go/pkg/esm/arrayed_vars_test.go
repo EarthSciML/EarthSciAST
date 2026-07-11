@@ -16,7 +16,7 @@ import (
 func TestArrayedVarsFixtures(t *testing.T) {
 	fixtureDir := filepath.Join("..", "..", "..", "..", "tests", "fixtures", "arrayed_vars")
 
-	type check func(*testing.T, *EsmFile)
+	type check func(*testing.T, *ESMFile)
 
 	cases := []struct {
 		file  string
@@ -26,7 +26,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 		{
 			file:  "scalar_no_shape.esm",
 			model: "Scalar0D",
-			check: func(t *testing.T, esm *EsmFile) {
+			check: func(t *testing.T, esm *ESMFile) {
 				v := esm.Models["Scalar0D"].Variables["x"]
 				assert.Nil(t, v.Shape, "unset shape should stay nil (scalar)")
 				assert.Equal(t, "", v.Location, "unset location should stay empty")
@@ -35,7 +35,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 		{
 			file:  "scalar_explicit.esm",
 			model: "ScalarExplicit",
-			check: func(t *testing.T, esm *EsmFile) {
+			check: func(t *testing.T, esm *ESMFile) {
 				v := esm.Models["ScalarExplicit"].Variables["mass"]
 				// An empty-list shape is semantically equivalent to omission
 				// (both mean scalar). Bindings may normalize one to the
@@ -47,7 +47,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 		{
 			file:  "one_d.esm",
 			model: "Diffusion1D",
-			check: func(t *testing.T, esm *EsmFile) {
+			check: func(t *testing.T, esm *ESMFile) {
 				v := esm.Models["Diffusion1D"].Variables["c"]
 				assert.Equal(t, []string{"x"}, v.Shape)
 				assert.Equal(t, "cell_center", v.Location)
@@ -59,7 +59,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 		{
 			file:  "two_d_faces.esm",
 			model: "StaggeredFlow2D",
-			check: func(t *testing.T, esm *EsmFile) {
+			check: func(t *testing.T, esm *ESMFile) {
 				p := esm.Models["StaggeredFlow2D"].Variables["p"]
 				assert.Equal(t, []string{"x", "y"}, p.Shape)
 				assert.Equal(t, "cell_center", p.Location)
@@ -71,7 +71,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 		{
 			file:  "vertex_located.esm",
 			model: "VertexScalar2D",
-			check: func(t *testing.T, esm *EsmFile) {
+			check: func(t *testing.T, esm *ESMFile) {
 				phi := esm.Models["VertexScalar2D"].Variables["phi"]
 				assert.Equal(t, []string{"x", "y"}, phi.Shape)
 				assert.Equal(t, "vertex", phi.Location)
@@ -85,7 +85,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			raw, err := os.ReadFile(path)
 			require.NoError(t, err)
 
-			var loaded EsmFile
+			var loaded ESMFile
 			require.NoError(t, json.Unmarshal(raw, &loaded))
 			tc.check(t, &loaded)
 
@@ -94,7 +94,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			reserialized, err := json.Marshal(&loaded)
 			require.NoError(t, err)
 
-			var reloaded EsmFile
+			var reloaded ESMFile
 			require.NoError(t, json.Unmarshal(reserialized, &reloaded))
 			tc.check(t, &reloaded)
 

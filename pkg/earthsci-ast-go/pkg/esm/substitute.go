@@ -1,309 +1,218 @@
 package esm
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
 
-// Substitute performs variable substitution in expressions
-// expr: the expression to substitute into
-// bindings: map from variable names to replacement expressions
-func Substitute(expr Expression, bindings map[string]Expression) Expression {
-	return substituteRecursive(expr, bindings)
+// SubstitutionError is returned when substitution cannot complete. Currently
+// the only cause is a cyclic binding — a variable whose expansion reaches
+// itself (directly, x → f(x), or transitively, x → y, y → x) — which would
+// otherwise recurse forever. It carries the shared "[code] message" diagnostic
+// form (DiagnosticError).
+type SubstitutionError struct {
+	Code    string
+	Message string
 }
 
-// substituteRecursive is the internal recursive function
-func substituteRecursive(expr Expression, bindings map[string]Expression) Expression {
+func (e *SubstitutionError) Error() string { return fmt.Sprintf("[%s] %s", e.Code, e.Message) }
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *SubstitutionError) DiagnosticCode() string { return e.Code }
+
+// codeCyclicSubstitution is raised when a binding is cyclic.
+const codeCyclicSubstitution = "cyclic_substitution"
+
+// Substitute performs variable substitution in expressions.
+// expr: the expression to substitute into
+// bindings: map from variable names to replacement expressions
+// Returns a SubstitutionError if the bindings are cyclic.
+func Substitute(expr Expression, bindings map[string]Expression) (Expression, error) {
 	return substituteRecursiveWithScoped(expr, bindings, nil, "")
 }
 
-// substituteRecursiveWithScoped is the internal recursive function with scoped reference support
-func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *EsmFile, currentSystem string) Expression {
+// substituteRecursiveWithScoped is the internal recursive substitution entry
+// with scoped-reference support (file != nil enables dotted-name resolution).
+// It seeds a fresh cycle-tracking set for each top-level call.
+func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
+	return substituteRec(expr, bindings, file, currentSystem, map[string]bool{})
+}
+
+// substituteRec recursively substitutes bindings into expr. visiting is the set
+// of binding keys currently being expanded on the active path; re-entering a key
+// means the binding is cyclic and yields a SubstitutionError. The set is
+// backtracked (a key is removed once its expansion returns), so a variable
+// appearing in independent sibling positions is not mistaken for a cycle.
+func substituteRec(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string, visiting map[string]bool) (Expression, error) {
 	switch e := expr.(type) {
 	case string:
-		// Variable reference - check for substitution
-		if replacement, exists := bindings[e]; exists {
-			// Recursively apply substitutions to the replacement
-			return substituteRecursiveWithScoped(replacement, bindings, file, currentSystem)
+		// Variable reference — resolve to a binding key (direct name, else a
+		// scoped dotted name), then expand it with cycle tracking.
+		key, replacement, ok := lookupBinding(e, bindings, file, currentSystem)
+		if !ok {
+			return e, nil
 		}
-
-		// If it's a scoped reference and we have file context, try to resolve it
-		if file != nil && strings.Contains(e, ".") {
-			if resolved, found := resolveScopedReference(e, file, currentSystem); found {
-				// Check if the resolved reference has a binding
-				if replacement, exists := bindings[resolved]; exists {
-					return substituteRecursiveWithScoped(replacement, bindings, file, currentSystem)
-				}
+		if visiting[key] {
+			return nil, &SubstitutionError{
+				Code:    codeCyclicSubstitution,
+				Message: fmt.Sprintf("cyclic binding: variable '%s' is reachable from its own substitution", key),
 			}
 		}
-
-		return e
+		visiting[key] = true
+		out, err := substituteRec(replacement, bindings, file, currentSystem, visiting)
+		delete(visiting, key)
+		return out, err
 
 	case ExprNode:
-		// Expression node - recursively substitute arguments
-		newArgs := make([]interface{}, len(e.Args))
-		for i, arg := range e.Args {
-			newArgs[i] = substituteRecursiveWithScoped(arg, bindings, file, currentSystem)
-		}
-
-		// Create new ExprNode with substituted arguments
-		newNode := ExprNode{
-			Op:   e.Op,
-			Args: newArgs,
-			Wrt:  e.Wrt,
-			Dim:  e.Dim,
-		}
-
-		// Special handling for derivative operators where the 'wrt' variable might be substituted
-		if e.Op == "D" && e.Wrt != nil {
-			if replacement, exists := bindings[*e.Wrt]; exists {
-				if wrtStr, ok := replacement.(string); ok {
-					newNode.Wrt = &wrtStr
-				}
-			} else if file != nil && strings.Contains(*e.Wrt, ".") {
-				// Handle scoped reference in wrt
-				if resolved, found := resolveScopedReference(*e.Wrt, file, currentSystem); found {
-					if replacement, exists := bindings[resolved]; exists {
-						if wrtStr, ok := replacement.(string); ok {
-							newNode.Wrt = &wrtStr
-						}
-					}
-				}
-			}
-		}
-
-		// Special handling for gradient operators where the 'dim' variable might be substituted
-		if e.Op == "grad" && e.Dim != nil {
-			if replacement, exists := bindings[*e.Dim]; exists {
-				if dimStr, ok := replacement.(string); ok {
-					newNode.Dim = &dimStr
-				}
-			} else if file != nil && strings.Contains(*e.Dim, ".") {
-				// Handle scoped reference in dim
-				if resolved, found := resolveScopedReference(*e.Dim, file, currentSystem); found {
-					if replacement, exists := bindings[resolved]; exists {
-						if dimStr, ok := replacement.(string); ok {
-							newNode.Dim = &dimStr
-						}
-					}
-				}
-			}
-		}
-
-		return newNode
+		return substituteNode(e, bindings, file, currentSystem, visiting)
 
 	case *ExprNode:
-		// Pointer to expression node
-		return substituteRecursiveWithScoped(*e, bindings, file, currentSystem)
+		if e == nil {
+			return nil, nil
+		}
+		return substituteNode(*e, bindings, file, currentSystem, visiting)
 
 	case float64, int, int32, int64, float32:
 		// Numeric literals - no substitution needed
-		return e
+		return e, nil
 
 	default:
 		// Handle interface{} that might contain other types
 		if e == nil {
-			return nil
+			return nil, nil
 		}
-
-		// Try to handle the case where expr is wrapped in interface{}
+		// Try to handle the case where expr is wrapped in a pointer.
 		v := reflect.ValueOf(e)
 		if v.Kind() == reflect.Pointer && !v.IsNil() {
-			// Dereference pointer
-			return substituteRecursiveWithScoped(v.Elem().Interface(), bindings, file, currentSystem)
+			return substituteRec(v.Elem().Interface(), bindings, file, currentSystem, visiting)
 		}
-
 		// For unknown types, return as-is
-		return e
+		return e, nil
 	}
 }
 
-// SubstituteInEquation substitutes variables in both LHS and RHS of an equation
-func SubstituteInEquation(eq Equation, bindings map[string]Expression) Equation {
-	return Equation{
-		LHS: substituteRecursive(eq.LHS, bindings),
-		RHS: substituteRecursive(eq.RHS, bindings),
+// lookupBinding resolves a variable name to the binding key and replacement it
+// substitutes to: the direct binding first, then (when file != nil and the name
+// is dotted) the scoped-reference resolution. Returns ok=false when no binding
+// applies. The returned key is what cycle tracking is keyed on.
+func lookupBinding(name string, bindings map[string]Expression, file *ESMFile, currentSystem string) (key string, replacement Expression, ok bool) {
+	if r, exists := bindings[name]; exists {
+		return name, r, true
 	}
+	if file != nil && strings.Contains(name, ".") {
+		if resolved, found := resolveScopedReference(name, file, currentSystem); found {
+			if r, exists := bindings[resolved]; exists {
+				return resolved, r, true
+			}
+		}
+	}
+	return "", nil, false
 }
 
-// SubstituteInAffectEquation substitutes variables in an affect equation
-// Note: LHS is a variable name (string) so it's not substituted, only RHS
-func SubstituteInAffectEquation(affect AffectEquation, bindings map[string]Expression) AffectEquation {
-	return AffectEquation{
-		LHS: affect.LHS, // Variable name stays the same
-		RHS: substituteRecursive(affect.RHS, bindings),
+// substituteNode substitutes into an operator node's children (via the shared
+// field-preserving walker, so every field survives) and then, for D/grad,
+// substitutes the `wrt`/`dim` variable-name slot they carry outside args.
+func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string, visiting map[string]bool) (Expression, error) {
+	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
+		return substituteRec(child, bindings, file, currentSystem, visiting)
+	})
+	if err != nil {
+		return out, err
 	}
+	if out.Op == OpDerivative {
+		out.Wrt = substituteScalarField(out.Wrt, bindings, file, currentSystem)
+	}
+	if out.Op == OpGrad {
+		out.Dim = substituteScalarField(out.Dim, bindings, file, currentSystem)
+	}
+	return out, nil
 }
 
-// SubstituteInModel performs substitution across an entire model
-func SubstituteInModel(model Model, bindings map[string]Expression) Model {
-	newModel := model // Copy the struct
-
-	// Substitute in equations
-	newEquations := make([]Equation, len(model.Equations))
-	for i, eq := range model.Equations {
-		newEquations[i] = SubstituteInEquation(eq, bindings)
+// substituteScalarField resolves a substitution for a *string variable-name
+// slot (a `wrt`/`dim` name a D/grad op carries outside `args`). A binding is
+// applied only when the replacement is itself a bare name (string); a
+// non-string replacement, or no binding, leaves the slot unchanged. It performs
+// no recursion (a name has no children), so it cannot introduce a cycle.
+func substituteScalarField(field *string, bindings map[string]Expression, file *ESMFile, currentSystem string) *string {
+	if field == nil {
+		return nil
 	}
-	newModel.Equations = newEquations
-
-	// Substitute in observed variable expressions
-	newVariables := make(map[string]ModelVariable)
-	for name, variable := range model.Variables {
-		newVar := variable
-		if variable.Expression != nil {
-			newVar.Expression = substituteRecursive(variable.Expression, bindings)
+	if _, replacement, ok := lookupBinding(*field, bindings, file, currentSystem); ok {
+		if s, ok := replacement.(string); ok {
+			return &s
 		}
-		newVariables[name] = newVar
 	}
-	newModel.Variables = newVariables
-
-	// Substitute in discrete events
-	newDiscreteEvents := make([]DiscreteEvent, len(model.DiscreteEvents))
-	for i, event := range model.DiscreteEvents {
-		newEvent := event
-
-		// Substitute in trigger expression if it's a condition type
-		if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
-			newEvent.Trigger.Expression = substituteRecursive(event.Trigger.Expression, bindings)
-		}
-
-		// Substitute in affects
-		newAffects := make([]AffectEquation, len(event.Affects))
-		for j, affect := range event.Affects {
-			newAffects[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.Affects = newAffects
-
-		newDiscreteEvents[i] = newEvent
-	}
-	newModel.DiscreteEvents = newDiscreteEvents
-
-	// Substitute in continuous events
-	newContinuousEvents := make([]ContinuousEvent, len(model.ContinuousEvents))
-	for i, event := range model.ContinuousEvents {
-		newEvent := event
-
-		// Substitute in conditions
-		newConditions := make([]Expression, len(event.Conditions))
-		for j, condition := range event.Conditions {
-			newConditions[j] = substituteRecursive(condition, bindings)
-		}
-		newEvent.Conditions = newConditions
-
-		// Substitute in affects
-		newAffects := make([]AffectEquation, len(event.Affects))
-		for j, affect := range event.Affects {
-			newAffects[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.Affects = newAffects
-
-		// Substitute in affect_neg if present
-		newAffectNeg := make([]AffectEquation, len(event.AffectNeg))
-		for j, affect := range event.AffectNeg {
-			newAffectNeg[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.AffectNeg = newAffectNeg
-
-		newContinuousEvents[i] = newEvent
-	}
-	newModel.ContinuousEvents = newContinuousEvents
-
-	return newModel
+	return field
 }
 
-// SubstituteInReactionSystem performs substitution across an entire reaction system
-func SubstituteInReactionSystem(system ReactionSystem, bindings map[string]Expression) ReactionSystem {
-	newSystem := system // Copy the struct
-
-	// Substitute in reactions
-	newReactions := make([]Reaction, len(system.Reactions))
-	for i, reaction := range system.Reactions {
-		newReaction := reaction
-		newReaction.Rate = substituteRecursive(reaction.Rate, bindings)
-		newReactions[i] = newReaction
+// SubstituteInEquation substitutes variables in both LHS and RHS of an equation.
+func SubstituteInEquation(eq Equation, bindings map[string]Expression) (Equation, error) {
+	lhs, err := substituteRecursiveWithScoped(eq.LHS, bindings, nil, "")
+	if err != nil {
+		return Equation{}, err
 	}
-	newSystem.Reactions = newReactions
-
-	// Substitute in constraint equations
-	newConstraintEquations := make([]Equation, len(system.ConstraintEquations))
-	for i, eq := range system.ConstraintEquations {
-		newConstraintEquations[i] = SubstituteInEquation(eq, bindings)
+	rhs, err := substituteRecursiveWithScoped(eq.RHS, bindings, nil, "")
+	if err != nil {
+		return Equation{}, err
 	}
-	newSystem.ConstraintEquations = newConstraintEquations
-
-	// Substitute in discrete events (same as in model)
-	newDiscreteEvents := make([]DiscreteEvent, len(system.DiscreteEvents))
-	for i, event := range system.DiscreteEvents {
-		newEvent := event
-
-		if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
-			newEvent.Trigger.Expression = substituteRecursive(event.Trigger.Expression, bindings)
-		}
-
-		newAffects := make([]AffectEquation, len(event.Affects))
-		for j, affect := range event.Affects {
-			newAffects[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.Affects = newAffects
-
-		newDiscreteEvents[i] = newEvent
-	}
-	newSystem.DiscreteEvents = newDiscreteEvents
-
-	// Substitute in continuous events (same as in model)
-	newContinuousEvents := make([]ContinuousEvent, len(system.ContinuousEvents))
-	for i, event := range system.ContinuousEvents {
-		newEvent := event
-
-		newConditions := make([]Expression, len(event.Conditions))
-		for j, condition := range event.Conditions {
-			newConditions[j] = substituteRecursive(condition, bindings)
-		}
-		newEvent.Conditions = newConditions
-
-		newAffects := make([]AffectEquation, len(event.Affects))
-		for j, affect := range event.Affects {
-			newAffects[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.Affects = newAffects
-
-		newAffectNeg := make([]AffectEquation, len(event.AffectNeg))
-		for j, affect := range event.AffectNeg {
-			newAffectNeg[j] = SubstituteInAffectEquation(affect, bindings)
-		}
-		newEvent.AffectNeg = newAffectNeg
-
-		newContinuousEvents[i] = newEvent
-	}
-	newSystem.ContinuousEvents = newContinuousEvents
-
-	return newSystem
+	return Equation{LHS: lhs, RHS: rhs}, nil
 }
 
-// SubstituteInFile performs substitution across an entire ESM file
-func SubstituteInFile(file EsmFile, bindings map[string]Expression) EsmFile {
+// SubstituteInAffectEquation substitutes variables in an affect equation.
+// Note: LHS is a variable name (string) so it's not substituted, only RHS.
+func SubstituteInAffectEquation(affect AffectEquation, bindings map[string]Expression) (AffectEquation, error) {
+	rhs, err := substituteRecursiveWithScoped(affect.RHS, bindings, nil, "")
+	if err != nil {
+		return AffectEquation{}, err
+	}
+	return AffectEquation{LHS: affect.LHS, RHS: rhs}, nil
+}
+
+// SubstituteInModel performs substitution across an entire model. It is the
+// scope-free case of SubstituteInModelWithScoped (file=nil disables dotted-name
+// resolution), so it delegates rather than duplicating the traversal.
+func SubstituteInModel(model Model, bindings map[string]Expression) (Model, error) {
+	return SubstituteInModelWithScoped(model, bindings, nil, "")
+}
+
+// SubstituteInReactionSystem performs substitution across an entire reaction
+// system. Scope-free delegation to SubstituteInReactionSystemWithScoped.
+func SubstituteInReactionSystem(system ReactionSystem, bindings map[string]Expression) (ReactionSystem, error) {
+	return SubstituteInReactionSystemWithScoped(system, bindings, nil, "")
+}
+
+// SubstituteInFile performs substitution across an entire ESM file.
+func SubstituteInFile(file ESMFile, bindings map[string]Expression) (ESMFile, error) {
 	newFile := file // Copy the struct
 
-	// Substitute in models
 	newModels := make(map[string]Model)
 	for name, model := range file.Models {
-		newModels[name] = SubstituteInModel(model, bindings)
+		out, err := SubstituteInModel(model, bindings)
+		if err != nil {
+			return ESMFile{}, err
+		}
+		newModels[name] = out
 	}
 	newFile.Models = newModels
 
-	// Substitute in reaction systems
 	newReactionSystems := make(map[string]ReactionSystem)
 	for name, system := range file.ReactionSystems {
-		newReactionSystems[name] = SubstituteInReactionSystem(system, bindings)
+		out, err := SubstituteInReactionSystem(system, bindings)
+		if err != nil {
+			return ESMFile{}, err
+		}
+		newReactionSystems[name] = out
 	}
 	newFile.ReactionSystems = newReactionSystems
 
-	return newFile
+	return newFile, nil
 }
 
-// PartialSubstitute performs substitution but preserves the original structure when possible
-// This is useful when you want to substitute some variables but keep others as symbolic references
-func PartialSubstitute(expr Expression, bindings map[string]Expression, keepSymbolic []string) Expression {
+// PartialSubstitute performs substitution but preserves the original structure
+// when possible. This is useful when you want to substitute some variables but
+// keep others as symbolic references.
+func PartialSubstitute(expr Expression, bindings map[string]Expression, keepSymbolic []string) (Expression, error) {
 	// Create a filtered bindings map that excludes variables we want to keep symbolic
 	filteredBindings := make(map[string]Expression)
 	for k, v := range bindings {
@@ -319,25 +228,39 @@ func PartialSubstitute(expr Expression, bindings map[string]Expression, keepSymb
 		}
 	}
 
-	return substituteRecursive(expr, filteredBindings)
+	return substituteRecursiveWithScoped(expr, filteredBindings, nil, "")
 }
 
-// SubstituteWithScoped performs variable substitution with scoped reference support
-func SubstituteWithScoped(expr Expression, bindings map[string]Expression, file *EsmFile, currentSystem string) Expression {
+// SubstituteWithScoped performs variable substitution with scoped reference support.
+func SubstituteWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
 	return substituteRecursiveWithScoped(expr, bindings, file, currentSystem)
 }
 
-// SubstituteInModelWithScoped performs substitution across an entire model with scoped reference support
-func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, file *EsmFile, modelName string) Model {
+// SubstituteInModelWithScoped performs substitution across an entire model with
+// scoped reference support.
+func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, file *ESMFile, modelName string) (Model, error) {
 	newModel := model // Copy the struct
+
+	// sub applies substitution and latches the first error, so the traversal
+	// below reads like a straight-line rewrite; the latched error is returned
+	// once at the end.
+	var firstErr error
+	sub := func(e Expression) Expression {
+		if firstErr != nil {
+			return e
+		}
+		out, err := substituteRecursiveWithScoped(e, bindings, file, modelName)
+		if err != nil {
+			firstErr = err
+			return e
+		}
+		return out
+	}
 
 	// Substitute in equations
 	newEquations := make([]Equation, len(model.Equations))
 	for i, eq := range model.Equations {
-		newEquations[i] = Equation{
-			LHS: substituteRecursiveWithScoped(eq.LHS, bindings, file, modelName),
-			RHS: substituteRecursiveWithScoped(eq.RHS, bindings, file, modelName),
-		}
+		newEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS)}
 	}
 	newModel.Equations = newEquations
 
@@ -346,7 +269,7 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	for name, variable := range model.Variables {
 		newVar := variable
 		if variable.Expression != nil {
-			newVar.Expression = substituteRecursiveWithScoped(variable.Expression, bindings, file, modelName)
+			newVar.Expression = sub(variable.Expression)
 		}
 		newVariables[name] = newVar
 	}
@@ -356,22 +279,14 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	newDiscreteEvents := make([]DiscreteEvent, len(model.DiscreteEvents))
 	for i, event := range model.DiscreteEvents {
 		newEvent := event
-
-		// Substitute in trigger expression if it's a condition type
 		if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
-			newEvent.Trigger.Expression = substituteRecursiveWithScoped(event.Trigger.Expression, bindings, file, modelName)
+			newEvent.Trigger.Expression = sub(event.Trigger.Expression)
 		}
-
-		// Substitute in affects
 		newAffects := make([]AffectEquation, len(event.Affects))
 		for j, affect := range event.Affects {
-			newAffects[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, modelName),
-			}
+			newAffects[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.Affects = newAffects
-
 		newDiscreteEvents[i] = newEvent
 	}
 	newModel.DiscreteEvents = newDiscreteEvents
@@ -380,50 +295,54 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	newContinuousEvents := make([]ContinuousEvent, len(model.ContinuousEvents))
 	for i, event := range model.ContinuousEvents {
 		newEvent := event
-
-		// Substitute in conditions
 		newConditions := make([]Expression, len(event.Conditions))
 		for j, condition := range event.Conditions {
-			newConditions[j] = substituteRecursiveWithScoped(condition, bindings, file, modelName)
+			newConditions[j] = sub(condition)
 		}
 		newEvent.Conditions = newConditions
-
-		// Substitute in affects
 		newAffects := make([]AffectEquation, len(event.Affects))
 		for j, affect := range event.Affects {
-			newAffects[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, modelName),
-			}
+			newAffects[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.Affects = newAffects
-
-		// Substitute in affect_neg if present
 		newAffectNeg := make([]AffectEquation, len(event.AffectNeg))
 		for j, affect := range event.AffectNeg {
-			newAffectNeg[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, modelName),
-			}
+			newAffectNeg[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.AffectNeg = newAffectNeg
-
 		newContinuousEvents[i] = newEvent
 	}
 	newModel.ContinuousEvents = newContinuousEvents
 
-	return newModel
+	if firstErr != nil {
+		return Model{}, firstErr
+	}
+	return newModel, nil
 }
 
-// SubstituteInReactionSystemWithScoped performs substitution across an entire reaction system with scoped reference support
-func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[string]Expression, file *EsmFile, systemName string) ReactionSystem {
+// SubstituteInReactionSystemWithScoped performs substitution across an entire
+// reaction system with scoped reference support.
+func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[string]Expression, file *ESMFile, systemName string) (ReactionSystem, error) {
 	newSystem := system // Copy the struct
+
+	var firstErr error
+	sub := func(e Expression) Expression {
+		if firstErr != nil {
+			return e
+		}
+		out, err := substituteRecursiveWithScoped(e, bindings, file, systemName)
+		if err != nil {
+			firstErr = err
+			return e
+		}
+		return out
+	}
 
 	// Substitute in reactions
 	newReactions := make([]Reaction, len(system.Reactions))
 	for i, reaction := range system.Reactions {
 		newReaction := reaction
-		newReaction.Rate = substituteRecursiveWithScoped(reaction.Rate, bindings, file, systemName)
+		newReaction.Rate = sub(reaction.Rate)
 		newReactions[i] = newReaction
 	}
 	newSystem.Reactions = newReactions
@@ -431,10 +350,7 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 	// Substitute in constraint equations
 	newConstraintEquations := make([]Equation, len(system.ConstraintEquations))
 	for i, eq := range system.ConstraintEquations {
-		newConstraintEquations[i] = Equation{
-			LHS: substituteRecursiveWithScoped(eq.LHS, bindings, file, systemName),
-			RHS: substituteRecursiveWithScoped(eq.RHS, bindings, file, systemName),
-		}
+		newConstraintEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS)}
 	}
 	newSystem.ConstraintEquations = newConstraintEquations
 
@@ -442,20 +358,14 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 	newDiscreteEvents := make([]DiscreteEvent, len(system.DiscreteEvents))
 	for i, event := range system.DiscreteEvents {
 		newEvent := event
-
 		if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
-			newEvent.Trigger.Expression = substituteRecursiveWithScoped(event.Trigger.Expression, bindings, file, systemName)
+			newEvent.Trigger.Expression = sub(event.Trigger.Expression)
 		}
-
 		newAffects := make([]AffectEquation, len(event.Affects))
 		for j, affect := range event.Affects {
-			newAffects[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, systemName),
-			}
+			newAffects[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.Affects = newAffects
-
 		newDiscreteEvents[i] = newEvent
 	}
 	newSystem.DiscreteEvents = newDiscreteEvents
@@ -464,55 +374,55 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 	newContinuousEvents := make([]ContinuousEvent, len(system.ContinuousEvents))
 	for i, event := range system.ContinuousEvents {
 		newEvent := event
-
 		newConditions := make([]Expression, len(event.Conditions))
 		for j, condition := range event.Conditions {
-			newConditions[j] = substituteRecursiveWithScoped(condition, bindings, file, systemName)
+			newConditions[j] = sub(condition)
 		}
 		newEvent.Conditions = newConditions
-
 		newAffects := make([]AffectEquation, len(event.Affects))
 		for j, affect := range event.Affects {
-			newAffects[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, systemName),
-			}
+			newAffects[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.Affects = newAffects
-
 		newAffectNeg := make([]AffectEquation, len(event.AffectNeg))
 		for j, affect := range event.AffectNeg {
-			newAffectNeg[j] = AffectEquation{
-				LHS: affect.LHS, // Variable name stays the same
-				RHS: substituteRecursiveWithScoped(affect.RHS, bindings, file, systemName),
-			}
+			newAffectNeg[j] = AffectEquation{LHS: affect.LHS, RHS: sub(affect.RHS)}
 		}
 		newEvent.AffectNeg = newAffectNeg
-
 		newContinuousEvents[i] = newEvent
 	}
 	newSystem.ContinuousEvents = newContinuousEvents
 
-	return newSystem
+	if firstErr != nil {
+		return ReactionSystem{}, firstErr
+	}
+	return newSystem, nil
 }
 
-// SubstituteInFileWithScoped performs substitution across an entire ESM file with scoped reference support
-func SubstituteInFileWithScoped(file EsmFile, bindings map[string]Expression) EsmFile {
+// SubstituteInFileWithScoped performs substitution across an entire ESM file
+// with scoped reference support.
+func SubstituteInFileWithScoped(file ESMFile, bindings map[string]Expression) (ESMFile, error) {
 	newFile := file // Copy the struct
 
-	// Substitute in models
 	newModels := make(map[string]Model)
 	for name, model := range file.Models {
-		newModels[name] = SubstituteInModelWithScoped(model, bindings, &file, name)
+		out, err := SubstituteInModelWithScoped(model, bindings, &file, name)
+		if err != nil {
+			return ESMFile{}, err
+		}
+		newModels[name] = out
 	}
 	newFile.Models = newModels
 
-	// Substitute in reaction systems
 	newReactionSystems := make(map[string]ReactionSystem)
 	for name, system := range file.ReactionSystems {
-		newReactionSystems[name] = SubstituteInReactionSystemWithScoped(system, bindings, &file, name)
+		out, err := SubstituteInReactionSystemWithScoped(system, bindings, &file, name)
+		if err != nil {
+			return ESMFile{}, err
+		}
+		newReactionSystems[name] = out
 	}
 	newFile.ReactionSystems = newReactionSystems
 
-	return newFile
+	return newFile, nil
 }

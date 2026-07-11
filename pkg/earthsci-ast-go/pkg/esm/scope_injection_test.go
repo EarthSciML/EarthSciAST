@@ -11,7 +11,7 @@ package esm
 //
 // Form B is a pure root-level transform, so it is asserted against the full
 // expanded golden through the raw §9.7 pipeline (tiExpandRaw), exactly like
-// import_smoke. Forms A and C go through the typed EsmFile round-trip, whose
+// import_smoke. Forms A and C go through the typed ESMFile round-trip, whose
 // serializer emits an empty `metadata.authors` the Julia goldens omit (a
 // pre-existing cross-binding serializer quirk, unrelated to injection), so
 // those two compare every block EXCEPT `metadata` — the same scoping the
@@ -27,13 +27,13 @@ import (
 // siNodeOp returns the `op` of an expression node, handling the typed
 // ExprNode / *ExprNode (a Load-parsed equation) and the raw map form (an
 // inlined-subsystem or raw-pipeline node).
-func siNodeOp(x interface{}) string {
+func siNodeOp(x any) string {
 	switch e := x.(type) {
 	case ExprNode:
 		return e.Op
 	case *ExprNode:
 		return e.Op
-	case map[string]interface{}:
+	case map[string]any:
 		s, _ := e["op"].(string)
 		return s
 	}
@@ -41,23 +41,23 @@ func siNodeOp(x interface{}) string {
 }
 
 // siNodeArgs returns the `args` slice of an expression node in either form.
-func siNodeArgs(x interface{}) []interface{} {
+func siNodeArgs(x any) []any {
 	switch e := x.(type) {
 	case ExprNode:
 		return e.Args
 	case *ExprNode:
 		return e.Args
-	case map[string]interface{}:
-		a, _ := e["args"].([]interface{})
+	case map[string]any:
+		a, _ := e["args"].([]any)
 		return a
 	}
 	return nil
 }
 
 // siDecodeDoc decodes a JSON document string into a generic map.
-func siDecodeDoc(t *testing.T, s string) map[string]interface{} {
+func siDecodeDoc(t *testing.T, s string) map[string]any {
 	t.Helper()
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal([]byte(s), &m); err != nil {
 		t.Fatalf("decode document: %v", err)
 	}
@@ -65,23 +65,23 @@ func siDecodeDoc(t *testing.T, s string) map[string]interface{} {
 }
 
 // siEqRHS navigates a model's first equation RHS in a decoded raw document.
-func siRawFirstEqRHS(t *testing.T, comp map[string]interface{}) interface{} {
+func siRawFirstEqRHS(t *testing.T, comp map[string]any) any {
 	t.Helper()
-	eqs, ok := comp["equations"].([]interface{})
+	eqs, ok := comp["equations"].([]any)
 	if !ok || len(eqs) == 0 {
 		t.Fatalf("component has no equations")
 	}
-	eq, _ := eqs[0].(map[string]interface{})
+	eq, _ := eqs[0].(map[string]any)
 	return eq["rhs"]
 }
 
-// siCompareSansMetadata marshals the typed EsmFile, strips `metadata` from both
+// siCompareSansMetadata marshals the typed ESMFile, strips `metadata` from both
 // it and the golden, and asserts structural equality of every other block.
-func siCompareSansMetadata(t *testing.T, f *EsmFile, goldenPath string) {
+func siCompareSansMetadata(t *testing.T, f *ESMFile, goldenPath string) {
 	t.Helper()
 	b, err := json.Marshal(f)
 	if err != nil {
-		t.Fatalf("marshal EsmFile: %v", err)
+		t.Fatalf("marshal ESMFile: %v", err)
 	}
 	got := siDecodeDoc(t, string(b))
 	delete(got, "metadata")
@@ -113,7 +113,7 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	// The mounted, agnostic leaf's D(c, wrt: lon) is lowered by the injected
 	// rule at the mount; the subsystem resolves to an inline component (a raw
 	// map), not a ref.
-	runoff, ok := f.Models["Assembly"].Subsystems["Runoff"].(map[string]interface{})
+	runoff, ok := f.Models["Assembly"].Subsystems["Runoff"].(map[string]any)
 	if !ok {
 		t.Fatalf("Runoff subsystem did not resolve to an inline component: %T",
 			f.Models["Assembly"].Subsystems["Runoff"])
@@ -152,7 +152,7 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load no_inject: %v", err)
 	}
-	niRunoff, ok := ni.Models["Assembly"].Subsystems["Runoff"].(map[string]interface{})
+	niRunoff, ok := ni.Models["Assembly"].Subsystems["Runoff"].(map[string]any)
 	if !ok {
 		t.Fatalf("no_inject Runoff did not resolve to a component: %T",
 			ni.Models["Assembly"].Subsystems["Runoff"])
@@ -172,16 +172,16 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 
 	got := tiExpandRaw(t, filepath.Join(dir, "fixture.esm"))
 	doc := siDecodeDoc(t, got)
-	models := doc["models"].(map[string]interface{})
+	models := doc["models"].(map[string]any)
 
 	// Advection is discretized by name; its lon-derivative is lowered.
-	advArgs := siNodeArgs(siRawFirstEqRHS(t, models["Advection"].(map[string]interface{})))
+	advArgs := siNodeArgs(siRawFirstEqRHS(t, models["Advection"].(map[string]any)))
 	if len(advArgs) != 2 || siNodeOp(advArgs[1]) != "makearray" {
 		t.Errorf("Advection lon-derivative not lowered: op=%q", siNodeOp(advArgs[1]))
 	}
 	// Injected grid reached the importing registry.
-	if isets, ok := doc["index_sets"].(map[string]interface{}); ok {
-		lon, _ := isets["lon"].(map[string]interface{})
+	if isets, ok := doc["index_sets"].(map[string]any); ok {
+		lon, _ := isets["lon"].(map[string]any)
 		if lon["size"] != float64(288) {
 			t.Errorf("index_sets.lon.size = %v; want 288", lon["size"])
 		}
@@ -189,13 +189,13 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 		t.Errorf("index_sets missing from expanded document")
 	}
 	// Emit (the 0-D partner) named no key and stays untouched.
-	emitEq := models["Emit"].(map[string]interface{})["equations"].([]interface{})[0].(map[string]interface{})
+	emitEq := models["Emit"].(map[string]any)["equations"].([]any)[0].(map[string]any)
 	if siNodeOp(emitEq["lhs"]) != "D" {
 		t.Errorf("Emit lhs op = %q; want D (untouched)", siNodeOp(emitEq["lhs"]))
 	}
 	// The injection map is consumed — form B does not survive parse → emit.
-	coupling := doc["coupling"].([]interface{})
-	if entry, ok := coupling[0].(map[string]interface{}); ok {
+	coupling := doc["coupling"].([]any)
+	if entry, ok := coupling[0].(map[string]any); ok {
 		if _, has := entry["expression_template_imports"]; has {
 			t.Errorf("coupling entry retained expression_template_imports after load")
 		}

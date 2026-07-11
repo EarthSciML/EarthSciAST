@@ -110,7 +110,7 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 // TestIndexSetsDocumentScopeRoundTrip pins the v0.8.0 relocation of the
 // `index_sets` registry from a per-Model field to document scope
 // (RFC semiring-faq-unified-ir §5.2). It asserts that (a) the loader parses the
-// registry onto the top-level EsmFile.IndexSets field, (b) no model carries an
+// registry onto the top-level ESMFile.IndexSets field, (b) no model carries an
 // index_sets field, and (c) the registry survives a load → save → load → save
 // cycle at document scope, idempotently. Covers the four kinds that appear in
 // the shared corpus (interval, categorical, derived).
@@ -175,13 +175,13 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", tc.rel, err)
 			}
-			var raw map[string]interface{}
+			var raw map[string]any
 			if err := json.Unmarshal(data, &raw); err != nil {
 				t.Fatalf("unmarshal fixture %s: %v", tc.rel, err)
 			}
-			if models, ok := raw["models"].(map[string]interface{}); ok {
+			if models, ok := raw["models"].(map[string]any); ok {
 				for mn, mv := range models {
-					if m, ok := mv.(map[string]interface{}); ok {
+					if m, ok := mv.(map[string]any); ok {
 						if _, bad := m["index_sets"]; bad {
 							t.Errorf("model %q still carries a model-scoped index_sets field", mn)
 						}
@@ -202,17 +202,17 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("first serialize: %v", err)
 			}
-			var doc1 map[string]interface{}
+			var doc1 map[string]any
 			if err := json.Unmarshal(out1, &doc1); err != nil {
 				t.Fatalf("unmarshal out1: %v", err)
 			}
-			iset1, ok := doc1["index_sets"].(map[string]interface{})
+			iset1, ok := doc1["index_sets"].(map[string]any)
 			if !ok || len(iset1) == 0 {
 				t.Fatalf("top-level index_sets missing from serialized output")
 			}
-			if models, ok := doc1["models"].(map[string]interface{}); ok {
+			if models, ok := doc1["models"].(map[string]any); ok {
 				for mn, mv := range models {
-					if m, ok := mv.(map[string]interface{}); ok {
+					if m, ok := mv.(map[string]any); ok {
 						if _, has := m["index_sets"]; has {
 							t.Errorf("serialized model %q must not carry index_sets", mn)
 						}
@@ -232,7 +232,7 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("second serialize: %v", err)
 			}
-			var doc2 map[string]interface{}
+			var doc2 map[string]any
 			if err := json.Unmarshal(out2, &doc2); err != nil {
 				t.Fatalf("unmarshal out2: %v", err)
 			}

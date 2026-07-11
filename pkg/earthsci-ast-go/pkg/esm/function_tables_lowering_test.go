@@ -26,7 +26,7 @@ import (
 // toFloat64Any extends the package's toFloat64 with json.Number handling.
 // Const-op `value` payloads come off the wire as json.Number under the
 // UseNumber decoder path and are not normalized in place.
-func toFloat64Any(v interface{}) (float64, bool) {
+func toFloat64Any(v any) (float64, bool) {
 	if n, ok := v.(json.Number); ok {
 		f, err := n.Float64()
 		return f, err == nil
@@ -49,7 +49,7 @@ func bitEqual(a, b float64) bool {
 	return math.Float64bits(a) == math.Float64bits(b)
 }
 
-func resolveAxisValue(t *testing.T, expr interface{}, vars map[string]ModelVariable) float64 {
+func resolveAxisValue(t *testing.T, expr any, vars map[string]ModelVariable) float64 {
 	t.Helper()
 	switch v := expr.(type) {
 	case string:
@@ -95,15 +95,15 @@ func resolveOutputIndex(t *testing.T, node ExprNode, outputs []string) int {
 	return 0
 }
 
-func sliceTo1D(t *testing.T, data interface{}, idx int, hasOutputs bool) []float64 {
+func sliceTo1D(t *testing.T, data any, idx int, hasOutputs bool) []float64 {
 	t.Helper()
-	arr, ok := data.([]interface{})
+	arr, ok := data.([]any)
 	if !ok {
 		t.Fatalf("data must be array, got %T", data)
 	}
 	src := arr
 	if hasOutputs {
-		row, ok := arr[idx].([]interface{})
+		row, ok := arr[idx].([]any)
 		if !ok {
 			t.Fatalf("data[%d] must be array, got %T", idx, arr[idx])
 		}
@@ -120,15 +120,15 @@ func sliceTo1D(t *testing.T, data interface{}, idx int, hasOutputs bool) []float
 	return out
 }
 
-func sliceTo2D(t *testing.T, data interface{}, idx int, hasOutputs bool) [][]float64 {
+func sliceTo2D(t *testing.T, data any, idx int, hasOutputs bool) [][]float64 {
 	t.Helper()
-	arr, ok := data.([]interface{})
+	arr, ok := data.([]any)
 	if !ok {
 		t.Fatalf("data must be array, got %T", data)
 	}
-	var rows []interface{}
+	var rows []any
 	if hasOutputs {
-		r, ok := arr[idx].([]interface{})
+		r, ok := arr[idx].([]any)
 		if !ok {
 			t.Fatalf("data[%d] must be 2-D array", idx)
 		}
@@ -138,7 +138,7 @@ func sliceTo2D(t *testing.T, data interface{}, idx int, hasOutputs bool) [][]flo
 	}
 	out := make([][]float64, len(rows))
 	for i, row := range rows {
-		ra, ok := row.([]interface{})
+		ra, ok := row.([]any)
 		if !ok {
 			t.Fatalf("row %d must be array, got %T", i, row)
 		}
@@ -154,26 +154,26 @@ func sliceTo2D(t *testing.T, data interface{}, idx int, hasOutputs bool) [][]flo
 	return out
 }
 
-func axisValuesFloat64(in []float64) []interface{} {
-	out := make([]interface{}, len(in))
+func axisValuesFloat64(in []float64) []any {
+	out := make([]any, len(in))
 	for i, v := range in {
 		out[i] = v
 	}
 	return out
 }
 
-func tableSliceAsAny1D(in []float64) []interface{} {
-	out := make([]interface{}, len(in))
+func tableSliceAsAny1D(in []float64) []any {
+	out := make([]any, len(in))
 	for i, v := range in {
 		out[i] = v
 	}
 	return out
 }
 
-func tableSliceAsAny2D(in [][]float64) []interface{} {
-	out := make([]interface{}, len(in))
+func tableSliceAsAny2D(in [][]float64) []any {
+	out := make([]any, len(in))
 	for i, row := range in {
-		rr := make([]interface{}, len(row))
+		rr := make([]any, len(row))
 		for j, v := range row {
 			rr[j] = v
 		}
@@ -182,7 +182,7 @@ func tableSliceAsAny2D(in [][]float64) []interface{} {
 	return out
 }
 
-func evalInterpFloat(t *testing.T, name string, args []interface{}) float64 {
+func evalInterpFloat(t *testing.T, name string, args []any) float64 {
 	t.Helper()
 	got, err := EvaluateClosedFunction(name, args)
 	if err != nil {
@@ -195,7 +195,7 @@ func evalInterpFloat(t *testing.T, name string, args []interface{}) float64 {
 	return f
 }
 
-func lowerAndEvaluate(t *testing.T, node ExprNode, file *EsmFile,
+func lowerAndEvaluate(t *testing.T, node ExprNode, file *ESMFile,
 	vars map[string]ModelVariable) float64 {
 	t.Helper()
 	if node.Op != "table_lookup" {
@@ -222,7 +222,7 @@ func lowerAndEvaluate(t *testing.T, node ExprNode, file *EsmFile,
 		axis := table.Axes[0]
 		slice := sliceTo1D(t, table.Data, outIdx, hasOutputs)
 		x := resolveAxisValue(t, node.TableAxes[axis.Name], vars)
-		return evalInterpFloat(t, "interp.linear", []interface{}{
+		return evalInterpFloat(t, "interp.linear", []any{
 			tableSliceAsAny1D(slice),
 			axisValuesFloat64(axis.Values),
 			x,
@@ -234,7 +234,7 @@ func lowerAndEvaluate(t *testing.T, node ExprNode, file *EsmFile,
 		slice := sliceTo2D(t, table.Data, outIdx, hasOutputs)
 		x := resolveAxisValue(t, node.TableAxes[ax.Name], vars)
 		y := resolveAxisValue(t, node.TableAxes[ay.Name], vars)
-		return evalInterpFloat(t, "interp.bilinear", []interface{}{
+		return evalInterpFloat(t, "interp.bilinear", []any{
 			tableSliceAsAny2D(slice),
 			axisValuesFloat64(ax.Values),
 			axisValuesFloat64(ay.Values),
@@ -251,7 +251,7 @@ func referenceInlineConst(
 	output *string,
 	outputIdxInt *int,
 	axisInputs [][2]string,
-	file *EsmFile,
+	file *ESMFile,
 	vars map[string]ModelVariable,
 ) float64 {
 	t.Helper()
@@ -283,7 +283,7 @@ func referenceInlineConst(
 		if !ok {
 			t.Fatal("variable default not numeric")
 		}
-		return evalInterpFloat(t, "interp.linear", []interface{}{
+		return evalInterpFloat(t, "interp.linear", []any{
 			tableSliceAsAny1D(slice),
 			axisValuesFloat64(axis.Values),
 			x,
@@ -298,7 +298,7 @@ func referenceInlineConst(
 		slice := sliceTo2D(t, table.Data, idx, hasOutputs)
 		x, _ := toFloat64Any(vars[axisInputs[0][1]].Default)
 		y, _ := toFloat64Any(vars[axisInputs[1][1]].Default)
-		return evalInterpFloat(t, "interp.bilinear", []interface{}{
+		return evalInterpFloat(t, "interp.bilinear", []any{
 			tableSliceAsAny2D(slice),
 			axisValuesFloat64(ax.Values),
 			axisValuesFloat64(ay.Values),
@@ -309,7 +309,7 @@ func referenceInlineConst(
 	return 0
 }
 
-func firstTableLookup(t *testing.T, file *EsmFile, modelID string, eqIdx int) ExprNode {
+func firstTableLookup(t *testing.T, file *ESMFile, modelID string, eqIdx int) ExprNode {
 	t.Helper()
 	model := file.Models[modelID]
 	rhs := model.Equations[eqIdx].RHS
@@ -412,7 +412,7 @@ func TestFunctionTablesRoundtripLoweringMatchesInlineConstCompanion(t *testing.T
 	x := resolveAxisValue(t, inline.Args[2], vars)
 	tableSlice := sliceTo1D(t, tableArg.Value, 0, false)
 	axisSlice := sliceTo1D(t, axisArg.Value, 0, false)
-	inlineVal := evalInterpFloat(t, "interp.linear", []interface{}{
+	inlineVal := evalInterpFloat(t, "interp.linear", []any{
 		tableSliceAsAny1D(tableSlice),
 		axisValuesFloat64(axisSlice),
 		x,

@@ -21,6 +21,9 @@ func (e *EvaluationError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *EvaluationError) DiagnosticCode() string { return e.Code }
+
 // FreeVariables returns the set of all variable names that appear in an expression
 func FreeVariables(expr Expression) map[string]bool {
 	variables := make(map[string]bool)
@@ -76,23 +79,17 @@ func Simplify(expr Expression) Expression {
 	}
 }
 
-// simplifyExprNode performs simplification on an expression node
+// simplifyExprNode performs simplification on an expression node.
+//
+// Children are recursively simplified through the shared field-preserving
+// walker so a non-arithmetic node (integral, table_lookup, aggregate, …) keeps
+// EVERY field — the old rebuild copied only Op/Args/Wrt/Dim and silently
+// stripped Var/Lower/Upper/axes/output/…
 func simplifyExprNode(node ExprNode) Expression {
-	// First, recursively simplify all arguments
-	simplifiedArgs := make([]interface{}, len(node.Args))
-	for i, arg := range node.Args {
-		simplifiedArgs[i] = Simplify(arg)
-	}
+	simplified, _ := mapExprChildren(node, func(child Expression) (Expression, error) {
+		return Simplify(child), nil
+	})
 
-	// Create a new node with simplified arguments
-	simplified := ExprNode{
-		Op:   node.Op,
-		Args: simplifiedArgs,
-		Wrt:  node.Wrt,
-		Dim:  node.Dim,
-	}
-
-	// Apply simplification rules based on the operator
 	switch node.Op {
 	case "+":
 		return simplifyAddition(simplified)
@@ -105,19 +102,21 @@ func simplifyExprNode(node ExprNode) Expression {
 	case "^":
 		return simplifyExponentiation(simplified)
 	default:
-		return tryConstantFolding(simplified)
+		if result, ok := tryConstantFolding(simplified); ok {
+			return result
+		}
+		return simplified
 	}
 }
 
 // simplifyAddition handles addition simplification
 func simplifyAddition(node ExprNode) Expression {
-	// Try constant folding first
-	if result := tryConstantFolding(node); !isSameExprNode(result, node) {
+	if result, ok := tryConstantFolding(node); ok {
 		return result
 	}
 
 	// Filter out zeros and collect non-zero terms
-	nonZeroArgs := make([]interface{}, 0, len(node.Args))
+	nonZeroArgs := make([]any, 0, len(node.Args))
 	for _, arg := range node.Args {
 		if !isZero(arg) {
 			nonZeroArgs = append(nonZeroArgs, arg)
@@ -145,8 +144,7 @@ func simplifySubtraction(node ExprNode) Expression {
 	}
 
 	if len(node.Args) == 2 {
-		// Try constant folding first
-		if result := tryConstantFolding(node); !isSameExprNode(result, node) {
+		if result, ok := tryConstantFolding(node); ok {
 			return result
 		}
 
@@ -161,8 +159,7 @@ func simplifySubtraction(node ExprNode) Expression {
 
 // simplifyMultiplication handles multiplication simplification
 func simplifyMultiplication(node ExprNode) Expression {
-	// Try constant folding first
-	if result := tryConstantFolding(node); !isSameExprNode(result, node) {
+	if result, ok := tryConstantFolding(node); ok {
 		return result
 	}
 
@@ -174,7 +171,7 @@ func simplifyMultiplication(node ExprNode) Expression {
 	}
 
 	// Filter out ones
-	nonOneArgs := make([]interface{}, 0, len(node.Args))
+	nonOneArgs := make([]any, 0, len(node.Args))
 	for _, arg := range node.Args {
 		if !isOne(arg) {
 			nonOneArgs = append(nonOneArgs, arg)
@@ -197,8 +194,7 @@ func simplifyDivision(node ExprNode) Expression {
 		return node
 	}
 
-	// Try constant folding first
-	if result := tryConstantFolding(node); !isSameExprNode(result, node) {
+	if result, ok := tryConstantFolding(node); ok {
 		return result
 	}
 
@@ -221,8 +217,7 @@ func simplifyExponentiation(node ExprNode) Expression {
 		return node
 	}
 
-	// Try constant folding first
-	if result := tryConstantFolding(node); !isSameExprNode(result, node) {
+	if result, ok := tryConstantFolding(node); ok {
 		return result
 	}
 
@@ -252,91 +247,162 @@ func simplifyExponentiation(node ExprNode) Expression {
 	return node
 }
 
-// tryConstantFolding attempts to evaluate expressions with all constant arguments
-func tryConstantFolding(node ExprNode) Expression {
-	// Check if all arguments are numbers
-	numbers := make([]float64, len(node.Args))
+// arithOp describes a numeric operator: its inclusive arity bounds and a pure
+// reduction over already-evaluated float64 arguments. The SAME table drives
+// both the scalar evaluator (evaluateExprNode) and constant folding
+// (tryConstantFolding), so the two can never again disagree on which ops exist,
+// their arity, or how they reduce. maxArgs < 0 means unbounded (n-ary).
+//
+// apply returns an error on a domain violation (division by zero, log/sqrt of
+// an out-of-domain value). The evaluator surfaces that error; folding treats
+// ANY apply error (or an arity mismatch) as "cannot fold" and leaves the node
+// untouched, so a constant subexpression folds only when it would evaluate
+// without error.
+type arithOp struct {
+	minArgs, maxArgs int
+	apply            func(args []float64) (float64, error)
+}
+
+func (op arithOp) arityOK(n int) bool {
+	return n >= op.minArgs && (op.maxArgs < 0 || n <= op.maxArgs)
+}
+
+// arityDesc renders an op's arity bounds for evaluator error messages.
+func arityDesc(op arithOp) string {
+	switch {
+	case op.maxArgs < 0:
+		return fmt.Sprintf("at least %d", op.minArgs)
+	case op.minArgs == op.maxArgs:
+		return strconv.Itoa(op.minArgs)
+	default:
+		return fmt.Sprintf("%d to %d", op.minArgs, op.maxArgs)
+	}
+}
+
+// unaryMath wraps a total 1-argument math function as an arithOp.
+func unaryMath(fn func(float64) float64) arithOp {
+	return arithOp{1, 1, func(a []float64) (float64, error) { return fn(a[0]), nil }}
+}
+
+func powApply(a []float64) (float64, error) { return math.Pow(a[0], a[1]), nil }
+
+// arithOpTable is the single source of truth for the scalar-evaluable /
+// foldable operator set (esm-spec §4.2). Non-evaluable ops handled before
+// argument evaluation (const/enum/fn/D/grad/div/laplacian) are intentionally
+// absent.
+var arithOpTable = map[string]arithOp{
+	"+": {0, -1, func(a []float64) (float64, error) {
+		s := 0.0
+		for _, x := range a {
+			s += x
+		}
+		return s, nil
+	}},
+	"*": {0, -1, func(a []float64) (float64, error) {
+		p := 1.0
+		for _, x := range a {
+			p *= x
+		}
+		return p, nil
+	}},
+	"-": {1, 2, func(a []float64) (float64, error) {
+		if len(a) == 1 {
+			return -a[0], nil
+		}
+		return a[0] - a[1], nil
+	}},
+	"/": {2, 2, func(a []float64) (float64, error) {
+		if a[1] == 0 {
+			return 0, fmt.Errorf("division by zero")
+		}
+		return a[0] / a[1], nil
+	}},
+	"^":   {2, 2, powApply},
+	"**":  {2, 2, powApply}, // §4.2 alias of ^; now folds identically
+	"exp": unaryMath(math.Exp),
+	"log": {1, 1, func(a []float64) (float64, error) {
+		if a[0] <= 0 {
+			return 0, fmt.Errorf("log of non-positive number: %g", a[0])
+		}
+		return math.Log(a[0]), nil
+	}},
+	"log10": {1, 1, func(a []float64) (float64, error) {
+		if a[0] <= 0 {
+			return 0, fmt.Errorf("log10 of non-positive number: %g", a[0])
+		}
+		return math.Log10(a[0]), nil
+	}},
+	"sqrt": {1, 1, func(a []float64) (float64, error) {
+		if a[0] < 0 {
+			return 0, fmt.Errorf("sqrt of negative number: %g", a[0])
+		}
+		return math.Sqrt(a[0]), nil
+	}},
+	"abs":   unaryMath(math.Abs),
+	"sin":   unaryMath(math.Sin),
+	"cos":   unaryMath(math.Cos),
+	"tan":   unaryMath(math.Tan),
+	"asin":  unaryMath(math.Asin),
+	"acos":  unaryMath(math.Acos),
+	"atan":  unaryMath(math.Atan),
+	"atan2": {2, 2, func(a []float64) (float64, error) { return math.Atan2(a[0], a[1]), nil }},
+	"sinh":  unaryMath(math.Sinh),
+	"cosh":  unaryMath(math.Cosh),
+	"tanh":  unaryMath(math.Tanh),
+	"asinh": unaryMath(math.Asinh),
+	"acosh": unaryMath(math.Acosh),
+	"atanh": unaryMath(math.Atanh),
+	"sign": {1, 1, func(a []float64) (float64, error) {
+		switch {
+		case a[0] > 0:
+			return 1, nil
+		case a[0] < 0:
+			return -1, nil
+		}
+		return 0, nil
+	}},
+	"min": {2, -1, func(a []float64) (float64, error) {
+		r := a[0]
+		for _, x := range a[1:] {
+			r = math.Min(r, x)
+		}
+		return r, nil
+	}},
+	"max": {2, -1, func(a []float64) (float64, error) {
+		r := a[0]
+		for _, x := range a[1:] {
+			r = math.Max(r, x)
+		}
+		return r, nil
+	}},
+	"floor": unaryMath(math.Floor),
+	"ceil":  unaryMath(math.Ceil),
+}
+
+// tryConstantFolding evaluates a node whose op is in arithOpTable and whose
+// arguments are all numeric literals, returning (foldedValue, true). It returns
+// (node, false) when the op is not foldable, the arity is wrong, an argument is
+// non-numeric, or evaluation would error (e.g. log of a non-positive constant —
+// left unfolded rather than folded to NaN). Numeric coercion is STRICT: a bare
+// string is a variable, never a literal, so a variable named "0" never folds.
+func tryConstantFolding(node ExprNode) (Expression, bool) {
+	op, ok := arithOpTable[node.Op]
+	if !ok || !op.arityOK(len(node.Args)) {
+		return node, false
+	}
+	nums := make([]float64, len(node.Args))
 	for i, arg := range node.Args {
-		if num, ok := toFloat64(arg); ok {
-			numbers[i] = num
-		} else {
-			// Not all arguments are numbers, return unchanged
-			return node
+		f, isNum := toFloat64Strict(arg)
+		if !isNum {
+			return node, false
 		}
+		nums[i] = f
 	}
-
-	// All arguments are constants, try to evaluate
-	switch node.Op {
-	case "+":
-		result := 0.0
-		for _, num := range numbers {
-			result += num
-		}
-		return result
-	case "-":
-		if len(numbers) == 1 {
-			return -numbers[0]
-		} else if len(numbers) == 2 {
-			return numbers[0] - numbers[1]
-		}
-	case "*":
-		result := 1.0
-		for _, num := range numbers {
-			result *= num
-		}
-		return result
-	case "/":
-		if len(numbers) == 2 && numbers[1] != 0 {
-			return numbers[0] / numbers[1]
-		}
-	case "^":
-		if len(numbers) == 2 {
-			return math.Pow(numbers[0], numbers[1])
-		}
-	case "exp":
-		if len(numbers) == 1 {
-			return math.Exp(numbers[0])
-		}
-	case "log":
-		if len(numbers) == 1 && numbers[0] > 0 {
-			return math.Log(numbers[0])
-		}
-	case "sqrt":
-		if len(numbers) == 1 && numbers[0] >= 0 {
-			return math.Sqrt(numbers[0])
-		}
-	case "sin":
-		if len(numbers) == 1 {
-			return math.Sin(numbers[0])
-		}
-	case "cos":
-		if len(numbers) == 1 {
-			return math.Cos(numbers[0])
-		}
-	case "tan":
-		if len(numbers) == 1 {
-			return math.Tan(numbers[0])
-		}
-	case "sinh":
-		if len(numbers) == 1 {
-			return math.Sinh(numbers[0])
-		}
-	case "cosh":
-		if len(numbers) == 1 {
-			return math.Cosh(numbers[0])
-		}
-	case "tanh":
-		if len(numbers) == 1 {
-			return math.Tanh(numbers[0])
-		}
-	case "abs":
-		if len(numbers) == 1 {
-			return math.Abs(numbers[0])
-		}
+	result, err := op.apply(nums)
+	if err != nil {
+		return node, false
 	}
-
-	// If we can't evaluate, return the original node
-	return node
+	return result, true
 }
 
 // Evaluate numerically evaluates an expression with variable bindings
@@ -423,188 +489,29 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		args[i] = val
 	}
 
-	// Apply the operation
-	switch node.Op {
-	case "+":
-		result := 0.0
-		for _, arg := range args {
-			result += arg
-		}
-		return result, nil
-	case "-":
-		if len(args) == 1 {
-			return -args[0], nil
-		} else if len(args) == 2 {
-			return args[0] - args[1], nil
-		}
-		return 0, fmt.Errorf("subtraction requires 1 or 2 arguments, got %d", len(args))
-	case "*":
-		result := 1.0
-		for _, arg := range args {
-			result *= arg
-		}
-		return result, nil
-	case "/":
-		if len(args) != 2 {
-			return 0, fmt.Errorf("division requires 2 arguments, got %d", len(args))
-		}
-		if args[1] == 0 {
-			return 0, fmt.Errorf("division by zero")
-		}
-		return args[0] / args[1], nil
-	case "^", "**":
-		if len(args) != 2 {
-			return 0, fmt.Errorf("exponentiation requires 2 arguments, got %d", len(args))
-		}
-		return math.Pow(args[0], args[1]), nil
-	case "exp":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("exp requires 1 argument, got %d", len(args))
-		}
-		return math.Exp(args[0]), nil
-	case "log":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("log requires 1 argument, got %d", len(args))
-		}
-		if args[0] <= 0 {
-			return 0, fmt.Errorf("log of non-positive number: %f", args[0])
-		}
-		return math.Log(args[0]), nil
-	case "log10":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("log10 requires 1 argument, got %d", len(args))
-		}
-		if args[0] <= 0 {
-			return 0, fmt.Errorf("log10 of non-positive number: %f", args[0])
-		}
-		return math.Log10(args[0]), nil
-	case "sqrt":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("sqrt requires 1 argument, got %d", len(args))
-		}
-		if args[0] < 0 {
-			return 0, fmt.Errorf("sqrt of negative number: %f", args[0])
-		}
-		return math.Sqrt(args[0]), nil
-	case "abs":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("abs requires 1 argument, got %d", len(args))
-		}
-		return math.Abs(args[0]), nil
-	case "sin":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("sin requires 1 argument, got %d", len(args))
-		}
-		return math.Sin(args[0]), nil
-	case "cos":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("cos requires 1 argument, got %d", len(args))
-		}
-		return math.Cos(args[0]), nil
-	case "tan":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("tan requires 1 argument, got %d", len(args))
-		}
-		return math.Tan(args[0]), nil
-	case "asin":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("asin requires 1 argument, got %d", len(args))
-		}
-		return math.Asin(args[0]), nil
-	case "acos":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("acos requires 1 argument, got %d", len(args))
-		}
-		return math.Acos(args[0]), nil
-	case "atan":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("atan requires 1 argument, got %d", len(args))
-		}
-		return math.Atan(args[0]), nil
-	case "atan2":
-		if len(args) != 2 {
-			return 0, fmt.Errorf("atan2 requires 2 arguments, got %d", len(args))
-		}
-		return math.Atan2(args[0], args[1]), nil
-	case "sinh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("sinh requires 1 argument, got %d", len(args))
-		}
-		return math.Sinh(args[0]), nil
-	case "cosh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("cosh requires 1 argument, got %d", len(args))
-		}
-		return math.Cosh(args[0]), nil
-	case "tanh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("tanh requires 1 argument, got %d", len(args))
-		}
-		return math.Tanh(args[0]), nil
-	case "asinh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("asinh requires 1 argument, got %d", len(args))
-		}
-		return math.Asinh(args[0]), nil
-	case "acosh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("acosh requires 1 argument, got %d", len(args))
-		}
-		return math.Acosh(args[0]), nil
-	case "atanh":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("atanh requires 1 argument, got %d", len(args))
-		}
-		return math.Atanh(args[0]), nil
-	case "sign":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("sign requires 1 argument, got %d", len(args))
-		}
-		if args[0] > 0 {
-			return 1.0, nil
-		} else if args[0] < 0 {
-			return -1.0, nil
-		}
-		return 0.0, nil
-	case "min":
-		// n-ary min (esm-spec §4.2 — arity ≥ 2)
-		if len(args) < 2 {
-			return 0, fmt.Errorf("min requires at least 2 arguments, got %d", len(args))
-		}
-		result := args[0]
-		for _, a := range args[1:] {
-			result = math.Min(result, a)
-		}
-		return result, nil
-	case "max":
-		// n-ary max (esm-spec §4.2 — arity ≥ 2)
-		if len(args) < 2 {
-			return 0, fmt.Errorf("max requires at least 2 arguments, got %d", len(args))
-		}
-		result := args[0]
-		for _, a := range args[1:] {
-			result = math.Max(result, a)
-		}
-		return result, nil
-	case "floor":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("floor requires 1 argument, got %d", len(args))
-		}
-		return math.Floor(args[0]), nil
-	case "ceil":
-		if len(args) != 1 {
-			return 0, fmt.Errorf("ceil requires 1 argument, got %d", len(args))
-		}
-		return math.Ceil(args[0]), nil
-	default:
+	// Apply the operation via the shared op-spec table (the same table that
+	// drives constant folding, so the two never diverge on op set / arity).
+	op, ok := arithOpTable[node.Op]
+	if !ok {
 		return 0, fmt.Errorf("unknown operation: %s", node.Op)
 	}
+	if !op.arityOK(len(args)) {
+		return 0, fmt.Errorf("%s: got %d argument(s), expected %s", node.Op, len(args), arityDesc(op))
+	}
+	return op.apply(args)
 }
 
 // Helper functions
 
-// toFloat64 converts various numeric types to float64
-func toFloat64(value interface{}) (float64, bool) {
+// toFloat64 is the LENIENT numeric coercion: it converts the numeric Go types
+// AND parses numeric strings (via strconv.ParseFloat, which also accepts
+// "NaN"/"Inf"). It exists for TABLE / closed-function extraction
+// (registered_functions.go) and `const`-value coercion, where an argument may
+// legitimately arrive as a numeric string literal. It MUST NOT be used to test
+// whether an expression is a numeric literal for Simplify/folding, because a
+// bare string there is a variable reference, not a number — use
+// toFloat64Strict instead.
+func toFloat64(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
 		return v, true
@@ -626,25 +533,47 @@ func toFloat64(value interface{}) (float64, bool) {
 	}
 }
 
+// toFloat64Strict is the STRICT numeric coercion: it accepts only the numeric
+// Go types and never parses strings. Simplify/Evaluate identity predicates
+// (isZero/isOne/isPositive) and constant folding use it so that a variable
+// literally named "0" or "1" is treated as a symbol, never as the number it
+// spells.
+func toFloat64Strict(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case float32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // isZero checks if an expression represents the number zero
-func isZero(expr interface{}) bool {
-	if num, ok := toFloat64(expr); ok {
+func isZero(expr any) bool {
+	if num, ok := toFloat64Strict(expr); ok {
 		return num == 0.0
 	}
 	return false
 }
 
 // isOne checks if an expression represents the number one
-func isOne(expr interface{}) bool {
-	if num, ok := toFloat64(expr); ok {
+func isOne(expr any) bool {
+	if num, ok := toFloat64Strict(expr); ok {
 		return num == 1.0
 	}
 	return false
 }
 
 // isPositive checks if an expression represents a positive number
-func isPositive(expr interface{}) bool {
-	if num, ok := toFloat64(expr); ok {
+func isPositive(expr any) bool {
+	if num, ok := toFloat64Strict(expr); ok {
 		return num > 0.0
 	}
 	return false
@@ -662,7 +591,7 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	if node.Name == nil || *node.Name == "" {
 		return 0, fmt.Errorf("fn op missing required `name` field (esm-spec §4.4)")
 	}
-	args := make([]interface{}, len(node.Args))
+	args := make([]any, len(node.Args))
 	for i, raw := range node.Args {
 		v, err := evaluateFnArg(raw, bindings)
 		if err != nil {
@@ -690,7 +619,7 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 // reduced to scalar float64 via the standard evaluator. A `const`-op
 // child carrying an array Value is passed through as []interface{} so
 // that closed functions like `interp.searchsorted` receive the table.
-func evaluateFnArg(arg interface{}, bindings map[string]float64) (interface{}, error) {
+func evaluateFnArg(arg any, bindings map[string]float64) (any, error) {
 	switch a := arg.(type) {
 	case ExprNode:
 		if a.Op == "const" {
@@ -708,19 +637,9 @@ func evaluateFnArg(arg interface{}, bindings map[string]float64) (interface{}, e
 // constNodeValue returns the typed payload of a `const`-op node. Numeric
 // values come back as float64 / int64 (the parser's normalized literal
 // types); arrays come back as []interface{}.
-func constNodeValue(node ExprNode) (interface{}, error) {
+func constNodeValue(node ExprNode) (any, error) {
 	if node.Value == nil {
 		return nil, fmt.Errorf("const op missing required `value` field (esm-spec §4.2)")
 	}
 	return node.Value, nil
-}
-
-// isSameExprNode checks if an expression is the same ExprNode (avoids struct comparison issues)
-func isSameExprNode(expr interface{}, node ExprNode) bool {
-	exprNode, ok := expr.(ExprNode)
-	if !ok {
-		return false
-	}
-	// Simple check - if it's still an ExprNode with the same operation, it wasn't folded
-	return exprNode.Op == node.Op
 }

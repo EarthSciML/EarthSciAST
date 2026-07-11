@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// intExactCutoff is the magnitude below which every integer-valued float64 is
+// representable exactly (2^52 < 1e15 < 2^53). Above it, consecutive integers are
+// no longer all representable, so int64(v) could silently misround; such
+// coefficients fall back to the general float rendering instead.
+const intExactCutoff = 1e15
+
 // formatStoich renders a stoichiometric coefficient using the shortest form
 // that round-trips exactly through JSON: integer-valued coefficients emit
 // without a decimal (e.g. "2"), fractional coefficients use the canonical
@@ -17,7 +23,7 @@ func formatStoich(v float64) string {
 	if math.IsInf(v, 0) || math.IsNaN(v) {
 		return strconv.FormatFloat(v, 'g', -1, 64)
 	}
-	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+	if v == math.Trunc(v) && math.Abs(v) < intExactCutoff {
 		return strconv.FormatInt(int64(v), 10)
 	}
 	return strconv.FormatFloat(v, 'g', -1, 64)
@@ -35,7 +41,7 @@ type FlattenedSystem struct {
 	// per-state `default` the Julia/Rust/Python flatten paths carry.
 	InitialValues map[string]float64
 	Equations     []FlattenedEquation // all equations with namespaced vars
-	Events        []interface{}       // events with namespaced references
+	Events        []any               // events with namespaced references
 	Metadata      FlattenMetadata     // which systems were flattened
 }
 
@@ -52,7 +58,7 @@ type FlattenMetadata struct {
 	CouplingRules []string // descriptions of coupling rules applied
 }
 
-// Flatten takes an EsmFile containing multiple models and/or reaction systems
+// Flatten takes an ESMFile containing multiple models and/or reaction systems
 // and returns a FlattenedSystem with dot-namespaced variables.
 //
 // The algorithm:
@@ -60,14 +66,14 @@ type FlattenMetadata struct {
 //  2. Namespaces all variables: prefix every variable/parameter with SystemName.
 //  3. Applies coupling rules (operator_compose, couple, variable_map, operator_apply)
 //  4. Collects and returns the unified flattened system
-func Flatten(file *EsmFile) (*FlattenedSystem, error) {
+func Flatten(file *ESMFile) (*FlattenedSystem, error) {
 	return FlattenWithOptions(file, CouplingImportOptions{})
 }
 
 // FlattenWithOptions is Flatten with control over how `coupling_import` refs are
 // resolved (esm-spec §10.10). Only needed when the file uses `coupling_import`;
 // a file with no such entries flattens identically under the zero-value options.
-func FlattenWithOptions(file *EsmFile, opts CouplingImportOptions) (*FlattenedSystem, error) {
+func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSystem, error) {
 	if file == nil {
 		return nil, fmt.Errorf("flatten: input file is nil")
 	}
@@ -339,68 +345,100 @@ func buildSumExpression(terms []string) string {
 // namespaceExpression converts an Expression tree to a string representation
 // with all variable references prefixed by "systemName.".
 func namespaceExpression(expr Expression, systemName string, varNames map[string]bool) string {
+	return renderNamespacedExpr(expr, func(v string) string {
+		if varNames[v] {
+			return systemName + "." + v
+		}
+		// Already scoped or an independent variable like "t".
+		return v
+	}, true)
+}
+
+// renderNamespacedExpr renders an Expression tree to an infix string, resolving
+// bare variable leaves through `resolve`. It is the single renderer behind both
+// namespaceExpression (equation rendering, parens=true) and
+// namespaceConnectorExpression (connector rendering, parens=false).
+//
+// The `parens` flag selects between two DELIBERATELY divergent rendering modes
+// that cross-language flatten fixtures pin — do not converge them:
+//
+//   - parens=true: parenthesizes add/sub operands inside `*`, complex
+//     denominators inside `/`, and complex/pow bases inside `^`; renders
+//     `D(x, wrt)` specially; emits `-(?)` / `/(?)` / `^(?)` placeholders for
+//     malformed-arity arithmetic nodes.
+//   - parens=false: never parenthesizes; renders n-ary `-` as a chained
+//     subtraction; lets malformed-arity `/`, `^`, and `D` fall through to the
+//     generic `op(args...)` form.
+func renderNamespacedExpr(expr Expression, resolve func(string) string, parens bool) string {
 	switch e := expr.(type) {
 	case string:
-		// If the string is a known variable, namespace it
-		if varNames[e] {
-			return systemName + "." + e
-		}
-		// Already scoped or an independent variable like "t"
-		return e
+		return resolve(e)
 	case float64:
 		return fmt.Sprintf("%g", e)
 	case int:
 		return fmt.Sprintf("%d", e)
 	case ExprNode:
-		return namespaceExprNode(e, systemName, varNames)
+		return renderNamespacedNode(e, resolve, parens)
 	case *ExprNode:
-		return namespaceExprNode(*e, systemName, varNames)
+		if e == nil {
+			return ""
+		}
+		return renderNamespacedNode(*e, resolve, parens)
 	default:
 		return fmt.Sprintf("%v", expr)
 	}
 }
 
-// namespaceExprNode handles namespacing for expression tree nodes.
-func namespaceExprNode(node ExprNode, systemName string, varNames map[string]bool) string {
+// renderNamespacedNode renders one operator node to an infix string; see
+// renderNamespacedExpr for the meaning of `parens`.
+func renderNamespacedNode(node ExprNode, resolve func(string) string, parens bool) string {
+	render := func(e Expression) string { return renderNamespacedExpr(e, resolve, parens) }
 	op := node.Op
 
-	switch op {
-	case "D":
-		// Derivative: D(var, wrt)
+	// D(var, wrt) is rendered specially only in the parenthesizing (equation)
+	// mode; the connector renderer lets it fall through to the generic form.
+	if parens && op == "D" {
 		if len(node.Args) >= 1 {
-			argStr := namespaceExpression(node.Args[0], systemName, varNames)
 			wrt := "t"
 			if node.Wrt != nil {
 				wrt = *node.Wrt
 			}
-			return fmt.Sprintf("D(%s, %s)", argStr, wrt)
+			return fmt.Sprintf("D(%s, %s)", render(node.Args[0]), wrt)
 		}
 		return "D(?)"
+	}
 
+	switch op {
 	case "+":
 		parts := make([]string, len(node.Args))
 		for i, arg := range node.Args {
-			parts[i] = namespaceExpression(arg, systemName, varNames)
+			parts[i] = render(arg)
 		}
 		return strings.Join(parts, " + ")
 
 	case "-":
 		if len(node.Args) == 1 {
-			return "-" + namespaceExpression(node.Args[0], systemName, varNames)
+			return "-" + render(node.Args[0])
 		}
 		if len(node.Args) == 2 {
-			left := namespaceExpression(node.Args[0], systemName, varNames)
-			right := namespaceExpression(node.Args[1], systemName, varNames)
-			return left + " - " + right
+			return render(node.Args[0]) + " - " + render(node.Args[1])
 		}
-		return "-(?)"
+		if parens {
+			return "-(?)"
+		}
+		// parens=false: chain an n-ary subtraction.
+		parts := make([]string, len(node.Args))
+		for i, arg := range node.Args {
+			parts[i] = render(arg)
+		}
+		return strings.Join(parts, " - ")
 
 	case "*":
 		parts := make([]string, len(node.Args))
 		for i, arg := range node.Args {
-			s := namespaceExpression(arg, systemName, varNames)
-			// Parenthesize additions/subtractions inside multiplication
-			if isAddSub(arg) {
+			s := render(arg)
+			// Parenthesize additions/subtractions inside multiplication.
+			if parens && isAddSub(arg) {
 				s = "(" + s + ")"
 			}
 			parts[i] = s
@@ -409,48 +447,66 @@ func namespaceExprNode(node ExprNode, systemName string, varNames map[string]boo
 
 	case "/":
 		if len(node.Args) == 2 {
-			left := namespaceExpression(node.Args[0], systemName, varNames)
-			right := namespaceExpression(node.Args[1], systemName, varNames)
-			if isComplex(node.Args[1]) {
+			left := render(node.Args[0])
+			right := render(node.Args[1])
+			if parens && needsParens(node.Args[1]) {
 				right = "(" + right + ")"
 			}
 			return left + "/" + right
 		}
-		return "/(?)"
+		if parens {
+			return "/(?)"
+		}
+		// parens=false: fall through to the generic form.
 
 	case "^", "**":
 		if len(node.Args) == 2 {
-			base := namespaceExpression(node.Args[0], systemName, varNames)
-			exp := namespaceExpression(node.Args[1], systemName, varNames)
-			if isComplex(node.Args[0]) {
+			base := render(node.Args[0])
+			exp := render(node.Args[1])
+			// `^` reads left-to-right in the rendered string, so an arithmetic
+			// OR pow base must be parenthesized: (a^b)^c must not render as
+			// a^b^c (which reparses right-associatively as a^(b^c)).
+			if parens && (needsParens(node.Args[0]) || isPowNode(node.Args[0])) {
 				base = "(" + base + ")"
 			}
 			return base + "^" + exp
 		}
-		return "^(?)"
-
-	default:
-		// Generic function call: op(arg1, arg2, ...)
-		argStrs := make([]string, len(node.Args))
-		for i, arg := range node.Args {
-			argStrs[i] = namespaceExpression(arg, systemName, varNames)
+		if parens {
+			return "^(?)"
 		}
-		return op + "(" + strings.Join(argStrs, ", ") + ")"
+		// parens=false: fall through to the generic form.
 	}
+
+	// Generic function call: op(arg1, arg2, ...)
+	argStrs := make([]string, len(node.Args))
+	for i, arg := range node.Args {
+		argStrs[i] = render(arg)
+	}
+	return op + "(" + strings.Join(argStrs, ", ") + ")"
 }
 
 // isAddSub returns true if expr is an addition or binary subtraction node.
-func isAddSub(expr interface{}) bool {
+func isAddSub(expr any) bool {
 	if n, ok := expr.(ExprNode); ok {
 		return n.Op == "+" || (n.Op == "-" && len(n.Args) == 2)
 	}
 	return false
 }
 
-// isComplex returns true if expr is a non-trivial expression node.
-func isComplex(expr interface{}) bool {
+// needsParens reports whether expr is an arithmetic node (+, -, *, /) that must
+// be parenthesized when it appears as a `/` denominator or a `^` base.
+func needsParens(expr any) bool {
 	if n, ok := expr.(ExprNode); ok {
 		return n.Op == "+" || n.Op == "-" || n.Op == "*" || n.Op == "/"
+	}
+	return false
+}
+
+// isPowNode reports whether expr is an exponentiation node (^ / **). A pow base
+// must be parenthesized because rendered `^` is read left-to-right.
+func isPowNode(expr any) bool {
+	if n, ok := expr.(ExprNode); ok {
+		return n.Op == "^" || n.Op == "**"
 	}
 	return false
 }
@@ -466,18 +522,7 @@ func namespaceDiscreteEvent(de DiscreteEvent, systemName string, varNames map[st
 	}
 
 	// Namespace affects
-	nsAffects := make([]AffectEquation, len(de.Affects))
-	for i, affect := range de.Affects {
-		lhs := affect.LHS
-		if varNames[lhs] {
-			lhs = systemName + "." + lhs
-		}
-		nsAffects[i] = AffectEquation{
-			LHS: lhs,
-			RHS: namespaceExpressionTree(affect.RHS, systemName, varNames),
-		}
-	}
-	nsEvent.Affects = nsAffects
+	nsEvent.Affects = namespaceAffects(de.Affects, systemName, varNames)
 
 	// Namespace discrete parameters
 	if len(de.DiscreteParameters) > 0 {
@@ -506,35 +551,29 @@ func namespaceContinuousEvent(ce ContinuousEvent, systemName string, varNames ma
 	}
 	nsEvent.Conditions = nsConditions
 
-	// Namespace affects
-	nsAffects := make([]AffectEquation, len(ce.Affects))
-	for i, affect := range ce.Affects {
-		lhs := affect.LHS
-		if varNames[lhs] {
-			lhs = systemName + "." + lhs
-		}
-		nsAffects[i] = AffectEquation{
-			LHS: lhs,
-			RHS: namespaceExpressionTree(affect.RHS, systemName, varNames),
-		}
-	}
-	nsEvent.Affects = nsAffects
-
-	// Namespace affect_neg
-	nsAffectNeg := make([]AffectEquation, len(ce.AffectNeg))
-	for i, affect := range ce.AffectNeg {
-		lhs := affect.LHS
-		if varNames[lhs] {
-			lhs = systemName + "." + lhs
-		}
-		nsAffectNeg[i] = AffectEquation{
-			LHS: lhs,
-			RHS: namespaceExpressionTree(affect.RHS, systemName, varNames),
-		}
-	}
-	nsEvent.AffectNeg = nsAffectNeg
+	// Namespace affects and affect_neg
+	nsEvent.Affects = namespaceAffects(ce.Affects, systemName, varNames)
+	nsEvent.AffectNeg = namespaceAffects(ce.AffectNeg, systemName, varNames)
 
 	return nsEvent
+}
+
+// namespaceAffects returns a copy of affects with each affect's LHS variable
+// (when it names a known variable) and RHS expression namespaced under
+// systemName. Shared by the discrete/continuous event namespacers.
+func namespaceAffects(affects []AffectEquation, systemName string, varNames map[string]bool) []AffectEquation {
+	out := make([]AffectEquation, len(affects))
+	for i, affect := range affects {
+		lhs := affect.LHS
+		if varNames[lhs] {
+			lhs = systemName + "." + lhs
+		}
+		out[i] = AffectEquation{
+			LHS: lhs,
+			RHS: namespaceExpressionTree(affect.RHS, systemName, varNames),
+		}
+	}
+	return out
 }
 
 // namespaceExpressionTree walks an Expression tree and returns a new tree with
@@ -550,7 +589,7 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 	case float64, int:
 		return e
 	case ExprNode:
-		newArgs := make([]interface{}, len(e.Args))
+		newArgs := make([]any, len(e.Args))
 		for i, arg := range e.Args {
 			newArgs[i] = namespaceExpressionTree(arg, systemName, varNames)
 		}
@@ -577,10 +616,10 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 }
 
 // applyCouplingRule applies a single coupling entry to the flattened system.
-func applyCouplingRule(flat *FlattenedSystem, entry interface{}, allVarNames map[string]map[string]bool) error {
+func applyCouplingRule(flat *FlattenedSystem, entry any, allVarNames map[string]map[string]bool) error {
 	switch c := entry.(type) {
 	case OperatorComposeCoupling:
-		return applyOperatorCompose(flat, c, allVarNames)
+		return applyOperatorCompose(flat, c)
 	case CouplingCouple:
 		return applyCoupleConnector(flat, c, allVarNames)
 	case VariableMapCoupling:
@@ -597,7 +636,7 @@ func applyCouplingRule(flat *FlattenedSystem, entry interface{}, allVarNames map
 
 // applyOperatorCompose merges two systems by unifying their equation sets.
 // The translate map renames variables from one system's namespace into the other's.
-func applyOperatorCompose(flat *FlattenedSystem, c OperatorComposeCoupling, allVarNames map[string]map[string]bool) error {
+func applyOperatorCompose(flat *FlattenedSystem, c OperatorComposeCoupling) error {
 	desc := fmt.Sprintf("operator_compose(%s, %s)", c.Systems[0], c.Systems[1])
 
 	// Apply variable translations if specified
@@ -607,10 +646,11 @@ func applyOperatorCompose(flat *FlattenedSystem, c OperatorComposeCoupling, allV
 			if !ok {
 				continue
 			}
-			// Rewrite equations: replace occurrences of fromVar with toVar
+			// Rewrite equations: replace whole-token occurrences of fromVar
+			// with toVar (token-aware so "A.x" does not corrupt "A.x2"/"BA.x").
 			for i, eq := range flat.Equations {
-				flat.Equations[i].LHS = strings.ReplaceAll(eq.LHS, fromVar, toVar)
-				flat.Equations[i].RHS = strings.ReplaceAll(eq.RHS, fromVar, toVar)
+				flat.Equations[i].LHS = replaceVarToken(eq.LHS, fromVar, toVar)
+				flat.Equations[i].RHS = replaceVarToken(eq.RHS, fromVar, toVar)
 			}
 		}
 		desc += fmt.Sprintf(" with translations: %v", c.Translate)
@@ -648,19 +688,19 @@ func applyCoupleConnector(flat *FlattenedSystem, c CouplingCouple, allVarNames m
 		case "additive":
 			// Add the connector expression to the RHS of the equation for toRef
 			for i, eq := range flat.Equations {
-				if containsVariable(eq.LHS, toRef) {
+				if lhsMentionsVar(eq.LHS, toRef) {
 					flat.Equations[i].RHS = eq.RHS + " + " + connExprStr
 				}
 			}
 		case "multiplicative":
 			for i, eq := range flat.Equations {
-				if containsVariable(eq.LHS, toRef) {
+				if lhsMentionsVar(eq.LHS, toRef) {
 					flat.Equations[i].RHS = "(" + eq.RHS + ")*" + connExprStr
 				}
 			}
 		case "replacement":
 			for i, eq := range flat.Equations {
-				if containsVariable(eq.LHS, toRef) {
+				if lhsMentionsVar(eq.LHS, toRef) {
 					flat.Equations[i].RHS = connExprStr
 				}
 			}
@@ -683,8 +723,8 @@ func applyVariableMap(flat *FlattenedSystem, c VariableMapCoupling) error {
 	}
 
 	for i, eq := range flat.Equations {
-		flat.Equations[i].LHS = strings.ReplaceAll(eq.LHS, c.From, replacement)
-		flat.Equations[i].RHS = strings.ReplaceAll(eq.RHS, c.From, replacement)
+		flat.Equations[i].LHS = replaceVarToken(eq.LHS, c.From, replacement)
+		flat.Equations[i].RHS = replaceVarToken(eq.RHS, c.From, replacement)
 	}
 
 	// Transform is a union: a legacy string kind, or a widened Expression AST
@@ -712,66 +752,65 @@ func applyOperatorApply(flat *FlattenedSystem, c OperatorApplyCoupling) error {
 }
 
 // namespaceConnectorExpression namespaces an expression tree used in a connector,
-// where variables may belong to either of the two coupled systems.
+// where variables may belong to either of the two coupled systems. It shares the
+// single infix renderer with namespaceExpression but selects the non-parenthesizing
+// mode (parens=false) whose divergent output cross-language fixtures pin.
 func namespaceConnectorExpression(expr Expression, systems [2]string, allVarNames map[string]map[string]bool) string {
-	switch e := expr.(type) {
-	case string:
-		// Check both systems for this variable
+	return renderNamespacedExpr(expr, func(v string) string {
+		// Check both systems for this variable.
 		for _, sysName := range systems {
-			if vars, ok := allVarNames[sysName]; ok && vars[e] {
-				return sysName + "." + e
+			if vars, ok := allVarNames[sysName]; ok && vars[v] {
+				return sysName + "." + v
 			}
 		}
-		return e
-	case float64:
-		return fmt.Sprintf("%g", e)
-	case int:
-		return fmt.Sprintf("%d", e)
-	case ExprNode:
-		return namespaceConnectorExprNode(e, systems, allVarNames)
-	case *ExprNode:
-		if e == nil {
-			return ""
-		}
-		return namespaceConnectorExprNode(*e, systems, allVarNames)
-	default:
-		return fmt.Sprintf("%v", expr)
-	}
+		return v
+	}, false)
 }
 
-func namespaceConnectorExprNode(node ExprNode, systems [2]string, allVarNames map[string]map[string]bool) string {
-	argStrs := make([]string, len(node.Args))
-	for i, arg := range node.Args {
-		argStrs[i] = namespaceConnectorExpression(arg, systems, allVarNames)
-	}
-
-	switch node.Op {
-	case "+":
-		return strings.Join(argStrs, " + ")
-	case "-":
-		if len(argStrs) == 1 {
-			return "-" + argStrs[0]
-		}
-		return strings.Join(argStrs, " - ")
-	case "*":
-		return strings.Join(argStrs, "*")
-	case "/":
-		if len(argStrs) == 2 {
-			return argStrs[0] + "/" + argStrs[1]
-		}
-	case "^", "**":
-		if len(argStrs) == 2 {
-			return argStrs[0] + "^" + argStrs[1]
-		}
-	}
-
-	// Generic function form
-	return node.Op + "(" + strings.Join(argStrs, ", ") + ")"
-}
-
-// containsVariable checks if a LHS string contains a reference to the given variable.
-func containsVariable(lhs, varRef string) bool {
+// lhsMentionsVar reports whether the flattened LHS string mentions varRef as a
+// substring. The connector-target match is intentionally a loose substring test
+// (not the token-aware replaceVarToken): the target `Sys.v` must be found inside
+// a derivative LHS like "D(Sys.v, t)", where it is not a standalone token.
+func lhsMentionsVar(lhs, varRef string) bool {
 	return strings.Contains(lhs, varRef)
+}
+
+// isIdentChar reports whether c can appear inside a flattened variable token — a
+// dot-namespaced identifier of letters, digits, underscores, and the dot segment
+// separator. It defines the token boundary replaceVarToken uses.
+func isIdentChar(c byte) bool {
+	return c == '_' || c == '.' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
+}
+
+// replaceVarToken replaces every WHOLE-TOKEN occurrence of `from` in s with
+// `to`, leaving matches that are merely a substring of a longer variable token
+// untouched. Flattened variable names are dot-namespaced identifiers, so a naive
+// strings.ReplaceAll of "A.x" would also corrupt "A.x2" and "BA.x" (esm audit):
+// a match counts only when neither the character before nor the character after
+// it is an identifier char. Scanning resumes past each replacement, so the
+// inserted `to` text is never itself rewritten.
+func replaceVarToken(s, from, to string) string {
+	if from == "" || !strings.Contains(s, from) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], from) {
+			beforeOK := i == 0 || !isIdentChar(s[i-1])
+			after := i + len(from)
+			afterOK := after == len(s) || !isIdentChar(s[after])
+			if beforeOK && afterOK {
+				b.WriteString(to)
+				i = after
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }
 
 // sortedKeys returns the sorted keys of a map.
