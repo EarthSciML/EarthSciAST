@@ -42,6 +42,7 @@ from .cadence import partition as _partition_model
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child
+from .index_ranges import expand_range as _expand_range
 from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS as _INTERP_CONST_ARG_POSITIONS,
 )
@@ -1337,8 +1338,6 @@ def _expand_reduce_ranges(
     """Dense 1-based value list for each contracted range, in ``reduce_syms``
     order (``_expand_range`` of each resolved reduce spec) — the one line every
     scalar / vectorized reduction path repeats to expand its contracted box."""
-    from .flatten import _expand_range  # local import to avoid cycle
-
     return [_expand_range(resolved[s]) for s in reduce_syms]
 
 
@@ -1593,8 +1592,6 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # identical; ragged sets become per-parent dynamic bounds.
     resolved: dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
 
-    from .flatten import _expand_range  # local import to avoid cycle
-
     out_ranges_exp: list[list[int]] = []
     for s in out_syms:
         rs = resolved[s]
@@ -1820,8 +1817,6 @@ def _eval_arrayop_ragged(
     point — the named, first-class form of the per-parent dynamic bound (RFC
     §5.2). Non-ragged reduce ranges in the same node expand statically.
     """
-    from .flatten import _expand_range  # local import to avoid cycle
-
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)

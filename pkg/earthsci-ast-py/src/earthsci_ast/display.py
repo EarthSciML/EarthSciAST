@@ -10,7 +10,9 @@ Based on ESM Format Specification Section 6.1
 from __future__ import annotations
 
 import re
+import warnings
 
+from . import op_registry
 from .esm_types import Equation, EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 # Greek letter to LaTeX mapping
@@ -1267,6 +1269,25 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
     # Generic fallback: function-call notation for open-tier sugar
     # (grad/div/laplacian) and any unknown user op. Only `args` are shown.
+    #
+    # Making the silent degradation loud (audit): a registered op reaching here
+    # renders generically by contract — the rewrite-target sugar
+    # (grad/div/laplacian/curl) and the relational build-time ops
+    # (skolem/rank/distinct/join/…) carry no dedicated math notation. But an op
+    # that is not even in the canonical vocabulary (:mod:`.op_registry`) reaching
+    # generic `op(args)` rendering is exactly the case the audit flagged: a new /
+    # mistyped op degrades to plausible-but-unstyled output with no signal.
+    # Surface it as a non-fatal RuntimeWarning naming the op (raising would break
+    # legitimate open-tier user-op rendering and existing tests).
+    if not op_registry.is_known(op):
+        warnings.warn(
+            f"display: op {op!r} is not in the canonical op registry "
+            f"(earthsci_ast.op_registry); rendering it with the generic "
+            f"'op(args)' fallback. If this is a real op, add a renderer and "
+            f"register it.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if format_type == "unicode":
         arg_list = ", ".join(to_unicode(arg) for arg in args)
     elif format_type == "latex":

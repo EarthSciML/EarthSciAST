@@ -121,12 +121,8 @@ from .substitute import (
     substitute,
     substitute_in_model,
     substitute_in_reaction_system,
-    expand_var_placeholders,
     expand_equation_placeholders,
     has_var_placeholder,
-    get_state_variables,
-    expand_model_placeholders,
-    process_operator_compose_placeholders,
 )
 
 # Analysis tier - reaction system analysis
@@ -405,12 +401,8 @@ __all__ = [
     "substitute",
     "substitute_in_model",
     "substitute_in_reaction_system",
-    "expand_var_placeholders",
     "expand_equation_placeholders",
     "has_var_placeholder",
-    "get_state_variables",
-    "expand_model_placeholders",
-    "process_operator_compose_placeholders",
     # Reaction system analysis
     "derive_odes",
     "stoichiometric_matrix",

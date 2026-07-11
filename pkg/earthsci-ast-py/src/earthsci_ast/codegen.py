@@ -8,7 +8,32 @@ from ESM files in multiple target languages:
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any
+
+from . import op_registry
+
+
+def _warn_unregistered_op(op: str, target: str) -> None:
+    """Surface the silent-degradation path the audit flagged (loud, non-fatal).
+
+    ``codegen`` intentionally special-cases only the operator / control-flow
+    subset (see ``tests/test_op_registry.py``) and generic function-call syntax
+    ``op(args)`` is the correct, deliberate rendering for the rest of the
+    registered vocabulary (``sin``, ``log``, ``min``, the array ops, …). But an
+    op that is not even in the canonical vocabulary (:mod:`.op_registry`) reaching
+    generic rendering is a new / mistyped op degrading silently — warn naming it
+    rather than emitting plausible-but-unchecked code with no signal. Raising is
+    avoided so legitimate open-tier user ops still generate.
+    """
+    if not op_registry.is_known(op):
+        warnings.warn(
+            f"codegen ({target}): op {op!r} is not in the canonical op registry "
+            f"(earthsci_ast.op_registry); emitting the generic 'op(args)' "
+            f"fallback. If this is a real op, add a handler and register it.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def to_julia_code(file: dict[str, Any]) -> str:
@@ -408,6 +433,7 @@ def _format_expression_node(node: dict[str, Any]) -> str:
     if op == "not":
         return f"!({_format_expression(args[0])})" if args else "!()"
     # For other operators, use function call syntax
+    _warn_unregistered_op(op, "julia")
     return f"{op}({', '.join(_format_expression(arg) for arg in args)})"
 
 
@@ -641,6 +667,7 @@ def _format_python_expression_node(node: dict[str, Any]) -> str:
     if op == "not":
         return f"~({_format_python_expression(args[0])})" if args else "~()"
     # For other operators, use function call syntax
+    _warn_unregistered_op(op, "python")
     return f"{op}({', '.join(_format_python_expression(arg) for arg in args)})"
 
 

@@ -93,6 +93,7 @@ from .esm_types import (
     Tolerance,
     VariableMapCoupling,
 )
+from .json_walk import expand_ref_env
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -130,7 +131,6 @@ _CURRENT_VERSION = (0, 8, 0)
 
 def _check_version_compatibility(version_string: str) -> None:
     """Check ESM version compatibility, raising errors or warnings as appropriate."""
-    import re
     import warnings
 
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version_string)
@@ -1321,19 +1321,6 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     )
 
 
-_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-def _expand_ref_env(ref: str) -> str:
-    """Expand ``${VAR}`` tokens in a §4.7 ref from the environment.
-
-    esm-spec §4.7: OPTIONAL loader capability; an unset variable is left literal
-    (so the ref fails to resolve rather than misresolving). Only the braced
-    ``${VAR}`` form is expanded, matching the Julia binding.
-    """
-    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
-
-
 def _fetch_ref_content(ref: str, base_path: str) -> str:
     """Fetch content from a subsystem ref (URL or file path).
 
@@ -1347,7 +1334,7 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     Raises:
         SubsystemRefError: If the reference cannot be fetched or read
     """
-    ref = _expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
+    ref = expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
     if ref.startswith("http://") or ref.startswith("https://"):
         import urllib.error
         import urllib.request
@@ -1483,7 +1470,7 @@ def _load_ref_data(
         resolve_template_machinery,
     )
 
-    ref_str = _expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
+    ref_str = expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
     content = _fetch_ref_content(ref_str, base_path)
     ref_data = json.loads(content)
 

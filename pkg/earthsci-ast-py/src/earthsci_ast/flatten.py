@@ -35,6 +35,13 @@ from .esm_types import (
     VariableMapCoupling,
 )
 from .expr_walk import any_child, iter_children, map_children, walk
+
+# ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so
+# :mod:`.numpy_interpreter` can import it at module load instead of via three
+# function-local imports that dodged an import cycle). Re-exported here under its
+# original name for backward compatibility — ``simulation_array`` and callers in
+# this module still import ``_expand_range`` from :mod:`.flatten`.
+from .index_ranges import expand_range as _expand_range
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
@@ -458,35 +465,6 @@ def _has_array_op(expr: Expr) -> bool:
             return True
         return any_child(expr, _has_array_op)
     return False
-
-
-def _expand_range(r: list[int]) -> list[int]:
-    """Expand a range spec ``[start, stop]`` or ``[start, step, stop]``.
-
-    Ranges are inclusive on both ends (matching Julia ``start:stop``).
-    """
-    if len(r) == 2:
-        start, stop = r
-        step = 1
-    elif len(r) == 3:
-        start, step, stop = r
-    else:
-        raise ValueError(f"Invalid range spec: {r}")
-    if step == 0:
-        raise ValueError(f"Range step cannot be zero: {r}")
-    vals: list[int] = []
-    v = int(start)
-    stop = int(stop)
-    step = int(step)
-    if step > 0:
-        while v <= stop:
-            vals.append(v)
-            v += step
-    else:
-        while v >= stop:
-            vals.append(v)
-            v += step
-    return vals
 
 
 def _has_spatial_operator(expr: Expr) -> bool:

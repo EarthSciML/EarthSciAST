@@ -128,17 +128,3 @@ class ESMErrorFactory:
                 },
             ),
         )
-
-    @staticmethod
-    def create_undefined_reference_error(
-        reference: str, available_options: list, path: str
-    ) -> ESMError:
-        """Create an undefined reference error."""
-        return ESMError(
-            code=ErrorCode.UNDEFINED_VARIABLE,
-            message=f"Undefined reference '{reference}'",
-            severity=Severity.ERROR,
-            context=ErrorContext(
-                path=path, details={"reference": reference, "available_options": available_options}
-            ),
-        )
