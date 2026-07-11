@@ -138,7 +138,7 @@ const _CG = EarthSciAST
         prod_ab = OpExpr("*", E[a, b])
 
         @testset "Julia emitter" begin
-            fmt = _CG.format_expression
+            fmt = _CG.format_julia_expression
             # (a + b) * c must not degrade to a + b * c
             @test fmt(OpExpr("*", E[plus, c])) == "(a + b) * c"
             # sum of products stays unparenthesized
