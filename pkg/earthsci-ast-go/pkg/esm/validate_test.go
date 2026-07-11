@@ -8,8 +8,8 @@ import (
 )
 
 func TestValidateValidModel(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -43,8 +43,8 @@ func TestValidateValidModel(t *testing.T) {
 }
 
 func TestValidateModelWithUnknownVariable(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -72,8 +72,8 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 }
 
 func TestValidateObservedVariableWithoutExpression(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -101,8 +101,8 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 }
 
 func TestValidateReactionSystem(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -134,8 +134,8 @@ func TestValidateReactionSystem(t *testing.T) {
 }
 
 func TestValidateReactionWithUnknownSpecies(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -167,8 +167,8 @@ func TestValidateReactionWithUnknownSpecies(t *testing.T) {
 }
 
 func TestValidateComplexExpression(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -212,8 +212,8 @@ func TestValidateComplexExpression(t *testing.T) {
 }
 
 func TestValidateDiscreteEvent(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -253,8 +253,8 @@ func TestValidateDiscreteEvent(t *testing.T) {
 }
 
 func TestValidateDataLoaders(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -291,8 +291,8 @@ func TestValidateDataLoaders(t *testing.T) {
 }
 
 func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -455,8 +455,8 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			esmFile := &EsmFile{
-				Esm: "0.1.0",
+			esmFile := &ESMFile{
+				ESM: "0.1.0",
 				Metadata: Metadata{
 					Name:    "TestModel",
 					Authors: []string{"Test Author"},

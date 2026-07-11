@@ -58,7 +58,7 @@ type FlattenMetadata struct {
 	CouplingRules []string // descriptions of coupling rules applied
 }
 
-// Flatten takes an EsmFile containing multiple models and/or reaction systems
+// Flatten takes an ESMFile containing multiple models and/or reaction systems
 // and returns a FlattenedSystem with dot-namespaced variables.
 //
 // The algorithm:
@@ -66,14 +66,14 @@ type FlattenMetadata struct {
 //  2. Namespaces all variables: prefix every variable/parameter with SystemName.
 //  3. Applies coupling rules (operator_compose, couple, variable_map, operator_apply)
 //  4. Collects and returns the unified flattened system
-func Flatten(file *EsmFile) (*FlattenedSystem, error) {
+func Flatten(file *ESMFile) (*FlattenedSystem, error) {
 	return FlattenWithOptions(file, CouplingImportOptions{})
 }
 
 // FlattenWithOptions is Flatten with control over how `coupling_import` refs are
 // resolved (esm-spec §10.10). Only needed when the file uses `coupling_import`;
 // a file with no such entries flattens identically under the zero-value options.
-func FlattenWithOptions(file *EsmFile, opts CouplingImportOptions) (*FlattenedSystem, error) {
+func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSystem, error) {
 	if file == nil {
 		return nil, fmt.Errorf("flatten: input file is nil")
 	}

@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEsmFileBasicStructure(t *testing.T) {
+func TestESMFileBasicStructure(t *testing.T) {
 	// Test creating a basic ESM file structure
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:        "TestModel",
 			Description: strPtr("A test model"),
@@ -21,15 +21,15 @@ func TestEsmFileBasicStructure(t *testing.T) {
 	}
 
 	// Test validation - this should fail because no models, reaction systems, or data loaders
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 }
 
-func TestEsmFileWithDataLoaderOnly(t *testing.T) {
+func TestESMFileWithDataLoaderOnly(t *testing.T) {
 	// Test creating an ESM file whose sole component is a data loader.
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "LoaderOnly",
 			Authors: []string{"Test Author"},
@@ -52,14 +52,14 @@ func TestEsmFileWithDataLoaderOnly(t *testing.T) {
 	}
 
 	// Test validation - this should pass since data_loaders is present.
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
-func TestEsmFileWithModel(t *testing.T) {
+func TestESMFileWithModel(t *testing.T) {
 	// Test creating an ESM file with a simple model
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -84,14 +84,14 @@ func TestEsmFileWithModel(t *testing.T) {
 	}
 
 	// Test validation - this should pass
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
-func TestEsmFileWithReactionSystem(t *testing.T) {
+func TestESMFileWithReactionSystem(t *testing.T) {
 	// Test creating an ESM file with a reaction system
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestReactions",
 			Authors: []string{"Test Author"},
@@ -118,14 +118,14 @@ func TestEsmFileWithReactionSystem(t *testing.T) {
 	}
 
 	// Test validation - this should pass
-	err := esmFile.Validate()
+	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
 
 func TestJSONSerialization(t *testing.T) {
 	// Test basic JSON serialization
-	esmFile := EsmFile{
-		Esm: "0.1.0",
+	esmFile := ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -155,12 +155,12 @@ func TestJSONSerialization(t *testing.T) {
 	assert.NotEmpty(t, jsonData)
 
 	// Test that we can unmarshal it back
-	var parsed EsmFile
+	var parsed ESMFile
 	err = json.Unmarshal(jsonData, &parsed)
 	require.NoError(t, err)
 
 	// Basic checks
-	assert.Equal(t, "0.1.0", parsed.Esm)
+	assert.Equal(t, "0.1.0", parsed.ESM)
 	assert.Equal(t, "TestModel", parsed.Metadata.Name)
 	assert.Len(t, parsed.Models, 1)
 }
@@ -254,7 +254,7 @@ func TestCouplingDeserialization(t *testing.T) {
 	}`
 
 	// Unmarshal the JSON
-	var esmFile EsmFile
+	var esmFile ESMFile
 	err := json.Unmarshal([]byte(jsonData), &esmFile)
 	require.NoError(t, err)
 
@@ -330,7 +330,7 @@ func TestCouplingDeserializationErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var esmFile EsmFile
+			var esmFile ESMFile
 			err := json.Unmarshal([]byte(tt.jsonData), &esmFile)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorMsg)
@@ -372,7 +372,7 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 	}`
 
 	// Unmarshal the JSON
-	var esmFile EsmFile
+	var esmFile ESMFile
 	err := json.Unmarshal([]byte(jsonData), &esmFile)
 	require.NoError(t, err)
 

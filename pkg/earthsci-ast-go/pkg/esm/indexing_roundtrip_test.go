@@ -43,11 +43,11 @@ func TestIndexOutsideArrayopFixtureParses(t *testing.T) {
 // TestIndexOutsideArrayopScalarRoundTrip drives the load → save → load
 // cycle on a scalar-only model that uses `{op:"index", ...}` on the RHS
 // of ODEs — the exact contract RFC §5.1 pins down. Using an in-Go
-// EsmFile keeps this test isolated from the independent `arrayop`
+// ESMFile keeps this test isolated from the independent `arrayop`
 // serialization gap in the Go binding.
 func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
-	original := &EsmFile{
-		Esm: "0.1.0",
+	original := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "index_scalar_rhs",
 			Authors: []string{"EarthSciAST/polecats/chrome"},

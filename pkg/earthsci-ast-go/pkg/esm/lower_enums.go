@@ -2,7 +2,7 @@ package esm
 
 // Enum lowering — esm-spec §9.3.
 //
-// Walks every expression tree in an EsmFile and replaces each `enum`-op
+// Walks every expression tree in an ESMFile and replaces each `enum`-op
 // node with an equivalent `const`-op integer per the file's `enums` block.
 // After this pass runs, no `enum`-op nodes remain in the in-memory
 // representation.
@@ -34,7 +34,7 @@ func newLowerEnumsError(code, msg string) *LowerEnumsError {
 // `enum` op to a `{op: "const", value: <int>}` node per esm-spec §9.3.
 // Returns LowerEnumsError if any enum op references an undeclared enum
 // or symbol; otherwise mutates the file in place and returns nil.
-func LowerEnums(file *EsmFile) error {
+func LowerEnums(file *ESMFile) error {
 	enums := file.Enums
 	if enums == nil {
 		enums = map[string]map[string]int{}

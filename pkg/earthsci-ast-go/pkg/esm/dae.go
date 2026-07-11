@@ -29,7 +29,7 @@ func newRuleErr(code, msg string) *RuleEngineError {
 	return &RuleEngineError{Code: code, Message: msg}
 }
 
-// DAEInfo records the outcome of ApplyDAEContract on an EsmFile.
+// DAEInfo records the outcome of ApplyDAEContract on an ESMFile.
 type DAEInfo struct {
 	// SystemClass is "ode" if ApplyDAEContract succeeded with no
 	// residual algebraic equations, else "dae".
@@ -74,7 +74,7 @@ type DAEInfo struct {
 // standalone by tools that need DAE factoring on an already discretized model.
 // Models carrying an explicit non-ODE SystemKind ("nonlinear", "sde", "pde")
 // are skipped — the DAE contract only applies to would-be ODE systems.
-func ApplyDAEContract(file *EsmFile) (DAEInfo, error) {
+func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 	info := DAEInfo{
 		SystemClass:      SystemKindODE,
 		PerModel:         map[string]int{},
@@ -222,7 +222,7 @@ func isDAETargetSystem(model *Model) bool {
 // fileIndepVar returns the independent (time) variable for the document. Every
 // component shares the single top-level domain; when it declares an explicit
 // independent_variable that name is used, otherwise it defaults to "t".
-func fileIndepVar(file *EsmFile) string {
+func fileIndepVar(file *ESMFile) string {
 	if file.Domain != nil && file.Domain.IndependentVariable != nil {
 		return *file.Domain.IndependentVariable
 	}

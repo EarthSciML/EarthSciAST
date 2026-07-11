@@ -84,7 +84,7 @@ func parseFile(filename string) {
 		fatalf("Failed to load ESM file: %v", err)
 	}
 
-	fmt.Printf("Successfully parsed ESM file version %s\n", esmFile.Esm)
+	fmt.Printf("Successfully parsed ESM file version %s\n", esmFile.ESM)
 	fmt.Printf("Model name: %s\n", esmFile.Metadata.Name)
 	fmt.Printf("Authors: %v\n", esmFile.Metadata.Authors)
 

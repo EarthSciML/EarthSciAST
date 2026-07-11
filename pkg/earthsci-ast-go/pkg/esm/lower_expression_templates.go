@@ -35,7 +35,7 @@ package esm
 //
 // Operates on the pre-deserialization `map[string]interface{}` view, so it
 // must run after schema validation but before unmarshaling into the
-// `EsmFile` struct.
+// `ESMFile` struct.
 
 import (
 	"encoding/json"

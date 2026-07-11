@@ -11,8 +11,8 @@ import (
 )
 
 func TestSave(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -51,8 +51,8 @@ func TestSave(t *testing.T) {
 }
 
 func TestSaveCompact(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -93,8 +93,8 @@ func TestSaveNilFile(t *testing.T) {
 
 func TestSaveInvalidFile(t *testing.T) {
 	// Create an invalid ESM file (missing required models/reaction_systems)
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -108,8 +108,8 @@ func TestSaveInvalidFile(t *testing.T) {
 }
 
 func TestSaveToFile(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -144,8 +144,8 @@ func TestSaveToFile(t *testing.T) {
 }
 
 func TestSaveCompactToFile(t *testing.T) {
-	esmFile := &EsmFile{
-		Esm: "0.1.0",
+	esmFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TestModel",
 			Authors: []string{"Test Author"},
@@ -290,8 +290,8 @@ func TestSerializeReactionSystemNil(t *testing.T) {
 
 func TestRoundTripSerialization(t *testing.T) {
 	// Create a complex ESM file
-	originalFile := &EsmFile{
-		Esm: "0.1.0",
+	originalFile := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "ComplexModel",
 			Authors: []string{"Test Author"},
@@ -346,7 +346,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	require.NoError(t, err)
 
 	// Compare key fields
-	assert.Equal(t, originalFile.Esm, parsedFile.Esm)
+	assert.Equal(t, originalFile.ESM, parsedFile.ESM)
 	assert.Equal(t, originalFile.Metadata.Name, parsedFile.Metadata.Name)
 	assert.Equal(t, len(originalFile.Models), len(parsedFile.Models))
 	assert.Equal(t, len(originalFile.ReactionSystems), len(parsedFile.ReactionSystems))

@@ -9,8 +9,8 @@ import (
 
 func TestScopedReferenceEdgeCases(t *testing.T) {
 	// Create a complex test ESM file with deep nesting and cross-references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -139,8 +139,8 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 
 func TestValidationWithComplexScopedReferences(t *testing.T) {
 	// Test validation with the complex file structure
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -188,8 +188,8 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 
 func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	// Test substitution with complex scoped references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Complex Test Model",
 		},
@@ -259,8 +259,8 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 
 func TestValidationErrorsForUnresolvedScopedReferences(t *testing.T) {
 	// Test that validation properly reports errors for unresolved scoped references
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Test Model with Errors",
 		},

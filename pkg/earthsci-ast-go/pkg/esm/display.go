@@ -571,11 +571,11 @@ func ToUnicodeSpaced(target Expression) string {
 
 // ModelSummary returns a structured model summary display showing all models,
 // reaction systems, data loaders, coupling, domain, and solver as specified in Section 6.3
-func ModelSummary(esm *EsmFile) string {
+func ModelSummary(esm *ESMFile) string {
 	result := strings.Builder{}
 
 	// Header: ESM version and metadata
-	fmt.Fprintf(&result, "ESM v%s: %s\n", esm.Esm, esm.Metadata.Name)
+	fmt.Fprintf(&result, "ESM v%s: %s\n", esm.ESM, esm.Metadata.Name)
 	if esm.Metadata.Description != nil {
 		fmt.Fprintf(&result, "  \"%s\"\n", *esm.Metadata.Description)
 	}
@@ -609,7 +609,7 @@ func formatSpeciesList(items []SubstrateProduct) string {
 
 // summarizeReactionSystems writes the "Reaction Systems" section (systems sorted
 // by name for deterministic output).
-func summarizeReactionSystems(b *strings.Builder, esm *EsmFile) {
+func summarizeReactionSystems(b *strings.Builder, esm *ESMFile) {
 	if len(esm.ReactionSystems) == 0 {
 		return
 	}
@@ -635,7 +635,7 @@ func summarizeReactionSystems(b *strings.Builder, esm *EsmFile) {
 }
 
 // summarizeModels writes the "Models" section (models sorted by name).
-func summarizeModels(b *strings.Builder, esm *EsmFile) {
+func summarizeModels(b *strings.Builder, esm *ESMFile) {
 	if len(esm.Models) == 0 {
 		return
 	}
@@ -668,7 +668,7 @@ func summarizeModels(b *strings.Builder, esm *EsmFile) {
 
 // summarizeDataLoaders writes the "Data Loaders" section (loaders and their
 // variable names both sorted).
-func summarizeDataLoaders(b *strings.Builder, esm *EsmFile) {
+func summarizeDataLoaders(b *strings.Builder, esm *ESMFile) {
 	if len(esm.DataLoaders) == 0 {
 		return
 	}
@@ -683,7 +683,7 @@ func summarizeDataLoaders(b *strings.Builder, esm *EsmFile) {
 }
 
 // summarizeCoupling writes the "Coupling" section in declaration order.
-func summarizeCoupling(b *strings.Builder, esm *EsmFile) {
+func summarizeCoupling(b *strings.Builder, esm *ESMFile) {
 	if len(esm.Coupling) == 0 {
 		return
 	}
@@ -715,7 +715,7 @@ func summarizeCoupling(b *strings.Builder, esm *EsmFile) {
 }
 
 // summarizeDomain writes the "Domain" section (temporal extent only).
-func summarizeDomain(b *strings.Builder, esm *EsmFile) {
+func summarizeDomain(b *strings.Builder, esm *ESMFile) {
 	if esm.Domain == nil {
 		return
 	}

@@ -22,11 +22,11 @@ func Substitute(expr Expression, bindings map[string]Expression) Expression {
 
 // substituteRecursiveWithScoped is the internal recursive substitution entry
 // with scoped-reference support (file != nil enables dotted-name resolution).
-func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *EsmFile, currentSystem string) Expression {
+func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) Expression {
 	return substituteDepth(expr, bindings, file, currentSystem, 0)
 }
 
-func substituteDepth(expr Expression, bindings map[string]Expression, file *EsmFile, currentSystem string, depth int) Expression {
+func substituteDepth(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string, depth int) Expression {
 	if depth > maxSubstituteDepth {
 		return expr // cyclic binding guard — halt without recursing
 	}
@@ -76,7 +76,7 @@ func substituteDepth(expr Expression, bindings map[string]Expression, file *EsmF
 // substituteNode substitutes into an operator node's children (via the shared
 // field-preserving walker, so every field survives) and then, for D/grad,
 // substitutes the `wrt`/`dim` variable-name slot they carry outside args.
-func substituteNode(node ExprNode, bindings map[string]Expression, file *EsmFile, currentSystem string, depth int) Expression {
+func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string, depth int) Expression {
 	out, _ := mapExprChildren(node, func(child Expression) (Expression, error) {
 		return substituteDepth(child, bindings, file, currentSystem, depth+1), nil
 	})
@@ -94,7 +94,7 @@ func substituteNode(node ExprNode, bindings map[string]Expression, file *EsmFile
 // applied only when the replacement is itself a bare name (string); a
 // non-string replacement, or no binding, leaves the slot unchanged. Mirrors the
 // string-arm of substituteDepth, minus recursion (a name has no children).
-func substituteScalarField(field *string, bindings map[string]Expression, file *EsmFile, currentSystem string) *string {
+func substituteScalarField(field *string, bindings map[string]Expression, file *ESMFile, currentSystem string) *string {
 	if field == nil {
 		return nil
 	}
@@ -147,7 +147,7 @@ func SubstituteInReactionSystem(system ReactionSystem, bindings map[string]Expre
 }
 
 // SubstituteInFile performs substitution across an entire ESM file
-func SubstituteInFile(file EsmFile, bindings map[string]Expression) EsmFile {
+func SubstituteInFile(file ESMFile, bindings map[string]Expression) ESMFile {
 	newFile := file // Copy the struct
 
 	// Substitute in models
@@ -189,12 +189,12 @@ func PartialSubstitute(expr Expression, bindings map[string]Expression, keepSymb
 }
 
 // SubstituteWithScoped performs variable substitution with scoped reference support
-func SubstituteWithScoped(expr Expression, bindings map[string]Expression, file *EsmFile, currentSystem string) Expression {
+func SubstituteWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) Expression {
 	return substituteRecursiveWithScoped(expr, bindings, file, currentSystem)
 }
 
 // SubstituteInModelWithScoped performs substitution across an entire model with scoped reference support
-func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, file *EsmFile, modelName string) Model {
+func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, file *ESMFile, modelName string) Model {
 	newModel := model // Copy the struct
 
 	// Substitute in equations
@@ -282,7 +282,7 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 }
 
 // SubstituteInReactionSystemWithScoped performs substitution across an entire reaction system with scoped reference support
-func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[string]Expression, file *EsmFile, systemName string) ReactionSystem {
+func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[string]Expression, file *ESMFile, systemName string) ReactionSystem {
 	newSystem := system // Copy the struct
 
 	// Substitute in reactions
@@ -363,7 +363,7 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 }
 
 // SubstituteInFileWithScoped performs substitution across an entire ESM file with scoped reference support
-func SubstituteInFileWithScoped(file EsmFile, bindings map[string]Expression) EsmFile {
+func SubstituteInFileWithScoped(file ESMFile, bindings map[string]Expression) ESMFile {
 	newFile := file // Copy the struct
 
 	// Substitute in models

@@ -9,8 +9,8 @@ import (
 // TestComponentGraphFromFile tests component graph creation from an ESM file
 func TestComponentGraphFromFile(t *testing.T) {
 	// Create a sample ESM file
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "Test Model",
 			Authors: []string{"Test Author"},

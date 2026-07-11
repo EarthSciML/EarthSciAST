@@ -11,7 +11,7 @@ package esm
 //
 // Form B is a pure root-level transform, so it is asserted against the full
 // expanded golden through the raw §9.7 pipeline (tiExpandRaw), exactly like
-// import_smoke. Forms A and C go through the typed EsmFile round-trip, whose
+// import_smoke. Forms A and C go through the typed ESMFile round-trip, whose
 // serializer emits an empty `metadata.authors` the Julia goldens omit (a
 // pre-existing cross-binding serializer quirk, unrelated to injection), so
 // those two compare every block EXCEPT `metadata` — the same scoping the
@@ -75,13 +75,13 @@ func siRawFirstEqRHS(t *testing.T, comp map[string]any) any {
 	return eq["rhs"]
 }
 
-// siCompareSansMetadata marshals the typed EsmFile, strips `metadata` from both
+// siCompareSansMetadata marshals the typed ESMFile, strips `metadata` from both
 // it and the golden, and asserts structural equality of every other block.
-func siCompareSansMetadata(t *testing.T, f *EsmFile, goldenPath string) {
+func siCompareSansMetadata(t *testing.T, f *ESMFile, goldenPath string) {
 	t.Helper()
 	b, err := json.Marshal(f)
 	if err != nil {
-		t.Fatalf("marshal EsmFile: %v", err)
+		t.Fatalf("marshal ESMFile: %v", err)
 	}
 	got := siDecodeDoc(t, string(b))
 	delete(got, "metadata")

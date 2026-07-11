@@ -24,9 +24,9 @@ func algEq(lhs string, rhs Expression) Equation {
 	return Equation{LHS: lhs, RHS: rhs}
 }
 
-func singleModelFile(m Model) *EsmFile {
-	return &EsmFile{
-		Esm:      "0.2.0",
+func singleModelFile(m Model) *ESMFile {
+	return &ESMFile{
+		ESM:      "0.2.0",
 		Metadata: Metadata{Name: "t"},
 		Models:   map[string]Model{"M": m},
 	}
@@ -304,8 +304,8 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 			dEq("x", "time", int64(1)),
 		},
 	}
-	file := &EsmFile{
-		Esm:      "0.2.0",
+	file := &ESMFile{
+		ESM:      "0.2.0",
 		Metadata: Metadata{Name: "t"},
 		Models:   map[string]Model{"M": m},
 		Domain:   &Domain{IndependentVariable: &iv},

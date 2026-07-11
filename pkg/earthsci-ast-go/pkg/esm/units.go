@@ -699,7 +699,7 @@ func dimString(u *Unit) string {
 
 // validateModelUnits runs dimensional analysis over every equation in a model
 // and appends any warnings it finds to the result.
-func validateModelUnits(modelName string, model *Model, basePath string, file *EsmFile, result *StructuralValidationResult) {
+func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
 	for name, err := range bad {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{

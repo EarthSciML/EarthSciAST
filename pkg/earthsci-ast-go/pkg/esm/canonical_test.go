@@ -60,8 +60,8 @@ func TestCanonicalFloat64NonFinite(t *testing.T) {
 // an integer-valued float64 literal in an Expression slot must serialize as
 // "1.0" (not "1") so that the parse-back rule recovers a float node.
 func TestSaveEmitsTrailingDotZeroForIntegerFloat(t *testing.T) {
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "IntegerFloatEmission",
 			Authors: []string{"Test"},
@@ -170,8 +170,8 @@ func TestRoundTripPreservesIntFloatDistinction(t *testing.T) {
 // VariableMapCoupling.Factor are a common case.
 func TestSaveTypedFloatFields(t *testing.T) {
 	factor := 2.0
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "TypedFloats",
 			Authors: []string{"Test"},
@@ -197,8 +197,8 @@ func TestSaveTypedFloatFields(t *testing.T) {
 // TestSaveRejectsNonFiniteFloat verifies that NaN/Inf are rejected with
 // E_CANONICAL_NONFINITE per RFC §5.4.6.
 func TestSaveRejectsNonFiniteFloat(t *testing.T) {
-	file := &EsmFile{
-		Esm: "0.1.0",
+	file := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:    "NonFinite",
 			Authors: []string{"Test"},

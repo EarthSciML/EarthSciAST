@@ -15,7 +15,7 @@ import (
 // system is unknown, or the joined unresolved remaining path when navigation
 // fails partway down a subsystem chain — and callers must not treat it as a
 // resolved name.
-func resolveScopedReference(scopedRef string, file *EsmFile, currentSystem string) (string, bool) {
+func resolveScopedReference(scopedRef string, file *ESMFile, currentSystem string) (string, bool) {
 	if !strings.Contains(scopedRef, ".") {
 		// Not a scoped reference, return as-is
 		return scopedRef, true

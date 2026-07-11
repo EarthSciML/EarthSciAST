@@ -7,7 +7,7 @@ import (
 )
 
 func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Atmos": {
 				Variables: map[string]ModelVariable{
@@ -36,7 +36,7 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 }
 
 func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		ReactionSystems: map[string]ReactionSystem{
 			"Chem": {
 				Species: map[string]Species{
@@ -66,7 +66,7 @@ func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
 func TestFlatten_ReactionSystemHonorsSpeciesDefault(t *testing.T) {
 	// A species' declared scalar `default` must flow through to the flattened
 	// system's initial-value vector. Absent defaults fall back to 0.0.
-	file := &EsmFile{
+	file := &ESMFile{
 		ReactionSystems: map[string]ReactionSystem{
 			"Chem": {
 				Species: map[string]Species{
@@ -106,7 +106,7 @@ func TestFlatten_ReactionSystemHonorsSpeciesDefault(t *testing.T) {
 }
 
 func TestFlatten_RecordsCouplingRules(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"A": {
 				Variables: map[string]ModelVariable{"x": {Type: "state"}},

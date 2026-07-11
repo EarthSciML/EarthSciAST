@@ -312,7 +312,7 @@ func parseCouplingRefView(where string, data []byte) (map[string]any, error) {
 // expandCouplingImportEntry validates a resolved coupling-library document and
 // expands one `coupling_import` entry into its concrete edges, bound to `bind`.
 // Raises the esm-spec §10.11 diagnostics.
-func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]string, file *EsmFile) ([]CouplingEntry, error) {
+func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]string, file *ESMFile) ([]CouplingEntry, error) {
 	if !isCouplingLibraryDoc(lib) {
 		return nil, newETErr("coupling_import_not_library",
 			fmt.Sprintf("coupling_import ref '%s' lacks top-level `coupling_roles` — not a coupling-library file (esm-spec §10.9)", ref))
@@ -436,7 +436,7 @@ func rawEdgeToCouplingEntry(edge map[string]any) (CouplingEntry, error) {
 // resolvesToComponent resolves a `bind` value as a component path (esm-spec
 // §10.10.1) — a system or loader node, walking models/reaction_systems/
 // data_loaders then nested `subsystems`, never terminating on a variable.
-func resolvesToComponent(file *EsmFile, value string) bool {
+func resolvesToComponent(file *ESMFile, value string) bool {
 	if file == nil {
 		return false
 	}
@@ -481,7 +481,7 @@ func resolvesToComponent(file *EsmFile, value string) bool {
 // has no `coupling` block. Non-import entries pass through untouched; a file
 // with no `coupling_import` entries needs no options and returns `file.Coupling`
 // verbatim.
-func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]any, error) {
+func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]any, error) {
 	if file == nil {
 		return nil, nil
 	}
@@ -492,7 +492,7 @@ func expandCouplingImports(file *EsmFile, opts CouplingImportOptions) ([]any, er
 
 	hasImport := false
 	for _, e := range coupling {
-		if ce, ok := e.(CouplingEntry); ok && ce.GetType() == "coupling_import" {
+		if ce, ok := e.(CouplingEntry); ok && ce.CouplingType() == "coupling_import" {
 			hasImport = true
 			break
 		}

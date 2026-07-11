@@ -26,13 +26,13 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 // save is the shared serialization core for the four exported Save* entry
 // points. It validates the file (Save semantics — unlike ToJSON) and emits
 // canonical JSON, indented when indent is true and compact otherwise.
-func save(file *EsmFile, indent bool) (string, error) {
+func save(file *ESMFile, indent bool) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("cannot serialize nil ESM file")
 	}
 
 	// Validate the file before serializing
-	if err := file.Validate(); err != nil {
+	if err := file.ValidateStruct(); err != nil {
 		return "", fmt.Errorf("validation failed before serialization: %w", err)
 	}
 
@@ -45,17 +45,17 @@ func save(file *EsmFile, indent bool) (string, error) {
 }
 
 // Save serializes an ESM file to indented JSON string
-func Save(file *EsmFile) (string, error) {
+func Save(file *ESMFile) (string, error) {
 	return save(file, true)
 }
 
 // SaveCompact serializes an ESM file to compact JSON string (no indentation)
-func SaveCompact(file *EsmFile) (string, error) {
+func SaveCompact(file *ESMFile) (string, error) {
 	return save(file, false)
 }
 
 // SaveToFile saves an ESM file directly to a file path
-func SaveToFile(file *EsmFile, path string) error {
+func SaveToFile(file *ESMFile, path string) error {
 	jsonStr, err := Save(file)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func SaveToFile(file *EsmFile, path string) error {
 }
 
 // SaveCompactToFile saves an ESM file to a file path in compact format
-func SaveCompactToFile(file *EsmFile, path string) error {
+func SaveCompactToFile(file *ESMFile, path string) error {
 	jsonStr, err := SaveCompact(file)
 	if err != nil {
 		return err

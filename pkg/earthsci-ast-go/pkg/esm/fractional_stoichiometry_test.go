@@ -55,7 +55,7 @@ func TestFractionalStoichiometryRoundTrip(t *testing.T) {
 	first, err := json.Marshal(parsed)
 	require.NoError(t, err)
 
-	var reparsed EsmFile
+	var reparsed ESMFile
 	require.NoError(t, json.Unmarshal(first, &reparsed))
 
 	second, err := json.Marshal(&reparsed)

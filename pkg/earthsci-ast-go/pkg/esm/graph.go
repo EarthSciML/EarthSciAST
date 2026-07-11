@@ -71,7 +71,7 @@ type ExpressionGraph struct {
 // ========================================
 
 // ComponentGraphFromFile creates a component graph from an ESM file
-func ComponentGraphFromFile(file *EsmFile) *ComponentGraph {
+func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 	graph := &ComponentGraph{
 		Nodes: make([]ComponentNode, 0),
 		Edges: make([]GraphEdge[ComponentNode, CouplingEdge], 0),
@@ -245,7 +245,7 @@ func createCouplingEdges(coupling any, nodeMap map[string]ComponentNode) []Graph
 // ========================================
 
 // ExpressionGraphFromFile creates an expression graph from an ESM file
-func ExpressionGraphFromFile(file *EsmFile) *ExpressionGraph {
+func ExpressionGraphFromFile(file *ESMFile) *ExpressionGraph {
 	graph := &ExpressionGraph{
 		Nodes: make([]VariableNode, 0),
 		Edges: make([]GraphEdge[VariableNode, DependencyEdge], 0),

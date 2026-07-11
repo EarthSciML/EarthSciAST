@@ -335,7 +335,7 @@ func mustCanonicalRaw(t *testing.T, v any) json.RawMessage {
 }
 
 func TestFlatten_ExpressionTransformDoesNotError(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Src": {
 				Variables: map[string]ModelVariable{"F": {Type: "state"}},

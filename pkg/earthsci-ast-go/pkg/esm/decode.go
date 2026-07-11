@@ -429,11 +429,11 @@ func (v *VariableMapCoupling) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Custom JSON unmarshaling for EsmFile
-func (esm *EsmFile) UnmarshalJSON(data []byte) error {
-	// Define a temporary struct that matches EsmFile but uses json.RawMessage for coupling
-	type TempEsmFile struct {
-		Esm             string                    `json:"esm"`
+// Custom JSON unmarshaling for ESMFile
+func (esm *ESMFile) UnmarshalJSON(data []byte) error {
+	// Define a temporary struct that matches ESMFile but uses json.RawMessage for coupling
+	type TempESMFile struct {
+		ESM             string                    `json:"esm"`
 		Metadata        Metadata                  `json:"metadata"`
 		Models          map[string]Model          `json:"models,omitempty"`
 		ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
@@ -446,13 +446,13 @@ func (esm *EsmFile) UnmarshalJSON(data []byte) error {
 		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
 	}
 
-	var temp TempEsmFile
+	var temp TempESMFile
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
 
 	// Copy all fields except coupling
-	esm.Esm = temp.Esm
+	esm.ESM = temp.ESM
 	esm.Metadata = temp.Metadata
 	esm.Models = temp.Models
 	esm.ReactionSystems = temp.ReactionSystems

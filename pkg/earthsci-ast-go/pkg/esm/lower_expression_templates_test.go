@@ -282,10 +282,10 @@ func TestLoadString_ExpandsTemplatesEndToEnd(t *testing.T) {
 		t.Fatalf("re-marshal: %v", err)
 	}
 	if strings.Contains(string(out), "apply_expression_template") {
-		t.Errorf("expanded EsmFile still contains apply_expression_template:\n%s", out)
+		t.Errorf("expanded ESMFile still contains apply_expression_template:\n%s", out)
 	}
 	if strings.Contains(string(out), "expression_templates") {
-		t.Errorf("expanded EsmFile still contains expression_templates block:\n%s", out)
+		t.Errorf("expanded ESMFile still contains expression_templates block:\n%s", out)
 	}
 }
 

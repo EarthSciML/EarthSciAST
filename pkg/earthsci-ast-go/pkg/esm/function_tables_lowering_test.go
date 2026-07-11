@@ -195,7 +195,7 @@ func evalInterpFloat(t *testing.T, name string, args []any) float64 {
 	return f
 }
 
-func lowerAndEvaluate(t *testing.T, node ExprNode, file *EsmFile,
+func lowerAndEvaluate(t *testing.T, node ExprNode, file *ESMFile,
 	vars map[string]ModelVariable) float64 {
 	t.Helper()
 	if node.Op != "table_lookup" {
@@ -251,7 +251,7 @@ func referenceInlineConst(
 	output *string,
 	outputIdxInt *int,
 	axisInputs [][2]string,
-	file *EsmFile,
+	file *ESMFile,
 	vars map[string]ModelVariable,
 ) float64 {
 	t.Helper()
@@ -309,7 +309,7 @@ func referenceInlineConst(
 	return 0
 }
 
-func firstTableLookup(t *testing.T, file *EsmFile, modelID string, eqIdx int) ExprNode {
+func firstTableLookup(t *testing.T, file *ESMFile, modelID string, eqIdx int) ExprNode {
 	t.Helper()
 	model := file.Models[modelID]
 	rhs := model.Equations[eqIdx].RHS

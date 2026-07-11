@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func loadNonlinearFixture(t *testing.T, rel string) *EsmFile {
+func loadNonlinearFixture(t *testing.T, rel string) *ESMFile {
 	t.Helper()
 	wd, err := os.Getwd()
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestNonlinearIsorropiaShapeRoundTrip(t *testing.T) {
 
 	data, err := json.Marshal(parsed)
 	require.NoError(t, err)
-	var reparsed EsmFile
+	var reparsed ESMFile
 	require.NoError(t, json.Unmarshal(data, &reparsed))
 
 	first, err := json.Marshal(parsed)
@@ -60,7 +60,7 @@ func TestNonlinearMogiShapeRoundTrip(t *testing.T) {
 
 	data, err := json.Marshal(parsed)
 	require.NoError(t, err)
-	var reparsed EsmFile
+	var reparsed ESMFile
 	require.NoError(t, json.Unmarshal(data, &reparsed))
 
 	first, err := json.Marshal(parsed)

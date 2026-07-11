@@ -81,7 +81,7 @@ type DetailedValidationResult struct {
 
 // ValidateFile performs comprehensive validation of an ESM file per ESM Libraries Spec Section 3.4
 // This includes schema validation, structural validation, and unit validation (future)
-func ValidateFile(file *EsmFile, jsonStr string) *ValidationResult {
+func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 	// First validate JSON schema
 	schemaResult, err := validateJSONSchema(jsonStr)
 	if err != nil {
@@ -122,7 +122,7 @@ func ValidateFile(file *EsmFile, jsonStr string) *ValidationResult {
 
 // Validate is the backward compatibility function that returns DetailedValidationResult
 // For the new spec-compliant validation, use ValidateFile
-func Validate(file *EsmFile) *DetailedValidationResult {
+func Validate(file *ESMFile) *DetailedValidationResult {
 	return ValidateStructural(file)
 }
 
@@ -141,14 +141,14 @@ type StructuralValidationResult struct {
 // each emitted StructuralError to the legacy ValidationMessage wording (see
 // structuralErrorToLegacyMessage). Unit/dimensional checks are NOT part of this
 // legacy surface — use ValidateStructuralWithCodes/ValidateFile for those.
-func ValidateStructural(file *EsmFile) *DetailedValidationResult {
+func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 	result := &DetailedValidationResult{
 		Valid:    true,
 		Messages: []ValidationMessage{},
 	}
 
 	// Basic struct validation (already done in types.go)
-	if err := file.Validate(); err != nil {
+	if err := file.ValidateStruct(); err != nil {
 		result.Valid = false
 		result.Messages = append(result.Messages, ValidationMessage{
 			Level:   "error",
@@ -171,14 +171,14 @@ func ValidateStructural(file *EsmFile) *DetailedValidationResult {
 }
 
 // ValidateStructuralWithCodes performs structural validation and returns structured errors directly
-func ValidateStructuralWithCodes(file *EsmFile) *StructuralValidationResult {
+func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	result := &StructuralValidationResult{
 		StructuralErrors: []StructuralError{},
 		UnitWarnings:     []UnitWarning{},
 	}
 
 	// Basic struct validation (already done in types.go)
-	if err := file.Validate(); err != nil {
+	if err := file.ValidateStruct(); err != nil {
 		result.StructuralErrors = append(result.StructuralErrors, StructuralError{
 			Path:    "$",
 			Code:    CodeValidationFailed,
@@ -236,7 +236,7 @@ func structuralErrorToLegacyMessage(se StructuralError) ValidationMessage {
 // legacy-only warnings (duplicate substrate/product) that have no code-bearing
 // representation.
 type structuralScan struct {
-	file           *EsmFile
+	file           *ESMFile
 	indep          string
 	errors         []StructuralError
 	legacyWarnings []ValidationMessage
@@ -254,7 +254,7 @@ func (s *structuralScan) addLegacyWarning(path, message string) {
 
 // collectStructuralErrors runs the unified structural traversal and returns the
 // code-bearing errors together with legacy-only warnings.
-func collectStructuralErrors(file *EsmFile) ([]StructuralError, []ValidationMessage) {
+func collectStructuralErrors(file *ESMFile) ([]StructuralError, []ValidationMessage) {
 	s := &structuralScan{file: file, indep: fileIndepVar(file)}
 
 	for modelName, model := range file.Models {

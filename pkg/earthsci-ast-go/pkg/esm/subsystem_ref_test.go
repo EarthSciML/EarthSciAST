@@ -22,7 +22,7 @@ func writeJSON(t *testing.T, path string, payload any) {
 }
 
 func TestResolveSubsystemRefs_NoRefs(t *testing.T) {
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"main": {Variables: map[string]ModelVariable{}, Equations: []Equation{}},
 		},
@@ -50,7 +50,7 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 	}
 	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Variables: map[string]ModelVariable{},
@@ -104,7 +104,7 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 	}
 	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Variables: map[string]ModelVariable{},
@@ -137,7 +137,7 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 
 func TestResolveSubsystemRefs_MissingFile(t *testing.T) {
 	dir := t.TempDir()
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Subsystems: map[string]any{
@@ -190,7 +190,7 @@ func TestResolveSubsystemRefs_Circular(t *testing.T) {
 	writeJSON(t, filepath.Join(dir, "a.json"), a)
 	writeJSON(t, filepath.Join(dir, "b.json"), b)
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Root": {
 				Subsystems: map[string]any{
@@ -229,7 +229,7 @@ func TestResolveSubsystemRefs_RemoteURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"Outer": {
 				Subsystems: map[string]any{

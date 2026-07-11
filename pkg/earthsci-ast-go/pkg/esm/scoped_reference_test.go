@@ -8,7 +8,7 @@ import (
 
 func TestResolveScopedReference(t *testing.T) {
 	// Create a test ESM file with models and subsystems
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
@@ -133,8 +133,8 @@ func TestResolveScopedReference(t *testing.T) {
 
 func TestValidationWithScopedReferences(t *testing.T) {
 	// Create a test ESM file with scoped references in equations
-	file := &EsmFile{
-		Esm: "1.0",
+	file := &ESMFile{
+		ESM: "1.0",
 		Metadata: Metadata{
 			Name: "Test Model",
 		},
@@ -175,7 +175,7 @@ func TestValidationWithScopedReferences(t *testing.T) {
 
 func TestSubstitutionWithScopedReferences(t *testing.T) {
 	// Create a test ESM file
-	file := &EsmFile{
+	file := &ESMFile{
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{

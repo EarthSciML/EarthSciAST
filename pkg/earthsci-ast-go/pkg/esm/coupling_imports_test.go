@@ -36,9 +36,9 @@ func couplingLibView(t *testing.T, jsonStr string) map[string]any {
 }
 
 // An assembly mounting the two components the library wires.
-func couplingAssembly(coupling []any) *EsmFile {
-	return &EsmFile{
-		Esm:      "0.8.0",
+func couplingAssembly(coupling []any) *ESMFile {
+	return &ESMFile{
+		ESM:      "0.8.0",
 		Metadata: Metadata{Name: "wildfire"},
 		Models: map[string]Model{
 			"FuelModelLookup": {
@@ -343,8 +343,8 @@ func TestCouplingImport_RoundTrip(t *testing.T) {
 func TestSubsystemRef_IsCouplingLibrary(t *testing.T) {
 	dir := t.TempDir()
 	writeFileString(t, filepath.Join(dir, "clib.esm"), couplingLibJSON)
-	file := &EsmFile{
-		Esm:      "0.8.0",
+	file := &ESMFile{
+		ESM:      "0.8.0",
 		Metadata: Metadata{Name: "a"},
 		Models: map[string]Model{
 			"Outer": {

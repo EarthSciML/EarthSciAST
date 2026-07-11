@@ -20,7 +20,7 @@ import (
 //
 // The function modifies file in-place, replacing reference objects with the
 // resolved model or reaction system content.
-func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
+func ResolveSubsystemRefs(file *ESMFile, basePath string) error {
 	return resolveSubsystemRefsWithMeta(file, basePath, nil)
 }
 
@@ -34,7 +34,7 @@ func ResolveSubsystemRefs(file *EsmFile, basePath string) error {
 // with the loader-API bindings) and passes it here BEFORE the root's
 // metaparameters are consumed by the template-machinery resolver. Direct
 // callers (which have no mounting metaparameters) pass nil.
-func resolveSubsystemRefsWithMeta(file *EsmFile, basePath string, parentMeta map[string]int64) error {
+func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta map[string]int64) error {
 	visited := make(map[string]bool)
 	// The importing document's index_sets registry (esm-spec §4.7): a mounted
 	// subsystem file's top-level index_sets merge into it, so a mounted mesh's
@@ -50,7 +50,7 @@ func resolveSubsystemRefsWithMeta(file *EsmFile, basePath string, parentMeta map
 // visited paths for circular reference detection and threads the importing
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
-func resolveSubsystemRefsInternal(file *EsmFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
+func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta map[string]int64) error {
 	// Resolve subsystems in models. model.Subsystems is a map (reference type)
 	// that resolveSubsystemMap mutates in place, so no write-back of the Model
 	// struct into file.Models is needed.

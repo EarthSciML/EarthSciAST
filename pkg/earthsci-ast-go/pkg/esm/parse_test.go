@@ -48,7 +48,7 @@ func TestLoad(t *testing.T) {
 	esmFile, err := Load(tmpFile.Name())
 	assert.NoError(t, err)
 	assert.NotNil(t, esmFile)
-	assert.Equal(t, "0.1.0", esmFile.Esm)
+	assert.Equal(t, "0.1.0", esmFile.ESM)
 	assert.Equal(t, "TestModel", esmFile.Metadata.Name)
 	assert.Len(t, esmFile.Models, 1)
 }
@@ -82,7 +82,7 @@ func TestLoadString(t *testing.T) {
 	esmFile, err := LoadString(testJSON)
 	assert.NoError(t, err)
 	assert.NotNil(t, esmFile)
-	assert.Equal(t, "0.1.0", esmFile.Esm)
+	assert.Equal(t, "0.1.0", esmFile.ESM)
 	assert.Equal(t, "TestModel", esmFile.Metadata.Name)
 }
 
@@ -153,7 +153,7 @@ func TestLoadShouldSucceedWithStructuralValidationFailure(t *testing.T) {
 
 	// Verify it actually fails structural validation when called separately
 	if esmFile != nil {
-		validationErr := esmFile.Validate()
+		validationErr := esmFile.ValidateStruct()
 		assert.Error(t, validationErr, "Basic structural validation should fail")
 		assert.Contains(t, validationErr.Error(), "at least one of 'models', 'reaction_systems', or 'data_loaders' must be present")
 	}

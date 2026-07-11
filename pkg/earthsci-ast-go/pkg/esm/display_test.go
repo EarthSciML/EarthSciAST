@@ -350,8 +350,8 @@ func TestComplexChemicalExpression(t *testing.T) {
 
 func TestModelSummary(t *testing.T) {
 	// Create a minimal ESM file structure similar to minimal_chemistry.esm
-	esm := &EsmFile{
-		Esm: "0.1.0",
+	esm := &ESMFile{
+		ESM: "0.1.0",
 		Metadata: Metadata{
 			Name:        "MinimalChemAdvection",
 			Description: strPtr("O3-NO-NO2 chemistry with advection and external meteorology"),

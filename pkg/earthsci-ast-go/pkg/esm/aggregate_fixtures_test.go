@@ -110,7 +110,7 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 // TestIndexSetsDocumentScopeRoundTrip pins the v0.8.0 relocation of the
 // `index_sets` registry from a per-Model field to document scope
 // (RFC semiring-faq-unified-ir §5.2). It asserts that (a) the loader parses the
-// registry onto the top-level EsmFile.IndexSets field, (b) no model carries an
+// registry onto the top-level ESMFile.IndexSets field, (b) no model carries an
 // index_sets field, and (c) the registry survives a load → save → load → save
 // cycle at document scope, idempotently. Covers the four kinds that appear in
 // the shared corpus (interval, categorical, derived).

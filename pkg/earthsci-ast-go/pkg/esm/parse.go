@@ -48,7 +48,7 @@ func applyLoadOptions(opts []LoadOption) loadOptions {
 
 // Load loads an ESM file from the specified path and validates it against the JSON schema.
 // After parsing, it resolves any subsystem references relative to the file's directory.
-func Load(path string, opts ...LoadOption) (*EsmFile, error) {
+func Load(path string, opts ...LoadOption) (*ESMFile, error) {
 	// Read the file
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -82,7 +82,7 @@ func Load(path string, opts ...LoadOption) (*EsmFile, error) {
 }
 
 // LoadString parses an ESM file from JSON string and validates it against the JSON schema
-func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
+func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	o := applyLoadOptions(opts)
 
 	// v0.4.0 expression_templates / apply_expression_template are rejected
@@ -136,13 +136,13 @@ func LoadString(jsonStr string, opts ...LoadOption) (*EsmFile, error) {
 	}
 	jsonStr = expanded
 
-	// Parse JSON into our struct. EsmFile implements json.Unmarshaler, so a
+	// Parse JSON into our struct. ESMFile implements json.Unmarshaler, so a
 	// top-level decoder's UseNumber setting would NOT reach the nested
 	// Expression slots — the int/float wire distinction (discretization RFC
 	// §5.4.1) is instead preserved deeper down, by UnmarshalExpression's own
 	// UseNumber decoder for every Expression-bearing field, with the residual
 	// json.Number tokens cleaned up by normalizeNumericLiterals below.
-	var esmFile EsmFile
+	var esmFile ESMFile
 	if err := json.Unmarshal([]byte(jsonStr), &esmFile); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
@@ -247,9 +247,9 @@ func normalizeExpression(expr Expression) Expression {
 	}
 }
 
-// normalizeNumericLiterals walks the parsed EsmFile and normalizes json.Number
+// normalizeNumericLiterals walks the parsed ESMFile and normalizes json.Number
 // tokens to int64 or float64 in every Expression-bearing field.
-func normalizeNumericLiterals(ef *EsmFile) {
+func normalizeNumericLiterals(ef *ESMFile) {
 	if ef.Models != nil {
 		for name, model := range ef.Models {
 			normalizeModelLiterals(&model)
@@ -371,7 +371,7 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 // every top-level expression slot: observed-variable expressions, equations,
 // initialization equations, guesses, event triggers/conditions/affects, and —
 // on reaction systems — reaction rates and constraint equations.
-func rejectCallOps(file *EsmFile) error {
+func rejectCallOps(file *ESMFile) error {
 	var visit func(expr Expression) error
 	visit = func(expr Expression) error {
 		if node, ok := asExprNode(expr); ok {

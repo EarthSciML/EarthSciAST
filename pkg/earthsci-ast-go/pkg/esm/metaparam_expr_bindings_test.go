@@ -69,7 +69,7 @@ func metaExprIndexSize(t *testing.T, view map[string]any, name string) int64 {
 
 // mountIndexSize reads a folded interval `size` from a loaded document's merged
 // index-set registry (esm-spec §4.7 subsystem index-set merge).
-func mountIndexSize(t *testing.T, f *EsmFile, name string) int {
+func mountIndexSize(t *testing.T, f *ESMFile, name string) int {
 	t.Helper()
 	is, ok := f.IndexSets[name]
 	if !ok {

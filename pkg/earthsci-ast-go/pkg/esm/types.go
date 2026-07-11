@@ -131,7 +131,7 @@ type ModelVariable struct {
 	Description *string    `json:"description,omitempty"`
 	Expression  Expression `json:"expression,omitempty"` // for observed variables
 	// Shape lists index-set names for arrayed variables, drawn from the
-	// document-scoped `index_sets` registry (EsmFile.IndexSets). Nil means
+	// document-scoped `index_sets` registry (ESMFile.IndexSets). Nil means
 	// scalar. As of v0.8.0 the iteration domains named here live at document
 	// scope, not on the model. See RFC semiring-faq-unified-ir §5.2 / §6.1.
 	Shape []string `json:"shape,omitempty"`
@@ -476,7 +476,7 @@ type DataLoaderVariable struct {
 // CouplingEntry represents different types of coupling rules
 // This is a discriminated union based on the "type" field
 type CouplingEntry interface {
-	GetType() string
+	CouplingType() string
 }
 
 // OperatorComposeCoupling represents operator composition
@@ -488,7 +488,7 @@ type OperatorComposeCoupling struct {
 	Description *string        `json:"description,omitempty"`
 }
 
-func (o OperatorComposeCoupling) GetType() string { return o.Type }
+func (o OperatorComposeCoupling) CouplingType() string { return o.Type }
 
 // CouplingCouple represents bi-directional coupling via connector equations
 type CouplingCouple struct {
@@ -499,7 +499,7 @@ type CouplingCouple struct {
 	Description *string   `json:"description,omitempty"`
 }
 
-func (c CouplingCouple) GetType() string { return c.Type }
+func (c CouplingCouple) CouplingType() string { return c.Type }
 
 // VariableMapCoupling represents variable mapping.
 // Transform is a union (mirrors DataLoaderVariable.UnitConversion): either one
@@ -519,7 +519,7 @@ type VariableMapCoupling struct {
 	Description *string    `json:"description,omitempty"`
 }
 
-func (v VariableMapCoupling) GetType() string { return v.Type }
+func (v VariableMapCoupling) CouplingType() string { return v.Type }
 
 // TransformKind returns the legacy string transform kind, or "" when the
 // transform is an Expression AST (or absent).
@@ -545,7 +545,7 @@ type OperatorApplyCoupling struct {
 	Description *string `json:"description,omitempty"`
 }
 
-func (o OperatorApplyCoupling) GetType() string { return o.Type }
+func (o OperatorApplyCoupling) CouplingType() string { return o.Type }
 
 // CallbackCoupling represents callback-based coupling
 type CallbackCoupling struct {
@@ -555,7 +555,7 @@ type CallbackCoupling struct {
 	Description *string        `json:"description,omitempty"`
 }
 
-func (c CallbackCoupling) GetType() string { return c.Type }
+func (c CallbackCoupling) CouplingType() string { return c.Type }
 
 // EventCoupling represents event-based coupling
 type EventCoupling struct {
@@ -573,7 +573,7 @@ type EventCoupling struct {
 	Description        *string               `json:"description,omitempty"`
 }
 
-func (e EventCoupling) GetType() string { return e.Type }
+func (e EventCoupling) CouplingType() string { return e.Type }
 
 // CouplingImport reuses a coupling-library file (esm-spec §10.9, §10.10): it
 // imports the library named by `Ref` and binds each of its declared roles to a
@@ -590,7 +590,7 @@ type CouplingImport struct {
 	Description *string           `json:"description,omitempty"`
 }
 
-func (c CouplingImport) GetType() string { return c.Type }
+func (c CouplingImport) CouplingType() string { return c.Type }
 
 // CouplingRole is one entry in a coupling-library file's `coupling_roles` map
 // (esm-spec §10.9): a formal component role (a name, not a type), carrying an
@@ -685,9 +685,9 @@ type IndexSet struct {
 	Values  *string  `json:"values,omitempty"`
 }
 
-// EsmFile represents the top-level ESM file structure
-type EsmFile struct {
-	Esm             string                    `json:"esm" validate:"required"`
+// ESMFile represents the top-level ESM file structure
+type ESMFile struct {
+	ESM             string                    `json:"esm" validate:"required"`
 	Metadata        Metadata                  `json:"metadata" validate:"required"`
 	Models          map[string]Model          `json:"models,omitempty"`
 	ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
@@ -756,8 +756,12 @@ type FunctionTable struct {
 // cache-heavy and MUST be reused rather than reconstructed per call.
 var validate = validator.New()
 
-// Validate validates the ESM file structure
-func (e *EsmFile) Validate() error {
+// ValidateStruct runs the go-playground struct validation over the ESM file
+// (required fields, tag constraints) plus the "at least one component present"
+// invariant. It is intentionally named distinctly from the package-level
+// semantic validator Validate(*ESMFile) (validate.go), which performs the
+// richer structural/reference/unit checks — the two are different layers.
+func (e *ESMFile) ValidateStruct() error {
 	if err := validate.Struct(e); err != nil {
 		return err
 	}
@@ -772,23 +776,23 @@ func (e *EsmFile) Validate() error {
 
 // ToJSON converts the ESM file to canonical (indented) JSON bytes.
 //
-// Unlike Save (serialize.go), ToJSON does NOT run (*EsmFile).Validate first —
+// Unlike Save (serialize.go), ToJSON does NOT run (*ESMFile).Validate first —
 // it serializes whatever it is given. Callers that need the file validated
 // before emission should use Save (which returns a string) or call Validate
 // explicitly; ToJSON exists for the raw byte form and for round-trip paths that
 // have already validated.
-func (e *EsmFile) ToJSON() ([]byte, error) {
+func (e *ESMFile) ToJSON() ([]byte, error) {
 	return marshalCanonical(e, true)
 }
 
 // FromJSON creates an ESM file from JSON data
-func FromJSON(data []byte) (*EsmFile, error) {
-	var esm EsmFile
+func FromJSON(data []byte) (*ESMFile, error) {
+	var esm ESMFile
 	if err := json.Unmarshal(data, &esm); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
-	if err := esm.Validate(); err != nil {
+	if err := esm.ValidateStruct(); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
