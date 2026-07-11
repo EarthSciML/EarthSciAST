@@ -23,8 +23,10 @@ func marshalCanonical(v interface{}, indent bool) ([]byte, error) {
 	return json.Marshal(canonical)
 }
 
-// Save serializes an ESM file to JSON string
-func Save(file *EsmFile) (string, error) {
+// save is the shared serialization core for the four exported Save* entry
+// points. It validates the file (Save semantics — unlike ToJSON) and emits
+// canonical JSON, indented when indent is true and compact otherwise.
+func save(file *EsmFile, indent bool) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("cannot serialize nil ESM file")
 	}
@@ -34,66 +36,57 @@ func Save(file *EsmFile) (string, error) {
 		return "", fmt.Errorf("validation failed before serialization: %w", err)
 	}
 
-	jsonData, err := marshalCanonical(file, true)
+	jsonData, err := marshalCanonical(file, indent)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal ESM file to JSON: %w", err)
 	}
 
 	return string(jsonData), nil
+}
+
+// Save serializes an ESM file to indented JSON string
+func Save(file *EsmFile) (string, error) {
+	return save(file, true)
 }
 
 // SaveCompact serializes an ESM file to compact JSON string (no indentation)
 func SaveCompact(file *EsmFile) (string, error) {
-	if file == nil {
-		return "", fmt.Errorf("cannot serialize nil ESM file")
-	}
-
-	// Validate the file before serializing
-	if err := file.Validate(); err != nil {
-		return "", fmt.Errorf("validation failed before serialization: %w", err)
-	}
-
-	jsonData, err := marshalCanonical(file, false)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal ESM file to JSON: %w", err)
-	}
-
-	return string(jsonData), nil
+	return save(file, false)
 }
 
 // SaveToFile saves an ESM file directly to a file path
-func SaveToFile(file *EsmFile, filepath string) error {
+func SaveToFile(file *EsmFile, path string) error {
 	jsonStr, err := Save(file)
 	if err != nil {
 		return err
 	}
 
 	// Write to file
-	if err := writeFile(filepath, []byte(jsonStr)); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", filepath, err)
+	if err := writeFile(path, []byte(jsonStr)); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
 	return nil
 }
 
 // SaveCompactToFile saves an ESM file to a file path in compact format
-func SaveCompactToFile(file *EsmFile, filepath string) error {
+func SaveCompactToFile(file *EsmFile, path string) error {
 	jsonStr, err := SaveCompact(file)
 	if err != nil {
 		return err
 	}
 
 	// Write to file
-	if err := writeFile(filepath, []byte(jsonStr)); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", filepath, err)
+	if err := writeFile(path, []byte(jsonStr)); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
 	return nil
 }
 
-// writeFile is a simple file writing helper that can be easily mocked for testing
-func writeFile(filepath string, data []byte) error {
-	return os.WriteFile(filepath, data, 0644)
+// writeFile is a simple file writing helper.
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0644)
 }
 
 // SerializeExpression serializes just an expression to JSON
