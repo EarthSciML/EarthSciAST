@@ -333,13 +333,40 @@ class Parser {
 // Lossless JSON stringifier
 // ---------------------------------------------------------------------------
 
-export class CanonicalNonfiniteError extends Error {
-  code = 'E_CANONICAL_NONFINITE' as const
+/**
+ * Canonical-form error carrying a stable RFC §5.4.6 / §5.4.7 `code` string
+ * (`E_CANONICAL_NONFINITE`, `E_CANONICAL_DIVBY_ZERO`).
+ *
+ * Defined here — the lowest module in the canonical-form stack — so that both
+ * this module's serializer and `canonicalize.ts` can share ONE nonfinite error
+ * type ({@link CanonicalNonfiniteError} extends it) without an import cycle.
+ * `canonicalize.ts` re-exports this class under the same name, so consumers may
+ * keep importing `CanonicalizeError` from either module.
+ */
+export class CanonicalizeError extends Error {
+  /** Stable RFC §5.4.6 / §5.4.7 error code. */
+  readonly code: string
+  constructor(code: string, message?: string) {
+    super(message ?? code)
+    this.code = code
+    this.name = 'CanonicalizeError'
+  }
+}
+
+/**
+ * Raised when a non-finite number (NaN, ±Infinity) reaches canonical / lossless
+ * serialization — RFC §5.4.6 forbids non-finite numbers in the wire form. A
+ * specialization of {@link CanonicalizeError} carrying the
+ * `E_CANONICAL_NONFINITE` code plus the offending `value` and its `path`, so a
+ * single `instanceof CanonicalizeError` check catches every canonical-form
+ * failure regardless of which pass raised it.
+ */
+export class CanonicalNonfiniteError extends CanonicalizeError {
   constructor(
     public readonly value: number,
     public readonly path: string,
   ) {
-    super(`Canonical form forbids non-finite number ${value} at ${path}`)
+    super('E_CANONICAL_NONFINITE', `Canonical form forbids non-finite number ${value} at ${path}`)
     this.name = 'CanonicalNonfiniteError'
   }
 }
@@ -433,11 +460,14 @@ export function formatNumericLiteral(lit: NumericLiteral, path: string): string 
  * Emit a float token via ECMAScript `ToString(Number)` with a trailing
  * `.0` override when the result is an integer-valued plain-decimal token.
  *
- * This is the document-serialization float emitter used by
- * {@link losslessJsonStringify} and `save()`. It is NOT the strict RFC
- * §5.4.6 canonical-form emitter — that is `formatCanonicalFloat` in
- * `canonicalize.ts`, which additionally normalizes exponent notation
- * (strips the leading `+`, forces exponent thresholds).
+ * NAMING: this is the DOCUMENT-serialization float emitter (used by
+ * {@link losslessJsonStringify} and `save()`), which relies on
+ * `ToString(Number)`'s own exponent formatting. It is deliberately NOT the
+ * strict RFC §5.4.6 CANONICAL-FORM emitter — that is the confusingly-similar
+ * `formatCanonicalFloat` in `canonicalize.ts`, which additionally normalizes
+ * exponent notation (strips the leading `+` and forces the §5.4.6 exponent
+ * thresholds). Keep the two distinct: `formatFloatToken` for wire round-trip,
+ * `formatCanonicalFloat` for byte-canonical output.
  */
 export function formatFloatToken(value: number): string {
   if (!Number.isFinite(value)) {
@@ -448,4 +478,42 @@ export function formatFloatToken(value: number): string {
   if (s.includes('.') || s.includes('e') || s.includes('E')) return s
   // Integer-valued float in plain-decimal range — add trailing `.0`.
   return `${s}.0`
+}
+
+/**
+ * Recursively replace `NumericLiteral` leaves with their plain-number value.
+ *
+ * Returns a NEW tree; the input is never mutated. Non-literal objects and
+ * arrays are shallow-copied ONLY when a descendant is actually rewritten, so
+ * unrelated subtrees stay reference-identical with the input.
+ *
+ * Single home for a helper that was previously copy-pasted verbatim into both
+ * `save()` (to emit bare JSON numbers) and `load()`'s canonical mode (which
+ * builds a plain view for Ajv schema validation, since the schema declares
+ * `type: number`, which does not match tagged `{kind, value}` objects).
+ */
+export function stripNumericLiterals(value: unknown): unknown {
+  if (isNumericLiteral(value)) return value.value
+  if (Array.isArray(value)) {
+    let changed = false
+    const out: unknown[] = new Array(value.length)
+    for (let i = 0; i < value.length; i++) {
+      const v = stripNumericLiterals(value[i])
+      if (v !== value[i]) changed = true
+      out[i] = v
+    }
+    return changed ? out : value
+  }
+  if (value && typeof value === 'object') {
+    const src = value as Record<string, unknown>
+    let changed = false
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(src)) {
+      const v = stripNumericLiterals(src[key])
+      if (v !== src[key]) changed = true
+      out[key] = v
+    }
+    return changed ? out : value
+  }
+  return value
 }

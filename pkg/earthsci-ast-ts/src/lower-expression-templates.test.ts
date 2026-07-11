@@ -7,6 +7,7 @@ import * as path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
 import { lowerExpressionTemplates, ExpressionTemplateError } from './lower-expression-templates.js'
+import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
@@ -1117,5 +1118,57 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
     }
     expect(caught).toBeInstanceOf(ExpressionTemplateError)
     expect((caught as ExpressionTemplateError).code).toBe('makearray_region_inverted')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression guards for the Wave-2β clarity/consistency fixes.
+// ---------------------------------------------------------------------------
+
+describe('rulePriority — non-finite priority does not poison rule selection', () => {
+  it('a NaN-priority rule sorts as priority 0, so a real higher-priority rule still wins', () => {
+    // Two `match` rules fire on the same `foo` node. `ruleNaN` is declared
+    // FIRST (declIndex 0) with a non-finite priority; `rule5` is declared
+    // second with priority 5. Before the guard fix, `NaN` made the sort
+    // comparator fall back to declaration order, so `ruleNaN` (declIndex 0)
+    // shadowed `rule5`. With the fix (`NaN` -> 0) the priority-5 rule wins.
+    const file = {
+      esm: '0.8.0',
+      metadata: { name: 'nan_priority' },
+      models: {
+        m: {
+          variables: { x: { type: 'variable', units: '1' } },
+          expression_templates: {
+            ruleNaN: {
+              params: ['a'],
+              match: { op: 'foo', args: ['a'] },
+              body: { op: 'from_nan', args: ['a'] },
+              priority: Number.NaN,
+            },
+            rule5: {
+              params: ['a'],
+              match: { op: 'foo', args: ['a'] },
+              body: { op: 'from_five', args: ['a'] },
+              priority: 5,
+            },
+          },
+          equations: [{ lhs: 'x', rhs: { op: 'foo', args: ['z'] } }],
+        },
+      },
+    }
+    const out = lowerExpressionTemplates(file) as any
+    expect(out.models.m.equations[0].rhs).toEqual({ op: 'from_five', args: ['z'] })
+  })
+})
+
+describe('ExpressionTemplateError — extends EsmDiagnosticError, byte-compatible', () => {
+  it('keeps its name, code, and [code] message while gaining the EsmDiagnosticError base', () => {
+    const err = new ExpressionTemplateError('some_code', 'boom')
+    expect(err).toBeInstanceOf(ExpressionTemplateError)
+    expect(err).toBeInstanceOf(EsmDiagnosticError)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.name).toBe('ExpressionTemplateError')
+    expect(err.code).toBe('some_code')
+    expect(err.message).toBe('[some_code] boom')
   })
 })

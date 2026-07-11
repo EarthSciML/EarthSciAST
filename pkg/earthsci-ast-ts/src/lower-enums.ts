@@ -11,16 +11,23 @@
  * runner (`compileExpression` / `evaluateExpression`) sees only
  * `const`. Mirrors the Julia `lower_enums!` pass.
  *
- * Errors:
- *   - Reference to an undeclared enum name → EnumLoweringError with a
- *     descriptive message (no spec-pinned diagnostic code at this time;
- *     follow-up if a stable code is added).
- *   - Reference to an unknown member of a declared enum → EnumLoweringError.
+ * Errors are `EnumLoweringError`s carrying stable, registry-backed diagnostic
+ * codes (see `errors.ts` `ERROR_CODES`, mirrored by the Python `ErrorCode`
+ * enum):
+ *   - `enum_op_malformed` — an `enum` op whose args are not
+ *     `[enum_name, member_name]` (two strings).
+ *   - `enum_not_declared` — reference to an enum name not present in the file's
+ *     top-level `enums` block.
+ *   - `enum_member_not_found` — reference to an unknown member of a declared
+ *     enum.
  */
 
-import type { Expression, ExpressionNode } from './generated.js'
 import type { EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
+import { EXPRESSION_CHILD_KEYS } from './expression.js'
+
+/** Shared source of truth for "which op fields carry child expressions". */
+const EXPRESSION_CHILD_KEY_SET: ReadonlySet<string> = new Set(EXPRESSION_CHILD_KEYS)
 
 export class EnumLoweringError extends Error {
   constructor(
@@ -80,12 +87,20 @@ function lowerExpr(expr: unknown, enums: EnumsMap): unknown {
       }
       return { op: 'const', args: [], value: decl[memberName] }
     }
-    // Generic op: recurse into args + every Expression-valued field.
+    // Generic op: recurse into every expression-bearing child field. Descent
+    // uses `EXPRESSION_CHILD_KEYS` — the SAME single source of truth the shared
+    // walker (`mapChildren`/`forEachChild`) and the rest of the package trust —
+    // rather than a local `/expr/i` heuristic that both diverged from that set
+    // and skipped aggregate `filter`/`key`, `table_lookup` `axes`, and template
+    // `bindings`. Non-child fields (`op`, `wrt`, `dim`, `reduce`, `value`, …)
+    // are copied verbatim, preserving key order and structural sharing (map
+    // fields `axes`/`bindings` recurse through the plain-object branch below,
+    // which keeps their key order).
     const out: Record<string, unknown> = {}
     let changed = false
     for (const key of Object.keys(node)) {
       const v = node[key]
-      const lv = key === 'args' || /expr/i.test(key) || key === 'values' ? lowerExpr(v, enums) : v
+      const lv = EXPRESSION_CHILD_KEY_SET.has(key) ? lowerExpr(v, enums) : v
       if (lv !== v) changed = true
       out[key] = lv
     }
@@ -119,6 +134,3 @@ export function lowerEnums(file: EsmFile): EsmFile {
   }
   return lowerExpr(file, enums) as EsmFile
 }
-
-// Re-export for tests.
-export type { Expression, ExpressionNode }

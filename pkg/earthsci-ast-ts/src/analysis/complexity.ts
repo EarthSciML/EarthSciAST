@@ -6,10 +6,63 @@
  */
 
 import type { Expr } from '../types.js'
-import type { ComplexityMetrics } from './types.js'
-import { freeVariables, isExprNode } from '../expression.js'
+import type { ComplexityMetrics, StabilityIssue } from './types.js'
+import { freeVariables, isExprNode, forEachChild } from '../expression.js'
 import { numericValue } from '../numeric-literal.js'
 import { opCost } from '../op-registry.js'
+
+// --- Computational-cost weights (calculateComputationalCost) ----------------
+/** Cost charged per unique variable lookup. */
+const VARIABLE_LOOKUP_COST = 1
+/** Cost charged per constant literal (small but non-zero). */
+const CONSTANT_COST = 0.1
+/** Cost charged per unit of expression depth (stack pressure). */
+const DEPTH_COST = 2
+
+// --- Memory-usage weights (calculateMemoryUsage) ----------------------------
+/** Memory charged per operation node (op + args array + metadata). */
+const OP_NODE_MEMORY = 3
+/** Memory charged per unique variable (lookup slot). */
+const VARIABLE_MEMORY = 2
+/** Memory charged per constant literal. */
+const CONSTANT_MEMORY = 1
+/** Memory charged per unit of expression depth (stack frame). */
+const DEPTH_MEMORY = 1
+
+// --- classifyComplexity level boundaries (inclusive upper bounds) -----------
+const COMPLEXITY_TRIVIAL_MAX = 5
+const COMPLEXITY_SIMPLE_MAX = 20
+const COMPLEXITY_MODERATE_MAX = 50
+const COMPLEXITY_COMPLEX_MAX = 150
+
+/** Minimum cost for a subexpression to be reported by findExpensiveSubexpressions. */
+const EXPENSIVE_COST_THRESHOLD = 10
+
+// --- detectStabilityIssues thresholds ---------------------------------------
+/** A constant denominator with magnitude below this is flagged as unstable. */
+const SMALL_DENOMINATOR = 1e-6
+/** A constant exponent with magnitude above this is flagged as large. */
+const LARGE_EXPONENT = 100
+
+/**
+ * Operations whose multiple arguments can be evaluated independently (and thus
+ * in parallel). Hoisted to module scope so it is built once, not per node.
+ */
+const PARALLELIZABLE_OPS: ReadonlySet<string> = new Set([
+  '+',
+  '*',
+  'and',
+  'or',
+  'min',
+  'max',
+  // Element-wise operations
+  'sin',
+  'cos',
+  'exp',
+  'log',
+  'sqrt',
+  'abs',
+])
 
 /**
  * Analyze the complexity of an expression
@@ -51,20 +104,16 @@ function analyzeExpressionRecursive(expr: Expr, metrics: ComplexityMetrics, dept
   // produced by canonical-mode parsing.
   if (numericValue(expr) !== undefined) {
     metrics.constantCount++
-  } else if (typeof expr === 'string') {
-    // Variable - will be counted later in freeVariables call
-    // Just increment memory usage
-    metrics.memoryUsage += 1
   } else if (isExprNode(expr)) {
     // Operation node
     metrics.operationCount++
     metrics.operationTypes[expr.op] = (metrics.operationTypes[expr.op] || 0) + 1
 
-    // Recursively analyze arguments
-    for (const arg of expr.args) {
-      analyzeExpressionRecursive(arg, metrics, depth + 1)
-    }
+    // Recursively analyze every child (args, aggregate bodies, ...).
+    forEachChild(expr, (child) => analyzeExpressionRecursive(child, metrics, depth + 1))
   }
+  // Variable-reference strings contribute no operation/constant here; unique
+  // variables are counted via freeVariables in analyzeComplexity.
 }
 
 /**
@@ -79,18 +128,13 @@ function calculateComputationalCost(metrics: ComplexityMetrics): number {
   }
 
   // Add cost for variable lookups
-  totalCost += metrics.variableCount * 1
+  totalCost += metrics.variableCount * VARIABLE_LOOKUP_COST
 
   // Add cost for constants (minimal but not zero)
-  totalCost += metrics.constantCount * 0.1
+  totalCost += metrics.constantCount * CONSTANT_COST
 
   // Add depth penalty (deeper expressions are more expensive due to stack usage)
-  totalCost += metrics.depth * 2
-
-  // Ensure minimum cost of 1 for any non-trivial expression
-  if (totalCost === 0 && (metrics.variableCount > 0 || metrics.constantCount > 0)) {
-    totalCost = 1
-  }
+  totalCost += metrics.depth * DEPTH_COST
 
   return totalCost
 }
@@ -103,16 +147,16 @@ function calculateMemoryUsage(metrics: ComplexityMetrics): number {
   let memoryUsage = 0
 
   // Each operation node requires memory
-  memoryUsage += metrics.operationCount * 3 // op + args array + metadata
+  memoryUsage += metrics.operationCount * OP_NODE_MEMORY
 
   // Each unique variable requires memory for lookup
-  memoryUsage += metrics.variableCount * 2
+  memoryUsage += metrics.variableCount * VARIABLE_MEMORY
 
   // Each constant requires storage
-  memoryUsage += metrics.constantCount * 1
+  memoryUsage += metrics.constantCount * CONSTANT_MEMORY
 
   // Depth affects stack memory usage
-  memoryUsage += metrics.depth * 1
+  memoryUsage += metrics.depth * DEPTH_MEMORY
 
   return memoryUsage
 }
@@ -161,13 +205,13 @@ export function classifyComplexity(
   const metrics = analyzeComplexity(expr)
 
   // Classification based on computational cost
-  if (metrics.computationalCost <= 5) {
+  if (metrics.computationalCost <= COMPLEXITY_TRIVIAL_MAX) {
     return 'trivial'
-  } else if (metrics.computationalCost <= 20) {
+  } else if (metrics.computationalCost <= COMPLEXITY_SIMPLE_MAX) {
     return 'simple'
-  } else if (metrics.computationalCost <= 50) {
+  } else if (metrics.computationalCost <= COMPLEXITY_MODERATE_MAX) {
     return 'moderate'
-  } else if (metrics.computationalCost <= 150) {
+  } else if (metrics.computationalCost <= COMPLEXITY_COMPLEX_MAX) {
     return 'complex'
   } else {
     return 'very_complex'
@@ -194,7 +238,7 @@ export function findExpensiveSubexpressions(
     const cost = analyzeComplexity(currentExpr).computationalCost
 
     // Only include expressions that are worth optimizing
-    if (cost > 10) {
+    if (cost > EXPENSIVE_COST_THRESHOLD) {
       results.push({
         expression: currentExpr,
         cost,
@@ -204,8 +248,9 @@ export function findExpensiveSubexpressions(
 
     // Recursively analyze sub-expressions
     if (isExprNode(currentExpr)) {
-      currentExpr.args.forEach((arg, index) => {
-        analyzeRecursive(arg, [...path, `args[${index}]`])
+      forEachChild(currentExpr, (child, key, index) => {
+        const segment = index !== undefined ? `${key}[${index}]` : key
+        analyzeRecursive(child, [...path, segment])
       })
     }
   }
@@ -233,31 +278,12 @@ export function estimateParallelPotential(expr: Expr): number {
     if (isExprNode(currentExpr)) {
       totalOps++
 
-      // Operations that can be parallelized
-      const parallelizableOperations = new Set([
-        '+',
-        '*',
-        'and',
-        'or',
-        'min',
-        'max',
-        // Element-wise operations
-        'sin',
-        'cos',
-        'exp',
-        'log',
-        'sqrt',
-        'abs',
-      ])
-
-      if (parallelizableOperations.has(currentExpr.op) && currentExpr.args.length > 1) {
+      if (PARALLELIZABLE_OPS.has(currentExpr.op) && currentExpr.args.length > 1) {
         parallelizableOps++
       }
 
-      // Recursively analyze arguments
-      for (const arg of currentExpr.args) {
-        analyzeParallelism(arg)
-      }
+      // Recursively analyze children
+      forEachChild(currentExpr, (child) => analyzeParallelism(child))
     }
   }
 
@@ -271,18 +297,8 @@ export function estimateParallelPotential(expr: Expr): number {
  * @param expr Expression to analyze
  * @returns Array of potential stability issues
  */
-export function detectStabilityIssues(expr: Expr): Array<{
-  issue: string
-  severity: 'low' | 'medium' | 'high'
-  path: string[]
-  suggestion: string
-}> {
-  const issues: Array<{
-    issue: string
-    severity: 'low' | 'medium' | 'high'
-    path: string[]
-    suggestion: string
-  }> = []
+export function detectStabilityIssues(expr: Expr): StabilityIssue[] {
+  const issues: StabilityIssue[] = []
 
   function analyzeStability(currentExpr: Expr, path: string[]) {
     if (isExprNode(currentExpr)) {
@@ -293,7 +309,7 @@ export function detectStabilityIssues(expr: Expr): Array<{
 
         if (denominatorValue !== undefined) {
           // Division by small constants
-          if (Math.abs(denominatorValue) < 1e-6) {
+          if (Math.abs(denominatorValue) < SMALL_DENOMINATOR) {
             issues.push({
               issue: 'Division by very small constant',
               severity: 'high',
@@ -341,7 +357,7 @@ export function detectStabilityIssues(expr: Expr): Array<{
       // Check for very large exponents
       if (currentExpr.op === '^' && currentExpr.args.length === 2) {
         const exponent = numericValue(currentExpr.args[1])
-        if (exponent !== undefined && Math.abs(exponent) > 100) {
+        if (exponent !== undefined && Math.abs(exponent) > LARGE_EXPONENT) {
           issues.push({
             issue: 'Very large exponent',
             severity: 'medium',
@@ -367,9 +383,10 @@ export function detectStabilityIssues(expr: Expr): Array<{
         }
       }
 
-      // Recursively analyze arguments
-      currentExpr.args.forEach((arg, index) => {
-        analyzeStability(arg, [...path, `args[${index}]`])
+      // Recursively analyze children
+      forEachChild(currentExpr, (child, key, index) => {
+        const segment = index !== undefined ? `${key}[${index}]` : key
+        analyzeStability(child, [...path, segment])
       })
     }
   }

@@ -45,16 +45,20 @@
  * Operates on the pre-coercion JSON view (plain objects) — runs in
  * `load()` after schema validation but before typed coercion.
  *
- * Errors:
+ * Errors (raised directly by this file; the code STRINGS live in
+ * `./errors.js` `ERROR_CODES`):
  *   - apply_expression_template_unknown_template
  *   - apply_expression_template_bindings_mismatch
  *   - apply_expression_template_recursive_body
  *   - apply_expression_template_version_too_old
  *   - apply_expression_template_invalid_declaration
  *   - rewrite_rule_nonterminating
+ *   - template_constraint_unknown_index_set   (§9.6.1 `where` registration)
+ *   - geometry_manifold_invalid               (§9.6.4 expanded-form validator)
+ *   - makearray_region_inverted               (§9.6.4 expanded-form validator)
  *
  * plus the esm-spec §9.7 template-library / metaparameter codes (§9.6.6,
- * raised from `template_imports.ts` and `ref-loading.ts`):
+ * raised from `template-imports.ts` and `ref-loading.ts`):
  *
  *   - template_import_version_too_old
  *   - template_import_unresolved
@@ -71,6 +75,8 @@
  */
 
 import { isNumericLiteral, numericValue } from './numeric-literal.js'
+import { deepClone, isObject } from './object-utils.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 const APPLY_OP = 'apply_expression_template'
 
@@ -84,6 +90,8 @@ const APPLY_OP = 'apply_expression_template'
  */
 const GEOMETRY_MANIFOLD_OPS = new Set(['intersect_polygon', 'polygon_intersection_area'])
 const GEOMETRY_MANIFOLD_VALUES = new Set(['planar', 'spherical', 'geodesic'])
+/** The closed manifold set rendered for diagnostics, e.g. `{planar, spherical, geodesic}`. */
+const GEOMETRY_MANIFOLD_SET_DISPLAY = `{${[...GEOMETRY_MANIFOLD_VALUES].join(', ')}}`
 
 /**
  * Maximum number of productive rewrite passes before a file is rejected as
@@ -93,12 +101,19 @@ const GEOMETRY_MANIFOLD_VALUES = new Set(['planar', 'spherical', 'geodesic'])
  */
 const MAX_REWRITE_PASSES = 64
 
-export class ExpressionTemplateError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-  ) {
-    super(`[${code}] ${message}`)
+/**
+ * Diagnostic raised by §9.6 expression-template lowering (and, historically, by
+ * the §9.7 template/coupling importers and §9.6.4 expanded-form validators that
+ * reuse it as their shared coded-diagnostic class — validate.ts maps it to the
+ * `expression_template_error` load-error kind). Extends the neutral
+ * {@link EsmDiagnosticError} additively: the class NAME, the
+ * `(code, message)` constructor signature, the `[code] message` text, and the
+ * public `code` string property are all preserved byte-for-byte, so every
+ * importer and `instanceof ExpressionTemplateError` check is unaffected.
+ */
+export class ExpressionTemplateError extends EsmDiagnosticError {
+  constructor(code: string, message: string) {
+    super(code, `[${code}] ${message}`)
     this.name = 'ExpressionTemplateError'
   }
 }
@@ -137,22 +152,19 @@ interface MatchRule {
 type ShapeEnv = Record<string, string[]>
 const EMPTY_SHAPE_ENV: ShapeEnv = {}
 
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) && !isNumericLiteral(v)
-}
-
 /**
  * The `priority` of a `match` rule (esm-spec §9.6.3): higher fires first,
  * ties break by declaration order. Absent ⇒ 0. The schema constrains
  * `priority` to an integer; any numeric encoding is coerced defensively.
+ * A non-finite priority (`NaN`/±`Infinity`) is treated as 0 rather than being
+ * allowed to poison the rule sort.
  */
 function rulePriority(decl: TemplateDecl): number {
   const p: unknown = decl.priority
   if (p === undefined || p === null) return 0
   if (typeof p === 'boolean') return 0
   const n = numericValue(p)
-  if (n !== undefined) return Math.round(n)
-  if (typeof p === 'number' && Number.isFinite(p)) return Math.round(p)
+  if (n !== undefined) return Number.isFinite(n) ? Math.round(n) : 0
   return 0
 }
 
@@ -326,7 +338,7 @@ function registeredWhere(
     for (const s of req) {
       if (!isetNames.has(s)) {
         throw new ExpressionTemplateError(
-          'template_constraint_unknown_index_set',
+          ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
           `${scope}.expression_templates.${tname}: where.${p}.shape names index set '${s}', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)`,
         )
       }
@@ -334,18 +346,6 @@ function registeredWhere(
     out[p] = req
   }
   return out
-}
-
-function deepClone<T>(v: T): T {
-  if (v === null || v === undefined) return v
-  if (isNumericLiteral(v)) return v // preserve symbol-tagged literals as-is
-  if (Array.isArray(v)) return v.map(deepClone) as unknown as T
-  if (typeof v === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const k of Object.keys(v as object)) out[k] = deepClone((v as Record<string, unknown>)[k])
-    return out as unknown as T
-  }
-  return v
 }
 
 /** Substitute parameter occurrences in a template body. */
@@ -383,7 +383,7 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   if (isObject(body)) {
     if (body.op === APPLY_OP) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_invalid_declaration',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `expression_templates.${templateName}: \`match\` contains an 'apply_expression_template' node at ${path}; match patterns MUST NOT reference templates (esm-spec §9.7.3)`,
       )
     }
@@ -393,11 +393,21 @@ function assertNoNestedApply(body: Json, templateName: string, path: string): vo
   }
 }
 
-export function validateTemplates(templates: Templates, scope: string): void {
+/**
+ * Structurally validate a raw `expression_templates` block (esm-spec §9.6.1).
+ * Accepts the pre-coercion `Record<string, unknown>` view directly — no
+ * `as TemplateDecl` lie at the call site — and NARROWS it to {@link Templates}
+ * on return via the `asserts` clause, so callers get the typed view only after
+ * the structure has actually been checked.
+ */
+export function validateTemplates(
+  templates: Record<string, unknown>,
+  scope: string,
+): asserts templates is Templates {
   for (const [name, decl] of Object.entries(templates)) {
     if (!decl || typeof decl !== 'object') {
       throw new ExpressionTemplateError(
-        'apply_expression_template_invalid_declaration',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: entry must be an object with params + body`,
       )
     }
@@ -406,7 +416,7 @@ export function validateTemplates(templates: Templates, scope: string): void {
     const params = (decl as { params?: unknown }).params
     if (!Array.isArray(params)) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_invalid_declaration',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: 'params' must be an array of strings`,
       )
     }
@@ -414,13 +424,13 @@ export function validateTemplates(templates: Templates, scope: string): void {
     for (const p of params) {
       if (typeof p !== 'string' || p.length === 0) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_invalid_declaration',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: param names must be non-empty strings`,
         )
       }
       if (seen.has(p)) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_invalid_declaration',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: param '${p}' is declared twice`,
         )
       }
@@ -428,7 +438,7 @@ export function validateTemplates(templates: Templates, scope: string): void {
     }
     if (!('body' in (decl as object))) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_invalid_declaration',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         `${scope}.expression_templates.${name}: 'body' is required`,
       )
     }
@@ -457,47 +467,47 @@ export function validateTemplates(templates: Templates, scope: string): void {
     if (whr !== undefined && whr !== null) {
       if (match === undefined) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_invalid_declaration',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)`,
         )
       }
       if (!isObject(whr) || Object.keys(whr).length === 0) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_invalid_declaration',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
           `${scope}.expression_templates.${name}: 'where' must be a non-empty object mapping declared params to constraint objects`,
         )
       }
       for (const [p, cobj] of Object.entries(whr)) {
         if (!seen.has(p)) {
           throw new ExpressionTemplateError(
-            'apply_expression_template_invalid_declaration',
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: 'where' constrains '${p}', which is not a declared param (esm-spec §9.6.1)`,
           )
         }
         if (!isObject(cobj)) {
           throw new ExpressionTemplateError(
-            'apply_expression_template_invalid_declaration',
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p} must be a constraint object (v1 admits exactly the 'shape' kind)`,
           )
         }
         const ckeys = Object.keys(cobj)
         if (!(ckeys.length === 1 && ckeys[0] === 'shape')) {
           throw new ExpressionTemplateError(
-            'apply_expression_template_invalid_declaration',
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p} carries constraint kind(s) ${[...ckeys].sort().join(', ')}; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)`,
           )
         }
         const shp = (cobj as { shape?: unknown }).shape
         if (!Array.isArray(shp) || shp.length === 0) {
           throw new ExpressionTemplateError(
-            'apply_expression_template_invalid_declaration',
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             `${scope}.expression_templates.${name}: where.${p}.shape must be a non-empty array of index-set names`,
           )
         }
         for (const s of shp) {
           if (typeof s !== 'string' || s.length === 0) {
             throw new ExpressionTemplateError(
-              'apply_expression_template_invalid_declaration',
+              ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
               `${scope}.expression_templates.${name}: where.${p}.shape entries must be non-empty strings`,
             )
           }
@@ -561,8 +571,12 @@ function inlineApplies(node: Json, templates: Templates, scope: string): Json {
  * closed Expression AST with zero `apply_expression_template` nodes; runs
  * BEFORE the §9.6.3 fixpoint ever consults a `match` rule. Mutates the decl
  * objects in `templates` in place.
+ *
+ * Accepts the pre-coercion `Record<string, unknown>` view (the §9.7 resolver
+ * calls this on a raw `JsonObject`); the decls are assumed structurally valid
+ * (`validateTemplates` already ran).
  */
-export function composeTemplateBodies(templates: Templates, scope: string): void {
+export function composeTemplateBodies(templates: Record<string, unknown>, scope: string): void {
   const names = Object.keys(templates)
   if (names.length === 0) return
   const refs: Record<string, string[]> = {}
@@ -578,13 +592,13 @@ export function composeTemplateBodies(templates: Templates, scope: string): void
       const tdecl = templates[r]
       if (!tdecl) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_unknown_template',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
           `${scope}.expression_templates.${name}: body references undeclared template '${r}' (esm-spec §9.7.3)`,
         )
       }
       if ((tdecl as { match?: Json }).match !== undefined) {
         throw new ExpressionTemplateError(
-          'apply_expression_template_unknown_template',
+          ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
           `${scope}.expression_templates.${name}: body references '${r}', a \`match\` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)`,
         )
       }
@@ -602,7 +616,7 @@ export function composeTemplateBodies(templates: Templates, scope: string): void
     if (st === 1) {
       const cyc = [...chain.slice(chain.indexOf(name)), name]
       throw new ExpressionTemplateError(
-        'apply_expression_template_recursive_body',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
         `${scope}.expression_templates: template-body reference cycle ${cyc.join(' -> ')} (esm-spec §9.7.3)`,
       )
     }
@@ -618,7 +632,7 @@ export function composeTemplateBodies(templates: Templates, scope: string): void
     depth[name] = d
     if (d > MAX_TEMPLATE_EXPANSION_DEPTH) {
       throw new ExpressionTemplateError(
-        'template_body_expansion_too_deep',
+        ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
         `${scope}.expression_templates.${name}: body-reference chain of ${d} templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=${MAX_TEMPLATE_EXPANSION_DEPTH} (esm-spec §9.7.3)`,
       )
     }
@@ -630,7 +644,7 @@ export function composeTemplateBodies(templates: Templates, scope: string): void
   for (const name of order) {
     if (refs[name]!.length === 0) continue
     const decl = templates[name] as { body: Json }
-    decl.body = inlineApplies(decl.body, templates, `${scope}.expression_templates.${name}`)
+    decl.body = inlineApplies(decl.body, templates as Templates, `${scope}.expression_templates.${name}`)
   }
 }
 
@@ -646,21 +660,21 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   const name = node.name
   if (typeof name !== 'string' || name.length === 0) {
     throw new ExpressionTemplateError(
-      'apply_expression_template_invalid_declaration',
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
       `${scope}: apply_expression_template node missing or empty 'name'`,
     )
   }
   const decl = templates[name]
   if (!decl) {
     throw new ExpressionTemplateError(
-      'apply_expression_template_unknown_template',
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
       `${scope}: apply_expression_template references undeclared template '${name}'`,
     )
   }
   const bindings = node.bindings
   if (!isObject(bindings)) {
     throw new ExpressionTemplateError(
-      'apply_expression_template_bindings_mismatch',
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
       `${scope}: apply_expression_template '${name}' missing 'bindings' object`,
     )
   }
@@ -669,7 +683,7 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   for (const p of decl.params) {
     if (!provided.has(p)) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_bindings_mismatch',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
         `${scope}: apply_expression_template '${name}' missing binding for param '${p}'`,
       )
     }
@@ -677,16 +691,15 @@ function expandApply(node: Record<string, unknown>, templates: Templates, scope:
   for (const p of provided) {
     if (!declared.has(p)) {
       throw new ExpressionTemplateError(
-        'apply_expression_template_bindings_mismatch',
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
         `${scope}: apply_expression_template '${name}' supplies unknown param '${p}'`,
       )
     }
   }
-  const resolvedBindings: Record<string, Json> = {}
-  for (const [k, v] of Object.entries(bindings)) {
-    resolvedBindings[k] = v
-  }
-  return substitute(decl.body, resolvedBindings)
+  // Bindings are spliced in AS-IS (esm-spec §9.6.3): `substitute` deep-clones
+  // each value on use, so the narrowed `bindings` map is passed straight
+  // through — no intermediate copy is needed or meaningful here.
+  return substitute(decl.body, bindings)
 }
 
 interface PassResult {
@@ -783,7 +796,7 @@ function rewriteToFixpoint(
     if (!changed) return current // fixpoint reached
   }
   throw new ExpressionTemplateError(
-    'rewrite_rule_nonterminating',
+    ERROR_CODES.REWRITE_RULE_NONTERMINATING,
     `${scope}: expression-template rewriting did not converge within ` +
       `MAX_REWRITE_PASSES=${MAX_REWRITE_PASSES} passes (last rewritten op ` +
       `'${last.op}'). A \`match\` rule likely re-introduces its own pattern ` +
@@ -816,6 +829,29 @@ function parseSemver(v: unknown): { major: number; minor: number; patch: number 
 }
 
 /**
+ * Visit every top-level model / reaction_system in the raw pre-coercion JSON
+ * view, guarding that the container map and each entry are plain objects. This
+ * is the file-local counterpart to `./traverse.js`'s typed `forEachComponent`:
+ * it operates on the `Record<string, unknown>` view (not a typed `EsmFile`),
+ * visits top-level entries ONLY (no subsystem descent), and applies NO
+ * reference-stub skip — matching the four component walks in this module that
+ * were previously copy-pasted, byte-for-byte.
+ */
+function forEachRawComponent(
+  root: Record<string, unknown>,
+  cb: (kind: 'models' | 'reaction_systems', name: string, comp: Record<string, unknown>) => void,
+): void {
+  for (const kind of ['models', 'reaction_systems'] as const) {
+    const comps = root[kind]
+    if (!isObject(comps)) continue
+    for (const [name, comp] of Object.entries(comps)) {
+      if (!isObject(comp)) continue
+      cb(kind, name, comp)
+    }
+  }
+}
+
+/**
  * Reject `apply_expression_template` and `expression_templates` in files
  * declaring `esm` < 0.4.0. Operates on the pre-coercion JSON view.
  */
@@ -828,22 +864,17 @@ export function rejectExpressionTemplatesPreV04(view: unknown): void {
 
   const offences: string[] = []
   // expression_templates blocks anywhere
-  const root = view as Record<string, unknown>
-  for (const compKind of ['models', 'reaction_systems'] as const) {
-    const comps = root[compKind]
-    if (!isObject(comps)) continue
-    for (const [name, comp] of Object.entries(comps)) {
-      if (isObject(comp) && 'expression_templates' in comp) {
-        offences.push(`/${compKind}/${name}/expression_templates`)
-      }
+  forEachRawComponent(view, (compKind, name, comp) => {
+    if ('expression_templates' in comp) {
+      offences.push(`/${compKind}/${name}/expression_templates`)
     }
-  }
+  })
   // apply_expression_template ops anywhere in the AST
   for (const path of findStrayApplyOps(view)) offences.push(path)
 
   if (offences.length > 0) {
     throw new ExpressionTemplateError(
-      'apply_expression_template_version_too_old',
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
       `expression_templates / apply_expression_template require esm >= 0.4.0; file declares ${(view as { esm?: string }).esm}. Offending paths: ${offences.join(', ')}`,
     )
   }
@@ -880,22 +911,19 @@ function buildRewriteContext(
   shapeEnv: ShapeEnv,
   scope: string,
 ): RewriteContext {
-  const templates: Templates = {}
-  const matchRules: MatchRule[] = []
-  const all: Templates = {}
-  for (const [tname, tdecl] of Object.entries(tplRaw)) {
-    all[tname] = tdecl as TemplateDecl
-  }
-  validateTemplates(all, scope)
+  // `tplRaw` IS the template map — validate it in place (which narrows it to
+  // `Templates`) rather than copying into a second identically-keyed object.
+  validateTemplates(tplRaw, scope)
   // Registration-time body composition (esm-spec §9.7.3): inline body
   // references to match-less in-scope templates as a statically-checked
   // acyclic DAG, so every rule body the fixpoint sees is a closed AST.
-  composeTemplateBodies(all, scope)
+  composeTemplateBodies(tplRaw, scope)
+  const templates: Templates = tplRaw
+  const matchRules: MatchRule[] = []
   // Object key order in JS preserves declaration order, so the
   // enumeration index IS the authored declaration order.
   let declIndex = 0
-  for (const [tname, decl] of Object.entries(all)) {
-    templates[tname] = decl
+  for (const [tname, decl] of Object.entries(templates)) {
     if (decl.match !== undefined) {
       matchRules.push({
         name: tname,
@@ -920,25 +948,13 @@ function buildRewriteContext(
 
 /** True if any model / reaction_system declares an expression_templates block. */
 function hasExpressionTemplatesBlock(root: Record<string, unknown>): boolean {
-  for (const compKind of ['models', 'reaction_systems'] as const) {
-    const comps = root[compKind]
-    if (!isObject(comps)) continue
-    for (const comp of Object.values(comps)) {
-      if (isObject(comp) && isObject(comp.expression_templates)) return true
-    }
-  }
-  return false
+  let found = false
+  forEachRawComponent(root, (_kind, _name, comp) => {
+    if (isObject(comp.expression_templates)) found = true
+  })
+  return found
 }
 
-/**
- * Rewrite all `expression_templates` in the given file: expand explicit
- * `apply_expression_template` nodes AND auto-apply `match` rules to a fixpoint
- * per component (outermost-first, priority-ordered, bounded — esm-spec §9.6.3).
- * Returns a new file object with templates applied and `expression_templates`
- * blocks removed.
- *
- * Pre-condition: the input has been schema-validated.
- */
 /**
  * Post-expansion validator (esm-spec §9.6.4): every `intersect_polygon` /
  * `polygon_intersection_area` node OUTSIDE an `expression_templates` block
@@ -962,8 +978,8 @@ export function validateGeometryManifolds(tree: unknown, path = ''): void {
     const m = node.manifold
     if (!(typeof m === 'string' && GEOMETRY_MANIFOLD_VALUES.has(m))) {
       throw new ExpressionTemplateError(
-        'geometry_manifold_invalid',
-        `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set {planar, spherical, geodesic}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
+        ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+        `${path}: \`${node.op}\` carries manifold ${JSON.stringify(m)}, not a member of the closed set ${GEOMETRY_MANIFOLD_SET_DISPLAY}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.`,
       )
     }
   }
@@ -1011,7 +1027,7 @@ export function validateMakearrayRegions(tree: unknown, path = ''): void {
           if (lo === undefined || hi === undefined) continue
           if (hi < lo - 1) {
             throw new ExpressionTemplateError(
-              'makearray_region_inverted',
+              ERROR_CODES.MAKEARRAY_REGION_INVERTED,
               `${path}: makearray regions[${ri}] dimension ${di} bound pair [${lo}, ${hi}] is inverted (stop < start - 1). An empty bound is spelled [start, start-1] and contributes no elements (esm-spec §4.3.2); a further-inverted pair is an authoring error — e.g. an interior stencil region [2, N-1] instantiated at N below the scheme's minimum extent (§9.6.8).`,
             )
           }
@@ -1039,6 +1055,15 @@ function intBound(v: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * Rewrite all `expression_templates` in the given file: expand explicit
+ * `apply_expression_template` nodes AND auto-apply `match` rules to a fixpoint
+ * per component (outermost-first, priority-ordered, bounded — esm-spec §9.6.3).
+ * Returns a new file object with templates applied and `expression_templates`
+ * blocks removed.
+ *
+ * Pre-condition: the input has been schema-validated.
+ */
 export function lowerExpressionTemplates<T extends object>(file: T): T {
   rejectExpressionTemplatesPreV04(file)
 
@@ -1048,8 +1073,8 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // Scan globally for apply ops (orphan-op detection) and for any
   // expression_templates block (a component may carry `match` rules that
   // must run even when there are no apply ops).
-  const globalOps = findStrayApplyOps(file)
-  if (globalOps.length === 0 && !hasExpressionTemplatesBlock(root)) {
+  const strayApplyPaths = findStrayApplyOps(file)
+  if (strayApplyPaths.length === 0 && !hasExpressionTemplatesBlock(root)) {
     // Nothing to expand and no rules to apply; the §9.6.4 expanded-form
     // validators still run — the raw tree IS the expanded form. Then strip
     // empty expression_templates blocks for canonical-form invariance.
@@ -1076,44 +1101,39 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
     models: new Map<string, RewriteContext>(),
     reaction_systems: new Map<string, RewriteContext>(),
   }
-  for (const compKind of ['models', 'reaction_systems'] as const) {
-    const comps = out[compKind]
-    if (!isObject(comps)) continue
-    for (const [compName, compRaw] of Object.entries(comps)) {
-      if (!isObject(compRaw)) continue
-      const comp = compRaw as Component
-      const tplRaw = comp.expression_templates
-      // Static shape environment for `where` constraint evaluation
-      // (esm-spec §9.6.1): declared variable shapes only.
-      const shapeEnv = componentShapeEnv(comp)
-      // `templates`  — every template keyed by name, consulted by
-      //                `apply_expression_template` (order-independent).
-      // `matchRules` — the auto-applied `match` rules, pre-sorted by
-      //                (−priority, declarationIndex) so `onePass` takes the
-      //                FIRST matching rule (esm-spec §9.6.3).
-      let templates: Templates = {}
-      let matchRules: MatchRule[] = []
-      if (isObject(tplRaw)) {
-        const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, `${compKind}.${compName}`)
-        templates = ctx.templates
-        matchRules = ctx.matchRules
-        contextsByKind[compKind].set(compName, ctx)
-      }
-      // Rewrite every property except expression_templates (we don't expand
-      // inside template bodies — those are validated above) to a fixpoint.
-      for (const k of Object.keys(comp)) {
-        if (k === 'expression_templates') continue
-        comp[k] = rewriteToFixpoint(
-          comp[k],
-          templates,
-          matchRules,
-          `${compKind}.${compName}.${k}`,
-          shapeEnv,
-        )
-      }
-      delete comp.expression_templates
+  forEachRawComponent(out, (compKind, compName, compRaw) => {
+    const comp = compRaw as Component
+    const tplRaw = comp.expression_templates
+    // Static shape environment for `where` constraint evaluation
+    // (esm-spec §9.6.1): declared variable shapes only.
+    const shapeEnv = componentShapeEnv(comp)
+    // `templates`  — every template keyed by name, consulted by
+    //                `apply_expression_template` (order-independent).
+    // `matchRules` — the auto-applied `match` rules, pre-sorted by
+    //                (−priority, declarationIndex) so `onePass` takes the
+    //                FIRST matching rule (esm-spec §9.6.3).
+    let templates: Templates = {}
+    let matchRules: MatchRule[] = []
+    if (isObject(tplRaw)) {
+      const ctx = buildRewriteContext(tplRaw, isetNames, shapeEnv, `${compKind}.${compName}`)
+      templates = ctx.templates
+      matchRules = ctx.matchRules
+      contextsByKind[compKind].set(compName, ctx)
     }
-  }
+    // Rewrite every property except expression_templates (we don't expand
+    // inside template bodies — those are validated above) to a fixpoint.
+    for (const k of Object.keys(comp)) {
+      if (k === 'expression_templates') continue
+      comp[k] = rewriteToFixpoint(
+        comp[k],
+        templates,
+        matchRules,
+        `${compKind}.${compName}.${k}`,
+        shapeEnv,
+      )
+    }
+    delete comp.expression_templates
+  })
 
   // Top-level coupling: a `variable_map` entry may carry an object-valued
   // Expression `transform` (esm-spec §8.6). It is rewritten to fixpoint in
@@ -1121,7 +1141,7 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
   // the RECEIVING component — the first dot-segment of the entry's `to`,
   // looked up under models then reaction_systems. A receiving component
   // that is absent or declares no templates leaves the transform
-  // unrewritten (a stray apply op is then caught by the leftover check).
+  // unrewritten (a stray apply op is then caught by the stray-apply check).
   const coupling = out.coupling
   if (Array.isArray(coupling)) {
     for (let i = 0; i < coupling.length; i++) {
@@ -1146,11 +1166,11 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
 
   // After expansion, there must be no apply_expression_template ops left
   // anywhere in the file.
-  const leftover = findStrayApplyOps(out)
-  if (leftover.length > 0) {
+  const strayApplyPathsPostExpansion = findStrayApplyOps(out)
+  if (strayApplyPathsPostExpansion.length > 0) {
     throw new ExpressionTemplateError(
-      'apply_expression_template_unknown_template',
-      `apply_expression_template ops remain after expansion at: ${leftover.join(', ')} — likely referenced from a component lacking an expression_templates block`,
+      ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+      `apply_expression_template ops remain after expansion at: ${strayApplyPathsPostExpansion.join(', ')} — likely referenced from a component lacking an expression_templates block`,
     )
   }
 
@@ -1167,14 +1187,10 @@ export function lowerExpressionTemplates<T extends object>(file: T): T {
 function stripExpressionTemplates<T extends object>(file: T): T {
   if (!isObject(file)) return file
   const out = deepClone(file as Record<string, unknown>)
-  for (const compKind of ['models', 'reaction_systems'] as const) {
-    const comps = out[compKind]
-    if (!isObject(comps)) continue
-    for (const compRaw of Object.values(comps)) {
-      if (isObject(compRaw) && 'expression_templates' in compRaw) {
-        delete (compRaw as Record<string, unknown>).expression_templates
-      }
+  forEachRawComponent(out, (_kind, _name, comp) => {
+    if ('expression_templates' in comp) {
+      delete comp.expression_templates
     }
-  }
+  })
   return out as T
 }

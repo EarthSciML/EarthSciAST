@@ -183,3 +183,54 @@ describe('diagnostics (esm-spec §10.11)', () => {
     ).toBe('coupling_edge_unknown_role')
   })
 })
+
+// Guards the read-only role-collection visitor (forEachEntryRef/forEachExprRef)
+// against the mutating rewriter (rewriteEntryInPlace): both must agree on the
+// §10.10.2 occurrence set across every edge type, so role collection (used for
+// validation) and role substitution (used for expansion) stay in lockstep.
+describe('role collection + rewrite parity across edge types (esm-spec §10.10.2)', () => {
+  // A couple edge names roles in `systems` AND in its connector equations.
+  const coupleLib = {
+    esm: '0.8.0',
+    metadata: { name: 'CoupleLib' },
+    coupling_roles: { Fuel: {}, Spread: {} },
+    coupling: [
+      {
+        type: 'couple',
+        systems: ['Fuel', 'Spread'],
+        connector: { equations: [{ from: 'Fuel.sigma', to: 'Spread.sigma' }] },
+      },
+    ],
+  }
+
+  it('collects and substitutes roles from a couple systems array + connector', () => {
+    const file = assembly([
+      { type: 'coupling_import', ref: 'c.esm', bind: { Fuel: 'FuelModelLookup', Spread: 'RothermelFireSpread' } },
+    ])
+    const expanded = expandCouplingImports(file, { loadRef: () => coupleLib })
+    expect(expanded?.[0]).toMatchObject({
+      type: 'couple',
+      systems: ['FuelModelLookup', 'RothermelFireSpread'],
+      connector: { equations: [{ from: 'FuelModelLookup.sigma', to: 'RothermelFireSpread.sigma' }] },
+    })
+  })
+
+  it('detects an undeclared role reached only via a couple systems entry', () => {
+    const badCoupleLib = {
+      ...coupleLib,
+      coupling: [
+        {
+          type: 'couple',
+          systems: ['Fuel', 'Ghost'],
+          connector: { equations: [{ from: 'Fuel.sigma', to: 'Spread.sigma' }] },
+        },
+      ],
+    }
+    const file = assembly([
+      { type: 'coupling_import', ref: 'c.esm', bind: { Fuel: 'FuelModelLookup', Spread: 'RothermelFireSpread' } },
+    ])
+    expect(errCode(() => expandCouplingImports(file, { loadRef: () => badCoupleLib }))).toBe(
+      'coupling_edge_unknown_role',
+    )
+  })
+})

@@ -9,6 +9,8 @@ import {
   losslessJsonParse,
   losslessJsonStringify,
   formatFloatToken,
+  stripNumericLiterals,
+  CanonicalizeError,
   CanonicalNonfiniteError,
   LosslessJsonParseError,
   type NumericLiteral,
@@ -257,5 +259,35 @@ describe('formatFloatToken', () => {
   it('throws on non-finite values', () => {
     expect(() => formatFloatToken(NaN)).toThrow(CanonicalNonfiniteError)
     expect(() => formatFloatToken(Infinity)).toThrow(CanonicalNonfiniteError)
+  })
+})
+
+describe('CanonicalNonfiniteError', () => {
+  it('is a CanonicalizeError carrying the shared E_CANONICAL_NONFINITE code', () => {
+    const err = new CanonicalNonfiniteError(NaN, '$.x')
+    // One shared error hierarchy: the nonfinite error IS a CanonicalizeError.
+    expect(err).toBeInstanceOf(CanonicalizeError)
+    expect(err.code).toBe('E_CANONICAL_NONFINITE')
+    expect(err.value).toBeNaN()
+    expect(err.path).toBe('$.x')
+    expect(err.message).toBe('Canonical form forbids non-finite number NaN at $.x')
+  })
+})
+
+describe('stripNumericLiterals', () => {
+  it('replaces tagged leaves with plain numbers without mutating the input', () => {
+    const lit = intLit(5)
+    const input = { a: lit, b: [floatLit(1.5), 'x'], c: { d: 2 } }
+    const out = stripNumericLiterals(input) as typeof input
+    expect(out.a).toBe(5)
+    expect(out.b[0]).toBe(1.5)
+    expect(out.b[1]).toBe('x')
+    // Input tree still holds the original tagged literal.
+    expect(input.a).toBe(lit)
+  })
+
+  it('returns the SAME reference when no literal is present (structural sharing)', () => {
+    const input = { a: 1, b: ['x', { c: 'y' }] }
+    expect(stripNumericLiterals(input)).toBe(input)
   })
 })

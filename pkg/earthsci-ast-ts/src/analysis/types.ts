@@ -6,14 +6,31 @@
  */
 
 import type { Expr } from '../types.js'
-import type { Graph } from '../graph.js'
+import type { Graph, VariableNode } from '../graph.js'
 
-/** Node representing a variable in a dependency graph */
+/**
+ * The kind of a variable node. Derived from graph.ts's {@link VariableNode} so
+ * the union lives in exactly one place (analysis and the parent graph module
+ * must agree on the vocabulary of variable kinds).
+ */
+export type VariableKind = VariableNode['kind']
+
+/**
+ * Node representing a variable in a dependency graph.
+ *
+ * Overlaps graph.ts's {@link VariableNode} (both carry `name`/`kind`/`units`/
+ * `system`); this analysis variant additionally tracks the defining expression
+ * ({@link definition}) and the topological {@link depth}. The two families are
+ * kept separate because they are produced by different builders
+ * (`analysis/buildDependencyGraph` vs graph.ts's `expressionGraph`) with
+ * different edge payloads; the shared `kind` vocabulary is unified via
+ * {@link VariableKind}.
+ */
 export interface DependencyNode {
   /** Variable name */
   name: string
   /** Type of variable (state, parameter, observed, brownian, discrete, species) */
-  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'discrete' | 'species'
+  kind: VariableKind
   /** System/model this variable belongs to */
   system: string
   /** Units if specified */
@@ -24,16 +41,20 @@ export interface DependencyNode {
   depth: number
 }
 
-/** Edge representing a dependency relationship between variables */
+/**
+ * Edge representing a dependency relationship between variables.
+ *
+ * Analysis-local counterpart of graph.ts's {@link DependencyEdge}; the two use
+ * disjoint edge vocabularies (`type` here vs `relationship`/`equation_index`
+ * there) because they are built by different graph constructors.
+ */
 export interface DependencyRelation {
   /** Source variable */
   source: string
   /** Target variable */
   target: string
   /** Type of dependency */
-  type: 'direct' | 'indirect' | 'circular' | 'parameter_dependency' | 'definition_dependency'
-  /** Strength/weight of dependency (0-1) */
-  weight: number
+  type: 'direct' | 'circular' | 'parameter_dependency' | 'definition_dependency'
   /** Expression that creates this dependency */
   expression?: Expr
 }
@@ -42,7 +63,17 @@ export interface DependencyRelation {
 export interface DependencyGraph extends Graph<DependencyNode, DependencyRelation> {
   /** Check for circular dependencies */
   hasCircularDependencies(): boolean
-  /** Get strongly connected components */
+  /**
+   * Circular-dependency cycles. Each entry is one back-edge cycle found by a
+   * DFS over the directed edges; distinct cycles may share nodes (these are
+   * NOT strongly-connected components).
+   */
+  getCycles(): DependencyNode[][]
+  /**
+   * @deprecated Misnomer — this does NOT compute strongly-connected
+   * components; it returns the raw DFS cycles from {@link getCycles}. Use
+   * {@link getCycles} instead.
+   */
   getStronglyConnectedComponents(): DependencyNode[][]
   /** Topological sort of dependencies */
   topologicalSort(): DependencyNode[]
@@ -66,6 +97,18 @@ export interface ComplexityMetrics {
   memoryUsage: number
 }
 
+/** A single numerical-stability finding produced by `detectStabilityIssues`. */
+export interface StabilityIssue {
+  /** Human-readable description of the issue */
+  issue: string
+  /** Severity of the issue */
+  severity: 'low' | 'medium' | 'high'
+  /** Path to the offending subexpression (e.g. `['args[1]']`) */
+  path: string[]
+  /** Suggested remediation */
+  suggestion: string
+}
+
 /** Common subexpression identification result */
 export interface CommonSubexpression {
   /** The common subexpression */
@@ -80,7 +123,7 @@ export interface CommonSubexpression {
 
 /** Location of an expression within a larger structure */
 export interface ExpressionLocation {
-  /** Path to the expression (e.g., ['models', 'Transport', 'equations', 0, 'rhs']) */
+  /** Path to the expression (e.g. `['root', 'args[0]', 'args[1]']`) */
   path: string[]
   /** Human-readable description */
   description: string
@@ -96,7 +139,12 @@ export interface DerivativeResult {
   variable: string
   /** Simplified form if different from derivative */
   simplified?: Expr
-  /** Chain rule components if applicable */
+  /**
+   * For {@link higherOrderDerivative}: one entry per differentiation order,
+   * recording the expression at that order (`expression`) and its derivative
+   * (`derivative`, i.e. the expression at the next order). These are the
+   * successive derivative steps, NOT chain-rule multiplicative factors.
+   */
   chainComponents?: Array<{
     expression: Expr
     derivative: Expr

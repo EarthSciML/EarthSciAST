@@ -6,14 +6,15 @@
  * and various mathematical functions.
  */
 
-import type { Expr } from '../types.js'
+import type { Expr, ExpressionNode } from '../types.js'
 import type { DerivativeResult } from './types.js'
-import { simplify, freeVariables, isExprNode } from '../expression.js'
+import { simplify, freeVariables, isExprNode, deepEqualExpr } from '../expression.js'
 import { numericValue } from '../numeric-literal.js'
 
 /**
  * Thrown when {@link differentiate} encounters an operator with no
- * differentiation rule. Callers that need a boolean answer should use
+ * differentiation rule, or a known operator applied with an arity its rule
+ * does not cover. Callers that need a boolean answer should use
  * {@link isDifferentiable}.
  */
 export class NonDifferentiableExpressionError extends Error {
@@ -24,6 +25,81 @@ export class NonDifferentiableExpressionError extends Error {
     super(`No differentiation rule for operator '${op}' (d/d${variable})`)
     this.name = 'NonDifferentiableExpressionError'
   }
+}
+
+/** Thrown by {@link higherOrderDerivative} when `order` is not positive. */
+export class InvalidDerivativeOrderError extends Error {
+  constructor(public readonly order: number) {
+    super(`Derivative order must be positive (got ${order})`)
+    this.name = 'InvalidDerivativeOrderError'
+  }
+}
+
+/**
+ * Differentiation rules for single-argument elementary functions, keyed by
+ * operator. Each rule receives the argument `u`, its derivative `du`, and the
+ * original `node` (so e.g. `exp` can reuse `e^u` verbatim), and returns the
+ * derivative expression. Arity is validated by the caller before dispatch, so
+ * these bodies may assume exactly one argument.
+ */
+type UnaryDerivativeRule = (u: Expr, du: Expr, node: ExpressionNode) => Expr
+
+const UNARY_DERIVATIVE_RULES: Record<string, UnaryDerivativeRule> = {
+  // d/dx (e^u) = e^u * u'
+  exp: (_u, du, node) => ({ op: '*', args: [node, du] }),
+  // d/dx (ln(u)) = u'/u
+  log: (u, du) => ({ op: '/', args: [du, u] }),
+  // d/dx (log₁₀(u)) = u'/(u * ln(10))
+  log10: (u, du) => ({ op: '/', args: [du, { op: '*', args: [u, Math.LN10] }] }),
+  // d/dx (sin(u)) = cos(u) * u'
+  sin: (u, du) => ({ op: '*', args: [{ op: 'cos', args: [u] }, du] }),
+  // d/dx (cos(u)) = -sin(u) * u'
+  cos: (u, du) => ({ op: '*', args: [{ op: '-', args: [{ op: 'sin', args: [u] }] }, du] }),
+  // d/dx (tan(u)) = (1/cos²(u)) * u'
+  tan: (u, du) => ({
+    op: '*',
+    args: [{ op: '/', args: [1, { op: '^', args: [{ op: 'cos', args: [u] }, 2] }] }, du],
+  }),
+  // d/dx (arcsin(u)) = u'/√(1-u²)
+  asin: (u, du) => ({
+    op: '/',
+    args: [du, { op: 'sqrt', args: [{ op: '-', args: [1, { op: '^', args: [u, 2] }] }] }],
+  }),
+  // d/dx (arccos(u)) = -u'/√(1-u²)
+  acos: (u, du) => ({
+    op: '/',
+    args: [
+      { op: '-', args: [du] },
+      { op: 'sqrt', args: [{ op: '-', args: [1, { op: '^', args: [u, 2] }] }] },
+    ],
+  }),
+  // d/dx (arctan(u)) = u'/(1+u²)
+  atan: (u, du) => ({ op: '/', args: [du, { op: '+', args: [1, { op: '^', args: [u, 2] }] }] }),
+  // d/dx (sinh(u)) = cosh(u) * u'
+  sinh: (u, du) => ({ op: '*', args: [{ op: 'cosh', args: [u] }, du] }),
+  // d/dx (cosh(u)) = sinh(u) * u'
+  cosh: (u, du) => ({ op: '*', args: [{ op: 'sinh', args: [u] }, du] }),
+  // d/dx (tanh(u)) = (1/cosh²(u)) * u'
+  tanh: (u, du) => ({
+    op: '*',
+    args: [{ op: '/', args: [1, { op: '^', args: [{ op: 'cosh', args: [u] }, 2] }] }, du],
+  }),
+  // d/dx (asinh(u)) = u'/√(u²+1)
+  asinh: (u, du) => ({
+    op: '/',
+    args: [du, { op: 'sqrt', args: [{ op: '+', args: [{ op: '^', args: [u, 2] }, 1] }] }],
+  }),
+  // d/dx (acosh(u)) = u'/√(u²-1)
+  acosh: (u, du) => ({
+    op: '/',
+    args: [du, { op: 'sqrt', args: [{ op: '-', args: [{ op: '^', args: [u, 2] }, 1] }] }],
+  }),
+  // d/dx (atanh(u)) = u'/(1-u²)
+  atanh: (u, du) => ({ op: '/', args: [du, { op: '-', args: [1, { op: '^', args: [u, 2] }] }] }),
+  // d/dx (√u) = u'/(2√u)
+  sqrt: (u, du) => ({ op: '/', args: [du, { op: '*', args: [2, { op: 'sqrt', args: [u] }] }] }),
+  // d/dx (|u|) = u' * sign(u)
+  abs: (u, du) => ({ op: '*', args: [du, { op: 'sign', args: [u] }] }),
 }
 
 /**
@@ -39,7 +115,7 @@ export function differentiate(expr: Expr, variable: string): DerivativeResult {
   return {
     derivative,
     variable,
-    simplified: isEqual(derivative, simplified) ? undefined : simplified,
+    simplified: deepEqualExpr(derivative, simplified) ? undefined : simplified,
   }
 }
 
@@ -93,6 +169,18 @@ function computeDerivative(expr: Expr, variable: string): Expr {
   if (isExprNode(expr)) {
     const args = expr.args
 
+    // Single-argument elementary functions share the rule table above. An
+    // arity mismatch (e.g. sin with two arguments) is non-differentiable — it
+    // must throw, NOT fabricate 0, so isDifferentiable() reports it honestly.
+    const unaryRule = UNARY_DERIVATIVE_RULES[expr.op]
+    if (unaryRule) {
+      if (args.length !== 1) {
+        throw new NonDifferentiableExpressionError(expr.op, variable)
+      }
+      const u = args[0]
+      return unaryRule(u, computeDerivative(u, variable), expr)
+    }
+
     switch (expr.op) {
       // Basic arithmetic
       case '+':
@@ -138,7 +226,7 @@ function computeDerivative(expr: Expr, variable: string): Expr {
           const rest = { op: '*', args: args.slice(1) } as Expr
           return computeDerivative({ op: '*', args: [first, rest] }, variable)
         }
-        break
+        throw new NonDifferentiableExpressionError(expr.op, variable)
 
       case '/':
         // Quotient rule: d/dx (u/v) = (u'v - uv')/v²
@@ -161,7 +249,7 @@ function computeDerivative(expr: Expr, variable: string): Expr {
             ],
           }
         }
-        break
+        throw new NonDifferentiableExpressionError(expr.op, variable)
 
       case '^':
         // Power rule: d/dx (u^n) = n * u^(n-1) * u'
@@ -199,284 +287,10 @@ function computeDerivative(expr: Expr, variable: string): Expr {
             ],
           }
         }
-        break
+        throw new NonDifferentiableExpressionError(expr.op, variable)
 
-      // Elementary functions
-      case 'exp':
-        // d/dx (e^u) = e^u * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [expr, du], // e^u * u'
-          }
-        }
-        break
-
-      case 'log':
-        // d/dx (ln(u)) = u'/u
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [du, u],
-          }
-        }
-        break
-
-      case 'log10':
-        // d/dx (log₁₀(u)) = u'/(u * ln(10))
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: '*',
-                args: [u, Math.LN10], // ln(10)
-              },
-            ],
-          }
-        }
-        break
-
-      case 'sin':
-        // d/dx (sin(u)) = cos(u) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [{ op: 'cos', args: [u] }, du],
-          }
-        }
-        break
-
-      case 'cos':
-        // d/dx (cos(u)) = -sin(u) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [{ op: '-', args: [{ op: 'sin', args: [u] }] }, du],
-          }
-        }
-        break
-
-      case 'tan':
-        // d/dx (tan(u)) = sec²(u) * u' = (1/cos²(u)) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [
-              {
-                op: '/',
-                args: [1, { op: '^', args: [{ op: 'cos', args: [u] }, 2] }],
-              },
-              du,
-            ],
-          }
-        }
-        break
-
-      case 'asin':
-        // d/dx (arcsin(u)) = u'/√(1-u²)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: 'sqrt',
-                args: [
-                  {
-                    op: '-',
-                    args: [1, { op: '^', args: [u, 2] }],
-                  },
-                ],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'acos':
-        // d/dx (arccos(u)) = -u'/√(1-u²)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              { op: '-', args: [du] },
-              {
-                op: 'sqrt',
-                args: [
-                  {
-                    op: '-',
-                    args: [1, { op: '^', args: [u, 2] }],
-                  },
-                ],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'atan':
-        // d/dx (arctan(u)) = u'/(1+u²)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: '+',
-                args: [1, { op: '^', args: [u, 2] }],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'sinh':
-        // d/dx (sinh(u)) = cosh(u) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [{ op: 'cosh', args: [u] }, du],
-          }
-        }
-        break
-
-      case 'cosh':
-        // d/dx (cosh(u)) = sinh(u) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [{ op: 'sinh', args: [u] }, du],
-          }
-        }
-        break
-
-      case 'tanh':
-        // d/dx (tanh(u)) = sech²(u) * u' = (1/cosh²(u)) * u'
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [
-              {
-                op: '/',
-                args: [1, { op: '^', args: [{ op: 'cosh', args: [u] }, 2] }],
-              },
-              du,
-            ],
-          }
-        }
-        break
-
-      case 'asinh':
-        // d/dx (asinh(u)) = u'/√(u²+1)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: 'sqrt',
-                args: [{ op: '+', args: [{ op: '^', args: [u, 2] }, 1] }],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'acosh':
-        // d/dx (acosh(u)) = u'/√(u²-1)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: 'sqrt',
-                args: [{ op: '-', args: [{ op: '^', args: [u, 2] }, 1] }],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'atanh':
-        // d/dx (atanh(u)) = u'/(1-u²)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: '-',
-                args: [1, { op: '^', args: [u, 2] }],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'sqrt':
-        // d/dx (√u) = u'/(2√u)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '/',
-            args: [
-              du,
-              {
-                op: '*',
-                args: [2, { op: 'sqrt', args: [u] }],
-              },
-            ],
-          }
-        }
-        break
-
-      case 'abs':
-        // d/dx (|u|) = u' * sign(u)
-        if (args.length === 1) {
-          const u = args[0]
-          const du = computeDerivative(u, variable)
-          return {
-            op: '*',
-            args: [du, { op: 'sign', args: [u] }],
-          }
-        }
-        break
-
-      // Comparison and logical operators (derivatives are 0 or undefined)
+      // Comparison and logical operators have no well-defined derivative in the
+      // usual sense; treat as locally constant (0).
       case '>':
       case '<':
       case '>=':
@@ -486,7 +300,6 @@ function computeDerivative(expr: Expr, variable: string): Expr {
       case 'and':
       case 'or':
       case 'not':
-        // These don't have well-defined derivatives in the usual sense
         return 0
 
       case 'ifelse':
@@ -503,7 +316,7 @@ function computeDerivative(expr: Expr, variable: string): Expr {
             ],
           }
         }
-        break
+        throw new NonDifferentiableExpressionError(expr.op, variable)
 
       case 'min':
       case 'max':
@@ -522,7 +335,7 @@ function computeDerivative(expr: Expr, variable: string): Expr {
             args: [condition, du, dv],
           }
         }
-        break
+        throw new NonDifferentiableExpressionError(expr.op, variable)
 
       default:
         // No differentiation rule for this operator — throw so
@@ -534,37 +347,6 @@ function computeDerivative(expr: Expr, variable: string): Expr {
 
   // Fallback: return 0 for anything we can't differentiate
   return 0
-}
-
-/**
- * Check if two expressions are structurally equal
- */
-function isEqual(expr1: Expr, expr2: Expr): boolean {
-  // Numeric leaves (plain or tagged) compare by value.
-  const n1 = numericValue(expr1)
-  const n2 = numericValue(expr2)
-  if (n1 !== undefined || n2 !== undefined) {
-    return n1 !== undefined && n2 !== undefined && Object.is(n1, n2)
-  }
-
-  if (typeof expr1 !== typeof expr2) return false
-
-  if (typeof expr1 === 'string') {
-    return expr1 === expr2
-  }
-
-  if (isExprNode(expr1) && isExprNode(expr2) && expr1.op && expr2.op) {
-    if (expr1.op !== expr2.op) return false
-    if (expr1.args.length !== expr2.args.length) return false
-
-    for (let i = 0; i < expr1.args.length; i++) {
-      if (!isEqual(expr1.args[i], expr2.args[i])) return false
-    }
-
-    return true
-  }
-
-  return false
 }
 
 /**
@@ -580,7 +362,7 @@ export function higherOrderDerivative(
   order: number = 1,
 ): DerivativeResult {
   if (order <= 0) {
-    throw new Error('Derivative order must be positive')
+    throw new InvalidDerivativeOrderError(order)
   }
 
   let current = expr
@@ -600,7 +382,7 @@ export function higherOrderDerivative(
   return {
     derivative: current,
     variable,
-    simplified: isEqual(current, simplified) ? undefined : simplified,
+    simplified: deepEqualExpr(current, simplified) ? undefined : simplified,
     chainComponents,
   }
 }
@@ -642,7 +424,7 @@ export function findCriticalPoints(
 
   return {
     derivative,
-    simplified: isEqual(derivative, simplified) ? undefined : simplified,
+    simplified: deepEqualExpr(derivative, simplified) ? undefined : simplified,
     hasConstantDerivative: typeof derivative === 'number',
     isConstantZero: derivative === 0,
   }

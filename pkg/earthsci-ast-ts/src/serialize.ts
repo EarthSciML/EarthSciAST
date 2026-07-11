@@ -36,6 +36,7 @@ import {
   isNumericLiteral,
   formatNumericLiteral,
   CanonicalNonfiniteError,
+  stripNumericLiterals,
 } from './numeric-literal.js'
 
 /** Optional behavior controls for {@link save}. */
@@ -77,38 +78,6 @@ export function save(file: EsmFile, options?: SaveOptions): string {
   }
   const stripped = stripNumericLiterals(file)
   return JSON.stringify(stripped, null, indent)
-}
-
-/**
- * Recursively replace `NumericLiteral` leaves with their plain-number
- * value. Returns a new tree; input is not mutated. Non-literal objects
- * and arrays are shallow-copied only when a descendant is rewritten so
- * unrelated subtrees stay reference-identical with the input.
- */
-function stripNumericLiterals(value: unknown): unknown {
-  if (isNumericLiteral(value)) return value.value
-  if (Array.isArray(value)) {
-    let changed = false
-    const out: unknown[] = new Array(value.length)
-    for (let i = 0; i < value.length; i++) {
-      const v = stripNumericLiterals(value[i])
-      if (v !== value[i]) changed = true
-      out[i] = v
-    }
-    return changed ? out : value
-  }
-  if (value && typeof value === 'object') {
-    const src = value as Record<string, unknown>
-    let changed = false
-    const out: Record<string, unknown> = {}
-    for (const key of Object.keys(src)) {
-      const v = stripNumericLiterals(src[key])
-      if (v !== src[key]) changed = true
-      out[key] = v
-    }
-    return changed ? out : value
-  }
-  return value
 }
 
 /**

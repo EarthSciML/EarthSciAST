@@ -17,15 +17,33 @@ import {
   UnitConversionError,
 } from './unit-conversion.js'
 import { isNumericLiteral } from './numeric-literal.js'
+import { getOpInfo } from './op-registry.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
+
+/**
+ * A single dimensional-analysis diagnostic: the message plus the classification
+ * decided AT THE POINT it was raised (see {@link UnitWarning.code}). The code is
+ * explicit rather than recovered from the prose, so rewording a message can
+ * never silently flip a warning between `analysis` and `dimensional_mismatch`.
+ */
+export interface UnitDiagnostic {
+  message: string
+  code: UnitWarning['code']
+}
 
 /**
  * Result of dimensional analysis for a single expression.
  */
 export interface UnitResult {
   dimensions: ParsedUnit
+  /** Message-only view, retained for the public `checkDimensions` API and
+   *  legacy callers that inspect warning prose. */
   warnings: string[]
+  /** Structured view of {@link warnings}: each message with its explicit
+   *  classification. `validateUnits` uses these codes (not a prose regex) to
+   *  decide which warnings `validate()` promotes to errors. */
+  diagnostics: UnitDiagnostic[]
 }
 
 /**
@@ -37,7 +55,8 @@ export interface UnitWarning {
    * Structured warning kind. `dimensional_mismatch` marks a
    * dimensional-consistency violation (promoted to a structural error by
    * `validate()`); `analysis` covers informational diagnostics (unknown
-   * variables, arity problems, internal errors).
+   * variables, arity problems, internal errors). Assigned explicitly where the
+   * message is raised — never inferred from the message text.
    */
   code: 'dimensional_mismatch' | 'analysis'
   location?: string
@@ -45,14 +64,22 @@ export interface UnitWarning {
 }
 
 /**
- * Classify a `checkDimensions()` warning message. This lives beside the
- * message definitions in this module so the classification and the message
- * wording cannot drift apart in separate files.
+ * Non-throwing arity check driven by the op-registry bounds — the single
+ * source of truth — instead of hardcoding the count per case. Returns the
+ * units-style warning message when `count` violates `op`'s registered arity, or
+ * `null` when it is within bounds. `label` supplies the operator's display form
+ * (which varies: `Division`, `Derivative D()`, `atan2()`, a bare comparison
+ * symbol, ...), keeping the exact
+ * "<label> requires exactly|at least N argument(s), got M" wording. Returns
+ * `null` for an unregistered op (those cases carry no arity check).
  */
-function warningCode(message: string): UnitWarning['code'] {
-  return /same dimensions|incompatible|mismatch|inconsisten/i.test(message)
-    ? 'dimensional_mismatch'
-    : 'analysis'
+function arityWarning(op: string, label: string, count: number): string | null {
+  const arity = getOpInfo(op)?.arity
+  if (!arity) return null
+  const { min, max } = arity
+  if (count >= min && (max === null || count <= max)) return null
+  const bound = max === null ? `at least ${min}` : `exactly ${min}`
+  return `${label} requires ${bound} argument${min === 1 ? '' : 's'}, got ${count}`
 }
 
 function dimensionless(): ParsedUnit {
@@ -102,19 +129,31 @@ export function checkDimensions(
   unitBindings: Map<string, ParsedUnit>,
   coordinateBindings?: Map<string, ParsedUnit>,
 ): UnitResult {
-  const warnings: string[] = []
+  const diagnostics: UnitDiagnostic[] = []
+  // Record a diagnostic with its classification made EXPLICIT here (not
+  // recovered later from the prose). `dimensional_mismatch` is the promotable
+  // dimensional-consistency violation; `analysis` is everything else (unknown
+  // variables, arity problems, dimensionless-argument checks).
+  const warn = (message: string, code: UnitWarning['code']): void => {
+    diagnostics.push({ message, code })
+  }
+  const finish = (dimensions: ParsedUnit): UnitResult => ({
+    dimensions,
+    warnings: diagnostics.map((d) => d.message),
+    diagnostics,
+  })
 
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
-    return { dimensions: dimensionless(), warnings }
+    return finish(dimensionless())
   }
 
   if (typeof expr === 'string') {
     const dims = unitBindings.get(expr)
     if (!dims) {
-      warnings.push(`Unknown variable: ${expr}`)
-      return { dimensions: dimensionless(), warnings }
+      warn(`Unknown variable: ${expr}`, 'analysis')
+      return finish(dimensionless())
     }
-    return { dimensions: dims, warnings }
+    return finish(dims)
   }
 
   const node = expr as ExpressionNode
@@ -122,7 +161,7 @@ export function checkDimensions(
   const args = node.args
 
   const argResults = args.map((arg) => checkDimensions(arg, unitBindings, coordinateBindings))
-  warnings.push(...argResults.flatMap((r) => r.warnings))
+  for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   const argDims = argResults.map((r) => r.dimensions)
   const get = (i: number): ParsedUnit => argDims[i] ?? dimensionless()
@@ -134,46 +173,52 @@ export function checkDimensions(
       for (let i = 1; i < argDims.length; i++) {
         const other = get(i)
         if (!dimsEqual(first.dims, other.dims)) {
-          warnings.push(
+          warn(
             `Addition/subtraction requires same dimensions, got ${formatDims(first.dims)} and ${formatDims(other.dims)}`,
+            'dimensional_mismatch',
           )
         }
       }
-      return { dimensions: first, warnings }
+      return finish(first)
     }
 
     case '*':
-      return { dimensions: multiplyUnits(argDims), warnings }
+      return finish(multiplyUnits(argDims))
 
-    case '/':
-      if (argDims.length !== 2) {
-        warnings.push(`Division requires exactly 2 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+    case '/': {
+      const arity = arityWarning('/', 'Division', argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
-      return { dimensions: divideUnits(get(0), get(1)), warnings }
+      return finish(divideUnits(get(0), get(1)))
+    }
 
-    case '^':
-      if (argDims.length !== 2) {
-        warnings.push(`Exponentiation requires exactly 2 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+    case '^': {
+      const arity = arityWarning('^', 'Exponentiation', argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       if (!isDimensionless(get(1))) {
-        warnings.push(`Exponent must be dimensionless, got ${formatDims(get(1).dims)}`)
+        warn(`Exponent must be dimensionless, got ${formatDims(get(1).dims)}`, 'analysis')
       }
       // Preserve the base unit unchanged. Applying the exponent would require
       // extracting the constant value from the second argument, which the
       // original implementation did not attempt and current tests do not
       // exercise.
-      return { dimensions: get(0), warnings }
+      return finish(get(0))
+    }
 
     case 'D': {
-      if (args.length !== 1) {
-        warnings.push(`Derivative D() requires exactly 1 argument, got ${args.length}`)
-        return { dimensions: dimensionless(), warnings }
+      const arity = arityWarning('D', 'Derivative D()', args.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       const timeVar = node.wrt || 't'
       const timeDims = unitBindings.get(timeVar) ?? { dims: { s: 1 }, scale: 1 }
-      return { dimensions: divideUnits(get(0), timeDims), warnings }
+      return finish(divideUnits(get(0), timeDims))
     }
 
     case 'grad':
@@ -192,19 +237,20 @@ export function checkDimensions(
       const dimName = node.dim
       const lengthDims: ParsedUnit = { dims: { m: 1 }, scale: 1 }
       if (!dimName || !coordinateBindings) {
-        return { dimensions: divideUnits(get(0), lengthDims), warnings }
+        return finish(divideUnits(get(0), lengthDims))
       }
       const coordDims = coordinateBindings.get(dimName)
       if (!coordDims) {
-        return { dimensions: divideUnits(get(0), lengthDims), warnings }
+        return finish(divideUnits(get(0), lengthDims))
       }
       if (isDimensionless(coordDims)) {
-        warnings.push(
+        warn(
           `Gradient operator applied to variable with incompatible spatial units: coordinate '${dimName}' has no declared units (unit_inconsistency)`,
+          'dimensional_mismatch',
         )
-        return { dimensions: get(0), warnings }
+        return finish(get(0))
       }
-      return { dimensions: divideUnits(get(0), coordDims), warnings }
+      return finish(divideUnits(get(0), coordDims))
     }
 
     case 'exp':
@@ -225,79 +271,90 @@ export function checkDimensions(
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (!isDimensionless(arg)) {
-          warnings.push(`${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`)
+          warn(`${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`, 'analysis')
         }
       }
-      return { dimensions: dimensionless(), warnings }
+      return finish(dimensionless())
 
-    case 'atan2':
-      if (argDims.length !== 2) {
-        warnings.push(`atan2() requires exactly 2 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+    case 'atan2': {
+      const arity = arityWarning('atan2', 'atan2()', argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       if (!dimsEqual(get(0).dims, get(1).dims)) {
-        warnings.push(
+        warn(
           `atan2() requires arguments with same dimensions, got ${formatDims(get(0).dims)} and ${formatDims(get(1).dims)}`,
+          'dimensional_mismatch',
         )
       }
-      return { dimensions: dimensionless(), warnings }
+      return finish(dimensionless())
+    }
 
     case 'sqrt':
     case 'abs':
     case 'sign':
     case 'floor':
     case 'ceil':
-      return { dimensions: get(0), warnings }
+      return finish(get(0))
 
     case 'min':
     case 'max': {
-      if (argDims.length < 2) {
-        warnings.push(`${op}() requires at least 2 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+      const arity = arityWarning(op, `${op}()`, argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       const ref = get(0)
       for (let i = 1; i < argDims.length; i++) {
         const other = get(i)
         if (!dimsEqual(ref.dims, other.dims)) {
-          warnings.push(
+          warn(
             `${op}() requires all arguments to have same dimensions, got ${formatDims(ref.dims)} and ${formatDims(other.dims)}`,
+            'dimensional_mismatch',
           )
         }
       }
-      return { dimensions: ref, warnings }
+      return finish(ref)
     }
 
-    case 'ifelse':
-      if (argDims.length !== 3) {
-        warnings.push(`ifelse() requires exactly 3 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+    case 'ifelse': {
+      const arity = arityWarning('ifelse', 'ifelse()', argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       if (!isDimensionless(get(0))) {
-        warnings.push(`ifelse() condition must be dimensionless, got ${formatDims(get(0).dims)}`)
+        warn(`ifelse() condition must be dimensionless, got ${formatDims(get(0).dims)}`, 'analysis')
       }
       if (!dimsEqual(get(1).dims, get(2).dims)) {
-        warnings.push(
+        warn(
           `ifelse() branches must have same dimensions, got ${formatDims(get(1).dims)} and ${formatDims(get(2).dims)}`,
+          'dimensional_mismatch',
         )
       }
-      return { dimensions: get(1), warnings }
+      return finish(get(1))
+    }
 
     case '>':
     case '<':
     case '>=':
     case '<=':
     case '==':
-    case '!=':
-      if (argDims.length !== 2) {
-        warnings.push(`${op} requires exactly 2 arguments, got ${argDims.length}`)
-        return { dimensions: dimensionless(), warnings }
+    case '!=': {
+      const arity = arityWarning(op, op, argDims.length)
+      if (arity) {
+        warn(arity, 'analysis')
+        return finish(dimensionless())
       }
       if (!dimsEqual(get(0).dims, get(1).dims)) {
-        warnings.push(
+        warn(
           `${op} requires arguments with same dimensions, got ${formatDims(get(0).dims)} and ${formatDims(get(1).dims)}`,
+          'dimensional_mismatch',
         )
       }
-      return { dimensions: dimensionless(), warnings }
+      return finish(dimensionless())
+    }
 
     case 'and':
     case 'or':
@@ -305,22 +362,89 @@ export function checkDimensions(
       for (let i = 0; i < argDims.length; i++) {
         const arg = get(i)
         if (!isDimensionless(arg)) {
-          warnings.push(`${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`)
+          warn(`${op} requires dimensionless arguments, got ${formatDims(arg.dims)}`, 'analysis')
         }
       }
-      return { dimensions: dimensionless(), warnings }
+      return finish(dimensionless())
 
     case 'Pre':
-      return { dimensions: get(0), warnings }
+      return finish(get(0))
 
     default:
-      warnings.push(`Unknown operator: ${op}`)
-      return { dimensions: dimensionless(), warnings }
+      warn(`Unknown operator: ${op}`, 'analysis')
+      return finish(dimensionless())
   }
 }
 
 /**
- * Validate dimensional consistency of all equations in an ESM file.
+ * Register a unit binding under BOTH its scoped key (`Scope.name`) and its bare
+ * short name (`name`). The scoped key always reflects this component; the bare
+ * key is FIRST-WINS — an earlier component's short name is never overwritten by
+ * a later collision, matching the legacy resolution order where the
+ * first-declared short name shadows later ones. No-op when `units` is absent.
+ */
+function addBinding(
+  bindings: Map<string, ParsedUnit>,
+  scope: string,
+  name: string,
+  units: string | undefined,
+): void {
+  if (!units) return
+  const parsed = parseUnit(units)
+  bindings.set(`${scope}.${name}`, parsed)
+  if (!bindings.has(name)) bindings.set(name, parsed)
+}
+
+/**
+ * Run a single dimensional check `run`, funnel its structured sub-diagnostics
+ * into `warnings` (tagged with `location` and their EXPLICIT codes), and emit
+ * its dimensional-mismatch warning when one is present AND no operand was an
+ * unknown variable — missing unit declarations would otherwise produce false
+ * positives, since both sides default to dimensionless. Any thrown error
+ * surfaces as one `analysis` warning prefixed with `errorContext`. The equation
+ * and observed-variable passes share this; they differ only in what `run`
+ * compares.
+ */
+function checkAndReport(
+  warnings: UnitWarning[],
+  location: string,
+  errorContext: string,
+  run: () => { diagnostics: UnitDiagnostic[]; mismatch: UnitWarning | null },
+): void {
+  try {
+    const { diagnostics, mismatch } = run()
+    const hasUnknownVariable = diagnostics.some((d) => d.message.includes('Unknown variable'))
+    if (mismatch && !hasUnknownVariable) {
+      warnings.push(mismatch)
+    }
+    for (const d of diagnostics) {
+      warnings.push({ message: d.message, code: d.code, location })
+    }
+  } catch (error) {
+    warnings.push({
+      message: `${errorContext}: ${error instanceof Error ? error.message : String(error)}`,
+      code: 'analysis',
+      location,
+    })
+  }
+}
+
+/**
+ * Validate dimensional consistency of equations in an ESM file.
+ *
+ * SCOPE: checks only TOP-LEVEL `models` — each model's dynamic `equations` and
+ * its `observed` variable expressions. It deliberately does NOT recurse into
+ * `subsystems`, nor check reaction-system `constraint_equations`. The
+ * unit-binding environment is assembled only from top-level declarations, so
+ * descending would report spurious "Unknown variable" warnings for
+ * subsystem-local names on existing fixtures. Callers needing broader coverage
+ * should assemble their own bindings and call `checkDimensions` directly.
+ *
+ * SPATIAL COORDINATES: `validateUnits` never supplies `checkDimensions`'
+ * optional `coordinateBindings`, so `grad`/`div`/`laplacian` here fall back to
+ * the metre-denominator default. To resolve spatial-derivative units against a
+ * model's declared domain, call `checkDimensions` directly with a
+ * `coordinateBindings` map.
  */
 export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
@@ -330,13 +454,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [modelName, model] of Object.entries(file.models)) {
       if ('variables' in model && model.variables) {
         for (const [varName, variable] of Object.entries(model.variables)) {
-          const fullVarName = `${modelName}.${varName}`
-          if (variable.units) {
-            unitBindings.set(fullVarName, parseUnit(variable.units))
-          }
-          if (!unitBindings.has(varName) && variable.units) {
-            unitBindings.set(varName, parseUnit(variable.units))
-          }
+          addBinding(unitBindings, modelName, varName, variable.units)
         }
       }
     }
@@ -346,25 +464,13 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
     for (const [systemName, system] of Object.entries(file.reaction_systems)) {
       if ('species' in system && system.species) {
         for (const [speciesName, species] of Object.entries(system.species)) {
-          const fullSpeciesName = `${systemName}.${speciesName}`
-          if (species.units) {
-            unitBindings.set(fullSpeciesName, parseUnit(species.units))
-          }
-          if (!unitBindings.has(speciesName) && species.units) {
-            unitBindings.set(speciesName, parseUnit(species.units))
-          }
+          addBinding(unitBindings, systemName, speciesName, species.units)
         }
       }
 
       if ('parameters' in system && system.parameters) {
         for (const [paramName, param] of Object.entries(system.parameters)) {
-          const fullParamName = `${systemName}.${paramName}`
-          if (param.units) {
-            unitBindings.set(fullParamName, parseUnit(param.units))
-          }
-          if (!unitBindings.has(paramName) && param.units) {
-            unitBindings.set(paramName, parseUnit(param.units))
-          }
+          addBinding(unitBindings, systemName, paramName, param.units)
         }
       }
     }
@@ -377,82 +483,50 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   if (file.models) {
     for (const [modelName, model] of Object.entries(file.models)) {
       if ('equations' in model && model.equations) {
+        const location = `models.${modelName}`
         for (const equation of model.equations) {
-          try {
+          checkAndReport(warnings, location, 'Error checking equation dimensions', () => {
             const lhsResult = checkDimensions(equation.lhs, unitBindings)
             const rhsResult = checkDimensions(equation.rhs, unitBindings)
-
-            const allSubWarnings = [...lhsResult.warnings, ...rhsResult.warnings]
-            const hasUnknownVariable = allSubWarnings.some((w) => w.includes('Unknown variable'))
-
-            // Only emit mismatch warnings when dimensions are fully known.
-            // Missing unit declarations would otherwise produce false
-            // positives (both sides default to dimensionless in ways that
-            // don't round-trip).
-            if (
-              !hasUnknownVariable &&
-              !dimsEqual(lhsResult.dimensions.dims, rhsResult.dimensions.dims)
-            ) {
-              warnings.push({
-                message: `Dimensional mismatch in equation: LHS has ${formatDims(lhsResult.dimensions.dims)}, RHS has ${formatDims(rhsResult.dimensions.dims)}`,
-                code: 'dimensional_mismatch',
-                location: `models.${modelName}`,
-                equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
-              })
-            }
-
-            for (const warning of allSubWarnings) {
-              warnings.push({
-                message: warning,
-                code: warningCode(warning),
-                location: `models.${modelName}`,
-              })
-            }
-          } catch (error) {
-            warnings.push({
-              message: `Error checking equation dimensions: ${error instanceof Error ? error.message : String(error)}`,
-              code: 'analysis',
-              location: `models.${modelName}`,
-            })
-          }
+            const diagnostics = [...lhsResult.diagnostics, ...rhsResult.diagnostics]
+            const mismatch: UnitWarning | null = dimsEqual(
+              lhsResult.dimensions.dims,
+              rhsResult.dimensions.dims,
+            )
+              ? null
+              : {
+                  message: `Dimensional mismatch in equation: LHS has ${formatDims(lhsResult.dimensions.dims)}, RHS has ${formatDims(rhsResult.dimensions.dims)}`,
+                  code: 'dimensional_mismatch',
+                  location,
+                  equation: `${JSON.stringify(equation.lhs)} = ${JSON.stringify(equation.rhs)}`,
+                }
+            return { diagnostics, mismatch }
+          })
         }
       }
 
       if ('variables' in model && model.variables) {
         for (const [varName, variable] of Object.entries(model.variables)) {
           if (variable.type === 'observed' && variable.expression) {
-            try {
-              const exprResult = checkDimensions(variable.expression, unitBindings)
+            const expression = variable.expression
+            const location = `models.${modelName}.variables.${varName}`
+            checkAndReport(warnings, location, 'Error checking observed variable dimensions', () => {
+              const exprResult = checkDimensions(expression, unitBindings)
               const varDims: ParsedUnit = variable.units
                 ? parseUnit(variable.units)
                 : dimensionless()
-
-              const hasUnknownVariable = exprResult.warnings.some((w) =>
-                w.includes('Unknown variable'),
+              const mismatch: UnitWarning | null = dimsEqual(
+                exprResult.dimensions.dims,
+                varDims.dims,
               )
-
-              if (!hasUnknownVariable && !dimsEqual(exprResult.dimensions.dims, varDims.dims)) {
-                warnings.push({
-                  message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
-                  code: 'dimensional_mismatch',
-                  location: `models.${modelName}.variables.${varName}`,
-                })
-              }
-
-              for (const warning of exprResult.warnings) {
-                warnings.push({
-                  message: warning,
-                  code: warningCode(warning),
-                  location: `models.${modelName}.variables.${varName}`,
-                })
-              }
-            } catch (error) {
-              warnings.push({
-                message: `Error checking observed variable dimensions: ${error instanceof Error ? error.message : String(error)}`,
-                code: 'analysis',
-                location: `models.${modelName}.variables.${varName}`,
-              })
-            }
+                ? null
+                : {
+                    message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatDims(varDims.dims)}, expression evaluates to ${formatDims(exprResult.dimensions.dims)}`,
+                    code: 'dimensional_mismatch',
+                    location,
+                  }
+              return { diagnostics: exprResult.diagnostics, mismatch }
+            })
           }
         }
       }

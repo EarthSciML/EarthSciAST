@@ -82,8 +82,11 @@ describe('Dependency Graph Analysis', () => {
       const graph = buildDependencyGraph(model)
 
       expect(graph.hasCircularDependencies()).toBe(true)
-      const cycles = graph.getStronglyConnectedComponents()
+      const cycles = graph.getCycles()
       expect(cycles.length).toBeGreaterThan(0)
+
+      // Deprecated alias should return the same cycles.
+      expect(graph.getStronglyConnectedComponents()).toEqual(cycles)
 
       // Should find x and z in a cycle
       const cycleNodes = cycles.flat().map((n) => n.name)

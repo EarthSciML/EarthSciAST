@@ -21,7 +21,7 @@ describe('flatten', () => {
           ],
         },
       },
-    } as unknown as EsmFile
+    } satisfies EsmFile
 
     const flat = flatten(file)
     expect(flat.stateVariables).toEqual(['Atmos.T'])
@@ -44,14 +44,15 @@ describe('flatten', () => {
           parameters: { k1: { units: '1/s' } },
           reactions: [
             {
+              id: 'R1',
               substrates: [{ species: 'O3', stoichiometry: 1 }],
-              products: [],
+              products: null,
               rate: { op: '*', args: ['k1', 'O3'] },
             },
           ],
         },
       },
-    } as unknown as EsmFile
+    } satisfies EsmFile
 
     const flat = flatten(file)
     expect(flat.stateVariables).toContain('Chem.O3')
@@ -76,7 +77,7 @@ describe('flatten', () => {
           transform: 'identity',
         },
       ],
-    } as unknown as EsmFile
+    } satisfies EsmFile
 
     const flat = flatten(file)
     expect(flat.metadata.couplingRules).toHaveLength(1)
@@ -109,7 +110,7 @@ describe('flatten', () => {
           },
         },
       ],
-    } as unknown as EsmFile
+    } satisfies EsmFile
 
     const flat = flatten(file)
     expect(flat.metadata.couplingRules).toEqual(['variable_map(Src.F -> Sink.y, expression)'])
@@ -132,7 +133,7 @@ describe('flatten', () => {
           },
         },
       },
-    } as unknown as EsmFile
+    } satisfies EsmFile
 
     const flat = flatten(file)
     expect(flat.stateVariables).toContain('Outer.y')

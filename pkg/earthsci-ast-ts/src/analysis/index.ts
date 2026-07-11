@@ -8,15 +8,21 @@
  * - Expression complexity metrics
  * - Common subexpression identification
  * - Symbolic differentiation
- * - System graph generation with multiple export formats
+ *
+ * It re-exports only the symbols it owns. Graph generation/export
+ * (`expressionGraph`, `toDot`, ...), unit analysis, reaction ODE derivation,
+ * and model-editing operations live in their own modules and are re-exported
+ * from the package root (`../index.ts`), not duplicated here.
  */
 
-// Re-export all types
+// Re-export all analysis-owned types
 export type {
   DependencyNode,
   DependencyRelation,
   DependencyGraph,
+  VariableKind,
   ComplexityMetrics,
+  StabilityIssue,
   CommonSubexpression,
   ExpressionLocation,
   DerivativeResult,
@@ -48,6 +54,7 @@ export {
   estimateSavings,
   generateFactoredVariableNames,
   groupSubexpressionsByType,
+  DEFAULT_MIN_COMPLEXITY,
 } from './common-subexpressions.js'
 
 // Symbolic differentiation
@@ -59,55 +66,8 @@ export {
   isDifferentiable,
   findCriticalPoints,
   NonDifferentiableExpressionError,
+  InvalidDerivativeOrderError,
 } from './differentiation.js'
-
-// Import graph functionality from existing modules
-export {
-  componentGraph,
-  expressionGraph,
-  toDot,
-  toMermaid,
-  toJsonGraph,
-  componentExists,
-  getComponentType,
-} from '../graph.js'
-
-// Import unit analysis functionality
-export {
-  parseUnit,
-  checkDimensions,
-  validateUnits,
-  type UnitResult,
-  type UnitWarning,
-} from '../units.js'
-
-// Import ODE derivation and stoichiometry functionality
-export { deriveODEs, stoichiometricMatrix, substrateMatrix, productMatrix } from '../reactions.js'
-
-// Import programmatic model editing operations
-export {
-  addVariable,
-  removeVariable,
-  renameVariable,
-  addEquation,
-  removeEquation,
-  substituteInEquations,
-  addReaction,
-  removeReaction,
-  addSpecies,
-  removeSpecies,
-  addContinuousEvent,
-  addDiscreteEvent,
-  removeEvent,
-  addCoupling,
-  removeCoupling,
-  compose,
-  mapVariable,
-  merge,
-  extract,
-  VariableInUseError,
-  EntityNotFoundError,
-} from '../edit.js'
 
 import type { Expr, Model, EsmFile } from '../types.js'
 import type {
@@ -115,76 +75,90 @@ import type {
   CommonSubexpression,
   DependencyGraph as DependencyGraphType,
   DerivativeResult,
+  StabilityIssue,
 } from './types.js'
+import { isExprNode } from '../expression.js'
 import { analyzeComplexity, detectStabilityIssues } from './complexity.js'
-import { findCommonSubexpressions } from './common-subexpressions.js'
+import { findCommonSubexpressions, DEFAULT_MIN_COMPLEXITY } from './common-subexpressions.js'
 import { buildDependencyGraph } from './dependency-graph.js'
 import { gradient, partialDerivatives } from './differentiation.js'
 
-/** Combined results returned by {@link ExpressionAnalyzer.analyze}. */
+/** Combined results returned by {@link analyzeExpression}. */
 export interface AnalysisResults {
   complexity?: ComplexityMetrics
-  stabilityIssues?: ReturnType<typeof detectStabilityIssues>
+  stabilityIssues?: StabilityIssue[]
   commonSubexpressions?: CommonSubexpression[]
   dependencyGraph?: DependencyGraphType
   partialDerivatives?: Map<string, DerivativeResult>
   gradient?: DerivativeResult[]
 }
 
+/** Options controlling which analyses {@link analyzeExpression} runs. */
+export interface AnalysisOptions {
+  /** Compute complexity metrics and stability issues (expression targets only). */
+  includeComplexity?: boolean
+  /** Identify common subexpressions (expression targets only). */
+  includeSubexpressions?: boolean
+  /** Build the variable dependency graph. */
+  includeDependencies?: boolean
+  /** Compute partial derivatives and gradient (expression targets only). */
+  includeDerivatives?: boolean
+  /** Variables to differentiate with respect to (required for derivatives). */
+  variables?: string[]
+  /** Minimum complexity threshold for common-subexpression detection. */
+  minComplexityThreshold?: number
+}
+
 /**
- * Main analysis class providing a unified interface to all analysis capabilities
+ * Perform comprehensive analysis of an expression or model.
+ * @param target Expression, Model, or ESM file to analyze
+ * @param options Analysis options
+ * @returns Complete analysis results
  */
-export class ExpressionAnalyzer {
-  /**
-   * Perform comprehensive analysis of an expression or model
-   * @param target Expression, Model, or ESM file to analyze
-   * @param options Analysis options
-   * @returns Complete analysis results
-   */
-  static analyze(
-    target: Expr | Model | EsmFile,
-    options: {
-      includeComplexity?: boolean
-      includeSubexpressions?: boolean
-      includeDependencies?: boolean
-      includeDerivatives?: boolean
-      variables?: string[]
-      minComplexityThreshold?: number
-    } = {},
-  ): AnalysisResults {
-    const {
-      includeComplexity = true,
-      includeSubexpressions = true,
-      includeDependencies = true,
-      includeDerivatives = false,
-      variables = [],
-      minComplexityThreshold = 5,
-    } = options
+export function analyzeExpression(
+  target: Expr | Model | EsmFile,
+  options: AnalysisOptions = {},
+): AnalysisResults {
+  const {
+    includeComplexity = true,
+    includeSubexpressions = true,
+    includeDependencies = true,
+    includeDerivatives = false,
+    variables = [],
+    minComplexityThreshold = DEFAULT_MIN_COMPLEXITY,
+  } = options
 
-    const results: AnalysisResults = {}
-    const isExpressionNode = typeof target === 'object' && target !== null && 'op' in target
+  const results: AnalysisResults = {}
 
-    if (includeComplexity && isExpressionNode) {
-      results.complexity = analyzeComplexity(target as Expr)
-      results.stabilityIssues = detectStabilityIssues(target as Expr)
+  // Complexity, subexpression, and derivative analyses only apply to a single
+  // expression node; the guard narrows `target` to ExpressionNode.
+  if (isExprNode(target)) {
+    if (includeComplexity) {
+      results.complexity = analyzeComplexity(target)
+      results.stabilityIssues = detectStabilityIssues(target)
     }
 
-    if (includeSubexpressions && isExpressionNode) {
-      results.commonSubexpressions = findCommonSubexpressions(
-        target as Expr,
-        minComplexityThreshold,
-      )
+    if (includeSubexpressions) {
+      results.commonSubexpressions = findCommonSubexpressions(target, minComplexityThreshold)
     }
 
-    if (includeDependencies) {
-      results.dependencyGraph = buildDependencyGraph(target)
+    if (includeDerivatives && variables.length > 0) {
+      results.partialDerivatives = partialDerivatives(target, variables)
+      results.gradient = gradient(target, variables)
     }
-
-    if (includeDerivatives && isExpressionNode && variables.length > 0) {
-      results.partialDerivatives = partialDerivatives(target as Expr, variables)
-      results.gradient = gradient(target as Expr, variables)
-    }
-
-    return results
   }
+
+  if (includeDependencies) {
+    results.dependencyGraph = buildDependencyGraph(target)
+  }
+
+  return results
+}
+
+/**
+ * Static namespace wrapping {@link analyzeExpression}.
+ * @deprecated Call {@link analyzeExpression} directly.
+ */
+export const ExpressionAnalyzer = {
+  analyze: analyzeExpression,
 }
